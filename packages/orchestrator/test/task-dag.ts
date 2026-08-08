@@ -1,5 +1,5 @@
 import { expect } from "vitest"
-import { projectTrackerSnapshot, type TaskDagSnapshot } from "../src/task-dag.js"
+import { projectTrackerSnapshot, type TaskDagSnapshot } from "../src/authorities/task-tracker/graph.js"
 
 export const validSnapshot = (input: unknown): TaskDagSnapshot => {
   const result = projectTrackerSnapshot(input)

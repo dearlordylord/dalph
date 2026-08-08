@@ -11,7 +11,7 @@ and validation work is bounded by the
 ## Decision boundary
 
 This decision materializes the issue owner's accepted rederive-on-capacity-
-change rule. It uses the existing reconstructed managed-run state, runnable
+change rule. It uses the existing reconstructed run state, runnable
 frontier selector, task admission controller, workflow interpreter, and
 frontier-recovery Quint model. It does not restore the fixed recovery-phase
 dispatcher, retain the controller's dormant waiter queue, or introduce a third
@@ -120,7 +120,7 @@ flowchart LR
   coalesces triggers"]
   R["Reconstruction workflow
   reads and decodes journal rows"]
-  M["Managed-run reducer
+  M["Reconstructed-run reducer
   folds decoded records"]
   C["Admission controller
   snapshots occupied/reserved positions"]
@@ -175,7 +175,7 @@ position 10; task A has one begun at position 20.
 2. A provider observation confirms that the occupied invocation stopped.
 3. The controller removes that exact occupied position and signals
    "admission may now be possible."
-4. The activation coordinator rereads managed-run state and the controller snapshot.
+4. The activation coordinator rereads run state and the controller snapshot.
 5. The selector again derives [Z@10, A@20].
 6. The controller reserves the available position for Z.
 ```
@@ -195,7 +195,7 @@ through the accepted control boundary and the occupied invocation stops.
 3. Before restart, the journal gains the task-control fact that prevents Z's
    next forward-progress operation, and the provider stops the invocation.
 4. Restart folds current journal history and freshly observes non-consumption.
-5. The activation coordinator reads that managed-run state and the rebuilt controller
+5. The activation coordinator reads that run state and the rebuilt controller
    snapshot.
 6. The selector explains Z's pause and derives [A@20].
 7. The controller reserves the available position for A.
@@ -417,7 +417,7 @@ dormant waiter queue, its duplicate-waiter guard, and every production call to
 
 One pass performs these concrete actions:
 
-1. The coordinator reads the current reconstructed managed-run state and
+1. The coordinator reads the current reconstructed run state and
    controller and activation-ownership snapshots.
 2. The selector derives the runnable frontier and exact explanations.
 3. The coordinator excludes exact transitions already represented by a live
@@ -603,7 +603,7 @@ The accepted design is
 It was resolved with the owner in
 [Define exact activation ownership and admission handoff](https://github.com/dearlordylord/dalph/issues/151).
 One scoped activation coordinator receives order-free triggers. Each pass reads current
-reconstructed managed-run state and the controller snapshot, derives the
+reconstructed run state and the controller snapshot, derives the
 frontier and bounded admission set, reserves one exact transition, and creates
 one scoped owned-operation runner. The coordinator then derives again without
 waiting for that runner's final result. Each runner executes one exact workflow

@@ -3,30 +3,40 @@
   "tasks": [
     {
       "id": "join",
+      "title": "join",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": "group",
       "prerequisiteIds": ["right", "left"]
     },
     {
       "id": "right",
+      "title": "right",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": "group",
       "prerequisiteIds": ["root"]
     },
     {
       "id": "root",
+      "title": "root",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": null,
       "prerequisiteIds": []
     },
     {
       "id": "group",
+      "title": "group",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": null,
       "prerequisiteIds": []
     },
     {
       "id": "left",
+      "title": "left",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": "group",
       "prerequisiteIds": ["root"]

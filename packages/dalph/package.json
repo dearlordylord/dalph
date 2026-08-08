@@ -1,0 +1,28 @@
+{
+  "name": "@dalph/dalph",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "dalph": "dist/bin/dalph.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/clean-package-build-output.mjs . && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-import-extensions.mjs ."
+  },
+  "dependencies": {
+    "@dalph/contracts": "workspace:*",
+    "@dalph/executor": "workspace:*",
+    "@dalph/orchestrator": "workspace:*",
+    "@effect/platform-node": "4.0.0-beta.99",
+    "effect": "4.0.0-beta.99"
+  }
+}

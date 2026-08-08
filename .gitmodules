@@ -1,0 +1,4 @@
+[submodule "tools/optmem"]
+	path = tools/optmem
+	url = https://github.com/VictorTaelin/OptMem.git
+	branch = main

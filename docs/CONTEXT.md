@@ -20,52 +20,164 @@ the retained identity of the original research record and historical harness,
 not the name of the production orchestrator.
 _Avoid_: New `ralph-run.sh`, shell-harness replacement
 
+**Dalph coordinator**:
+The typed production actor that intentionally initiates Dalph workflow actions,
+such as committing one exact tracker-read intent before asking the task tracker.
+It is not a process identity, deployment, journal writer identity, or claim
+owner.
+_Avoid_: Coordinator process ID, Dalph orchestrator, claim owner
+
 **Dalph executor**:
-The Dalph component that owns one selected task-implementation algorithm,
-including its coding-agent invocations, review strategy, internal restoration,
-and internal implementation or review artifacts.
-_Avoid_: Dalph orchestrator, task-work provider, universal review pipeline
+The Dalph component that performs the complete work for one planned task
+attempt and reports only the attempt-level running, safely suspended, or
+terminal result required by generic orchestration. The production executor's
+inner algorithm is post-milestone design.
+_Avoid_: Dalph orchestrator, universal review pipeline
 
-The current review-capable executor is transitionally co-located in
-`packages/orchestrator` and shares internal `WorkflowOperation` and
-`WorkflowInterpreter` types with orchestration code. File placement and shared
-type names do not make its review strategy part of the Dalph orchestrator.
+**Operator**:
+The one logical V1 human actor that intentionally applies a Pause, Unpause, or
+task-claim reacquisition direction through Dalph. V1 records the actor class
+`Operator`, not an authenticated person identity; a separately accepted
+transport request identity may identify a redeliverable request without
+identifying the person. Authentication and multiple operator identities
+require a separately accepted boundary design.
+_Avoid_: Authenticated operator identity, claim owner, provider user
 
-**Executor outer invocation**:
-One executor-declared unit that Dalph may start, continue, wait for, interrupt,
-or normalize into an outcome without learning the executor's internal stage.
-_Avoid_: Review stage, worker state, workflow phase
+**Workflow occurrence**:
+One concrete happening relevant to a Dalph run. Constructing a command,
+workflow operation, frontier transition, or test control does not prove that a
+workflow occurrence happened.
+_Avoid_: Workflow operation, command, proposal, journal record
 
-**Executor outer invocation correlation**:
-The exact task and invocation identities that Dalph uses across intent,
-provider observation, interruption, continuation, and outcome.
-_Avoid_: Task identity alone, log correlation, artifact identity
+**Initiated action**:
+A past-tense workflow occurrence intentionally initiated by a typed production
+actor. Its runtime value is classified as `InitiatedAction` and carries
+`initiatedBy`.
+_Avoid_: Requested action, constructed operation, actorless occurrence
 
-**Executor outer invocation resource use**:
-The task-work capacity positions that the selected executor declares for one
-outer invocation independently of that invocation's internal purpose or name.
-_Avoid_: Review capacity, operation-name capacity
+**Non-action occurrence**:
+A past-tense workflow occurrence that is not itself an action. Its runtime
+value is classified as `NonActionOccurrence` and does not copy the actor from a
+causally related initiated action.
+_Avoid_: Uninitiated action, action outcome with copied actor
 
-**Executor outer invocation wait**:
-The selected executor's named reason and exact correlation for why Dalph
-cannot yet continue one outer invocation. A scheduled wait carries the branded
-absolute retry deadline.
-_Avoid_: Internal executor stage, inferred log state
+**Workflow event**:
+The immutable production domain value representing one past-tense workflow
+occurrence. Its concrete tagged type retains its specific name, exhaustive
+initiation classification, and only the causal or evidence relationships that
+production proves. A journal record is the durable envelope for an event, not
+the event or outside happening itself.
+_Avoid_: Journal record, command, proposed operation, physical occurrence
 
-**Executor outer invocation interruption**:
-The exact correlated invocation and provider observation proving that its
-outer execution was interrupted.
-_Avoid_: Process exit alone, coordinator cancellation
+**Tracker-graph read initiated**:
+The initiated action established when the Dalph coordinator commits one exact
+tracker-read intent and owns its continuation. The constructed
+`ReadTrackerGraph` operation alone does not establish this event.
+_Avoid_: Tracker facts observed, tracker edit, operation selected
 
-**Executor outer invocation outcome**:
-The selected executor's normalized completed, failed, interrupted, or
-non-convergent result for one exact outer invocation.
+**Task-tracker facts observed**:
+The non-action occurrence established when Dalph receives exact normalized
+tracker evidence through one identified tracker-graph read action. It may
+reference that earlier action by `OperationId`; its concrete evidence retains
+coverage, freshness, target, revision, and journal position. It neither copies
+the action's actor nor claims the read caused the tracker facts.
+_Avoid_: Tracker edit, tracker read initiated, cached graph state
+
+**Applied control direction**:
+The initiated action established when Operator's Pause or Unpause direction is
+accepted and applied to one exact run or task subject. Receiving or durably
+recording a command request is not this event.
+_Avoid_: Control command receipt, pause phase, operator identity
+
+**Planned-attempt executor work**:
+The selected executor's complete course of work for one planned task attempt.
+Dalph may start, continue, ask to suspend, or receive the outcome of that work
+without learning an internal stage. In v1, the planned task attempt identifies
+this work at the generic executor boundary; Dalph does not allocate a second
+outer-invocation identity. The controlled fake has no coding-agent, reviewer,
+evidence, handback, retry, or restoration stages.
+_Avoid_: Executor outer invocation, review stage, worker process, workflow
+operation
+
+**Planned-attempt executor-work responsibility began**:
+The initiated action established when Dalph records its intent and assumes
+responsibility for one exact planned attempt before asking the executor to work.
+It does not prove that the executor accepted or started work.
+_Avoid_: Executor work started, executor accepted work
+
+**Planned work undertaken for a task**:
+The task-level phenomenon established when Dalph assumes executor-work
+responsibility for at least one planned attempt belonging to that task. It does
+not prove that the executor accepted or started work, that the task tracker
+closed the task, or that Git integrated the work.
+_Avoid_: Executor work started, completed tracker task, integrated task
+
+**Planned-attempt executor-work report**:
+The non-action occurrence established when Dalph receives `Running`,
+`SafelySuspended`, or `Terminal` for one exact planned attempt. It proves the
+reported condition, not an executor-internal action or actor.
+_Avoid_: Executor action, executor decision, completed tracker task
+
+**Planned-attempt executor-work correlation**:
+The exact `RunId` and `AttemptId` of the planned task attempt that Dalph uses
+across executor start, continuation, safe suspension, and terminal outcome. An
+internal `OperationId`, coding-agent invocation, reviewer invocation, provider
+request, session, or worker process cannot replace or supplement this generic
+correlation.
+_Avoid_: Executor outer invocation identity, task identity alone, operation
+identity, log correlation
+
+**Task-work capacity requirement**:
+The zero-or-one task-work position that Dalph says one workflow transition
+needs. The executor does not request, acquire, declare, or release this
+position. For example, Dalph may require one position before it asks the
+executor to continue task A, while a tracker-only read requires none.
+_Avoid_: Executor-declared capacity, review capacity, operation-name capacity
+
+**Initial control policy**:
+The schema-decoded values Dalph records with a fresh Run beginning. The current
+production slice contains task-execution capacity only. Recovery accepts no
+replacement initial value and reconstructs the latest durable Run control
+policy.
+_Avoid_: Process default during recovery, mutable coordinator settings
+
+**Run control policy**:
+The latest schema-decoded task-execution capacity and monotonic revision that
+Dalph reconstructs from one Run's beginning plus later applied changes. It is
+durable workflow-journal history, not the process-local task-position map.
+_Avoid_: Persisted positions, process configuration, admission snapshot
+
+**Applied task-work capacity**:
+The initiated action established when Operator's capacity change is durably
+appended for one Run policy revision. Receiving or decoding the request is not
+this event. Existing task-work position holders continue; later admissions use
+the new ceiling.
+_Avoid_: Capacity command receipt, executor capacity, preemptive contraction
+
+**Planned-attempt executor-work suspension**:
+The executor's proof that its complete work for one exact planned task attempt
+is safely stopped, has preserved what it needs to resume the same attempt, and
+has no executor-owned activity for that attempt still running. Dalph may
+therefore make the task-work position available. The controlled fake executor
+produces this proof after Dalph asks it to stop for resume, such as during a
+task pause, run pause, or safety stop. A coding-agent, reviewer, session, or
+worker-process interruption alone is an executor-internal fact and does not
+prove suspension.
+_Avoid_: Executor interruption, process exit alone, coordinator cancellation,
+attempt abandonment
+
+**Planned-attempt executor-work outcome**:
+An executor's normalized completed or failed result for one
+exact planned task attempt. Suspension is separately resumable and therefore
+is not a terminal outcome.
 _Avoid_: Internal review result, raw provider response
 
-**Executor outer invocation projection**:
-The selected executor's current declaration that one exact outer invocation
-is ready, waiting, or complete with a normalized outcome.
-_Avoid_: Generic inspection of executor-specific journal events
+**Planned-attempt executor-work projection**:
+The controlled fake executor's current declaration that its complete work for
+one exact `(RunId, AttemptId)` is running, safely suspended, or terminal with a
+normalized result. Starting or resuming is a Dalph request, not another
+persisted executor state.
+_Avoid_: Generic inspection of executor-specific journal events, internal wait
 
 **Historical Ralph harness**:
 The one-off `scripts/ralph-run.sh` experiment and its execution formats.
@@ -90,7 +202,50 @@ _Avoid_: Tracker fixture, tracker state file, GitHub Issues API fixture
 **Run**:
 One durable Dalph coordination instance for one task-tracker target. It begins
 when Dalph records a fresh `RunId` and ends with one run termination record.
-_Avoid_: Process, task, task-work session, historical harness run
+_Avoid_: Process, task, historical harness run
+
+**Workflow Run beginning**:
+The first durable workflow-journal fact for one Run. It associates a freshly
+allocated Run identity with one exact task-tracker target and distinguishes a
+fresh start from recovery.
+_Avoid_: UUID allocation, process start, recovery start
+
+**Workflow Run termination**:
+The final durable workflow-journal fact for one normally completed Run. It
+closes that Run's history; a crash leaves the Run unterminated.
+_Avoid_: Executor terminal report, process exit, safe suspension
+
+**Workflow-journal history**:
+The ordered, decoded Dalph workflow-journal records for one exact `RunId`.
+It contains only facts Dalph recorded about its workflow; Git history,
+task-tracker history, executor-internal history, and process logs remain owned
+by their respective systems.
+_Avoid_: Run history, external-system history, current authority facts
+
+**Workflow-journal history reduction**:
+The pure fold that validates one workflow-journal history, reconstructs its run
+state, and derives its recovery frontier. It returns every history issue it can
+establish instead of adopting, repairing, or discarding contradictory records.
+_Avoid_: History validation alone, journal decoding, coordinator rehydration
+
+**Reconstructed run state**:
+The process-local composition of graph knowledge, outstanding workflow
+responsibilities, applied pause directions, and workflow-journal records for
+one `RunId`. Dalph derives it from workflow-journal history; it is neither
+persisted authority nor a runnable frontier.
+_Avoid_: Managed run state, serialized coordinator, current external state
+
+**Run recovery frontier**:
+The process-local projection naming the next durable boundary, unresolved
+boundary, or terminal attempt for every task represented by one reduced
+workflow-journal history. Dalph does not persist this projection.
+_Avoid_: Recovery stage, runnable frontier, persisted recovery state
+
+**Run recovery activation**:
+The application capability that reads a reconstructed run's current runnable
+frontier and executes its recovered transitions through the ordinary
+activation and capacity path.
+_Avoid_: Managed activation, process restart, separate recovery scheduler
 
 **Task-tracker target**:
 The grouping root or query that tells a task-tracker adapter where to begin
@@ -104,6 +259,14 @@ every transitive prerequisite needed to evaluate them. Grouping descendants of
 a prerequisite-only task are outside the closure unless the target selects
 them independently.
 _Avoid_: Tracker target closure, scope, complete native graph
+
+**Task-membership constraint**:
+The task-local stop derived when a later complete task-tracker observation no
+longer includes a task for which Dalph still has an exact workflow
+responsibility. Dalph preserves that responsibility for a later activation,
+reconciliation, or disposition; the membership edit does not prove cleanup,
+claim release, successful handoff, or a whole-run conflict.
+_Avoid_: Removed task, automatic cleanup, whole-run membership conflict
 
 **Task tracker**:
 The external work-record application configured for a Dalph run. It stores task
@@ -124,9 +287,10 @@ _Avoid_: Task tracker, GitHub Issues
 
 **Current authority fact**:
 A value currently maintained by its named external owner, such as task state in
-the task tracker, a worktree registration in Git, or a session in the task-work
-provider. Dalph learns it only from a boundary result whose contract proves that
-fact; earlier journal history does not prove it remains current.
+the task tracker, a worktree registration in Git, or the latest report from the
+planned-attempt executor. Dalph learns it only from a boundary result whose
+contract proves that fact; earlier journal history does not prove it remains
+current.
 _Avoid_: Cached authority state, durable graph knowledge, journaled observation
 
 **Normalized task-graph read result**:
@@ -134,38 +298,117 @@ The provider-independent boundary value a task-tracker adapter assembles with
 explicit coverage, completeness, temporal-consistency, and freshness evidence.
 Its normalized shape does not claim that every fact is fully current or came
 from one instant.
-_Avoid_: Current task graph, TaskGraphFactsUpdated event, provider response dump
+_Avoid_: Current task graph, provider response dump
 
-**Task-tracker target-closure membership observation**:
-The normalized result saying one successful task-tracker read completely
-covered membership in one task-tracker target closure and returned the named
-task identities. It carries the read boundary's freshness evidence, the
-provider-independent content fingerprint, and potentially mixed-time
-consistency. It does not claim lifecycle, dependency, grouping, or claim facts.
-An absent identity is proven only when the named read shape explicitly covered
-that identity; journal order does not make incompatible membership observations
-comparable.
-_Avoid_: Current target closure, complete task graph, atomic tracker snapshot
+**Task-tracker fact family**:
+One named kind of normalized tracker fact with one coverage and freshness
+meaning. A V1 complete graph observation contains exactly these five kinds:
+task identities, task lifecycles, task prerequisites, parent groupings, and
+target membership. “Family” does not mean a task grouping, compatibility
+generation, provider response, or cache partition.
 
-**Task-graph facts updated**:
-The immutable workflow-journal event recording provider-independent task and
-edge facts returned by either a tracker read or a tracker mutation. The
-graph-knowledge reducer applies both origins through the same coverage,
-completeness, consistency, and replacement rules.
-_Avoid_: Provider response dump, current task graph, read-only observation event
+For example, suppose GitHub work item #11 “Ship CLI” is open, cannot start
+until #10 “Build parser” finishes, sits under #5 “Release 1.0”, and belongs to
+the repository or project Dalph is running. The five families answer five
+separate questions: which work item this is, its current state, which other
+work must finish first, which larger work item contains it, and whether it
+belongs to the body of work Dalph is running. They are five kinds of answer
+from one graph read, not five separate tracker reads.
+_Avoid_: Family without naming the facts, provider field group, response page
+
+**Complete task-tracker facts observation**:
+The normalized result of one logical complete target-closure read. It contains
+exactly one complete family for task identities, lifecycles, prerequisites,
+parent grouping, and target membership. Every family names its subjects,
+content identity, potentially mixed-time consistency, and the same read
+operation as its freshness boundary. It excludes authored title and body,
+claim records, provider pages, cursors, and raw responses.
+_Avoid_: Membership-only observation, current task graph, atomic tracker snapshot
+
+**Unchanged task-tracker facts reconfirmation**:
+A compact later observation proving that a comparable complete read normalized
+to unchanged content. It records current coverage and freshness for every
+graph fact family and refers to an earlier full observation for the payload.
+_Avoid_: Duplicate full payload, current tracker authority, no-op
+
+**Task-tracker facts observed**:
+The single immutable workflow-journal event family for normalized tracker facts
+that satisfy a named observation contract. Complete graph reads, unchanged
+graph reconfirmations, focused task-work specification reads, and sufficiently
+evidenced mutation results may produce it. A mutation acknowledgement without
+the required coverage, completeness, consistency, freshness, and replacement
+evidence cannot stand in for an observation.
+_Avoid_: Provider response dump, mutation acknowledgement, parallel graph event
 
 **Best available durable graph knowledge**:
-The reducer's reconstruction of usable journaled task and edge facts, proven
-absences, and unresolved conflicts for each observed graph area. It may lag
-current tracker facts and changes only by folding later journal events.
+The reducer's reconstruction of usable task and edge facts from
+`TaskTrackerFactsObserved` history. It may lag current tracker facts and changes
+only by folding later facts with explicit coverage, completeness, consistency,
+freshness, and replacement evidence.
 _Avoid_: Current task graph, persisted frontier, tracker authority
 
-**Task-graph knowledge conflict**:
-Two successful `TaskGraphFactsUpdated` events report incompatible facts for one
-subject without comparable provider evidence proving which fact is newer. The
-conflict makes only that fact or dependent graph region unavailable pending a
-focused reread.
-_Avoid_: Invalid managed history, whole-run blocker, last-journal-event wins
+**Delivery frontier**:
+The process-local, evidence-bearing projection of each ticket's eligibility or
+graph-owned reason for exclusion from delivery. It is derived from one current
+complete task graph and does not include exact workflow responsibility,
+process-local ownership, held positions, or integration resources.
+_Avoid_: Runnable workflow transition, persisted frontier, admission result
+
+**Bounded parallel tickets**:
+The process-local desired tickets selected from one delivery frontier under the
+current control policy. The selection may include a ticket that cannot yet
+acquire a task-work position; it neither holds a position nor proves that an
+action or workflow responsibility began.
+_Avoid_: Admitted tasks, running attempts, capacity positions
+
+**Ticket delivery**:
+The process-local lifecycle relationship derived from desired ticket placement
+and every exact outstanding workflow responsibility for that ticket. It can
+describe a selected ticket before its first intent and can retain a ticket
+after planned-attempt executor work ends while integration or another delivery
+consequence remains outstanding. It is not persisted, is not proof that an
+outside action occurred, and does not make the Dalph executor responsible for
+claim acquisition, integration, cleanup, or tracker mutation.
+_Avoid_: Planned-attempt executor-work responsibility, integration responsibility, durable delivery flag
+
+**Delivery action proposal**:
+A pure description of one exact next Dalph protocol action, its immutable
+route, domain order evidence, and complete task-work or integration-resource
+requirements. Constructing, comparing, or observing a proposal performs no
+action and acquires no process-local resource.
+_Avoid_: Workflow occurrence, admitted action, runtime ownership
+
+**Delivery action planning**:
+The process-local descriptive composition that combines current delivery
+consequences with exact proposed-action requirements from tracker observation,
+ticket delivery, settlement or integration, and tracker reflection into one
+ordered proposal frontier. It performs no action, admits no resource, allocates
+no identity, and owns no fiber.
+_Avoid_: Delivery runtime relation, action execution, action controller
+
+**Delivery live action ownership**:
+The process-local owner, exact admission reservation, and scoped fiber for one
+admitted delivery action proposal. It prevents a second start for that exact
+proposal while the action runs and, after success, until an ordinary accepted
+fact publication removes the proposal. It is discarded on process loss and is
+never durable evidence that the boundary request did or did not happen.
+_Avoid_: Workflow responsibility, accepted action result, persisted owner,
+relation revision
+
+**Run quiescence**:
+The process-local condition for one Run in which no delivery action is currently
+executable and no admitted delivery action is still running. It does not prove
+that every task completed, every responsibility settled, the tracker graph was
+freshly reconfirmed, the Run may terminate, or the coordinator process should
+remain alive.
+_Avoid_: Run completion, empty target, polling permission, finality proof
+
+**Delivery settlement**:
+An established terminal delivery fact backed by the accepted integration and
+exact resource-disposition protocols. A terminal executor report, accepted
+result, constructed candidate, request acknowledgement, or tracker command is
+not a delivery settlement.
+_Avoid_: Executor completion, integration candidate, tracker completion request
 
 **Potentially mixed-time task-graph read**:
 A normalized task-graph read result assembled without a provider guarantee that
@@ -179,7 +422,7 @@ A typed task-tracker adapter failure proving that provider reads used for one
 requested task-graph result cannot form one valid normalized value. It exposes
 the contradiction to the caller-selected task-graph read policy instead of
 returning a potentially mixed-time result.
-_Avoid_: Potentially mixed-time task-graph read, invalid managed history, provider retry policy
+_Avoid_: Potentially mixed-time task-graph read, invalid workflow-journal history, provider retry policy
 
 **Task-graph read policy**:
 The caller-selected, bounded policy for retrying one failed provider page and
@@ -257,6 +500,15 @@ token currently own the task. It does not prove that the task remains open or
 inside the run's current task-tracker target closure.
 _Avoid_: Claim request acknowledged, claimed task eligibility observed
 
+**Explicit task-claim reacquisition authority**:
+The durable authority linking one replacement task-claim acquisition intent to
+one earlier applied Operator direction for that Run and task. The direction's
+non-person `TaskClaimReacquisitionRequestId` coalesces exact transport
+redelivery and remains available after a coordinator restart. The authority is
+represented explicitly on the acquisition operation; an `OperationId`
+spelling or an earlier claim token cannot imply it.
+_Avoid_: Operation-ID prefix, stale claim token, automatic reacquisition
+
 **Completion claim**:
 The temporary task-tracker record that replaces one exact active task claim
 immediately before Dalph asks the task tracker to mark the task complete. It
@@ -268,10 +520,139 @@ _Avoid_: Task claim, task completed successfully, Git branch
 **Planned task attempt**:
 One immutable Dalph decision to try one exact task revision fingerprint in one
 run from one exact Base SHA. It binds its attempt identity, branch ref,
-worktree path, executor locator, and task-work-session locator before Dalph
-creates or discovers any of those execution resources. Planning it does not
-prove that an external resource exists or that task work started.
-_Avoid_: Plan, attempt plan, task, task work, task-work session, retry counter
+worktree path, and executor locator before Dalph creates or discovers either
+execution resource. Planning it does not prove that an external resource
+exists or that executor work started.
+_Avoid_: Plan, attempt plan, task, task work, retry counter
+
+**Attempt-choice request identity**:
+The non-person identity of one Operator request to continue or stop one exact
+pre-integration planned task attempt. It coalesces exact request redelivery and
+cannot identify another attempt or a different choice.
+_Avoid_: Operator identity, attempt identity, operation identity, idempotency key
+
+**Accepted result**:
+The immutable Git commit returned by the executor after its whole bounded
+workflow accepts one planned attempt. It does not select repository policy,
+prove integration lineage, promote a ref, or complete the tracker task.
+_Avoid_: Completed task, integrated commit, promoted result
+
+**Integration responsibility**:
+The durable Dalph responsibility created after the exact accepted terminal
+report is recorded and paired with the coordinator-selected repository/ref
+target. Its workflow-journal position supplies its order; it is not a second
+queue row or an integration-resource lease.
+_Avoid_: Integration queue entry, target lock, accepted executor report
+
+**Integration start**:
+The durable initiated action that crosses one integration responsibility's
+non-cancellable cutoff. It consumes the derived pre-integration cancellation
+capability, but does not prove candidate construction, verification, promotion,
+or tracker completion.
+_Avoid_: Integration completed, target promoted, task completed
+
+**Integration target resource**:
+The process-local serialized right to act on one exact repository/ref target.
+It is acquired before integration starts, released while the started
+responsibility waits on tracker prerequisites, and recreated empty after
+process restart. The journal never stores its ownership.
+_Avoid_: Integration responsibility, durable lock, queue position
+
+**Integration session**:
+One resumable integration-agent responsibility bound to a started integration
+responsibility, its accepted result, one fixed expected target head, and a
+persisted isolated candidate resource. At most one session for an accepted
+result is unsettled; a superseded session may be followed by one bound to the
+newly observed head. Its resource is distinct from the planned task worktree. A
+conflict, process restart, or invalid submitted object continues the existing
+identity and does not supersede it or authorize a successor session.
+_Avoid_: Process invocation, retry attempt, worktree tip, candidate commit
+
+**Integration-session supersession**:
+The durable fact that one integration session's fixed expected target head is
+stale, ending that session while preserving its candidate and isolated work as
+evidence. It is not delivery settlement; it permits a successor session for
+the same accepted result and newly observed target head.
+_Avoid_: Integration-session settlement, retry, replacement session, delivery settlement
+
+**Integration candidate**:
+The first explicitly submitted commit that Git proves has exactly two ordered
+direct parents: the fixed expected target head first and the immutable accepted
+result second. Construction does not verify the contents, update the target
+ref, or complete the tracker task.
+_Avoid_: Worktree HEAD, agent success, verified candidate, promoted result
+
+**Target verification request**:
+The deterministic initial request derived from one exact constructed-candidate
+journal occurrence and one configured public verification plan. Every wrapper
+result carries its complete candidate, session, target, plan, and request
+correlation. Recovery reuses this request; it does not allocate a replacement
+to escape an ambiguous response.
+_Avoid_: Verification process, command invocation, retry attempt, OperationId
+
+**Target verification evidence manifest**:
+The immutable content-addressed envelope for one exact terminal target
+verification result. It names the constructed-candidate occurrence, complete
+request correlation, terminal outcome, and separately content-addressed
+artifacts. Dalph rereads every object and the manifest before recording the
+sealed result. Only a sealed `Passed` manifest can become a later promotion
+premise.
+_Avoid_: Process exit, log file, verification success flag, promoted candidate
+
+**Public target-verification wrapper**:
+The repository-selected boundary that runs or resumes one target verification
+request and owns any heavy-verification lock needed by its commands. Dalph
+does not acquire that lock separately, inspect private commands, or nest a
+guarded invocation.
+_Avoid_: Dalph lock controller, package script, internal verification command
+
+**Target promotion request**:
+The deterministic request that offers one exact verified candidate M to one
+repository/ref target by atomically replacing M's fixed first parent H. It
+binds the constructed-candidate occurrence and sealed passing verification
+manifest. Recovery reuses it; another operation identity cannot change H, M,
+the target, or the evidence.
+_Avoid_: Force update, target-head observation, candidate replacement, tracker completion
+
+**Target promotion attempt intent**:
+The durable numbered fact written immediately before Dalph may ask Git to
+perform one target promotion request. A crash after this fact cannot prove
+whether the request crossed Git, so recovery treats its ordinal as consumed
+and reconciles before considering the next intent. The first intent requires a
+current exact-H Git proof. After ambiguity, another intent requires Git to
+report exact H again. One candidate permits at most three intents; Git reads
+are not attempt intents.
+_Avoid_: Retry loop iteration, Git read, promotion request identity, candidate attempt
+
+**Promoted integration proof**:
+The durable fact that Git either accepted the exact `H -> M` compare-and-set or
+later proved M is the target head or its ancestor. It retains M's ordered
+parents and sealed passing verification manifest. Equivalent content, a patch
+match, or a journaled request without Git ancestry is not this proof.
+_Avoid_: Verification pass, compare-and-set intent, target head alone, completed tracker task
+
+**Non-convergent target promotion**:
+The durable preservation disposition after three exact target-promotion
+attempts remain unresolved and the final Git reconciliation does not establish
+promotion or a different readable head. Dalph keeps M, its candidate resource,
+session, accepted result, and sealed evidence, releases its process-local
+target position, and sends no fourth attempt.
+_Avoid_: Failed task, discarded candidate, automatic replacement, unbounded retry
+
+**Pending candidate submission**:
+One explicit candidate commit awaiting a readable Git object-type and parent
+observation. An unreadable Git call preserves this submission for a later
+reread without asking the integration agent to resubmit it.
+_Avoid_: Missing object, invalid candidate, agent failure
+
+**Non-convergent candidate construction**:
+The durable disposition after either the separately selected positive
+correction limit or automatic agent-continuation limit is exhausted in one
+integration session. Dalph preserves the accepted result and isolated Git
+work, leaves the task incomplete, and releases the process-local
+integration-target resource for unrelated work. Production supplies both
+limits explicitly; Dalph does not silently choose them.
+_Avoid_: Failed task, discarded worktree, replacement session
 
 **Planned-task-attempt recording predecessor**:
 An earlier workflow operation named by a planned-task-attempt recording
@@ -284,8 +665,8 @@ _Avoid_: Plan predecessor, dependency, prior task version
 A fresh Git observation proving that one planned task attempt's exact worktree
 path is registered to its exact branch, reporting current `HEAD`, and that Git
 successfully checked the attempt's declared Base SHA as an ancestor of that
-`HEAD`. This proof is logged before Dalph asks the task-work provider to begin
-agent work.
+`HEAD`. This proof is logged before Dalph starts or continues the
+planned-attempt executor work.
 _Avoid_: Worktree created, branch exists, task execution admitted
 
 **Git worktree reconciliation fact**:
@@ -297,11 +678,43 @@ current `HEAD`. Dalph preserves the resource and fact for operator repair; it
 does not repair, move, reset, clean, or delete the resource.
 _Avoid_: Git error, worktree cleanup candidate, recoverable mismatch
 
+**Attempt worktree lost**:
+A read-only Git observation that the exact worktree previously prepared for
+one immutable planned task attempt is no longer registered. It carries that
+attempt's exact branch, path, Base, Run, and task identity through the plan.
+Dalph records the observation, safely suspends running executor work, and
+preserves the claim, plan, evidence, and remaining resources. It never
+authorizes recreating or repairing the disappeared worktree.
+_Avoid_: Missing fresh worktree, worktree reconciliation request, disposable
+worktree
+
+**Target lineage observation**:
+Git's exact current integration-target head together with whether one planned
+attempt's immutable Base is its ancestor. Compatible advancement leaves the
+attempt unconstrained. A proven non-ancestral target rewrite creates a
+task-local Git constraint and preserves independent task eligibility.
+_Avoid_: Target version, Base equality check, integration completion
+
+**Result commit qualification**:
+The pure decision from Git's result-commit existence and ancestry facts.
+Missing or non-descendant commits are rejected while the planned worktree,
+claim, and evidence remain preserved. Qualification does not construct or
+verify an integration candidate.
+_Avoid_: Executor result, candidate verification, integration success
+
+**Exact-head promotion decision**:
+The pure authorization immediately before the concrete promotion protocol. A
+verified candidate may be offered only by compare-and-set against its exact
+expected target head. A stale exact head selects candidate reconciliation; an
+ambiguous head requires a reread. Neither decision authorizes a force update.
+_Avoid_: Target overwrite, promotion result, integration start
+
 **Task revision fingerprint**:
-The opaque fingerprint of one normalized task's exact tracker-observed content
-bound to a planned task attempt. It compares observed content; it is not a
+The opaque fingerprint of one task-work specification's exact normalized
+tracker-authored title and body, bound to a planned task attempt. It excludes
+lifecycle, dependency, grouping, membership, and claim facts. It is not a
 version counter, release version, edit sequence, or historical revision chain.
-It is distinct from the fingerprint of the complete task-graph snapshot.
+It is distinct from the fingerprint of the complete task-graph observation.
 _Avoid_: Task version, version number, tracker revision, Git commit, journal
 position
 
@@ -311,819 +724,6 @@ exact claim, target-closure membership, and complete blockers needed before
 Dalph starts another long-running action for an existing attempt.
 _Avoid_: Initial attempt eligibility, coding-agent progress poll, global refresh
 
-**Task executor locator**:
-The branded locator selecting the configured executor for one planned task
-attempt. It is not a provider-assigned task-work-session identity.
-_Avoid_: Task runner, task-work session ID, worker process ID
+## Executor-internal policy
 
-**Task executor**:
-The task-runner application boundary that starts or resumes the configured
-implementer in one exact established task-work session and freshly observes its
-worker process. It does not establish sessions, allocate workflow operation
-identities, or decide task-tracker success.
-_Avoid_: Task runner as a whole, task-work provider, task executor locator
-
-**Task-work-session locator**:
-The branded, Dalph-planned locator used to create or rediscover one exact
-task-work session. A task-work provider may later report a distinct native
-session identity for that locator.
-_Avoid_: Task-work-session identity, executor locator, worktree locator
-
-**Task work**:
-The activity performed to satisfy a task's requested repository change. Task
-work is not the task record, Dalph's request to begin, a capacity slot, a
-session identity, or an operating-system process.
-_Avoid_: Task execution, task, attempt, session, process
-
-**Task-work session**:
-A provider-assigned identity and record associating one planned task attempt
-with its current and past provider work units or worker processes. A provider
-that supports resumption reuses that session identity across running units.
-_Avoid_: Task, planned task attempt, worker process, task execution
-
-**Worker process**:
-One operating-system process, identified by an operating-system process ID,
-that performs task work within a task-work session. Process exit does not by
-itself decide the task's task-tracker lifecycle.
-_Avoid_: Provider work unit, task-work session, task, task execution
-
-**Provider work unit**:
-One provider-specific running unit, such as a Sandcastle job. It may wrap a
-container, virtual machine, agent run, or process; Dalph does not call it an
-operating-system process unless the provider reports an OS process ID.
-_Avoid_: Worker process, task-work session
-
-**Provider work-unit availability**:
-The task-work provider adapter's explicit observation of one registry-known
-provider work unit: available with current details, confirmed purged by the
-native provider, or temporarily unreadable. Purged and unreadable units remain
-known members of their task-work session rather than disappearing from its
-history.
-_Avoid_: Task-work session existence, provider work-unit result, empty provider listing
-
-**Provider work unit purged**:
-The provider adapter proves that one registry-known provider work unit existed
-and that its native record was intentionally removed. Its task-work session
-remains established, but that work unit cannot be resumed; later workflow must
-select replacement, preservation, or failure explicitly.
-_Avoid_: Provider work unit absent, provider work unit temporarily unreadable, no matching task-work session reported
-
-**Dalph-assigned identity**:
-An identity Dalph creates before recording or requesting a workflow action, such
-as a `RunId` or `OperationId`.
-_Avoid_: Managed identity, provider-reported identity
-
-**Provider-reported identity**:
-A session, provider-work-unit, or process identity created outside Dalph and
-returned through a task-work provider adapter. Dalph may record it but does not
-claim to have assigned it.
-_Avoid_: Dalph-assigned identity, managed identity
-
-**Task runner**:
-The part of Dalph the coordinator calls to ask a configured task-work provider
-to start work and report current task-work sessions, provider work units, and
-worker processes. It is not a separate deployed application or microservice by
-definition.
-_Avoid_: Execution service, execution substrate, task tracker, Dalph coordinator
-
-**Task-work provider**:
-The configured local mechanism or external application that creates and reports
-task-work sessions, provider work units, or worker processes. A local process
-provider and a future Sandcastle provider are different concrete task-work
-providers.
-_Avoid_: Task runner, task tracker
-
-**Task-work provider adapter**:
-The part of the task runner that translates start requests and session lookups
-for one concrete task-work provider. It is an application boundary, not a
-deployment boundary: an adapter may wrap a local CLI, operating-system process,
-SDK, filesystem-backed runner, or remote API. A local adapter reads OS
-processes; a future Sandcastle adapter reads Sandcastle sessions and work units.
-_Avoid_: Task runner, task-work provider, execution service
-
-**Task-work provider correlation registry**:
-Provider-adapter-owned durable metadata that correlates one exact `OperationId`
-and planned task attempt with its provider-assigned task-work session and
-provider work units. It survives for the lifetime of every recoverable run even
-when a provider removes native session details. It is neither Dalph workflow
-journal state nor a retained transcript or cached process listing.
-_Avoid_: Dalph workflow journal, task-work provider cache, workflow projection, native session retention
-
-**Task selected by the task-tracker target**:
-A task belongs to the task-tracker target closure after Dalph applies the
-configured grouping/query selector and prerequisite expansion. Selection does
-not claim the task, reserve capacity, or prove that work started.
-_Avoid_: Claimed task eligibility observed, task admission, task start
-
-**Claimed task eligibility observed**:
-After claim acquisition, a fresh read through the real task-tracker boundary
-proves that the claimed task is open, remains in the run's task-tracker target
-closure, and has no unsatisfied prerequisite. Dry-run, rejected claims,
-inaccessible reads, and missing, non-open, or blocked tasks cannot establish
-this event.
-_Avoid_: Tracker execution admitted, task claim acquired, task execution admitted
-
-**Task execution admitted**:
-The coordinator admits one runnable planned task attempt into its bounded
-task-work capacity. Admission does not prove tracker scope or that a session,
-provider work unit, or worker process started.
-_Avoid_: Claimed task eligibility observed, task execution started
-
-**Task execution started**:
-The task-work provider reports evidence that task work began. Claim ownership,
-bounded capacity, a start request, or task-work session establishment alone
-cannot establish this event.
-_Avoid_: Claimed task eligibility observed, task execution admitted, task-work start requested
-
-**Task execution request**:
-The coordinator asks the configured executor to start or resume one worker
-process in the exact provider-assigned task-work session established for a
-planned task attempt. The request retains the `OperationId` allocated at task
-execution admission. Dalph records the exact request attempt immediately before
-the adapter boundary; its return does not prove that a process began or exited.
-_Avoid_: Task-work session establishment, task execution started, task execution outcome
-
-**Task execution interruption request**:
-The coordinator asks the configured executor to stop one exact running worker
-process while preserving its task-work session and planned task attempt for
-later reconciliation or resumption. Dalph may select this action while carrying
-out a user-requested pause, but the action is not itself a pause. The request's
-return does not prove that the process stopped; a fresh task-execution
-observation must report interruption or another terminal outcome.
-_Avoid_: User-requested task pause, task cancellation, task abandonment
-
-**Task execution observation**:
-A fresh task-work-provider read correlating the admission `OperationId`, exact
-task-work session, and worker process. A running or terminal observation proves
-that task execution started. A running observation remains nonterminal; only a
-terminal observation reports success, nonzero exit, or interruption; provider
-uncertainty remains explicit.
-_Avoid_: Request acknowledgement, task execution admission, task completion
-
-**Task execution session conflict**:
-Fresh provider evidence that the session associated with an execution request
-is stale, replaced, foreign, or absent from durable provider correlation.
-Dalph preserves the evidence and does not select another session, create a
-replacement identity, or advance the attempt.
-_Avoid_: Task-work session lookup failure, task execution outcome, retry
-
-**Task execution outcome observation**:
-The discriminated successful, nonzero-exit, or interrupted process
-fact returned by the task-work provider for one admission `OperationId` and
-exact session. Nonzero exit and interruption preserve WIP and bounded partial
-output. This observation does not decide task-tracker success.
-_Avoid_: Task execution started, task completed successfully, review result
-
-**Implementation evidence object**:
-One complete byte sequence stored atomically under its SHA-256 content address
-in the EvidenceStore. An object may contain executor output, a Git diff, or a
-stage manifest; its presence alone does not authorize review.
-_Avoid_: Workflow journal event, cached output, review result
-
-**Implementation evidence manifest**:
-The immutable implementation-stage record that names the exact successful task
-execution operation as its causal predecessor and references the complete
-content-addressed executor-output and Git-diff objects. The current selected
-executor seals the manifest only after both referenced objects are readable
-from the EvidenceStore.
-_Avoid_: Partial evidence, mutable report, task completion
-
-**Implementation review authorization**:
-A value decoded from one complete sealed implementation evidence manifest.
-Unsealed bytes, partial manifests, dry-run projections, and deterministic-test
-projections cannot establish it.
-_Avoid_: Review request, successful process exit, simulated evidence
-
-**Semantic review round**:
-One reviewer disposition for the latest successful implementer invocation of
-one planned task attempt. A round consumes no technical retry count; later
-retry and convergence policy owns whether another round may begin.
-_Avoid_: Reviewer process, technical retry, task attempt
-
-**Implementation review round limit**:
-The positive bound captured on every review request for one planned task attempt.
-It limits successful semantic reviewer dispositions, not retries of a failed
-reviewer or handback invocation. Findings at the limit select implementation
-non-convergence and cannot select another unchanged handback/rework round.
-_Avoid_: Technical retry limit, time limit, implicit progress
-
-**Implementation acceptance**:
-The final successful outcome of the current implementation-and-review protocol.
-It may select later integration work but does not complete the tracker task,
-settle every task responsibility, or terminate the run.
-_Avoid_: Successful process exit, tracker task completion, task terminal state
-
-**Implementation non-convergence**:
-The final unsuccessful outcome of the current implementation-and-review
-protocol selected when a findings-bearing
-sealed review consumes the captured implementation review round limit. It is a
-semantic result and remains distinct from exhausted technical transport retry.
-_Avoid_: Reviewer failure, handback failure, task execution failure, run termination
-
-**Implementation technical retry exhaustion**:
-The final unsuccessful outcome of the current implementation-and-review
-protocol selected only after the exact reviewer or findings-handback invocation
-consumes its captured technical retry schedule. It does not advance the
-semantic round or by itself terminate the task or run.
-_Avoid_: Implementation non-convergence, finding, coordinator interruption, run termination
-
-**Demonstrated resource emergency**:
-Fresh execution-provider evidence that memory, process capacity, or storage was
-exhausted while preserving WIP and bounded partial output. It terminates the
-implementation loop and forbids automatic retry of the unchanged invocation.
-_Avoid_: Nonzero exit, timeout inference, generic execution failure
-
-**Technical retry scope**:
-The exact reviewer invocation or findings-handback invocation whose typed
-technical failures share one captured positive retry limit and bounded
-exponential delay policy. The scope retains its workflow operation and semantic
-review round, but its technical retry ordinal is a separate branded fact.
-_Avoid_: Semantic review round, task attempt, coordinator recovery budget
-
-**Technical retry scheduled**:
-The Dalph workflow-journal fact that the current selected executor records
-after one typed technical invocation failure and before waiting. It binds the
-active technical retry scope, next technical retry ordinal, capped delay, and
-absolute `notBefore` read from the Effect clock. It does not prove that the
-retry began and does not make a coordinator interruption by itself consume or
-preserve budget; later recovery compares it with an exact
-deferral-supersession intent.
-_Avoid_: Reviewer finding, semantic handback, timer instance, retry attempt
-
-**Technical retry deferral superseded**:
-The Dalph workflow-journal intent that the current selected executor records
-after one scheduled retry becomes eligible and immediately before that
-executor asks the same provider invocation to create or rediscover its exact
-result. It retires exactly that scope and retry ordinal's deferral. It does not
-prove that the request crossed the provider boundary or consume another
-technical retry or semantic review round.
-Like its matching schedule, it is valid only after the exact invocation intent
-and before that invocation's durable outcome.
-_Avoid_: Retry completed, timer fired, semantic review advanced
-
-**Reviewer invocation**:
-One request made by the current selected executor to a fresh independent
-reviewer, identified by an executor-internal workflow operation and durable
-reviewer-session identity before it crosses the reviewer boundary. Executor
-recovery resumes that exact invocation rather than creating another semantic
-round. The generic Dalph orchestrator sees only its outer invocation
-projection.
-_Avoid_: Review result, implementer invocation, retry attempt
-
-**Reviewer session**:
-The durable identity for one reviewer invocation. A later semantic round must
-use a different reviewer session even when it reviews the same planned task
-attempt.
-_Avoid_: Task-work session, reviewer identity, semantic review round
-
-**Implementation review evidence**:
-An immutable content-addressed manifest that references its immediate evidence
-predecessor, binds the planned task attempt, exact worktree, latest implementer
-invocation and session, reviewer session, and semantic round, and retains the
-complete finding history together with the reviewer disposition in the current
-review-capable executor protocol.
-The current review contract has no partial-resolution state: every finding in
-that history remains unresolved and is supplied to the next fresh reviewer
-until one accepted disposition resolves the complete set. The accepted manifest
-retains the history as immutable audit evidence rather than current findings.
-It is not a universal requirement of every future executor or resolution
-protocol.
-_Avoid_: Implementation evidence, mutable review report, workflow trace, task completion evidence
-
-**Review findings handback**:
-The request that sends one findings-bearing implementation review evidence
-object to the exact task-work session and latest implementer invocation that
-produced the reviewed implementation. A stale invocation, foreign session, or
-different planned task attempt cannot receive it.
-_Avoid_: Technical retry, new task attempt, reviewer response
-
-**Task-work start requested**:
-The coordinator asks the task runner to start task work by requesting a new
-provider session or running unit for one planned task attempt. Sending the
-request does not prove that the provider created a task-work session, provider
-work unit, or worker process.
-_Avoid_: `ExecuteTask`, task execution, task start, execution request
-
-**Task-work session lookup requested**:
-The coordinator asks the task runner to read the task-work provider's current
-session and running-unit records for one planned task attempt. This read-only
-request never creates task work.
-_Avoid_: Task-work start requested, retry
-
-**Task-work session reported**:
-The task runner returns the completed session lookup. The report distinguishes
-an absent session, a matching session with its provider work units or worker
-processes, and conflicting records instead of collapsing them into “executed.”
-For a matching session, every registry-known provider work unit is reported as
-available, confirmed purged, or temporarily unreadable. Failure to establish
-the session correlation itself produces no session report.
-_Avoid_: Task execution started, task started, executed
-
-**No matching task-work session reported**:
-The task-work provider adapter proves from complete durable correlation metadata
-that no current or historical task-work session matches the exact `OperationId`
-and planned task attempt. A request error, empty native session listing, purged
-native session, or unavailable registry cannot establish this report.
-_Avoid_: Task-work session lookup failure, native session absent, task-work session correlation conflict
-
-**Task-work session correlation conflict**:
-A fresh task-work session lookup reports multiple matches, an identity or
-payload mismatch, or other provider records that contradict the exact
-`OperationId` and planned task attempt. Dalph preserves the conflicting
-provider evidence and blocks the affected workflow operation instead of
-choosing a session, requesting another one, or overriding provider authority.
-_Avoid_: Task-work session reported, execution resource conflict, lookup failure, operator-selected session
-
-**Task-work session lookup failure**:
-The task runner could not obtain an authoritative task-work session report from
-the configured provider. It records why the fresh result check could not
-answer, leaves the task-work start operation unresolved, and authorizes only a
-later fresh result check.
-_Avoid_: No matching task-work session reported, task-work session correlation conflict, task-work session established
-
-**Task-work session result reported**:
-The provider's terminal completion, failure, or interruption for one task-work
-session, returned through the task runner. It does not decide whether the task's
-requested repository change is acceptable or whether the task tracker should
-mark the task successful. A running session has current state but no result.
-_Avoid_: Task execution outcome observation, task admission, canonical task ordering
-
-**Workflow operation**:
-One named Dalph action or observation, such as requesting task-work start or
-recording a task-runner report. It is neither the whole task nor an individual
-SDK, CLI, or agent tool call.
-_Avoid_: Generic operation, tool call, task
-
-**Workflow operation intent**:
-The immutable journal event recording one selected workflow operation before
-Dalph crosses the boundary named by that operation. It proves neither that a
-request was sent nor that an external application changed.
-_Avoid_: Request acknowledgement, external fact, operation result
-
-**Operation identity**:
-The stable Dalph-assigned identity allocated when one workflow operation is
-selected. Once its intent is committed, the identity links that immutable
-intent to any state-changing request, fresh result checks, recovery, repeats of
-that same request, and its recorded outcome.
-_Avoid_: Task identity, attempt identity, journal position
-
-**Causal predecessor**:
-A workflow operation whose recorded outcome or decision was necessary to select
-another workflow operation. Direct `OperationId` references record this
-relationship; journal adjacency and tracker task dependencies do not.
-_Avoid_: Previous journal event, task prerequisite, earlier operation
-
-**Workflow responsibility**:
-Dalph's durable obligation to continue, reconcile, preserve, isolate, or
-dispose one exact task-coordination action, workflow operation, or external
-resource. It does not claim ownership of the external authority's facts.
-_Avoid_: Task claim, external resource ownership, whole-attempt responsibility flag
-
-**Workflow responsibility relinquished**:
-The durable disposition ending one exact workflow responsibility after current
-authority facts show that Dalph may no longer act on that subject. Other
-responsibilities for the same task attempt remain until separately discharged
-or relinquished.
-_Avoid_: Attempt abandoned, task completed, external history rewritten
-
-**Continuation constraint**:
-One independently derived fact that prevents a named forward-progress action
-until its owning authority changes or the Dalph user records an accepted
-disposition. It composes with pause and other constraints instead of becoming a
-combined task status.
-_Avoid_: Generic blocker, whole-run failure, persisted workflow stage
-
-**Task-specification change hold**:
-The continuation constraint activated when a fresh task-tracker read reports a
-task-work specification fingerprint different from the one bound to the
-planned task attempt.
-_Avoid_: Task pause, automatic replan, executor incorporated changes
-
-**Task-lifecycle hold**:
-The reversible continuation constraint activated when the task tracker reports
-a terminal task lifecycle that does not mean successful completion. It
-preserves the attempt and resources while unrelated work continues.
-_Avoid_: Task completed successfully, attempt abandonment, task pause
-
-**Target-membership constraint**:
-The reversible continuation constraint activated when a complete task-tracker
-read proves that an active task no longer belongs to its run's task-tracker
-target closure.
-_Avoid_: Incomplete graph read, task deletion, task pause
-
-**Claim-authority hold**:
-The continuation constraint activated after bounded task-tracker reads cannot
-determine the current exact claim. Unreadability does not prove that the claim
-was lost or authorize reacquisition.
-_Avoid_: Foreign claim, unclaimed task, automatic claim reacquisition
-
-**Git-lineage constraint**:
-The reversible continuation constraint activated when a fresh Git read proves
-that the planned Base is no longer an ancestor of the configured integration
-target.
-_Avoid_: Compatible target advance, dirty worktree, automatic rebase
-
-**Attempt worktree lost**:
-The terminal planned-attempt outcome recorded when Git proves that the exact
-planned worktree path is missing or no longer registered as planned. It does
-not authorize repair, replacement discovery, or resource cleanup.
-_Avoid_: Worktree unreadable, Git worktree reconciliation fact, attempt abandoned
-
-**Native task-work session unavailable**:
-The provider observation that a successful complete read no longer returns one
-historically correlated provider-native task-work session. It records no cause
-and does not authorize replacement without a separate user action.
-_Avoid_: Session unreadable, session purged by user, no matching session reported
-
-**State-changing request**:
-A request that may change state outside Dalph's journal: for example, claiming
-a task through the task tracker, creating a Git ref, or asking a task runner to
-start task work.
-_Avoid_: Mutation, controlled mutation, effect
-
-**State-changing request acknowledgement**:
-The durable workflow result recording that the named external boundary returned
-from one state-changing request. It updates reconstructed graph knowledge only
-when the same event also carries normalized task-graph facts under an accepted
-adapter contract.
-_Avoid_: Current external fact, fresh result check, duplicate observation event
-
-**Uncertain request outcome**:
-The state after Dalph recorded its intent to send a state-changing request but
-did not record the result and cannot yet determine the result by rereading the
-task tracker, Git, or task runner. It names one missing answer, not generic
-workflow ambiguity.
-_Avoid_: Ambiguity, ambiguous effect, temporary ambiguity seam
-
-**Fresh result check**:
-A new read made after an uncertain request outcome from the exact boundary the
-request targeted: the task tracker for a claim, Git for a ref, or the task runner
-reading the task-work provider through its configured adapter for a task-work
-session. Journal replay and cached projections are not fresh result checks.
-_Avoid_: External authority observation, fact-owner observation
-
-**Task-work start request acknowledgement**:
-The provider response saying one task-work start request returned. Dalph records
-it as managed workflow history, but it does not prove that a task-work session
-exists and never replaces the required fresh result check.
-_Avoid_: Task-work session reported, task-work session result reported, recovery authority
-
-**Task-work session established**:
-The managed workflow outcome recorded after a fresh result check reports exactly
-one task-work session matching the start request's stable `OperationId` and
-complete planned task attempt. It says only that the requested session for that
-one planned task attempt exists. An established session may normally contain no
-provider work unit or worker process yet; requesting that work is a distinct
-workflow operation. The session's current state and terminal result remain
-separate provider observations.
-_Avoid_: Task-work start request acknowledgement, task-work session result reported, task completed successfully
-
-**Uncertain-request recovery rules**:
-The explicit mapping from a recorded intent plus a fresh result check through
-the same task-tracker adapter, Git operation, or task-work provider adapter to
-the next allowed action: acknowledge an already-applied change, make a first
-request, stop on a contradiction, or wait/fail when the check cannot currently
-answer.
-_Avoid_: Operation-aware launch/observation protocol, reconciliation magic
-
-**Workflow comparison trace**:
-A derived sequence of comparison-trace entries used to compare live, dry-run,
-and deterministic-test interpreters. Entries come from interpreter reports, not
-journal event records, and are not persisted as current task, Git, session,
-process, or workflow-journal state.
-_Avoid_: Dalph workflow journal, audit log, dry-run-specific trace
-
-**Runnable frontier**:
-The process-local set of exact per-responsibility workflow transitions that
-reconstructed managed-run state and accepted policy currently allow before
-applying task-work capacity. Its derivation also returns a typed wait, pause,
-isolation, relinquishment, or settled reason for each responsibility with no
-legal transition; neither result is persisted as authority.
-_Avoid_: Admission set, managed-run recovery stage, persisted queue, durable graph knowledge, task-tracker target closure
-
-**Admission set**:
-The process-local, deterministically ordered subset of the runnable frontier
-chosen for currently available task admission positions. Membership commits no
-workflow responsibility until Dalph records the selected transition's exact
-operation intent.
-_Avoid_: Runnable frontier, persisted queue, task claim, task execution admitted
-
-**Selected transition identity**:
-The exact structural process-local identity of one workflow transition returned
-by the selector before its operation intent is recorded. It combines the run,
-transition kind, exact subject, and a deterministic fingerprint of the
-transition's immutable decision inputs, with no random nonce. Unchanged inputs
-recreate an equal identity; changed decision inputs create a different one. It
-creates no workflow responsibility and is not persisted. After intent, the
-durable operation identity replaces it for requests, checks, retries,
-reconciliation, and outcomes.
-_Avoid_: Operation identity, task identity, persisted frontier entry, admission position
-
-**Activation ownership**:
-The process-local exclusive capability held by one owned-operation runner while
-it records or executes one exact selected workflow transition. The activation
-coordinator creates ownership while starting that runner, keys it by selected
-transition identity before intent and by operation identity afterward, and
-removes it after the exact result or interruption rule completes. After intent,
-the live entry retains the immutable selected-transition value only as an
-exclusion correlation; every request, result, retry, and reconciliation action
-uses operation identity. Trigger callers cannot submit a transition or obtain
-this capability. It is not authority over a tracker, Git, executor, provider,
-or their resources.
-_Avoid_: Workflow responsibility, task claim, admission reservation, durable lease
-
-**Activation coordinator**:
-The single scoped process-local actor that receives order-free activation
-signals, reads current reconstructed state and capacity, serially selects and
-admits one exact transition, and creates its owned-operation runner. It derives
-again after each established handoff without waiting for an earlier runner's
-final result. It is not a task executor and stores no durable mailbox, frontier,
-or authority state.
-_Avoid_: Activation consumer, scheduler queue, task executor, actor-system authority
-
-**Owned-operation runner**:
-One scoped Effect fiber created only by the activation coordinator to hold
-activation ownership, execute one exact workflow transition through the
-workflow interpreter, record its exact result, and signal the coordinator.
-Several runners may overlap within capacity and other resource bounds. It is
-not the provider-owned task-work invocation that the interpreted operation may
-start or observe. Its finalizer and signal are live-runtime behavior, not
-guarantees after abrupt process death; later startup reconstructs instead. A
-live-runtime exit before intent makes the exact reserved task-admission position
-available. An exit after intent but before a result retains the position under
-`OperationId` until fresh provider evidence proves whether it is occupied or
-available.
-_Avoid_: Activation coordinator, task executor, task-work invocation, worker process
-
-**Activation in progress**:
-The process-local explanation that one exact frontier transition is already
-represented by a live owned-operation runner. The activation coordinator
-excludes that exact identity from later admission without changing the order of
-remaining transitions. Runtime-observed runner exit removes the ownership;
-abrupt process death discards the explanation and later startup reconstructs
-from durable intent and fresh authority observations.
-_Avoid_: Duplicate activation ownership, persisted running status, capacity waiting
-
-**Duplicate activation ownership defect**:
-The classified implementation defect detected when the private atomic handoff
-attempts to register a second owned-operation runner for one exact transition.
-Before dying, the interruption-masked handoff makes its exact newly reserved
-task-admission position available and creates no runner or external effect. The
-coordinator supervisor isolates the exact subject; this defect is not an
-expected Effect failure.
-_Avoid_: Activation in progress, duplicate-ownership conflict, retryable activation failure
-
-**Task admission position**:
-One process-local unit of configured task-work capacity, reserved while Dalph
-prepares a freshly committed task or occupied while a task-work invocation
-consumes capacity. It is recreated after process loss from configuration,
-workflow responsibility, and fresh observations rather than restored as
-authority. Missing or unreadable provider evidence cannot make an ambiguously
-used position available.
-_Avoid_: Task claim, persisted capacity reservation, worker process
-
-**Capacity waiting**:
-The derived condition in which a runnable transition needing task-work capacity
-is excluded from the admission set because every task admission position is
-reserved or occupied.
-_Avoid_: Durable waiting status, retry deferral, dependency-blocked task
-
-**Control command identity (provisional)**:
-The branded `ControlCommandId` carried by one exact user control request in the
-current issue #62 implementation. That implementation stores the received
-request in the run's workflow journal and uses the identity to distinguish an
-exact redelivery from contradictory reuse. This is not an accepted requirement
-to persist receipt or allocate an identity before append. Issue #155 decides
-what durable fact proves Dalph applied a Pause or Unpause direction, whether
-that fact needs an identity, and which boundary would create one. It remains
-distinct from the `OperationId` of any later workflow action.
-_Avoid_: Accepted command-ID protocol, applied Pause or Unpause evidence,
-operation identity, run identity, provider request identity
-
-**Authenticated operator identity**:
-The branded local-transport identity of the Dalph user who issued one exact
-control command. The authenticating transport supplies it to the
-transport-independent control service; decoding a client payload does not
-authenticate the user. Recording the identity provides command attribution and
-does not grant task-claim, Git, executor, or provider authority.
-_Avoid_: Claim owner identity, provider-user identity, client-supplied username
-
-**Dalph user**:
-The single human actor who issues pause, unpause, interruption, cancellation,
-and other control commands to Dalph. V1 records the authenticated operator
-identity on each command but does not define roles, multi-user authorization
-policy, or transfer command authority between users.
-_Avoid_: Claim owner identity, provider-user identity, authorization role
-
-**User-requested run pause**:
-The durable pause of one exact `RunId` requested by the Dalph user. Dalph
-selects no new forward-progress action for any task in that run after each
-already-started action reaches its specified safe boundary. A run pause does
-not create a user-requested task pause for each task. Unpausing the run removes
-only the run pause; independently paused tasks remain paused. Resuming describes
-later workflow progress after the Unpause direction.
-_Avoid_: Collection of task pauses, run termination, run blocked
-
-**Run pause phase**:
-The reconstructed pause dimension for one run: unpaused, pausing, paused, or
-resuming. Dalph derives it from the run's accepted Pause or Unpause direction
-and the safe-boundary progress of every affected task; it does not write a
-separate phase record. One task or grouping-covered descendant still reaching a
-safe boundary keeps the run pausing and supplies its tagged progress reason.
-_Avoid_: Run termination, collection of task pause phases, persisted run status
-
-**Task pause phase**:
-The reconstructed pause dimension for one task in one run: unpaused, pausing,
-paused, or resuming. Dalph derives it from the accepted user Pause or Unpause
-direction, ordinary workflow outcomes, current grouping-pause coverage, and
-outstanding responsibilities; it does not write a separate phase record. The
-phase composes with rather than replaces the task tracker's lifecycle and claim
-facts, the task's workflow stage, and its resource responsibilities. For
-example, one task may simultaneously be unclaimed and paused while another is
-claimed and pausing.
-_Avoid_: Task lifecycle, task claim state, combined task status
-
-**User-requested task pause**:
-The durable pause of one exact `(RunId, TaskId)` pair requested by the Dalph
-user. After the request reaches its specified safe boundary, Dalph does not
-select new forward-progress actions for that task in that run. A task-graph
-change does not remove the pause; the Dalph user must request Unpause. A
-later run containing the same tracker task does not inherit the pause. The
-task's prerequisites and dependents do not become paused merely because this
-task is paused. Its transitive grouping descendants receive grouping-pause
-coverage without receiving their own pause phase.
-Any existing exact task claim, planned task attempt, worktree, task-work
-session, and unfinished work remain preserved for an ordinary pause such as an
-overnight pause. Only a separate user-requested abandonment, cancellation, or
-handoff may release or transfer the claim.
-_Avoid_: Paused subtree, task-tracker target closure, blocked task
-
-**Grouping-pause coverage**:
-The derived prohibition on forward-progress actions for every transitive
-grouping descendant of a user-requested task pause. Dalph stores only the
-parent's pause phase and recomputes covered descendants from current
-tracker-owned grouping edges. Adding or moving a child changes coverage without
-creating or removing a child pause record. Coverage follows parent-to-descendant
-grouping edges only; it does not create a prerequisite edge, pause a grouping
-ancestor or sibling, or require the parent task to complete.
-_Avoid_: User-requested task pause, dependency-blocked task, persisted pause closure
-
-**Task pausing**:
-The nonterminal state after Dalph accepts a user-requested task pause and before
-it confirms the task's safe pause boundary. Dalph selects no new
-forward-progress action for the task, but it continues the exact bounded wait,
-fresh result check, worker interruption, or provider observation needed to
-settle work already in flight. The reconstructed state carries a tagged pause
-progress reason naming that action and its exact subject. A paused grouping
-parent remains pausing while any covered descendant has not reached its safe
-boundary, and the reason names that descendant. The phase and reason are
-derived so a later UI can explain the delay without persisting separate UI
-state.
-_Avoid_: Task paused, dependency-blocked task, generic pending state
-
-**Task paused**:
-The confirmed task pause phase after every already-started bounded request has a
-known recorded result, every long-running agent invocation has stopped, no
-shared integration resource or task-work-capacity permit remains held for the
-task or a grouping-covered descendant, and their preserved responsibilities are
-explicit. An unresolved request, unreadable authority, or covered descendant
-still reaching its boundary keeps the selected parent task pausing with a
-concrete progress reason. The paused phase creates no polling loop or periodic
-authority read. Only a user Unpause request or a separately configured
-observation policy causes new reads for the task.
-_Avoid_: Task pausing, dependency-blocked task, run blocked
-
-**Task resuming**:
-The nonterminal state after the Dalph user requests Unpause and before Dalph
-allows another forward-progress action for the task. Dalph freshly reads the
-task, claim, applicable task-graph facts, Git resources, and task-work-provider
-state required by the task's preserved responsibilities. Compatible facts
-permit ordinary operation selection; changed or unreadable facts select the
-applicable reconciliation, wait, or isolation rule instead of restarting stale
-work. If Unpause is requested while pause actions remain in flight, Dalph first
-settles those exact actions and derives a progress reason rather than cancelling
-them or starting a competing worker.
-_Avoid_: Unpause command, task execution resumed, crash recovery
-
-**Dependency-blocked task**:
-A task that a fresh task-tracker read reports has at least one unsatisfied
-prerequisite. It is not paused. Dalph automatically considers it for the
-runnable frontier after a later task-tracker read reports no unsatisfied
-prerequisite and every other eligibility rule is satisfied.
-_Avoid_: User-requested task pause, persisted pause closure, grouping descendant
-
-**Dalph workflow journal**:
-The durable history of workflow-operation intents and observed outcomes that
-Dalph records. It contains only that history; current task, Git, task-work
-session, provider-work-unit, and worker-process state must be reread through
-their respective task-tracker, Git, or task-runner operations.
-_Avoid_: Authority journal, audit log, semantic execution trace, tracker state
-
-**Journal event record**:
-One persisted workflow-journal event containing its identity, position, kind,
-version, and payload.
-_Avoid_: Event envelope, serialized coordinator, unvalidated database row
-
-**Journal boundary decode issue**:
-A typed fact that one physical journal row, normalized envelope, or immutable
-versioned payload could not cross its Effect Schema boundary. Discovery retains
-the row ordinal and the run identity when that identity itself decoded; it does
-not discard other rows or convert the issue into an empty history.
-_Avoid_: Invalid managed history, missing run, storage outage
-
-**Git common directory**:
-The canonical Git-owned administrative directory shared by a repository and
-all of its linked worktrees. Dalph uses its canonical path as the key for the
-single-live-coordinator lock.
-_Avoid_: Worktree `.git` file, project directory, coordinator identity, coordinator ownership
-
-**Git common-directory target**:
-A requested path that must resolve to a canonical Git common-directory locator
-before Dalph attempts to acquire the single-live-coordinator lock.
-_Avoid_: Canonical locator, coordinator identity
-
-**Journal history validation**:
-The process that reads journal events in position order, validates rules between
-events, and returns either a recovery state or typed validation errors. Dalph
-does not persist the derived recovery state.
-_Avoid_: Event decoding, coordinator rehydration, reducer rollup table
-
-**Reconstructed managed-run state**:
-The validated process-local composition of reduced graph knowledge, workflow
-history, resource responsibility, and pause state through one applied journal
-position. It is derived from decoded journal events and is neither persisted
-authority nor a runnable frontier.
-_Avoid_: Serialized coordinator, reducer cache table, runnable frontier
-
-**Named workflow wait**:
-A derived reason that one exact responsibility has no immediately legal
-transition, paired with the time, capacity release, graph update, authority
-observation, or executor-declared signal that can make it actionable.
-_Avoid_: Generic waiting status, unresolved request, task paused, branch-local isolation
-
-**Invalid managed history**:
-A preserved run whose individually decoded journal events contradict canonical
-position, record-key, operation-identity, ownership, or workflow-transition
-rules. Dalph accumulates the independent validation issues and does not resume
-the run or rewrite its history.
-_Avoid_: Journal boundary decode issue, provider reconciliation fact, repaired history
-
-**Startup run recovery**:
-The fail-closed process performed under coordinator ownership that discovers
-every journaled run without an age cutoff, validates each complete managed
-history, freshly rereads tracker and Git authority, and asks the selected
-executor to reconcile its internal provider, evidence, and reviewer authorities
-for the exact recorded attempts before live coordination begins.
-_Avoid_: Process rehydration, recent-run scan, journal replay alone
-
-**Run termination**:
-The final Dalph-recorded disposition of a run: completed, blocked, cancelled, or
-failed. Dalph records any disposition only after all active task-work sessions,
-provider work units, and worker processes stop, or each retained resource is
-explicitly named, isolated, and recorded with recovery instructions, and all
-required cleanup finishes. A terminated run does not reopen; later work for the
-same target belongs to a new run.
-_Avoid_: Empty frontier, paused run, drained run
-
-**Task completed successfully**:
-The normalized terminal task state saying the task tracker reports successful
-completion. Each task-tracker adapter maps its provider-specific lifecycle,
-labels, or project fields into this state.
-_Avoid_: Closed GitHub issue, successful lifecycle, task-work session result
-
-**Run completion**:
-The run termination recorded only after every task in the task-tracker target
-closure is in the `Task completed successfully` state and no
-planned task attempt, task-work session, integration step, or cleanup step
-remains unfinished.
-_Avoid_: Last task success, partial success, temporary quiescence
-
-**Run blocked**:
-The run termination recorded when a typed condition prevents every currently
-allowed continuation until one exact change occurs. The blocked-run record names
-that required change and the person, task tracker, Git repository, or task-work
-provider capable of making it.
-_Avoid_: Paused, temporarily idle, failed
-
-**Branch-local isolation**:
-A recorded disposition preventing Dalph from acting on one exact task, attempt,
-or resource region whose facts are invalid, unreadable, ambiguous, or unsafe.
-It retains every still-owned responsibility until named repair or fresh
-authority evidence permits action or authorizes exact relinquishment.
-_Avoid_: Run blocked, global startup failure, discarded contradiction, workflow responsibility relinquished
-
-**Run cancelled**:
-The run termination recorded after an authorized operator directs Dalph to stop
-the run and the required preservation/cleanup steps finish.
-_Avoid_: Interrupted process, failed, blocked
-
-**Run failed**:
-The run termination recorded when a typed terminal failure is non-retryable
-under its named retry/recovery policy or reaches that policy's recorded retry
-limit.
-_Avoid_: One failed task-work session, blocked, cancelled
-
-**Dry-run completion schedule**:
-The reproducible pseudo-random order in which the dry interpreter completes
-simulated task-work sessions holding reserved task-work capacity.
-_Avoid_: Production prediction, randomized task admission, simulated execution, ambient randomness
+The generic orchestrator models only complete planned-attempt executor work and its running, safely suspended, or terminal report. Review, retry, provider-session, handback, restoration, and convergence policy are not current Dalph domain concepts. Any future production executor algorithm requires new accepted operational scenarios and must remain behind this coarse boundary.

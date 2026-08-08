@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 1,
+  "experimentId": "97dbf5f6-9f28-4ae8-ae99-0956dfbb7eb8",
+  "coordinatorPid": 4070850,
+  "processes": [
+    {
+      "role": "preflight-command",
+      "argv": [
+        "/usr/bin/prlimit",
+        "--cpu=15:15",
+        "--as=4294967296:4294967296",
+        "--fsize=536870912:536870912",
+        "--nofile=256:256",
+        "--nproc=256:256",
+        "--core=0:0",
+        "--",
+        "/usr/bin/git",
+        "-C",
+        "/workspace/typescript/dalph/.references/symphony",
+        "rev-parse",
+        "HEAD"
+      ],
+      "requestedArgv": [
+        "/usr/bin/git",
+        "-C",
+        "/workspace/typescript/dalph/.references/symphony",
+        "rev-parse",
+        "HEAD"
+      ],
+      "pid": 4070863,
+      "processGroupId": 4070863,
+      "parentPid": 4070850,
+      "startedAt": "2026-07-30T20:47:47.611Z",
+      "ownedByExperiment": true,
+      "endedAt": "2026-07-30T20:47:47.622Z",
+      "exitCode": 0,
+      "signal": null
+    },
+    {
+      "role": "preflight-command",
+      "argv": [
+        "/usr/bin/prlimit",
+        "--cpu=15:15",
+        "--as=4294967296:4294967296",
+        "--fsize=536870912:536870912",
+        "--nofile=256:256",
+        "--nproc=256:256",
+        "--core=0:0",
+        "--",
+        "/usr/bin/git",
+        "-C",
+        "/workspace/typescript/dalph/.references/symphony",
+        "archive",
+        "--format=tar",
+        "-o",
+        "/tmp/dalph-symphony-c0-NG4Q4x/symphony-source.tar",
+        "f8e8b8a670c799f6e0ade7a8c25c4bf4a4a56ec7"
+      ],
+      "requestedArgv": [
+        "/usr/bin/git",
+        "-C",
+        "/workspace/typescript/dalph/.references/symphony",
+        "archive",
+        "--format=tar",
+        "-o",
+        "/tmp/dalph-symphony-c0-NG4Q4x/symphony-source.tar",
+        "f8e8b8a670c799f6e0ade7a8c25c4bf4a4a56ec7"
+      ],
+      "pid": 4070864,
+      "processGroupId": 4070864,
+      "parentPid": 4070850,
+      "startedAt": "2026-07-30T20:47:47.623Z",
+      "ownedByExperiment": true,
+      "endedAt": "2026-07-30T20:47:47.697Z",
+      "exitCode": 0,
+      "signal": null
+    },
+    {
+      "role": "preflight-command",
+      "argv": [
+        "/usr/bin/prlimit",
+        "--cpu=15:15",
+        "--as=4294967296:4294967296",
+        "--fsize=536870912:536870912",
+        "--nofile=256:256",
+        "--nproc=256:256",
+        "--core=0:0",
+        "--",
+        "/usr/bin/tar",
+        "-xf",
+        "/tmp/dalph-symphony-c0-NG4Q4x/symphony-source.tar",
+        "-C",
+        "/tmp/dalph-symphony-c0-NG4Q4x/source/symphony"
+      ],
+      "requestedArgv": [
+        "/usr/bin/tar",
+        "-xf",
+        "/tmp/dalph-symphony-c0-NG4Q4x/symphony-source.tar",
+        "-C",
+        "/tmp/dalph-symphony-c0-NG4Q4x/source/symphony"
+      ],
+      "pid": 4070865,
+      "processGroupId": 4070865,
+      "parentPid": 4070850,
+      "startedAt": "2026-07-30T20:47:47.697Z",
+      "ownedByExperiment": true,
+      "endedAt": "2026-07-30T20:47:47.743Z",
+      "exitCode": 0,
+      "signal": null
+    },
+    {
+      "role": "preflight-command",
+      "argv": [
+        "/usr/bin/prlimit",
+        "--cpu=15:15",
+        "--as=4294967296:4294967296",
+        "--fsize=536870912:536870912",
+        "--nofile=256:256",
+        "--nproc=256:256",
+        "--core=0:0",
+        "--",
+        "/usr/bin/unshare",
+        "--user",
+        "--map-root-user",
+        "--net",
+        "--mount-proc",
+        "/usr/local/bin/node",
+        "--input-type=module",
+        "-e",
+        "import { networkInterfaces } from 'node:os';\nimport { connect } from 'node:net';\nconst nonLoopback = Object.values(networkInterfaces()).flat().filter((x) => x && !x.internal);\nif (nonLoopback.length) process.exit(20);\nconst socket = connect({ host: '192.0.2.1', port: 9 });\nconst timer = setTimeout(() => process.exit(21), 1000);\nsocket.once('connect', () => process.exit(22));\nsocket.once('error', (error) => {\n  clearTimeout(timer);\n  process.exit(['ENETUNREACH', 'EHOSTUNREACH', 'EADDRNOTAVAIL'].includes(error.code) ? 0 : 23);\n});"
+      ],
+      "requestedArgv": [
+        "/usr/bin/unshare",
+        "--user",
+        "--map-root-user",
+        "--net",
+        "--mount-proc",
+        "/usr/local/bin/node",
+        "--input-type=module",
+        "-e",
+        "import { networkInterfaces } from 'node:os';\nimport { connect } from 'node:net';\nconst nonLoopback = Object.values(networkInterfaces()).flat().filter((x) => x && !x.internal);\nif (nonLoopback.length) process.exit(20);\nconst socket = connect({ host: '192.0.2.1', port: 9 });\nconst timer = setTimeout(() => process.exit(21), 1000);\nsocket.once('connect', () => process.exit(22));\nsocket.once('error', (error) => {\n  clearTimeout(timer);\n  process.exit(['ENETUNREACH', 'EHOSTUNREACH', 'EADDRNOTAVAIL'].includes(error.code) ? 0 : 23);\n});"
+      ],
+      "pid": 4070866,
+      "processGroupId": 4070866,
+      "parentPid": 4070850,
+      "startedAt": "2026-07-30T20:47:47.784Z",
+      "ownedByExperiment": true,
+      "endedAt": "2026-07-30T20:47:47.787Z",
+      "exitCode": 1,
+      "signal": null
+    },
+    {
+      "role": "idle-external-signal-canary",
+      "argv": [
+        "/usr/bin/prlimit",
+        "--cpu=15:15",
+        "--as=4294967296:4294967296",
+        "--fsize=536870912:536870912",
+        "--nofile=256:256",
+        "--nproc=256:256",
+        "--core=0:0",
+        "--",
+        "/usr/bin/sleep",
+        "30"
+      ],
+      "requestedArgv": [
+        "/usr/bin/sleep",
+        "30"
+      ],
+      "pid": 4070867,
+      "processGroupId": 4070867,
+      "parentPid": 4070850,
+      "startedAt": "2026-07-30T20:47:47.791Z",
+      "ownedByExperiment": true,
+      "endedAt": "2026-07-30T20:47:47.791Z",
+      "exitCode": null,
+      "signal": "SIGKILL",
+      "terminationAction": {
+        "operation": "node ChildProcess.kill",
+        "signal": "SIGKILL",
+        "exactTargetPid": 4070867
+      }
+    }
+  ],
+  "symphonyProcesses": []
+}

@@ -23,6 +23,7 @@ const terminate = (child, signal) => {
 export const runBoundedCommand = ({
   args,
   executable,
+  forwardOutput = true,
   name,
   terminationGraceMilliseconds = defaultTerminationGraceMilliseconds,
   timeoutMilliseconds
@@ -30,10 +31,28 @@ export const runBoundedCommand = ({
   new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       detached: process.platform !== "win32",
-      stdio: "inherit"
+      stdio: ["inherit", "pipe", "pipe"]
     })
+    const stdoutLineCounter = { endsWithLineBreak: true, lineBreaks: 0, wasWritten: false }
+    const stderrLineCounter = { endsWithLineBreak: true, lineBreaks: 0, wasWritten: false }
     let timedOut = false
     let escalationTimer
+
+    const observeOutput = (output, destination, lineCounter) => {
+      lineCounter.wasWritten = true
+      lineCounter.endsWithLineBreak = output.at(-1) === 10
+      for (const byte of output) {
+        if (byte === 10) lineCounter.lineBreaks += 1
+      }
+      if (forwardOutput) destination.write(output)
+    }
+
+    child.stdout.on("data", (output) => {
+      observeOutput(output, process.stdout, stdoutLineCounter)
+    })
+    child.stderr.on("data", (output) => {
+      observeOutput(output, process.stderr, stderrLineCounter)
+    })
 
     const timer = setTimeout(() => {
       timedOut = true
@@ -72,7 +91,7 @@ export const runBoundedCommand = ({
         reject(error)
       }
     })
-    child.once("exit", (code, signal) => {
+    child.once("close", (code, signal) => {
       clearTimeout(timer)
 
       if (timedOut) {
@@ -82,7 +101,14 @@ export const runBoundedCommand = ({
       if (code !== 0) {
         reject(new Error(`${name} failed with ${signal ?? `exit ${code}`}`))
       } else {
-        resolve()
+        const outputLineCount = [stdoutLineCounter, stderrLineCounter].reduce(
+          (total, lineCounter) =>
+            total + lineCounter.lineBreaks + (lineCounter.wasWritten && !lineCounter.endsWithLineBreak ? 1 : 0),
+          0
+        )
+        resolve({
+          outputLineCount
+        })
       }
     })
   })

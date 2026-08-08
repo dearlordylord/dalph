@@ -1,16 +1,17 @@
 # Derive run-scoped pause state from accepted user directions
 
-Status: Reconsidering in [issue #155](https://github.com/dearlordylord/dalph/issues/155)
+Status: Revised by [issue #155](https://github.com/dearlordylord/dalph/issues/155)
+and implemented at the application boundary by
+[issue #166](https://github.com/dearlordylord/dalph/issues/166)
 
-The current implementation records distinct run/task Pause and Unpause commands
-in one run's workflow journal under branded control-command identities, then
-derives pausing, paused, and resuming phases from those commands, ordinary
-workflow outcomes, grouping coverage, and outstanding responsibilities. The
-operator has rejected durable receipt as a requirement: a command may be lost
-if Dalph crashes before applying it. Issue #155 decides which later fact proves
-that Dalph applied the direction and whether command identity remains necessary.
-The design still does not persist phase rollups or copy a parent pause onto each
-child.
+The current application boundary records a past-tense Operator-initiated event
+only after it applies one exact run/task Pause or Unpause direction. An
+ephemeral request may be lost if Dalph crashes before application; after the
+event is appended, restart reconstructs its exact subject and direction. V1
+records no authenticated operator or transport-command identity. Issues #134
+and #135 own the later pausing, paused, and resuming progression from this
+applied direction. The design still does not persist phase rollups or copy a
+parent pause onto each child.
 
 ## Consequences
 

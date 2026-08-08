@@ -1,0 +1,7 @@
+agda/*.agdai
+agda/MAlonzo/
+alloy/Delivery/
+alloy/DeliveryL2/
+lean/.lake/
+lean/*.olean
+alloy/DeliveryLiveness/

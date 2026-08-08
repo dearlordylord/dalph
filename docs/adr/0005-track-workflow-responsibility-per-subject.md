@@ -8,7 +8,7 @@ responsibility flag to a whole planned task attempt. A fresh authority
 observation may end Dalph's permission to act on one subject while obligations
 for the same attempt remain—for example, a replaced tracker claim stops task
 changes but does not erase the duty to preserve or safely dispose the worktree
-and task-work session.
+or the task-work position held for the planned attempt.
 
 ## Consequences
 

@@ -1,0 +1,353 @@
+import { it } from "@effect/vitest"
+import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
+import { quintIt } from "@firfi/quint-connect/vitest"
+import {
+  AttemptId,
+  GitCommitSha,
+  PlannedAttemptExecutor,
+  plannedAttemptExecutorCorrelation,
+  PlannedAttemptExecutorReport,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
+import {
+  continuePlannedAttemptExecutorWork,
+  type JournalRecord,
+  JournalStore,
+  journalStoreCapabilities,
+  legacyUnpublishedInRunJournalLayer,
+  JournalPosition,
+  requestPlannedAttemptExecutorSuspension,
+  TaskWorkCapacity
+} from "@dalph/orchestrator"
+import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
+import {
+  makeDeliveryRuntimeAdmissionController,
+  type DeliveryRuntimeAdmissionController
+} from "../../../orchestrator/src/coordination/delivery/delivery-runtime-admission.js"
+import {
+  DeliveryProposalId,
+  trackerGraphReadProposalOf
+} from "../../../orchestrator/src/coordination/delivery/delivery-proposal.js"
+import { makeIntegrationTargetResourceController } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
+import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
+
+const plannedAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("1"),
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/model-attempt"),
+  executor: TaskExecutorLocator.make("executor:model"),
+  runId: RunId.make("158"),
+  taskId: TaskId.make("model-task"),
+  taskRevision: TaskRevision.make("model-revision"),
+  worktree: WorktreeLocator.make("/worktrees/model-attempt")
+})
+const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+const continuationProposal = {
+  ...trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(1),
+    purpose: "EstablishCurrentGraph",
+    runId: plannedAttempt.runId,
+    target: FixtureTarget.make("planned-attempt-executor-model")
+  }),
+  admission: {
+    integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+    taskWorkPosition: {
+      _tag: "TaskWorkPositionRequired" as const,
+      mode: "ReserveOrReuse" as const,
+      retainAs: correlation,
+      taskId: plannedAttempt.taskId
+    }
+  },
+  id: DeliveryProposalId.make("planned-attempt-executor-model-continuation")
+}
+
+const SpecProjection = Schema.Struct({
+  state: Schema.Struct({
+    consecutiveRunningReports: ITFBigInt,
+    positionHeld: Schema.Boolean,
+    status: Schema.Struct({ tag: Schema.String, value: Schema.Unknown })
+  })
+})
+
+/** The claimed correlation the payload of a report variant carries. */
+const SpecCorrelation = Schema.Struct({ attemptId: ITFBigInt, runId: ITFBigInt })
+
+type ObservedCorrelation = { readonly attemptId: bigint; readonly runId: bigint }
+
+/**
+ * Only executor reports carry a correlation. The two phases before one arrives
+ * are Dalph's own, and the spec gives their variants no payload, so nothing
+ * here may invent an identity for them.
+ */
+const reportTags: ReadonlySet<string> = new Set(["Running", "SuspensionRequested", "SafelySuspended", "Terminal"])
+
+const claimedOf = (status: { readonly tag: string; readonly value: unknown }) =>
+  reportTags.has(status.tag)
+    ? Schema.decodeUnknownEffect(SpecCorrelation)(status.value).pipe(
+        Effect.map((claimed): ObservedCorrelation | undefined => claimed)
+      )
+    : Effect.succeed(undefined)
+
+const executorConformanceDriver = defineDriver(
+  {
+    beginResponsibility: {},
+    finishTerminal: {},
+    init: {},
+    reportSafelySuspended: {},
+    requestSafeSuspension: {},
+    startOrContinueRunning: {}
+  },
+  () => {
+    let latestReport: PlannedAttemptExecutorReport | undefined
+    let nextStartReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    let pendingSuspension: Fiber.Fiber<PlannedAttemptExecutorReport> | undefined
+    let pendingStart: Fiber.Fiber<PlannedAttemptExecutorReport> | undefined
+    let controller: DeliveryRuntimeAdmissionController | undefined
+    let records: ReadonlyArray<JournalRecord> = []
+    let status = "ResponsibilityNotBegun"
+    let responsibilityRecorded = Deferred.makeUnsafe<void>()
+    let startResponse: Deferred.Deferred<PlannedAttemptExecutorReport> | undefined
+    let suspensionResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
+    const executor = PlannedAttemptExecutor.of({
+      project: () => Effect.succeed(Option.fromUndefinedOr(latestReport)),
+      requestSuspension: () =>
+        Deferred.await(suspensionResponse).pipe(
+          Effect.tap((report) =>
+            Effect.sync(() => {
+              latestReport = report
+            })
+          )
+        ),
+      startOrContinue: () => {
+        const response = startResponse
+        return response === undefined
+          ? Effect.sync(() => {
+              latestReport = nextStartReport
+              return nextStartReport
+            })
+          : Deferred.await(response).pipe(
+              Effect.tap((report) =>
+                Effect.sync(() => {
+                  latestReport = report
+                })
+              )
+            )
+      }
+    })
+    const journal = JournalStore.of({
+      append: (eventRunId, key, event) =>
+        Effect.gen(function* () {
+          const record = {
+            event,
+            key,
+            position: JournalPosition.make(records.filter(({ runId }) => runId === eventRunId).length + 1),
+            runId: eventRunId
+          } satisfies JournalRecord
+          records = [...records, record]
+          if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+            yield* Deferred.succeed(responsibilityRecorded, undefined)
+          }
+          return record
+        }),
+      beginRun: () => Effect.die("executor conformance never begins a Run"),
+      read: (requestedRunId) => Effect.succeed(records.filter(({ runId }) => runId === requestedRunId)),
+      readRunForRecovery: () => Effect.die("executor conformance never recovers a Run"),
+      scan: () => Effect.die("executor conformance never scans the journal"),
+      terminateRun: () => Effect.die("executor conformance never terminates a Run")
+    })
+    const legacyJournalLayer = legacyUnpublishedInRunJournalLayer.pipe(
+      Layer.provideMerge(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
+    )
+    const workflowLayer = Layer.merge(legacyJournalLayer, Layer.succeed(PlannedAttemptExecutor, executor))
+    const continueExecutorWorkflow = () =>
+      continuePlannedAttemptExecutorWork(plannedAttempt).pipe(Effect.provide(workflowLayer), Effect.orDie)
+    const suspendExecutorWorkflow = () =>
+      requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(Effect.provide(workflowLayer), Effect.orDie)
+    const requireController = (): Effect.Effect<DeliveryRuntimeAdmissionController> =>
+      controller === undefined ? Effect.die("admission controller must be initialized") : Effect.succeed(controller)
+    const releasePositionIfHeld = Effect.fn("PlannedAttemptExecutorConformance.releasePositionIfHeld")(function* () {
+      const admission = yield* requireController()
+      const snapshot = yield* admission.snapshot
+      if (snapshot.positions.has(plannedAttempt.taskId)) {
+        yield* admission.releasePlannedAttemptPosition(correlation)
+      }
+    })
+    const reservePositionIfAvailable = Effect.fn("PlannedAttemptExecutorConformance.reservePositionIfAvailable")(
+      function* () {
+        const admission = yield* requireController()
+        const decision = yield* admission.tryReserve(continuationProposal)
+        if (decision._tag === "Deferred") {
+          return yield* Effect.die("planned attempt must be admitted")
+        }
+      }
+    )
+    const completePendingSuspension = (report: PlannedAttemptExecutorReport) =>
+      Effect.gen(function* () {
+        yield* Deferred.succeed(suspensionResponse, report)
+        if (pendingSuspension === undefined) {
+          return yield* Effect.die("suspension request must be pending")
+        }
+        const observed = yield* Fiber.join(pendingSuspension)
+        pendingSuspension = undefined
+        status = observed._tag
+        if (observed._tag === "SafelySuspended" || observed._tag === "Terminal") {
+          yield* releasePositionIfHeld()
+        }
+      })
+    const completePendingStart = (report: PlannedAttemptExecutorReport) =>
+      Effect.gen(function* () {
+        const start = pendingStart
+        const response = startResponse
+        if (start === undefined || response === undefined) {
+          return yield* Effect.die("executor start must be pending after responsibility begins")
+        }
+        yield* Deferred.succeed(response, report)
+        const result = yield* Fiber.join(start)
+        pendingStart = undefined
+        startResponse = undefined
+        return result
+      })
+    const invokeStart = (report: PlannedAttemptExecutorReport) =>
+      Effect.gen(function* () {
+        const admission = yield* requireController()
+        const snapshot = yield* admission.snapshot
+        if (!snapshot.positions.has(plannedAttempt.taskId)) {
+          yield* reservePositionIfAvailable()
+        }
+        const observed =
+          pendingStart === undefined
+            ? yield* Effect.suspend(() => {
+                nextStartReport = report
+                return continueExecutorWorkflow()
+              })
+            : yield* completePendingStart(report)
+        status = observed._tag
+        if (observed._tag === "Terminal") {
+          yield* releasePositionIfHeld()
+        }
+      })
+    return {
+      beginResponsibility: () =>
+        Effect.gen(function* () {
+          yield* reservePositionIfAvailable()
+          responsibilityRecorded = Deferred.makeUnsafe()
+          startResponse = Deferred.makeUnsafe()
+          pendingStart = yield* continueExecutorWorkflow().pipe(Effect.forkDetach({ startImmediately: true }))
+          yield* Deferred.await(responsibilityRecorded)
+          status = "ResponsibilityBegan"
+        }),
+      finishTerminal: () =>
+        pendingSuspension === undefined
+          ? invokeStart(
+              PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+            )
+          : completePendingSuspension(
+              PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+            ),
+      getState: () =>
+        Effect.gen(function* () {
+          const snapshot = yield* (yield* requireController()).snapshot
+          // Read off the report the executor actually made rather than
+          // restating the planned identity, which would compare a constant
+          // against itself.
+          const claimed: ObservedCorrelation | undefined =
+            latestReport === undefined
+              ? undefined
+              : { attemptId: BigInt(latestReport.correlation.attemptId), runId: BigInt(latestReport.correlation.runId) }
+          const acceptedReports = records.filter(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" &&
+              event.report.correlation.runId === correlation.runId &&
+              event.report.correlation.attemptId === correlation.attemptId
+          )
+          const lastSafeSuspension = acceptedReports.findLastIndex(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended"
+          )
+          const consecutiveRunningReports = acceptedReports
+            .slice(lastSafeSuspension + 1)
+            .filter(
+              ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Running"
+            ).length
+          return {
+            claimed,
+            consecutiveRunningReports: BigInt(consecutiveRunningReports),
+            positionHeld: snapshot.positions.has(plannedAttempt.taskId),
+            status
+          }
+        }),
+      init: () =>
+        Effect.gen(function* () {
+          if (pendingSuspension !== undefined) {
+            yield* Fiber.interrupt(pendingSuspension)
+          }
+          if (pendingStart !== undefined) {
+            yield* Fiber.interrupt(pendingStart)
+          }
+          controller = yield* makeDeliveryRuntimeAdmissionController(
+            { capacity: TaskWorkCapacity.make(1), held: [] },
+            yield* makeIntegrationTargetResourceController()
+          )
+          latestReport = undefined
+          pendingSuspension = undefined
+          pendingStart = undefined
+          records = []
+          status = "ResponsibilityNotBegun"
+          responsibilityRecorded = Deferred.makeUnsafe()
+          startResponse = undefined
+          suspensionResponse = Deferred.makeUnsafe()
+        }),
+      requestSafeSuspension: () =>
+        Effect.gen(function* () {
+          suspensionResponse = Deferred.makeUnsafe()
+          pendingSuspension = yield* suspendExecutorWorkflow().pipe(Effect.forkDetach({ startImmediately: true }))
+          status = "SuspensionRequested"
+        }),
+      reportSafelySuspended: () =>
+        completePendingSuspension(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })),
+      startOrContinueRunning: () => invokeStart(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+    }
+  }
+)
+
+quintIt(
+  it.effect,
+  "replays the planned-attempt model through the executor boundary",
+  {
+    backend: "typescript",
+    driverFactory: executorConformanceDriver,
+    maxSteps: 20,
+    nTraces: 50,
+    seed: "158",
+    spec: "specs/plannedAttemptExecutor.qnt",
+    stateCheck: stateCheck(
+      (raw) =>
+        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
+          Effect.flatMap(({ state }) =>
+            claimedOf(state.status).pipe(
+              Effect.map((claimed) => ({
+                claimed,
+                consecutiveRunningReports: state.consecutiveRunningReports,
+                positionHeld: state.positionHeld,
+                status: state.status.tag
+              }))
+            )
+          ),
+          Effect.orDie
+        ),
+      (spec, implementation) =>
+        spec.positionHeld === implementation.positionHeld &&
+        spec.consecutiveRunningReports === implementation.consecutiveRunningReports &&
+        spec.status === implementation.status &&
+        spec.claimed?.runId === implementation.claimed?.runId &&
+        spec.claimed?.attemptId === implementation.claimed?.attemptId
+    )
+  },
+  30_000
+)

@@ -1,1216 +1,359 @@
 # Dalph Tooling Architecture
 
-This document records stable architecture for Dalph repository tooling. It does
-not define a target repository's rules, product runtime, authored content, or
-application architecture.
+This document is the map of Dalph's stable architecture. It shows how the
+major parts relate and points to the documents that own detailed protocols.
+It does not duplicate target-repository rules, operational scenarios, provider
+limits, implementation status, or the issue roadmap.
 
-Canonical boundary terminology lives in [CONTEXT.md](CONTEXT.md).
+Canonical domain language lives in [CONTEXT.md](CONTEXT.md). Chronological
+behavior lives under [scenarios/](scenarios/), and accepted design decisions
+live under [adr/](adr/).
 
-`runWorkflow` selects operations from Dalph's workflow algebra. The
-`WorkflowInterpreter` is the injected Effect service whose methods execute
-those selected operations at their named boundaries. An Effect Layer constructs
-that service from real or simulated tracker, journal, Git, task-work-provider,
-and executor capabilities. “Interpreter” names this operation handler, not an
-environment or runtime mode; one Layer may intentionally combine real behavior
-at one boundary with simulated behavior at another.
+## Governing Composition
 
-## Historical-Harness Boundary
+Dalph treats the tracker graph as a current signal. Delivery projects that
+signal into a frontier, bounded tickets, responsibility-aware ticket delivery,
+settlement, and the tracker consequences implied by settlement.
 
-The Dalph orchestrator is graph-native repository tooling designed independently
-of `scripts/ralph-run.sh`. That script is a one-off historical harness, not
-Dalph's architecture, compatibility baseline, migration source, fallback
-scheduler, or runtime foundation. The
-historical harness may supply candidate tooling requirements, failure evidence,
-and design lessons. A candidate becomes an accepted tooling requirement only
-when a named decision or implementation specification explicitly accepts it.
+```ts
+export const delivery = Effect.gen(function* () {
+  const trackerGraph = yield* TrackerGraphRelation
 
-The Dalph orchestrator must not invoke, wrap, resume, migrate, or preserve
-behavioral parity with the historical harness. Dalph ignores identities and
-records created by that harness. Dalph reads task claims from the configured
-task tracker, creates planned task attempts, receives task-work session
-identities from the task-work provider, and records workflow history in the
-Dalph workflow journal.
+  const graph = trackerGraph.signal
+  const frontier = mapCurrentSignal(graph, frontierOf)
+  const tickets = yield* boundedParallelTickets(frontier)
+  const responsibilities = yield* executorResponsibilities(tickets)
+  const settlements = yield* deliverySettlements(responsibilities)
 
-## Exclusive Coordinator Lock
+  return yield* reflectDeliverySettlements(settlements)
+})
+```
 
-At most one live Dalph coordinator may send state-changing requests for a
-canonical Git common directory. It proves exclusivity by holding an
-operating-system lock on that directory. Closing the Effect Layer scope or
-ending the coordinator process releases the lock. A competing coordinator fails
-before sending a state-changing request.
+Every line above is descriptive. Reading or subscribing to the returned
+current signal performs no tracker, Git, executor, or journal action.
 
-Requested path aliases pass through the same canonical-path resolution code
-before either the deterministic-test or production lock implementation checks
-the resulting locator.
+Downstream planning code derives action proposals from delivery
+consequences and other established facts. Runtime code owns admission,
+process-local action ownership, fibers, interruption, and repetition. The
+named action protocol records intent when required, calls the tracker, Git, or
+executor, observes the result, and records the resulting workflow fact.
+Journal publication changes the ordinary input signals, so description and
+planning derive their next values without a general invalidation command.
 
-Before Dalph sends a live request that may change task-tracker, Git, or
-task-work-provider state for this Git common directory, the coordinator verifies
-that it still holds the directory lock. If the locked descriptor and canonical
-path identify different directories, Dalph interrupts an in-flight request and
-rejects later requests. The descriptor locks the existing Git common directory
-itself, so replacing a child lock file cannot create a competing lock. A durable
-row, stale-file timeout, TTL lease, in-process semaphore, and journal record are
-not substitutes. Dry-run remains read-only and does not acquire the lock.
+Run stabilization sits above description, planning, and live action ownership.
+After no action is executable and no admitted action is still running, it must
+obtain a later complete tracker observation before either an incomplete return
+or normal termination. That quiescent condition does not prove completion. The
+later observation may reveal new work, help prove normal termination together
+with settled obligations and empty live ownership, or leave an incomplete Run
+recoverable after the current invocation returns.
 
-The native lock request is non-blocking and is never retried. Acquisition also
-performs one canonical-path resolution, open, and stat, whose latency belongs to
-the supported local filesystem. Before every state-changing request, the
-coordinator synchronously performs one descriptor/path stat pair. While the lock
-is held, the background check starts its next stat pair one second after the
-preceding observation completes. On a responsive local host contradiction
-detection is therefore nominally about one second, not a strict wall-clock
-deadline; active state-changing requests add their own checks. This lock-check
-cadence is independent of task-graph refresh and task-tracker API latency.
+The governing design and chronology are specified by
+[issue 190](https://github.com/dearlordylord/dalph/issues/190). GitHub owns
+implementation status; this document records the architecture rather than
+mirroring ticket state.
 
-The production lock accepts local filesystem paths that `realpath` can
-canonicalize, including symbolic links, `.` and `..` segments, and filesystem
-case normalization when the host canonicalizes case aliases. Network
-filesystems and distinct bind-mount aliases require separately specified lock
-behavior before production use; local-path tests do not prove distributed lock
-behavior.
+This section states that governing destination. During the #191–#195 migration,
+temporary runtime-relation, revision, invalidation, quiescence-probe, and
+environment-named seams may still exist in source. They are implementation
+gaps, not alternate architecture.
+
+## Protected Compositions
+
+The following Effects are the readable account of delivery at their respective
+abstraction levels. Their visible composition is priority-one architecture,
+not incidental glue.
+
+| Stable meaning | Current exported symbol | Visible argument | Other established input | Result | Colour | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| Current graph becomes coherent delivery consequences | `delivery` | none | current tracker graph, Run policy, exact obligations/current evidence, and established settlement evidence | `CurrentSignal<DeliveryConsequences>` | description | [`delivery.ts`](../packages/orchestrator/src/coordination/delivery/delivery.ts) |
+| Current frontier is viewed through current Run policy | `boundedParallelTickets` | current delivery frontier | current Run control policy | current bounded parallel tickets | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
+| Bounded placements and exact obligations become ticket deliveries | `executorResponsibilities` | current bounded parallel tickets | established exact obligations and their current evidence | `TicketDeliveryRelation` | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
+| Ticket deliveries become established settlement facts | `deliverySettlements` | ticket-delivery relation | established integration, verification, promotion, cleanup, and disposition evidence | `DeliverySettlementRelation` | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
+| Settlement facts become coherent tracker-reflection meaning | `reflectDeliverySettlements` | delivery-settlement relation | none | `CurrentSignal<DeliveryConsequences>` with semantic tracker consequences, never executable proposals | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
+| Current delivery consequences and accepted action requirements become one checked proposal frontier | `deliveryActionPlanning` | current delivery consequences | named tracker-graph, ticket-delivery, settlement/integration, and tracker-reflection requirements | `CurrentSignal<DeliveryProposalFrontier>` | planning | [`delivery-action-planning.ts`](../packages/orchestrator/src/coordination/delivery/delivery-action-planning.ts) |
+
+The five delivery compositions and the downstream planning composition are
+indexed by stable meaning, current exported symbol, and source file.
+`executorResponsibilities` is the current source locator; its returned domain
+value is broader `TicketDelivery`, not proof that an executor responsibility
+already began. A separately approved vocabulary change updates the index
+without changing the stable semantic step.
+
+Any change to the visible steps, order, semantic inputs, result meaning, or
+colour of these compositions requires explicit project-owner approval, an
+approved scenario or design amendment when behavior changes, and an updated
+architecture guard. The current exact source guard is in
+[`delivery.test.ts`](../packages/orchestrator/src/coordination/delivery/delivery.test.ts);
+extending that guard to all indexed compositions is allowed without changing
+their source.
+
+## Function Colours and Composition
+
+A function colour identifies obligations that must not be hidden inside a
+higher-level description:
+
+- **Description** derives immutable values or current signals without changing
+  an owning system.
+- **Planning** derives exact proposed actions, order, conflicts, isolation, and
+  resource requirements without performing them or allocating identities.
+- **Reconciliation** rereads the system that owns a fact before deciding
+  whether an earlier request may be continued or repeated.
+- **Action** records intent when required, crosses one external seam, observes
+  the result, and records the established workflow fact.
+- **Runtime** owns subscriptions, bounded admission, process-local ownership,
+  fibers, interruption, wake-up, and repetition.
+- **Stabilization** obtains the required later complete tracker observation
+  after quiescence, then decides whether the invocation returns or records Run
+  termination.
+
+A clean composition remains at one colour and one abstraction level until a
+different obligation is unavoidable. It then calls a named lower composition
+whose interface describes that change. Authority ambiguity, retry ordering,
+resource ownership, and cleanup remain explicit inside the module that owns
+them; declarative presentation does not erase those protocols.
+
+Effect services and Layers provide these seams. Controlled, test, and external
+adapters are selected when the program is assembled. Shared domain code and
+authored cassettes do not branch on an environment mode. Fresh and recovered
+initialization remain distinct because they establish different Run facts,
+then provide the same ordinary delivery, planning, runtime, and stabilization
+interfaces.
+
+## Authority and Reconciliation
+
+| System | Facts it owns | What Dalph may retain |
+| --- | --- | --- |
+| Task tracker | task identity, authored instructions, lifecycle, dependencies, grouping, target membership, and claims | journaled observations and current process-local projections |
+| Git | commits, lineage, refs, worktrees, and integration state | exact planned locators, journaled intents and observations, and current process-local projections |
+| Dalph executor | complete work for one planned attempt and its normalized running, safely suspended, or terminal report | exact planned-attempt correlation and journaled responsibility/report facts |
+| Execution substrate | agent session/context and process observations used internally by an executor | only observations exposed through an accepted executor protocol; no copied session state as authority |
+| Integration-candidate agent | its separately identified candidate-construction session and reports | journaled candidate intent, exact session correlation, and submitted candidate evidence |
+| Target repository verification wrapper | one exact request's guarded checks, terminal result, diagnostics, and heavy-lock lifecycle | journaled request intent plus content-addressed artifacts and the sealed manifest after complete rereads |
+| Evidence store | immutable bytes addressed by their content digest | exact references in workflow-journal verification events; never copied derived frontier or lock state |
+| Dalph Journal | ordered workflow occurrences recorded by Dalph | the workflow history itself |
+
+Dalph does not turn a copied external fact into authority. After an ambiguous
+request or process loss, it reads the system that owns the result before it
+repeats the request. A tracker mutation result may update the current graph
+view when it contains enough normalized coverage, completeness, consistency,
+freshness, and replacement evidence to satisfy the same named contract as a
+tracker observation. A bare acknowledgement that a mutation was accepted or
+applied is not enough.
+
+Derived frontiers, bounded tickets, ticket deliveries, settlements, proposed
+actions, stream positions, wakeups, capacity positions, and live action owners
+remain process-local. They can be rebuilt from journal history and current
+authority observations and are not persisted as substitutes for those facts.
+
+Cleanup for every owned resource is disposition-typed, exact, recoverable, and
+fail-closed.
 
 ## Durability and Reconstruction
 
-Dalph persists only the workflow history it records in the Dalph workflow
-journal. It does not make an in-memory coordinator object durable or persist
-copies of current task-tracker, Git, or task-runner state so that coordination
-can continue from those copies after restart.
+Dalph persists workflow history, not a serialized coordinator. On restart it
+validates each Run's complete journal history, reconstructs exact outstanding
+responsibilities through pure composed reducers, and obtains current evidence
+from each owning seam wherever the accepted protocol provides and requires that
+observation. The current same-process executor is recreated
+rather than inspected after process loss.
 
-After restart and while holding coordinator ownership, Dalph scans every
-physical journal row and discovers every recoverable run without an age cutoff.
-It validates each run's complete event history in position order before it
-rereads current task and claim state from the tracker, refs and exact worktrees
-from Git, current sessions from the task runner, worker processes from the task
-executor, and evidence, review, and handback state from their authorities. It derives new in-memory
-coordination and presentation state from those reads. A restarted process must
-not treat a pre-crash queue buffer, capacity reservation, timer instance,
-frontier, presentation cursor, or projection as proof that work occurred.
+Intent is recorded before an effect whose outcome could become ambiguous.
+After a lost response or crash, the ordinary protocol reconciles the recorded
+intent with the system that owns the result before retrying. Invalid shared
+journal history fails the affected Run closed. A contradiction local to one
+task, attempt, or resource prevents action only in the region that needs that
+fact when independent regions can still proceed safely.
 
-Dalph is deployed locally, but the coordinator process and provider-owned
-worker processes remain distinct failure and observation boundaries. A
-coordinator crash does not prove that a worker stopped, and a worker exit does
-not imply coordinator failure. Deterministic-test and live-fake harnesses
-control those deaths independently and cover coordinator-only failure,
-co-failure, and mixed worker survival. This local separation preserves truthful
-recovery now and a later distributed deployment path without changing
-authority ownership.
+The detailed journal, publication, reduction, crash, and reconstruction rules
+are in [Journal and Reconstruction](architecture/journal-and-reconstruction.md).
 
-Discovery accumulates independent physical-row, envelope, payload, identity,
-ownership, semantic-history, and reconciliation issues. A row that cannot be
-decoded does not hide another row or become an empty history. Any run with a
-boundary issue or invalid managed history remains preserved and is not resumed;
-ambiguous external resources likewise remain untouched for operator repair.
-Startup fails closed after collecting the available issues rather than allowing
-one unreadable authority to hide another authority's reconciliation fact.
+## Exclusive Coordinator Lock
 
-Manual mutation of journal storage is outside Dalph's supported threat model:
-the journal provides no cryptographic tamper resistance and Dalph does not
-repair manually altered history. Crash-consistent append, process death,
-storage reopening, decoding, and semantic validation remain supported.
-Whenever startup encounters invalid physical or semantic history, it preserves
-the evidence and fails the affected run closed.
+At most one live Dalph coordinator may send state-changing requests for one
+canonical Git common directory. It holds an operating-system lock on that
+directory and verifies ownership before each such request. Losing or
+contradicting ownership interrupts the in-flight request and rejects later
+ones. Process-local semaphores, journal rows, stale-file timeouts, and leases
+are not substitutes for this local-host exclusion rule.
 
-Journal storage, decoding, and reduction are separate boundaries. The
-reconstruction workflow reads each run's physical rows once in canonical
-position order, decodes and upcasts them, then passes the resulting event values
-through one pure composed reducer. Its graph-knowledge, workflow-history,
-resource-responsibility, and pause reducers neither read the journal nor invoke
-any other effect. They update distinct component states for each event, after
-which the composition validates cross-component invariants and returns one
-`ReconstructedManagedRunState`.
+Filesystem qualification and lifecycle details are in
+[Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md).
 
-One decoded journal event may update more than one component reducer without
-merging their state models. When a successful tracker mutation response both
-completes its workflow operation and supplies normalized task-graph facts, one
-`TaskGraphFactsUpdated` event updates workflow history and graph knowledge
-atomically. Its tagged origin preserves whether those facts came from an
-explicit read or mutation result. The graph-knowledge reducer applies them
-through the same coverage, completeness, temporal-consistency, and replacement
-algebra.
+## Workflow Commands, Actions, Occurrences, and Events
 
-The live process may retain that derived state together with its last applied
-`JournalPosition` and incrementally apply later decoded events. This is only a
-process-local optimization: it is discarded on process loss, never persisted
-as journal authority, and never substitutes for reading and validating the
-complete history during restart.
+A proposed action is not proof that anything happened. A workflow event is the
+immutable domain value for one past-tense occurrence; a journal record is its
+durable envelope. An initiated action names its actor. A non-action occurrence,
+such as receiving tracker facts or an executor report, does not copy the actor
+from an earlier action.
 
-For each valid run, reduction preserves graph knowledge, workflow history,
-pause state, and every exact outstanding responsibility. A pure selector derives
-one non-persisted runnable frontier from those facts. The
-frontier may contain multiple independently legal transitions for one task
-attempt and carries a typed wait, pause, isolation, relinquishment, or settled
-reason for each responsibility with no legal transition. A pre-attempt subject
-that cannot reconstruct a safe claim or plan fails closed instead of being
-mistaken for settled work.
+Every event exposed to a generic production consumer has exactly one
+runtime-visible action/non-action classification. Adding an actor or event
+variant must break exhaustive consumers until they handle it. Presentation
+must not infer this classification from an operation name, transition name,
+button label, test source, or environment. A dying coordinator cannot record
+its own death; recovery accepts every retained journal prefix without a
+fabricated crash event.
 
-Dalph consumes every independently valid part of the reconstructed run. A
-contradiction, unreadable authority, ambiguous resource, or loss of
-responsibility isolates only the exact task, attempt, or resource region whose
-facts are needed to act there. Unaffected branches continue whenever their next
-actions require none of the isolated facts or resources. A condition stops the
-whole run only when it invalidates shared managed history or a shared capability
-required for every otherwise allowed continuation.
+The canonical vocabulary is in [CONTEXT.md](CONTEXT.md), and concrete projection
+rules are in
+[workflow-occurrence-projection.md](scenarios/workflow-occurrence-projection.md).
 
-Workflow responsibility is tracked per exact subject rather than as one flag
-for a planned task attempt. Losing permission to change a tracker task may
-relinquish that task-coordination responsibility while Dalph retains separate
-obligations to preserve, stop, reconcile, or dispose the attempt's worktree and
-task-work session. Each responsibility ends only through its own completed
-disposition or a durable relinquishment backed by a fresh authority
-observation.
+## Historical-Harness Boundary
 
-If a fresh tracker read finds that a task changed during implementation, Dalph
-updates graph knowledge and prevents that branch from crossing another
-state-changing boundary while preserving its outstanding session and resource
-responsibilities. The pause rules decide how already-started work reaches a safe
-boundary; the
-[external-change reconciliation specification](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md#active-task-continuation-and-external-changes)
-decides what may continue afterward. Unpausing alone never reconciles changed
-task intent.
+Dalph is a graph-native orchestrator. It does not invoke, resume, migrate, or
+preserve behavioral parity with `scripts/ralph-run.sh`. The historical harness
+is research evidence only; a behavior becomes Dalph architecture only through
+an accepted decision or scenario.
 
 ## Pause, Unpause, and Resumption
 
-A user-requested task pause does not cancel a bounded state-changing request
-that Dalph already sent for that task. The request may be a quick local Git call
-or a slower task-tracker or task-work-provider network call. The pause
-coordinator waits only under that operation's accepted bounded policy, records
-its outcome through the request's existing workflow operation, and selects no
-later forward-progress operation for the paused task. This wait needs no
-separate pause-specific workflow event: the original request intent and outcome
-remain explicit in the Dalph workflow journal. A coordinator interruption,
-timeout, or uncertain request outcome uses the request's ordinary
-fresh-result-check and recovery rules.
+Pause prevents later forward progress after an already-sent bounded request
+reaches its ordinary protocol boundary. It does not erase claims, attempts,
+worktrees, executor obligations, or integration obligations. Unpause causes
+the required current facts to be read before progress resumes. Run Pause and
+task Pause are separate journaled directions; task Pause follows current
+tracker grouping descendants rather than dependency edges.
 
-An ordinary user-requested task pause preserves the task's exact claim, planned
-task attempt, worktree, task-work session, and unfinished work. The pause does
-not authorize claim release, resource cleanup, abandonment, cancellation, or
-handoff. Those actions require their own accepted user command and disposition
-rules.
-
-A user-requested run pause is one run-level state, not a batch of
-user-requested task pauses. It prevents selection of new forward-progress
-operations across the run while each already-started task action reaches the
-same boundary it would use for a task pause. Unpausing the run removes only the
-run-level state; any independently requested task pause remains in force.
-
-The control surface records four distinct durable commands in the run's
-workflow journal before selecting any resulting boundary action: request run
-pause, request run unpause, request task pause, and request task unpause. They
-set the requested direction for one exact pause subject; they are not reference
-counts. Repeating Pause does not stack another pause or require another
-Unpause.
-Each carries a branded `ControlCommandId`; an exact identity-and-payload
-delivery retry is idempotent, while reusing the identity for a different command
-is a typed contradiction. A later command with a new identity may change the
-requested direction without cancelling an already-started safety action.
-
-Issue #155 reconsiders the preceding receipt-durability protocol. A control
-request that disappears before Dalph applies its direction may be lost. The
-replacement design must retain enough durable evidence to reconstruct an
-applied Pause or Unpause direction without treating receipt alone as applied;
-command-id allocation remains undecided. Issues #134 and #135 do not consume
-the provisional receipt protocol until that decision closes.
-
-The pause reducer maintains run pause and per-task pause phases independently
-from tracker lifecycle, task claims, workflow stages, and resource
-responsibilities. Operation selection composes those facts instead of encoding
-their Cartesian product as one task-status enum. A pause request therefore does
-not acquire a missing claim, release an existing claim, or replace either claim
-fact; an unclaimed task can remain paused.
-
-The current journal records user Pause and Unpause commands, not `Pausing` or `Paused`
-status updates. The pure pause reducer derives each phase and its tagged
-progress reason from those commands, ordinary workflow outcomes, current
-grouping coverage, and outstanding responsibilities. A task pause remains
-pausing while any covered grouping descendant is still reaching a safe
-boundary; the derived parent reason identifies each preventing descendant.
-
-Every task pause is scoped to one exact `(RunId, TaskId)` pair. A terminated run
-never reopens, and a later run that observes the same tracker task does not
-inherit the earlier run's pause. Restarting a coordinator for a nonterminal
-paused run reconstructs that same run and pause from its journal, then remains
-passive until Unpause. A new run and an unpaused run both read current
-tracker facts; neither restores a saved task graph.
-
-A task pause covers the selected task and every task reached by following
-tracker-owned grouping edges from parent to transitive descendant. Only the
-selected task receives an explicit user pause command. Operation selection
-derives descendant coverage from current graph knowledge; it does not write
-pause state to each child or persist the resolved closure. A newly grouped
-descendant becomes covered, and a task moved outside that grouping closure
-stops being covered. The rule does not synthesize prerequisite edges: grouping
-descendants do not wait for parent completion, and pausing a child does not
-cover its ancestor or siblings.
-
-Prerequisite edges retain their ordinary tracker meaning. Pausing task `B` does
-not pause a prerequisite of `B` or a task that depends on `B`. A prerequisite,
-including one shared with another branch, remains independently runnable. A
-task whose prerequisite path reaches unfinished `B` is simply
-dependency-blocked and becomes eligible automatically after fresh tracker facts
-show its prerequisites satisfied. In the edge direction, the prerequisite
-blocks the dependent; pause never reverses that edge or persists its transitive
-dependent closure.
-
-Under the current review-capable executor protocol, an active reviewer or
-findings-handback agent is long-running task work for pause purposes. The
-generic Dalph orchestrator sees only an opaque executor outer invocation. It
-asks the selected executor to interrupt that exact outer invocation. The
-selected executor preserves its internal workflow operation, reviewer session,
-every already recorded immutable evidence object, and unresolved finding
-history, and later resumes that invocation. The selected executor does not
-invent a partial review disposition or let reviewer work continue merely
-because the invocation does not change Git or the task tracker. Review and
-handback are concrete stages of the current selected executor protocol, not
-permanent Dalph orchestrator stages.
-
-[Future research](https://github.com/dearlordylord/dalph/issues/127) must permit
-an executor to govern its own optional review and restoration protocol without
-making review evidence a universal completion requirement.
-
-If implementation evidence capture has already begun when pause is requested,
-the selected executor lets that bounded local Git-and-EvidenceStore operation
-finish and seal its immutable evidence manifest. The manifest preserves the
-exact worker output and worktree diff that later resume and review require.
-Pause does not select evidence capture if it has not begun, and it does not
-select the subsequent review after an in-flight capture finishes.
-
-Pause never selects a not-yet-started cleanup or disposition action. If an exact
-cleanup request already crossed its boundary, the request follows the same
-bounded completion and uncertain-outcome reconciliation rule as every other
-state-changing request; Dalph records the known result and selects no later
-cleanup step for the paused subject. Pause does not reverse cleanup that already
-completed. Concrete cleanup resources and their exact disposition protocols
-remain owned by their implementation specifications rather than being invented
-by pause semantics.
-
-If a task already holds the serialized integration resource when its pause is
-requested, it remains `TaskPausing` while the accepted integration protocol
-finishes or reconciles that already-authorized attempt to a known state where
-the shared resource can be released. Dalph does not interrupt the protocol,
-automatically roll back Git, or hold integration exclusivity for the duration
-of the pause. If the pause request is recorded before integration acquires the
-shared resource, Dalph does not begin that integration attempt. A future
-cancel-integration policy is a separate command and does not change pause
-semantics.
-
-A user Unpause request moves a task into `TaskResuming`; it does not
-directly start or resume a worker. Dalph freshly rereads the exact task, claim,
-applicable dependency and grouping facts, Git resources, task-work session,
-worker or provider work unit, evidence, review, handback, and integration facts
-needed by the task's preserved responsibilities. Only compatible observations
-allow ordinary operation selection. Edited, completed, closed, newly blocked,
-newly unblocked, foreign-claimed, unreadable, or target-closure-removed tasks
-enter their accepted reconciliation, wait, disposition, or isolation rule
-without stale task work restarting. The canonical
-[external-change table](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md#active-task-continuation-and-external-changes)
-owns those per-observation choices.
-
-If the user requests Unpause while a task is still pausing, Dalph records the
-new requested destination but does not cancel an already-sent interruption or
-start another worker. It first observes or reconciles the original worker and
-every other already-started operation to their safe boundaries, then performs
-the ordinary resuming reads. The derived progress reason names the operation that
-still prevents resumption.
-
-Pause handling does not select a replacement task or execute a pause-specific
-capacity-release branch. Task execution holds a scoped task-work-capacity permit
-only while the task-work provider reports that the exact worker consumes that
-capacity. A fresh terminal interruption observation closes the permit scope
-through the same resource mechanism used by ordinary execution. Frontier
-scheduling separately derives that capacity is available and may admit another
-task. Preserving a task-work session or worktree does not by itself retain
-task-work capacity. The current provider contract has no suspended outcome; a
-future suspension capability must separately define its resource occupancy,
-fresh observation, and resumption semantics before pause may select it.
-
-A confirmed task or run pause is passive. Pause state by itself schedules no
-polling, heartbeat, timer, or periodic tracker, Git, task-runner, evidence, or
-review read. The workflow journal preserves the pause and outstanding
-responsibilities. A user Unpause request triggers the required fresh reads; a
-separately accepted observation policy may also read paused subjects without
-authorizing forward progress.
-
-See [ADR 0008](adr/0008-derive-run-scoped-pause-state.md).
-
-## Active Continuation and External-Change Reconciliation
-
-Before every new long-running executor invocation, including same-session
-rework, and before pre-promotion integration continues, the orchestrator
-requests sufficiently fresh continuation facts. `ActiveTaskContinuationRead`
-names the usage-shaped task-tracker read covering the authored task-work
-specification and fingerprint, lifecycle, exact claim, target-closure
-membership, and complete blockers needed for that decision. It is not a second
-planned-attempt eligibility decision and does not poll coding-agent progress.
-
-Each read declares its subjects, fact families, completeness, and freshness
-cutoff. A task-tracker adapter may reuse retained knowledge only when it covers
-the exact request and was observed after the cutoff. It may deduplicate
-overlapping fresh reads. There is no global time-to-live policy. A successful
-read updates graph knowledge even when its normalized values are unchanged,
-because its coverage and freshness evidence are new.
-
-Authority changes become independent continuation constraints. User pause,
-authored task change, tracker lifecycle, claim state, target membership,
-dependencies, Git lineage, worktree identity, and provider-session availability
-do not form one Cartesian task status. Clearing a pause cannot clear a
-task-specification change hold, and restoring target membership cannot clear a
-foreign claim.
-
-When authored task instructions change before promotion, Dalph stops the exact
-active executor invocation and observes it to a terminal outer result. The
-Dalph user must then choose one of three distinct durable actions:
-
-1. Continue the existing attempt with an override naming the planned and newly
-   observed fingerprints. The override does not claim that the executor
-   incorporated the changed instructions.
-2. Restart task implementation by superseding the old attempt, retaining the
-   task claim, and planning a new attempt from current instructions and current
-   target head. Old resources remain preserved until separately disposed.
-3. Stop task implementation by abandoning the attempt and releasing only the
-   exact owned claim. It creates no successor and authorizes no generic cleanup.
-
-If the tracker reports successful completion, Dalph accepts that current
-authority fact. It stops active pre-promotion work, preserves worktree and WIP,
-does not repeat Git integration or tracker completion, deletes only its exact
-claim after a fresh read proves ownership, and recomputes graph knowledge.
-Dependants may become runnable without a Dalph-produced Git commit.
-
-A terminal lifecycle that does not mean success activates a reversible
-task-lifecycle hold. A complete read proving removal from the selected target
-closure activates a reversible target-membership constraint. Both preserve the
-attempt, claim, session, worktree, WIP, and evidence. Reopening or returning to
-the closure permits the same attempt to continue only after every independent
-constraint clears. An incomplete or unreadable graph read cannot prove target
-removal.
-
-A fresh read proving that the exact claim is missing, replaced, or foreign
-stops the invocation and every later stage. Dalph never edits a foreign claim.
-Reacquisition requires an explicit user command and a new claim identity.
-Temporary claim unreadability permits only bounded rereads and forbids starting
-another executor, review, integration, or completion action. Exhaustion stops
-active work and activates a claim-authority hold; unreadability never proves
-claim loss.
-
-Dependencies remain tracker facts, not stored wait flags. A new unfinished
-blocker before promotion preserves the integration candidate, releases the
-serialized integration resource, and derives automatic dependency waiting. The
-wait cannot block its prerequisite or unrelated eligible integration. After
-the blocker clears, Dalph rereads the target and reuses a candidate only when
-the accepted result, ancestry, and verification remain compatible. A blocker
-appearing after promotion never rolls Git back: Dalph preserves promotion
-proof, waits before tracker completion, then re-proves ancestry and completes
-without reintegration.
-
-Every planned attempt records the configured local integration target's current
-commit as its immutable planned Base. A compatible target advance leaves that
-Base in ancestry and permits work to continue. A proven rewrite activates a
-Git-lineage constraint; transient Git unreadability proves no rewrite.
-Integration verifies an isolated candidate and promotes it only by atomically
-fast-forwarding the configured target ref from an exact expected old head. A
-stale expected head causes candidate reconciliation and retry and never
-overwrites the intervening update.
-
-Dirty, new, deleted, staged, or committed worktree content is ordinary attempt
-WIP. Dalph does not infer who authored it. At creation, recovery, resume, and
-each stage that requires the worktree, Git must prove the exact path remains the
-exact registered planned worktree. A proven missing or mismatched worktree
-records `AttemptWorktreeLost`, stops the executor, preserves readable external
-evidence, and retains the claim while the user chooses clean restart or stop.
-Dalph does not repair worktrees, search for replacements, or infer cause.
-
-A successful complete provider read that no longer returns one historically
-correlated native session records `NativeTaskWorkSessionUnavailable`. A failed
-or incomplete read instead records temporary unreadability and permits only
-bounded rereads. Replacing an unavailable session requires a user command and
-fresh proof that no predecessor worker remains capable of writing. The
-successor has a new identity over the same attempt and preserved WIP; a stale
-predecessor result can never satisfy successor work.
-
-The canonical behavior and acceptance cases are in
-[Bounded Resumable and Pausable Graph-Frontier Specification](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md).
+Detailed behavior lives in [ADR 0008](adr/0008-derive-run-scoped-pause-state.md),
+[Run Pause scenarios](scenarios/issue-134-pause-whole-run.md), and
+[task Pause scenarios](scenarios/issue-135-pause-task-grouping-descendants.md).
 
 ## Frontier Derivation, Scheduling, and Capacity
 
-Dalph first reconstructs usable graph knowledge, workflow history, per-subject
-responsibility, and pause state. A pure derivation then returns the runnable
-frontier: every workflow transition those facts and accepted policy currently
-allow before applying task-work capacity. The derivation does not read the task
-tracker, journal, Git, or task-work provider and does not change when an
-interpreter simulates a boundary.
+The delivery frontier is a graph-only description. Bounded parallel tickets
+apply current Run policy without starting work or proving that a task owns a
+runtime position. Existing exact obligations remain visible even when their
+tasks are closed, removed, blocked, or outside the current bound.
 
-The default tracker observation assembles the complete bounded task-tracker
-target closure. A smaller named read shape may support a focused decision only
-when its declared coverage completely proves the task's lifecycle, target
-closure membership, complete prerequisite set, and every prerequisite
-lifecycle needed by that decision. Missing, incomplete, or incomparable facts
-never prove that a blocker is absent. They make only transitions that depend on
-those facts unavailable; unrelated transitions derived from usable knowledge
-continue.
+Planning describes proposed actions and their resource requirements. Runtime
+admits them, allocates fresh identities only after admission, and owns the
+positions while the accepted protocol requires them. Capacity contraction is
+non-preemptive. Integration uses a separately serialized resource.
 
-Successful normalized facts from either a tracker read or a tracker mutation
-result update graph knowledge through `TaskGraphFactsUpdated`. The same pure
-frontier derivation runs after either origin. Completing task `A` therefore does
-not imperatively enqueue dependents `B` and `C`, advance their execution stages,
-or persist a downstream queue. It updates the relevant graph facts, after which
-the derivation decides whether the previously unstarted downstream region now
-contains runnable transitions.
+Wait, pause, isolation, relinquishment, and settlement are different domain
+conditions. An empty proposal frontier proves only that no action can start
+now; it does not prove that the Run completed.
 
-The scheduler chooses a process-local admission set from the runnable frontier.
-It first admits ready transitions for tasks where Dalph already has workflow
-responsibility. Those tasks are ordered by the earliest journal position that
-began any of the task's still-outstanding responsibilities needed by its ready
-transition, then by normalized `TaskId`. Fresh tasks follow in ascending
-normalized `TaskId` order. The scheduler admits no more capacity-requiring
-transitions than fit the currently available task admission positions. Tracker
-enumeration order, hash-map iteration, ambient randomness, and a persisted
-scheduling cursor never participate.
-
-This ordering is deterministic for the exact reconstructed state presented to
-one scheduling decision. Worker completion order, tracker edits, provider
-response timing, and capacity-release timing remain externally determined and
-may change the state presented to the next decision. Dalph records those
-observations in their actual order and does not delay work or reorder history to
-manufacture the same global execution sequence across runs.
-
-For a fresh task, scheduler choice is uncommitted until Dalph appends the exact
-first ambiguity-crossing operation intent, normally
-`TaskClaimAcquisitionIntended`. Dalph records no standalone durable
-task-selection event. A crash before that append leaves no responsibility and
-recomputes the choice from fresh facts. A crash afterward reconstructs
-responsibility for that exact operation and follows its reconcile-before-retry
-protocol before considering fresh work.
-
-One process-local controller supplies the configured task admission positions
-to ordinary and resumed work. A position is reserved from a fresh task's first
-operation intent through preparation of its initial task-work invocation. It is
-occupied while the task-work provider reports that an implementation,
-technical-review, semantic-review, findings-handback, or resumed task-work
-invocation consumes capacity. An invocation's terminal observation releases
-the position; the task keeps its durable responsibility and receives
-responsibility-first priority when another invocation becomes ready.
-
-Pure derivation, reducer execution, bounded journal appends, tracker/Git/provider
-reconciliation reads, evidence sealing, cleanup, and integration do not consume
-task-work capacity. Cleanup follows its exact disposition protocol, and
-integration uses its separately serialized resource. A paused branch, a branch
-waiting on an external condition after its current bounded action settles, a
-disposed or isolated branch, and a branch whose task-work invocation terminated
-hold no admission position merely because their responsibility or recoverable
-resources remain.
-
-Creating one exact task claim record is the exception for its already-committed
-fresh task: retryable GitHub failures reuse the same operation identity under
-the selected bounded retry policy and retain the reserved admission position
-between attempts. Exhausting retries for a shared GitHub failure, or encountering
-an authentication or invalid repository-configuration problem, stops fresh
-admission and fails the run after already-started work reaches its defined safe
-boundary. A confirmed task-specific conflict, such as a current claim owned by
-another owner, leaves that task alone, releases the position, and permits an
-unrelated task to be selected.
-
-When no position is available, capacity waiting is derived from the runnable
-frontier and controller state. It is exposed with its reason but does not append
-a waiting event, queue entry, capacity reservation, or presentation rollup to
-the workflow journal. Releasing a position or changing relevant reconstructed
-state wakes scheduling. After process loss, Dalph discards the old controller,
-reconstructs responsibility, freshly reads the applicable external boundaries,
-and derives new positions and waits.
-
-Every workflow wait names both the exact condition preventing the next
-transition and the event or observation that can make that transition legal.
-Current reasons include task-work capacity, an unfinished dependency, a
-recorded technical-retry deadline, and an occupied integration resource; the
-list remains extensible by executor-declared protocols. A request that Dalph can
-reconcile immediately is unresolved rather than waiting. Pause and
-branch-local isolation also remain separate from waiting.
-
-Branch-local isolation is a reversible safety boundary: Dalph forbids action on
-the exact affected region while retaining every still-owned responsibility and
-names the repair or fresh authority evidence that can permit progress.
-Responsibility relinquishment instead durably ends one exact obligation after
-fresh authority evidence or an authorized handoff proves Dalph may no longer
-act. Relinquishment has no wake condition; other responsibilities for the same
-attempt may continue or remain isolated.
-
-One unavailable branch blocks another only when the second branch's next action
-concretely requires its unfinished prerequisite, an integration resource it
-already holds, the whole run is paused, or shared managed history or capability
-is invalid. A paused, capacity-waiting, disposed, isolated, foreign-claimed, or
-responsibility-relinquished task does not create a generic whole-run blocker.
-An empty runnable frontier proves only that no transition is currently allowed;
-run completion still requires a fresh tracker observation proving every task in
-the live target closure completed successfully and all managed work and
-resources settled.
-
-### Acceptance examples
-
-With task-work capacity one and equally runnable fresh tasks `A` and `B`, the
-frontier contains both tasks and the admission set contains only `A`. Dalph
-reserves the position for `A` and appends only `A`'s exact claim intent. If the
-coordinator dies before that append, restart rereads the tracker and recomputes
-both uncommitted choices. If it dies after the append but before learning
-whether GitHub created `A`'s claim record, restart reconstructs responsibility
-only for `A`, checks GitHub for that exact owner and token, and leaves `B`
-unselected. Observing both tasks therefore neither selects both nor creates
-responsibility for both.
-
-If responsible task `A` is paused after its worker stops, it retains its claim
-and recoverable resources but holds no admission position. Fresh task `B` may
-use the sole position. A later Unpause request triggers `A`'s required fresh
-reads while `B` continues. If `A` becomes ready before `B` finishes, it derives
-capacity waiting without a journal event. When `B` releases the position, `A`
-is admitted before fresh task `C`; if `A` is paused, blocked, or isolated
-instead, `C` may proceed.
-
-See [ADR 0009](adr/0009-separate-frontier-from-bounded-admission.md).
-
-Before each new long-running executor invocation, including same-session
-rework, the workflow requests sufficiently fresh graph knowledge for the
-control facts that may forbid starting it. This continuation check is not a new
-planned-attempt eligibility decision and does not silently replan the attempt;
-the active-continuation rules classify each changed authority fact. The graph
-boundary may satisfy the declared area and freshness from retained knowledge or
-update that knowledge through the provider.
-
-Ordinary coordination and startup recovery invoke the same pure transition
-selector after every recorded result. An already-recorded unresolved operation
-keeps its operation identity and uses its existing reconciliation protocol.
-The activation continues every immediately legal independent transition until
-only named waits, pauses, isolations, relinquished or settled
-responsibilities, subject-specific final outcomes, or typed issues remain. A
-journal append alone is not a reason to return.
-
-| State or record | Where current state is read | Restart treatment |
-| --- | --- | --- |
-| Dalph-recorded workflow intents and observed outcomes | Read from the durable JournalStore in canonical `JournalPosition` order within one `RunId` | Reopen the journal and apply the unresolved-request reconciliation rules to each intent missing a recorded outcome before retrying |
-| Task identity, lifecycle, dependencies, grouping, and claims | Read through the configured task tracker | Reread every task in the task-tracker target closure and derive current eligibility instead of restoring a stored frontier |
-| Git lineage, refs, commits, worktrees, and integration state | Read from Git | Reread the exact resource locators recorded in the planned task attempt and compare them with journaled intents before continuing |
-| Task-work sessions, provider work units, and worker processes | Read through the configured task runner; its adapter queries the configured task-work provider | Ask the task runner for a fresh report, then classify the task-work session and its provider work units or worker processes before retry, cleanup, or failure |
-| In-memory queue buffers, wakeup signals, semaphore instances, permit holdings, and timer instances | Available only in the live coordinator process | Discard them on process loss and recreate them from accepted configuration, journaled scheduling records, and fresh task-tracker, Git, and task-runner reads; they never prove that work occurred |
-| Runnable frontiers and resource-readiness views | Derived in the live coordinator process | Recompute them from fresh task-tracker, Git, and task-runner reads plus Dalph-recorded journal history |
-| Workflow-comparison-trace entries, presentation cursors, and graph indexes | Derived presentation data, even when an output store retains a copy | Rebuild them from committed journal records in original `(RunId, JournalPosition)` order without reordering or renumbering history. After restart, reread the task tracker and Git, ask the task runner for a fresh task-work session report, and record new journal events for those reads and reports. Preserve returned identities or revisions and leave unreadable intervals explicit. Dry-run and deterministic-test comparison traces remain process-local and do not write the Dalph workflow journal |
-
-A task-work provider adapter may satisfy its correlation contract with a
-provider-owned durable registry outside the Dalph workflow journal. That
-registry retains the exact operation, planned-attempt, task-work-session, and
-provider-work-unit correlation for every recoverable run even when the native
-provider has a shorter session-retention period. Native session absence, an
-empty provider listing, or any request error whose contract does not explicitly
-prove pre-creation rejection does not prove non-creation. When the adapter
-cannot read complete correlation history, it returns a typed task-work session
-lookup failure instead of reporting that no matching session exists.
-
-An established task-work session with no provider work unit or worker process
-is a normal explicit state. Establishing the durable session and asking the
-adapter to start or resume work inside that session are distinct workflow
-operations. Dalph records each operation's intent and observed outcome
-separately. After restart it can therefore distinguish a session awaiting its
-first work request from an uncertain work-unit or worker-process request.
-
-A matching task-work session report preserves every registry-known provider
-work unit even when native details are no longer readable. Each work unit is
-tagged as available, confirmed purged, or temporarily unreadable. Confirmed
-purge leaves the enclosing task-work session established but forbids resuming
-that work unit. Temporary unreadability authorizes only another observation;
-neither condition is collapsed into an absent task-work session.
-
-A task-work session correlation conflict leaves the session-establishment
-operation unresolved under its existing `OperationId`. Dalph may only perform
-a fresh lookup after provider-owned correlation data is repaired or follow a
-separate run-disposition decision. Repair does not authorize selecting one
-conflicting session, changing the planned task attempt, or issuing another session
-creation request.
-
-A journal event record is durable after Dalph receives successful
-acknowledgement of its append. Presentation may apply process-local backpressure
-after acknowledgement, but a crash before presentation output does not erase
-that record: replay can reconstruct any corresponding comparison-trace entry
-from the same `(RunId, JournalPosition)`. If Dalph persists live
-workflow-comparison-trace entries, it
-must either atomically commit each projected item with advancement of its source
-cursor or enforce idempotency by `(RunId, JournalPosition)`, so replay cannot
-persist a second projection of the same committed record. A workflow comparison
-trace item saying task-work capacity was reserved does not prove that task work
-began. After restart, Dalph requires the journaled start request and a fresh
-task-work session report from the task runner.
-
-SQLite schema migration, journal-event version conversion, and ordered journal
-history validation change independently and require separate implementations.
-Physical SQLite changes use ordered Effect SQL SQLite migrations before the
-normalized schema is read or written. Each physical record stores normalized
-run identity, canonical position, record key, event kind, event version, and an
-immutable JSON payload; it stores no derived frontier or recovery rollup.
-Effect Schema independently decodes every physical row and versioned payload,
-then an immutable upcaster produces the current event meaning. Idempotent
-reappend compares that upcasted meaning rather than historical JSON bytes.
-
-Successful row decoding is necessary but not sufficient for recovery. The
-total history reducer checks contiguous canonical positions, record-run and
-record-key identity, event-kind and operation identity, attempt ownership,
-legal intent/observation transitions, and duplicate or contradictory facts. It
-returns either valid managed history or all detected typed validation issues;
-it does not throw away the records or persist the derived result. See
-[ADR 0001](adr/0001-versioned-journal-evolution.md).
-
-Journal history validation rejects structurally impossible managed history,
-such as an observation without its operation intent, an outcome without its
-required observation, or mismatched operation and planned-attempt references.
-Two well-formed provider reports that disagree remain valid journal history but
-produce a typed provider-evidence conflict. Failure to obtain complete provider
-evidence remains a typed lookup failure. Neither external condition is
-reclassified as journal corruption.
+Detailed rules live in
+[Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md)
+and [ADR 0009](adr/0009-separate-frontier-from-bounded-admission.md).
 
 ## Tracker Target Closure
 
-Grouping chooses target membership; dependency edges extend that membership only
-far enough to include every transitive prerequisite. For example, if selected
-root `R` groups child `C`, `C` is blocked by `B`, and prerequisite-only task `B`
-groups child `B1`, the closure contains `R`, `C`, and `B` but not `B1`. The
-concrete consequence is that this run neither schedules nor presents `B1` unless
-the selected root hierarchy also reaches it. This does not hide a prerequisite
-needed to release `C`: GitHub records `B`, not `B1`, on `C.blockedBy`, and
-grouping itself never controls eligibility.
+Grouping chooses target membership. Dependency edges extend that membership
+only far enough to include every transitive prerequisite needed to evaluate a
+selected task. Grouping children of a prerequisite-only task remain outside
+the closure unless the target also selects them.
 
 ## Task-Tracker Observation Consistency
 
-The task-tracker adapter returns either one complete normalized task graph or a
-typed failure. GitHub may still change between the API requests used to assemble
-that graph. The GitHub adapter must finish every bounded page, decode every task
-in the task-tracker target closure, and reject detectable missing or
-contradictory records before exposing a `TaskDagSnapshot`. Its `TrackerRevision`
-identifies the canonical content actually read; it does not claim that GitHub
-assigned one revision to the multi-request read.
+The tracker adapter returns a complete normalized observation for its declared
+read shape or a typed failure. Each observation states its subjects, covered
+fact families, completeness, consistency, freshness, and content identity.
+Missing coverage never proves that a blocker or task is absent. Incomparable
+facts remain an explicit conflict until a later observation resolves them.
 
-GitHub's current Issue GraphQL fields expose current issue values and paginated
-`subIssues`/`blockedBy` connections without an as-of-time argument. GitHub keeps
-an editable history for authored issue content, and `timelineItems(since:)`
-includes timestamped lifecycle, dependency, and subissue add/remove events.
-Those events are a possible future event-replay source, but they are not a
-direct as-of graph query. Reconstruction would need separately specified
-completeness, initial-state, ordering, deletion, transfer, retention, and access
-semantics, so V1 deliberately does not claim historical reconstruction. Git
-records commit history and cannot reconstruct task-tracker state. Consequently,
-concurrent task-tracker edits that do not create a detectable identity,
-pagination, repository, or parent contradiction can produce a mixed-time
-observation. Before the Dalph coordinator sends a state-changing request whose
-validity depends on the current task graph, it must reread the task tracker
-instead of treating an earlier `TrackerRevision` as a GitHub transaction token.
-
-The calling workflow selects a bounded task-graph read policy when it asks the
-task-tracker adapter to assemble a graph. The policy may provide a short Effect
-`Schedule` for retrying one failed provider page while retaining the other
-in-memory pages already collected by that assembly. If the page schedule is
-exhausted, a cursor becomes unusable, or consistency checking finds a
-contradiction, a separate bounded assembly schedule may discard those pages and
-restart the complete read. A single-attempt policy instead exposes the first
-typed page failure or `TaskGraphReadContradiction`.
-
-Intermediate failures consumed by the selected policy do not appear in its
-caller-facing failure union, while exhaustion appears as
-`TaskGraphReadRetryExhausted`. The policy therefore determines the complete
-Effect return type, so callers do not match impossible failures with no-op
-branches. No adapter policy may convert a detectable contradiction into a valid
-normalized result, retry without a bound, or read the Dalph workflow journal.
-The workflow recorder journals the selected read intent and its final result;
-individual provider requests, page retries, and adapter-internal assembly
-attempts are not workflow-journal events.
-
-When the selected policy exhausts, workflow history records one explicit failed
-task-graph read operation naming its requested shape, subjects, and final typed
-failure. That outcome does not mark any tracker task failed. It leaves only the
-affected graph knowledge unavailable, and a later manual or automatic
-reconciliation policy may select a new read operation.
-
-The adapter exposes a closed set of named task-graph read shapes earned by
-workflow usage, such as reading one task, one task's complete blocker relation,
-or one task-tracker target closure. Each shape defines the subjects and fact
-families its successful result covers, so an empty complete blocker result can
-remove earlier blocker knowledge while a task-only result says nothing about
-blockers. New workflow requirements may add new shapes; Dalph does not expose
-an arbitrary field bag or speculative general-purpose graph-query language.
-
-A successful complete graph-fact update replaces reconstructed durable graph
-knowledge for the graph area and fact families it covered. If GitHub previously
-reported that task A was blocked by task B and a later comparable complete
-result for A's blockers returns an empty list, reduction removes that edge.
-Results that did not cover A's blockers neither preserve the edge as current
-nor remove it; they simply add no new blocker knowledge.
-
-An explicit read is not the only source of updated graph facts. A tracker
-mutation result may produce `TaskGraphFactsUpdated` when its adapter contract
-returns a normalized result with the same declared coverage and evidence
-required from a named read shape. That single event also records the mutation
-operation's successful outcome; Dalph does not append a duplicate
-request-acknowledgement event. If the mutation response lacks sufficient graph
-facts, its ordinary typed acknowledgement updates workflow history only and a
-later read supplies graph knowledge.
-
-Freshness evidence applies at the narrowest fact family the provider can
-support. GitHub exposes `Issue.updatedAt`, which can help compare two observed
-versions of one issue record, but its dependency and sub-issue connection edges
-carry no corresponding edge revision or update timestamp. Timestamped
-dependency and sub-issue timeline events do not by themselves make a current
-multi-page connection read an as-of snapshot. `TrackerRevision` fingerprints
-the normalized content read and is not a graph-wide freshness order.
-
-When two successful observations conflict, reduction uses a provider comparison
-only within the fact family for which the adapter declares it valid. If neither
-fact is provably newer, reduction retains a `TaskGraphKnowledgeConflict` for
-that exact subject and fact family, continues consuming independent valid
-knowledge, and makes a bounded focused reread eligible. Journal position alone
-never resolves the external-fact conflict.
-
-One V1 GitHub adapter read supports at most 1,000 distinct tasks and at most 10
-pages from any one `subIssues` or `blockedBy` connection. With GitHub's maximum
-100 nodes per GraphQL page, these caps bound one relation at 1,000 endpoints and
-the worst-case observation at 21,001 provider requests. Crossing either bound
-fails with `ResourceLimitExceeded`; a partial graph is never returned. These
-are deliberate safety limits, not inferred properties of the current target.
-
-Provider evidence: [GitHub Issue GraphQL fields](https://docs.github.com/en/graphql/reference/issues)
-and [GitHub GraphQL query limits](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api),
-plus [GitHub issue edit history](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/editing-an-issue).
+Provider-neutral and GitHub-specific rules are in
+[Tracker Graph and Claims](architecture/tracker-graph-and-claims.md).
 
 ## GitHub Task Claims
 
-The GitHub Issues adapter represents one active task claim as a repository
-label record whose deterministic name is `dalph-claim-` plus a bounded SHA-256
-digest of the opaque `TaskId`. The label description is a schema-versioned
-payload containing the exact `OperationId`, `ClaimOwner`, and `ClaimToken`.
-The deterministic name associates the tracker-owned label record with the
-`TaskId` even across a crash between label creation and later workflow
-observations. The compact payload is bounded by GitHub's 100-character label
-description limit; an owner or token that cannot be represented fails before
-the request crosses the tracker boundary.
+The configured tracker owns claims. Dalph records its exact claim intent before
+asking GitHub to create the repository label used as the claim record. After an
+unknown result or restart it rereads that exact record before repeating or
+releasing anything.
 
-GitHub repository label names are unique. Atomic label creation is therefore
-the adapter's create-if-unclaimed boundary: two competing creates for one task
-cannot create two claim records. Every returned error or malformed response is
-followed by a fresh repository-label lookup before the generic claim protocol
-can authorize a repeat. Release first compares the complete owner/token claim,
-then deletes the exact opaque GitHub label node ID. A delayed release for a
-deleted label cannot delete a replacement label with a new node ID.
-
-The journal records the exact claim-acquisition operation before label
-creation. At coordinator restart, an intent without a durable acquired outcome
-is reconciled with the same operation, owner, and token; the generic protocol
-rereads the repository label before it can repeat the request.
-
-The coordinator's Git common-directory ownership capability guards label
-creation and deletion. Claim lookup remains read-only. After the adapter proves
-claim ownership, Dalph selects a read-only claimed-task eligibility observation.
-The production interpreter rereads the exact claim and complete task graph.
-Only the claimed task being open, still present in the target closure, and free
-of unsatisfied prerequisites can emit `ClaimedTaskEligibilityObserved`. Dry-run
-records the same operation shape without receiving tracker mutation authority
-and produces a distinct simulated outcome that claims no real tracker
-observation.
+The label representation and provider limits are in
+[Tracker Graph and Claims](architecture/tracker-graph-and-claims.md); recovery
+chronology is in
+[issue-137-reconcile-task-claims.md](scenarios/issue-137-reconcile-task-claims.md).
 
 ## Durable Task-Attempt Planning
 
-Under [ADR 0002](adr/0002-planned-task-attempt-admission.md), the coordinator
-records one immutable planned task attempt only after a fresh durable
-`ClaimedTaskEligibilityObserved` outcome matches the task identity and task
-revision fingerprint. The planned-task-attempt recording operation has that
-eligibility-observation operation as its sole direct predecessor. Before the
-coordinator asks Git or a task-work provider to create or discover an execution
-resource, it records the planned task attempt in the Dalph workflow journal and
-waits for the append acknowledgement. The planned task attempt binds the run,
-task revision fingerprint, attempt identity, declared Base SHA, branch ref,
-worktree path, executor locator, and task-work-session locator. The subsequent
-session-establishment operation causally depends on that acknowledged
-planned-task-attempt recording operation.
+One immutable planned task attempt binds the Run, task revision, Attempt ID,
+exact Base SHA, branch, worktree path, and executor locator before Dalph asks
+Git or the executor to act. A later attempt requires an explicit outcome that
+authorizes it; changing an operation identity cannot replace a plan.
 
-All planned-task-attempt identities and locators cross the journal boundary
-through Effect Schema and retain distinct brands. A failed or contradictory
-append therefore leaves Git and the task-work provider untouched. Repeating the
-same recording operation is idempotent; attempting to replace its journal key
-with a different planned task attempt is a journal contradiction. The key is
-scoped by `RunId` and `AttemptId`, so changing the recording-operation identity
-cannot replace an attempt. A later decision to make another attempt must state
-which prior outcome authorizes recording it instead of continuing or
-terminating the existing attempt.
-
-The workflow selects and invokes the same planned-task-attempt recording and
-worktree-reconciliation operations in every composition. Effect Layers select
-the implementation of each boundary independently, so tests may intentionally
-combine controlled adapters that exercise a production protocol at one
-boundary with simulation at another. A composition that exposes an adapter
-which may change external state must also record the required intent for that
-exact boundary. The production Layer guarantees that Dalph records the planned
-task attempt and rereads the journal before it may inspect or change Git. A
-mixed test Layer does not acquire that production durability guarantee merely
-because one of its controlled adapters exercises production protocol code.
-
-Before live session establishment or recovery, the journaled interpreter
-requires exactly one earlier `TaskAttemptPlanned` event with the identical
-planned task attempt whose recording operation is a direct causal predecessor.
-Missing, duplicate, non-causal, and mismatched evidence fail with a typed
-contradiction before provider mutation.
+See [ADR 0002](adr/0002-planned-task-attempt-admission.md) and
+[Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md).
 
 ## Exact Git Worktree Reconciliation
 
-After the journal acknowledges one immutable planned task attempt and before
-Dalph asks the task-work provider to begin agent work, Dalph records one exact
-worktree-reconciliation intent. It then reads Git's registered worktrees and
-the planned branch. Only a fresh observation that both resources are absent may
-authorize `git worktree add`; an existing planned branch may authorize adding
-that branch only after Git proves the declared Base is its ancestor.
+Normal execution and recovery use the same read-after-request protocol. Dalph
+continues only after Git proves that the exact planned path, branch, current
+`HEAD`, and declared Base have the required relationship. A contradiction
+preserves the observed resources and fails closed; this protocol does not
+repair, reset, prune, move, clean, or delete them.
 
-Normal execution and recovery use the same read-after-request protocol. Every
-create request is followed by a Git read because that read supplies the current
-branch, worktree-registration, `HEAD`, and ancestry facts from which Dalph
-constructs `PlannedWorktreeReady`; it is not an additional safety read taken
-because the create command might be unreliable. If the coordinator restarts
-without a durable result for a recorded worktree-reconciliation intent, it
-enters that same Git-read step before issuing another create request. Dalph
-proceeds only with a `PlannedWorktreeReady` proof containing the declared Base,
-current `HEAD`, exact branch ref, and exact worktree path after
-`merge-base --is-ancestor` succeeds.
-The task-work-session operation causally depends on both the acknowledged plan
-and this worktree-reconciliation operation. Dry-run projects the same operation
-without reading or changing Git and cannot fabricate a Base/HEAD proof.
+See [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md)
+and [issue-139-reconcile-git-facts.md](scenarios/issue-139-reconcile-git-facts.md).
 
-If the declared Base is not an ancestor of current `HEAD`, Dalph stops without
-resetting or recreating the branch. A target directory that Git does not
-register, a planned branch registered at a foreign worktree, a different branch
-registered at the planned path, duplicate registrations, detached planned
-worktrees, and malformed Git output remain distinct typed reconciliation facts.
-Dalph preserves every observed resource; this workflow performs no repair,
-clean, move, reset, prune, or deletion.
+## Planned-Attempt Executor Boundary
 
-## Exact Task Execution Reconciliation
+The executor performs the complete work for one exact planned attempt and
+reports `Running`, `SafelySuspended`, or a terminal result using the same
+`RunId` and `AttemptId`. Safe suspension and terminal results prove that no
+executor-owned activity for that attempt remains running. Coding-agent,
+reviewer, retry, handback, and session-restoration stages remain internal to a
+future production executor design.
 
-After Dalph establishes the exact provider-assigned task-work session, it
-selects a distinct task-execution operation and admits that operation to bounded
-task-work capacity. The operation binds the immutable planned task attempt, exact
-session identity, normalized task revision (fingerprint), and a new `OperationId`. Session
-establishment is a causal predecessor; it is not evidence that worker-process
-execution began.
+The current controlled executor shares Dalph's process lifetime; it does not
+prove adoption of an independently surviving production session. See
+[planned-attempt-executor-boundary.md](scenarios/planned-attempt-executor-boundary.md)
+and [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md).
 
-The journal commits task-execution intent and then an exact request-attempt
-record before the configured executor may start or resume a process. Every
-request return, typed adapter failure, and fresh process observation retains
-that admission `OperationId`; adapters cannot replace it. A request
-acknowledgement never emits `TaskExecutionStarted`. Dalph emits that event only
-after validating a fresh provider observation of the exact running or terminal
-worker process.
+## Accepted-Result Integration Admission
 
-On restart, an execution intent without a durable outcome authorizes a fresh
-provider observation before any later retry policy may repeat a process
-request. An intent without a request-attempt record proves that the first
-request remains safe. After a request-attempt crash, Dalph observes first and
-may complete the exact request only after authoritative evidence proves that no
-process exists. Running reports remain explicit nonterminal evidence and pin
-the worker-process identity for later observations; successful, nonzero-exit,
-and interrupted outcomes remain discriminated. Equivalent terminal evidence
-may arrive under a new provider-observation identity, but changed outcome or
-process evidence is a typed contradiction. Nonzero exit and interruption
-retain the provider session, worker-process identity, preserved-WIP proof, and
-bounded partial output.
-Ambiguous terminal evidence remains a typed unresolved outcome.
+An accepted executor result does not complete its tracker task. Dalph first
+establishes a durable integration obligation. Runtime serializes work for the
+same repository/ref target separately from task-work capacity. Integration
+uses a candidate resource distinct from the task worktree and must establish
+the exact accepted-head protocol before tracker completion or cleanup can be
+settled. After Git proves the exact two-parent candidate, Dalph reacquires the
+same-target process-local position, obtains current tracker and target-lineage
+facts, and invokes only the configured public verification wrapper. The
+wrapper owns its heavy lock. Dalph records one deterministic request intent,
+stores and rereads immutable evidence, and records a sealed terminal manifest.
+A non-passing terminal preserves the candidate and blocks promotion; a sealed
+passing manifest is only a premise for the later promotion protocol.
 
-Stale, replaced, foreign, and untracked sessions are typed reconciliation facts
-that block the attempt. Dalph does not choose a different provider record,
-allocate a replacement operation identity, or discard the worktree. Dry-run
-uses the planned session locator in the same exhaustive operation algebra but
-cannot fabricate a provider session or process identity.
+See [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md),
+[issue-56-queue-accepted-integration.md](scenarios/issue-56-queue-accepted-integration.md),
+and
+[issue-57-build-two-parent-integration-candidate.md](scenarios/issue-57-build-two-parent-integration-candidate.md).
+The verification continuation is specified by
+[issue-59-run-target-verification.md](scenarios/issue-59-run-target-verification.md).
 
-## Current Selected Executor Internals
+## Formal Model and Executable Scenarios
 
-The following evidence, review, findings-handback, retry, and convergence
-sections describe the current review-capable **Dalph executor**, not the generic
-Dalph orchestrator. The executor translates each internal action into an opaque
-outer invocation, wait, correlation, resource-use declaration, or outcome
-before generic reconstruction, frontier selection, admission, or activation
-uses it.
+Quint models and executable TypeScript scenarios verify the protocol slices
+they name. They do not extend the production domain or prove behavior outside
+their stated model boundary. The final relevant change runs `pnpm check:quint`;
+ordinary repository verification runs `pnpm check:all`.
 
-The present source layout is transitional. The selected executor remains
-co-located in `packages/orchestrator` and its internal operations still share
-the `WorkflowOperation` and `WorkflowInterpreter` algebras. That placement and
-those shared type names do not transfer review ownership to the orchestrator.
-Issue #127 is currently future research for executor composition and import
-direction; it is not a scheduled implementation that splits these internal
-operations or packages.
+Current model boundaries include
+[`plannedAttemptExecutor.qnt`](../specs/plannedAttemptExecutor.qnt) and
+[`acceptedResultIntegration.qnt`](../specs/acceptedResultIntegration.qnt).
 
-## Immutable Implementation Evidence
+[QUINT-GUIDE.md](QUINT-GUIDE.md) covers how to write a model here: guard and
+invariant conventions, the places Quint fails silently, and where these models
+depart from the community knowledge base.
 
-Within the current selected executor, only a successful exact task-execution
-outcome selects implementation-evidence sealing. The sealing operation directly
-names that execution operation as its causal predecessor. The selected executor
-reads the completed attempt's Git diff through the Git boundary and stores the
-diff and bounded executor output as separate immutable EvidenceStore objects.
+## Detailed Architecture Index
 
-Diff collection snapshots the exact linked worktree through a scoped temporary
-Git index and object database. The repository's real object database is exposed
-only as a read-only alternate, so staged and untracked bytes can be represented
-without changing the target index or object inventory. Repository clean filters
-still define Git's snapshot semantics; target filters used during orchestration
-must therefore be deterministic and free of external side effects.
+| Group | Owns |
+| --- | --- |
+| [Journal and Reconstruction](architecture/journal-and-reconstruction.md) | journal publication, reduction, recovery, responsibility reconstruction, and failure locality |
+| [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md) | exclusive coordinator ownership, Run lifecycle, pause, frontier/admission separation, capacity, waits, and stabilization |
+| [Tracker Graph and Claims](architecture/tracker-graph-and-claims.md) | tracker closure, observation evidence, GitHub consistency limits, named reads, mutations, and claims |
+| [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, candidate construction, verification, and exact-head promotion |
+| [CONTEXT.md](CONTEXT.md) | canonical domain vocabulary |
+| [scenarios/](scenarios/) | chronological behavior and acceptance-test mappings |
+| [adr/](adr/) | accepted design decisions and their trade-offs |
+| [research/](../research/) | investigation and evidence, not accepted architecture by itself |
 
-The EvidenceStore derives every object identity from the complete byte content.
-Its filesystem adapter writes a private partial file and atomically publishes a
-same-filesystem hard link at the SHA-256 address. Repeated writes of identical
-bytes return the same reference; reads verify both digest and byte length.
-
-The implementation-stage manifest is stored last and references both evidence
-objects, the planned Base SHA, task, run, and successful execution predecessor.
-Consequently, a crash can leave unreachable content-addressed objects but never
-a manifest that authorizes review before all referenced bytes are sealed.
-Selected-executor recovery repeats the same content-addressed writes and
-returns an already journaled sealed outcome when present. The selected
-executor's journaled live interpreter requires the exact successful execution
-outcome before it records sealing intent.
-
-Dry-run and deterministic-test interpreters select the same sealing operation
-after their execution projection, but emit only
-`ImplementationEvidenceSealingSimulated`. That value contains stage and
-predecessor ordering without a manifest or evidence reference and therefore
-cannot pass the implementation-review authorization boundary.
-
-## Fresh Implementation Review And Exact Handback
-
-One semantic review round inside the current selected executor begins only from
-a complete implementation-review authorization. Before invoking a reviewer,
-the selected executor records the exact internal review operation, semantic
-round, and fresh reviewer-session identity in the Dalph workflow journal. The
-request binds the same planned task attempt and worktree, the latest successful
-implementer invocation, and its exact provider session. Journal validation
-rejects a stale invocation, reused reviewer session, foreign provider session,
-or cross-attempt continuation before either provider boundary is called.
-
-The reviewer returns either acceptance or at least one typed finding. The
-selected executor stores that disposition in a content-addressed review
-manifest whose immediate predecessor is the sealed implementation evidence for
-the first round or the prior review evidence for a later round. Every manifest
-retains the complete finding history. A later round must advance by exactly one
-semantic ordinal, preserve the exact unresolved finding history, and use a
-fresh reviewer session. Its predecessor must be findings, followed by the exact
-acknowledged handback and a newer successful implementer invocation in the same
-established session; that invocation's newly sealed evidence alone can admit
-the review.
-
-Findings select a separate handback operation. The handback request carries the
-immutable review evidence and repeats the exact planned task attempt, worktree,
-implementer invocation, and provider session binding. The journal records
-intent before provider delivery and records acknowledgement afterward.
-Selected-executor recovery reuses the journaled review or handback operation
-and session; it does not allocate another semantic round. Reviewer and handback
-adapters implement provider-enforced create-or-resume contracts: reviewer work
-is idempotent by operation plus reviewer-session identity, and findings
-delivery is idempotent by handback operation. An exact repeated payload returns
-the first accepted result without duplicating provider work; reuse of a key
-with a different payload fails.
-
-Dry-run and deterministic-test interpreters select the same review operation
-after simulated evidence sealing but return
-`ImplementationReviewSimulated`. They cannot fabricate sealed review evidence,
-a reviewer session observation, a semantic disposition, or a findings
-handback.
-
-## Bounded Technical Invocation Scheduling
-
-Before the selected executor's journaled interpreter invokes one reviewer or
-sends one findings handback, it captures a positive technical retry limit,
-positive initial delay, and maximum delay for that exact active scope. Reviewer
-scope binds the executor-internal review operation, reviewer session, and
-semantic review round. Findings-handback scope binds its operation, reviewed
-operation, and the same semantic round. Technical retry ordinals and semantic
-review rounds are distinct branded values; a provider invocation failure never
-creates another semantic round.
-The current default permits three retries after the first invocation, begins at
-100 milliseconds, and caps each delay at five seconds; every active scope
-persists those values rather than depending on later defaults.
-
-Only `ImplementationReviewInvocationFailure` and
-`ReviewFindingsHandbackFailure` advance these schedules. The Effect schedule
-applies exponential delay capped by the captured maximum and stops after the
-captured retry limit. Before each wait it records the next technical retry
-ordinal, capped delay, and absolute `notBefore` from the Effect clock in the
-Dalph workflow journal. Production and test compositions execute this same
-selected-executor scheduling algebra; deterministic tests advance `TestClock`.
-Dry-run has no provider invocation and therefore cannot fabricate a technical
-failure or scheduled retry fact.
-If clock-plus-delay arithmetic cannot produce a nonnegative safe-integer
-`notBefore`, scheduling fails with `TechnicalRetryScheduleOverflow` before a
-schedule fact is appended, a timer waits, or another provider invocation runs.
-
-Coordinator ownership failure and Effect interruption are not technical
-invocation failures and bypass this schedule. On restart, the selected
-executor's interpreter reuses the captured policy and exact invocation scope. A
-scheduled deferral in the future waits only `notBefore - now` through the Effect
-clock; an overdue deferral is immediately eligible. Immediately before the next
-provider call, the selected executor records
-`TechnicalRetryDeferralSuperseded` in the Dalph workflow journal for that exact
-ordinal. A later typed technical failure alone may schedule the following
-ordinal.
-Every schedule and supersession must follow the exact review or handback intent
-and precede its durable outcome; policy capture alone may precede the intent.
-Technical-retry events form one coherent version-3 protocol, and decoding does
-not infer retry progress from earlier event versions.
-
-Interruption after scheduling but before supersession leaves one pending
-deferral. Interruption after supersession but before a durable provider outcome
-resumes the same ordinal immediately through the provider's create-or-resume
-boundary, which discovers an already-produced result before doing new work.
-Neither crash position allocates a new reviewer session, semantic review round,
-or technical retry ordinal. The total history reducer rejects gaps, crossed
-scopes, delays inconsistent with the captured policy, schedules above the
-captured limit, and a schedule that advances before its predecessor deferral is
-superseded. Dry-run still fabricates no provider invocation or retry fact.
-
-## Bounded Implementation Convergence
-
-The current selected executor captures a positive semantic review round limit
-and runs one explicit bounded loop. A successful execution seals immutable
-evidence and selects a fresh independent reviewer. Acceptance records
-`Accepted`. Findings below the limit are handed back to the exact implementer
-invocation and provider session, then select a newer execution in that same
-session and a fresh reviewer session. Each later reviewer receives the complete
-finding history. Findings at the captured limit record
-`ImplementationNonConvergent` without another handback.
-
-Semantic non-convergence is distinct from technical retry exhaustion. Exhausted
-reviewer transport records `ReviewTechnicalRetryExhausted`; exhausted findings
-delivery records `HandbackTechnicalRetryExhausted`. Nonzero execution exit,
-interruption, and demonstrated resource emergency also have distinct final
-current-protocol outcomes. A resource emergency requires explicit provider
-evidence for memory, process-capacity, or storage exhaustion and forbids
-automatic retry of the unchanged execution; the selected executor never infers
-it from an exit code.
-
-Every current-protocol final outcome retains the exact active claim, planned
-task attempt, authoritative ready-worktree operation and proof, provider
-session, applicable findings/evidence chain, and selecting failure or outcome.
-Its direct predecessor must contain exactly the embedded review, request, or
-execution outcome; operation identity alone is insufficient. The journal
-permits one disposition per attempt and rejects later attempt events. Restart
-first reconciles unresolved provider intents, then reconstructs the last
-durable convergence stage. It reuses an unresolved review or handback
-operation, continues an acknowledged handback with same-session execution, and
-does not allocate a semantic round or reviewer session merely because the
-coordinator restarted.
-
-Dry-run selects the same bounded workflow shape but records only an
-`ImplementationConvergenceSimulated` projection. It cannot fabricate a claim,
-provider session, sealed review, findings, acceptance, or failure disposition.
-
-## Resolution, Integration, And Tracker Completion
-
-A final executor-protocol outcome is not a terminal task or run. The selected
-resolution protocol determines whether the attempt proceeds to integration,
-preservation, operator handling, or another explicitly declared disposition.
-The present successful protocol selects integration after implementation
-acceptance; a future executor may omit review or govern review internally
-without changing Dalph's outer operation-identity, responsibility, and
-reconcile-before-retry rules.
-
-The executor may edit, stage, commit any number of times, amend history, or
-leave uncommitted bytes inside its exact worktree. Dalph never equates one
-executor invocation with one commit and does not infer whether the executor or
-an operator authored a Git change. This freedom does not guarantee integration:
-later boundaries still validate every invariant required by the selected
-protocol. Evidence capture, when the selected protocol requires it, snapshots
-the complete worktree result relative to the planned Base. The integration
-protocol records the exact result placed on the target branch; that result may
-be a fast-forward tip, squash commit, merge commit, or another typed protocol
-outcome. The active-continuation rules classify concurrent or externally
-authored Git changes without attributing an actor.
-
-Successful integration reaches a known result and releases the separately
-serialized Git integration resource before tracker completion begins. Dalph
-keeps the planned attempt's worktree, task-work session, and other resources
-required by the resolution protocol until the tracker-completion request has a
-known result. If task pause arrives while integration already holds the shared
-resource, Dalph finishes or reconciles that exact Git protocol and releases the
-resource but does not begin tracker completion. If tracker completion already
-crossed its boundary, pause reconciles that exact request.
-
-The current tracker-completion protocol has four distinct durable regions:
-
-1. compare-and-set the exact active claim to a completion claim that binds the
-   current task revision, confirmed integration result, and any supporting
-   artifacts required by the selected resolution protocol;
-2. request successful task completion using that exact completion claim;
-3. confirm from the task tracker that the task completed successfully; and
-4. compare-and-set delete the exact completion claim.
-
-An unresolved request in any region retains its original operation identity
-and is reconciled before retry. Tracker confirmation in step 3 may release
-dependent tasks; failure of the later completion-claim deletion never reopens
-the task. The completion claim is a tracker-owned semantic state. Each adapter
-may use its own durable representation, but it must enforce the same narrowing:
-ordinary abandonment cannot release a completion already in progress, only the
-matching completion claim can authorize completion, and only confirmed
-completion can authorize deletion.
-
-There is no generic cleanup stage. A resolution protocol may select only the
-exact cleanup, preservation, disposal, or handoff operations it declares. Each
-such operation owns a separate workflow responsibility and explicit causal
-preconditions; Dalph neither infers “clean everything” nor deletes evidence or
-executor-owned resources without the applicable protocol. A task's Dalph work
-is settled only when its selected resolution protocol has a final outcome and
-every remaining responsibility is completed or durably relinquished.
-
-Finality always names its subject. Executor-protocol outcome, planned-attempt
-resolution, tracker task completion, Dalph task-responsibility settlement, and
-run termination are distinct facts. Run termination remains governed by the
-run-completion, blocked, cancelled, and failed definitions rather than by any
-single executor, review, integration, or tracker event.
-
-## Formal Models and Executable Conformance
-
-Dalph maintains two canonical Quint models under `specs/`. The focused
-`taskWorkSessionRecovery` model owns provider-session establishment,
-correlation, authoritative absence, unreadability, conflict, and the bounded
-lookup protocol. The `frontierRecovery` model owns composition across graph
-knowledge, responsibility, pause, capacity, crash recovery, reconciliation,
-and the eight claim-through-completion ambiguity-crossing boundaries.
-
-The models overlap only through the versioned `AmbiguityBoundaryV1` projection.
-For one exact subject it carries operation identity, immutable request
-fingerprint, causal predecessors, committed intent, request attempts, fresh
-checks, normalized observations, authority effect identities, the exact outcome
-or nonterminal disposition, and revision/freshness evidence. The focused model,
-broad model, and implementation adapters must project the same session trace to
-equal values.
-
-Each model exports a closed action schema. A test-only Quint-connect driver maps
-every action to a deterministic test control that invokes the production
-workflow algebra or one of its pure reducers. The driver and its controls are
-not production package APIs. Drivers may control named external authorities but
-must not implement another scheduler, set private reducer state, or decide the
-expected next action. After every action they compare reconstructed state,
-derived frontier/admission, external-authority projections, and ordered
-semantic workflow traces.
-
-The conformance suite runs every applicable test cut point through two fresh
-scopes: in-memory recovery over retained journal events and production SQLite
-reopening over the same database file. The test-only cut-point inventory
-includes choices before intent, intents, request attempts, acknowledgements or
-failures, fresh-read intents, observations, and exact outcomes or dispositions.
-It is owned by conformance support, not the production journal-event descriptor.
-Conformance schemas, cut-point maps, model controls, and fake authorities live
-under test support and are neither exported nor emitted by the production
-package. P0–P6 are never production workflow stages, states, or events.
-
-Formal exhaustive checking, sampled model-to-code conformance, and physical
-SQLite reopening remain distinct evidence claims. A behavior change updates
-its specification, model, adapter, retained readable scenarios, and both
-reopening seams together. See
-[ADR 0010](adr/0010-govern-recovery-with-two-quint-models.md) and the
-[formal-model portfolio](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md#formal-model-portfolio).
-
-## Documentation Responsibilities
-
-| Document, application, or store                                                    | Records or decisions provided                                                    |
-| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| [Dalph tooling context](CONTEXT.md)                                                | Canonical Dalph terminology and the tooling/main-application distinction          |
-| This document                                                                      | Stable Dalph structure and rules for rereading task-tracker and Git state, obtaining task-runner reports, and reading journal history |
-| [Bounded resumable graph-frontier specification](BOUNDED-RESUMABLE-GRAPH-FRONTIER.md) | Accepted behavior, model portfolio, executable seams, conformance-test cut-point matrix, and acceptance scenarios |
-| Configured task tracker                                                            | Task identity, description, lifecycle, dependency/grouping relationships, and claims |
-| [`research/`](../research/)                                                        | Historical investigation and decision evidence; accepted requirements and decisions are recorded in their named specification or decision document |
-| Historical `ralph-run.sh` sources in their origin repository                      | Historical harness behavior only                                                 |
-
-A target repository's architecture, ubiquitous language, and modeling
-assumptions do not define Dalph architecture.
+The configured tracker owns roadmap and implementation status. This document
+and its grouped architecture pages state stable structure and invariants only.

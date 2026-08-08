@@ -1,5 +1,3 @@
-# Dalph agent instructions
-
 ## Package manager and branch
 
 - Use pnpm, never npm.
@@ -29,14 +27,11 @@
 
 - Read `docs/CONTEXT.md` and `docs/ARCHITECTURE.md` before changing domain or
   architecture language.
-- Dalph is a clean graph-native orchestrator, not a rewrite or compatibility
-  layer for the historical `ralph-run.sh` experiment.
-- Use Effect V4 services, layers, Schema boundaries, schedules, streams, scoped
-  concurrency, and typed failures for the production control plane.
+- Use Effect V4 features at its fullest. Be idiomatic.
 - The tracker owns task identity, lifecycle, dependencies, grouping, and
   claims. Git owns lineage, refs, commits, worktrees, and integration facts.
   The execution substrate owns session and process observations. Dalph's
-  journal owns only managed workflow history.
+  journal owns only workflow-journal history.
 - Do not duplicate authority facts or persist derived frontier, resource, or UI
   state.
 - During design and review, identify distinct domain phenomena, give them
@@ -49,14 +44,11 @@
 ## Delivery invariants
 
 - One exact worktree and planned Base SHA per task attempt.
-- Bounded concurrent task execution; integration resources remain distinct and
-  serialized according to the accepted target protocol.
-- Fresh independent reviewers, same-session handback, distinct technical and
-  semantic retry scopes, automatic bounded retries, and typed non-convergence.
+- Bounded concurrent task execution
 - Intent before ambiguity-crossing effects, observation afterward, and
   reconcile-before-retry after ambiguous outcomes.
 - Cleanup is disposition-typed, exact, recoverable, and fail-closed.
-- Dry-run, live-fake, test, and production interpret one workflow algebra.
+- Dry-run, test, and production interpret one workflow algebra.
 
 ## Verification and review
 
@@ -65,12 +57,20 @@
   three times” over “bounded acquisition,” “check GitHub again” over
   “perform an authoritative reread,” and “repository label used as the task
   claim record” over “label-backed lock.” Introduce the canonical term after
-  the concrete behavior is clear.
+  the concrete behavior is clear or not at all
 - Use focused package tests while developing. Do not inherit target
   repositories' application-specific typecheck, model-checking, or MBT gates
   as Dalph implementation gates.
 - Follow `docs/DEVELOPMENT.md` and `docs/CODE_REVIEW.md`. Run
   `pnpm check:all` before implementation handoff.
+- Run `pnpm check:quint` once after the final relevant changes and before
+  integration. During development, run it only when changing a Quint model,
+  its executable conformance adapter, or behavior governed by that model;
+  `pnpm check:all` intentionally does not repeat exhaustive model checking.
+- Read `docs/QUINT-GUIDE.md` before writing or changing a Quint model. Quint
+  fails silently: uncollected tests, undefined behavior, and unreachable
+  actions all read as a passing gate, so treat a green model result as a claim
+  needing a negative control.
 - Every implementation ticket must preserve its declared acceptance scenarios
   and blocking edges.
 - After significant changes, repeat domain/spec, architecture/connascence, and

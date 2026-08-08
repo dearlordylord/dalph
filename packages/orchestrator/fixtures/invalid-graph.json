@@ -3,60 +3,80 @@
   "tasks": [
     {
       "id": "task-a",
+      "title": "task-a",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": null,
       "prerequisiteIds": ["task-b"]
     },
     {
       "id": "task-a",
+      "title": "task-a",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": "task-b",
       "prerequisiteIds": []
     },
     {
       "id": "task-b",
+      "title": "task-b",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": null,
       "prerequisiteIds": ["task-a"]
     },
     {
       "id": "task-c",
+      "title": "task-c",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": null,
       "prerequisiteIds": ["task-c", "missing", "missing"]
     },
     {
       "id": "task-d",
+      "title": "task-d",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": null,
       "prerequisiteIds": ["task-e"]
     },
     {
       "id": "task-e",
+      "title": "task-e",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": null,
       "prerequisiteIds": ["task-d"]
     },
     {
       "id": "task-f",
+      "title": "task-f",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": "missing-parent",
       "prerequisiteIds": []
     },
     {
       "id": "task-g",
+      "title": "task-g",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": "task-g",
       "prerequisiteIds": []
     },
     {
       "id": "task-h",
+      "title": "task-h",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": "task-i",
       "prerequisiteIds": []
     },
     {
       "id": "task-i",
+      "title": "task-i",
+      "body": "",
       "lifecycle": { "_tag": "Open" },
       "parentTaskId": "task-h",
       "prerequisiteIds": []

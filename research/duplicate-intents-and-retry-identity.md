@@ -24,7 +24,7 @@ It does not change the protocol, implementation, or tracker.
   [ADR 0002](../docs/adr/0002-planned-task-attempt-admission.md).
 - Current implementation inspected: ordinary workflow selection, missing-stage
   continuation, unresolved-operation recovery, journaled interpreters, Git
-  worktree reconciliation, task-work-session establishment, managed-history
+  worktree reconciliation, task-work-session establishment, workflow-journal-history
   reduction, in-memory tests, and SQLite crash-reopening tests.
 
 ## Conclusion
@@ -46,8 +46,8 @@ There is one important distinction:
   states this directly
   ([`docs/CONTEXT.md` lines 502-507](../docs/CONTEXT.md#L502-L507)).
 - A second worktree or session-establishment intent for the equivalent planned
-  attempt is invalid managed history
-  ([`managed-history.ts` lines 674-705](../packages/orchestrator/src/managed-history.ts#L674-L705)).
+  attempt is invalid workflow-journal history
+  ([`workflow-journal-history.ts` lines 674-705](../packages/orchestrator/src/workflow-journal-history.ts#L674-L705)).
 
 The current boundary implementation does not fully enforce that invariant
 before mutation. A direct caller can mechanically supply a different
@@ -114,7 +114,7 @@ This is the first intent, not a retry.
 The reducer distinguishes absence of an intent (`TaskWorktreeReconciliationNeeded`)
 from a committed intent without proof (`TaskWorktreeReconciliationUnresolved`).
 The unresolved variant carries the recorded operation itself
-([`managed-run-recovery-stage.ts` lines 104-122](../packages/orchestrator/src/managed-run-recovery-stage.ts#L104-L122)).
+([`run-recovery-frontier.ts` lines 104-122](../packages/orchestrator/src/run-recovery-frontier.ts#L104-L122)).
 
 For the needed variant, recovery freshly checks eligibility and allocates the
 first worktree operation
@@ -192,7 +192,7 @@ The operation constructor preserves the supplied request identity
 
 The reducer distinguishes a missing establishment intent from an unresolved
 one and carries the recorded operation in the unresolved variant
-([`managed-run-recovery-stage.ts` lines 124-143](../packages/orchestrator/src/managed-run-recovery-stage.ts#L124-L143)).
+([`run-recovery-frontier.ts` lines 124-143](../packages/orchestrator/src/run-recovery-frontier.ts#L124-L143)).
 Only the missing variant allocates the first session-establishment ID after a
 fresh eligibility check
 ([`workflow-stage-recovery.ts` lines 212-236](../packages/orchestrator/src/workflow-stage-recovery.ts#L212-L236)).
@@ -302,7 +302,7 @@ exists today:
    replacement decision.
 4. An external boundary contract explaining why the original resource
    correlation no longer owns retries.
-5. Updated managed-history semantics that make the two intents distinguishable
+5. Updated workflow-journal-history semantics that make the two intents distinguishable
    rather than treating them as duplicates.
 
 ## Current enforcement gap
@@ -331,9 +331,9 @@ boundaries are Git worktree creation and task-work-provider session creation.
   rather than an unequal replay of the old row
   ([`journal-record-key.ts` lines 4-8](../packages/orchestrator/src/journal-record-key.ts#L4-L8);
   [`journal-store.ts` lines 426-452](../packages/orchestrator/src/journal-store.ts#L426-L452)).
-- Full managed-history reduction later rejects multiple worktree or session
+- Full workflow-journal-history reduction later rejects multiple worktree or session
   intents for an equivalent planned attempt
-  ([`managed-history.ts` lines 674-705](../packages/orchestrator/src/managed-history.ts#L674-L705)).
+  ([`workflow-journal-history.ts` lines 674-705](../packages/orchestrator/src/workflow-journal-history.ts#L674-L705)).
   Startup performs that reduction before its recovery phases
   ([`workflow-recovery.ts` lines 309-318](../packages/orchestrator/src/workflow-recovery.ts#L309-L318)),
   but direct live interpreter calls do not perform the same attempt-level
@@ -341,7 +341,7 @@ boundaries are Git worktree creation and task-work-provider session creation.
 
 The focused reducer test confirms that both duplicate worktree and duplicate
 session intents are invalid
-([`managed-run-recovery-stage.test.ts` lines 241-286](../packages/orchestrator/src/managed-run-recovery-stage.test.ts#L241-L286)).
+([`run-recovery-frontier.test.ts` lines 241-286](../packages/orchestrator/src/run-recovery-frontier.test.ts#L241-L286)).
 No focused test currently proves that the journaled interpreters reject a
 second same-attempt intent before Git or provider mutation.
 
@@ -355,7 +355,7 @@ map's existing strict sequence:
    places the invariant and boundary ordering in their canonical specification
    homes.
 2. [Audit architecture against the accepted model, issue #125](https://github.com/dearlordylord/dalph/issues/125)
-   decides whether the journaled interpreters and managed-history validation
+   decides whether the journaled interpreters and workflow-journal-history validation
    should be retained, refactored, or replaced to enforce attempt-level
    uniqueness before either external effect.
 3. [Create implementation tickets and blocking edges, issue #126](https://github.com/dearlordylord/dalph/issues/126)

@@ -1,5 +1,12 @@
 # Issue #133 executor-boundary follow-up verification
 
+> Historical note: issue #131 was reopened after owner review rejected the
+> executor-declared capacity rule recorded below. The accepted replacement is
+> Dalph-owned, task-scoped capacity in
+> `docs/BOUNDED-RESUMABLE-GRAPH-FRONTIER.md`. For example, a provider
+> correlation mismatch for task A now counts task A once rather than retaining
+> one reservation plus one occupied position.
+
 This bounded audit checks the uncertainty follow-ups after commit
 `26b6ce71751668d915d844a40f8369b9d5689811`. It does not reopen issue #133 or
 replace its completed review loop. It records executable evidence that is
@@ -50,7 +57,7 @@ instant, it may be continued.
 
 The current watcher has a liveness-latency defect:
 
-1. `makeManagedRecoveryActivation` reads the frontier once.
+1. `makeRunRecoveryActivation` reads the frontier once.
 2. It selects the earliest deadline from that snapshot.
 3. It performs one `Effect.sleep` until that timestamp.
 4. `JournalStore` offers `append`, `read`, and `scan`, but no change
@@ -130,14 +137,14 @@ or vocabulary constraint. “Gap” means the lane is applicable but absent.
 The repository uses flat ESLint, but no `no-restricted-imports` rule or custom
 rule currently prevents generic modules from importing
 `selected-executor-protocol.ts` or its internal evidence/review types.
-`managed-activation.ts` currently imports the selected protocol directly.
+`run-recovery-activation.ts` currently imports the selected protocol directly.
 
 If a second executor must be installable without editing source in the future,
 the low-cost preparation is:
 
 1. define an executor runtime/reconstruction service whose interface contains
    only the existing outer types;
-2. inject that service into activation and managed-history composition;
+2. inject that service into activation and workflow-journal-history composition;
 3. bind the selected evidence/review executor in the production composition
    root; and
 4. add an ESLint restricted-import rule preventing generic modules from
@@ -155,7 +162,7 @@ it exercises reconstruction, projection, frontier finality, and admission
 together.
 
 The current architecture is not ready to install a second executor without
-editing source. `managed-history.ts` and `managed-activation.ts` select the
+editing source. `workflow-journal-history.ts` and `run-recovery-activation.ts` select the
 current protocol directly. A throwaway direct/no-review executor confirmed
 that the existing outer types are coarse enough, but the production seam must
 also inject selected-protocol journal validation and current resource-use

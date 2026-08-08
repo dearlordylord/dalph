@@ -52,6 +52,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          submodules: true
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
@@ -71,8 +72,8 @@ jobs:
       - name: Install gitleaks
         run: bash scripts/install-gitleaks.sh
 
-      # Quint remains available through pnpm check:quint and pnpm check:all,
-      # but is deferred from hosted CI until the single-executor v1 proof of
-      # concept is working and the recovery-model runtime has adequate margin.
+      # Quint-connected MBT remains in the local pnpm check:all gate. Explicit
+      # formal checking remains available through pnpm check:quint and runs
+      # once before integration for relevant changes, not in hosted CI.
       - name: Run CI quality gate
         run: pnpm check:ci

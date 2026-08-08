@@ -6,6 +6,8 @@
     "**/dist/**",
     "**/coverage/**",
     "**/.git/**",
+    "**/.references/**",
+    "**/.worktrees/**",
     "**/prototypes/**",
     "**/test/**",
     "**/*.test.ts",

@@ -1,7 +1,0 @@
-{
-  "evaluator": "ordinary-operator",
-  "scenarioId": "target-closure-read-evidence",
-  "verdict": "acceptable",
-  "confidence": "high",
-  "reason": "The operator can distinguish an explicitly checked absent task from a later read that merely names an earlier operation, and neither read silently creates task ownership."
-}

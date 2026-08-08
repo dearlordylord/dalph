@@ -1,0 +1,112 @@
+import { NodeServices } from "@effect/platform-node"
+import { type IntegrationTarget, PlannedAttemptExecutor, type RunId } from "@dalph/contracts"
+import { controlledFakePlannedAttemptExecutorLayer } from "@dalph/executor"
+import {
+  type JournaledRunBootstrap,
+  type JournaledRuntimeLayerInput,
+  type TrackerGraphReader,
+  controlDirectionApplicationLayer,
+  coordinatorOwnedGitWorktreeLayer,
+  coordinatorOwnedTrackerMutationLayer,
+  type GitCommonDirectoryTarget,
+  type JournalStoreError,
+  journaledRunBootstrapLayer,
+  journaledWorkflowInterpreterLayer,
+  nodeGitCommandLayer,
+  nodeGitTargetLineageLayer,
+  nodeGitWorktreeLayer,
+  freshOperationIdAllocatorLayer,
+  productionCoordinatorOwnershipLayer,
+  productionJournalStoreLayer,
+  type TrackerMutation,
+  validatedStartupRecoveryLayer,
+  taskWorkCapacityControlLayer,
+  taskClaimReacquisitionControlLayer,
+  workflowInterpreterLayer,
+  WorkflowInterpreter,
+  WorkflowTrace,
+  type TargetVerificationRuntimeInput,
+  type TargetPromotionRuntimeInput
+} from "@dalph/orchestrator"
+import type { FileSystem } from "effect"
+import { Crypto, Effect, Layer } from "effect"
+
+/**
+ * Composes the production-shaped milestone with live tracker/Git boundaries
+ * and one same-process coarse fake executor.
+ */
+type ProductionWorkflowLayer<TrackerError, TrackerRequirements> = Layer.Layer<
+  JournaledRunBootstrap,
+  | TrackerError
+  | JournalStoreError
+  | Layer.Error<typeof productionJournalStoreLayer>
+  | Layer.Error<ReturnType<typeof productionCoordinatorOwnershipLayer>>,
+  Crypto.Crypto | FileSystem.FileSystem | TrackerGraphReader | TrackerRequirements | WorkflowTrace
+>
+
+export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirements>(
+  runId: RunId,
+  target: GitCommonDirectoryTarget,
+  integrationTarget: IntegrationTarget,
+  trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>,
+  targetVerification?: TargetVerificationRuntimeInput,
+  targetPromotion?: TargetPromotionRuntimeInput
+): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
+  const ownershipLayer = productionCoordinatorOwnershipLayer(target)
+  const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
+    Layer.provide(ownershipLayer)
+  )
+  const gitWorktreeLayer = coordinatorOwnedGitWorktreeLayer(
+    nodeGitWorktreeLayer(target).pipe(Layer.provide(nodeGitCommandLayer), Layer.provide(NodeServices.layer))
+  ).pipe(Layer.provide(ownershipLayer))
+  const gitTargetLineageLayer = nodeGitTargetLineageLayer.pipe(
+    Layer.provide(nodeGitCommandLayer),
+    Layer.provide(NodeServices.layer)
+  )
+  const journalLayer = productionJournalStoreLayer.pipe(Layer.provide(ownershipLayer))
+  const baseInterpreterLayer = workflowInterpreterLayer.pipe(
+    Layer.provide(trackerMutationLayer),
+    Layer.provide(gitTargetLineageLayer),
+    Layer.provide(gitWorktreeLayer)
+  )
+  const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, controlledFakePlannedAttemptExecutorLayer)
+
+  return Layer.unwrap(
+    Effect.gen(function* () {
+      const interpreter = yield* WorkflowInterpreter
+      const crypto = yield* Crypto.Crypto
+      const executor = yield* PlannedAttemptExecutor
+      const trace = yield* WorkflowTrace
+      const runtimeLayer = ({ runId: activeRunId, startup }: JournaledRuntimeLayerInput) => {
+        const interpreterLayer = journaledWorkflowInterpreterLayer(
+          activeRunId,
+          Layer.succeed(WorkflowInterpreter, interpreter)
+        )
+        const operatorControlLayer = Layer.mergeAll(
+          controlDirectionApplicationLayer,
+          taskClaimReacquisitionControlLayer,
+          taskWorkCapacityControlLayer
+        )
+        return validatedStartupRecoveryLayer(
+          activeRunId,
+          integrationTarget,
+          startup,
+          undefined,
+          undefined,
+          targetVerification,
+          targetPromotion
+        ).pipe(
+          Layer.provide(interpreterLayer),
+          Layer.provide(operatorControlLayer),
+          Layer.provide(freshOperationIdAllocatorLayer.pipe(Layer.provide(Layer.succeed(Crypto.Crypto, crypto)))),
+          Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),
+          Layer.provide(Layer.succeed(WorkflowTrace, trace))
+        )
+      }
+      return journaledRunBootstrapLayer(runId, runtimeLayer).pipe(
+        Layer.provide(journalLayer),
+        Layer.provide(ownershipLayer)
+      )
+    })
+  ).pipe(Layer.provide(nonJournaledRuntimeInputs))
+}

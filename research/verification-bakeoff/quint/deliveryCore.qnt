@@ -1,0 +1,670 @@
+// Shared L2 benchmark: the Dalph delivery protocol, abstracted to the smallest
+// model that still expresses invariants 7-19 of ../INVARIANTS.md.
+//
+// MUTANT selects a seeded defect from ../MUTANTS.md. 0 is the faithful model.
+//
+// TODO: this model is bound to no code. Its actions abstract
+// packages/orchestrator/src/coordination/delivery/run-delivery-runtime.ts, and
+// nothing checks that the abstraction is faithful. The four specs under
+// specs/*.qnt reach production through
+// packages/dalph/test/conformance/*.mbt.test.ts; this one does not, so every
+// `checked` cell in the Quint column of ../INVARIANTS.md is a statement about
+// the model alone. I16 is the one that matters most: `crash` and `recover`
+// here have no counterpart in any code-bound spec.
+module deliveryCore {
+  const MUTANT: int
+
+  type TaskId = int
+
+  type Phase =
+    | NoObligation
+    | Claimed
+    | Planned
+    | Executing
+    | SuspensionRequested
+    | Suspended
+    | Accepted
+    | Integrating
+    | Promoted
+    | Settled
+    // Terminal, but retained rather than settled: the analogue of
+    // CorrectionLimitReached in specs/acceptedResultIntegration.qnt. Only the
+    // temporal properties need it -- parking in Integrating forever violates
+    // no safety property at all.
+    | Abandoned
+
+  type Ticket = {
+    phase: Phase,
+    attempts: int,
+    present: bool,
+    open: bool,
+    expectedHead: int,
+  }
+
+  pure val TASKS: Set[TaskId] = Set(0, 1)
+  pure val MAX_CAPACITY: int = 2
+
+  var tickets: TaskId -> Ticket
+  var capacity: int
+  var positions: Set[TaskId]
+  var paused: bool
+  var targetResource: Set[TaskId]
+  var targetHead: int
+  var crashed: bool
+
+  // History flags: conditions that are properties of transitions, not of states.
+  var admissionRespectedCeiling: bool
+  var promotedFromExactHead: bool
+
+  // ---------------------------------------------------------------- derivation
+
+  pure def holdsPosition(phase: Phase): bool =
+    phase == Executing or phase == SuspensionRequested
+
+  /** Graph-eligible: present in the latest observation and open with prerequisites met. */
+  val eligible: Set[TaskId] =
+    TASKS.filter(id => tickets.get(id).present and tickets.get(id).open)
+
+  /** Deterministic rank inside the eligible set; ordering is graph-owned, not runtime-owned. */
+  def rankOf(id: TaskId): int =
+    eligible.filter(other => other < id).size()
+
+  val selected: Set[TaskId] =
+    if (MUTANT == 1)
+      eligible.filter(id => rankOf(id) <= capacity)
+    else
+      eligible.filter(id => rankOf(id) < capacity)
+
+  /** An exact outstanding obligation Dalph must still settle. */
+  def hasObligation(id: TaskId): bool =
+    tickets.get(id).phase != NoObligation and tickets.get(id).phase != Settled
+
+  /** The ticket-delivery relation: selected now, or retained by exact lower evidence. */
+  val deliveries: Set[TaskId] =
+    if (MUTANT == 2)
+      selected
+    else
+      selected.union(TASKS.filter(hasObligation))
+
+  // ---------------------------------------------------------------- invariants
+
+  /** 1. Bound: selection never exceeds the configured ceiling. */
+  val boundRespected: bool = selected.size() <= capacity
+
+  /** 4. Retention: an exact obligation survives every graph placement. */
+  val retentionHolds: bool =
+    TASKS.forall(id => not(hasObligation(id)) or deliveries.contains(id))
+
+  /** 5. Settlement drop: settled tickets carry no obligation. */
+  val settlementDropped: bool =
+    TASKS.forall(id => tickets.get(id).phase != Settled or not(hasObligation(id)))
+
+  /** 7. Position discipline: a position is held exactly while work is outstanding. */
+  val positionDiscipline: bool =
+    crashed or positions == TASKS.filter(id => holdsPosition(tickets.get(id).phase))
+
+  /**
+   * 8. The capacity trap. This is deliberately NOT the ceiling invariant: a
+   * capacity contraction lets existing holders continue, so a state predicate
+   * over held positions is the wrong specification. The true rule constrains
+   * admission, which is a transition property.
+   */
+  val ceilingOverHeldPositions: bool = positions.size() <= capacity
+  val admissionRule: bool = admissionRespectedCeiling
+
+  /** 10. One attempt in flight per task, across crash and recovery. */
+  val oneAttemptPerTask: bool =
+    TASKS.forall(id => tickets.get(id).attempts <= 1)
+
+  /** 12/13. Integration target is serialized and promotion is compare-and-set. */
+  val targetResourceExclusive: bool = targetResource.size() <= 1
+  val promotionUsedExactHead: bool = promotedFromExactHead
+
+  /** 14. Process-local resources never survive a crash. */
+  val processLocalLostOnCrash: bool =
+    not(crashed) or (positions == Set() and targetResource == Set())
+
+  /* 17's safety half has no state predicate here, and the obvious one is a
+   * trap. `not(paused) or no Planned task holds a position` reads like "a
+   * pause admits no new work" and cannot fail: `positionDiscipline` above
+   * already pins `positions` to the tasks in a holding phase, and `Planned` is
+   * not one of them. It is true of every state, paused or not, and `paused` is
+   * never consulted. The M8 shape exactly -- reads correct, constrains
+   * nothing.
+   *
+   * I17 is a property of the admission TRANSITION, so it lives in the
+   * `not(paused)` guards on `beginWork` and `resumeWork` and in the temporal
+   * `pauseDrainsPositions` below. */
+
+  val allInvariants: bool = and {
+    boundRespected,
+    retentionHolds,
+    settlementDropped,
+    positionDiscipline,
+    admissionRule,
+    oneAttemptPerTask,
+    targetResourceExclusive,
+    promotionUsedExactHead,
+    processLocalLostOnCrash,
+  }
+
+  // -------------------------------------------------------- inductive invariant
+  //
+  // `quint verify --inductive-invariant I` discharges three obligations rather
+  // than exploring a state space:
+  //
+  //   init => I        I and step => I'        I => Inv
+  //
+  // The middle one is the question ../alloy/DeliveryL2.als exists to answer, and
+  // the same question Lean and Agda force by construction: nothing here mentions
+  // reachability, so the check is unbounded in TIME. It is not unbounded in
+  // DATA, which is why `stateBounds` below has to exist.
+  //
+  // Apalache starts the check from I rather than from `init`, so I must assign
+  // every variable a domain -- without `stateBounds` the run dies at
+  // `tickets is used before it is assigned`. That requirement is not
+  // bureaucratic: the finite domains become part of the invariant and have to be
+  // proved closed under `step`, which is what `headAdvancesWithPromotions` is
+  // for. Alloy's `for 2 Task, 5 Int` states the same bound and never asks you to
+  // prove the transition respects it.
+
+  pure val PHASES: Set[Phase] = Set(NoObligation, Claimed, Planned, Executing,
+    SuspensionRequested, Suspended, Accepted, Integrating, Promoted, Settled,
+    Abandoned)
+  pure val BOOLS: Set[bool] = Set(false, true)
+  /// 2 external advances plus at most one promotion per task.
+  pure val HEADS: Set[int] = 0.to(4)
+  pure val TICKET_VALUES: Set[Ticket] =
+    tuples(PHASES, 0.to(2), BOOLS, BOOLS, HEADS).map(((p, a, pr, o, e)) =>
+      { phase: p, attempts: a, present: pr, open: o, expectedHead: e })
+
+  /// The TypeOK of this model: every variable ranges over a finite domain.
+  /// `attempts` reaches 2 so that the counterexample to induction is expressible
+  /// rather than excluded by the bound.
+  val stateBounds: bool = and {
+    tickets.in(setOfMaps(TASKS, TICKET_VALUES)),
+    capacity.in(0.to(MAX_CAPACITY)),
+    positions.in(TASKS.powerset()),
+    paused.in(BOOLS),
+    targetResource.in(TASKS.powerset()),
+    targetHead.in(HEADS),
+    crashed.in(BOOLS),
+    admissionRespectedCeiling.in(BOOLS),
+    promotedFromExactHead.in(BOOLS),
+  }
+
+  /// NOT inductive, and the point of the exercise. `oneAttemptPerTask` is the
+  /// invariant every engine here discharges without comment; as an induction
+  /// hypothesis it fails on one step, because a state with `phase = Claimed` and
+  /// `attempts = 1` satisfies it and `planAttempt` takes that state to
+  /// `attempts = 2`. The state is unreachable, which is exactly what a
+  /// strengthening is for.
+  val inductiveCandidate: bool = stateBounds and allInvariants
+
+  /// The strengthening. Identical to `phaseBoundsAttempts` in
+  /// ../alloy/DeliveryL2.als, ../lean/L2.lean and ../agda/L2.agda -- three tools
+  /// arrived at the same missing clause by three different routes.
+  val phaseBoundsAttempts: bool =
+    TASKS.forall(id =>
+      (tickets.get(id).phase != NoObligation and tickets.get(id).phase != Claimed)
+        or tickets.get(id).attempts == 0)
+
+  /// The bound obligation, not a domain invariant. `promote` increments
+  /// `targetHead` with no ceiling of its own, so `targetHead.in(HEADS)` is not
+  /// preserved unless the advance is tied to something exhaustible: two
+  /// `externalTargetAdvance` steps plus one promotion per task.
+  val headAdvancesWithPromotions: bool =
+    targetHead <= 2 + TASKS.filter(id =>
+      tickets.get(id).phase == Promoted or tickets.get(id).phase == Settled).size()
+
+  val inductiveInvariant: bool = and {
+    stateBounds,
+    allInvariants,
+    phaseBoundsAttempts,
+    headAdvancesWithPromotions,
+  }
+
+  /// Negative control: drops the bound obligation only. The counterexample is
+  /// `targetHead = 4` and a `promote`, which is a fact about `HEADS` and not
+  /// about the protocol -- the shape of failure Apalache adds and Alloy hides.
+  val inductiveWithoutHeadBound: bool = and {
+    stateBounds, allInvariants, phaseBoundsAttempts,
+  }
+
+  // ----------------------------------------------------------------- witnesses
+
+  val executingReached: bool = TASKS.exists(id => tickets.get(id).phase == Executing)
+  val suspendedReached: bool = TASKS.exists(id => tickets.get(id).phase == Suspended)
+  val integratingReached: bool = TASKS.exists(id => tickets.get(id).phase == Integrating)
+  val settledReached: bool = TASKS.exists(id => tickets.get(id).phase == Settled)
+  val crashReached: bool = crashed
+  val absentWithObligationReached: bool =
+    TASKS.exists(id => hasObligation(id) and not(tickets.get(id).present))
+
+  // ------------------------------------------------------------------- actions
+
+  pure val freshTicket: Ticket = {
+    phase: NoObligation,
+    attempts: 0,
+    present: false,
+    open: false,
+    expectedHead: 0,
+  }
+
+  action init: bool = all {
+    tickets' = TASKS.mapBy(_ => freshTicket),
+    capacity' = 1,
+    positions' = Set(),
+    paused' = false,
+    targetResource' = Set(),
+    targetHead' = 0,
+    crashed' = false,
+    admissionRespectedCeiling' = true,
+    promotedFromExactHead' = true,
+  }
+
+  /** Everything except `tickets` is unchanged. */
+  action onlyTickets(updated: TaskId -> Ticket): bool = all {
+    tickets' = updated,
+    capacity' = capacity,
+    positions' = positions,
+    paused' = paused,
+    targetResource' = targetResource,
+    targetHead' = targetHead,
+    crashed' = crashed,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  action observeGraph(id: TaskId, nowPresent: bool, nowOpen: bool): bool =
+    onlyTickets(tickets.setBy(id, t => t.with("present", nowPresent).with("open", nowOpen)))
+
+  action acquireClaim(id: TaskId): bool = all {
+    not(crashed),
+    tickets.get(id).phase == NoObligation,
+    selected.contains(id),
+    onlyTickets(tickets.setBy(id, t => t.with("phase", Claimed))),
+  }
+
+  action planAttempt(id: TaskId): bool = all {
+    not(crashed),
+    tickets.get(id).phase == Claimed,
+    onlyTickets(tickets.setBy(id, t => t.with("phase", Planned).with("attempts", t.attempts + 1))),
+  }
+
+  action beginWork(id: TaskId): bool = all {
+    not(crashed),
+    not(paused),
+    tickets.get(id).phase == Planned,
+    positions.size() < capacity,
+    tickets' = tickets.setBy(id, t => t.with("phase", Executing)),
+    positions' = positions.union(Set(id)),
+    admissionRespectedCeiling' = (admissionRespectedCeiling and (positions.size() + 1 <= capacity)),
+    capacity' = capacity,
+    paused' = paused,
+    targetResource' = targetResource,
+    targetHead' = targetHead,
+    crashed' = crashed,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  action requestSuspension(id: TaskId): bool = all {
+    not(crashed),
+    tickets.get(id).phase == Executing,
+    tickets' = tickets.setBy(id, t => t.with("phase", SuspensionRequested)),
+    // MUTANT 4 releases the position at the request instead of at the proof.
+    positions' = if (MUTANT == 4) positions.exclude(Set(id)) else positions,
+    capacity' = capacity,
+    paused' = paused,
+    targetResource' = targetResource,
+    targetHead' = targetHead,
+    crashed' = crashed,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  action releasePosition(id: TaskId, nextPhase: Phase): bool = all {
+    tickets' = tickets.setBy(id, t => t.with("phase", nextPhase)),
+    positions' = positions.exclude(Set(id)),
+    capacity' = capacity,
+    paused' = paused,
+    targetResource' = targetResource,
+    targetHead' = targetHead,
+    crashed' = crashed,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  action safelySuspend(id: TaskId): bool = all {
+    not(crashed),
+    tickets.get(id).phase == SuspensionRequested,
+    releasePosition(id, Suspended),
+  }
+
+  action resumeWork(id: TaskId): bool = all {
+    not(crashed),
+    not(paused),
+    tickets.get(id).phase == Suspended,
+    positions.size() < capacity,
+    tickets' = tickets.setBy(id, t => t.with("phase", Executing)),
+    positions' = positions.union(Set(id)),
+    admissionRespectedCeiling' = (admissionRespectedCeiling and (positions.size() + 1 <= capacity)),
+    capacity' = capacity,
+    paused' = paused,
+    targetResource' = targetResource,
+    targetHead' = targetHead,
+    crashed' = crashed,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  action reportAccepted(id: TaskId): bool = all {
+    not(crashed),
+    tickets.get(id).phase == Executing,
+    releasePosition(id, Accepted),
+  }
+
+  action startIntegration(id: TaskId): bool = all {
+    not(crashed),
+    tickets.get(id).phase == Accepted,
+    targetResource == Set(),
+    tickets' = tickets.setBy(id, t => t.with("phase", Integrating).with("expectedHead", targetHead)),
+    targetResource' = Set(id),
+    positions' = positions,
+    capacity' = capacity,
+    paused' = paused,
+    targetHead' = targetHead,
+    crashed' = crashed,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  action promote(id: TaskId): bool = all {
+    not(crashed),
+    tickets.get(id).phase == Integrating,
+    // MUTANT 6 drops the compare-and-set guard against the exact expected head.
+    or { MUTANT == 6, tickets.get(id).expectedHead == targetHead },
+    tickets' = tickets.setBy(id, t => t.with("phase", Promoted)),
+    targetHead' = targetHead + 1,
+    targetResource' = Set(),
+    promotedFromExactHead' = (promotedFromExactHead and (tickets.get(id).expectedHead == targetHead)),
+    positions' = positions,
+    capacity' = capacity,
+    paused' = paused,
+    crashed' = crashed,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+  }
+
+  /** The escape from a stale integration head; see I18. */
+  action abandonIntegration(id: TaskId): bool = all {
+    not(crashed),
+    tickets.get(id).phase == Integrating,
+    tickets.get(id).expectedHead != targetHead,
+    tickets' = tickets.setBy(id, t => t.with("phase", Abandoned)),
+    targetResource' = Set(),
+    positions' = positions,
+    capacity' = capacity,
+    paused' = paused,
+    crashed' = crashed,
+    targetHead' = targetHead,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  action settle(id: TaskId): bool = all {
+    not(crashed),
+    tickets.get(id).phase == Promoted,
+    onlyTickets(tickets.setBy(id, t => t.with("phase", Settled))),
+  }
+
+  action applyPause: bool = all {
+    not(crashed),
+    not(paused),
+    paused' = true,
+    tickets' = tickets,
+    capacity' = capacity,
+    positions' = positions,
+    targetResource' = targetResource,
+    targetHead' = targetHead,
+    crashed' = crashed,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  action applyUnpause: bool = all {
+    not(crashed),
+    paused,
+    paused' = false,
+    tickets' = tickets,
+    capacity' = capacity,
+    positions' = positions,
+    targetResource' = targetResource,
+    targetHead' = targetHead,
+    crashed' = crashed,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  action changeCapacity(target: int): bool = all {
+    not(crashed),
+    target >= 0,
+    target <= MAX_CAPACITY,
+    target != capacity,
+    capacity' = target,
+    tickets' = tickets,
+    positions' = positions,
+    paused' = paused,
+    targetResource' = targetResource,
+    targetHead' = targetHead,
+    crashed' = crashed,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  /** The integration target may advance outside Dalph, staling a captured expected head. */
+  action externalTargetAdvance: bool = all {
+    targetHead < 2,
+    targetHead' = targetHead + 1,
+    tickets' = tickets,
+    capacity' = capacity,
+    positions' = positions,
+    paused' = paused,
+    targetResource' = targetResource,
+    crashed' = crashed,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  /** Process loss: durable phases survive, process-local ownership does not. */
+  action crash: bool = all {
+    not(crashed),
+    crashed' = true,
+    positions' = Set(),
+    targetResource' = Set(),
+    tickets' = TASKS.mapBy(id =>
+      if (tickets.get(id).phase == Integrating)
+        tickets.get(id).with("phase", Accepted)
+      else
+        tickets.get(id)
+    ),
+    capacity' = capacity,
+    paused' = paused,
+    targetHead' = targetHead,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  /** Recovery continues the exact reconstructed attempt; it plans no replacement. */
+  action recover: bool = all {
+    crashed,
+    crashed' = false,
+    positions' = TASKS.filter(id => holdsPosition(tickets.get(id).phase)),
+    // MUTANT 5 treats process loss as a reason to plan a second attempt.
+    tickets' =
+      if (MUTANT == 5)
+        TASKS.mapBy(id =>
+          if (holdsPosition(tickets.get(id).phase))
+            tickets.get(id).with("attempts", tickets.get(id).attempts + 1)
+          else
+            tickets.get(id)
+        )
+      else
+        tickets,
+    capacity' = capacity,
+    paused' = paused,
+    targetResource' = targetResource,
+    targetHead' = targetHead,
+    admissionRespectedCeiling' = admissionRespectedCeiling,
+    promotedFromExactHead' = promotedFromExactHead,
+  }
+
+  action step: bool = {
+    nondet id = TASKS.oneOf()
+    nondet nextCapacity = 0.to(MAX_CAPACITY).oneOf()
+    nondet nowPresent = Set(false, true).oneOf()
+    nondet nowOpen = Set(false, true).oneOf()
+    any {
+      observeGraph(id, nowPresent, nowOpen),
+      acquireClaim(id),
+      planAttempt(id),
+      beginWork(id),
+      requestSuspension(id),
+      safelySuspend(id),
+      resumeWork(id),
+      reportAccepted(id),
+      startIntegration(id),
+      promote(id),
+      settle(id),
+      abandonIntegration(id),
+      applyPause,
+      applyUnpause,
+      changeCapacity(nextCapacity),
+      externalTargetAdvance,
+      crash,
+      recover,
+    }
+  }
+
+  // ------------------------------------------------------------------ temporal
+  //
+  // I17-I19 of ../INVARIANTS.md. Quint has `always`, `eventually`, `weakFair`
+  // and `strongFair` as builtins, so these read closer to the TLA+ originals
+  // than the Alloy ones do -- `strongFair` is literally `SF_e(A)`.
+  //
+  // The catch is at the back end. `quint run` cannot evaluate temporal
+  // operators at all, and Apalache stops at `Handling fairness is not
+  // supported yet!`, so every property below is reachable only through
+  // `quint verify --temporal --backend tlc`. See ./NOTES.md.
+
+  val vars = (tickets, capacity, positions, paused, targetResource, targetHead,
+              crashed, admissionRespectedCeiling, promotedFromExactHead)
+
+  /// Strong, not weak: weak fairness starves `startIntegration` under an
+  /// exclusive target. Per action, not on the disjunction: that removes the
+  /// suspend/resume lasso, which is an artifact of work being atomic here
+  /// rather than a real behaviour. See ../tlaplus/run-liveness.sh --lasso.
+  temporal fairness = and {
+    TASKS.forall(id => and {
+      acquireClaim(id).strongFair(vars),
+      planAttempt(id).strongFair(vars),
+      beginWork(id).strongFair(vars),
+      safelySuspend(id).strongFair(vars),
+      resumeWork(id).strongFair(vars),
+      reportAccepted(id).strongFair(vars),
+      startIntegration(id).strongFair(vars),
+      promote(id).strongFair(vars),
+      abandonIntegration(id).strongFair(vars),
+      settle(id).strongFair(vars),
+    }),
+    recover.strongFair(vars),
+  }
+
+  /// The lifecycle actions only. The environment can always act, so quiescence
+  /// has to be about what Dalph can still do.
+  action anyProgress: bool = {
+    nondet id = TASKS.oneOf()
+    any {
+      acquireClaim(id), planAttempt(id), beginWork(id), safelySuspend(id),
+      resumeWork(id), reportAccepted(id), startIntegration(id), promote(id),
+      abandonIntegration(id), settle(id), recover,
+    }
+  }
+
+  temporal eventuallyStable = eventually(always(not(crashed)))
+  temporal eventuallyRunning = eventually(always(not(paused)))
+  temporal eventuallyRoomy = eventually(always(capacity > 0))
+
+  /// The operator eventually stops interrupting.
+  ///
+  /// NOT a hypothesis of I18. docs/CONTEXT.md defines executor-work suspension
+  /// as a proof that the work is safely stopped and "has preserved what it
+  /// needs to resume the same attempt", so progress survives a suspend/resume
+  /// cycle and an operator suspending forever does not prevent completion.
+  ///
+  /// Used by `everyBegunSettlesUninterrupted` below -- which, like every
+  /// temporal definition in this section, is a STATEMENT and not a check.
+  /// Apalache refuses fairness and `quint run` cannot evaluate temporal
+  /// operators, so nothing here is executed by `./run.sh`. That is the Quint
+  /// result, not an oversight.
+  temporal eventuallyUninterrupted =
+    eventually(always(
+      TASKS.forall(id => tickets.get(id).phase != SuspensionRequested)))
+
+  /// I17: a pause that stays applied drains every held position.
+  ///
+  /// `eventually(always(paused))`, not `always(paused)`. `init` sets
+  /// `paused = false`, so `always(paused)` holds of no behaviour and that form
+  /// makes the property vacuously true.
+  temporal pauseDrainsPositions =
+    (fairness and eventually(always(paused)) and eventuallyStable)
+      implies eventually(always(positions == Set()))
+
+  /// I18: settles OR is retained with an exact stated reason. Both disjuncts.
+  temporal everyBegunSettles =
+    (fairness and eventuallyStable and eventuallyRunning and eventuallyRoomy)
+      implies TASKS.forall(id =>
+        always(
+          (tickets.get(id).phase != Executing)
+            or eventually(tickets.get(id).phase == Settled
+                            or tickets.get(id).phase == Abandoned)
+        ))
+
+  /// Row 2 of the three-way lasso comparison. NOT the primary form of I18: the
+  /// domain does not need the operator hypothesis, because safe suspension
+  /// preserves progress. Stated so the Quint file carries all three rows that
+  /// ../tlaplus/run-liveness.sh --lasso and ../alloy/DeliveryLiveness.als do.
+  temporal everyBegunSettlesUninterrupted =
+    (fairness and eventuallyStable and eventuallyRunning and eventuallyRoomy
+       and eventuallyUninterrupted)
+      implies TASKS.forall(id =>
+        always(
+          (tickets.get(id).phase != Executing)
+            or eventually(tickets.get(id).phase == Settled
+                            or tickets.get(id).phase == Abandoned)
+        ))
+
+  /// I19: strictly weaker than I18 -- parked at Planned under capacity 0 is
+  /// quiescent and has completed nothing.
+  ///
+  /// INVARIANTS.md states I19 as "with no new tracker facts". That hypothesis
+  /// is absent here because this model cannot express new facts: TASKS is
+  /// fixed and no phase returns to NoObligation, so work is exhaustible by
+  /// construction. See ../tlaplus/DeliveryLiveness.tla for what happens when
+  /// arrival is modelled.
+  /// `step.enabled()` is NOT the right test: `observeGraph` has no guard, so it
+  /// is true in every state and the consequent would be unsatisfiable. Only the
+  /// lifecycle actions count, matching `AnyProgress` in
+  /// ../tlaplus/DeliveryLiveness.tla and `quiescent` in
+  /// ../alloy/DeliveryLiveness.als.
+  temporal reachesQuiescence =
+    (fairness and eventuallyStable) implies eventually(always(not(anyProgress.enabled())))
+}
+
+module delivery {
+  import deliveryCore(MUTANT = 0).*
+}
+
+module deliveryM1 { import deliveryCore(MUTANT = 1).* }
+module deliveryM2 { import deliveryCore(MUTANT = 2).* }
+module deliveryM4 { import deliveryCore(MUTANT = 4).* }
+module deliveryM5 { import deliveryCore(MUTANT = 5).* }
+module deliveryM6 { import deliveryCore(MUTANT = 6).* }

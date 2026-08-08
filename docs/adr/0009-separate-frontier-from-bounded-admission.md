@@ -18,17 +18,29 @@ tie-breaker. Fresh tasks use normalized task identity as their stable order.
 External response and completion timing may change the state seen by a later
 decision, but the admission set is deterministic for one exact derived state.
 
-One process-local capacity controller reserves positions for freshly committed
-task preparation. Each executor outer invocation declares whether it uses one
-task-work capacity position. Generic orchestration applies that resource use
-without knowing whether the selected executor is implementing, restoring,
-reviewing, or handling artifacts internally. Capacity waits, reservations, and
-frontier values are recomputed after restart and are never journal authority.
+One process-local capacity controller stores at most one position for each
+task. Dalph decides whether a workflow transition needs zero or one task-work
+position; the executor does not request, acquire, declare, or release it.
+Generic orchestration applies that requirement to the executor's complete work
+for one planned task attempt, identified by its `RunId` and `AttemptId`.
+
+After admission, task A keeps its position until the executor returns a
+terminal result for that complete planned attempt or proves the complete
+attempt safely suspended after Dalph asked it to stop for later resume.
+Executor-internal operations, waits, process observations, or identities
+cannot release or multiply the position. A completed executor attempt does not
+prove the task tracker marks task A completed.
+
+Journal reconstruction must reject two unfinished planned-attempt executor
+responsibilities for one task before frontier derivation. Capacity positions
+and frontier values are recomputed after restart and are never journal
+authority.
 
 When the process-local controller's snapshot changes so future admission may be
-possible—including after it records fresh provider evidence of non-consumption
-or releases/cancels a reservation—the Dalph coordinator reads the current
-reconstructed managed-run state and controller snapshot and derives the
+possible—including after a complete planned attempt becomes terminal, becomes
+safely suspended, or a pre-start reservation is cancelled—the Dalph
+coordinator reads the current
+reconstructed run state and controller snapshot and derives the
 frontier and admission set again. It performs a workflow-selected external
 boundary read only when the decision's required knowledge is unavailable; this
 controller change alone does not require complete restart reconstruction. A

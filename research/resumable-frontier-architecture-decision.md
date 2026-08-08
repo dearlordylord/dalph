@@ -15,7 +15,7 @@ The audited baseline is `master` at
   [bounded resumable graph-frontier specification](../docs/BOUNDED-RESUMABLE-GRAPH-FRONTIER.md);
 - the canonical [domain language](../docs/CONTEXT.md),
   [architecture](../docs/ARCHITECTURE.md), and ADRs
-  [0004](../docs/adr/0004-compose-pure-managed-run-reducers.md) through
+  [0004](../docs/adr/0004-compose-pure-run-reducers.md) through
   [0010](../docs/adr/0010-govern-recovery-with-two-quint-models.md);
 - the checked
   [`frontierRecovery`](../specs/frontierRecovery.qnt) and
@@ -47,15 +47,15 @@ review-protocol implementations.
 | Current module or module family | Disposition | Concrete decision |
 | --- | --- | --- |
 | [`workflow-run.ts`](../packages/orchestrator/src/workflow-run.ts) | Replace, then delete | Replace the one-shot `eligibleTasks()` traversal and whole-task `Effect.forEach` capacity limit with the shared activation, frontier, and admission modules. No compatibility wrapper remains. |
-| [`managed-run-recovery-stage.ts`](../packages/orchestrator/src/managed-run-recovery-stage.ts) and [`workflow-stage-recovery.ts`](../packages/orchestrator/src/workflow-stage-recovery.ts) | Replace, then delete | Per-subject responsibility plus the ordinary transition selector supersede `ManagedRunRecoveryStageEntry`. Recovery does not need a second local taxonomy or stage-specific continuation dispatcher. |
+| [`run-recovery-frontier.ts`](../packages/orchestrator/src/run-recovery-frontier.ts) and [`workflow-stage-recovery.ts`](../packages/orchestrator/src/workflow-stage-recovery.ts) | Replace, then delete | Per-subject responsibility plus the ordinary transition selector supersede `RunRecoveryFrontierEntry`. Recovery does not need a second local taxonomy or stage-specific continuation dispatcher. |
 | [`workflow-recovery.ts`](../packages/orchestrator/src/workflow-recovery.ts) | Refactor substantially | Retain exact boundary reconciliation functions and typed observations, but move activation and classification into the shared selector. Remove the fixed startup phase list, “one append means return,” and whole-run early returns. |
 | [`production-application.ts`](../packages/orchestrator/src/production-application.ts) | Refactor substantially | Keep scoped coordinator ownership and Layer composition. Startup discovers and validates every run, supplies fresh facts to the shared control plane, isolates exact affected regions, and continues independent work. Delete `StartupRecoveryBlocked` after callers consume subject-scoped startup results; only invalid shared history or a shared capability needed by every continuation may fail the whole application. |
-| [`managed-history.ts`](../packages/orchestrator/src/managed-history.ts) | Refactor and deepen | Retain ordered total validation, identity checks, and accumulated typed issues. Split the current monolithic fold behind one reconstructed-managed-run interface that composes distinct graph-knowledge, workflow-history, responsibility, and pause reducers. Stop returning a recovery-stage projection. |
+| [`workflow-journal-history.ts`](../packages/orchestrator/src/workflow-journal-history.ts) | Refactor and deepen | Retain ordered total validation, identity checks, and accumulated typed issues. Split the current monolithic fold behind one reconstructed-run interface that composes distinct graph-knowledge, workflow-history, responsibility, and pause reducers. Stop returning a recovery-stage projection. |
 | [`task-dag.ts`](../packages/orchestrator/src/task-dag.ts), tracker graph readers, and graph outcome types | Refactor and deepen | Retain provider decoding, identity normalization, closure validation, cycle detection, and deterministic task ordering. Replace `eligibleTasks()` as an orchestration interface with normalized graph facts carrying declared coverage, completeness, consistency, freshness, and proven absence. A graph-knowledge reducer, not graph membership, supplies the selector's facts. |
 | [`workflow-operation.ts`](../packages/orchestrator/src/workflow-operation.ts), [`workflow.ts`](../packages/orchestrator/src/workflow.ts), and journaled interpreters | Retain and refactor at the edges | Preserve the operation algebra, `WorkflowInterpreter` seam, Layer substitution, stable `OperationId`, and intent-before-effect ordering. Add accepted control, read, constraint, responsibility, integration, completion, and disposition operations as current consumers require them; remove mode-shaped or obsolete operations only when their callers migrate. |
 | Claim, worktree, session-establishment, and task-execution protocol modules | Retain | Their exact identity, immutable payload, causal predecessor, fresh-result-check, typed conflict, and reconcile-before-retry behavior provide leverage across ordinary and restarted execution and correspond to `AmbiguityBoundaryV1`. Adapt their results into the new reconstructed-state reducers instead of reimplementing them. |
-| Implementation evidence, review, handback, retry, and convergence modules | Retain as the current protocol; refactor behind the executor seam | The accepted current protocol still requires them, so deleting them would lose behavior. The outer control plane must stop treating their internal stages and artifacts as universal Dalph stages. The executor reports declared outer transitions, waits, correlation identities, capacity use, and outcomes; issue #127 owns whether later executors make review optional or store different internal evidence. |
-| Existing focused protocol, Schema, property, SQLite, and interpreter-equivalence tests | Retain where their production seam survives | Keep tests that prove an exact retained boundary contract. Replace tests that assert `ManagedRunRecoveryStageEntry`, one-shot traversal, or global startup blockage. Every behavior slice also updates the owning Quint model, test-only adapter, semantic trace, and applicable in-memory and SQLite P0–P6 conformance-test cut points. These labels are test vocabulary, never production stages or states. |
+| Implementation evidence, review, handback, retry, and convergence modules | Retain as the review-loop executor; refactor behind the executor seam | The accepted review-loop protocol still requires them, so deleting them would lose behavior. The outer control plane must stop treating their internal stages and artifacts as universal Dalph stages. The executor reports outer transitions, waits, correlation identities, provider lifecycle, and outcomes; Dalph owns task-work capacity. For example, an active executor report changes the state of the task's existing position rather than adding an executor-owned position. Issue #127 owns whether later executors make review optional or store different internal evidence. |
+| Existing focused protocol, Schema, property, SQLite, and interpreter-equivalence tests | Retain where their production seam survives | Keep tests that prove an exact retained boundary contract. Replace tests that assert `RunRecoveryFrontierEntry`, one-shot traversal, or global startup blockage. Every behavior slice also updates the owning Quint model, test-only adapter, semantic trace, and applicable in-memory and SQLite P0–P6 conformance-test cut points. These labels are test vocabulary, never production stages or states. |
 
 ## Why the current topology is replaced
 
@@ -78,7 +78,7 @@ tests, and production the same interface and transition algebra.
 
 ### The recovery-stage union encodes workflow position, not responsibility
 
-`ManagedRunRecoveryStageEntry` infers unfinished work from observed graph
+`RunRecoveryFrontierEntry` infers unfinished work from observed graph
 membership, compresses every post-execution prefix into
 `ImplementationConvergencePending`, and assigns one apparent stage to each
 attempt. The accepted model permits several independent responsibilities,
@@ -102,7 +102,7 @@ affected run because no safe state can be reconstructed. A worktree mismatch,
 foreign claim, unavailable session, or unreadable provider result instead
 becomes the accepted subject-specific constraint, wait, disposition, or
 isolation. The application fails only when a shared capability or shared
-managed-history fault prevents every otherwise legal continuation.
+workflow-journal-history fault prevents every otherwise legal continuation.
 
 ## Authority and ownership correction
 
@@ -151,10 +151,29 @@ are architectural blocking edges, not tickets.
    model, semantic-trace, and dual-store prefix coverage. These slices depend
    on reconstruction and the selector but may be split by authority boundary.
 5. **Executor seam.** Move the current evidence/review/handback/convergence
-   implementation behind an executor-declared outer protocol without changing
-   its accepted behavior. Do not decide configurable pipelines here; preserve
-   issue #127's ability to replace this adapter without changing the outer
-   frontier and responsibility modules.
+   implementation behind an outer protocol without changing its accepted
+   behavior. Dalph keeps the capacity requirement outside that protocol. For
+   example, the executor reports provider lifecycle while Dalph decides whether
+   the transition needs one task-work position. Do not decide configurable
+   pipelines here; preserve issue #127's ability to replace this adapter
+   without changing the outer frontier and responsibility modules.
+
+### Executor source-boundary reconciliation
+
+The later
+[review-loop executor source-boundary decision](review-loop-executor-source-boundary-decision.md)
+clarifies the preceding baseline disposition. The retained generic
+`WorkflowOperation` and `WorkflowInterpreter` seams contain only
+orchestrator-facing members. Review-loop internal operations, events,
+validation, reconstruction, artifacts, and provider adapters move behind one
+injected executor bundle in an enforced module tree. A stage-name-free test
+bundle proves the seam without adding production executor selection.
+
+Issue #127 remains the v2 owner for per-attempt executor identity,
+configuration, event routing across multiple executor protocols, missing
+executor handling, and operator-visible restart under another executor. The
+current v1 source refactor may replace unreleased journal schemas without
+preserving repository fixtures as compatibility targets.
 
 No slice may temporarily create a second durable frontier, capacity record,
 responsibility rollup, or UI state. A compatibility adapter is acceptable only
@@ -181,7 +200,7 @@ Mysterious Name judgement:
    deterministic responsibility-first ordering, or configured capacity
    controller. Sequential iteration happens to limit this path to one; it does
    not implement the configured admission protocol.
-4. One attempt-level `ManagedRunRecoveryStageEntry` cannot represent distinct
+4. One attempt-level `RunRecoveryFrontierEntry` cannot represent distinct
    actionable, waiting, isolated, retained, and settled responsibilities.
    `Terminal` and `ImplementationConvergencePending` are also mysterious names:
    neither names the concrete subject or responsibility that is terminal or
@@ -218,7 +237,7 @@ compatibility layer for the historical harness or a blanket rewrite.
   execution, journal, evidence, and review modules already enforce valuable
   exact-boundary invariants. Rewriting them adds risk without solving the
   topology mismatch.
-- **Extend `ManagedRunRecoveryStageEntry`.** Rejected because one stage per
+- **Extend `RunRecoveryFrontierEntry`.** Rejected because one entry per
   attempt cannot represent multiple responsibilities and independent
   constraints without an invalid-state Cartesian product.
 - **Keep startup recovery as Layer construction.** Rejected because recovered

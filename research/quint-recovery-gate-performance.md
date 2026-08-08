@@ -29,6 +29,43 @@ phase telemetry, passed repeatedly in **229.73–260.27 seconds**. This is a
 useful wall-clock fix, but not the long-term cure: it consumed essentially the
 same total CPU and still recompiles the whole model for every profile.
 
+## 2026-07-28 follow-up: bound the capacity-correlation proof
+
+Commit `cbba179ea` added a tenth exhaustive profile whose step allowed the
+coordinator to crash, reconstruct, and crash again. Each crash incremented the
+integer `crashCount`, so TLC could always discover another distinct reachable
+state. The complete frontier gate therefore no longer had a finite fixed point:
+one observed run remained in that profile after 19 minutes 41 seconds, while
+`cbba179ea^` completed the previous nine-profile portfolio in 292.69 seconds
+under the same host conditions. Raising the frontier timeout from 300 to 1,200
+seconds could delay but not solve that failure.
+
+The retained gate makes the broad diagnostic profile finite with the same
+two-crash bound as the existing activation reconstruction profile. Canonical
+exhaustive evidence comes from the focused M2 capacity-correlation projection,
+which keeps only one expected task position, one independent task position,
+provider reports, and a `NoCrash | CrashedOnce` ordinal. Its capacity-two TLC
+proof explores 52 states to depth 10; the capacity-one proof explores 38 states
+to depth 8.
+
+Keeping that projection in its own M2 artifact reduced one observed proof from
+67 seconds to 4 seconds because Quint no longer flattened the complete broad
+model for the focused property. Exhaustive TLC profiles retain the measured
+concurrency-three cap. Hardware-gated concurrency up to six covers the lighter
+independent typechecks, deterministic tests, sampled profiles, and deliberate
+counterexamples. The corrected frontier gate, including the bounded broad
+composition profile and both focused proofs, passed in **275.05 seconds**:
+14.36 seconds for typechecks and deterministic tests, 43.26 seconds for
+sampled profiles, and 196.34 seconds for broad exhaustive profiles. Running
+the two serial focused proofs alongside the independent deliberate
+counterexamples kept those final branches from adding serial wall time; they
+took 17.51 and 21.09 seconds respectively. The
+complete two-model recovery gate passed in 278.15 seconds. No sample count,
+trace depth, exhaustive broad profile, or negative check was removed.
+A repeat inside the full repository quality gate completed the frontier in
+240.77 seconds and the two-model recovery gate in 243.80 seconds, giving an
+observed final range of 240.77–275.05 seconds.
+
 ## The arithmetic: how “about 30 seconds” becomes 420 seconds
 
 “Thirty seconds” is not one startup pause that somehow expands to seven

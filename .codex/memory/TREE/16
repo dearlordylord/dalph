@@ -1,0 +1,1 @@
+OptMem advisory; master publishes, writes lock. M1 executor keyed RunId/AttemptId holds capacity to safe/terminal; coordinator begins, reports are occurrences. Pause starts none, follows grouping, debt lasts to settlement, resumes fresh. Continue/Stop once per fingerprints.             

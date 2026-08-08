@@ -1,7 +1,0 @@
-{
-  "evaluator": "ordinary-operator",
-  "scenarioId": "unsettled-responsibility-prevents-termination",
-  "verdict": "acceptable",
-  "confidence": "high",
-  "reason": "The run remains visibly active and explains what must change before work can continue."
-}

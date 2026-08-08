@@ -1,7 +1,0 @@
-{
-  "evaluator": "lost-or-duplicated-work",
-  "scenarioId": "unsettled-responsibility-prevents-termination",
-  "verdict": "acceptable",
-  "confidence": "high",
-  "reason": "An empty frontier cannot silently discard an exact outstanding responsibility."
-}

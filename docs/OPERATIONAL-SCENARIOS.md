@@ -15,6 +15,37 @@ concurrency rule, cleanup action, or visible outcome. A documentation-only or
 tooling-only change may state that it changes no Dalph runtime behavior and give
 the concrete reason instead of inventing a scenario.
 
+## Three registers of the same behavior
+
+A scenario is prose. The same behavior is also carried by two other artifacts,
+and each register owns a different half of what a scenario says.
+
+**Prose** — the files under `docs/scenarios/`. One chronology told so a person
+can follow it, with the actor, the outside events, the ordered boundary calls,
+the crash points, and the visible result. This is the register that comes first
+and the one a reader learns from.
+
+**Cassette** — the recorded, replayable form of the same chronology. A cassette
+carries what happened, occurrence by occurrence, and is authoritative for how
+behavior is recorded and replayed.
+
+**Invariant** — `DELIVERY-INVARIANTS.md`. A scenario's *What must Dalph not do?*
+field states something no recording can carry: a cassette proves an occurrence
+happened, and never that one cannot. Those clauses are general claims over every
+Run, so they live as `D` invariants rather than in any single chronology.
+
+A scenario is therefore complete when its chronology is recorded as a cassette
+and each of its forbidden results is traceable to a `D` invariant. The prose
+remains the readable register of both.
+
+`DELIVERY-STORY.md` is the same three-register split applied to one long
+chronology that spans many issues rather than one.
+
+`scenarios/README.md` classifies each file by whether its owning issue is
+closed as completed or still open. Ten of the sixteen issue-backed files belong
+to open issues and state required behavior rather than describing what Dalph
+does today.
+
 ## Required scenario fields
 
 Write each scenario in ordinary chronological language. Answer every relevant

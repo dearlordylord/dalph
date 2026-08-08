@@ -1,10 +1,6 @@
 import { performance } from "node:perf_hooks"
 
-import {
-  quintGateRegressionBudgetMilliseconds,
-  frontierModelBudgetMilliseconds,
-  taskSessionModelBudgetMilliseconds
-} from "./quint-gate-policy.mjs"
+import { quintGateRegressionBudgetMilliseconds } from "./quint-gate-policy.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const pnpmEntryPoint = process.env.npm_execpath
@@ -13,112 +9,376 @@ if (pnpmEntryPoint === undefined) {
   throw new Error("Run this model gate through pnpm")
 }
 
-const run = async (name, executable, args, timeoutMilliseconds) => {
+const run = async (name, args) => {
   process.stdout.write(`\n== ${name} ==\n`)
-  const startedAt = performance.now()
-  await runBoundedCommand({ args, executable, name, timeoutMilliseconds })
-  const elapsedMilliseconds = performance.now() - startedAt
-  process.stdout.write(
-    `${name} completed in ${(elapsedMilliseconds / 1000).toFixed(2)}s\n`
-  )
-  return elapsedMilliseconds
+  await runBoundedCommand({
+    args: [pnpmEntryPoint, "quint", ...args],
+    executable: process.execPath,
+    name,
+    timeoutMilliseconds: quintGateRegressionBudgetMilliseconds
+  })
 }
 
-const remainingTaskSessionBudget = () =>
-  Math.max(
-    1,
-    taskSessionModelBudgetMilliseconds - taskSessionElapsedMilliseconds
-  )
+const startedAt = performance.now()
 
-const gateStartedAt = performance.now()
-let taskSessionElapsedMilliseconds = 0
+await run("planned-attempt executor model typecheck", [
+  "typecheck",
+  "specs/plannedAttemptExecutor.qnt"
+])
+await run("planned-attempt executor deterministic tests", [
+  "test",
+  "specs/plannedAttemptExecutor_test.qnt",
+  "--main",
+  "plannedAttemptExecutorTest"
+])
+await run("planned-attempt executor sampled model", [
+  "run",
+  "specs/plannedAttemptExecutor.qnt",
+  "--invariants",
+  "everyReportCarriesPlannedAttempt",
+  "continuationCountBounded",
+  "positionHeldUntilSuspensionResult",
+  "safeSuspensionReleasesPosition",
+  "suspensionRequestRetainsPosition",
+  "terminalReleasesPosition",
+  "--witnesses",
+  "responsibilityBeganReached",
+  "runningReached",
+  "suspensionRequestedReached",
+  "safelySuspendedReached",
+  "terminalReached",
+  "continuationLimitReached",
+  "--max-steps",
+  "20",
+  "--max-samples",
+  "10000",
+  "--verbosity",
+  "1"
+])
+await run("planned-attempt executor exhaustive model", [
+  "verify",
+  "specs/plannedAttemptExecutor.qnt",
+  "--invariants",
+  "everyReportCarriesPlannedAttempt",
+  "continuationCountBounded",
+  "positionHeldUntilSuspensionResult",
+  "safeSuspensionReleasesPosition",
+  "suspensionRequestRetainsPosition",
+  "terminalReleasesPosition",
+  "--max-steps",
+  "20",
+  "--verbosity",
+  "1"
+])
 
-taskSessionElapsedMilliseconds += await run(
-  "task-session model typecheck",
-  process.execPath,
-  [
-    pnpmEntryPoint,
-    "quint",
-    "typecheck",
-    "specs/taskWorkSessionRecovery.qnt"
-  ],
-  remainingTaskSessionBudget()
-)
-taskSessionElapsedMilliseconds += await run(
-  "task-session deterministic tests",
-  process.execPath,
-  [
-    pnpmEntryPoint,
-    "quint",
-    "test",
-    "specs/taskWorkSessionRecovery_test.qnt",
-    "--main",
-    "taskWorkSessionRecoveryTest"
-  ],
-  remainingTaskSessionBudget()
-)
-taskSessionElapsedMilliseconds += await run(
-  "task-session sampled model",
-  process.execPath,
-  [
-    pnpmEntryPoint,
-    "quint",
-    "run",
-    "specs/taskWorkSessionRecovery.qnt",
-    "--invariants",
-    "requestRequiresIntent",
-    "everyRequestUsesStableIdentity",
-    "everyRequestUsesStablePayload",
-    "causalPredecessorsAreStable",
-    "absenceAloneAuthorizesRepeat",
-    "unreadableAndConflictNeverAuthorize",
-    "establishmentRequiresMatchingReport",
-    "lookupBoundIsRespected",
-    "terminalOutcomeIsStable",
-    "--witnesses",
-    "intentReached",
-    "requestReached",
-    "absenceAuthorizedRepeatReached",
-    "matchingReached",
-    "outcomeReached",
-    "unreadableBoundReached",
-    "absenceBoundReached",
-    "conflictReached",
-    "crashRestartReached",
-    "--max-steps",
-    "40",
-    "--max-samples",
-    "10000",
-    "--verbosity",
-    "1"
-  ],
-  remainingTaskSessionBudget()
-)
+const controlDirectionApplicationInvariants = [
+  "appliedDirectionIsOperatorInitiated",
+  "applicationClaimsNoLaterEffects",
+  "rejectedTaskControlPreservesPauseState",
+  "typeOk"
+]
 
+await run("control-direction application model typecheck", [
+  "typecheck",
+  "specs/controlDirectionApplication.qnt"
+])
+await run("control-direction application deterministic tests", [
+  "test",
+  "specs/controlDirectionApplication_test.qnt",
+  "--main",
+  "controlDirectionApplicationTest"
+])
+await run("control-direction application negative mutation profile", [
+  "test",
+  "specs/controlDirectionApplication_negative_test.qnt",
+  "--main",
+  "controlDirectionApplicationNegativeTest"
+])
+await run("control-direction application sampled model", [
+  "run",
+  "specs/controlDirectionApplication.qnt",
+  "--invariants",
+  ...controlDirectionApplicationInvariants,
+  "--witnesses",
+  "runPauseAppliedReached",
+  "taskPauseAppliedReached",
+  "taskUnpauseAppliedReached",
+  "staleTaskRejectedReached",
+  "unreadableMembershipReached",
+  "--max-steps",
+  "8",
+  "--max-samples",
+  "5000",
+  "--verbosity",
+  "1"
+])
+// TLC checks the complete state graph: 476 generated / 175 distinct states,
+// depth 10, ~0.7s (Quint 0.32.0, linux-aarch64). The graph is finite because
+// `appliedCount` saturates in the spec; unbounded it diverged past 36M states.
+// No --max-steps: a future regression shows as a diameter change, not truncation.
+await run("control-direction application exhaustive model", [
+  "verify",
+  "specs/controlDirectionApplication.qnt",
+  "--backend",
+  "tlc",
+  "--invariants",
+  ...controlDirectionApplicationInvariants,
+  "--verbosity",
+  "1"
+])
+
+const taskFactReconciliationInvariants = [
+  "positionHeldUntilSafeSuspension",
+  "changedFactsPreserveWip",
+  "specificationOffersEveryExactChoice",
+  "externalSuccessPreventsDuplicateDelivery",
+  "externalSuccessReleasesOnlyAfterSafeSuspension",
+  "externalSuccessSettlesAfterExactClaimRelease",
+  "replacementClaimRequiresDirectionAndIntent",
+  "replacementClaimIdentityIsFresh",
+  "foreignClaimIsNeverChanged",
+  "unreadableClaimCannotAuthorizeReplacement",
+  "claimConstraintPreservesIndependentEligibility"
+]
+
+await run("task-fact reconciliation model typecheck", [
+  "typecheck",
+  "specs/taskFactReconciliation.qnt"
+])
+await run("task-fact reconciliation deterministic tests", [
+  "test",
+  "specs/taskFactReconciliation_test.qnt",
+  "--main",
+  "taskFactReconciliationTest"
+])
+await run("task-fact reconciliation sampled model", [
+  "run",
+  "specs/taskFactReconciliation.qnt",
+  "--invariants",
+  ...taskFactReconciliationInvariants,
+  "--witnesses",
+  "membershipWaitReached",
+  "lifecycleWaitReached",
+  "specificationChoicesReached",
+  "externalSuccessSettledReached",
+  "foreignClaimWaitReached",
+  "missingClaimWaitReached",
+  "unreadableClaimWaitReached",
+  "replacementClaimObserved",
+  "--max-steps",
+  "12",
+  "--max-samples",
+  "10000",
+  "--verbosity",
+  "1"
+])
+await run("task-fact reconciliation exhaustive model", [
+  "verify",
+  "specs/taskFactReconciliation.qnt",
+  "--invariants",
+  ...taskFactReconciliationInvariants,
+  "--max-steps",
+  "12",
+  "--verbosity",
+  "1"
+])
+
+const gitReconciliationInvariants = [
+  "compatibleTargetAdvanceDoesNotConstrainAttempt",
+  "incompatibleRewriteConstrainsOnlyAffectedAttempt",
+  "gitConstraintPreservesIndependentEligibility",
+  "lostWorktreeNeverAuthorizesRepair",
+  "registrationConflictNeverAuthorizesRepair",
+  "positionHeldUntilSafeSuspension",
+  "rejectedResultPreservesWorktree",
+  "staleTargetNeverOverwrites",
+  "ambiguousTargetNeverPromotes",
+  "promotionRequiresExactExpectedHead",
+  "unverifiedCandidateNeverPromotes"
+]
+
+await run("Git reconciliation model typecheck", [
+  "typecheck",
+  "specs/gitReconciliation.qnt"
+])
+await run("Git reconciliation deterministic tests", [
+  "test",
+  "specs/gitReconciliation_test.qnt",
+  "--main",
+  "gitReconciliationTest"
+])
+await run("Git reconciliation negative mutation profile", [
+  "test",
+  "specs/gitReconciliation_negative_test.qnt",
+  "--main",
+  "gitReconciliationNegativeTest"
+])
+await run("Git reconciliation sampled model", [
+  "run",
+  "specs/gitReconciliation.qnt",
+  "--invariants",
+  ...gitReconciliationInvariants,
+  "--witnesses",
+  "compatibleAdvanceReached",
+  "targetRewriteWaitReached",
+  "lostWorktreeWaitReached",
+  "registrationConflictWaitReached",
+  "independentTaskSelectedReached",
+  "missingResultRejectedReached",
+  "nonDescendantResultRejectedReached",
+  "eligibleResultReached",
+  "exactCompareAndSetReached",
+  "staleTargetReconciliationReached",
+  "ambiguousTargetRereadReached",
+  "unverifiedCandidateRejectionReached",
+  "--max-steps",
+  "7",
+  "--max-samples",
+  "10000",
+  "--verbosity",
+  "1"
+])
+// TLC checks the complete state graph: 101 generated / 44 distinct states,
+// depth 5, ~0.7s (Quint 0.32.0, linux-aarch64) — replacing a 7-step Apalache
+// BMC with exhaustive checking. No --max-steps: TLC reports the diameter, so
+// "is the bound binding" stops being a separate investigation.
+await run("Git reconciliation exhaustive model", [
+  "verify",
+  "specs/gitReconciliation.qnt",
+  "--backend",
+  "tlc",
+  "--step",
+  "verificationStep",
+  "--invariants",
+  ...gitReconciliationInvariants,
+  "--verbosity",
+  "1"
+])
+
+const acceptedResultIntegrationInvariants = [
+  "cancellationExactlyQueued",
+  "queuePositionsAreUnique",
+  "targetHeldOnlyForActiveIntegration",
+  "atMostOneTargetHolder",
+  "startedPrecedesRemainingQueue",
+  "dependencyWaitPreservesQueueOrder",
+  "candidateReadyHasExactOrderedParents",
+  "sessionIdentityFixedAfterStart",
+  "verificationRequestIdentityIsStable",
+  "verificationIntentPrecedesWrapper",
+  "verificationInvocationAndReconciliationAreBounded",
+  "activeVerificationRetainsTargetUnlessRestarted",
+  "terminalVerificationReleasesTarget",
+  "verificationOutcomeMatchesPhase",
+  "onlySealedPassedAuthorizesPromotion",
+  "promotionPremiseRequiresSealedPassedEvidence",
+  "diagnosticOutcomesNeverAuthorizePromotion",
+  "contradictoryVerificationNeverAuthorizesPromotion",
+  "logicalIntegrationResponsibilityBlocksLaterQueue",
+  "noAutomaticVerificationReplacement",
+  "restartCountBounded",
+  "staleTargetProofIsNeverCurrent",
+  "reacquiredVerificationUsesFreshExpectedHead",
+  "promotionAttemptsAreBounded",
+  "ambiguousPromotionRequiresFreshObservation",
+  "promotionIntentPrecedesCompareAndSet",
+  "promotionUsesExactSealedCandidate",
+  "promotionCompareAndSetRequiresExactHead",
+  "promotionSuccessRequiresExactAncestryAndEvidence",
+  "stalePromotionPreservesCandidateAndNeverOverwrites",
+  "unreadablePromotionStaysPending",
+  "promotionExhaustionPreservesVerifiedCandidate",
+  "promotionTerminalReleasesTarget",
+  "promotionFreshObservationIsExactExpectedHead",
+  "promotionNoForceOrEquivalentShortcut",
+  "promotionRetryOrdinalsHaveFreshHeadReads"
+]
+
+await run("accepted-result integration model typecheck", [
+  "typecheck",
+  "specs/acceptedResultIntegration.qnt"
+])
+await run("accepted-result integration deterministic tests", [
+  "test",
+  "specs/acceptedResultIntegration_test.qnt",
+  "--main",
+  "acceptedResultIntegrationTest"
+])
+await run("accepted-result integration negative mutation profile", [
+  "test",
+  "specs/acceptedResultIntegration_negative_test.qnt",
+  "--main",
+  "acceptedResultIntegrationNegativeTest"
+])
+await run("accepted-result integration sampled model", [
+  "run",
+  "specs/acceptedResultIntegration.qnt",
+  "--invariants",
+  ...acceptedResultIntegrationInvariants,
+  "--witnesses",
+  "acceptedReached",
+  "queuedReached",
+  "startedReached",
+  "dependencyWaitReached",
+  "restartReached",
+  "targetHeadProofReached",
+  "dependencyWaitReleasedTarget",
+  "candidateReadyReached",
+  "correctionRequiredReached",
+  "correctionLimitReached",
+  "continuationLimitReached",
+  "correlationContradictionReached",
+  "correlationContradictionReleasedReached",
+  "verificationIntentReached",
+  "verificationInvokedReached",
+  "verificationResponseLostReached",
+  "verificationReconcilingReached",
+  "verificationPassedPendingSealReached",
+  "verificationPassedReached",
+  "verificationFailedReached",
+  "verificationKilledReached",
+  "verificationTimedOutReached",
+  "verificationPartialReached",
+  "verificationCorrelationContradictionReached",
+  "verificationEvidenceFailureReached",
+  "promotionPremiseReached",
+  "promotionIntentReached",
+  "promotionAttemptIntendedReached",
+  "promotionInFlightReached",
+  "promotionResponseLostReached",
+  "promotionReconciliationReached",
+  "promotionRetryReadyReached",
+  "promotionReadPendingReached",
+  "promotionSucceededReached",
+  "promotionStaleReached",
+  "promotionExhaustedReached",
+  "releasedLogicalBlockerReached",
+  "--max-steps",
+  "35",
+  "--max-samples",
+  "10000",
+  "--verbosity",
+  "1"
+])
+// TLC checks the complete finite state graph. No --max-steps is used: future
+// growth shows up as a diameter change rather than silent truncation.
+await run("accepted-result integration exhaustive model", [
+  "verify",
+  "specs/acceptedResultIntegration.qnt",
+  "--backend",
+  "tlc",
+  "--invariants",
+  ...acceptedResultIntegrationInvariants,
+  "--verbosity",
+  "1"
+])
+
+const elapsedMilliseconds = performance.now() - startedAt
 process.stdout.write(
-  `\nTask-session model total: ${(taskSessionElapsedMilliseconds / 1000).toFixed(2)}s ` +
-    `(budget ${taskSessionModelBudgetMilliseconds / 1000}s)\n`
+  `\nComplete Quint model gate: ${
+    (elapsedMilliseconds / 1000).toFixed(2)
+  }s (budget ${quintGateRegressionBudgetMilliseconds / 1000}s)\n`
 )
-if (taskSessionElapsedMilliseconds > taskSessionModelBudgetMilliseconds) {
-  throw new Error(
-    `Task-session models exceeded their ${taskSessionModelBudgetMilliseconds / 1000}-second regression budget`
-  )
-}
-
-await run(
-  "frontier recovery models",
-  process.execPath,
-  ["scripts/check-frontier-recovery-model.mjs"],
-  frontierModelBudgetMilliseconds
-)
-
-const gateElapsedMilliseconds = performance.now() - gateStartedAt
-process.stdout.write(
-  `\nComplete Quint recovery gate: ${(gateElapsedMilliseconds / 1000).toFixed(2)}s ` +
-    `(regression budget ${quintGateRegressionBudgetMilliseconds / 1000}s)\n`
-)
-if (gateElapsedMilliseconds > quintGateRegressionBudgetMilliseconds) {
-  throw new Error(
-    `Quint recovery gate exceeded its ${quintGateRegressionBudgetMilliseconds / 1000}-second regression budget`
-  )
+if (elapsedMilliseconds > quintGateRegressionBudgetMilliseconds) {
+  throw new Error("Quint models exceeded their regression budget")
 }

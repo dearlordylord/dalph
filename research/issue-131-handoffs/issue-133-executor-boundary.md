@@ -1,5 +1,10 @@
 # Handoff: implement the executor boundary in issue #133
 
+> Historical note: issue #133 is closed, and reopened issue #131 supersedes
+> this handoff's executor-declared capacity wording. Dalph now owns each task's
+> zero-or-one capacity requirement. For example, an executor reports provider
+> lifecycle but never asks Dalph to reserve a position.
+
 Use the `implement`, `domain-modeling`, `effect`, `property-based-testing`, and
 `code-review` skills only after the accepted issue #132 implementation and
 validation result exists.

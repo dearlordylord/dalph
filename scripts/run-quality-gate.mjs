@@ -1,7 +1,8 @@
-import { quintGateSafetyTimeoutMilliseconds } from "./quint-gate-policy.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
+import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
 
 const SECOND = 1_000
+const maximumSuccessfulOutputLines = 400
 const pnpmEntryPoint = process.env.npm_execpath
 const withoutQuint = process.argv.includes("--without-quint")
 
@@ -17,18 +18,29 @@ const gates = [
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
   { args: ["check:complexity"], name: "cyclomatic complexity", timeout: 60 * SECOND },
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
+  { args: ["test:memory"], name: "project memory scenarios", timeout: 60 * SECOND },
   ...(withoutQuint
     ? []
-    : [{ args: ["check:quint"], name: "Quint recovery models", timeout: quintGateSafetyTimeoutMilliseconds }]),
+    : [{ args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 5 * 60 * SECOND }]),
   { args: ["test:coverage"], name: "tests and coverage", timeout: 5 * 60 * SECOND },
-  { args: ["check:secrets"], name: "secret scan", timeout: 2 * 60 * SECOND }
+  { args: ["check:secrets"], name: "secret scan", timeout: 5 * 60 * SECOND }
 ]
 
+let successfulOutputLines = 0
+
 for (const gate of gates) {
-  await runBoundedCommand({
+  const result = await runBoundedCommand({
     args: [pnpmEntryPoint, ...gate.args],
     executable: process.execPath,
     name: `Quality gate '${gate.name}'`,
     timeoutMilliseconds: gate.timeout
   })
+  successfulOutputLines = addSuccessfulOutputLines({
+    currentOutputLines: successfulOutputLines,
+    maximumOutputLines: maximumSuccessfulOutputLines,
+    stageName: gate.name,
+    stageOutputLines: result.outputLineCount
+  })
 }
+
+console.log(`Quality gate emitted ${successfulOutputLines}/${maximumSuccessfulOutputLines} successful output lines.`)
