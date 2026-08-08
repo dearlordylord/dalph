@@ -30,6 +30,13 @@ no issue declares any file here outdated.
 | `issue-164-journal-first-tracker-observations.md` | 164 |
 | `issue-165-domain-readable-cassettes.md` | 165 |
 | `issue-170-maintained-cassette-catalog.md` | 170 |
+
+**Describes implemented behavior with an intentionally open owning issue** —
+the implementation evidence and post-implementation choices audit are recorded
+on the issue while later dependent work proceeds.
+
+| File | Issue |
+|---|---|
 | `issue-192-describe-delivery-actions.md` | 192 |
 | `issue-193-run-reactive-delivery-actions.md` | 193 |
 
