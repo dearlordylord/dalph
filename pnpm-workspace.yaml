@@ -1,5 +1,6 @@
 packages:
   - "."
   - "packages/*"
+  - "prototypes/reducer-lab"
 
 minimumReleaseAge: 1440

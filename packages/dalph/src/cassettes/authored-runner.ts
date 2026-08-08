@@ -583,12 +583,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
               runRecoveredWorkflow(command.target).pipe(Effect.provide(planningLayer("recovery")))
             )
             const recovered = yield* recoveredRun.pipe(Effect.forkScoped({ startImmediately: true }))
-            yield* Effect.raceFirst(
-              cursor.awaitTerminalAssertions,
-              Fiber.join(recovered).pipe(
-                Effect.andThen(Effect.die("recovered coordinator stopped before the authored terminal assertions"))
-              )
-            )
+            yield* Effect.raceFirst(cursor.awaitTerminalAssertions, Fiber.join(recovered))
             if (candidateTerminalEventTag !== undefined) yield* Deferred.await(candidateOutcomeRecorded)
             for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
             const recoveredCoordinatorExit = recovered.pollUnsafe()

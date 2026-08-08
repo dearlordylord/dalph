@@ -376,6 +376,16 @@ it.effect("restarts a confirmed paused Run without selecting new forward progres
   })
 )
 
+it.effect("accepts successful recovered completion at the terminal assertion boundary", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runPauseRestartsPassivelyAuthoredCassette)
+
+    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
+    expect(run.observedBehavior).toBeDefined()
+  })
+)
+
 it.effect("finishes the exact safe suspension before fresh reads after Unpause", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(runUnpauseAfterSafeSuspensionAuthoredCassette)

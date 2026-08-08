@@ -1,0 +1,86 @@
+:root {
+  color: #1b2520;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  background: #f3f0e8;
+}
+
+body {
+  margin: 0;
+}
+
+#root {
+  margin: 0 auto;
+  max-width: 76rem;
+  padding: 2rem;
+}
+
+.provenance {
+  border-left: 0.3rem solid #146b55;
+  max-width: 70rem;
+  padding: 0.75rem 1rem;
+}
+
+.controls,
+article {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+}
+
+.controls {
+  margin: 2rem 0;
+}
+
+.results {
+  display: grid;
+  gap: 0.75rem;
+}
+
+article {
+  background: #fffdf7;
+  border: 1px solid #c8c3b8;
+  border-radius: 0.4rem;
+  flex-wrap: wrap;
+  padding: 0.8rem 1rem;
+}
+
+article h2 {
+  flex: 1 1 28rem;
+  font-family: ui-monospace, monospace;
+  font-size: 1rem;
+  margin: 0;
+}
+
+button {
+  background: #146b55;
+  border: 0;
+  border-radius: 0.25rem;
+  color: white;
+  cursor: pointer;
+  padding: 0.55rem 0.8rem;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+output[data-status="Completed"] {
+  color: #146b55;
+}
+
+output[data-status="Failed"] {
+  color: #a32727;
+}
+
+details {
+  flex-basis: 100%;
+}
+
+pre {
+  background: #18201d;
+  color: #d8eee5;
+  max-height: 28rem;
+  overflow: auto;
+  padding: 1rem;
+}

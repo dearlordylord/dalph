@@ -9,12 +9,23 @@
     "noUncheckedIndexedAccess": true,
     "baseUrl": ".",
     "paths": {
-      "effect": ["./node_modules/effect"]
+      "@dalph/contracts": ["../../packages/contracts/src/index.ts"],
+      "@dalph/orchestrator": ["../../packages/orchestrator/src/index.ts"],
+      "effect": ["../../node_modules/effect"],
+      "effect/*": ["../../node_modules/effect/*"]
     },
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2023",
     "types": ["vite/client"]
   },
-  "include": ["src", "vite.config.ts"]
+  "include": [
+    "src/cassette-lab.ts",
+    "src/cassette-lab-view.ts",
+    "src/cassette-lab.smoke.ts",
+    "src/entry.ts",
+    "src/node-only-module-shim.ts",
+    "src/platform-node-shim.ts",
+    "vite.config.ts"
+  ]
 }

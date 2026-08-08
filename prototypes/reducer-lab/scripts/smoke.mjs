@@ -3,12 +3,12 @@ import { createServer } from "vite"
 const server = await createServer({
   appType: "custom",
   logLevel: "error",
-  server: { middlewareMode: true }
+  server: { hmr: false, middlewareMode: true }
 })
 
 try {
-  await server.ssrLoadModule("/src/lab-engine.smoke.ts")
-  console.log("Reducer Lab smoke scenarios passed.")
+  await server.ssrLoadModule("/src/cassette-lab.smoke.ts")
+  console.log("Reducer Lab maintained-cassette scenarios passed.")
 } finally {
   await server.close()
 }

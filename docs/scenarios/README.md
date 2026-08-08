@@ -68,3 +68,8 @@ issue 173, `planned-attempt-executor-boundary.md` is accepted for the
 production-shaped fake-executor milestone, `workflow-occurrence-projection.md`
 for the runtime occurrence-classification milestone, and
 `fresh-run-single-start.md` names no owner.
+
+`reducer-lab-maintained-cassette-catalog.md` is accepted by the maintainer's
+explicit lab synchronization request. It maps every maintained cassette to
+production-runner execution evidence and covers the authored runner's
+successful-recovery scheduling boundary.
