@@ -542,12 +542,21 @@ process restart. The journal never stores its ownership.
 _Avoid_: Integration responsibility, durable lock, queue position
 
 **Integration session**:
-The one resumable integration-agent responsibility bound to a started
-integration responsibility, its accepted result, expected target head, and
-persisted isolated candidate resource. That resource is distinct from the
-planned task worktree. A conflict, process restart, or invalid submitted object
-continues this identity; none authorizes a replacement session.
+One resumable integration-agent responsibility bound to a started integration
+responsibility, its accepted result, one fixed expected target head, and a
+persisted isolated candidate resource. At most one session for an accepted
+result is unsettled; a superseded session may be followed by one bound to the
+newly observed head. Its resource is distinct from the planned task worktree. A
+conflict, process restart, or invalid submitted object continues the existing
+identity and does not supersede it or authorize a successor session.
 _Avoid_: Process invocation, retry attempt, worktree tip, candidate commit
+
+**Integration-session supersession**:
+The durable fact that one integration session's fixed expected target head is
+stale, ending that session while preserving its candidate and isolated work as
+evidence. It is not delivery settlement; it permits a successor session for
+the same accepted result and newly observed target head.
+_Avoid_: Integration-session settlement, retry, replacement session, delivery settlement
 
 **Integration candidate**:
 The first explicitly submitted commit that Git proves has exactly two ordered

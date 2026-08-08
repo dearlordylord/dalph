@@ -367,11 +367,12 @@ does not move ahead of another merely because that other is waiting.
 target ownership is not retained across a wait on tracker facts.
 → `—`
 
-**D44 One integration session per accepted result.** At most one integration
-session is unsettled for a given accepted result. Exhaustion, a lost response, or
-a lost editing process never silently starts a replacement session or creates a
-replacement candidate, and a submission is routed by its exact session rather
-than guessed or inferred from a worktree tip.
+**D44 At most one unsettled integration session per accepted result.** A stale
+expected target may establish integration-session supersession; only then may a
+successor session bind the newly observed head. Exhaustion, a lost response, or
+a lost editing process never silently supersedes a session or creates a
+successor session or candidate, and a submission is routed by its exact session
+rather than guessed or inferred from a worktree tip.
 → `—` D3's shape applied to sessions; no model has an integration session.
 
 **D45 Conflict work is isolated from the planned worktree.** Integration and

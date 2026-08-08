@@ -2,7 +2,8 @@
 
 Issue: [Reconcile blockers before and after Git promotion](https://github.com/dearlordylord/dalph/issues/138)
 
-Status: draft awaiting acceptance before behavior-changing implementation.
+Status: accepted on 2026-08-07; behavior-changing implementation may use these
+scenarios as its operational gate.
 
 No person directly triggers these scenarios. The task tracker owns prerequisite
 relationships and completion. Git owns candidate, ref, and ancestry facts.
@@ -81,13 +82,18 @@ have advanced the configured target ref while A waited.
 If the configured target advanced compatibly from H to H2 while A waited, M
 remains immutable evidence of the earlier candidate `[H, C]`; Dalph does not
 rewrite it or claim it was built from H2. The ordinary bounded candidate
-reconciliation protocol may preserve M as historical evidence and construct a
-new candidate identity M2 with ordered parents `[H2, C]`, then require M2's
-own verification before promotion.
+reconciliation protocol records integration-session supersession for the stale
+H-bound session while preserving M and its isolated resource as historical
+evidence. Only after that durable supersession may Dalph start one H2-bound
+successor session for the same accepted result and construct a new candidate
+identity M2 with ordered parents `[H2, C]`. M2 requires its own verification
+before promotion. The two sessions are never unsettled at the same time.
 
 If Dalph crashes after step 1, restart reuses the durable complete tracker
 observation only according to its reconfirmation protocol and performs any
-still-missing Git reads before progress.
+still-missing Git reads before progress. If it crashes after recording
+integration-session supersession but before starting the successor, restart
+does not revive the H-bound session and starts at most one H2-bound successor.
 
 The operator sees A become eligible for current integration work, not jump
 directly to completion. When the edge was removed while B remained unfinished,
@@ -104,6 +110,7 @@ the owning bounded reconciliation protocol.
 - `freshly proves Git authority after a pre-promotion blocker clears`
 - `clears dependency wait when a complete read proves the prerequisite edge was removed`
 - `retains the complete observations needed to derive a future removed-prerequisite warning`
+- `supersedes the stale-head session before starting one successor from the new head`
 - `clears only the dependency constraint and does not promote directly`
 
 ## A new unfinished prerequisite appears after promotion
@@ -266,6 +273,20 @@ reverse the Git promotion, or conceal the inconsistency.
 - `preserves accepted tracker completion when a prerequisite concurrently reopens`
 - `warns about completed A with a newly unfinished prerequisite without automatic repair`
 - `clears the derived warning when fresh tracker facts remove the inconsistency`
+
+## Forbidden-result invariant mapping
+
+| Scenario rule | Governing delivery invariant |
+| --- | --- |
+| Preserve accepted work, candidates, promotion proof, and isolated resources across every blocker, unreadable result, force-push constraint, and crash | D10 retention, D16 work-in-progress survival, D31 same-work recovery |
+| Constrain only A, keep B and C governed by their own facts, and clear no independent constraint | D9 fresh-authority eligibility, D18 local constraint, D19 independent clearing |
+| Treat incomplete tracker coverage and unreadable Git as no permission to promote or complete | D23 incomplete or unreadable facts never prove absence, D24 no inferred completion |
+| Never rewrite candidate parents, reuse a candidate against H2, promote an unverified candidate, roll Git back, or force-update a stale target | D26 candidate shape, D27 exact compare-and-set promotion, D28 verification before promotion |
+| Record intent before an ambiguity-crossing mutation and reconcile its result before retry | D21 intent before effect, D22 reconcile before retry |
+| Persist no queue, wait, or integration-target ownership and recreate process-local ownership empty after restart | D29 authority separation |
+| Preserve acceptance-derived same-target order while A waits | D42 single acceptance-derived integration queue |
+| Release the serialized target resource whenever A is only waiting on tracker facts | D43 target-resource release while waiting |
+| Supersede the stale H-bound session before starting one H2-bound successor | D44 at most one unsettled integration session per accepted result |
 
 ## Scenario-to-test mapping required at handoff
 
