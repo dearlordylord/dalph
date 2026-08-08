@@ -17,28 +17,21 @@ import {
   AuthoritativeTaskWorktreeReady,
   ClaimOwner,
   ClaimToken,
-  FixtureTarget,
   JournalPosition,
   JournalStore,
   journaledWorkflowInterpreterLayer,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorktreeReconciliationOperation,
-  makeTrackerGraphObservationOperation,
   legacyMemoryJournalStoreLayer,
   OperationId,
   PlannedWorktreeReady,
-  projectTrackerSnapshot,
   requireAcknowledgedPlan,
   TaskAttemptPlannedEvent,
-  TaskAttemptPlanRecordingSimulated,
-  TaskClaimAcquisitionSimulated,
-  TaskWorktreeReconciliationSimulated,
-  TrackerRevision,
   workflowJournalEventVersion,
   WorkflowInterpreter
 } from "@dalph/orchestrator"
-import { Effect, Layer, Option } from "effect"
+import { Effect, Layer } from "effect"
 import { expect } from "vitest"
 
 const runId = RunId.make("generic-workflow-run")
@@ -103,6 +96,19 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
   return Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
     yield* interpreter.acquireTaskClaim(claimOperation)
+    const otherRunAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: RunId.make("another-run") })
+    expect(
+      (yield* interpreter
+        .recordTaskAttemptPlan(makeTaskAttemptPlanOperation({ ...planOperation, plannedAttempt: otherRunAttempt }))
+        .pipe(Effect.flip))._tag
+    ).toBe("TaskAttemptPlanRunContradiction")
+    expect(
+      (yield* interpreter
+        .reconcileTaskWorktree(
+          makeTaskWorktreeReconciliationOperation({ ...worktreeOperation, plannedAttempt: otherRunAttempt })
+        )
+        .pipe(Effect.flip))._tag
+    ).toBe("TaskAttemptPlanRunContradiction")
     yield* interpreter.recordTaskAttemptPlan(planOperation)
     yield* interpreter.reconcileTaskWorktree(worktreeOperation)
     const records = yield* (yield* JournalStore).read(runId)
@@ -114,87 +120,6 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
       "TaskWorktreeReady"
     ])
   }).pipe(Effect.provide(layer))
-})
-
-it.effect("journals simulated generic boundaries and rejects cross-run plans", () => {
-  const snapshotResult = projectTrackerSnapshot({ revision: TrackerRevision.make("generic-snapshot"), tasks: [] })
-  const snapshot = Option.getOrThrow(
-    Option.fromUndefinedOr(snapshotResult._tag === "Valid" ? snapshotResult.snapshot : undefined)
-  )
-  const graphOperation = makeTrackerGraphObservationOperation(
-    OperationId.make("graph-A"),
-    FixtureTarget.make("generic-fixture")
-  )
-  const claimOperation = makeTaskClaimAcquisitionOperation({
-    acquisition: {
-      operationId: OperationId.make("simulated-claim-A"),
-      owner: ClaimOwner.make("dalph"),
-      taskId: plannedAttempt.taskId,
-      token: ClaimToken.make("simulated-token-A")
-    },
-    predecessorOperationIds: [graphOperation.operationId]
-  })
-  const planOperation = makeTaskAttemptPlanOperation({
-    operationId: OperationId.make("simulated-plan-A"),
-    plannedAttempt,
-    predecessorOperationIds: [claimOperation.acquisition.operationId]
-  })
-  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
-    operationId: OperationId.make("simulated-worktree-A"),
-    plannedAttempt,
-    predecessorOperationIds: [planOperation.operationId]
-  })
-  const base = Layer.succeed(
-    WorkflowInterpreter,
-    WorkflowInterpreter.of({
-      acquireTaskClaim: (operation) => Effect.succeed(TaskClaimAcquisitionSimulated.make({ operation })),
-      readTaskClaim: () => Effect.die("unexpected task claim read"),
-      readTaskWorktree: () => Effect.die("unused worktree observation"),
-      readTargetLineage: () => Effect.die("unused target-lineage observation"),
-      readTrackerGraph: () => Effect.succeed(snapshot),
-      readTaskWorkSpecification: () => Effect.die("unused"),
-      reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
-      recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation })),
-      releaseTaskClaim: () => Effect.die("unused")
-    })
-  )
-  const testLayer = journaledWorkflowInterpreterLayer(runId, base).pipe(
-    Layer.provideMerge(legacyMemoryJournalStoreLayer)
-  )
-
-  return Effect.gen(function* () {
-    const interpreter = yield* WorkflowInterpreter
-    yield* interpreter.readTrackerGraph(graphOperation)
-    yield* interpreter.readTrackerGraph(graphOperation)
-    yield* interpreter.acquireTaskClaim(claimOperation, Effect.void)
-
-    const otherRunAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: RunId.make("another-run") })
-    const otherRunPlan = makeTaskAttemptPlanOperation({ ...planOperation, plannedAttempt: otherRunAttempt })
-    expect((yield* interpreter.recordTaskAttemptPlan(otherRunPlan).pipe(Effect.flip))._tag).toBe(
-      "TaskAttemptPlanRunContradiction"
-    )
-    expect(
-      (yield* interpreter
-        .reconcileTaskWorktree(
-          makeTaskWorktreeReconciliationOperation({ ...worktreeOperation, plannedAttempt: otherRunAttempt })
-        )
-        .pipe(Effect.flip))._tag
-    ).toBe("TaskAttemptPlanRunContradiction")
-
-    yield* interpreter.recordTaskAttemptPlan(planOperation)
-    expect((yield* interpreter.reconcileTaskWorktree(worktreeOperation))._tag).toBe(
-      "TaskWorktreeReconciliationSimulated"
-    )
-
-    const records = yield* (yield* JournalStore).read(runId)
-    expect(records.map(({ event }) => event._tag)).toEqual([
-      "TaskTrackerReadIntentRecorded",
-      "TaskTrackerFactsObserved",
-      "TaskClaimAcquisitionIntended",
-      "TaskAttemptPlanned",
-      "TaskWorktreeReconciliationIntended"
-    ])
-  }).pipe(Effect.provide(testLayer))
 })
 
 it.effect("requires one exact causal planned-attempt acknowledgement", () =>

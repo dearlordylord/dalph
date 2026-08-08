@@ -24,8 +24,6 @@ import { DeliveryActionExecutor, type DeliveryActionExecutorService } from "../d
 import { makeLiveDeliveryActionExecutor } from "../delivery/live-delivery-action-executor.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
-import { makeSyntheticDeliveryRelations } from "../delivery/synthetic-delivery-relations.js"
-import { makeSyntheticDeliveryActionExecutorWithAcceptedFacts } from "../delivery/synthetic-delivery-action-executor.js"
 import type { RunFinalityDecision, RunFinalityProof } from "../frontier/frontier.js"
 import { runStabilizedDelivery } from "./run-stabilization.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
@@ -85,16 +83,6 @@ export interface JournaledRunBootstrapService {
     target: TrackerTarget,
     program: Effect.Effect<RunFinalityProof, E, R>
   ) => Effect.Effect<RunFinalityDecision, E | JournaledRunBootstrapError, Exclude<R, JournaledRunServices>>
-  readonly synthetic: <E, R>(
-    target: TrackerTarget,
-    initialControlPolicy: InitialControlPolicy,
-    runId: RunId,
-    program: Effect.Effect<RunFinalityProof, E, R>
-  ) => Effect.Effect<
-    RunFinalityDecision,
-    E | JournaledRunBootstrapError | JournaledRunIdentityMismatch,
-    Exclude<R, JournaledRunServices>
-  >
   readonly operatorControl: {
     readonly applyControlDirection: (
       input: unknown
@@ -144,7 +132,7 @@ const makeJournaledDeliveryRelations = Effect.fn("Delivery.makeJournaledRelation
   return yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery, resources.integrationTargets)
 })
 
-const runFlatDelivery = Effect.fn("Delivery.runFlat")(function* <
+const runDeliveryComposition = Effect.fn("Delivery.runComposition")(function* <
   Relations extends DeliveryRelationsLayer,
   ERelations,
   RRelations,
@@ -171,7 +159,12 @@ const runFlatDelivery = Effect.fn("Delivery.runFlat")(function* <
   )
 })
 
-/** Runs a fresh workflow through the literal flat delivery composition. */
+const runJournaledDelivery = (runId: RunId, target: TrackerTarget) =>
+  runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () =>
+    makeLiveDeliveryActionExecutor(runId, target)
+  )
+
+/** Runs a fresh workflow through the ordinary delivery composition. */
 export const runWorkflow = (
   target: TrackerTarget,
   initialControlPolicy: InitialControlPolicy,
@@ -179,17 +172,10 @@ export const runWorkflow = (
 ) =>
   Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.fresh(
-      target,
-      initialControlPolicy,
-      runId,
-      runFlatDelivery(target, makeJournaledDeliveryRelations(runId, target), () =>
-        makeLiveDeliveryActionExecutor(runId, target)
-      )
-    )
+    return yield* bootstrap.fresh(target, initialControlPolicy, runId, runJournaledDelivery(runId, target))
   })
 
-/** Runs the exact reconstructed identity through the same flat delivery composition. */
+/** Runs the exact reconstructed identity through the same ordinary delivery composition. */
 export const runRecoveredWorkflow = (target: TrackerTarget) =>
   Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
@@ -202,30 +188,7 @@ export const runRecoveredWorkflow = (target: TrackerTarget) =>
           return yield* Effect.die("a recovered workflow requires authoritative recovered activation")
         }
         /* v8 ignore stop */
-        return yield* runFlatDelivery(target, makeJournaledDeliveryRelations(recovery.runId, target), () =>
-          makeLiveDeliveryActionExecutor(recovery.runId, target)
-        )
-      })
-    )
-  })
-
-/** Explicit non-durable interpretation of the same public delivery program. */
-export const runSyntheticWorkflowWithBootstrap = (
-  target: TrackerTarget,
-  initialControlPolicy: InitialControlPolicy,
-  runId: RunId
-) =>
-  Effect.gen(function* () {
-    const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.synthetic(
-      target,
-      initialControlPolicy,
-      runId,
-      Effect.gen(function* () {
-        const synthetic = yield* makeSyntheticDeliveryRelations(runId, target, initialControlPolicy)
-        return yield* runFlatDelivery(target, Effect.succeed(synthetic.layer), () =>
-          makeSyntheticDeliveryActionExecutorWithAcceptedFacts(runId, target, synthetic.acceptedFacts)
-        )
+        return yield* runJournaledDelivery(recovery.runId, target)
       })
     )
   })

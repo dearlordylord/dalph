@@ -1598,7 +1598,7 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
 
     expect(JSON.stringify(run.records)).not.toContain("CoordinatorProcessDies")
     expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
-      "The coordinator process and its same-process fake executor die"
+      "The coordinator process and its same-process executor session die"
     )
     expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("Operator applies Unpause to the Run.")
     expect(recorded.entries.some(({ _tag }) => _tag === "ControlDirectionApplied")).toBe(true)

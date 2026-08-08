@@ -6,7 +6,6 @@ import { Effect, Option, Schema } from "effect"
 import type { JournalState } from "../delivery/journal.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
-import type { FreshWorkflowActionFact } from "./fresh-workflow-fact.js"
 
 /** Journal history does not yet contain a graph usable by delivery. */
 export class CurrentDeliveryGraphUnavailable extends Schema.TaggedErrorClass<CurrentDeliveryGraphUnavailable>()(
@@ -28,16 +27,11 @@ interface CurrentDeliveryFrameBase {
   readonly runControlPolicy: RunControlPolicy
 }
 
-/** One immutable input to pure delivery projection; it owns no runtime state. */
-export type CurrentDeliveryFrame = CurrentDeliveryFrameBase &
-  (
-    | {
-        readonly _tag: "JournaledCurrentDeliveryFrame"
-        readonly acceptedAt: JournalPosition
-        readonly workflowHistory: ReconstructedRunState["workflowHistory"]
-      }
-    | { readonly _tag: "SyntheticCurrentDeliveryFrame"; readonly workflowFacts: ReadonlyArray<FreshWorkflowActionFact> }
-  )
+/** One immutable journal-backed input to pure delivery projection; it owns no runtime state. */
+export type CurrentDeliveryFrame = CurrentDeliveryFrameBase & {
+  readonly acceptedAt: JournalPosition
+  readonly workflowHistory: ReconstructedRunState["workflowHistory"]
+}
 
 /** Projects one already-coherent journal snapshot without another read. */
 export const journaledCurrentDeliveryFrameOf = (
@@ -61,7 +55,6 @@ export const journaledCurrentDeliveryFrameOf = (
     if (runControlPolicy === undefined) return yield* new CurrentDeliveryControlPolicyUnavailable()
     /* v8 ignore stop */
     return {
-      _tag: "JournaledCurrentDeliveryFrame",
       acceptedAt: journal.position,
       currentGraph,
       currentGraphOperationId,

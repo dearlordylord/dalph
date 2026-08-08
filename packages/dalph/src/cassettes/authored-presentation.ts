@@ -163,7 +163,7 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
     case "TaskWorkSpecificationReadReturned":
       return `The task tracker returns "${item.title}" for task ${item.taskId}.`
     case "PlannedAttemptExecutorWorkReported":
-      return `The controlled executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
+      return `The executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
     case "ExpectedBehavior":
       return expectedBehaviorLyric(item)
     case "InitialControlPolicy":
@@ -181,7 +181,7 @@ const coordinatorStoryLyric = (item: CoordinatorStoryItem): string => {
 
 const storyLyric = (item: AuthoredCassetteStoryItem): string =>
   item._tag === "CoordinatorProcessDies"
-    ? "The coordinator process and its same-process fake executor die; durable and authority facts remain."
+    ? "The coordinator process and its same-process executor session die; durable and authority facts remain."
     : coordinatorStoryLyric(item)
 
 /** Readable prose is derived from structured story items and is never parsed. */

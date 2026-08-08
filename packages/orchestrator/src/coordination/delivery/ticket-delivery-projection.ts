@@ -112,8 +112,6 @@ const evidenceTaskId = (evidence: TicketDeliveryEvidence): TaskId => {
       return evidence.responsibility.plannedAttempt.taskId
     case "IntegrationWait":
       return integrationWaitTaskId(evidence.wait)
-    case "SyntheticExecutorFacts":
-      return evidence.plannedAttempt.taskId
   }
 }
 
@@ -134,8 +132,6 @@ const evidenceIdentity = (evidence: TicketDeliveryEvidence): string => {
       ])
     case "IntegrationWait":
       return JSON.stringify(["integration-wait", evidenceTaskId(evidence), evidence.wait._tag])
-    case "SyntheticExecutorFacts":
-      return JSON.stringify(["synthetic-executor", exactAttemptIdentity(evidence.plannedAttempt)])
   }
 }
 
@@ -177,7 +173,6 @@ const obligationFrom = (evidence: TicketDeliveryEvidence): ReadonlyArray<ExactWo
       return [{ _tag: "StartedIntegration", responsibility: evidence.responsibility }]
     case "IntegrationCandidate":
     case "IntegrationWait":
-    case "SyntheticExecutorFacts":
       return []
   }
 }
@@ -198,14 +193,6 @@ const responsibilityStandingFrom = (
     ? [{ _tag: "ResponsibilitySituation", facts }]
     : []
 
-const syntheticExecutorStandingFrom = (
-  evidence: Extract<TicketDeliveryEvidence, { readonly _tag: "SyntheticExecutorFacts" }>,
-  placement: TicketDeliveryPlacement
-): ReadonlyArray<TicketDeliveryStanding> =>
-  evidence.report._tag === "Terminal" && evidence.report.result._tag !== "Accepted" && graphAlreadySuccessful(placement)
-    ? []
-    : [{ _tag: "SyntheticExecutorSituation", plannedAttempt: evidence.plannedAttempt, report: evidence.report }]
-
 const standingFrom = (
   evidence: TicketDeliveryEvidence,
   placement: TicketDeliveryPlacement
@@ -223,8 +210,6 @@ const standingFrom = (
       return candidateStandingFrom(evidence.state)
     case "IntegrationWait":
       return [{ _tag: "IntegrationWait", wait: evidence.wait }]
-    case "SyntheticExecutorFacts":
-      return syntheticExecutorStandingFrom(evidence, placement)
   }
 }
 

@@ -22,8 +22,12 @@ flowchart LR
     i67["#67 Abandon or quarantine"]
   end
 
-  subgraph milestone["Fake-provider milestone"]
-    i167["#167 Complete fake-provider behavior"]
+  subgraph architecture["Delivery architecture"]
+    i195["#195 Service convergence ✓"]
+  end
+
+  subgraph milestone["Controlled-provider milestone"]
+    i167["#167 Complete controlled-provider behavior"]
   end
 
   subgraph production["Production executor decision"]
@@ -44,6 +48,8 @@ flowchart LR
   i141 --> i61
 
   i138 --> i141
+
+  i195 --> i167
 
   i134 --> i135
   i134 --> i156

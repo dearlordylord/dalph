@@ -29,13 +29,12 @@ import {
   type TaskClaimConflict,
   type TaskClaimOwnershipConflict,
   type TaskClaimReadFailure,
-  TaskClaimRelease,
   type TaskClaimReleaseFailure,
   type TaskClaimRequestFailure,
   type TrackerMutationService
 } from "../../authorities/task-tracker/claim-mutation.js"
 import * as TrackerTrace from "../../presentation/tracker-workflow-trace.js"
-import { WorkflowOperation } from "../registry/operation.js"
+import type { WorkflowOperation } from "../registry/operation.js"
 import { taskClaimObservationAttemptBound } from "../protocols/task-claim-observation/bound.js"
 import {
   AuthoritativeTaskClaimReleased,
@@ -139,15 +138,7 @@ export const TaskClaimObservationUnreadable = Schema.TaggedStruct("TaskClaimObse
   taskId: TaskId
 })
 
-export const TaskClaimObservationSimulated = Schema.TaggedStruct("TaskClaimObservationSimulated", {
-  operation: WorkflowOperation.cases.ReadTaskClaim
-})
-
-const TaskClaimObservationResult = Schema.Union([
-  AuthoritativeTaskClaimObserved,
-  TaskClaimObservationUnreadable,
-  TaskClaimObservationSimulated
-])
+const TaskClaimObservationResult = Schema.Union([AuthoritativeTaskClaimObserved, TaskClaimObservationUnreadable])
 export type TaskClaimObservationResult = typeof TaskClaimObservationResult.Type
 
 export const AuthoritativePlannedAttemptWorktreeObserved = Schema.TaggedStruct(
@@ -155,41 +146,19 @@ export const AuthoritativePlannedAttemptWorktreeObserved = Schema.TaggedStruct(
   { observation: PlannedAttemptWorktreeObservation }
 )
 
-export const PlannedAttemptWorktreeObservationSimulated = Schema.TaggedStruct(
-  "PlannedAttemptWorktreeObservationSimulated",
-  { operation: WorkflowOperation.cases.ReadTaskWorktree }
-)
-
-const PlannedAttemptWorktreeObservationResult = Schema.Union([
-  AuthoritativePlannedAttemptWorktreeObserved,
-  PlannedAttemptWorktreeObservationSimulated
-])
+const PlannedAttemptWorktreeObservationResult = AuthoritativePlannedAttemptWorktreeObserved
 export type PlannedAttemptWorktreeObservationResult = typeof PlannedAttemptWorktreeObservationResult.Type
 
 export const AuthoritativeTargetLineageObserved = Schema.TaggedStruct("AuthoritativeTargetLineageObserved", {
   observation: TargetLineageObservation
 })
-export const TargetLineageObservationSimulated = Schema.TaggedStruct("TargetLineageObservationSimulated", {
-  operation: WorkflowOperation.cases.ReadTargetLineage
-})
-const TargetLineageObservationResult = Schema.Union([
-  AuthoritativeTargetLineageObserved,
-  TargetLineageObservationSimulated
-])
+const TargetLineageObservationResult = AuthoritativeTargetLineageObserved
 export type TargetLineageObservationResult = typeof TargetLineageObservationResult.Type
 
-/** Dry-run records intended ownership without claiming or reading claim state. */
-export const TaskClaimAcquisitionSimulated = Schema.TaggedStruct("TaskClaimAcquisitionSimulated", {
-  operation: WorkflowOperation.cases.AcquireTaskClaim
-})
-
-const TaskClaimAcquisitionResult = Schema.Union([AuthoritativeTaskClaimAcquired, TaskClaimAcquisitionSimulated])
+const TaskClaimAcquisitionResult = AuthoritativeTaskClaimAcquired
 type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
 
-/** Dry-run records an exact release without changing or reading tracker state. */
-export const TaskClaimReleaseSimulated = Schema.TaggedStruct("TaskClaimReleaseSimulated", { release: TaskClaimRelease })
-
-const TaskClaimReleaseResult = Schema.Union([AuthoritativeTaskClaimReleased, TaskClaimReleaseSimulated])
+const TaskClaimReleaseResult = AuthoritativeTaskClaimReleased
 type TaskClaimReleaseResult = typeof TaskClaimReleaseResult.Type
 
 /** Generic traces stop at the complete-attempt executor boundary. */
@@ -199,10 +168,8 @@ export const TraceItem = Schema.Union([
   TrackerTrace.TaskClaimAcquisitionIntended,
   TrackerTrace.TaskClaimAcquiredTrace,
   TaskAttemptPlan.TaskAttemptPlanAcknowledged,
-  TaskAttemptPlan.TaskAttemptPlanRecordingSimulated,
   TrackerTrace.TrackerExecutionAdmitted,
-  TaskWorktree.TaskWorktreeReadyTrace,
-  TaskWorktree.TaskWorktreeReconciliationSimulatedTrace
+  TaskWorktree.TaskWorktreeReadyTrace
 ])
 export type TraceItem = typeof TraceItem.Type
 

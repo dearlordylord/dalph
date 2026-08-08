@@ -77,7 +77,7 @@ export class IntegrationTargetUnavailable extends Schema.TaggedErrorClass<Integr
   { attemptId: AttemptId, runId: RunId }
 ) {}
 
-/** A journal-free synthetic run cannot assume durable integration responsibility. */
+/** An unjournaled invocation cannot assume durable integration responsibility. */
 export class IntegrationJournalUnavailable extends Schema.TaggedErrorClass<IntegrationJournalUnavailable>()(
   "IntegrationJournalUnavailable",
   { attemptId: AttemptId, runId: RunId }

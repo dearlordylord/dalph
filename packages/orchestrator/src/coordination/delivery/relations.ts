@@ -1,9 +1,8 @@
-/* eslint-disable max-lines -- The flat delivery relation algebra, service colours, and composition vocabulary stay co-located for auditability. */
+/* eslint-disable max-lines -- Delivery relationships, service colours, and composition vocabulary stay co-located for auditability. */
 import {
   PlannedAttemptExecutorReport,
   type AttemptId,
   type PlannedAttemptExecutorCorrelation,
-  type PlannedTaskAttempt,
   type TaskId,
   type TaskRevision
 } from "@dalph/contracts"
@@ -173,11 +172,6 @@ export type TicketDeliveryStanding =
     }
   | { readonly _tag: "IntegrationNonConvergencePreserved"; readonly state: IntegrationCandidateConstructionState }
   | { readonly _tag: "IntegrationWait"; readonly wait: IntegrationDeliveryWait }
-  | {
-      readonly _tag: "SyntheticExecutorSituation"
-      readonly plannedAttempt: PlannedTaskAttempt
-      readonly report: PlannedAttemptExecutorReport
-    }
 
 /** Graph/bound evidence for a retained broad delivery, including its negative space. */
 export type TicketDeliveryPlacement =
@@ -197,15 +191,10 @@ export type ExactTicketDeliveryEvidence =
       readonly state: IntegrationCandidateConstructionState
     }
 
-/** Exact accepted evidence plus non-authoritative regional and synthetic observations. */
+/** Exact accepted evidence plus non-authoritative regional observations. */
 export type TicketDeliveryEvidence =
   | ExactTicketDeliveryEvidence
   | { readonly _tag: "IntegrationWait"; readonly wait: IntegrationDeliveryWait }
-  | {
-      readonly _tag: "SyntheticExecutorFacts"
-      readonly plannedAttempt: PlannedTaskAttempt
-      readonly report: PlannedAttemptExecutorReport
-    }
 
 /** Evidence that the executor reported a terminal result for one exact planned attempt. */
 export const PlannedAttemptExecutorTerminalEvidence = Schema.TaggedStruct("PlannedAttemptExecutorTerminal", {
@@ -344,7 +333,7 @@ export interface TrackerGraphRelationService {
   readonly signal: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError>
 }
 
-/** Current accepted tracker-graph relation supplied to the flat delivery composition. */
+/** Current accepted tracker-graph relation supplied to delivery. */
 export class TrackerGraphRelation extends Context.Service<TrackerGraphRelation, TrackerGraphRelationService>()(
   "@dalph/TrackerGraphRelation"
 ) {}
@@ -401,7 +390,7 @@ export type DeliveryProposalFrontier =
       ]
     }
 
-/** One coherent current value assembled from every relation visible in the flat Effect. */
+/** One coherent current value assembled from every relationship visible to the Effect. */
 export interface DeliveryRuntimeSnapshot {
   readonly _tag: "DeliveryRuntimeSnapshot"
   readonly reflection: DeliveryReflection
@@ -476,11 +465,7 @@ const standingIsUnsettled = (standing: TicketDeliveryStanding): boolean => {
       "TaskExternalSuccessSettled"
     ].includes(standing.facts.disposition._tag)
   }
-  return (
-    standing._tag !== "SyntheticExecutorSituation" ||
-    standing.report._tag !== "Terminal" ||
-    standing.report.result._tag === "Accepted"
-  )
+  return true
 }
 
 /** Derives finality from the relation's own lifecycle facts, never from the legacy runnable frontier. */
@@ -605,7 +590,7 @@ export class DeliveryRuntimeAssembly extends Context.Service<DeliveryRuntimeAsse
   "@dalph/DeliveryRuntimeAssembly"
 ) {}
 
-/** Hides policy projection while preserving the flat delivery-level sentence. */
+/** Hides policy projection while preserving the delivery-level sentence. */
 export const boundedParallelTickets = Effect.fn("Delivery.boundedParallelTickets")(function* <E>(
   frontier: CurrentSignal<DeliveryFrontier, E>
 ) {

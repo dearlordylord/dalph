@@ -6,7 +6,6 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutorReport,
-  PlannedAttemptExecutorResult,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -241,28 +240,26 @@ it.effect("rejects nonterminal executor reports as terminal delivery evidence", 
   })
 )
 
-it.effect("treats only an accepted synthetic terminal report as unsettled delivery", () =>
+it.effect("keeps a proposed delivery unsettled until ordinary evidence advances it", () =>
   Effect.gen(function* () {
-    const taskId = TaskId.make("synthetic-finality")
-    const current = Option.getOrThrow(
-      yield* deliveryRuntime.pipe(
-        Effect.provide(
-          makeDeliveryRelationsLayer({
-            exactEvidence: currentSignalOf([]),
-            graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
-            policy: currentSignalOf(policy)
-          })
-        ),
-        Effect.flatMap((relation) =>
-          relation.changes.pipe(
-            Stream.map(({ current }) => current),
-            Stream.runHead
-          )
-        )
+    const taskId = TaskId.make("proposed-finality")
+    const relation = yield* deliveryRuntime.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          exactEvidence: currentSignalOf([]),
+          graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
+          policy: currentSignalOf(policy)
+        })
       )
     )
-    const correlation = { attemptId: AttemptId.make("synthetic-finality-attempt"), runId: RunId.make("synthetic") }
-    const finalityFor = (result: PlannedAttemptExecutorResult) =>
+    const current = Option.getOrThrow(
+      yield* relation.changes.pipe(
+        Stream.map(({ current: snapshot }) => snapshot),
+        Stream.runHead
+      )
+    )
+
+    expect(
       deliveryFinalityOf(
         {
           ...current,
@@ -274,13 +271,7 @@ it.effect("treats only an accepted synthetic terminal report as unsettled delive
                 evidence: [],
                 obligations: [],
                 placement: { _tag: "GraphNotEstablished" },
-                standings: [
-                  {
-                    _tag: "SyntheticExecutorSituation",
-                    plannedAttempt: exactAttemptEvidence(taskId).facts.responsibility.plannedAttempt,
-                    report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result })
-                  }
-                ],
+                standings: [{ _tag: "ProposedDelivery" }],
                 taskId
               }
             ]
@@ -288,17 +279,6 @@ it.effect("treats only an accepted synthetic terminal report as unsettled delive
         },
         { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
         { _tag: "TrackerReconfirmationAllowed" }
-      )
-
-    expect(finalityFor(PlannedAttemptExecutorResult.cases.Completed.make({}))).toEqual({
-      _tag: "RunMustRemainActive",
-      reason: "TrackerTargetUnsettled"
-    })
-    expect(
-      finalityFor(
-        PlannedAttemptExecutorResult.cases.Accepted.make({
-          acceptedResult: { commit: GitCommitSha.make("3".repeat(40)) }
-        })
       )
     ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
   })

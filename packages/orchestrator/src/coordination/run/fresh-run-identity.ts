@@ -2,7 +2,7 @@ import { Crypto, Effect, Encoding, Result, Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import { TrackerTarget } from "../../authorities/task-tracker/target.js"
 
-const AllocatedFreshWorkflowRunId = RunId.pipe(Schema.brand("AllocatedFreshWorkflowRunId"))
+export const AllocatedFreshWorkflowRunId = RunId.pipe(Schema.brand("AllocatedFreshWorkflowRunId"))
 export type AllocatedFreshWorkflowRunId = typeof AllocatedFreshWorkflowRunId.Type
 
 const freshWorkflowRunUuidVersion = 7

@@ -1,4 +1,4 @@
-import { PlannedAttemptExecutor, type RunId, TaskId } from "@dalph/contracts"
+import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { Context, Deferred, Effect, Fiber, Layer, Option, Ref } from "effect"
@@ -47,7 +47,8 @@ const runtimeLayer = Layer.mergeAll(
   controlDirectionApplicationLayer,
   Layer.mock(PlannedAttemptExecutor, {}),
   Layer.mock(RunRecoveryProjection, {
-    _tag: "SyntheticFreshOnlyProjection",
+    _tag: "JournaledFreshRunProjection",
+    runId: RunId.make("bootstrap-fixture"),
     readDeliveryProjection: Effect.succeed({
       evidence: { _tag: "UnavailableDeliveryProjectionEvidence" as const },
       frontier: { explanations: [], transitions: [] }

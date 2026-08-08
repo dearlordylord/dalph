@@ -121,7 +121,7 @@ forever wait. These prohibitions preserve D1, D12, and D41.
 - `gives each accepted executor report its own continuation proposal`
 - `publishes each accepted executor report before continuing and stops after Terminal`
 - `stops an always-Running executor at the durable continuation limit`
-- `stops an always-Running synthetic workflow at the shared continuation limit`
+- `stops an always-Running controlled workflow at the shared continuation limit`
 
 ## Process loss discards a live claim owner and rereads GitHub
 

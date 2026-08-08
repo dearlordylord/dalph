@@ -39,7 +39,7 @@ export type PlannedAttemptExecutorContinuationDisposition =
   | { readonly _tag: "ExecutorContinuationAvailable" }
   | { readonly _tag: "ExecutorContinuationLimitReached"; readonly limit: PlannedAttemptExecutorContinuationLimit }
 
-/** Pure durable-budget decision shared by journaled and synthetic interpreters. */
+/** Pure durable-budget decision shared by all conforming interpreter Layers. */
 export const plannedAttemptExecutorContinuationDisposition = (
   correlation: PlannedAttemptExecutorCorrelation,
   reports: ReadonlyArray<PlannedAttemptExecutorReport>,

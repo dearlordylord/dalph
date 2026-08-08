@@ -5,34 +5,28 @@ import {
   type JournaledRunBootstrap,
   type JournaledRuntimeLayerInput,
   type TrackerGraphReader,
-  AuthoritativeTaskWorktreeReady,
   controlDirectionApplicationLayer,
   coordinatorOwnedGitWorktreeLayer,
   coordinatorOwnedTrackerMutationLayer,
   type GitCommonDirectoryTarget,
-  GitTargetLineage,
-  GitWorktree,
   type JournalStoreError,
   journaledRunBootstrapLayer,
   journaledWorkflowInterpreterLayer,
   nodeGitCommandLayer,
   nodeGitTargetLineageLayer,
   nodeGitWorktreeLayer,
-  observePlannedAttemptWorktreeThrough,
-  observeTargetLineageThrough,
   productionCoordinatorOwnershipLayer,
   productionJournalStoreLayer,
-  runGitWorktreeReconciliation,
   type TrackerMutation,
   validatedStartupRecoveryLayer,
   taskWorkCapacityControlLayer,
   taskClaimReacquisitionControlLayer,
+  workflowInterpreterLayer,
   WorkflowInterpreter,
   WorkflowTrace
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
 import { Effect, Layer } from "effect"
-import { makeLiveWorkflowInterpreterLayer } from "./composition.js"
 
 /**
  * Composes the production-shaped milestone with live tracker/Git boundaries
@@ -65,27 +59,11 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     Layer.provide(NodeServices.layer)
   )
   const journalLayer = productionJournalStoreLayer.pipe(Layer.provide(ownershipLayer))
-  const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer("ProductionBase").pipe(
-    Layer.provide(trackerMutationLayer)
+  const baseInterpreterLayer = workflowInterpreterLayer.pipe(
+    Layer.provide(trackerMutationLayer),
+    Layer.provide(gitTargetLineageLayer),
+    Layer.provide(gitWorktreeLayer)
   )
-  const baseInterpreterLayer = Layer.effect(
-    WorkflowInterpreter,
-    Effect.gen(function* () {
-      const interpreter = yield* WorkflowInterpreter
-      const gitTargetLineage = yield* GitTargetLineage
-      const gitWorktree = yield* GitWorktree
-      return WorkflowInterpreter.of({
-        ...interpreter,
-        readTaskWorktree: (operation) => observePlannedAttemptWorktreeThrough(gitWorktree, operation),
-        /* v8 ignore next -- @preserve Production target-lineage recovery is exercised through the identical authored composition. */
-        readTargetLineage: (operation) => observeTargetLineageThrough(gitTargetLineage, operation),
-        reconcileTaskWorktree: (operation) =>
-          runGitWorktreeReconciliation(gitWorktree, operation.plannedAttempt).pipe(
-            Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))
-          )
-      })
-    })
-  ).pipe(Layer.provide(liveInterpreterLayer), Layer.provide(gitTargetLineageLayer), Layer.provide(gitWorktreeLayer))
   const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, controlledFakePlannedAttemptExecutorLayer)
 
   return Layer.unwrap(

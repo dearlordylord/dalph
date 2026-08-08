@@ -82,6 +82,8 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import { AuthoritativeTaskWorktreeReady } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import { AuthoritativeTaskClaimReleased } from "../../workflow/protocols/task-claim-release/protocol.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 
@@ -976,7 +978,16 @@ it.effect("replays the exact durable claim and worktree intents", () => {
     const interpreter = WorkflowInterpreter.of({
       acquireTaskClaim: (operation) =>
         Ref.update(calls, (current) => [...current, `claim:${operation.acquisition.operationId}`]).pipe(
-          Effect.as({ _tag: "TaskClaimAcquisitionSimulated", operation })
+          Effect.as(
+            AuthoritativeTaskClaimAcquired.make({
+              claim: ActiveTaskClaim.make({
+                operationId: operation.acquisition.operationId,
+                owner: operation.acquisition.owner,
+                taskId: operation.acquisition.taskId,
+                token: operation.acquisition.token
+              })
+            })
+          )
         ),
       readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -985,7 +996,16 @@ it.effect("replays the exact durable claim and worktree intents", () => {
       readTaskWorkSpecification: unused,
       reconcileTaskWorktree: (operation) =>
         Ref.update(calls, (current) => [...current, `worktree:${operation.operationId}`]).pipe(
-          Effect.as({ _tag: "TaskWorktreeReconciliationSimulated", operation })
+          Effect.as(
+            AuthoritativeTaskWorktreeReady.make({
+              proof: PlannedWorktreeReady.make({
+                baseSha: operation.plannedAttempt.baseSha,
+                branch: operation.plannedAttempt.branch,
+                headSha: operation.plannedAttempt.baseSha,
+                worktree: operation.plannedAttempt.worktree
+              })
+            })
+          )
         ),
       recordTaskAttemptPlan: unused,
       releaseTaskClaim: unused

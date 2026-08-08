@@ -30,7 +30,7 @@ import {
   journaledRunBootstrapLayer,
   type JournaledRuntimeLayerInput,
   journaledWorkflowInterpreterLayer,
-  makeLiveWorkflowInterpreterLayer,
+  workflowInterpreterLayer,
   memoryJournalStoreLayer,
   observePlannedAttemptWorktreeThrough,
   observeTargetLineageThrough,
@@ -75,7 +75,7 @@ const minimumCorrectionExhaustionValidationCount = 2
 const authoredCandidateContinuationLimit = 2
 const authoredSettlementYieldTurns = 10
 
-/** Decodes and drives one story through the production flat-delivery program. */
+/** Decodes and drives one story through the ordinary production delivery program. */
 const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(function* (input: unknown) {
   return yield* Effect.scoped(
     // eslint-disable-next-line complexity -- One chronological adapter owns the fresh, crash, recovery, candidate, and terminal story boundaries.
@@ -164,10 +164,12 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
       const testGitWorktree = Context.get(sharedContext, TestGitWorktree)
       const trackerLayer = controlledTrackerGraphReaderLayer(cursor)
-      const liveInterpreterLayer = makeLiveWorkflowInterpreterLayer("DeterministicTest").pipe(
-        Layer.provide(Layer.merge(trackerLayer, trackerMutationLayer))
+      const ordinaryInterpreterLayer = workflowInterpreterLayer.pipe(
+        Layer.provide(Layer.merge(trackerLayer, trackerMutationLayer)),
+        Layer.provide(gitWorktreeLayer),
+        Layer.provide(Layer.succeed(GitTargetLineage, gitTargetLineage))
       )
-      const authoritativeInterpreterLayer = Layer.effect(
+      const boundaryAdjustedInterpreterLayer = Layer.effect(
         WorkflowInterpreter,
         Effect.gen(function* () {
           const interpreter = yield* WorkflowInterpreter
@@ -189,11 +191,11 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
               )
           })
         })
-      ).pipe(Layer.provide(liveInterpreterLayer), Layer.provide(gitWorktreeLayer))
+      ).pipe(Layer.provide(ordinaryInterpreterLayer), Layer.provide(gitWorktreeLayer))
       const baseControlPolicyLayer = taskWorkCapacityControlLayer
       const operatorControlLayer = Layer.merge(controlDirectionApplicationLayer, taskClaimReacquisitionControlLayer)
       const controlPolicyLayer = Layer.merge(baseControlPolicyLayer, operatorControlLayer)
-      const interpreterLayer = journaledWorkflowInterpreterLayer(runId, authoritativeInterpreterLayer)
+      const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer)
       const planningLayer = (phase: "fresh" | "recovery") =>
         Layer.mergeAll(
           deterministicOperationIdAllocatorLayer(

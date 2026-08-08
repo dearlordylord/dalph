@@ -98,7 +98,7 @@ export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(A
       baseSha: "1111111111111111111111111111111111111111",
       claimOwner: "cassette-owner",
       claimTokenPrefix: "cassette-claim",
-      executor: "executor:controlled-fake",
+      executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/repository.git", ref: "refs/heads/master" },
       target: "cassette-target",
       worktreeRoot: "/dalph/cassettes"
@@ -729,7 +729,7 @@ export const dependentTasksCompleteInOneRunAuthoredCassette = Schema.decodeUnkno
       baseSha: "2222222222222222222222222222222222222222",
       claimOwner: "pipeline-cassette-owner",
       claimTokenPrefix: "pipeline-cassette-claim",
-      executor: "executor:controlled-fake",
+      executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/pipeline.git", ref: "refs/heads/master" },
       target: "pipeline-cassette-target",
       worktreeRoot: "/dalph/cassettes/pipeline"
@@ -812,7 +812,7 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.deco
         baseSha: "1111111111111111111111111111111111111111",
         claimOwner: "integration-cassette-owner",
         claimTokenPrefix: "integration-cassette-claim",
-        executor: "executor:controlled-fake",
+        executor: "executor:cassette",
         integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
         target: "cassette-target",
         worktreeRoot: "/dalph/cassettes/integration"

@@ -15,18 +15,11 @@ import {
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
-import {
-  TaskAttemptPlanAcknowledged,
-  TaskAttemptPlanRecordingSimulated
-} from "../../workflow/protocols/task-attempt-planning/record.js"
-import {
-  TaskWorktreeReadyTrace,
-  TaskWorktreeReconciliationSimulatedTrace
-} from "../../workflow/protocols/worktree-reconciliation/protocol.js"
-import { executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
+import { TaskAttemptPlanAcknowledged } from "../../workflow/protocols/task-attempt-planning/record.js"
+import { TaskWorktreeReadyTrace } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
+import { deliveryActionCompleted, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import type { FreshOperationOnlyRoute, FreshOperationStep } from "./delivery-action-proposal.js"
-import { FreshWorkflowActionFact } from "../run/fresh-workflow-fact.js"
 
 type FreshOperationAction = Extract<MaterializedDeliveryAction, { readonly _tag: "FreshOperationAction" }>
 type FreshWorkflowRoute = Extract<FreshOperationOnlyRoute, { readonly _tag: "FreshWorkflowRoute" }>
@@ -46,10 +39,7 @@ const acquireTaskClaim = Effect.fn("DeliveryAction.acquireTaskClaim")(function* 
   yield* trace.emit(OperationSelected.make({ operation }))
   yield* trace.emit(TaskClaimAcquisitionIntended.make({ operation }))
   const result = yield* interpreter.acquireTaskClaim(operation, lease.recordIntent(action.operationId))
-  if (result._tag === "AuthoritativeTaskClaimAcquired") {
-    yield* trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
-  }
-  return FreshWorkflowActionFact.TaskClaimAcquisitionCompleted({ operation, taskId: step.task.id })
+  yield* trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
 })
 
 const reconcileTaskWorktree = Effect.fn("DeliveryAction.reconcileTaskWorktree")(function* (
@@ -65,18 +55,8 @@ const reconcileTaskWorktree = Effect.fn("DeliveryAction.reconcileTaskWorktree")(
   })
   yield* trace.emit(OperationSelected.make({ operation }))
   const result = yield* interpreter.reconcileTaskWorktree(operation)
-  yield* trace.emit(
-    result._tag === "AuthoritativeTaskWorktreeReady"
-      ? TaskWorktreeReadyTrace.make({ operation, proof: result.proof })
-      : TaskWorktreeReconciliationSimulatedTrace.make({ operation })
-  )
-  return FreshWorkflowActionFact.TaskWorktreeReconciled({ plannedAttempt: step.plannedAttempt, taskId: step.task.id })
+  yield* trace.emit(TaskWorktreeReadyTrace.make({ operation, proof: result.proof }))
 })
-
-const freshWorkflowActionFactProduced = (
-  proposalId: FreshOperationAction["proposal"]["id"],
-  fact: FreshWorkflowActionFact
-) => ({ _tag: "FreshWorkflowActionFactProduced" as const, fact, proposalId })
 
 export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFreshWorkflowOperation")(function* (
   action: FreshOperationAction,
@@ -90,18 +70,12 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
   switch (step._tag) {
     case "ReadCurrentTaskGraph": {
       const operation = makeTrackerGraphObservationOperation(action.operationId, target, [], [step.task.id])
-      const snapshot = yield* executeTrackerGraphRead(operation)
-      return freshWorkflowActionFactProduced(
-        action.proposal.id,
-        FreshWorkflowActionFact.CurrentTaskGraphObserved({
-          operationId: operation.operationId,
-          snapshot,
-          taskId: step.task.id
-        })
-      )
+      yield* executeTrackerGraphRead(operation)
+      return deliveryActionCompleted(action.proposal.id)
     }
     case "AcquireTaskClaim": {
-      return freshWorkflowActionFactProduced(action.proposal.id, yield* acquireTaskClaim(action, step, lease))
+      yield* acquireTaskClaim(action, step, lease)
+      return deliveryActionCompleted(action.proposal.id)
     }
     case "ReadPostClaimGraph": {
       const operation = makeTrackerGraphObservationOperation(
@@ -116,32 +90,19 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
           TrackerExecutionAdmitted.make({ claimOperation: step.claimOperation, observationOperation: operation })
         )
       }
-      return freshWorkflowActionFactProduced(
-        action.proposal.id,
-        FreshWorkflowActionFact.PostClaimGraphObserved({
-          operationId: operation.operationId,
-          snapshot,
-          taskId: step.task.id
-        })
-      )
+      return deliveryActionCompleted(action.proposal.id)
     }
     case "ReadTaskWorkSpecification": {
       const operation = makeTaskWorkSpecificationObservationOperation(action.operationId, target, step.task.id, [
         step.predecessorOperationId
       ])
       yield* trace.emit(OperationSelected.make({ operation }))
-      const specification = yield* interpreter.readTaskWorkSpecification(operation)
-      return freshWorkflowActionFactProduced(
-        action.proposal.id,
-        FreshWorkflowActionFact.TaskWorkSpecificationObserved({
-          operationId: operation.operationId,
-          specification,
-          taskId: step.task.id
-        })
-      )
+      yield* interpreter.readTaskWorkSpecification(operation)
+      return deliveryActionCompleted(action.proposal.id)
     }
     case "ReconcileTaskWorktree": {
-      return freshWorkflowActionFactProduced(action.proposal.id, yield* reconcileTaskWorktree(action, step))
+      yield* reconcileTaskWorktree(action, step)
+      return deliveryActionCompleted(action.proposal.id)
     }
   }
 })
@@ -158,19 +119,7 @@ export const executeFreshAttemptPlanning = Effect.fn("DeliveryAction.executeFres
     predecessorOperationIds: [step.predecessorOperationId]
   })
   yield* trace.emit(OperationSelected.make({ operation }))
-  const result = yield* interpreter.recordTaskAttemptPlan(operation)
-  yield* trace.emit(
-    result._tag === "TaskAttemptPlanRecordAcknowledged"
-      ? TaskAttemptPlanAcknowledged.make({ operation })
-      : TaskAttemptPlanRecordingSimulated.make({ operation })
-  )
-  return {
-    _tag: "FreshWorkflowActionFactProduced" as const,
-    fact: FreshWorkflowActionFact.TaskAttemptPlanRecorded({
-      operationId: operation.operationId,
-      plannedAttempt: action.plannedAttempt,
-      taskId: step.task.id
-    }),
-    proposalId: action.proposal.id
-  }
+  yield* interpreter.recordTaskAttemptPlan(operation)
+  yield* trace.emit(TaskAttemptPlanAcknowledged.make({ operation }))
+  return deliveryActionCompleted(action.proposal.id)
 })

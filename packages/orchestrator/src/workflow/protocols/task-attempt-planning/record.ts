@@ -26,18 +26,10 @@ export const TaskAttemptPlanRecordAcknowledged = Schema.TaggedStruct("TaskAttemp
   plannedAttempt: PlannedTaskAttempt
 })
 
-/** Dry-run selected the plan operation without recording or mutating resources. */
-export const TaskAttemptPlanRecordingSimulated = Schema.TaggedStruct("TaskAttemptPlanRecordingSimulated", {
-  operation: WorkflowOperation.cases.RecordTaskAttemptPlan
-})
-
 /** Records acknowledgement that one immutable planned task attempt is durable. */
 export const TaskAttemptPlanAcknowledged = Schema.TaggedStruct("TaskAttemptPlanAcknowledged", {
   operation: WorkflowOperation.cases.RecordTaskAttemptPlan
 })
 
-export const TaskAttemptPlanRecordingResult = Schema.Union([
-  TaskAttemptPlanRecordAcknowledged,
-  TaskAttemptPlanRecordingSimulated
-])
+export const TaskAttemptPlanRecordingResult = TaskAttemptPlanRecordAcknowledged
 export type TaskAttemptPlanRecordingResult = typeof TaskAttemptPlanRecordingResult.Type

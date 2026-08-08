@@ -6,7 +6,6 @@ import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authoriti
 import {
   AttemptId,
   GitCommitSha,
-  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -87,7 +86,7 @@ const journaledGraph = (
   return TrackerGraphState.cases.GraphEstablished.make({ observation })
 }
 
-const syntheticEvidence = (taskId: TaskId): TicketDeliveryEvidence => {
+const executorResponsibilityEvidence = (taskId: TaskId): TicketDeliveryEvidence => {
   const plannedAttempt = PlannedTaskAttempt.make({
     attemptId: AttemptId.make(`coherent:${taskId}`),
     baseSha: GitCommitSha.make("1".repeat(40)),
@@ -99,11 +98,19 @@ const syntheticEvidence = (taskId: TaskId): TicketDeliveryEvidence => {
     worktree: WorktreeLocator.make(`/worktrees/${taskId}`)
   })
   return {
-    _tag: "SyntheticExecutorFacts",
-    plannedAttempt,
-    report: PlannedAttemptExecutorReport.cases.Running.make({
-      correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
-    })
+    _tag: "ResponsibilityFacts",
+    facts: {
+      _tag: "PlannedAttemptExecutorFreshFacts",
+      disposition: {
+        _tag: "Ready",
+        acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(4) }
+      },
+      responsibility: {
+        _tag: "PlannedAttemptExecutorWorkResponsibility",
+        beganAt: JournalPosition.make(4),
+        plannedAttempt
+      }
+    }
   }
 }
 
@@ -183,7 +190,7 @@ it.effect("emits one consequence per accepted publication without mixed graph po
       get: Effect.succeed(coherentBundle(graphOne, policyOne, [])),
       changes: Stream.fromIterable([
         coherentBundle(graphOne, policyOne, []),
-        coherentBundle(graphTwo, policyTwo, [syntheticEvidence(TaskId.make("B"))])
+        coherentBundle(graphTwo, policyTwo, [executorResponsibilityEvidence(TaskId.make("B"))])
       ])
     }
     const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policyOne), coherent })
@@ -216,6 +223,21 @@ it.effect("emits one consequence per accepted publication without mixed graph po
   })
 )
 
+it.effect("deduplicates one repeated accepted graph publication", () =>
+  Effect.gen(function* () {
+    const graph = journaledGraph("deduplicated-G1", [{ id: "A" }], "deduplicated-read", 7)
+    const bundle = coherentBundle(graph, policy, [])
+    const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
+      get: Effect.succeed(bundle),
+      changes: Stream.fromIterable([bundle, bundle])
+    }
+    const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policy), coherent })
+    const trackerGraph = yield* TrackerGraphRelation.pipe(Effect.provide(layer))
+
+    expect(Array.from(yield* trackerGraph.signal.changes.pipe(Stream.runCollect))).toHaveLength(1)
+  })
+)
+
 it.effect("publishes policy and exact evidence changes for one journaled graph", () =>
   Effect.gen(function* () {
     const graph = journaledGraph("same-graph-publication", [{ id: "A" }], "same-graph-read", 9)
@@ -232,7 +254,7 @@ it.effect("publishes policy and exact evidence changes for one journaled graph",
       changes: Stream.fromIterable([
         coherentBundle(graph, policyOne, []),
         coherentBundle(graph, policyTwo, []),
-        coherentBundle(graph, policyTwo, [syntheticEvidence(TaskId.make("A"))])
+        coherentBundle(graph, policyTwo, [executorResponsibilityEvidence(TaskId.make("A"))])
       ])
     }
     const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policyOne), coherent })

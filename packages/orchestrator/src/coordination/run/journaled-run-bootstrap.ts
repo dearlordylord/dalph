@@ -189,31 +189,18 @@ export const journaledRunBootstrapLayer = (
         return finality
       })
 
-      const startNewRun =
-        (recheckJournalAfterProof: boolean) =>
-        <E, R>(
-          target: Parameters<JournaledRunBootstrapService["fresh"]>[0],
-          initialControlPolicy: Parameters<JournaledRunBootstrapService["fresh"]>[1],
-          runId: RunId,
-          program: Effect.Effect<RunFinalityProof, E, R>
-        ) =>
-          activation.withPermit(
-            Effect.gen(function* () {
-              if (runId !== expectedRunId) {
-                return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
-              }
-              yield* inspectStartupRecovery(runId, lifecycle)
-              yield* lifecycle.beginRun(runId, target, initialControlPolicy)
-              const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-              return yield* finish(
-                runId,
-                yield* runWithJournal(runId, target, initial, "Fresh", recheckJournalAfterProof, program)
-              )
-            })
-          )
-
-      const fresh: JournaledRunBootstrapService["fresh"] = startNewRun(true)
-      const synthetic: JournaledRunBootstrapService["synthetic"] = startNewRun(false)
+      const fresh: JournaledRunBootstrapService["fresh"] = (target, initialControlPolicy, runId, program) =>
+        activation.withPermit(
+          Effect.gen(function* () {
+            if (runId !== expectedRunId) {
+              return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
+            }
+            yield* inspectStartupRecovery(runId, lifecycle)
+            yield* lifecycle.beginRun(runId, target, initialControlPolicy)
+            const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
+            return yield* finish(runId, yield* runWithJournal(runId, target, initial, "Fresh", true, program))
+          })
+        )
 
       const recovered: JournaledRunBootstrapService["recovered"] = (target, program) =>
         activation.withPermit(
@@ -234,6 +221,6 @@ export const journaledRunBootstrapLayer = (
         setTaskWorkCapacity: (input) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.apply(input))
       }
 
-      return JournaledRunBootstrap.of({ fresh, operatorControl, recovered, synthetic })
+      return JournaledRunBootstrap.of({ fresh, operatorControl, recovered })
     })
   )

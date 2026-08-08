@@ -20,25 +20,21 @@ import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
+import { TrackerGraphReader } from "../../authorities/task-tracker/graph-reader.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { InitialControlPolicy } from "../../control/policy.js"
-import {
-  TaskClaimAcquisitionSimulated,
-  WorkflowInterpreter,
-  WorkflowTrace
-} from "../../workflow/interpretation/interpreter.js"
+import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
+import { controlledWorkflowInterpreterLayer } from "../../workflow/interpretation/layers.js"
 import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
-import { TaskAttemptPlanRecordingSimulated } from "../../workflow/protocols/task-attempt-planning/record.js"
-import { TaskWorktreeReconciliationSimulated } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import { freshWorkflowRunId } from "./fresh-run-identity.js"
-import { JournaledRunBootstrap, runRecoveredWorkflow, runSyntheticWorkflowWithBootstrap, runWorkflow } from "./run.js"
-import { runSyntheticWorkflow } from "./synthetic-workflow.js"
+import { JournaledRunBootstrap, runRecoveredWorkflow, runWorkflow } from "./run.js"
+import { runControlledWorkflow } from "./controlled-workflow.js"
 
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
 const programDependencies = Layer.mergeAll(
@@ -47,9 +43,9 @@ const programDependencies = Layer.mergeAll(
   Layer.mock(TaskClaimAcquisitionPlanner, {})
 )
 
-it.effect("hands a fresh Run to the journal bootstrap with the exact identity and flat-delivery program", () =>
+it.effect("hands a fresh Run to the journal bootstrap with the exact identity and ordinary delivery program", () =>
   Effect.gen(function* () {
-    const target = FixtureTarget.make("flat-delivery-fresh")
+    const target = FixtureTarget.make("ordinary-delivery-fresh")
     const runId = yield* freshWorkflowRunId(target)
     const seen: Array<unknown> = []
     const finality = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
@@ -64,8 +60,7 @@ it.effect("hands a fresh Run to the journal bootstrap with the exact identity an
         readTaskWorkCapacity: () => Effect.die("unused"),
         setTaskWorkCapacity: () => Effect.die("unused")
       },
-      recovered: () => Effect.die("unused"),
-      synthetic: () => Effect.die("unused")
+      recovered: () => Effect.die("unused")
     })
 
     expect(
@@ -81,7 +76,7 @@ it.effect("hands a fresh Run to the journal bootstrap with the exact identity an
 
 it.effect("hands recovered execution to the same journal bootstrap boundary", () =>
   Effect.gen(function* () {
-    const target = FixtureTarget.make("flat-delivery-recovered")
+    const target = FixtureTarget.make("ordinary-delivery-recovered")
     const finality = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
     let calls = 0
     const bootstrap = JournaledRunBootstrap.of({
@@ -97,8 +92,7 @@ it.effect("hands recovered execution to the same journal bootstrap boundary", ()
         expect(receivedTarget).toBe(target)
         expect(program).toBeDefined()
         return Effect.succeed(finality)
-      },
-      synthetic: () => Effect.die("unused")
+      }
     })
 
     expect(
@@ -111,46 +105,13 @@ it.effect("hands recovered execution to the same journal bootstrap boundary", ()
   })
 )
 
-it.effect("hands synthetic execution to the flat runtime through the explicit non-durable bootstrap route", () =>
+it.effect("lets the public controlled workflow terminate from its settled current graph", () =>
   Effect.gen(function* () {
-    const target = FixtureTarget.make("flat-delivery-synthetic")
-    const runId = RunId.make("flat-delivery-synthetic-run")
-    const finality = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
-    let calls = 0
-    const bootstrap = JournaledRunBootstrap.of({
-      fresh: () => Effect.die("unused"),
-      operatorControl: {
-        applyControlDirection: () => Effect.die("unused"),
-        applyTaskClaimReacquisition: () => Effect.die("unused"),
-        readTaskWorkCapacity: () => Effect.die("unused"),
-        setTaskWorkCapacity: () => Effect.die("unused")
-      },
-      recovered: () => Effect.die("unused"),
-      synthetic: (receivedTarget, receivedPolicy, receivedRunId, program) => {
-        calls += 1
-        expect([receivedTarget, receivedPolicy, receivedRunId]).toEqual([target, policy, runId])
-        expect(program).toBeDefined()
-        return Effect.succeed(finality)
-      }
-    })
-
-    expect(
-      yield* runSyntheticWorkflowWithBootstrap(target, policy, runId).pipe(
-        Effect.provideService(JournaledRunBootstrap, bootstrap),
-        Effect.provide(programDependencies)
-      )
-    ).toBe(finality)
-    expect(calls).toBe(1)
-  })
-)
-
-it.effect("lets the public synthetic workflow terminate from its settled current graph", () =>
-  Effect.gen(function* () {
-    const projected = projectTrackerSnapshot({ revision: "synthetic-settled", tasks: [] })
-    if (projected._tag === "Invalid") return yield* Effect.die("the empty synthetic graph must be valid")
-    const target = FixtureTarget.make("synthetic-settled-target")
+    const projected = projectTrackerSnapshot({ revision: "controlled-settled", tasks: [] })
+    if (projected._tag === "Invalid") return yield* Effect.die("the empty controlled graph must be valid")
+    const target = FixtureTarget.make("controlled-settled-target")
     const operationOrdinal = yield* Ref.make(0)
-    const finality = yield* runSyntheticWorkflow(target, policy, RunId.make("synthetic-settled-run")).pipe(
+    const finality = yield* runControlledWorkflow(target, policy, RunId.make("controlled-settled-run")).pipe(
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(
@@ -158,7 +119,7 @@ it.effect("lets the public synthetic workflow terminate from its settled current
             OperationIdAllocator.of({
               allocate: () =>
                 Ref.updateAndGet(operationOrdinal, (ordinal) => ordinal + 1).pipe(
-                  Effect.map((ordinal) => OperationId.make(`synthetic-graph-read:${ordinal}`))
+                  Effect.map((ordinal) => OperationId.make(`controlled-graph-read:${ordinal}`))
                 )
             })
           ),
@@ -175,36 +136,36 @@ it.effect("lets the public synthetic workflow terminate from its settled current
   })
 )
 
-it.effect("stops an always-Running synthetic workflow at the shared continuation limit", () =>
+it.effect("stops an always-Running controlled workflow at the shared continuation limit", () =>
   Effect.gen(function* () {
-    const runId = RunId.make("synthetic-running-limit-run")
-    const target = FixtureTarget.make("synthetic-running-limit-target")
+    const runId = RunId.make("controlled-running-limit-run")
+    const target = FixtureTarget.make("controlled-running-limit-target")
     const specification = makeTaskWorkSpecification({
       body: "Keep reporting Running.",
-      taskId: TaskId.make("synthetic-running-task"),
-      title: "Bound synthetic continuation"
+      taskId: TaskId.make("controlled-running-task"),
+      title: "Bound controlled continuation"
     })
     const projected = projectTrackerSnapshot({
-      revision: "synthetic-running-limit",
+      revision: "controlled-running-limit",
       tasks: [{ id: specification.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
     })
     const snapshot = Option.getOrThrow(
       Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
     )
     const plannedAttempt = PlannedTaskAttempt.make({
-      attemptId: AttemptId.make("synthetic-running-attempt"),
+      attemptId: AttemptId.make("controlled-running-attempt"),
       baseSha: GitCommitSha.make("1".repeat(40)),
-      branch: TaskBranchRef.make("refs/heads/dalph/synthetic-running-attempt"),
-      executor: TaskExecutorLocator.make("executor:synthetic-running"),
+      branch: TaskBranchRef.make("refs/heads/dalph/controlled-running-attempt"),
+      executor: TaskExecutorLocator.make("executor:controlled-running"),
       runId,
       taskId: specification.taskId,
       taskRevision: specification.fingerprint,
-      worktree: WorktreeLocator.make("/worktrees/synthetic-running-attempt")
+      worktree: WorktreeLocator.make("/worktrees/controlled-running-attempt")
     })
     const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
     const executorCalls = yield* Ref.make(0)
     const operationIds = yield* Ref.make(0)
-    const failure = yield* runSyntheticWorkflow(target, policy, runId).pipe(
+    const failure = yield* runControlledWorkflow(target, policy, runId).pipe(
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(
@@ -212,7 +173,7 @@ it.effect("stops an always-Running synthetic workflow at the shared continuation
             OperationIdAllocator.of({
               allocate: () =>
                 Ref.getAndUpdate(operationIds, (ordinal) => ordinal + 1).pipe(
-                  Effect.map((ordinal) => OperationId.make(`synthetic-running-operation-${ordinal}`))
+                  Effect.map((ordinal) => OperationId.make(`controlled-running-operation-${ordinal}`))
                 )
             })
           ),
@@ -225,7 +186,7 @@ it.effect("stops an always-Running synthetic workflow at the shared continuation
                     operationId,
                     owner: ClaimOwner.make("dalph"),
                     taskId,
-                    token: ClaimToken.make("synthetic-running-token")
+                    token: ClaimToken.make("controlled-running-token")
                   })
                 )
             })
@@ -234,19 +195,22 @@ it.effect("stops an always-Running synthetic workflow at the shared continuation
             PlannedTaskAttemptPlanner,
             PlannedTaskAttemptPlanner.of({ plan: () => Effect.succeed(plannedAttempt) })
           ),
-          Layer.mock(WorkflowInterpreter, {
-            acquireTaskClaim: (operation) => Effect.succeed(TaskClaimAcquisitionSimulated.make({ operation })),
-            readTaskWorkSpecification: () => Effect.succeed(specification),
-            readTrackerGraph: () => Effect.succeed(snapshot),
-            reconcileTaskWorktree: (operation) =>
-              Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
-            recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation }))
-          }),
+          controlledWorkflowInterpreterLayer.pipe(
+            Layer.provide(
+              Layer.succeed(
+                TrackerGraphReader,
+                TrackerGraphReader.of({
+                  read: () => Effect.succeed(snapshot),
+                  readTaskWorkSpecification: () => Effect.succeed(specification)
+                })
+              )
+            )
+          ),
           Layer.succeed(
             PlannedAttemptExecutor,
             PlannedAttemptExecutor.of({
               project: () => Effect.succeed(Option.none()),
-              requestSuspension: () => Effect.die("synthetic workflow is not paused"),
+              requestSuspension: () => Effect.die("controlled workflow is not paused"),
               startOrContinue: () =>
                 Ref.update(executorCalls, (calls) => calls + 1).pipe(
                   Effect.as(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
@@ -264,7 +228,7 @@ it.effect("stops an always-Running synthetic workflow at the shared continuation
   })
 )
 
-it("contains one literal flat-delivery runtime connection and no former scheduler", () => {
+it("contains one ordinary delivery runtime connection and no former scheduler", () => {
   const source = readFileSync(fileURLToPath(new URL("./run.ts", import.meta.url)), "utf8")
 
   expect(source.match(/\byield\* delivery\b/g)).toHaveLength(1)

@@ -26,7 +26,6 @@ import type {
 import type { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { OperationId } from "../../workflow/identity.js"
-import type { FreshWorkflowActionFact } from "../run/fresh-workflow-fact.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import type {
@@ -75,11 +74,6 @@ export interface DeliveryActionExecutionLease {
 /** Typed semantic outcome; later domain work is always re-derived by the relation. */
 export type DeliveryActionResult =
   | { readonly _tag: "ActionCompleted"; readonly proposalId: DeliveryProposalId }
-  | {
-      readonly _tag: "FreshWorkflowActionFactProduced"
-      readonly fact: FreshWorkflowActionFact
-      readonly proposalId: DeliveryProposalId
-    }
   | {
       readonly _tag: "ExecutorReportPublished"
       readonly plannedAttempt: PlannedTaskAttempt

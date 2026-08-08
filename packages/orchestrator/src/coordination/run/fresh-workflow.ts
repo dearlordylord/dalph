@@ -7,7 +7,6 @@ import type { OperationId } from "../../workflow/identity.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { CurrentDeliveryFrame } from "./current-delivery-frame.js"
-import type { FreshWorkflowActionFact } from "./fresh-workflow-fact.js"
 import { reconstructedTaskGraphFromEvents } from "../reconstruction/graph-knowledge.js"
 import { FreshWorkflowStep, type FreshWorkflowStep as FreshWorkflowStepType } from "../delivery/fresh-workflow-step.js"
 
@@ -190,58 +189,6 @@ const journaledStepFor = (
   return FreshWorkflowStep.ReadCurrentTaskGraph({ predecessorOperationId: latestGraphCoveringTask.operationId, task })
 }
 
-// eslint-disable-next-line complexity -- Accepted non-durable facts derive the same next workflow operation families.
-const syntheticStepFor = (
-  task: Task,
-  facts: ReadonlyArray<FreshWorkflowActionFact>,
-  currentGraphOperationId: OperationId
-): FreshWorkflowStepType | undefined => {
-  const fact = facts.findLast(({ taskId }) => taskId === task.id)
-  if (fact === undefined) {
-    return FreshWorkflowStep.ReadCurrentTaskGraph({ predecessorOperationId: currentGraphOperationId, task })
-  }
-  switch (fact._tag) {
-    case "CurrentTaskGraphObserved":
-      return fact.snapshot.eligibleTasks().some(({ id }) => id === task.id)
-        ? FreshWorkflowStep.AcquireTaskClaim({ predecessorOperationId: fact.operationId, task })
-        : undefined
-    case "TaskClaimAcquisitionCompleted":
-      return FreshWorkflowStep.ReadPostClaimGraph({
-        claimOperation: fact.operation,
-        predecessorOperationId: fact.operation.acquisition.operationId,
-        task
-      })
-    case "PostClaimGraphObserved":
-      /* v8 ignore start -- Maintained dry-run graphs retain the just-claimed eligible task. */
-      return fact.snapshot.eligibleTasks().some(({ id }) => id === task.id)
-        ? FreshWorkflowStep.ReadTaskWorkSpecification({ predecessorOperationId: fact.operationId, task })
-        : undefined
-    /* v8 ignore stop */
-    case "TaskWorkSpecificationObserved":
-      return FreshWorkflowStep.RecordTaskAttemptPlan({
-        predecessorOperationId: fact.operationId,
-        specification: fact.specification,
-        task
-      })
-    case "TaskAttemptPlanRecorded":
-      return FreshWorkflowStep.ReconcileTaskWorktree({
-        plannedAttempt: fact.plannedAttempt,
-        predecessorOperationId: fact.operationId,
-        task
-      })
-    case "TaskWorktreeReconciled":
-      return FreshWorkflowStep.StartPlannedAttemptExecutorWork({ plannedAttempt: fact.plannedAttempt, task })
-    case "PlannedAttemptExecutorWorkReported":
-      return fact.report._tag === "Running"
-        ? FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({
-            acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: fact.ordinal },
-            plannedAttempt: fact.plannedAttempt,
-            task
-          })
-        : undefined
-  }
-}
-
 const responsibilityStillOwnsTask = (
   responsibility: WorkflowResponsibilityEntry,
   records: ReadonlyArray<JournalRecord>,
@@ -281,7 +228,7 @@ export const deriveFreshWorkflowDecisions = (
   recoveredAttemptIds: ReadonlySet<AttemptId> = new Set()
 ): ReadonlyArray<FreshWorkflowDecision> => {
   if (frame.pause.run._tag === "RunPaused") return []
-  const records = frame._tag === "JournaledCurrentDeliveryFrame" ? frame.workflowHistory.records : []
+  const records = frame.workflowHistory.records
   const responsibleTaskIds = new Set(
     frame.responsibility.entries
       .filter((responsibility) => responsibilityStillOwnsTask(responsibility, records, recoveredAttemptIds))
@@ -334,13 +281,7 @@ export const deriveFreshWorkflowDecisions = (
   const decisions = candidateGraph
     .eligibleTasks()
     .filter(({ id }) => currentlyEligibleTaskIds.has(id) && !responsibleTaskIds.has(id) && !pauseCoveredTaskIds.has(id))
-    .flatMap((task) => {
-      const step =
-        frame._tag === "SyntheticCurrentDeliveryFrame"
-          ? syntheticStepFor(task, frame.workflowFacts, frame.currentGraphOperationId)
-          : journaledStepFor(task, records, recoveredAttemptIds)
-      return step === undefined ? [] : [decisionFor(step)]
-    })
+    .map((task) => decisionFor(journaledStepFor(task, records, recoveredAttemptIds)))
   if (decisions.some(({ step }) => step._tag === "ReadCurrentTaskGraph")) {
     return decisions.filter(({ step }) => step._tag === "ReadCurrentTaskGraph")
   }

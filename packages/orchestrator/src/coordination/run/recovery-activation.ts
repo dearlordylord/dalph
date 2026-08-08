@@ -1319,7 +1319,7 @@ export interface RunRecoveryProjectionSnapshot {
 /** Exact shared failures that can prevent reconstruction of descriptive recovery evidence. */
 export type RunRecoveryProjectionError = Effect.Error<ReturnType<typeof readRecoveredProjection>>
 
-/** Read-only reconstructed evidence consumed by the flat delivery relation. */
+/** Read-only reconstructed evidence consumed by delivery. */
 export interface RunRecoveryProjectionSource {
   readonly readDeliveryProjection: Effect.Effect<RunRecoveryProjectionSnapshot, RunRecoveryProjectionError, never>
   readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{
@@ -1333,7 +1333,6 @@ export interface RunRecoveryProjectionSource {
 type RunRecoveryProjectionService =
   | (RunRecoveryProjectionSource & { readonly _tag: "AuthoritativeRunRecoveryProjection"; readonly runId: RunId })
   | (RunRecoveryProjectionSource & { readonly _tag: "JournaledFreshRunProjection"; readonly runId: RunId })
-  | (RunRecoveryProjectionSource & { readonly _tag: "SyntheticFreshOnlyProjection" })
 
 /**
  * Read-only current-run recovery evidence for the descriptive delivery relation.
@@ -1341,19 +1340,6 @@ type RunRecoveryProjectionService =
 export class RunRecoveryProjection extends Context.Service<RunRecoveryProjection, RunRecoveryProjectionService>()(
   "@dalph/RunRecoveryProjection"
 ) {}
-
-/** Explicit fresh-only composition for dry-run and deterministic tests. */
-export const emptyRunRecoveryProjectionLayer = Layer.succeed(
-  RunRecoveryProjection,
-  RunRecoveryProjection.of({
-    _tag: "SyntheticFreshOnlyProjection",
-    readDeliveryProjection: Effect.succeed({
-      evidence: { _tag: "AvailableDeliveryProjectionEvidence", acceptedAt: null, facts: [], integrationWaits: [] },
-      frontier: { explanations: [], transitions: [] }
-    }),
-    reconstructedPlannedAttemptPositions: []
-  })
-)
 
 const recoveryProjectionSnapshot = (
   projection: Effect.Success<ReturnType<typeof readRecoveredProjection>>,

@@ -1,4 +1,3 @@
-import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey } from "@dalph/contracts"
 import { Option } from "effect"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -15,28 +14,6 @@ import type { ExactTicketDeliveryEvidence, TicketDeliveryEvidence } from "./rela
 /** Every operation identity whose journal fact is available to delivery proposal derivation. */
 export const acceptedOperationIdsOf = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> =>
   new Set(records.flatMap(({ event }) => Option.toArray(Option.fromUndefinedOr(acceptedOperationIdOf(event)))))
-
-const syntheticExecutorEvidenceOf = (
-  frame: Extract<CurrentDeliveryFrame, { readonly _tag: "SyntheticCurrentDeliveryFrame" }>
-): ReadonlyArray<TicketDeliveryEvidence> => {
-  const latestByAttempt = new Map<
-    string,
-    Extract<(typeof frame.workflowFacts)[number], { readonly _tag: "PlannedAttemptExecutorWorkReported" }>
-  >()
-  for (const fact of frame.workflowFacts) {
-    if (fact._tag === "PlannedAttemptExecutorWorkReported") {
-      latestByAttempt.set(
-        plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(fact.plannedAttempt)),
-        fact
-      )
-    }
-  }
-  return [...latestByAttempt.values()].map((fact) => ({
-    _tag: "SyntheticExecutorFacts",
-    plannedAttempt: fact.plannedAttempt,
-    report: fact.report
-  }))
-}
 
 export const journaledIntegrationEvidenceOf = (
   records: ReadonlyArray<JournalRecord>
@@ -68,7 +45,5 @@ export const ticketDeliveryEvidenceOf = (
     _tag: "ResponsibilityFacts",
     facts
   }))
-  return frame._tag === "SyntheticCurrentDeliveryFrame"
-    ? [...evidence, ...syntheticExecutorEvidenceOf(frame)]
-    : [...evidence, ...journaledIntegrationEvidenceOf(frame.workflowHistory.records)]
+  return [...evidence, ...journaledIntegrationEvidenceOf(frame.workflowHistory.records)]
 }

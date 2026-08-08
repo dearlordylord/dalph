@@ -195,7 +195,6 @@ export * from "./coordination/reconstruction/history-result.js"
 export * from "./coordination/frontier/recovery-frontier.js"
 export { deriveIntegrationFrontier } from "./coordination/frontier/integration-frontier.js"
 export {
-  emptyRunRecoveryProjectionLayer,
   RunRecoveryProjection,
   type RunRecoveryProjectionError,
   type RunRecoveryProjectionSource
@@ -235,7 +234,6 @@ export {
   TaskAttemptPlanHistoryContradiction,
   TaskAttemptPlanRecordAcknowledged,
   TaskAttemptPlanRecordingResult,
-  TaskAttemptPlanRecordingSimulated,
   TaskAttemptPlanRunContradiction
 } from "./workflow/protocols/task-attempt-planning/record.js"
 export * from "./workflow/protocols/task-attempt-planning/journal-evidence.js"
@@ -307,9 +305,9 @@ export {
   UnclaimedTask
 } from "./authorities/task-tracker/claim-mutation.js"
 export {
+  controlledWorkflowInterpreterLayer,
   deterministicTestWorkflowInterpreterLayer,
-  makeDryRunWorkflowInterpreterLayer,
-  makeLiveWorkflowInterpreterLayer
+  workflowInterpreterLayer
 } from "./workflow/interpretation/layers.js"
 export {
   decodeFreshWorkflowRunIdForDiagnostics,
@@ -325,7 +323,7 @@ export {
   runRecoveredWorkflow,
   runWorkflow
 } from "./coordination/run/run.js"
-export { runSyntheticWorkflow } from "./coordination/run/synthetic-workflow.js"
+export { runControlledWorkflow } from "./coordination/run/controlled-workflow.js"
 export {
   journaledRunBootstrapLayer,
   type JournaledRuntimeLayerInput
@@ -408,18 +406,14 @@ export {
   AuthoritativeTaskClaimAcquired,
   observePlannedAttemptWorktreeThrough,
   observeTargetLineageThrough,
-  TaskClaimAcquisitionSimulated,
   TraceItem,
   WorkflowInterpreter,
   WorkflowTrace
 } from "./workflow/interpretation/interpreter.js"
 export {
   AuthoritativeTaskWorktreeReady,
-  TaskWorktreeExecutionModeContradiction,
   TaskWorktreeHistoryContradiction,
-  TaskWorktreeReadyTrace,
-  TaskWorktreeReconciliationSimulated,
-  TaskWorktreeReconciliationSimulatedTrace
+  TaskWorktreeReadyTrace
 } from "./workflow/protocols/worktree-reconciliation/protocol.js"
 export {
   causalGraphProjection,

@@ -400,24 +400,6 @@ describe("#181 ticket-delivery positive and negative space", () => {
     )
   })
 
-  it("removes a synthetic Completed terminal after the complete graph establishes success", () => {
-    const taskA = TaskId.make("A")
-    const attempt = plannedAttempt(taskA)
-    const evidence: TicketDeliveryEvidence = {
-      _tag: "SyntheticExecutorFacts",
-      plannedAttempt: attempt,
-      report: PlannedAttemptExecutorReport.cases.Terminal.make({
-        correlation: { attemptId: attempt.attemptId, runId: attempt.runId },
-        result: { _tag: "Completed" }
-      })
-    }
-
-    expect(project([], 1, [evidence]).deliveries.map(({ taskId }) => taskId)).toEqual([taskA])
-    expect(project([task("A", TaskLifecycle.cases.CompletedSuccessfully.make({}))], 1, [evidence]).deliveries).toEqual(
-      []
-    )
-  })
-
   it("lets a settled exact operation end while current graph selection remains descriptive", () => {
     const taskA = TaskId.make("A")
     const claim = exactClaimEvidence(taskA)

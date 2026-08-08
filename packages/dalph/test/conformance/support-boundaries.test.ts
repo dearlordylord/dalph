@@ -22,7 +22,6 @@ import {
   GitWorktree,
   gitWorktreeTestLayer,
   JournalBoundaryDecodeIssue,
-  makeDryRunWorkflowInterpreterLayer,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTargetLineageObservationOperation,
@@ -108,7 +107,7 @@ it.effect("records tracker test reads and replaces the authoritative snapshot", 
   }).pipe(Effect.provide(trackerGraphReaderTestLayer(firstSnapshot)))
 )
 
-it.effect("interprets live-claim and dry-run generic operations", () =>
+it.effect("substitutes controlled Layers without changing public delivery values", () =>
   Effect.gen(function* () {
     const task = firstSnapshot.eligibleTasks()[0]
     if (task === undefined) return yield* Effect.die("missing eligible task")
@@ -155,20 +154,18 @@ it.effect("interprets live-claim and dry-run generic operations", () =>
     const live = yield* WorkflowInterpreter
     expect((yield* live.readTrackerGraph(graph)).eligibleTasks()).toHaveLength(1)
     expect((yield* live.acquireTaskClaim(claim))._tag).toBe("AuthoritativeTaskClaimAcquired")
-    expect((yield* live.recordTaskAttemptPlan(plan))._tag).toBe("TaskAttemptPlanRecordingSimulated")
-    expect((yield* live.reconcileTaskWorktree(worktree))._tag).toBe("TaskWorktreeReconciliationSimulated")
-    expect((yield* live.readTaskWorktree(worktreeRead))._tag).toBe("PlannedAttemptWorktreeObservationSimulated")
-    expect((yield* live.readTargetLineage(targetLineageRead))._tag).toBe("TargetLineageObservationSimulated")
+    expect((yield* live.recordTaskAttemptPlan(plan))._tag).toBe("TaskAttemptPlanRecordAcknowledged")
+    expect((yield* live.reconcileTaskWorktree(worktree))._tag).toBe("AuthoritativeTaskWorktreeReady")
+    expect((yield* live.readTaskWorktree(worktreeRead))._tag).toBe("AuthoritativePlannedAttemptWorktreeObserved")
+    expect((yield* live.readTargetLineage(targetLineageRead))._tag).toBe("AuthoritativeTargetLineageObserved")
 
     const dry = yield* WorkflowInterpreter.pipe(
-      Effect.provide(
-        makeDryRunWorkflowInterpreterLayer().pipe(Layer.provide(trackerGraphReaderTestLayer(firstSnapshot)))
-      )
+      Effect.provide(dryRunWorkflowInterpreterLayer.pipe(Layer.provide(trackerGraphReaderTestLayer(firstSnapshot))))
     )
-    expect((yield* dry.acquireTaskClaim(claim))._tag).toBe("TaskClaimAcquisitionSimulated")
-    expect((yield* dry.readTaskWorktree(worktreeRead))._tag).toBe("PlannedAttemptWorktreeObservationSimulated")
-    expect((yield* dry.readTargetLineage(targetLineageRead))._tag).toBe("TargetLineageObservationSimulated")
-    expect((yield* dry.recordTaskAttemptPlan(plan))._tag).toBe("TaskAttemptPlanRecordingSimulated")
+    expect((yield* dry.acquireTaskClaim(claim))._tag).toBe("AuthoritativeTaskClaimAcquired")
+    expect((yield* dry.readTaskWorktree(worktreeRead))._tag).toBe("AuthoritativePlannedAttemptWorktreeObserved")
+    expect((yield* dry.readTargetLineage(targetLineageRead))._tag).toBe("AuthoritativeTargetLineageObserved")
+    expect((yield* dry.recordTaskAttemptPlan(plan))._tag).toBe("TaskAttemptPlanRecordAcknowledged")
   }).pipe(
     Effect.provide(
       deterministicPlannedTaskAttemptLayer({

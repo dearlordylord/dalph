@@ -24,14 +24,9 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
-import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import {
-  TaskClaimAcquisitionSimulated,
-  WorkflowInterpreter,
-  WorkflowTrace
-} from "../../workflow/interpretation/interpreter.js"
+import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { InRunJournal } from "../../workflow-journal/store.js"
 import {
   makeTargetLineageObservationOperation,
@@ -54,8 +49,6 @@ import {
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
-import { TaskAttemptPlanRecordingSimulated } from "../../workflow/protocols/task-attempt-planning/record.js"
-import { TaskWorktreeReconciliationSimulated } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import { deliveryProposalsOf } from "./delivery-proposal.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
@@ -69,7 +62,7 @@ import type {
 } from "./delivery-action-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
 import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
-import { executeFreshAttemptPlanning, executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
+import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executePlannedAttemptTransition } from "./planned-attempt-delivery-action-adapter.js"
 import { liveDeliveryActionExecutorLayer, makeLiveDeliveryActionExecutor } from "./live-delivery-action-executor.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
@@ -116,26 +109,19 @@ const activeClaim = ActiveTaskClaim.make({
 })
 const responsibilityBeganAt = JournalPosition.make(18)
 
-type FreshOperationProposal = Extract<
-  FreshIdentityDeliveryProposal,
-  { readonly actionIdentity: { readonly _tag: "FreshOperationIdRequired" } }
->
-type FreshAttemptProposal = Extract<
-  FreshIdentityDeliveryProposal,
-  { readonly actionIdentity: { readonly _tag: "FreshOperationAndAttemptIdsRequired" } }
->
-
 const isIdentityFreeProposal = (proposal: DeliveryActionProposal): proposal is IdentityFreeDeliveryProposal =>
   proposal.actionIdentity._tag === "NoWorkflowOperationIdentity"
 
 const isAcceptedIdentityProposal = (proposal: DeliveryActionProposal): proposal is AcceptedIdentityDeliveryProposal =>
   proposal.actionIdentity._tag === "ExistingOperationId"
 
+type FreshOperationProposal = Extract<
+  FreshIdentityDeliveryProposal,
+  { readonly actionIdentity: { readonly _tag: "FreshOperationIdRequired" } }
+>
+
 const isFreshOperationProposal = (proposal: DeliveryActionProposal): proposal is FreshOperationProposal =>
   proposal.actionIdentity._tag === "FreshOperationIdRequired"
-
-const isFreshAttemptProposal = (proposal: DeliveryActionProposal): proposal is FreshAttemptProposal =>
-  proposal.actionIdentity._tag === "FreshOperationAndAttemptIdsRequired"
 
 const proposalsFor = (transition: Transition, acceptedOperationIds: ReadonlySet<OperationId> = new Set()) => {
   const result = deliveryProposalsOf({
@@ -535,126 +521,74 @@ describe("delivery proposal route matrix", () => {
     })
   )
 
-  effectIt.effect("emits the alternative dry outcomes from every fresh adapter branch", () =>
+  effectIt.effect("does not admit executor work after an ordinary post-claim read makes the task ineligible", () =>
     Effect.gen(function* () {
-      const projected = projectTrackerSnapshot({ revision: "fresh-adapter-empty", tasks: [] })
-      if (projected._tag === "Invalid") return yield* Effect.die("fresh adapter graph must be valid")
-      const interpreter = WorkflowInterpreter.of({
-        acquireTaskClaim: (operation) => Effect.succeed(TaskClaimAcquisitionSimulated.make({ operation })),
-        readTaskClaim: () => Effect.die("unused readTaskClaim"),
-        readTaskWorktree: () => Effect.die("unused readTaskWorktree"),
-        readTargetLineage: () => Effect.die("unused readTargetLineage"),
-        readTrackerGraph: () => Effect.succeed(projected.snapshot),
-        readTaskWorkSpecification: () => Effect.die("unused readTaskWorkSpecification"),
-        reconcileTaskWorktree: (operation) => Effect.succeed(TaskWorktreeReconciliationSimulated.make({ operation })),
-        recordTaskAttemptPlan: (operation) => Effect.succeed(TaskAttemptPlanRecordingSimulated.make({ operation })),
-        releaseTaskClaim: () => Effect.die("unused releaseTaskClaim")
-      })
-      const withServices = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        effect.pipe(
-          Effect.provideService(
-            TaskClaimAcquisitionPlanner,
-            TaskClaimAcquisitionPlanner.of({
-              plan: (operationId, selectedTaskId) =>
-                Effect.succeed({
-                  operationId,
-                  owner: ClaimOwner.make("dalph"),
-                  taskId: selectedTaskId,
-                  token: ClaimToken.make(`fresh-adapter:${selectedTaskId}`)
-                })
-            })
-          ),
-          Effect.provideService(WorkflowInterpreter, interpreter),
-          Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
-        )
-      const freshProposal = (step: FreshWorkflowStep, transition: Transition) => {
-        const derived = deliveryProposalsOf({
-          acceptedOperationIds: new Set<OperationId>(),
-          fresh: [{ step, transition }],
-          runId,
-          transitions: [transition]
-        }).ticketDelivery[0]
-        if (derived === undefined) throw new Error(`missing fresh proposal for ${step._tag}`)
-        return derived
-      }
-      const executeFreshStep = (step: FreshWorkflowStep, transition: Transition) => {
-        const proposal = freshProposal(step, transition)
-        if (!isFreshOperationProposal(proposal) || proposal.route._tag !== "FreshWorkflowRoute") {
-          return Effect.die(`fresh operation route required for ${step._tag}`)
-        }
-        return withServices(
-          executeFreshWorkflowOperation(
-            { _tag: "FreshOperationAction", operationId: OperationId.make(`fresh:${step._tag}`), proposal },
-            proposal.route,
-            inertLease,
-            target
-          )
-        )
-      }
-
-      const claimStep = FreshWorkflowStep.AcquireTaskClaim({
-        predecessorOperationId: OperationId.make("fresh-claim-predecessor"),
-        task
-      })
-      yield* executeFreshStep(
-        claimStep,
-        RunnableFrontierTransition.CommitFreshTaskClaimIntent({ taskId, taskRevision: plannedAttempt.taskRevision })
-      )
-
+      const projected = projectTrackerSnapshot({ revision: "post-claim-ineligible", tasks: [] })
+      if (projected._tag === "Invalid") return yield* Effect.die("the empty tracker graph must be valid")
       const claimOperation = makeTaskClaimAcquisitionOperation({
         acquisition: {
-          operationId: OperationId.make("fresh-post-claim"),
+          operationId: OperationId.make("post-claim-ineligible-claim"),
           owner: ClaimOwner.make("dalph"),
           taskId,
-          token: ClaimToken.make("fresh-post-claim-token")
+          token: ClaimToken.make("post-claim-ineligible-token")
         },
         predecessorOperationIds: []
       })
-      const postClaimStep = FreshWorkflowStep.ReadPostClaimGraph({
+      const step = FreshWorkflowStep.ReadPostClaimGraph({
         claimOperation,
         predecessorOperationId: claimOperation.acquisition.operationId,
         task
       })
-      yield* executeFreshStep(
-        postClaimStep,
-        RunnableFrontierTransition.ContinueFreshWorkflowOperation({
-          operationId: claimOperation.acquisition.operationId,
-          taskId
-        })
-      )
-
-      const reconcilePredecessor = OperationId.make("fresh-reconcile-predecessor")
-      const reconcileStep = FreshWorkflowStep.ReconcileTaskWorktree({
-        plannedAttempt,
-        predecessorOperationId: reconcilePredecessor,
-        task
+      const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+        operationId: claimOperation.acquisition.operationId,
+        taskId
       })
-      yield* executeFreshStep(
-        reconcileStep,
-        RunnableFrontierTransition.ContinueFreshWorkflowOperation({ operationId: reconcilePredecessor, taskId })
-      )
-
-      const planPredecessor = OperationId.make("fresh-plan-predecessor")
-      const planStep = FreshWorkflowStep.RecordTaskAttemptPlan({
-        predecessorOperationId: planPredecessor,
-        specification: makeTaskWorkSpecification({ body: "Implement A", taskId, title: "A" }),
-        task
-      })
-      const planProposal = freshProposal(
-        planStep,
-        RunnableFrontierTransition.ContinueFreshWorkflowOperation({ operationId: planPredecessor, taskId })
-      )
-      if (!isFreshAttemptProposal(planProposal)) {
-        return yield* Effect.die("fresh attempt route required")
+      const proposal = deliveryProposalsOf({
+        acceptedOperationIds: new Set<OperationId>(),
+        fresh: [{ step, transition }],
+        runId,
+        transitions: [transition]
+      }).ticketDelivery[0]
+      if (
+        proposal === undefined ||
+        !isFreshOperationProposal(proposal) ||
+        proposal.route._tag !== "FreshWorkflowRoute"
+      ) {
+        return yield* Effect.die("a fresh post-claim route must be derivable")
       }
-      yield* withServices(
-        executeFreshAttemptPlanning({
-          _tag: "FreshAttemptAction",
-          operationId: OperationId.make("fresh:plan"),
-          plannedAttempt,
-          proposal: planProposal
-        })
+      const traceTags = yield* Ref.make<ReadonlyArray<string>>([])
+      const result = yield* executeFreshWorkflowOperation(
+        { _tag: "FreshOperationAction", operationId: OperationId.make("post-claim-ineligible-read"), proposal },
+        proposal.route,
+        inertLease,
+        target
+      ).pipe(
+        Effect.provideService(
+          WorkflowInterpreter,
+          WorkflowInterpreter.of({
+            acquireTaskClaim: () => Effect.die("unused claim acquisition"),
+            readTaskClaim: () => Effect.die("unused claim read"),
+            readTaskWorktree: () => Effect.die("unused worktree read"),
+            readTargetLineage: () => Effect.die("unused lineage read"),
+            readTrackerGraph: () => Effect.succeed(projected.snapshot),
+            readTaskWorkSpecification: () => Effect.die("unused specification read"),
+            reconcileTaskWorktree: () => Effect.die("unused worktree reconciliation"),
+            recordTaskAttemptPlan: () => Effect.die("unused attempt planning"),
+            releaseTaskClaim: () => Effect.die("unused claim release")
+          })
+        ),
+        Effect.provideService(
+          WorkflowTrace,
+          WorkflowTrace.of({ emit: (item) => Ref.update(traceTags, (current) => [...current, item._tag]) })
+        ),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unused claim planning") })
+        )
       )
+
+      expect(result).toEqual({ _tag: "ActionCompleted", proposalId: proposal.id })
+      expect(yield* Ref.get(traceTags)).not.toContain("TrackerExecutionAdmitted")
     })
   )
 

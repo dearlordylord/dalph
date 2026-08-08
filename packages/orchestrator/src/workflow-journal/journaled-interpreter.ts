@@ -95,26 +95,6 @@ const journaledTrackerGraphRead = (
     )
   })
 
-/** Journals graph reads with no explicit decision-sensitive task subjects; preserves explicitly covered synthetic reads. */
-export const journaledImplicitCoverageTrackerGraphInterpreterLayer = <E, R>(
-  runId: RunId,
-  interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>
-) =>
-  Layer.effect(
-    WorkflowInterpreter,
-    Effect.gen(function* () {
-      const interpreter = yield* WorkflowInterpreter
-      const journal = yield* InRunJournal
-      return WorkflowInterpreter.of({
-        ...interpreter,
-        readTrackerGraph: (operation) =>
-          operation.readShape.explicitlyCoveredTaskIds.length === 0
-            ? journaledTrackerGraphRead(runId, interpreter, journal)(operation)
-            : interpreter.readTrackerGraph(operation)
-      })
-    })
-  ).pipe(Layer.provide(interpreterLayer))
-
 /** Adds durable intent and outcomes to the generic pre-executor operations. */
 export const journaledWorkflowInterpreterLayer = <E, R>(
   runId: RunId,
@@ -160,13 +140,11 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
                 .pipe(Effect.andThen(Effect.fail(failure)))
             )
           )
-        if (result._tag === "AuthoritativeTaskClaimAcquired") {
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(operation.acquisition.operationId),
-            TaskClaimAcquiredEvent.make({ claim: result.claim, version: workflowJournalEventVersion })
-          )
-        }
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(operation.acquisition.operationId),
+          TaskClaimAcquiredEvent.make({ claim: result.claim, version: workflowJournalEventVersion })
+        )
         return result
       })
 
@@ -191,17 +169,12 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         const observation =
           result._tag === "AuthoritativeTaskClaimObserved"
             ? makeFocusedTaskClaimFactsObserved(operation, result.observation)
-            : result._tag === "TaskClaimObservationUnreadable"
-              ? makeFocusedTaskClaimFactsUnreadable(operation)
-              : /* v8 ignore next -- @preserve Journaled live interpreters never return dry-run simulation values. */
-                undefined
-        if (observation !== undefined) {
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(operation.operationId),
-            taskTrackerFactsObservedEvent(operation.operationId, observation)
-          )
-        }
+            : makeFocusedTaskClaimFactsUnreadable(operation)
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(operation.operationId),
+          taskTrackerFactsObservedEvent(operation.operationId, observation)
+        )
         return result
       })
 
@@ -225,19 +198,16 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           return AuthoritativePlannedAttemptWorktreeObserved.make({ observation: existing.observation })
         }
         const result = yield* interpreter.readTaskWorktree(operation)
-        /* v8 ignore else -- @preserve The typed interpreter result has only the authoritative success variant. */
-        if (result._tag === "AuthoritativePlannedAttemptWorktreeObserved") {
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(operation.operationId),
-            PlannedAttemptWorktreeObservedEvent.make({
-              observation: result.observation,
-              occurrenceClassification: "NonActionOccurrence",
-              operationId: operation.operationId,
-              version: workflowJournalEventVersion
-            })
-          )
-        }
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(operation.operationId),
+          PlannedAttemptWorktreeObservedEvent.make({
+            observation: result.observation,
+            occurrenceClassification: "NonActionOccurrence",
+            operationId: operation.operationId,
+            version: workflowJournalEventVersion
+          })
+        )
         return result
       })
 
@@ -261,20 +231,17 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           return AuthoritativeTargetLineageObserved.make({ observation: existing.observation })
         }
         const result = yield* interpreter.readTargetLineage(operation)
-        /* v8 ignore else -- @preserve The typed interpreter result has only the authoritative success variant. */
-        if (result._tag === "AuthoritativeTargetLineageObserved") {
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(operation.operationId),
-            TargetLineageObservedEvent.make({
-              observation: result.observation,
-              occurrenceClassification: "NonActionOccurrence",
-              operationId: operation.operationId,
-              plannedAttempt: operation.plannedAttempt,
-              version: workflowJournalEventVersion
-            })
-          )
-        }
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(operation.operationId),
+          TargetLineageObservedEvent.make({
+            observation: result.observation,
+            occurrenceClassification: "NonActionOccurrence",
+            operationId: operation.operationId,
+            plannedAttempt: operation.plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        )
         return result
       })
 
@@ -338,14 +305,11 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         )
         if (existing) return AuthoritativeTaskClaimReleased.make({ release: operation.release })
         const result = yield* interpreter.releaseTaskClaim(operation)
-        /* v8 ignore next -- @preserve Journaled live interpreters never return dry-run release simulation values. */
-        if (result._tag === "AuthoritativeTaskClaimReleased") {
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(operation.release.operationId),
-            TaskClaimReleasedEvent.make({ release: operation.release, version: workflowJournalEventVersion })
-          )
-        }
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(operation.release.operationId),
+          TaskClaimReleasedEvent.make({ release: operation.release, version: workflowJournalEventVersion })
+        )
         return result
       })
 
@@ -390,17 +354,15 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           TaskWorktreeReconciliationIntendedEvent.make({ operation, version: workflowJournalEventVersion })
         )
         const result = yield* interpreter.reconcileTaskWorktree(operation)
-        if (result._tag === "AuthoritativeTaskWorktreeReady") {
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(operation.operationId),
-            TaskWorktreeReadyEvent.make({
-              operationId: operation.operationId,
-              proof: result.proof,
-              version: workflowJournalEventVersion
-            })
-          )
-        }
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(operation.operationId),
+          TaskWorktreeReadyEvent.make({
+            operationId: operation.operationId,
+            proof: result.proof,
+            version: workflowJournalEventVersion
+          })
+        )
         return result
       })
 

@@ -634,7 +634,7 @@ const recordsFor = (cassette: RecordedCassetteType): ReadonlyArray<JournalRecord
     }
   })
 
-/** Folds recorded meanings as workflow history; it never drives fake providers. */
+/** Folds recorded meanings as workflow history; it never drives boundary implementations. */
 export const foldRecordedCassette = (cassette: RecordedCassetteType) =>
   reduceWorkflowJournalHistory(cassette.runId, recordsFor(cassette))
 

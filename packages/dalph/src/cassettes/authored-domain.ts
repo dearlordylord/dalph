@@ -181,7 +181,7 @@ const RunCoordinatorFields = {
  * released compatibility promise.
  */
 export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
-  /** Harness lifecycle: dispose one coordinator and its same-process fake without journaling an occurrence. */
+  /** Harness lifecycle: dispose one coordinator and its same-process executor session without journaling an occurrence. */
   CoordinatorProcessDies: {},
   DalphSelects: { operation: AuthoredCassetteDecision },
   /** Task-work assertions with optional complete lower-level evidence projections. */
@@ -346,7 +346,7 @@ const startingFactsAreConsistent = Schema.makeFilter((cassette: typeof AuthoredS
     uniqueClaims &&
     specificationsMatch
     ? undefined
-    : "authored starting facts must agree with their first controlled returns and name claims/specifications once"
+    : "authored starting facts must agree with their first boundary returns and name claims/specifications once"
 })
 
 const behaviorAssertionsAreConsistent = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
