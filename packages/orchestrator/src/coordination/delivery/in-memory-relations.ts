@@ -12,7 +12,6 @@ import {
   DeliveryRuntimeAssembly,
   DeliverySettlementProjection,
   makeDeliveryReflection,
-  makeDeliverySettlements,
   mapCurrentSignal,
   TicketDeliveryProjection,
   TrackerGraphRelation,
@@ -27,7 +26,7 @@ import {
   type TrackerGraphActionProposal,
   zipCurrentSignals
 } from "./relations.js"
-import { boundedParallelTicketsOf, ticketDeliveriesOf } from "./ticket-delivery-projection.js"
+import { boundedParallelTicketsOf, deliverySettlementsOf, ticketDeliveriesOf } from "./ticket-delivery-projection.js"
 import type { DeliveryProposalContributions } from "./delivery-proposal.js"
 
 export interface DeliveryRelationsLayerInput {
@@ -163,7 +162,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     DeliverySettlementProjection,
     DeliverySettlementProjection.of({
       of: (relation) => ({
-        current: mapCurrentSignal(relation.current, (deliveries) => makeDeliverySettlements(deliveries, [])),
+        current: mapCurrentSignal(relation.current, deliverySettlementsOf),
         proposalContributions: relation.proposalContributions,
         proposedActions: mapCurrentSignal(
           relation.proposalContributions,

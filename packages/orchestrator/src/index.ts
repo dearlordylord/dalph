@@ -232,6 +232,10 @@ export * from "./workflow/protocols/target-promotion/events.js"
 export * from "./workflow/protocols/target-promotion/protocol.js"
 export * from "./workflow/protocols/target-promotion/runtime.js"
 export { TargetPromotionRuntimeUnavailable } from "./coordination/delivery/target-promotion-boundary.js"
+export * from "./workflow/protocols/integration-finality/events.js"
+export * from "./workflow/protocols/integration-finality/protocol.js"
+export * from "./workflow/protocols/integration-finality/history.js"
+export * from "./workflow/protocols/integration-finality/state.js"
 export * from "./coordination/run/recovery-authority.js"
 export * from "./coordination/frontier/frontier.js"
 export {
@@ -340,6 +344,50 @@ export {
   type JournaledRuntimeLayerInput
 } from "./coordination/run/journaled-run-bootstrap.js"
 export { IntegrationCandidateBoundaryUnavailable } from "./coordination/delivery/integration-candidate-boundary.js"
+export { IntegrationFinalityRuntimeUnavailable } from "./coordination/delivery/integration-finality-boundary.js"
+export {
+  CompletionClaimBoundary,
+  CompletionClaimDeletedEvent,
+  CompletionClaimDeletionAttemptIntendedEvent,
+  CompletionClaimDeletionFailure,
+  CompletionClaimDeletionIntendedEvent,
+  CompletionClaimDeletionRequest,
+  CompletionClaimOwnershipConflict,
+  CompletionClaimReadFailure,
+  CompletionClaimReplacedEvent,
+  CompletionClaimReplacementAttemptIntendedEvent,
+  CompletionClaimReplacementFailure,
+  CompletionClaimReplacementIntendedEvent,
+  CompletionClaimReplacementRequest,
+  CompletionClaimRequestOrdinal,
+  CompletionTaskClaim,
+  FreshCompletedTaskObservation,
+  IntegrationFinalitySettledEvent,
+  completionClaimDeletionOperationIdFor,
+  completionClaimDeletionRequestFor,
+  completionClaimReplacementOperationIdFor,
+  completionClaimReplacementRequestFor,
+  completionClaimRequestLimit,
+  completionTaskClaimEquals,
+  controlledCompletionClaimBoundaryLayerFrom,
+  type CompletionClaimBoundaryService
+} from "./workflow/protocols/integration-finality/events.js"
+export {
+  CompletionClaimDidNotConverge,
+  CompletionClaimPremiseContradiction,
+  CompletionClaimPromotionRequired,
+  CompletionClaimReplacementRequired,
+  FreshTrackerSuccessRequired,
+  runCompletionClaimDeletionProtocol,
+  runCompletionClaimReplacementProtocol
+} from "./workflow/protocols/integration-finality/protocol.js"
+export {
+  deriveIntegrationFinalityStateFor,
+  IntegrationFinalityState,
+  latestFreshCompletedTaskObservationFor
+} from "./workflow/protocols/integration-finality/state.js"
+export { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "./coordination/reconstruction/state.js"
+export { authorizedClaimForAttempt, causalClaimForAttempt } from "./workflow/claim-authority-history.js"
 export {
   StartupRecoveryBlocked,
   StartupRecoveryIssue,

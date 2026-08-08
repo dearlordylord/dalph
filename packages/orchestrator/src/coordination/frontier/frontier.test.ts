@@ -191,6 +191,28 @@ it("keeps delivery active for a non-terminal wait but accepts an externally sett
   ).toEqual({ _tag: "RunMayTerminate" })
 })
 
+it("does not terminate an empty frontier while completion settlement is pending", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  const state = WorkflowResponsibilityState.make({ entries: [responsibility] })
+
+  expect(
+    deriveRunFinalityDecision(
+      {
+        explanations: [
+          {
+            _tag: "IntegrationFinalityTrackerSuccessWait",
+            plannedAttempt: responsibility.plannedAttempt,
+            wakeCondition: "TaskTrackerFactsObserved"
+          }
+        ],
+        transitions: []
+      },
+      state,
+      true
+    )
+  ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+})
+
 it("keeps independent fresh work runnable beside each local constraint", () => {
   const responsibility = operationResponsibilityFor(taskA)
   const constraints = [

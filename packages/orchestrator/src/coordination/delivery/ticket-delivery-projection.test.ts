@@ -37,10 +37,14 @@ import {
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import {
   boundedParallelTicketsOf,
+  deliverySettlementsOf,
   frontierOf,
   selectedTicketIds,
   ticketDeliveriesOf
 } from "./ticket-delivery-projection.js"
+import { IntegrationFinalitySettledEvent } from "../../workflow/protocols/integration-finality/events.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 
 const task = (
   id: string,
@@ -148,6 +152,31 @@ const exactWorktreeEvidence = (taskId: TaskId): ExactTicketDeliveryEvidence => (
 })
 
 describe("#181 graph and bounded projections", () => {
+  it("retains one exact task settlement without an outstanding workflow obligation", () => {
+    const fixture = integrationFinalityFixture
+    const settlement = IntegrationFinalitySettledEvent.make({
+      claim: fixture.claim,
+      deletionOperationId: OperationId.make("integration-finality-deletion"),
+      replacementOperationId: OperationId.make("integration-finality-replacement"),
+      successObservation: fixture.successObservation,
+      version: workflowJournalEventVersion
+    })
+
+    const result = project([task(fixture.taskId, TaskLifecycle.cases.CompletedSuccessfully.make({}))], 1, [
+      { _tag: "IntegrationFinalitySettlement", settlement }
+    ])
+
+    expect(result.deliveries).toHaveLength(1)
+    expect(result.deliveries[0]).toMatchObject({
+      obligations: [],
+      standings: [{ _tag: "IntegrationFinalitySettled" }],
+      taskId: fixture.taskId
+    })
+    expect(deliverySettlementsOf(result).settlements).toMatchObject([
+      { _tag: "DeliverySettlement", attemptId: fixture.plannedAttempt.attemptId, taskId: fixture.taskId }
+    ])
+  })
+
   it("keeps graph and policy in one publication value", () => {
     const currentGraph = graph([task("A")], "stage-graph")
     const currentPolicy = policy(1)

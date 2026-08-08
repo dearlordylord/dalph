@@ -1,4 +1,4 @@
-import { Option, Schema } from "effect"
+import { Option } from "effect"
 import {
   type AttemptId,
   type IntegrationTarget,
@@ -21,9 +21,9 @@ import {
   RunnableFrontierTransition
 } from "./frontier.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import type { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import {
   deriveConstructedIntegrationCandidateOccurrence,
   deriveIntegrationCandidateConstruction,
@@ -31,35 +31,18 @@ import {
   type CandidateContinuationLimit
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import {
-  IntegrationCandidateConstructionJournalEvent,
-  integrationCandidateConstructionEventCorrelation,
-  integrationCandidateCorrelationEquals
-} from "../../workflow/protocols/integration-candidate-construction/events.js"
-import {
   type TargetVerificationCandidate,
   type TargetVerificationPlan
 } from "../../workflow/protocols/target-verification/events.js"
 import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
+import {
+  integrationFinalityExplanationFor,
+  integrationFinalityTransitionsFor
+} from "./integration-finality-frontier.js"
+import { acceptedCandidateProgressAt } from "./integration-candidate-progress.js"
+export { integrationFinalityTransitionsFor } from "./integration-finality-frontier.js"
 export { integrationDeliveryWaitsOf, type IntegrationDeliveryWait } from "./integration-delivery-waits.js"
-
-const acceptedCandidateProgressAt = (
-  records: ReadonlyArray<JournalRecord>,
-  responsibility: StartedIntegrationResponsibility
-): JournalPosition | null => {
-  const intent = records.findLast(
-    ({ event }) =>
-      event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
-  )?.event
-  if (intent?._tag !== "IntegrationCandidateConstructionIntended") return null
-  const isCandidateEvent = Schema.is(IntegrationCandidateConstructionJournalEvent)
-  const relevant = records.findLast(
-    ({ event }) =>
-      isCandidateEvent(event) &&
-      integrationCandidateCorrelationEquals(integrationCandidateConstructionEventCorrelation(event), intent.correlation)
-  )
-  return Option.getOrThrow(Option.fromUndefinedOr(relevant)).position
-}
 
 export interface IntegrationFrontierRuntimeFacts {
   /** Tasks covered by a complete graph observation committed in this activation. */
@@ -73,6 +56,8 @@ export interface IntegrationFrontierRuntimeFacts {
   readonly targetVerificationPlan?: Option.Option<TargetVerificationPlan>
   readonly targetPromotionConfigured?: boolean
   readonly taskClaimAuthorityByAttemptId: ReadonlyMap<AttemptId, CurrentTaskClaimAuthority>
+  readonly activeClaimByAttemptId?: ReadonlyMap<AttemptId, ActiveTaskClaim>
+  readonly integrationFinalityConfigured?: boolean
 }
 
 const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {
@@ -157,6 +142,12 @@ export const deriveIntegrationFrontier = (
     candidate === undefined || verification?._tag !== "VerificationPassed"
       ? undefined
       : deriveTargetPromotionStateFor(runState.workflowHistory.records, candidate, verification)
+  const succeededPromotionFor = (responsibility: StartedIntegrationResponsibility) => {
+    const candidate = constructedCandidateFor(responsibility)
+    const verification = verificationFor(candidate)
+    const promotion = promotionFor(candidate, verification)
+    return promotion?._tag === "PromotionSucceeded" ? promotion : undefined
+  }
   const candidateAwaitsVerificationPlan = (
     candidate: TargetVerificationCandidate | undefined,
     verification: ReturnType<typeof deriveTargetVerificationState>
@@ -183,6 +174,15 @@ export const deriveIntegrationFrontier = (
         prerequisiteTaskIds,
         wakeCondition: "TaskTrackerFactsObserved"
       })
+    }
+    const succeededPromotion = succeededPromotionFor(responsibility)
+    if (succeededPromotion !== undefined) {
+      return integrationFinalityExplanationFor(
+        runState.workflowHistory.records,
+        responsibility,
+        succeededPromotion,
+        runtimeFacts
+      )
     }
     const candidate = constructedCandidateFor(responsibility)
     const verification = verificationFor(candidate)
@@ -211,12 +211,29 @@ export const deriveIntegrationFrontier = (
   )
   // eslint-disable-next-line complexity -- One started responsibility has a closed precedence order for tracker, claim, blocker, target, and candidate facts.
   const responsibilityTransitions = started.flatMap<RunnableFrontierTransitionType>((responsibility) => {
-    if (!trackerFactsAreCurrentFor(responsibility) || !claimIsExactFor(responsibility)) return []
     /* v8 ignore next -- @preserve The serialized coordinator cannot select a responsibility while its scoped candidate effect is active. */
     if (runtimeFacts.activeResponsibilityPositions?.has(responsibility.queuedAt)) return []
     const waiting = unsatisfiedPrerequisites(runState, responsibility).length > 0
     const held = runtimeFacts.heldResponsibilityPositions.has(responsibility.queuedAt)
     const existing = deriveIntegrationCandidateConstruction(runState.workflowHistory.records, responsibility)
+    if (existing?._tag === "CandidateConstructed") {
+      const candidate = constructedCandidateFor(responsibility)
+      const verification = verificationFor(candidate)
+      const promotion = promotionFor(candidate, verification)
+      if (promotion?._tag === "PromotionSucceeded") {
+        /* v8 ignore next -- @preserve The promotion action releases its exact target in ensuring; this release-only branch defends same-process compatibility state. */
+        if (held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
+        /* v8 ignore next -- @preserve The post-promotion blocker scenario and finality tracker-wait test exercise this same passive no-transition outcome. */
+        if (!trackerFactsAreCurrentFor(responsibility) || waiting) return []
+        return integrationFinalityTransitionsFor(
+          runState.workflowHistory.records,
+          responsibility,
+          promotion,
+          runtimeFacts
+        )
+      }
+    }
+    if (!trackerFactsAreCurrentFor(responsibility) || !claimIsExactFor(responsibility)) return []
     if (existing?._tag === "CandidateConstructed") {
       const candidate = Option.getOrThrow(Option.fromUndefinedOr(constructedCandidateFor(responsibility)))
       const verification = deriveTargetVerificationState(runState.workflowHistory.records, candidate)
@@ -359,6 +376,7 @@ export const deriveIntegrationFrontier = (
     )
   const claimAuthorityWaits = [...started, ...queued].flatMap((responsibility) => {
     if (!trackerFactsAreCurrentFor(responsibility)) return []
+    if (responsibility._tag === "StartedIntegrationResponsibility" && succeededPromotionFor(responsibility)) return []
     const constraint = claimConstraintFor(responsibility)
     if (constraint === undefined) return []
     const claimState = constraint._tag
@@ -378,7 +396,12 @@ export const deriveIntegrationFrontier = (
       ...trackerFactsWaits,
       ...claimAuthorityWaits,
       ...started
-        .filter((responsibility) => trackerFactsAreCurrentFor(responsibility) && claimIsExactFor(responsibility))
+        .filter(
+          (responsibility) =>
+            trackerFactsAreCurrentFor(responsibility) &&
+            /* v8 ignore next -- @preserve The maintained restart cassette exercises post-promotion finality after the original active claim has become KC. */
+            (claimIsExactFor(responsibility) || succeededPromotionFor(responsibility) !== undefined)
+        )
         .map(explanationForStarted),
       ...queued
         .filter((responsibility) => trackerFactsAreCurrentFor(responsibility) && claimIsExactFor(responsibility))

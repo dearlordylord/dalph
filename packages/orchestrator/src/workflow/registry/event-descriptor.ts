@@ -35,7 +35,14 @@ import {
   targetPromotionIntentRecordKey,
   targetPromotionNonConvergenceRecordKey,
   targetPromotionObservedSuccessRecordKey,
-  targetPromotionStaleRecordKey
+  targetPromotionStaleRecordKey,
+  completionClaimReplacementIntentRecordKey,
+  completionClaimReplacementAttemptIntentRecordKey,
+  completionClaimReplacedRecordKey,
+  completionClaimDeletionIntentRecordKey,
+  completionClaimDeletionAttemptIntentRecordKey,
+  completionClaimDeletedRecordKey,
+  integrationFinalitySettledRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../protocols/planned-attempt-executor-work/events.js"
@@ -282,6 +289,32 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
       return {
         _tag: "GenericEventDescriptor",
         expectedKey: targetPromotionNonConvergenceRecordKey(event.correlation.requestId)
+      }
+    case "CompletionClaimReplacementIntended":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: completionClaimReplacementIntentRecordKey(event.operationId)
+      }
+    case "CompletionClaimReplacementAttemptIntended":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: completionClaimReplacementAttemptIntentRecordKey(event.operationId, event.attemptOrdinal)
+      }
+    case "CompletionClaimReplaced":
+      return { _tag: "GenericEventDescriptor", expectedKey: completionClaimReplacedRecordKey(event.operationId) }
+    case "CompletionClaimDeletionIntended":
+      return { _tag: "GenericEventDescriptor", expectedKey: completionClaimDeletionIntentRecordKey(event.operationId) }
+    case "CompletionClaimDeletionAttemptIntended":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: completionClaimDeletionAttemptIntentRecordKey(event.operationId, event.attemptOrdinal)
+      }
+    case "CompletionClaimDeleted":
+      return { _tag: "GenericEventDescriptor", expectedKey: completionClaimDeletedRecordKey(event.operationId) }
+    case "IntegrationFinalitySettled":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: integrationFinalitySettledRecordKey(event.claim.promotionCorrelation.requestId)
       }
     case "TaskTrackerReadIntentRecorded":
       return operationEvent({

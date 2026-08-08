@@ -17,6 +17,20 @@ export interface RunFinalityProof {
   readonly decision: RunFinalityDecision
 }
 
+const unsettledExplanationTags = new Set<RunnableFrontier["explanations"][number]["_tag"]>([
+  "IntegrationDependencyWait",
+  "IntegrationInProgress",
+  "IntegrationTrackerFactsWait",
+  "IntegrationTargetWait",
+  "IntegrationConfigurationWait",
+  "IntegrationFinalityConfigurationWait",
+  "IntegrationFinalityTrackerSuccessWait",
+  "IntegrationFinalityNonConvergence",
+  "PlannedAttemptTaskExternalSuccessConstraint",
+  "PlannedAttemptTaskLifecycleConstraint",
+  "PlannedAttemptTaskSpecificationChangeConstraint"
+])
+
 /** Run termination requires tracker settlement and no runnable or unsettled responsibility. */
 export const deriveRunFinalityDecision = (
   frontier: RunnableFrontier,
@@ -26,19 +40,7 @@ export const deriveRunFinalityDecision = (
   if (frontier.transitions.length > 0) {
     return RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })
   }
-  if (
-    frontier.explanations.some(
-      ({ _tag }) =>
-        _tag === "IntegrationDependencyWait" ||
-        _tag === "IntegrationInProgress" ||
-        _tag === "IntegrationTrackerFactsWait" ||
-        _tag === "IntegrationTargetWait" ||
-        _tag === "IntegrationConfigurationWait" ||
-        _tag === "PlannedAttemptTaskExternalSuccessConstraint" ||
-        _tag === "PlannedAttemptTaskLifecycleConstraint" ||
-        _tag === "PlannedAttemptTaskSpecificationChangeConstraint"
-    )
-  ) {
+  if (frontier.explanations.some(({ _tag }) => unsettledExplanationTags.has(_tag))) {
     return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
   }
   const terminalOperationIds = new Set(

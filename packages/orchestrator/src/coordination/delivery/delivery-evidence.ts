@@ -12,6 +12,7 @@ import {
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
+import { deriveIntegrationFinalityStateFor } from "../../workflow/protocols/integration-finality/state.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import type { ExactTicketDeliveryEvidence, TicketDeliveryEvidence } from "./relations.js"
@@ -62,6 +63,12 @@ export const acceptedOperationIdsOf = (records: ReadonlyArray<JournalRecord>): R
 export const journaledIntegrationEvidenceOf = (
   records: ReadonlyArray<JournalRecord>
 ): ReadonlyArray<ExactTicketDeliveryEvidence> => {
+  const finalitySettlements: ReadonlyArray<ExactTicketDeliveryEvidence> = records.flatMap(({ event }) =>
+    event._tag === "IntegrationFinalitySettled" &&
+    deriveIntegrationFinalityStateFor(records, event.claim)?._tag === "IntegrationFinalitySettled"
+      ? [{ _tag: "IntegrationFinalitySettlement" as const, settlement: event }]
+      : []
+  )
   return [
     ...deriveUnqueuedAcceptedResults(records).map((accepted) => ({
       _tag: "AcceptedAwaitingIntegration" as const,
@@ -69,7 +76,8 @@ export const journaledIntegrationEvidenceOf = (
     })),
     ...deriveIntegrationAdmission(records).responsibilities.flatMap((responsibility) =>
       integrationEvidenceOf(records, responsibility)
-    )
+    ),
+    ...finalitySettlements
   ]
 }
 

@@ -182,6 +182,53 @@ const SPECS = [
       "promotionExhaustedReached",
       "releasedLogicalBlockerReached"
     ]
+  },
+  {
+    name: "integrationFinality",
+    file: "specs/integrationFinality.qnt",
+    invariants: [
+      "exactProofAndBinding",
+      "completionClaimRequiresExactPromotionProof",
+      "replacementIntentPrecedesRequest",
+      "deletionIntentPrecedesRequest",
+      "replacementRereadPrecedesRetry",
+      "deletionRereadPrecedesRetry",
+      "completionClaimRequestsAreBounded",
+      "completionClaimDeletionRequestsAreBounded",
+      "foreignClaimIsNeverMutated",
+      "noReintegration",
+      "successfulTaskNeverReopens",
+      "freshTrackerSuccessPrecedesCompletionClaimDeletion",
+      "completionClaimDeletionTargetsExactClaim",
+      "currentCompletionClaimIsExact",
+      "settledTaskRequiresExactCleanup",
+      "subjectSettlementIsLocal",
+      "emptyFrontierDoesNotSettleRetainedResponsibility",
+      "runTerminationRemainsOwnedByIssue102",
+      "issue61BoundariesRemainExternal"
+    ],
+    witnesses: [
+      "promotedProofReached",
+      "blockerWaitReached",
+      "replacementIntentPendingReached",
+      "replacementIntentReached",
+      "replacementRequestedReached",
+      "replacementResponseLostReached",
+      "replacementRetryReadyReached",
+      "replacementWaitReached",
+      "replacementExhaustedReached",
+      "completionClaimCurrentReached",
+      "trackerSuccessReached",
+      "deleteIntentReached",
+      "deleteRequestedReached",
+      "deleteResponseLostReached",
+      "deleteRetryReadyReached",
+      "deleteResponseObservedReached",
+      "cleanupWaitReached",
+      "settledReached",
+      "emptyFrontierReached",
+      "unrelatedResponsibilityReached"
+    ]
   }
 ]
 

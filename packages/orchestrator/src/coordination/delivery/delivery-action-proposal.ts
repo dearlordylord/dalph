@@ -201,6 +201,8 @@ export type IdentityFreeWorkflowTransition = Extract<
       | "ContinueStartedIntegrationCandidate"
       | "RunTargetVerification"
       | "RunTargetPromotion"
+      | "ReplacePromotedTaskClaim"
+      | "DeleteCompletedTaskCompletionClaim"
       | "QueueAcceptedResultIntegrationResponsibility"
       | "ReleaseStartedIntegrationTarget"
       | "StartQueuedIntegration"

@@ -16,6 +16,7 @@ import { InRunJournal, type JournalRecord } from "../../../workflow-journal/stor
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
 import { integrationResponsibilityEquivalence } from "./responsibility.js"
+import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
 
 /**
  * Exists only before the exact integration-start occurrence. It is derived
@@ -129,6 +130,22 @@ const startedFor = (
       integrationResponsibilityEquivalence(record.event, queued.event)
   )
 
+/**
+ * A completion settlement names the same immutable planned attempt that
+ * began this integration responsibility. It releases only this logical FIFO
+ * blocker; the settlement remains available separately as delivery evidence.
+ */
+const settledFor = (
+  records: ReadonlyArray<JournalRecord>,
+  queued: JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type }
+): boolean =>
+  records.some(
+    ({ event }) =>
+      event._tag === "IntegrationFinalitySettled" &&
+      plannedTaskAttemptEquivalence(event.claim.plannedAttempt, queued.event.plannedAttempt) &&
+      deriveIntegrationFinalityStateFor(records, event.claim)?._tag === "IntegrationFinalitySettled"
+  )
+
 /** Finds accepted terminal facts that still need their exact durable integration responsibility. */
 export const deriveUnqueuedAcceptedResults = (
   records: ReadonlyArray<JournalRecord>
@@ -175,6 +192,7 @@ export const deriveIntegrationAdmission = (records: ReadonlyArray<JournalRecord>
       (record): record is JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type } =>
         record.event._tag === "IntegrationResponsibilityBegan"
     )
+    .filter((record) => !settledFor(records, record))
     .toSorted((left, right) => left.position - right.position)
     .map((queued) => {
       const started = startedFor(records, queued)

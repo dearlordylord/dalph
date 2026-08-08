@@ -22,6 +22,13 @@ import {
   TargetPromotionObservedSuccessEvent,
   TargetPromotionStaleEvent,
   TargetPromotionNonConvergenceEvent,
+  CompletionClaimReplacementIntendedEvent,
+  CompletionClaimReplacementAttemptIntendedEvent,
+  CompletionClaimReplacedEvent,
+  CompletionClaimDeletionIntendedEvent,
+  CompletionClaimDeletionAttemptIntendedEvent,
+  CompletionClaimDeletedEvent,
+  IntegrationFinalitySettledEvent,
   type JournalRecord,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
@@ -358,19 +365,129 @@ const recordTargetPromotionEntry = (event: TargetPromotionEvent): RecordedTarget
   }
 }
 
-type IntegrationPreparationEvent = CandidateConstructionEvent | TargetVerificationEvent | TargetPromotionEvent
+type IntegrationFinalityEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "CompletionClaimReplacementIntended"
+      | "CompletionClaimReplacementAttemptIntended"
+      | "CompletionClaimReplaced"
+      | "CompletionClaimDeletionIntended"
+      | "CompletionClaimDeletionAttemptIntended"
+      | "CompletionClaimDeleted"
+      | "IntegrationFinalitySettled"
+  }
+>
+type RecordedIntegrationFinalityEntry = Extract<
+  RecordedCassetteEntry,
+  { readonly _tag: IntegrationFinalityEvent["_tag"] }
+>
+
+const isIntegrationFinalityEvent = (event: WorkflowJournalEvent): event is IntegrationFinalityEvent =>
+  event._tag === "CompletionClaimReplacementIntended" ||
+  event._tag === "CompletionClaimReplacementAttemptIntended" ||
+  event._tag === "CompletionClaimReplaced" ||
+  event._tag === "CompletionClaimDeletionIntended" ||
+  event._tag === "CompletionClaimDeletionAttemptIntended" ||
+  event._tag === "CompletionClaimDeleted" ||
+  event._tag === "IntegrationFinalitySettled"
+
+const isRecordedIntegrationFinalityEntry = (entry: RecordedCassetteEntry): entry is RecordedIntegrationFinalityEntry =>
+  entry._tag === "CompletionClaimReplacementIntended" ||
+  entry._tag === "CompletionClaimReplacementAttemptIntended" ||
+  entry._tag === "CompletionClaimReplaced" ||
+  entry._tag === "CompletionClaimDeletionIntended" ||
+  entry._tag === "CompletionClaimDeletionAttemptIntended" ||
+  entry._tag === "CompletionClaimDeleted" ||
+  entry._tag === "IntegrationFinalitySettled"
+
+const recordIntegrationFinalityEntry = (event: IntegrationFinalityEvent): RecordedIntegrationFinalityEntry => {
+  switch (event._tag) {
+    case "CompletionClaimReplacementIntended":
+      return {
+        _tag: event._tag,
+        claim: event.claim,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        operationId: event.operationId
+      }
+    case "CompletionClaimReplacementAttemptIntended":
+      return {
+        _tag: event._tag,
+        attemptOrdinal: event.attemptOrdinal,
+        claim: event.claim,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        operationId: event.operationId
+      }
+    case "CompletionClaimReplaced":
+      return {
+        _tag: event._tag,
+        claim: event.claim,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: event.operationId
+      }
+    case "CompletionClaimDeletionIntended":
+      return {
+        _tag: event._tag,
+        claim: event.claim,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        operationId: event.operationId,
+        successObservation: event.successObservation
+      }
+    case "CompletionClaimDeletionAttemptIntended":
+      return {
+        _tag: event._tag,
+        attemptOrdinal: event.attemptOrdinal,
+        claim: event.claim,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        operationId: event.operationId,
+        successObservation: event.successObservation
+      }
+    case "CompletionClaimDeleted":
+      return {
+        _tag: event._tag,
+        claim: event.claim,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: event.operationId,
+        successObservation: event.successObservation
+      }
+    case "IntegrationFinalitySettled":
+      return {
+        _tag: event._tag,
+        claim: event.claim,
+        deletionOperationId: event.deletionOperationId,
+        occurrenceClassification: "NonActionOccurrence",
+        replacementOperationId: event.replacementOperationId,
+        successObservation: event.successObservation
+      }
+  }
+}
+
+type IntegrationPreparationEvent =
+  | CandidateConstructionEvent
+  | TargetVerificationEvent
+  | TargetPromotionEvent
+  | IntegrationFinalityEvent
 type RecordedIntegrationPreparationEntry =
   | RecordedCandidateConstructionEntry
   | RecordedTargetVerificationEntry
   | RecordedTargetPromotionEntry
+  | RecordedIntegrationFinalityEntry
 
 const isIntegrationPreparationEvent = (event: WorkflowJournalEvent): event is IntegrationPreparationEvent =>
-  isCandidateConstructionEvent(event) || isTargetVerificationEvent(event) || isTargetPromotionEvent(event)
+  isCandidateConstructionEvent(event) ||
+  isTargetVerificationEvent(event) ||
+  isTargetPromotionEvent(event) ||
+  isIntegrationFinalityEvent(event)
 
 const recordIntegrationPreparationEntry = (event: IntegrationPreparationEvent): RecordedIntegrationPreparationEntry => {
   if (isCandidateConstructionEvent(event)) return recordCandidateConstructionEntry(event)
   if (isTargetVerificationEvent(event)) return recordTargetVerificationEntry(event)
-  return recordTargetPromotionEntry(event)
+  if (isTargetPromotionEvent(event)) return recordTargetPromotionEntry(event)
+  return recordIntegrationFinalityEntry(event)
 }
 
 const isRecordedIntegrationPreparationEntry = (
@@ -378,7 +495,8 @@ const isRecordedIntegrationPreparationEntry = (
 ): entry is RecordedIntegrationPreparationEntry =>
   isRecordedCandidateConstructionEntry(entry) ||
   isRecordedTargetVerificationEntry(entry) ||
-  isRecordedTargetPromotionEntry(entry)
+  isRecordedTargetPromotionEntry(entry) ||
+  isRecordedIntegrationFinalityEntry(entry)
 
 const recordTaskBoundaryEntry = (
   event: Exclude<
@@ -403,6 +521,13 @@ const recordTaskBoundaryEntry = (
         | "TargetVerificationEvidenceSealed"
         | "TargetVerificationCorrelationContradicted"
         | `TargetPromotion${string}`
+        | "CompletionClaimReplacementIntended"
+        | "CompletionClaimReplacementAttemptIntended"
+        | "CompletionClaimReplaced"
+        | "CompletionClaimDeletionIntended"
+        | "CompletionClaimDeletionAttemptIntended"
+        | "CompletionClaimDeleted"
+        | "IntegrationFinalitySettled"
         | "TaskTrackerFactsObserved"
         | "TaskTrackerReadIntentRecorded"
         | "TaskWorkCapacityChanged"
@@ -803,15 +928,69 @@ const eventForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): Work
   }
 }
 
+const eventForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntry): WorkflowJournalEvent => {
+  switch (entry._tag) {
+    case "CompletionClaimReplacementIntended":
+      return CompletionClaimReplacementIntendedEvent.make({
+        claim: entry.claim,
+        operationId: entry.operationId,
+        version: workflowJournalEventVersion
+      })
+    case "CompletionClaimReplacementAttemptIntended":
+      return CompletionClaimReplacementAttemptIntendedEvent.make({
+        attemptOrdinal: entry.attemptOrdinal,
+        claim: entry.claim,
+        operationId: entry.operationId,
+        version: workflowJournalEventVersion
+      })
+    case "CompletionClaimReplaced":
+      return CompletionClaimReplacedEvent.make({
+        claim: entry.claim,
+        operationId: entry.operationId,
+        version: workflowJournalEventVersion
+      })
+    case "CompletionClaimDeletionIntended":
+      return CompletionClaimDeletionIntendedEvent.make({
+        claim: entry.claim,
+        operationId: entry.operationId,
+        successObservation: entry.successObservation,
+        version: workflowJournalEventVersion
+      })
+    case "CompletionClaimDeletionAttemptIntended":
+      return CompletionClaimDeletionAttemptIntendedEvent.make({
+        attemptOrdinal: entry.attemptOrdinal,
+        claim: entry.claim,
+        operationId: entry.operationId,
+        successObservation: entry.successObservation,
+        version: workflowJournalEventVersion
+      })
+    case "CompletionClaimDeleted":
+      return CompletionClaimDeletedEvent.make({
+        claim: entry.claim,
+        operationId: entry.operationId,
+        successObservation: entry.successObservation,
+        version: workflowJournalEventVersion
+      })
+    case "IntegrationFinalitySettled":
+      return IntegrationFinalitySettledEvent.make({
+        claim: entry.claim,
+        deletionOperationId: entry.deletionOperationId,
+        replacementOperationId: entry.replacementOperationId,
+        successObservation: entry.successObservation,
+        version: workflowJournalEventVersion
+      })
+  }
+}
+
 const eventForIntegrationPreparationEntry = (
   entry: RecordedIntegrationPreparationEntry,
   entries: ReadonlyArray<RecordedCassetteEntry>,
   index: number
 ): WorkflowJournalEvent => {
   if (isRecordedCandidateConstructionEntry(entry)) return eventForCandidateConstructionEntry(entry, entries, index)
-  return isRecordedTargetVerificationEntry(entry)
-    ? eventForTargetVerificationEntry(entry)
-    : eventForTargetPromotionEntry(entry)
+  if (isRecordedTargetVerificationEntry(entry)) return eventForTargetVerificationEntry(entry)
+  if (isRecordedTargetPromotionEntry(entry)) return eventForTargetPromotionEntry(entry)
+  return eventForIntegrationFinalityEntry(entry)
 }
 
 const eventForRecordedEntry = (
@@ -968,11 +1147,30 @@ const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): stri
   }
 }
 
+const lyricForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntry): string => {
+  switch (entry._tag) {
+    case "CompletionClaimReplacementIntended":
+      return `Dalph coordinator intended to replace the exact active claim for task ${entry.claim.plannedAttempt.taskId}.`
+    case "CompletionClaimReplacementAttemptIntended":
+      return `Dalph coordinator sent completion-claim replacement attempt ${entry.attemptOrdinal} for task ${entry.claim.plannedAttempt.taskId}.`
+    case "CompletionClaimReplaced":
+      return `The task tracker proved the promotion-bound completion claim current for task ${entry.claim.plannedAttempt.taskId}.`
+    case "CompletionClaimDeletionIntended":
+      return `Dalph coordinator intended to delete the exact completion claim for task ${entry.claim.plannedAttempt.taskId} after fresh success.`
+    case "CompletionClaimDeletionAttemptIntended":
+      return `Dalph coordinator sent completion-claim deletion attempt ${entry.attemptOrdinal} for task ${entry.claim.plannedAttempt.taskId}.`
+    case "CompletionClaimDeleted":
+      return `The task tracker proved the exact completion claim absent for successful task ${entry.claim.plannedAttempt.taskId}.`
+    case "IntegrationFinalitySettled":
+      return `Dalph settled integration finality for promoted task ${entry.claim.plannedAttempt.taskId}.`
+  }
+}
+
 const lyricForIntegrationPreparationEntry = (entry: RecordedIntegrationPreparationEntry): string => {
   if (isRecordedCandidateConstructionEntry(entry)) return lyricForCandidateConstructionEntry(entry)
-  return isRecordedTargetVerificationEntry(entry)
-    ? lyricForTargetVerificationEntry(entry)
-    : lyricForTargetPromotionEntry(entry)
+  if (isRecordedTargetVerificationEntry(entry)) return lyricForTargetVerificationEntry(entry)
+  if (isRecordedTargetPromotionEntry(entry)) return lyricForTargetPromotionEntry(entry)
+  return lyricForIntegrationFinalityEntry(entry)
 }
 
 type RecordedClaimAcquisitionEntry = Extract<
@@ -1006,6 +1204,7 @@ const lyricForTaskBoundaryEntry = (
     | RecordedTrackerEntry
     | RecordedTargetVerificationEntry
     | RecordedTargetPromotionEntry
+    | RecordedIntegrationFinalityEntry
     | { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
 ): string => {

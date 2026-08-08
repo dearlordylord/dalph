@@ -373,6 +373,88 @@ await run("accepted-result integration exhaustive model", [
   "1"
 ])
 
+const integrationFinalityInvariants = [
+  "exactProofAndBinding",
+  "completionClaimRequiresExactPromotionProof",
+  "replacementIntentPrecedesRequest",
+  "deletionIntentPrecedesRequest",
+  "replacementRereadPrecedesRetry",
+  "deletionRereadPrecedesRetry",
+  "completionClaimRequestsAreBounded",
+  "completionClaimDeletionRequestsAreBounded",
+  "foreignClaimIsNeverMutated",
+  "noReintegration",
+  "successfulTaskNeverReopens",
+  "freshTrackerSuccessPrecedesCompletionClaimDeletion",
+  "completionClaimDeletionTargetsExactClaim",
+  "currentCompletionClaimIsExact",
+  "settledTaskRequiresExactCleanup",
+  "subjectSettlementIsLocal",
+  "emptyFrontierDoesNotSettleRetainedResponsibility",
+  "runTerminationRemainsOwnedByIssue102",
+  "issue61BoundariesRemainExternal"
+]
+
+await run("integration finality model typecheck", [
+  "typecheck",
+  "specs/integrationFinality.qnt"
+])
+await run("integration finality deterministic tests", [
+  "test",
+  "specs/integrationFinality_test.qnt",
+  "--main",
+  "integrationFinalityTest"
+])
+await run("integration finality negative mutation profile", [
+  "test",
+  "specs/integrationFinality_negative_test.qnt",
+  "--main",
+  "integrationFinalityNegativeTest"
+])
+await run("integration finality sampled model", [
+  "run",
+  "specs/integrationFinality.qnt",
+  "--invariants",
+  ...integrationFinalityInvariants,
+  "--witnesses",
+  "promotedProofReached",
+  "blockerWaitReached",
+  "replacementIntentPendingReached",
+  "replacementIntentReached",
+  "replacementRequestedReached",
+  "replacementResponseLostReached",
+  "replacementRetryReadyReached",
+  "replacementWaitReached",
+  "replacementExhaustedReached",
+  "completionClaimCurrentReached",
+  "trackerSuccessReached",
+  "deleteIntentReached",
+  "deleteRequestedReached",
+  "deleteResponseLostReached",
+  "deleteRetryReadyReached",
+  "deleteResponseObservedReached",
+  "cleanupWaitReached",
+  "settledReached",
+  "emptyFrontierReached",
+  "unrelatedResponsibilityReached",
+  "--max-steps",
+  "35",
+  "--max-samples",
+  "10000",
+  "--verbosity",
+  "1"
+])
+await run("integration finality exhaustive model", [
+  "verify",
+  "specs/integrationFinality.qnt",
+  "--backend",
+  "tlc",
+  "--invariants",
+  ...integrationFinalityInvariants,
+  "--verbosity",
+  "1"
+])
+
 const elapsedMilliseconds = performance.now() - startedAt
 process.stdout.write(
   `\nComplete Quint model gate: ${

@@ -94,6 +94,9 @@ const integrationTargetFor = (
   transition: RunnableFrontierTransition,
   responsibilities: ReadonlyArray<IntegrationResponsibility>
 ): IntegrationTargetResourceRequirement => {
+  if (transition._tag === "ReplacePromotedTaskClaim" || transition._tag === "DeleteCompletedTaskCompletionClaim") {
+    return { _tag: "NoIntegrationTargetResource" }
+  }
   if (transition._tag === "StartQueuedIntegration") {
     return {
       _tag: "IntegrationTargetResourceRequired",
@@ -117,17 +120,23 @@ const integrationTargetFor = (
   }
 }
 
+const settlementTransitionTags = new Set<RunnableFrontierTransition["_tag"]>([
+  "QueueAcceptedResultIntegrationResponsibility",
+  "StartQueuedIntegration",
+  "AcquireStartedIntegrationTarget",
+  "ContinueStartedIntegrationCandidate",
+  "RunTargetVerification",
+  "RunTargetPromotion",
+  "ReplacePromotedTaskClaim",
+  "DeleteCompletedTaskCompletionClaim",
+  "ReleaseStartedIntegrationTarget"
+])
+
 const isSettlementTransition = (
   transition: RunnableFrontierTransition,
   responsibilities: ReadonlyArray<IntegrationResponsibility>
 ): boolean =>
-  transition._tag === "QueueAcceptedResultIntegrationResponsibility" ||
-  transition._tag === "StartQueuedIntegration" ||
-  transition._tag === "AcquireStartedIntegrationTarget" ||
-  transition._tag === "ContinueStartedIntegrationCandidate" ||
-  transition._tag === "RunTargetVerification" ||
-  transition._tag === "RunTargetPromotion" ||
-  transition._tag === "ReleaseStartedIntegrationTarget" ||
+  settlementTransitionTags.has(transition._tag) ||
   integrationResponsibilityFor(transition, responsibilities) !== undefined
 
 const orderFor = (
@@ -309,6 +318,8 @@ type IdentityFreeTransition = Extract<
       | "ContinueStartedIntegrationCandidate"
       | "RunTargetVerification"
       | "RunTargetPromotion"
+      | "ReplacePromotedTaskClaim"
+      | "DeleteCompletedTaskCompletionClaim"
       | "QueueAcceptedResultIntegrationResponsibility"
       | "ReleaseStartedIntegrationTarget"
       | "StartQueuedIntegration"

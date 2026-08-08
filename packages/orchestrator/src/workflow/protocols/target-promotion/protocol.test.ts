@@ -64,6 +64,7 @@ import { deliveryProposalsOf } from "../../../coordination/delivery/delivery-pro
 import { executeIntegrationAction } from "../../../coordination/delivery/integration-delivery-action-adapter.js"
 import { makeIntegrationTargetResourceController } from "../../../coordination/admission/integration-target-resource.js"
 import { TargetPromotionRuntime } from "./runtime.js"
+import { TargetPromotionRuntimeUnavailable } from "../../../coordination/delivery/target-promotion-boundary.js"
 import type {
   DeliveryActionProposal,
   IdentityFreeDeliveryProposal
@@ -304,6 +305,25 @@ const promotionActionFor = (started: StartedIntegrationResponsibility) => {
   }
   return { action: { _tag: "IdentityFreeAction" as const, proposal }, transition }
 }
+
+it.effect("reports a typed failure when target-promotion runtime services are unavailable", () =>
+  Effect.gen(function* () {
+    const resources = yield* makeIntegrationTargetResourceController()
+    const { action, transition } = promotionActionFor(responsibility)
+    const poisonJournal = InRunJournal.of({
+      append: () => Effect.die("missing runtime must fail before appending"),
+      read: () => Effect.die("missing runtime must fail before reading")
+    })
+    const failure = yield* executeIntegrationAction(action, transition, {
+      acceptIntegrationTargetOwnership: Effect.void,
+      bindPlannedAttemptPosition: () => Effect.void,
+      integrationTargets: resources,
+      recordIntent: () => Effect.void,
+      releasePlannedAttemptPosition: () => Effect.void
+    }).pipe(Effect.provideService(InRunJournal, poisonJournal), Effect.flip)
+    expect(failure).toBeInstanceOf(TargetPromotionRuntimeUnavailable)
+  })
+)
 
 it.effect("allows a different target while the exact promotion permit is active", () =>
   Effect.scoped(

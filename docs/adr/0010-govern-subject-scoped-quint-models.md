@@ -4,13 +4,14 @@ Status: accepted
 
 Dalph keeps one Quint model per subject-scoped decision boundary, each with its
 own executable conformance adapter under
-`packages/dalph/test/conformance/*.mbt.test.ts`. Five exist:
+`packages/dalph/test/conformance/*.mbt.test.ts`. Six exist:
 
 | Model | Owns | Issues |
 |---|---|---|
 | `specs/taskFactReconciliation.qnt` | subject-local decisions after tracker facts change while one exact planned attempt owns unfinished executor work: membership, lifecycle, specification, external success, and the missing, foreign, and unreadable claim cases | 136, 137 |
 | `specs/gitReconciliation.qnt` | provider-neutral Git decisions: lineage, worktree loss, registration conflict, result-commit eligibility, and the stale and ambiguous target head | 139 |
 | `specs/acceptedResultIntegration.qnt` | accepted-result admission and one fixed integration session accepting only an explicit submitted commit whose ordered direct parents are the current target head and the accepted result | 56, 57 |
+| `specs/integrationFinality.qnt` | post-promotion completion-claim replacement and deletion, fresh tracker success, task-scoped settlement, and retention of unrelated Run responsibility | #141 (`integrationFinality`); executable seam: `packages/dalph/test/conformance/integration-finality.mbt.test.ts` invokes the production completion-claim protocols and Run finality decision |
 | `specs/controlDirectionApplication.qnt` | receiving a Pause or Unpause as ephemeral against applying one exact run-or-task direction as a durable Operator-initiated action | 155, 166 |
 | `specs/plannedAttemptExecutor.qnt` | the coarse same-process executor boundary: responsibility, running, suspension request, safe suspension, terminal, and the task-work position each holds | 158 |
 
@@ -30,7 +31,7 @@ is deliberate under this decision and is recorded as a TODO on that function.
 
 ## Adding a model
 
-A sixth model is justified by a materially different subject boundary,
+A seventh model is justified by a materially different subject boundary,
 abstraction, checking profile, executable adapter, lifecycle, or implementation
 consumer. Reaching for one because an existing model has grown is a signal to
 narrow that model's subject instead.
