@@ -64,11 +64,12 @@ The proof then has two parts:
 
 The generic theorem establishes P3 for every total semantics with that
 separation; `concrete`/`Concrete()` then instantiate it with all 23 guards and
-effects. The remaining limitation is syntactic cross-language correspondence:
-no prover parses `journal.mjs` and proves that the handwritten port is equal to
-it. The parity checklist, concrete witnesses, and mutations are evidence at
-that boundary. A generated or proved JavaScript-to-kernel refinement belongs
-with the planned L1↔L2 refinement work.
+effects. Ticket #200 closes the earlier syntactic correspondence seam:
+`journal-events.json` generates the executable JavaScript constructors, the
+cross-language mapping table, and compiling 23-constructor witnesses for Lean,
+Agda, and Dafny. The prover guards/effects remain authored proof code—the
+generator does not pretend their semantics are definitionally equal—but Lean's
+emitted-trace refinement proves that its concrete L2 replay equals the L1 fold.
 
 ## What each checker gives away
 
@@ -204,6 +205,7 @@ This is the scenario-to-test mapping for the research-only change:
 | Adding an event without teaching every consumer cannot silently pass | P1 mutants rejected by Lean, Agda, and Dafny |
 | A passing property did not result from zero generated witnesses | existing fast-check zero-witness rejection and directed prover witnesses |
 
-No competing Dalph runtime outcome is decided here. The deferred claim is a
-machine-checked correspondence from the JavaScript source to the concrete
-prover ports; it needs its own accepted refinement work item.
+No competing Dalph runtime outcome is decided here. Ticket #200 generated the
+event-alphabet correspondence and proved emitted-trace refinement in Lean; the
+deliberate remaining boundary is separately authored guard/effect code in each
+proof language, checked by the existing concrete witnesses and mutants.

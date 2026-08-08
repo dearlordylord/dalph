@@ -7,8 +7,11 @@ controls), with the interpretation decisions recorded in
 `fastcheck/NOTES.md`. `lean/Journal.lean`, `agda/Journal.agda`, and
 `dafny/Journal.dfy` now port the concrete guards/effects and prove the fold
 laws, with checker-rejected negative controls in `prover-mutants.mjs`.
-`LEARNING.md` states their exact strength and the remaining absence of a
-machine-checked translation between the separately authored sources.
+`journal-events.json` is the canonical tag/kind/payload manifest.
+`generate-journal-events.mjs` generates JavaScript constructors and compiling
+constructor witnesses for every prover. `lean/JournalRefinement.lean` proves
+semantic refinement from an emitting transition to this fold; `LEARNING.md`
+states the exact strength of that generated/proved boundary.
 
 ## Three constraints from the domain
 
@@ -226,6 +229,7 @@ bridge: it makes L2's `recover` action *equal to* folding the journal rather
 than a hand-written reconstruction that happens to look right. That would be the
 first refinement claim in the study.
 
-A full refinement needs L2 actions to emit events and carry a journal variable —
-expensive in TLC, tractable in Lean and Agda. Propositions 1–3 at L1 do not, and
-come first.
+`lean/JournalRefinement.lean` now supplies that refinement without adding a
+journal variable to TLC: its emitting L2 wrapper appends one canonical event
+and applies the concrete L1 transition, then proves by induction that replay
+reconstructs the wrapper's modeled state.

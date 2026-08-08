@@ -4,20 +4,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
+import { EVENT_MANIFEST } from "./fastcheck/journal-events.generated.mjs"
 
 const root = resolve(import.meta.dirname)
 const requestedTool = process.argv[2]
 const allowedTools = new Set(["lean", "agda", "dafny"])
-const eventNames = [
-  "claimIntentRecorded", "claimReleaseIntentRecorded", "attemptPlanned",
-  "workAdmitted", "suspensionRequested", "resumeRequested",
-  "worktreeIntentRecorded", "integrationSessionOpened", "promotionIntentRecorded",
-  "candidateConstructionNonConvergent", "deliverySettled", "workflowRunBegun",
-  "workflowRunTerminated", "capacityRevised", "directionApplied",
-  "trackerFactsObserved", "claimRecordRead", "claimedTaskEligibilityObserved",
-  "claimedTaskIneligible", "worktreeReconciliationObserved", "executorReported",
-  "promotionOutcomeObserved", "targetHeadObserved"
-]
+const eventNames = EVENT_MANIFEST.map(({ name }) => name[0].toLowerCase() + name.slice(1))
 
 if (requestedTool !== undefined && !allowedTools.has(requestedTool)) {
   process.stderr.write("usage: node prover-mutants.mjs [lean|agda|dafny]\n")

@@ -51,6 +51,7 @@ dafny/run.sh                          # verified code, seconds
 lean/run.sh                           # proofs, seconds
 agda/run.sh                           # --safe proofs + journal mutants, seconds
 node prover-mutants.mjs               # P1/P2/P3 negative controls for all three provers
+node generate-journal-events.mjs --check # canonical 23-event mapping is current
 ~/.elan/bin/lean L2.lean               # from lean/, the protocol proof
 ```
 

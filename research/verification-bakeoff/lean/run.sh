@@ -19,22 +19,25 @@ echo "| File | Expected | Lean | s |"
 echo "|---|---|---|---|"
 
 FAIL=0
+node ../generate-journal-events.mjs --check || FAIL=1
 
 # Exit codes, not empty output: a silent crash must not read as a pass, and a
 # warning on stderr must not read as an error.
 start=$SECONDS
 out_l1=$("$LEAN" L1.lean 2>&1); code_l1=$?
 out_l2=$("$LEAN" L2.lean 2>&1); code_l2=$?
-out_journal=$("$LEAN" Journal.lean 2>&1); code_journal=$?
+out_journal=$("$LEAN" -o Journal.olean Journal.lean 2>&1); code_journal=$?
+out_refinement=$(LEAN_PATH="$PWD" "$LEAN" JournalRefinement.lean 2>&1); code_refinement=$?
+out_events=$(LEAN_PATH="$PWD" "$LEAN" JournalEvents.generated.lean 2>&1); code_events=$?
 secs=$((SECONDS - start))
-if [[ $code_l1 == 0 && $code_l2 == 0 && $code_journal == 0 ]]; then
+if [[ $code_l1 == 0 && $code_l2 == 0 && $code_journal == 0 && $code_refinement == 0 && $code_events == 0 ]]; then
   verdict="all proofs check"
 else
-  verdict="**unexpected errors (exit $code_l1/$code_l2/$code_journal)**"
+  verdict="**unexpected errors (exit $code_l1/$code_l2/$code_journal/$code_refinement/$code_events)**"
   FAIL=1
 fi
-echo "| L1.lean + L2.lean + Journal.lean | check | $verdict | $secs |"
-[[ -n $out_l1$out_l2$out_journal ]] && grep -E 'error|warning' <<<"$out_l1$out_l2$out_journal" | sed 's/^/    /'
+echo "| L1.lean + L2.lean + Journal.lean + JournalRefinement.lean | check | $verdict | $secs |"
+[[ -n $out_l1$out_l2$out_journal$out_refinement$out_events ]] && grep -E 'error|warning' <<<"$out_l1$out_l2$out_journal$out_refinement$out_events" | sed 's/^/    /'
 
 # Each of the three mutants must fail *individually*: attribute every error
 # line to the mutant theorem whose line range contains it, rather than

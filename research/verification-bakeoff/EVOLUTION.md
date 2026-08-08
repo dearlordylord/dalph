@@ -148,3 +148,42 @@ The focused Quint model adds two checker-sensitive defects:
   `NegativeArraySizeException` while constructing the three-task liveness
   checker, before it can enumerate a state. The harness reports that error as
   no verdict rather than pass.
+
+## #200 — emitted journal refinement
+
+Planned Base SHA: `ee56be710f7c08a214581470077432dcc0dc9fe0`.
+
+This is research-only. It emits values inside the bake-off model; it adds no
+production journal event, tracker call, Git call, or executor call.
+
+### Correspondence boundary
+
+`journal-events.json` is now the canonical ordered manifest for all 23 event
+tags, their action/occurrence classification, and their ordered payload names.
+`generate-journal-events.mjs` derives the constructors executed by
+`fastcheck/journal.mjs`, an auditable JavaScript/Lean/Agda/Dafny mapping table,
+and one compiling 23-constructor witness file for each prover. The prover
+runners reject stale output and compile those witnesses. A changed tag,
+payload arity/order, or wrapper therefore makes the consumers move together.
+
+`lean/JournalRefinement.lean` makes emission part of an L2 step. One `emit`
+both applies the concrete transition and appends that exact `Event`.
+`emit_preserves_refinement` proves one-step preservation and
+`emitAll_refines` proves it for arbitrary traces. Emission wraps the existing
+concrete `Journal.step`; it does not define a second set of guards or effects.
+
+### Scenario-to-test mapping
+
+| Accepted scenario | Concrete result | Executable evidence |
+|---|---|---|
+| A claim intent is retained when the coordinator dies before the tracker result; appending the reread equals resuming the prefix | the prefix has `claimPending = true`; uninterrupted and resumed folds are equal | Lean `crash_prefix_retains_claim_intent` and `intent_outcome_resume_refinement`; fast-check directed P2 witness; reset-on-resume mutant M2 is caught |
+| A fails locally while B progresses; a shared contradiction fails the Run | A has a failure, B reaches `Claimed`, and the Run remains live; an event naming an unknown task fails the Run | Lean `regional_failure_is_contained` and `shared_failure_fails_run`; P3 theorem and cross-region-write mutants in every prover |
+| All 23 JavaScript/prover consumers share one alphabet | generated constructor witnesses compile in Lean, Agda, and Dafny; JavaScript constructors come from the manifest | `generate-journal-events.mjs --check`, each prover `run.sh`, and exhaustive-classifier mutants |
+
+### Measurement and interpretation
+
+Lean 4.32.2 checks the journal, refinement, and generated witness with the
+other faithful Lean files in about 3 seconds (about 13 seconds including Lean
+negative controls). The refinement adds no TLC state variable and therefore
+has no state-space cost. Its authored cost is the trace induction; one-step
+preservation reduces to the already-proved fold homomorphism.

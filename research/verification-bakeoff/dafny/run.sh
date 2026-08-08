@@ -71,6 +71,8 @@ mutants DeliveryMutants.dfy 3
 faithful DeliveryL2.dfy
 mutants DeliveryL2Mutants.dfy 3
 faithful Journal.dfy "--verification-time-limit 30"
+node ../generate-journal-events.mjs --check || FAIL=1
+faithful JournalEvents.generated.dfy "--verification-time-limit 30"
 
 echo ""
 grep -E 'Error: a (postcondition|precondition)' <<<"$LAST_OUT" | sed 's/^/    /'

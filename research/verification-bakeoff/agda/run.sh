@@ -15,7 +15,8 @@ echo "| File | Expected | Agda | s |"
 echo "|---|---|---|---|"
 
 FAIL=0
-for file in L1.agda L2.agda Journal.agda; do
+node ../generate-journal-events.mjs --check || FAIL=1
+for file in L1.agda L2.agda Journal.agda JournalEventsGenerated.agda; do
   start=$SECONDS
   output=$("$AGDA" --safe "$file" 2>&1); code=$?
   if [[ $code == 0 ]]; then
