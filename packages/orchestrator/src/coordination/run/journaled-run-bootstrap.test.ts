@@ -193,6 +193,52 @@ it.effect("retries an unacknowledged Run beginning through the same entry withou
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("retries a pre-commit Run beginning failure without entering activation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-pre-commit-begin-failure")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      const beginAttempts = yield* Ref.make(0)
+      const scans = yield* Ref.make(0)
+      const initialPolicyEvaluations = yield* Ref.make(0)
+      const programCalls = yield* Ref.make(0)
+      const preCommitFailure = new JournalStorageUnavailable({
+        detail: "the beginning failed before any row was committed",
+        operation: "JournalStore.beginRun"
+      })
+      const storage = JournalStore.of({
+        ...delegate,
+        beginRun: (requestedRunId, requestedTarget, policy) =>
+          Ref.getAndUpdate(beginAttempts, (count) => count + 1).pipe(
+            Effect.flatMap((attempt) =>
+              attempt === 0 ? Effect.fail(preCommitFailure) : delegate.beginRun(requestedRunId, requestedTarget, policy)
+            )
+          ),
+        scan: () => Ref.update(scans, (count) => count + 1).pipe(Effect.andThen(delegate.scan()))
+      })
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const policy = Ref.update(initialPolicyEvaluations, (count) => count + 1).pipe(Effect.as(initialPolicy))
+      const active = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+      const activation = Ref.update(programCalls, (count) => count + 1).pipe(Effect.as(finalityProof(active)))
+
+      expect(yield* bootstrap.activate(target, policy, runId, activation).pipe(Effect.flip)).toBe(preCommitFailure)
+      expect(yield* delegate.read(runId)).toEqual([])
+      expect(yield* Ref.get(initialPolicyEvaluations)).toBe(1)
+      // Tracker, Git, and executor boundaries exist only inside the activation program's context.
+      expect(yield* Ref.get(programCalls)).toBe(0)
+
+      expect(yield* bootstrap.activate(target, policy, runId, activation)).toEqual(active)
+      expect(yield* Ref.get(initialPolicyEvaluations)).toBe(2)
+      expect(yield* Ref.get(beginAttempts)).toBe(2)
+      expect(yield* Ref.get(scans)).toBe(2)
+      expect(yield* Ref.get(programCalls)).toBe(1)
+      expect((yield* delegate.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("classifies a failed beginning from the immediately reconciled durable Run fact", () =>
   Effect.scoped(
     Effect.gen(function* () {

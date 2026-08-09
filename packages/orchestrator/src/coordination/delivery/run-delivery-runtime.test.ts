@@ -36,6 +36,7 @@ import {
   makeTaskWorkSpecificationObservationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
+import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
@@ -49,6 +50,7 @@ import {
 import { DeliveryActionExecutor, type DeliveryActionResult, DeliverySemanticTrace } from "./delivery-action-executor.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import { liveActionIsPresent } from "./live-delivery-action.js"
 import {
   currentSignalOf,
   type DeliveryActionProposal,
@@ -230,6 +232,49 @@ const withProposals = (
   taskWork: { capacity: TaskWorkCapacity.make(capacity), held: [] }
 })
 
+const assertCausalRouteChangeDoesNotRepeat = Effect.fn("Test.assertCausalRouteChangeDoesNotRepeat")(function* (
+  first: DeliveryActionProposal,
+  superseding: DeliveryActionProposal,
+  independentTaskId: TaskId
+) {
+  const independent = proposal(1, independentTaskId)
+  expect(superseding.id).not.toBe(first.id)
+  const initial = withProposals(yield* baseEvaluation, [first], 2)
+  const relation = yield* dynamicEvaluationSignal(initial)
+  const firstStarted = yield* Deferred.make<void>()
+  const supersedingStarted = yield* Deferred.make<void>()
+  const independentStarted = yield* Deferred.make<void>()
+  const finish = yield* Deferred.make<void>()
+  const executor = DeliveryActionExecutor.of({
+    execute: (action) =>
+      Effect.gen(function* () {
+        if (action.proposal.id === first.id) {
+          yield* Deferred.succeed(firstStarted, undefined)
+          yield* relation.publish(withProposals(initial, [superseding, independent], 2))
+        } else if (action.proposal.id === superseding.id) {
+          yield* Deferred.succeed(supersedingStarted, undefined)
+        } else {
+          yield* Deferred.succeed(independentStarted, undefined)
+        }
+        yield* Deferred.await(finish)
+        if (action.proposal.id === first.id) yield* relation.publish(withProposals(initial, [], 2))
+        return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+      })
+  })
+
+  const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+    Effect.provide(identityLayers),
+    Effect.provideService(DeliveryActionExecutor, executor),
+    Effect.forkChild
+  )
+  yield* Deferred.await(firstStarted)
+  yield* Deferred.await(independentStarted)
+  expect(yield* Deferred.isDone(supersedingStarted)).toBe(false)
+
+  yield* Deferred.succeed(finish, undefined)
+  expect(yield* Fiber.join(runtime)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+})
+
 it.effect("finds exact proposal identities in available and conflicting frontiers", () =>
   Effect.sync(() => {
     const a = proposal(0, TaskId.make("frontier-A"))
@@ -250,6 +295,8 @@ it.effect("finds exact proposal identities in available and conflicting frontier
     expect(proposalIsPresent(available([a]), b.id)).toBe(false)
     expect(proposalIsPresent(conflicts([a.id]), a.id)).toBe(true)
     expect(proposalIsPresent(conflicts([a.id]), b.id)).toBe(false)
+    expect(liveActionIsPresent(conflicts([a.id]), a)).toBe(true)
+    expect(liveActionIsPresent(conflicts([a.id]), b)).toBe(false)
   })
 )
 
@@ -501,40 +548,99 @@ it.effect("does not repeat one recovered observation after only its causal route
       )
     const first = specificationRead("first")
     const superseding = specificationRead("superseding")
-    const independent = proposal(1, TaskId.make("independent-after-superseding-route"))
-    expect(superseding.id).not.toBe(first.id)
+    yield* assertCausalRouteChangeDoesNotRepeat(first, superseding, TaskId.make("independent-after-superseding-route"))
+  }).pipe(Effect.scoped)
+)
 
-    const initial = withProposals(yield* baseEvaluation, [first], 2)
+it.effect("does not repeat one responsible-task claim read after only its causal route changes while live", () =>
+  Effect.gen(function* () {
+    const taskId = TaskId.make("responsible-claim-route-change")
+    const claimRead = (predecessor: string) =>
+      recoveredProposalFor(
+        RunnableFrontierTransition.ObserveResponsibleTaskClaim({
+          operation: makeTaskClaimObservationOperation(
+            OperationId.make(`runtime-responsible-claim:${predecessor}`),
+            target,
+            taskId,
+            [OperationId.make(`runtime-responsible-graph:${predecessor}`)]
+          ),
+          taskId
+        })
+      )
+    const first = claimRead("first")
+    const superseding = claimRead("superseding")
+    yield* assertCausalRouteChangeDoesNotRepeat(
+      first,
+      superseding,
+      TaskId.make("independent-after-responsible-claim-route")
+    )
+  }).pipe(Effect.scoped)
+)
+
+it.effect("runs a stopped-attempt claim read after the distinct continuation-claim read settles", () =>
+  Effect.gen(function* () {
+    const continuation = recoveredProposalFor(
+      RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({
+        operation: makeTaskClaimObservationOperation(
+          OperationId.make("runtime-continuation-claim"),
+          target,
+          plannedAttempt.taskId
+        ),
+        plannedAttempt
+      })
+    )
+    const stopped = recoveredProposalFor(
+      RunnableFrontierTransition.ObserveStoppedAttemptClaim({
+        operation: makeTaskClaimObservationOperation(
+          OperationId.make("runtime-stopped-claim"),
+          target,
+          plannedAttempt.taskId,
+          [OperationId.make("runtime-stoppage-predecessor")]
+        ),
+        requestId: AttemptChoiceRequestId.make({ nonce: "runtime-stopped-claim", runId }),
+        subject: { observedTaskRevision: TaskRevision.make("runtime-stopped-revision"), plannedAttempt }
+      })
+    )
+    const marker = proposal(1, TaskId.make("marker-after-distinct-claim-read"))
+    expect(stopped.id).not.toBe(continuation.id)
+    const initial = withProposals(yield* baseEvaluation, [continuation], 2)
     const relation = yield* dynamicEvaluationSignal(initial)
-    const firstStarted = yield* Deferred.make<void>()
-    const supersedingStarted = yield* Deferred.make<void>()
-    const independentStarted = yield* Deferred.make<void>()
+    const continuationSettled = yield* Deferred.make<void>()
+    const stoppedStarted = yield* Deferred.make<void>()
+    const markerStarted = yield* Deferred.make<void>()
     const finish = yield* Deferred.make<void>()
     const executor = DeliveryActionExecutor.of({
       execute: (action) =>
-        Effect.gen(function* () {
-          if (action.proposal.id === first.id) {
-            yield* Deferred.succeed(firstStarted, undefined)
-            yield* relation.publish(withProposals(initial, [superseding, independent], 2))
-          } else if (action.proposal.id === superseding.id) {
-            yield* Deferred.succeed(supersedingStarted, undefined)
-          } else {
-            yield* Deferred.succeed(independentStarted, undefined)
-          }
-          yield* Deferred.await(finish)
-          if (action.proposal.id === first.id) yield* relation.publish(withProposals(initial, [], 2))
-          return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
-        })
+        action.proposal.id === continuation.id
+          ? Effect.succeed({ _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult)
+          : (action.proposal.id === stopped.id
+              ? Deferred.succeed(stoppedStarted, undefined)
+              : Deferred.succeed(markerStarted, undefined)
+            ).pipe(
+              Effect.andThen(Deferred.await(finish)),
+              Effect.andThen(
+                action.proposal.id === stopped.id ? relation.publish(withProposals(initial, [], 2)) : Effect.void
+              ),
+              Effect.as({ _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult)
+            )
+    })
+    const trace = DeliverySemanticTrace.of({
+      emit: (event) =>
+        event._tag === "ActionOutcome" && event.proposalId === continuation.id
+          ? Deferred.succeed(continuationSettled, undefined)
+          : Effect.void
     })
 
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(identityLayers),
       Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.provideService(DeliverySemanticTrace, trace),
       Effect.forkChild
     )
-    yield* Deferred.await(firstStarted)
-    yield* Deferred.await(independentStarted)
-    expect(yield* Deferred.isDone(supersedingStarted)).toBe(false)
+    yield* Deferred.await(continuationSettled)
+    yield* relation.publish(withProposals(initial, [stopped, marker], 2))
+    yield* Deferred.await(markerStarted)
+    expect(yield* Deferred.isDone(stoppedStarted)).toBe(true)
 
     yield* Deferred.succeed(finish, undefined)
     expect(yield* Fiber.join(runtime)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })

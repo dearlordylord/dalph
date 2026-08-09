@@ -83,8 +83,13 @@ turn identity allocation into proof that the Run began.
   `one idempotent Run entry installs the delivery service contracts` prove the
   boundary order, single entry, and single activation service surface.
 - Application test
+  `retries a pre-commit Run beginning failure without entering activation`
+  proves that a failure with no committed row reaches no activation boundary
+  and that the retry invocation re-observes absence and re-evaluates P0.
+- Application test
   `retries an unacknowledged Run beginning through the same entry without appending it twice`
-  proves the two crash prefixes.
+  proves that a committed beginning whose response was lost is reconstructed
+  without re-evaluating P0 or appending another beginning.
 - Existing Journal test
   `atomically rejects a second beginning for one Run identity`
   remains the lower-boundary negative control.
