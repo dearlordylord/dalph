@@ -45,6 +45,51 @@ export const plannedAttemptExecutorObligations = Object.freeze({
   ])
 })
 
+export const runActivationObligations = Object.freeze({
+  invariants: Object.freeze([
+    "oneBeginningPerRun",
+    "existingHistorySkipsInitialPolicy",
+    "beginningRecordsExactLazyPolicy",
+    "existingHistoryUsesLatestDurablePolicy",
+    "onlyExactEstablishedRunActivates",
+    "atMostOneDiscoveredUnfinishedRunMayActivate",
+    "terminatedRunIsFinal",
+    "activationRestoresHeldAdmission",
+    "independentAdmissionRequiresAvailablePosition",
+    "latestPolicyControlsAdmission",
+    "establishmentSourceDoesNotChangeActivationBounds",
+    "activationStartsAfterDurableBeginning",
+    "finalityReadRequiresQuiescence",
+    "terminationRequiresLaterSettledObservation",
+    "terminationRequiresEveryRetainedPositionSettled",
+    "trackerCallsRequireEstablishedHistory",
+    "processLossPreservesDurableHistory",
+    "modelIsFiniteAndBounded"
+  ]),
+  witnesses: Object.freeze([
+    "absentHistoryEstablishedReached",
+    "existingHistoryEstablishedReached",
+    "retainedPositionReconstructedReached",
+    "initialTrackerObservationReached",
+    "postQuiescenceAfterBeginningReached",
+    "postQuiescenceAfterExistingReached",
+    "incompleteReturnReached",
+    "terminatedReached",
+    "processLossReached",
+    "mismatchBlockedReached",
+    "targetMismatchBlockedReached",
+    "requestedRunAbsentBlockedReached",
+    "invalidHistoryBlockedReached",
+    "duplicateBeginningBlockedReached",
+    "foreignRunRecordBlockedReached",
+    "invalidChronologyBlockedReached",
+    "multipleUnfinishedBlockedReached",
+    "terminatedHistoryBlockedReached",
+    "independentAdmissionReached",
+    "contractedRetainedPositionReached"
+  ])
+})
+
 export const taskFactReconciliationObligations = Object.freeze({
   invariants: Object.freeze([
     "requestIdentityErrorsRemainDistinct",

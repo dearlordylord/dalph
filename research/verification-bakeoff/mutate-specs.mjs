@@ -26,6 +26,7 @@ import { promisify } from "node:util"
 
 import {
   plannedAttemptExecutorObligations,
+  runActivationObligations,
   taskFactReconciliationObligations
 } from "../../scripts/quint-model-obligations.mjs"
 
@@ -47,6 +48,12 @@ const SPECS = [
     file: "specs/plannedAttemptExecutor.qnt",
     invariants: plannedAttemptExecutorObligations.invariants,
     witnesses: plannedAttemptExecutorObligations.witnesses
+  },
+  {
+    name: "runActivation",
+    file: "specs/runActivation.qnt",
+    invariants: runActivationObligations.invariants,
+    witnesses: runActivationObligations.witnesses
   },
   {
     name: "controlDirectionApplication",
