@@ -118,6 +118,18 @@ interface AuthoredTaggedDiagnostic {
   readonly exact: string
 }
 
+interface AuthoredActionPlanningFact extends AuthoredTaggedDiagnostic {
+  readonly attemptId: AttemptId | null
+  /** Human-facing meaning derived while the production proposal or issue remains typed. */
+  readonly summary: string
+  /** Exact task correlation when the production value carries one. */
+  readonly taskId: TaskId | null
+}
+
+interface AuthoredObligationDiagnostic extends AuthoredTaggedDiagnostic {
+  readonly attemptId: AttemptId | null
+}
+
 /** Zero-based count of authored interactions consumed when a production delivery publication was captured. */
 const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
   Schema.brand("AuthoredStoryPosition")
@@ -179,7 +191,7 @@ export interface AuthoredDeliveryFrame {
     readonly placement: AuthoredTaggedDiagnostic
     readonly evidence: ReadonlyArray<AuthoredTaggedDiagnostic>
     readonly standings: ReadonlyArray<AuthoredTaggedDiagnostic>
-    readonly obligations: ReadonlyArray<AuthoredTaggedDiagnostic>
+    readonly obligations: ReadonlyArray<AuthoredObligationDiagnostic>
   }>
   readonly settlements: ReadonlyArray<{ readonly taskId: TaskId; readonly attemptId: AttemptId }>
   readonly trackerReflection: { readonly _tag: "DeliveryReflection"; readonly settlementCount: number }
@@ -187,12 +199,12 @@ export interface AuthoredDeliveryFrame {
   readonly actionPlanning:
     | {
         readonly _tag: "DeliveryProposalsAvailable"
-        readonly proposals: ReadonlyArray<AuthoredTaggedDiagnostic>
-        readonly isolatedIssues: ReadonlyArray<AuthoredTaggedDiagnostic>
+        readonly proposals: ReadonlyArray<AuthoredActionPlanningFact>
+        readonly isolatedIssues: ReadonlyArray<AuthoredActionPlanningFact>
       }
     | {
         readonly _tag: "DeliveryProposalOwnershipConflict"
-        readonly conflicts: ReadonlyArray<AuthoredTaggedDiagnostic>
+        readonly conflicts: ReadonlyArray<AuthoredActionPlanningFact>
       }
 }
 
@@ -214,18 +226,159 @@ const authoredTaggedDiagnosticOf = (value: { readonly _tag: string }): AuthoredT
   exact: JSON.stringify(value, null, diagnosticJsonIndent)
 })
 
+type DeliveryObligation = DeliveryConsequences["ticketDeliveries"]["deliveries"][number]["obligations"][number]
+
+const authoredObligationDiagnosticOf = (obligation: DeliveryObligation): AuthoredObligationDiagnostic => {
+  const attemptId = (() => {
+    switch (obligation._tag) {
+      case "WorkflowResponsibility":
+        return obligation.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
+          ? obligation.responsibility.plannedAttempt.attemptId
+          : null
+      case "AcceptedAwaitingIntegration":
+        return obligation.accepted.plannedAttempt.attemptId
+      case "QueuedIntegration":
+      case "StartedIntegration":
+        return obligation.responsibility.plannedAttempt.attemptId
+    }
+  })()
+  return { attemptId, kind: obligation._tag, exact: JSON.stringify(obligation, null, diagnosticJsonIndent) }
+}
+
+type DeliveryProposal = Extract<
+  DeliveryRuntimeEvaluation["proposedActions"],
+  { readonly _tag: "DeliveryProposalsAvailable" }
+>["proposals"][number]
+type DeliveryProposalIssue = Extract<
+  DeliveryRuntimeEvaluation["proposedActions"],
+  { readonly _tag: "DeliveryProposalsAvailable" }
+>["isolatedIssues"][number]
+type DeliveryProposalConflict = Extract<
+  DeliveryRuntimeEvaluation["proposedActions"],
+  { readonly _tag: "DeliveryProposalOwnershipConflict" }
+>["conflicts"][number]
+
+const wordsFromDomainTag = (tag: string): string => tag.replace(/(?<=[a-z])(?=[A-Z])/gu, " ")
+
+const proposalTaskId = (proposal: DeliveryProposal): TaskId | null =>
+  "taskId" in proposal.order ? proposal.order.taskId : null
+
+const proposalAction = (proposal: DeliveryProposal, taskId: TaskId | null): string => {
+  const action = (() => {
+    switch (proposal.route._tag) {
+      case "TrackerGraphReadRoute":
+        return "Read the tracker graph to establish the current graph"
+      case "FreshWorkflowRoute":
+      case "FreshExecutorWorkflowRoute":
+        return wordsFromDomainTag(proposal.route.step._tag)
+      case "RecoveredNewActionRoute":
+        return wordsFromDomainTag(proposal.route.action._tag)
+      case "AcceptedWorkflowRoute":
+      case "IdentityFreeWorkflowRoute":
+        return wordsFromDomainTag(proposal.route.transition._tag)
+    }
+  })()
+  if (proposal.route._tag === "IdentityFreeWorkflowRoute") {
+    if (proposal.route.transition._tag === "QueueAcceptedResultIntegrationResponsibility") {
+      return taskId === null
+        ? "Queue an accepted result for integration"
+        : `Queue task ${taskId}'s accepted result for integration`
+    }
+    if (proposal.route.transition._tag === "SuspendPlannedAttemptExecutorWork") {
+      return taskId === null
+        ? "Request safe suspension of planned-attempt executor work"
+        : `Request safe suspension of task ${taskId}'s planned-attempt executor work`
+    }
+  }
+  return action
+}
+
+const taskWorkAdmissionSummary = (proposal: DeliveryProposal): string => {
+  const requirement = proposal.admission.taskWorkPosition
+  switch (requirement._tag) {
+    case "NoTaskWorkPosition":
+      return "needs no task-work position"
+    case "TaskWorkPositionRequired":
+      switch (requirement.mode) {
+        case "Existing":
+          return "requires the existing task-work position"
+        case "ReserveOrReuse":
+          return "must reserve or reuse a task-work position"
+      }
+  }
+}
+
+const integrationTargetAdmissionSummary = (proposal: DeliveryProposal): string => {
+  const requirement = proposal.admission.integrationTarget
+  switch (requirement._tag) {
+    case "NoIntegrationTargetResource":
+      return "needs no integration-target resource"
+    case "IntegrationTargetResourceRequired":
+      switch (requirement.access) {
+        case "Acquire":
+          return "must acquire the integration-target resource"
+        case "Release":
+          return "must release the held integration-target resource"
+        case "UseHeld":
+          return "requires the held integration-target resource"
+      }
+  }
+}
+
+const authoredActionProposalFactOf = (proposal: DeliveryProposal): AuthoredActionPlanningFact => {
+  const taskId = proposalTaskId(proposal)
+  const attemptId =
+    proposal.admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired"
+      ? proposal.admission.plannedAttemptProtocol.correlation.attemptId
+      : null
+  const action = proposalAction(proposal, taskId)
+  const owner = wordsFromDomainTag(proposal.owner).toLowerCase()
+  return {
+    attemptId,
+    kind: proposal._tag,
+    taskId,
+    summary: [
+      action,
+      taskId === null || action.includes(`task ${taskId}`) ? undefined : `task ${taskId}`,
+      attemptId === null ? undefined : `attempt ${attemptId}`,
+      taskWorkAdmissionSummary(proposal),
+      integrationTargetAdmissionSummary(proposal),
+      proposal.waitsForLiveOperationId === null
+        ? undefined
+        : `waits for live operation ${proposal.waitsForLiveOperationId}`,
+      `planned by the ${owner} layer`
+    ]
+      .filter((part): part is string => part !== undefined)
+      .join(" · "),
+    exact: JSON.stringify(proposal, null, diagnosticJsonIndent)
+  }
+}
+
+const authoredActionIssueFactOf = (issue: DeliveryProposalIssue): AuthoredActionPlanningFact => ({
+  attemptId: null,
+  kind: issue._tag,
+  taskId: issue.taskId,
+  summary: `${wordsFromDomainTag(issue._tag)} · task ${issue.taskId} · ${wordsFromDomainTag(issue.transition)}`,
+  exact: JSON.stringify(issue, null, diagnosticJsonIndent)
+})
+
+const authoredActionConflictFactOf = (conflict: DeliveryProposalConflict): AuthoredActionPlanningFact => ({
+  attemptId: null,
+  kind: "DeliveryProposalOwnershipConflict",
+  taskId: null,
+  summary: `Proposal ownership conflict for ${conflict.id}: ${conflict.owners.join(" and ")} · planning fails closed`,
+  exact: JSON.stringify(conflict, null, diagnosticJsonIndent)
+})
+
 const authoredDeliveryFrameOf = (
   captured: AuthoredDeliveryPublication,
   consequences: DeliveryConsequences,
   runtime: DeliveryRuntimeEvaluation
 ): AuthoredDeliveryFrame => {
-  const conflictFacts: Array<AuthoredTaggedDiagnostic> = []
+  const conflictFacts: Array<AuthoredActionPlanningFact> = []
   if (runtime.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
     for (const conflict of runtime.proposedActions.conflicts) {
-      conflictFacts.push({
-        kind: "DeliveryProposalOwnershipConflict",
-        exact: JSON.stringify(conflict, null, diagnosticJsonIndent)
-      })
+      conflictFacts.push(authoredActionConflictFactOf(conflict))
     }
   }
   return {
@@ -280,7 +433,7 @@ const authoredDeliveryFrameOf = (
       placement: authoredTaggedDiagnosticOf(ticket.placement),
       evidence: ticket.evidence.map(authoredTaggedDiagnosticOf),
       standings: ticket.standings.map(authoredTaggedDiagnosticOf),
-      obligations: ticket.obligations.map(authoredTaggedDiagnosticOf)
+      obligations: ticket.obligations.map(authoredObligationDiagnosticOf)
     })),
     settlements: consequences.settlements.settlements.map(({ attemptId, taskId }) => ({ attemptId, taskId })),
     trackerReflection: {
@@ -291,8 +444,8 @@ const authoredDeliveryFrameOf = (
       runtime.proposedActions._tag === "DeliveryProposalsAvailable"
         ? {
             _tag: "DeliveryProposalsAvailable",
-            proposals: runtime.proposedActions.proposals.map(authoredTaggedDiagnosticOf),
-            isolatedIssues: runtime.proposedActions.isolatedIssues.map(authoredTaggedDiagnosticOf)
+            proposals: runtime.proposedActions.proposals.map(authoredActionProposalFactOf),
+            isolatedIssues: runtime.proposedActions.isolatedIssues.map(authoredActionIssueFactOf)
           }
         : { _tag: "DeliveryProposalOwnershipConflict", conflicts: conflictFacts }
   }
@@ -1109,6 +1262,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           }
           if (yield* cursor.atTerminalAssertions) break
           recoveryOrdinal += 1
+          yield* Ref.set(activeDeliveryActivation, "Recovered")
           const recoveredRun = withAuthoredOperatorDriver(
             runRecoveredWorkflowWithControlledDeliveryActionExecutor(command.target, controlledExecutorFactory).pipe(
               Effect.provide(planningLayer("recovery", recoveryOrdinal))
@@ -1123,7 +1277,14 @@ const runAuthoredScenarioCassetteWith = (request: {
             Effect.andThen(Effect.die("recovered coordinator stopped before the authored terminal assertions"))
           )
         )
-        if (candidateTerminalEventTag !== undefined) yield* Deferred.await(candidateOutcomeRecorded)
+        if (candidateTerminalEventTag !== undefined) {
+          yield* Effect.raceFirst(
+            Deferred.await(candidateOutcomeRecorded),
+            Fiber.join(coordinator).pipe(
+              Effect.andThen(Effect.die(`coordinator stopped before recording ${candidateTerminalEventTag}`))
+            )
+          )
+        }
         for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
         const recoveredCoordinatorExit = coordinator.pollUnsafe()
         yield* Fiber.interrupt(coordinator)

@@ -25,111 +25,7 @@ const appendText = <K extends keyof HTMLElementTagNameMap>(
   return element
 }
 
-const objectRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-  typeof value === "object" && value !== null ? value as Readonly<Record<string, unknown>> : undefined
-
-const firstNamedString = (value: unknown, names: ReadonlySet<string>): string | undefined => {
-  const record = objectRecord(value)
-  if (record === undefined) return undefined
-  for (const [key, child] of Object.entries(record)) {
-    if (names.has(key) && typeof child === "string") return child
-    const nested = firstNamedString(child, names)
-    if (nested !== undefined) return nested
-  }
-  if (Array.isArray(value)) {
-    for (const child of value) {
-      const nested = firstNamedString(child, names)
-      if (nested !== undefined) return nested
-    }
-  }
-  return undefined
-}
-
-const taggedName = (value: unknown): string | undefined => {
-  const tag = objectRecord(value)?._tag
-  return typeof tag === "string" ? tag : undefined
-}
-
-const wordsFromTag = (value: string): string =>
-  value.replace(/Route$/u, "").replace(/(?<=[a-z])(?=[A-Z])/gu, " ")
-
-const proposalAction = (value: unknown, taskId: string | undefined, fallback: string): string => {
-  const route = objectRecord(objectRecord(value)?.route)
-  const routeTag = taggedName(route)
-  const actionTag = routeTag === "IdentityFreeWorkflowRoute" || routeTag === "AcceptedWorkflowRoute"
-    ? taggedName(route?.transition)
-    : routeTag === "FreshWorkflowRoute" || routeTag === "FreshExecutorWorkflowRoute"
-      ? taggedName(route?.step)
-      : routeTag === "RecoveredNewActionRoute"
-        ? taggedName(route?.action)
-        : routeTag
-  if (actionTag === undefined) return fallback
-  if (actionTag === "TrackerGraphReadRoute") {
-    const purpose = firstNamedString(route, new Set(["purpose"]))
-    return purpose === "EstablishCurrentGraph"
-      ? "Read the tracker graph to establish the current graph"
-      : "Read the tracker graph"
-  }
-  if (actionTag === "QueueAcceptedResultIntegrationResponsibility") {
-    return taskId === undefined ? "Queue an accepted result for integration" : `Queue task ${taskId}'s accepted result for integration`
-  }
-  if (actionTag === "SuspendPlannedAttemptExecutorWork") {
-    return taskId === undefined
-      ? "Request safe suspension of planned-attempt executor work"
-      : `Request safe suspension of task ${taskId}'s planned-attempt executor work`
-  }
-  return wordsFromTag(actionTag)
-}
-
-const proposalAdmission = (value: unknown): string => {
-  const admission = objectRecord(objectRecord(value)?.admission)
-  const taskWork = objectRecord(admission?.taskWorkPosition)
-  const taskWorkText = taggedName(taskWork) === "TaskWorkPositionRequired"
-    ? taskWork?.mode === "Existing"
-      ? "requires the existing task-work position"
-      : "must reserve or reuse a task-work position"
-    : "needs no task-work position"
-  const integrationTarget = objectRecord(admission?.integrationTarget)
-  const targetText = taggedName(integrationTarget) !== "IntegrationTargetResourceRequired"
-    ? "needs no integration-target resource"
-    : integrationTarget?.access === "Acquire"
-      ? "must acquire the integration-target resource"
-      : integrationTarget?.access === "Release"
-        ? "must release the held integration-target resource"
-        : "requires the held integration-target resource"
-  return `${taskWorkText} · ${targetText}`
-}
-
-const proposalSummary = (fact: { readonly exact: string; readonly kind: string }): string => {
-  try {
-    const value: unknown = JSON.parse(fact.exact)
-    const record = objectRecord(value)
-    const taskId = firstNamedString(value, new Set(["taskId"]))
-    if (taggedName(value) !== "DeliveryActionProposal") {
-      if (fact.kind === "DeliveryProposalOwnershipConflict") {
-        const owners = Array.isArray(record?.owners) ? record.owners.map(String) : []
-        return `Proposal ownership conflict${typeof record?.id === "string" ? ` for ${record.id}` : ""}: ${owners.length === 0 ? "owners unavailable" : owners.join(" and ")} · planning fails closed`
-      }
-      const transition = firstNamedString(value, new Set(["transition"]))
-      return `${wordsFromTag(taggedName(value) ?? fact.kind)}${taskId === undefined ? "" : ` · task ${taskId}`}${transition === undefined ? "" : ` · ${wordsFromTag(transition)}`}`
-    }
-    const attemptId = firstNamedString(value, new Set(["attemptId"]))
-    const owner = firstNamedString(value, new Set(["owner"]))
-    const ownerText = owner?.replace(/(?<=[a-z])(?=[A-Z])/gu, " ").toLowerCase()
-    const waitsFor = record?.waitsForLiveOperationId
-    const action = proposalAction(value, taskId, fact.kind)
-    return [
-      action,
-      taskId === undefined || action.includes(`task ${taskId}`) ? undefined : `task ${taskId}`,
-      attemptId === undefined ? undefined : `attempt ${attemptId}`,
-      proposalAdmission(value),
-      typeof waitsFor === "string" ? `waits for live operation ${waitsFor}` : undefined,
-      ownerText === undefined ? undefined : `planned by the ${ownerText} layer`
-    ].filter((part): part is string => part !== undefined).join(" · ")
-  } catch {
-    return fact.kind
-  }
-}
+const proposalSummary = (fact: { readonly summary: string }): string => fact.summary
 
 const graphEdges = (
   tasks: ReadonlyArray<{
@@ -540,18 +436,12 @@ const exactCorrelations = (frame: AuthoredDeliveryFrame): ReadonlyArray<ExactCor
     summary: `held position · task ${taskId} · attempt ${attemptId} · Run ${runId}`
   })),
   ...frame.deliveries.flatMap(({ obligations, taskId }) =>
-    obligations.map(({ exact, kind }) => {
-      let attemptId: string | undefined
-      try {
-        attemptId = firstNamedString(JSON.parse(exact), new Set(["attemptId"]))
-      } catch {
-        // The exact JSON remains available in the task facts when it cannot be summarized.
-      }
-      return {
+    obligations.map(({ attemptId, exact, kind }) =>
+      ({
         key: `obligation:${taskId}:${kind}:${exact}`,
-        summary: `obligation · task ${taskId} · ${kind}${attemptId === undefined ? "" : ` · attempt ${attemptId}`}`
-      }
-    })
+        summary: `obligation · task ${taskId} · ${kind}${attemptId === null ? "" : ` · attempt ${attemptId}`}`
+      })
+    )
   )
 ]
 

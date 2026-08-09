@@ -461,6 +461,11 @@ it.effect("reopens Continue and performs fresh reads before admitting the same a
 
     expect(choiceAt).toBeGreaterThan(0)
     expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered", "Recovered"])
+    const firstRecoveredFrame = run.deliveryFrames.findIndex(({ activation }) => activation === "Recovered")
+    expect(firstRecoveredFrame).toBeGreaterThan(0)
+    expect(run.deliveryFrames.slice(firstRecoveredFrame).every(({ activation }) => activation === "Recovered")).toBe(
+      true
+    )
     expect(continuedAt).toBeGreaterThan(choiceAt)
     expect(between).toEqual([
       "TaskTrackerReadIntentRecorded",
@@ -2570,6 +2575,17 @@ it.effect(
             !heldPositions.some(({ taskId }) => taskId === "A")
         )
       ).toBe(true)
+      const trackerRead = run.deliveryFrames
+        .flatMap(({ actionPlanning }) =>
+          actionPlanning._tag === "DeliveryProposalsAvailable" ? actionPlanning.proposals : []
+        )
+        .find(({ exact }) => exact.includes('"_tag": "TrackerGraphReadRoute"'))
+      expect(trackerRead).toMatchObject({
+        attemptId: null,
+        summary:
+          "Read the tracker graph to establish the current graph · needs no task-work position · needs no integration-target resource · planned by the tracker graph layer",
+        taskId: null
+      })
       expect(() => JSON.stringify(run.deliveryFrames)).not.toThrow()
     })
 )
@@ -2624,6 +2640,9 @@ it.effect("retains every conflicting production proposal owner in the delivery f
       return expect.fail("expected the production proposal ownership conflict")
     }
     expect(frame.actionPlanning.conflicts).toHaveLength(1)
+    expect(frame.actionPlanning.conflicts[0]?.summary).toBe(
+      `Proposal ownership conflict for ${trackerProposal.id}: TrackerGraph and TicketDelivery · planning fails closed`
+    )
     expect(JSON.parse(frame.actionPlanning.conflicts[0]?.exact ?? "null")).toMatchObject({
       owners: ["TrackerGraph", "TicketDelivery"]
     })

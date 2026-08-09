@@ -136,7 +136,8 @@ discards all displayed results.
   checks the browser update path and the exact completed/failed summary.
 - `browser-smoke drives the real Orb application through every maintained cassette`
   runs through the package's `browser-smoke` command against `REDUCER_LAB_URL`, completes
-  the insecure-origin verification cassette, then requires all 40 choices to
+  the insecure-origin verification cassette, then discovers the current maintained
+  choice count from the ordinary selector and requires every choice to
   settle with no failure or Lab defect and exercises retained frame navigation.
 - `runs browser Run all sequentially without changing its complete cassette set`
   holds five controlled runners, proves only one starts initially, then proves
@@ -372,7 +373,10 @@ tasks to select. Reconstructed held positions and ticket-delivery obligations
 remain visible below; the Lab does not invite the maintainer to use an empty
 graph summary.
 
-The concise action-plan projection names the concrete production transition,
+The typed cassette-evidence projection derives the concise action-plan facts
+while the exact production proposal union is still available. The browser does
+not reparse raw diagnostic JSON to rediscover route, admission, ownership, or
+correlation. The projection names the concrete production transition,
 its task or attempt correlation, whether it must reserve or reuse a task-work
 position or integration-target resource, and any live operation it must wait
 for. Terms such as `IdentityFreeWorkflowRoute` stay in the secondary exact
@@ -382,7 +386,7 @@ No currently maintained authored cassette crosses the separate direct
 integration-finality protocol and then triggers another graph-level delivery
 publication. Consequently the authored workbench currently demonstrates the
 settlement and tracker-reflection layers only in their exact empty state. It
-says this explicitly; it must not imply that the 40-cassette catalog contains
+says this explicitly; it must not imply that the current maintained catalog contains
 a populated graph-level settlement frame, and it must not synthesize one from
 the direct protocol cassette.
 
@@ -488,7 +492,7 @@ task whose exact facts are correlated below.
 - The real-browser command listens for a delivery-frame event before the
   selected cassette's settled event, proves the article is still Running when
   a real frame appears, and then checks final auto-follow, rewind, disclosure
-  stability, and the complete 40-cassette terminal summary.
+  stability, and the complete current-catalog terminal summary.
 - `does not fabricate a graph workbench for direct protocol cassettes` checks
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.
