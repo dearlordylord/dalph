@@ -44,7 +44,9 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   workflowRunBeganRecordKey,
   workflowRunTerminatedRecordKey,
-  controlDirectionAppliedRecordKey
+  controlDirectionAppliedRecordKey,
+  attemptChoiceAppliedRecordKey,
+  taskClaimReacquisitionDirectedRecordKey
 } from "../../workflow-journal/record-key.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
@@ -90,6 +92,11 @@ import {
   ControlDirectionAppliedEvent,
   ControlDirectionApplicationOrdinal
 } from "../protocols/control-direction-application/events.js"
+import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
+import {
+  TaskClaimReacquisitionDirectedEvent,
+  TaskClaimReacquisitionRequestId
+} from "../protocols/task-claim-reacquisition/events.js"
 
 const runId = RunId.make("occurrence-run")
 const operation = makeTrackerGraphObservationOperation(
@@ -724,6 +731,50 @@ it.effect("projects only the applied direction and rejects unsupported operator 
   })
 )
 
+it.effect("projects Alice's distinct attempt-choice and claim-reacquisition actions", () =>
+  Effect.gen(function* () {
+    const choiceRequestId = AttemptChoiceRequestId.make({ nonce: "occurrence-choice", runId })
+    const reacquisitionRequestId = TaskClaimReacquisitionRequestId.make("occurrence-reacquire")
+    const projection = yield* projectWorkflowOccurrences([
+      {
+        event: AttemptChoiceAppliedEvent.make({
+          choice: "ContinueExistingAttempt",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId: choiceRequestId,
+          subject: { observedTaskRevision: TaskRevision.make("occurrence-changed-revision"), plannedAttempt },
+          version: workflowJournalEventVersion
+        }),
+        key: attemptChoiceAppliedRecordKey(choiceRequestId),
+        position: JournalPosition.make(1),
+        runId
+      },
+      {
+        event: TaskClaimReacquisitionDirectedEvent.make({
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId: reacquisitionRequestId,
+          subject: { runId, taskId: plannedAttempt.taskId },
+          version: workflowJournalEventVersion
+        }),
+        key: taskClaimReacquisitionDirectedRecordKey(reacquisitionRequestId),
+        position: JournalPosition.make(2),
+        runId
+      }
+    ])
+
+    expect(projection.occurrences).toMatchObject([
+      { _tag: "AppliedAttemptChoice", requestId: choiceRequestId, subject: { plannedAttempt } },
+      {
+        _tag: "AppliedTaskClaimReacquisitionDirection",
+        requestId: reacquisitionRequestId,
+        runId,
+        taskId: plannedAttempt.taskId
+      }
+    ])
+  })
+)
+
 it.effect("reconstructs after process loss without a coordinator-crash journal event", () =>
   Effect.gen(function* () {
     const retainedIntent: JournalRecord = {
@@ -998,6 +1049,7 @@ it.effect("rejects an observation whose exact initiating action is absent, later
 
 it("compile-time exhaustive fixtures cover every occurrence and actor variant", () => {
   const occurrenceVariants = {
+    AppliedAttemptChoice: true,
     AppliedControlDirection: true,
     AppliedTaskClaimReacquisitionDirection: true,
     AppliedTaskWorkCapacity: true,
@@ -1013,6 +1065,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(12)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(13)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

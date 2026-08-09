@@ -373,10 +373,19 @@ _Avoid_: Planned-attempt executor-work responsibility, integration responsibilit
 
 **Delivery action proposal**:
 A pure description of one exact next Dalph protocol action, its immutable
-route, domain order evidence, and complete task-work or integration-resource
-requirements. Constructing, comparing, or observing a proposal performs no
-action and acquires no process-local resource.
+route, domain order evidence, and complete task-work, planned-attempt protocol,
+or integration-resource requirements. Constructing, comparing, or observing a
+proposal performs no action and acquires no process-local resource.
 _Avoid_: Workflow occurrence, admitted action, runtime ownership
+
+**Planned-attempt protocol guard**:
+The process-local exclusion held while Dalph either records an executor command
+intent or proves and records that the same exact Run and planned attempt may be
+abandoned. It prevents those journal changes from passing each other. It is not
+executor authority, a task-work capacity position, or a durable fact, and it
+disappears with the process that owns it; restart relies on reconstructed
+journal chronology instead.
+_Avoid_: Task-work position, executor claim, durable attempt lock
 
 **Delivery action planning**:
 The process-local descriptive composition that combines current delivery

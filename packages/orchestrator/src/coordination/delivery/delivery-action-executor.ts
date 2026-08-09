@@ -1,17 +1,25 @@
-import type {
+import {
   PlannedAttemptExecutorCorrelation,
-  PlannedAttemptExecutorReport,
-  PlannedAttemptExecutorService,
-  PlannedTaskAttempt
+  type PlannedAttemptExecutorReport,
+  type PlannedAttemptExecutorService,
+  type PlannedTaskAttempt
 } from "@dalph/contracts"
-import { Context, type Effect } from "effect"
+import { Context, type Effect, Schema } from "effect"
 import type { InRunJournalService } from "../../workflow-journal/store.js"
 import type { WorkflowInterpreterService, WorkflowTraceService } from "../../workflow/interpretation/interpreter.js"
 import type { TaskClaimAcquisitionPlannerService } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import type {
+  PlannedAttemptExecutorCommandReconciliationRequired,
   PlannedAttemptExecutorContinuationLimitReached,
-  PlannedAttemptExecutorCorrelationMismatch
+  PlannedAttemptExecutorCorrelationMismatch,
+  PlannedAttemptExecutorProjectionUnavailable,
+  PlannedAttemptExecutorResponsibilityAbandoned,
+  PlannedAttemptExecutorResponsibilityContradiction,
+  PlannedAttemptExecutorResponsibilityMissing,
+  PlannedAttemptExecutorStateUnavailable,
+  PlannedAttemptExecutorSuspensionLimitReached
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
+import type { PlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type {
   queueAcceptedResultIntegrationResponsibility,
   startQueuedIntegration
@@ -37,13 +45,18 @@ import type { IntegrationFinalityRuntimeUnavailable } from "./integration-finali
 import type { OperationId } from "../../workflow/identity.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
-import type {
-  AcceptedIdentityDeliveryProposal,
+import {
+  type AcceptedIdentityDeliveryProposal,
   DeliveryProposalId,
-  FreshIdentityDeliveryProposal,
-  IdentityFreeDeliveryProposal
+  type FreshIdentityDeliveryProposal,
+  type IdentityFreeDeliveryProposal
 } from "./delivery-action-proposal.js"
 import type { DeliveryRelationSourceError } from "./relations.js"
+import type {
+  advanceAttemptStoppage,
+  observeAttemptStoppageExecutor,
+  recordStoppedAttemptClaimNoRelease
+} from "../../workflow/protocols/attempt-choice/stop.js"
 
 type FreshOperationProposal = Extract<
   FreshIdentityDeliveryProposal,
@@ -78,7 +91,17 @@ export interface DeliveryActionExecutionLease {
   readonly integrationTargets: IntegrationTargetResourceController
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
   readonly releasePlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
+  readonly withPlannedAttemptProtocol: <A, E, R>(
+    correlation: PlannedAttemptExecutorCorrelation,
+    effect: (permit: PlannedAttemptProtocolPermit) => Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E | DeliveryActionProtocolAdmissionMissing, R>
 }
+
+/** A route attempted exact-attempt protocol work without declaring its admission requirement. */
+export class DeliveryActionProtocolAdmissionMissing extends Schema.TaggedErrorClass<DeliveryActionProtocolAdmissionMissing>()(
+  "DeliveryActionProtocolAdmissionMissing",
+  { correlation: PlannedAttemptExecutorCorrelation, proposalId: DeliveryProposalId }
+) {}
 
 /** Typed semantic outcome; later domain work is always re-derived by the relation. */
 export type DeliveryActionResult =
@@ -122,6 +145,10 @@ type EffectFunctionFailure<F> = F extends (...args: infer _Args) => Effect.Effec
 
 /** Exact typed protocol failures preserved by the action-coloured executor port. */
 export type DeliveryActionExecutionError =
+  | DeliveryActionProtocolAdmissionMissing
+  | EffectFunctionFailure<typeof advanceAttemptStoppage>
+  | EffectFunctionFailure<typeof observeAttemptStoppageExecutor>
+  | EffectFunctionFailure<typeof recordStoppedAttemptClaimNoRelease>
   | EffectFunctionFailure<typeof queueAcceptedResultIntegrationResponsibility>
   | EffectFunctionFailure<typeof recoverTaskClaimOperation>
   | EffectFunctionFailure<typeof recoverTaskClaimReleaseOperation>
@@ -138,7 +165,14 @@ export type DeliveryActionExecutionError =
   | TargetPromotionRuntimeUnavailable
   | IntegrationFinalityRuntimeUnavailable
   | PlannedAttemptExecutorContinuationLimitReached
+  | PlannedAttemptExecutorCommandReconciliationRequired
   | PlannedAttemptExecutorCorrelationMismatch
+  | PlannedAttemptExecutorProjectionUnavailable
+  | PlannedAttemptExecutorResponsibilityAbandoned
+  | PlannedAttemptExecutorResponsibilityContradiction
+  | PlannedAttemptExecutorResponsibilityMissing
+  | PlannedAttemptExecutorStateUnavailable
+  | PlannedAttemptExecutorSuspensionLimitReached
   | DeliveryRelationSourceError
   | ServiceFailure<InRunJournalService>
   | ServiceFailure<PlannedAttemptExecutorService>
@@ -168,7 +202,10 @@ export type DeliverySemanticTraceEvent =
   | {
       readonly _tag: "ProposalDeferred"
       readonly proposalId: DeliveryProposalId
-      readonly reason: "IntegrationTargetUnavailable" | "TaskWorkPositionUnavailable"
+      readonly reason:
+        | "IntegrationTargetUnavailable"
+        | "PlannedAttemptProtocolUnavailable"
+        | "TaskWorkPositionUnavailable"
     }
 
 export interface DeliverySemanticTraceService {

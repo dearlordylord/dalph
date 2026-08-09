@@ -1,10 +1,16 @@
 import { type AttemptId } from "@dalph/contracts"
 import { type OperationId } from "../workflow/identity.js"
 import { type JournalPosition, JournalRecordKey } from "./identity.js"
-import type { PlannedAttemptExecutorReportOrdinal } from "../workflow/protocols/planned-attempt-executor-work/events.js"
+import type {
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservationOrdinal
+} from "../workflow/protocols/planned-attempt-executor-work/events.js"
 import type { RunPolicyRevision } from "../control/policy.js"
 import type { ControlDirectionApplicationOrdinal } from "../workflow/protocols/control-direction-application/events.js"
 import type { TaskClaimReacquisitionRequestId } from "../workflow/protocols/task-claim-reacquisition/events.js"
+import type { AttemptChoiceRequestId } from "../workflow/protocols/attempt-choice/events.js"
 import type {
   IntegrationCandidateAgentReportOrdinal,
   IntegrationCandidateCorrelation,
@@ -27,6 +33,18 @@ export const controlDirectionAppliedRecordKey = (ordinal: ControlDirectionApplic
 export const taskClaimReacquisitionDirectedRecordKey = (requestId: TaskClaimReacquisitionRequestId): JournalRecordKey =>
   JournalRecordKey.make(`task-claim-reacquisition:${requestId}:directed`)
 
+export const attemptChoiceAppliedRecordKey = (requestId: AttemptChoiceRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt-choice:${requestId.nonce}:applied`)
+
+export const attemptStoppageIntentRecordKey = (requestId: AttemptChoiceRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt-stoppage:${requestId.nonce}:intent`)
+
+export const attemptImplementationAbandonedRecordKey = (requestId: AttemptChoiceRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt-stoppage:${requestId.nonce}:implementation-abandoned`)
+
+export const stoppedAttemptClaimNoReleaseRecordKey = (requestId: AttemptChoiceRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt-stoppage:${requestId.nonce}:claim-no-release`)
+
 export const taskWorkCapacityPolicyRecordKey = (revision: RunPolicyRevision): JournalRecordKey =>
   JournalRecordKey.make(`run-policy:${revision}:task-work-capacity`)
 
@@ -42,10 +60,35 @@ export const attemptPlanRecordKey = (attemptId: AttemptId): JournalRecordKey =>
 export const plannedAttemptExecutorWorkResponsibilityBeganRecordKey = (attemptId: AttemptId): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:executor-work-responsibility-began`)
 
+export const plannedAttemptExecutorCommandIntendedRecordKey = (
+  attemptId: AttemptId,
+  ordinal: PlannedAttemptExecutorCommandOrdinal
+): JournalRecordKey => JournalRecordKey.make(`attempt:${attemptId}:executor-command:${ordinal}:intent`)
+
+export const plannedAttemptExecutorCommandProjectionObservedRecordKey = (
+  attemptId: AttemptId,
+  commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+  projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `attempt:${attemptId}:executor-command:${commandOrdinal}:projection:${projectionOrdinal}:observation`
+  )
+
+export const plannedAttemptExecutorCommandResponseContradictedRecordKey = (
+  attemptId: AttemptId,
+  commandOrdinal: PlannedAttemptExecutorCommandOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:executor-command:${commandOrdinal}:response-contradiction`)
+
 export const plannedAttemptExecutorWorkReportedRecordKey = (
   attemptId: AttemptId,
   ordinal: PlannedAttemptExecutorReportOrdinal
 ): JournalRecordKey => JournalRecordKey.make(`attempt:${attemptId}:executor-work-report:${ordinal}`)
+
+export const plannedAttemptExecutorStateObservedRecordKey = (
+  attemptId: AttemptId,
+  ordinal: PlannedAttemptExecutorStateObservationOrdinal
+): JournalRecordKey => JournalRecordKey.make(`attempt:${attemptId}:executor-state-observation:${ordinal}`)
 
 export const integrationResponsibilityBeganRecordKey = (attemptId: AttemptId): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:integration-responsibility-began`)

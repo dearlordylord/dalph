@@ -64,6 +64,8 @@ import {
 import { EvidenceStore, memoryEvidenceStoreLayer } from "../../workflow/protocols/target-verification/evidence-store.js"
 import { runTargetVerification } from "../../workflow/protocols/target-verification/protocol.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
@@ -78,6 +80,7 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
@@ -154,6 +157,19 @@ const seedTerminalAccepted = Effect.gen(function* () {
     runId,
     plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
     PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+  )
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "StartOrContinue",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: commandOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
   )
   const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
   yield* journal.append(

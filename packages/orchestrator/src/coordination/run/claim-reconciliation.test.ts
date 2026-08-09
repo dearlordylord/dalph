@@ -29,6 +29,7 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   taskClaimReacquisitionDirectedRecordKey
@@ -54,6 +55,8 @@ import {
   makeTaskWorktreeReconciliationOperation
 } from "../../workflow/registry/operation.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
@@ -238,6 +241,19 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
       plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
       PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
     )
+    const runningCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, runningCommandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: runningCommandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
     const runningOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
     yield* journal.append(
       runId,
@@ -339,6 +355,19 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
     expect((yield* recovery.readDeliveryProjection).frontier.transitions).toEqual([
       { _tag: "SuspendPlannedAttemptExecutorWork", plannedAttempt }
     ])
+    const suspensionCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspensionCommandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Suspend",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: suspensionCommandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
     const suspendedOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
     yield* journal.append(
       runId,
@@ -459,6 +488,19 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
       PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
     )
+    const runningCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, runningCommandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: runningCommandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
     const runningOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
     yield* journal.append(
       runId,
@@ -535,6 +577,19 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       { _tag: "SuspendPlannedAttemptExecutorWork", plannedAttempt }
     ])
 
+    const suspensionCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspensionCommandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Suspend",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: suspensionCommandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
     const suspendedOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
     yield* journal.append(
       runId,

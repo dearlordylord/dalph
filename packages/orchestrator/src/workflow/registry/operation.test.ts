@@ -1,11 +1,12 @@
 import { it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
-import { TaskId } from "@dalph/contracts"
+import { RunId, TaskId } from "@dalph/contracts"
 import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { OperationId } from "../identity.js"
-import { WorkflowOperation } from "./operation.js"
+import { TaskClaimReleaseAuthority, WorkflowOperation } from "./operation.js"
+import { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
 
 const claim = ActiveTaskClaim.make({
   operationId: OperationId.make("operation-test-acquisition"),
@@ -14,6 +15,7 @@ const claim = ActiveTaskClaim.make({
   token: ClaimToken.make("operation-test-token")
 })
 const release = TaskClaimRelease.make({ claim, operationId: OperationId.make("operation-test-release") })
+const authority = TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({})
 
 it.effect("requires a claim release to follow its acquisition without naming itself", () =>
   Effect.gen(function* () {
@@ -21,17 +23,45 @@ it.effect("requires a claim release to follow its acquisition without naming its
     expect(
       (yield* decode({
         _tag: "ReleaseTaskClaim",
+        authority,
         predecessorOperationIds: [release.operationId, claim.operationId],
         release
       }).pipe(Effect.flip))._tag
     ).toBe("SchemaError")
     expect(
-      (yield* decode({ _tag: "ReleaseTaskClaim", predecessorOperationIds: [], release }).pipe(Effect.flip))._tag
+      (yield* decode({ _tag: "ReleaseTaskClaim", authority, predecessorOperationIds: [], release }).pipe(Effect.flip))
+        ._tag
     ).toBe("SchemaError")
-    expect(yield* decode({ _tag: "ReleaseTaskClaim", predecessorOperationIds: [claim.operationId], release })).toEqual({
-      _tag: "ReleaseTaskClaim",
-      predecessorOperationIds: [claim.operationId],
-      release
+    expect(
+      yield* decode({ _tag: "ReleaseTaskClaim", authority, predecessorOperationIds: [claim.operationId], release })
+    ).toEqual({ _tag: "ReleaseTaskClaim", authority, predecessorOperationIds: [claim.operationId], release })
+  })
+)
+
+it.effect("requires a stopped-attempt claim release to name its focused claim observation", () =>
+  Effect.gen(function* () {
+    const decode = Schema.decodeUnknownEffect(WorkflowOperation)
+    const observationOperationId = OperationId.make("operation-test-focused-claim-read")
+    const stoppedAuthority = TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.make({
+      observationOperationId,
+      requestId: AttemptChoiceRequestId.make({ nonce: "operation-test-stop", runId: RunId.make("operation-test-run") })
     })
+
+    expect(
+      (yield* decode({
+        _tag: "ReleaseTaskClaim",
+        authority: stoppedAuthority,
+        predecessorOperationIds: [claim.operationId],
+        release
+      }).pipe(Effect.flip))._tag
+    ).toBe("SchemaError")
+    expect(
+      yield* decode({
+        _tag: "ReleaseTaskClaim",
+        authority: stoppedAuthority,
+        predecessorOperationIds: [claim.operationId, observationOperationId],
+        release
+      })
+    ).toMatchObject({ authority: stoppedAuthority })
   })
 )

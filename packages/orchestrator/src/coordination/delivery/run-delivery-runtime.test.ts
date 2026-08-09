@@ -30,12 +30,17 @@ import {
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { makeTaskClaimReleaseOperation } from "../../workflow/registry/operation.js"
+import { makeTaskClaimReleaseOperation, TaskClaimReleaseAuthority } from "../../workflow/registry/operation.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
-import { DeliveryProposalId, deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import {
+  acceptedWorkflowTransitionOperationId,
+  DeliveryProposalId,
+  deliveryProposalsOf,
+  trackerGraphReadProposalOf
+} from "./delivery-proposal.js"
 import { DeliveryActionExecutor, type DeliveryActionResult, DeliverySemanticTrace } from "./delivery-action-executor.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
@@ -56,7 +61,17 @@ import {
   runDeliveryRuntime,
   type DeliveryRuntimeInput
 } from "./run-delivery-runtime.js"
-import { DeliveryRuntimeResources, deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
+import {
+  DeliveryRuntimeResources,
+  deliveryRuntimeResourcesLayer,
+  deliveryRuntimeResourcesOf
+} from "./delivery-runtime-resources.js"
+import {
+  makePlannedAttemptProtocolController,
+  PlannedAttemptProtocolController,
+  plannedAttemptProtocolControllerLayer
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 
 const runDeliveryRuntimeQuiescence = <E>(relation: DeliveryRuntimeInput<E>) => runDeliveryRuntime(relation)
 
@@ -81,7 +96,8 @@ const plannerLayer = deterministicPlannedTaskAttemptLayer({
 const identityLayers = Layer.mergeAll(
   deterministicOperationIdAllocatorLayer("runtime-operation"),
   plannerLayer,
-  deliveryRuntimeResourcesLayer
+  deliveryRuntimeResourcesLayer,
+  plannedAttemptProtocolControllerLayer
 )
 
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -104,11 +120,36 @@ const proposal = (ordinal: number, taskId: TaskId): DeliveryActionProposal => ({
   }),
   admission: {
     integrationTarget: { _tag: "NoIntegrationTargetResource" },
+    plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" },
     taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId }
   },
   id: DeliveryProposalId.make(`runtime-proposal:${ordinal}:${taskId}`),
   order: { _tag: "FreshWorkflowOrder", frontierOrdinal: ordinal as never, step: "ReadCurrentTaskGraph", taskId },
   owner: "TicketDelivery"
+})
+
+const handoffCorrelation = { attemptId: AttemptId.make("runtime-admission-handoff-attempt"), runId }
+const handoffIntegrationTarget = IntegrationTarget.make({
+  repository: GitRepositoryLocator.make("/runtime-test/admission-handoff.git"),
+  ref: IntegrationTargetRef.make("refs/heads/main")
+})
+const handoffProposal = (): DeliveryActionProposal => ({
+  ...proposal(0, TaskId.make("runtime-admission-handoff-task")),
+  admission: {
+    integrationTarget: {
+      _tag: "IntegrationTargetResourceRequired",
+      access: "Acquire",
+      integrationTarget: handoffIntegrationTarget,
+      queuedAt: JournalPosition.make(42)
+    },
+    plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired", correlation: handoffCorrelation },
+    taskWorkPosition: {
+      _tag: "TaskWorkPositionRequired",
+      mode: "ReserveOrReuse",
+      taskId: TaskId.make("runtime-admission-handoff-task")
+    }
+  },
+  id: DeliveryProposalId.make("runtime-admission-handoff")
 })
 
 const recoveredProposalFor = (
@@ -316,6 +357,7 @@ it.effect("does not start a causal successor before its live operation owner is 
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(plannerLayer),
       Effect.provide(deliveryRuntimeResourcesLayer),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
       Effect.provideService(OperationIdAllocator, allocator),
       Effect.provideService(DeliveryActionExecutor, executor),
       Effect.forkChild
@@ -550,6 +592,7 @@ it.effect("does not allocate an operation or attempt identity before admission",
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(plannerLayer),
       Effect.provide(deliveryRuntimeResourcesLayer),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
       Effect.provideService(OperationIdAllocator, allocator),
       Effect.provideService(DeliveryActionExecutor, executor),
       Effect.forkChild
@@ -643,6 +686,90 @@ it.effect("interrupts every scoped live action without manufacturing completion"
   }).pipe(Effect.scoped)
 )
 
+const assertInterruptedAdmissionHandoffReleases = Effect.fn("Test.assertInterruptedAdmissionHandoffReleases")(
+  function* (gap: "AfterReservations" | "AfterOwnerRegistration") {
+    const admitted = handoffProposal()
+    const relation = yield* dynamicEvaluationSignal(withProposals(yield* baseEvaluation, [admitted], 1))
+    const gapEntered = yield* Deferred.make<void>()
+    const releaseGap = yield* Deferred.make<void>()
+    const releaseCalls = yield* Ref.make(0)
+    const executorCalls = yield* Ref.make(0)
+    const admissionCreated = yield* Deferred.make<DeliveryRuntimeAdmissionController>()
+    const underlyingIntegrationTargets = yield* makeIntegrationTargetResourceController()
+    const integrationTargets = {
+      ...underlyingIntegrationTargets,
+      acquire: (responsibility: Parameters<typeof underlyingIntegrationTargets.acquire>[0]) =>
+        (gap === "AfterReservations"
+          ? Deferred.succeed(gapEntered, undefined).pipe(Effect.andThen(Deferred.await(releaseGap)))
+          : Effect.void
+        ).pipe(Effect.andThen(underlyingIntegrationTargets.acquire(responsibility))),
+      release: (responsibility: Parameters<typeof underlyingIntegrationTargets.release>[0]) =>
+        Ref.update(releaseCalls, (count) => count + 1).pipe(
+          Effect.andThen(underlyingIntegrationTargets.release(responsibility))
+        )
+    }
+    const baseResources = deliveryRuntimeResourcesOf(integrationTargets)
+    const resources = DeliveryRuntimeResources.of({
+      ...baseResources,
+      makeAdmissionController: (initial) =>
+        baseResources
+          .makeAdmissionController(initial)
+          .pipe(Effect.tap((controller) => Deferred.succeed(admissionCreated, controller)))
+    })
+    const protocol = yield* makePlannedAttemptProtocolController()
+    const trace = DeliverySemanticTrace.of({
+      emit: (event) =>
+        gap === "AfterOwnerRegistration" && event._tag === "ProposalAdmitted" && event.proposalId === admitted.id
+          ? Deferred.succeed(gapEntered, undefined).pipe(Effect.andThen(Deferred.await(releaseGap)))
+          : Effect.void
+    })
+    const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+      Effect.provide(plannerLayer),
+      Effect.provide(deterministicOperationIdAllocatorLayer(`admission-handoff-${gap}`)),
+      Effect.provideService(PlannedAttemptProtocolController, protocol),
+      Effect.provideService(DeliveryRuntimeResources, resources),
+      Effect.provideService(DeliverySemanticTrace, trace),
+      Effect.provideService(
+        DeliveryActionExecutor,
+        DeliveryActionExecutor.of({
+          execute: () => Ref.update(executorCalls, (count) => count + 1).pipe(Effect.andThen(Effect.never))
+        })
+      ),
+      Effect.forkChild
+    )
+
+    yield* Deferred.await(gapEntered)
+    const interruption = yield* Fiber.interrupt(runtime).pipe(Effect.forkChild)
+    yield* Effect.yieldNow
+    yield* Deferred.succeed(releaseGap, undefined)
+    yield* Fiber.join(interruption)
+
+    const admission = yield* Deferred.await(admissionCreated)
+    expect(yield* Ref.get(executorCalls)).toBe(0)
+    expect(yield* Ref.get(releaseCalls)).toBe(1)
+    expect((yield* admission.snapshot).positions.size).toBe(0)
+    const exactPermit = Option.getOrThrow(yield* protocol.reserve(handoffCorrelation))
+    yield* exactPermit.release
+
+    const later = yield* admission.tryReserve(admitted)
+    expect(later._tag).toBe("Admitted")
+    if (later._tag === "Deferred") return
+    expect((yield* admission.snapshot).positions.size).toBe(1)
+    yield* admission.rollback(later.reservation, false)
+    expect((yield* admission.snapshot).positions.size).toBe(0)
+    expect(yield* Ref.get(releaseCalls)).toBe(2)
+  }
+)
+
+it.effect("releases exact admission resources when interrupted after reservations and before owner registration", () =>
+  assertInterruptedAdmissionHandoffReleases("AfterReservations").pipe(Effect.scoped)
+)
+
+it.effect(
+  "releases exact admission resources when interrupted after owner registration and before child ownership",
+  () => assertInterruptedAdmissionHandoffReleases("AfterOwnerRegistration").pipe(Effect.scoped)
+)
+
 it.effect("releases acquired integration ownership and its relation subscriber on interruption", () =>
   Effect.gen(function* () {
     const acquired = {
@@ -657,6 +784,7 @@ it.effect("releases acquired integration ownership and its relation subscriber o
           }),
           queuedAt: JournalPosition.make(40)
         },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
         taskWorkPosition: { _tag: "NoTaskWorkPosition" as const }
       }
     }
@@ -682,7 +810,11 @@ it.effect("releases acquired integration ownership and its relation subscriber o
     const fiber = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(plannerLayer),
       Effect.provide(deterministicOperationIdAllocatorLayer("interrupt-cleanup")),
-      Effect.provideService(DeliveryRuntimeResources, DeliveryRuntimeResources.of({ integrationTargets })),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
+      Effect.provideService(
+        DeliveryRuntimeResources,
+        DeliveryRuntimeResources.of(deliveryRuntimeResourcesOf(integrationTargets))
+      ),
       Effect.provideService(DeliveryActionExecutor, executor),
       Effect.forkChild
     )
@@ -716,6 +848,7 @@ it.effect("rolls back acquired integration ownership when the action fails", () 
           }),
           queuedAt: JournalPosition.make(41)
         },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
         taskWorkPosition: { _tag: "NoTaskWorkPosition" as const }
       }
     }
@@ -727,7 +860,11 @@ it.effect("rolls back acquired integration ownership when the action fails", () 
       yield* runDeliveryRuntimeDecision(relation).pipe(
         Effect.provide(plannerLayer),
         Effect.provide(deterministicOperationIdAllocatorLayer("failed-integration-action")),
-        Effect.provideService(DeliveryRuntimeResources, DeliveryRuntimeResources.of({ integrationTargets })),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provideService(
+          DeliveryRuntimeResources,
+          DeliveryRuntimeResources.of(deliveryRuntimeResourcesOf(integrationTargets))
+        ),
         Effect.provideService(
           DeliveryActionExecutor,
           DeliveryActionExecutor.of({ execute: () => Effect.fail(actionFailure) })
@@ -859,6 +996,7 @@ it.effect("materializes accepted and source-derived operation identities only af
       token: ClaimToken.make("runtime-external-token")
     })
     const releaseOperation = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
       predecessorOperationIds: [claimOperationId],
       release: { claim, operationId: OperationId.make("runtime-release-placeholder") }
     })
@@ -885,7 +1023,7 @@ it.effect("materializes accepted and source-derived operation identities only af
               action._tag === "FreshOperationAction"
                 ? action.operationId
                 : action._tag === "AcceptedOperationAction"
-                  ? action.proposal.actionIdentity.operationId
+                  ? acceptedWorkflowTransitionOperationId(action.proposal.route.transition)
                   : "unexpected"
           }
         ]).pipe(

@@ -1,6 +1,9 @@
 /* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
 import { Effect, Schema } from "effect"
 import {
+  AttemptChoiceAppliedEvent,
+  AttemptImplementationAbandonedEvent,
+  AttemptStoppageIntendedEvent,
   ControlDirectionAppliedEvent,
   describeJournalEvent,
   IntegrationResponsibilityBeganEvent,
@@ -30,6 +33,10 @@ import {
   CompletionClaimDeletedEvent,
   IntegrationFinalitySettledEvent,
   type JournalRecord,
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandResponseContradictedEvent,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   TaskAttemptPlannedEvent,
@@ -42,6 +49,7 @@ import {
   WorkflowActor,
   workflowJournalEventVersion,
   reduceWorkflowJournalHistory,
+  StoppedAttemptClaimNoReleaseObservedEvent,
   TaskClaimReacquisitionDirectedEvent
 } from "@dalph/orchestrator"
 import {
@@ -108,22 +116,68 @@ const trackerFactsEntry = (
 const recordExecutorEntry = (
   event: Extract<
     WorkflowJournalEvent,
-    { readonly _tag: "PlannedAttemptExecutorWorkReported" | "PlannedAttemptExecutorWorkResponsibilityBegan" }
+    {
+      readonly _tag:
+        | "PlannedAttemptExecutorCommandIntended"
+        | "PlannedAttemptExecutorCommandProjectionObserved"
+        | "PlannedAttemptExecutorCommandResponseContradicted"
+        | "PlannedAttemptExecutorStateObserved"
+        | "PlannedAttemptExecutorWorkReported"
+        | "PlannedAttemptExecutorWorkResponsibilityBegan"
+    }
   >
-): RecordedCassetteEntry =>
-  event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-    ? {
+): RecordedCassetteEntry => {
+  switch (event._tag) {
+    case "PlannedAttemptExecutorWorkResponsibilityBegan":
+      return {
         _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
         plannedAttempt: event.plannedAttempt
       }
-    : {
+    case "PlannedAttemptExecutorWorkReported":
+      return {
         _tag: "PlannedAttemptExecutorWorkReported",
         occurrenceClassification: "NonActionOccurrence",
         ordinal: event.ordinal,
         report: event.report
       }
+    case "PlannedAttemptExecutorCommandIntended":
+      return {
+        _tag: "PlannedAttemptExecutorCommandIntended",
+        command: event.command,
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        ordinal: event.ordinal,
+        plannedAttempt: event.plannedAttempt
+      }
+    case "PlannedAttemptExecutorCommandProjectionObserved":
+      return {
+        _tag: "PlannedAttemptExecutorCommandProjectionObserved",
+        commandOrdinal: event.commandOrdinal,
+        observation: event.observation,
+        occurrenceClassification: event.occurrenceClassification,
+        plannedAttempt: event.plannedAttempt,
+        projectionOrdinal: event.projectionOrdinal
+      }
+    case "PlannedAttemptExecutorCommandResponseContradicted":
+      return {
+        _tag: "PlannedAttemptExecutorCommandResponseContradicted",
+        commandOrdinal: event.commandOrdinal,
+        observed: event.observed,
+        occurrenceClassification: event.occurrenceClassification,
+        plannedAttempt: event.plannedAttempt
+      }
+    case "PlannedAttemptExecutorStateObserved":
+      return {
+        _tag: "PlannedAttemptExecutorStateObserved",
+        observation: event.observation,
+        occurrenceClassification: event.occurrenceClassification,
+        ordinal: event.ordinal,
+        plannedAttempt: event.plannedAttempt
+      }
+  }
+}
 
 type RecordedIntegrationEntry = Extract<
   RecordedCassetteEntry,
@@ -503,11 +557,18 @@ const recordTaskBoundaryEntry = (
     WorkflowJournalEvent,
     {
       readonly _tag:
+        | "AttemptChoiceApplied"
+        | "AttemptImplementationAbandoned"
+        | "AttemptStoppageIntended"
         | "ControlDirectionApplied"
         | "TaskClaimReacquisitionDirected"
         | "GitReadIntentRecorded"
         | "PlannedAttemptWorktreeObserved"
         | "TargetLineageObserved"
+        | "PlannedAttemptExecutorCommandIntended"
+        | "PlannedAttemptExecutorCommandProjectionObserved"
+        | "PlannedAttemptExecutorCommandResponseContradicted"
+        | "PlannedAttemptExecutorStateObserved"
         | "PlannedAttemptExecutorWorkReported"
         | "PlannedAttemptExecutorWorkResponsibilityBegan"
         | "IntegrationCandidateAgentReported"
@@ -533,6 +594,7 @@ const recordTaskBoundaryEntry = (
         | "TaskWorkCapacityChanged"
         | "WorkflowRunBegan"
         | "WorkflowRunTerminated"
+        | "StoppedAttemptClaimNoReleaseObserved"
     }
   >
 ): RecordedCassetteEntry => {
@@ -558,13 +620,25 @@ const recordTaskBoundaryEntry = (
 
 type OperatorDirectionEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+  { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
 >
 
 const isOperatorDirectionEvent = (event: WorkflowJournalEvent): event is OperatorDirectionEvent =>
-  event._tag === "ControlDirectionApplied" || event._tag === "TaskClaimReacquisitionDirected"
+  event._tag === "AttemptChoiceApplied" ||
+  event._tag === "ControlDirectionApplied" ||
+  event._tag === "TaskClaimReacquisitionDirected"
 
 const recordedOperatorDirectionEntryFor = (event: OperatorDirectionEvent): RecordedCassetteEntry => {
+  if (event._tag === "AttemptChoiceApplied") {
+    return {
+      _tag: "AttemptChoiceApplied",
+      choice: event.choice,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      requestId: event.requestId,
+      subject: event.subject
+    }
+  }
   if (event._tag === "ControlDirectionApplied") {
     return {
       _tag: "ControlDirectionApplied",
@@ -584,10 +658,56 @@ const recordedOperatorDirectionEntryFor = (event: OperatorDirectionEvent): Recor
   }
 }
 
+type AttemptStopEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag: "AttemptImplementationAbandoned" | "AttemptStoppageIntended" | "StoppedAttemptClaimNoReleaseObserved"
+  }
+>
+
+const isAttemptStopEvent = (event: WorkflowJournalEvent): event is AttemptStopEvent =>
+  event._tag === "AttemptImplementationAbandoned" ||
+  event._tag === "AttemptStoppageIntended" ||
+  event._tag === "StoppedAttemptClaimNoReleaseObserved"
+
+const recordedAttemptStopEntryFor = (event: AttemptStopEvent): RecordedCassetteEntry => {
+  switch (event._tag) {
+    case "AttemptStoppageIntended":
+      return {
+        _tag: event._tag,
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        requestId: event.requestId,
+        subject: event.subject
+      }
+    case "AttemptImplementationAbandoned":
+      return {
+        _tag: event._tag,
+        expectedClaim: event.expectedClaim,
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        proof: event.proof,
+        requestId: event.requestId,
+        subject: event.subject
+      }
+    case "StoppedAttemptClaimNoReleaseObserved":
+      return {
+        _tag: event._tag,
+        expectedClaim: event.expectedClaim,
+        observation: event.observation,
+        observationOperationId: event.observationOperationId,
+        occurrenceClassification: event.occurrenceClassification,
+        requestId: event.requestId,
+        subject: event.subject
+      }
+  }
+}
+
 // eslint-disable-next-line complexity -- The closed journal vocabulary has one total projection into recorded cassette entries.
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
   if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
   if (isOperatorDirectionEvent(event)) return recordedOperatorDirectionEntryFor(event)
+  if (isAttemptStopEvent(event)) return recordedAttemptStopEntryFor(event)
   if (isIntegrationPreparationEvent(event)) return recordIntegrationPreparationEntry(event)
   if (
     event._tag === "GitReadIntentRecorded" ||
@@ -600,6 +720,10 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
     return recordTrackerEntry(event)
   }
   if (
+    event._tag === "PlannedAttemptExecutorCommandIntended" ||
+    event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+    event._tag === "PlannedAttemptExecutorCommandResponseContradicted" ||
+    event._tag === "PlannedAttemptExecutorStateObserved" ||
     event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
     event._tag === "PlannedAttemptExecutorWorkReported"
   ) {
@@ -673,22 +797,75 @@ const eventForTaskBoundaryEntry = (
 
 type RecordedExecutorEntry = Extract<
   RecordedCassetteEntry,
-  { readonly _tag: "PlannedAttemptExecutorWorkReported" | "PlannedAttemptExecutorWorkResponsibilityBegan" }
+  {
+    readonly _tag:
+      | "PlannedAttemptExecutorCommandIntended"
+      | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorCommandResponseContradicted"
+      | "PlannedAttemptExecutorStateObserved"
+      | "PlannedAttemptExecutorWorkReported"
+      | "PlannedAttemptExecutorWorkResponsibilityBegan"
+  }
 >
 const isRecordedExecutorEntry = (entry: RecordedCassetteEntry): entry is RecordedExecutorEntry =>
-  new Set(["PlannedAttemptExecutorWorkReported", "PlannedAttemptExecutorWorkResponsibilityBegan"]).has(entry._tag)
+  new Set([
+    "PlannedAttemptExecutorCommandIntended",
+    "PlannedAttemptExecutorCommandProjectionObserved",
+    "PlannedAttemptExecutorCommandResponseContradicted",
+    "PlannedAttemptExecutorStateObserved",
+    "PlannedAttemptExecutorWorkReported",
+    "PlannedAttemptExecutorWorkResponsibilityBegan"
+  ]).has(entry._tag)
 
-const eventForExecutorEntry = (entry: RecordedExecutorEntry): WorkflowJournalEvent =>
-  entry._tag === "PlannedAttemptExecutorWorkReported"
-    ? PlannedAttemptExecutorWorkReportedEvent.make({
+const eventForExecutorEntry = (entry: RecordedExecutorEntry): WorkflowJournalEvent => {
+  switch (entry._tag) {
+    case "PlannedAttemptExecutorWorkReported":
+      return PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: entry.ordinal,
         report: entry.report,
         version: workflowJournalEventVersion
       })
-    : PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+    case "PlannedAttemptExecutorWorkResponsibilityBegan":
+      return PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
         plannedAttempt: entry.plannedAttempt,
         version: workflowJournalEventVersion
       })
+    case "PlannedAttemptExecutorCommandIntended":
+      return PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: entry.command,
+        initiatedBy: entry.initiatedBy,
+        occurrenceClassification: entry.occurrenceClassification,
+        ordinal: entry.ordinal,
+        plannedAttempt: entry.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    case "PlannedAttemptExecutorCommandProjectionObserved":
+      return PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+        commandOrdinal: entry.commandOrdinal,
+        observation: entry.observation,
+        occurrenceClassification: entry.occurrenceClassification,
+        plannedAttempt: entry.plannedAttempt,
+        projectionOrdinal: entry.projectionOrdinal,
+        version: workflowJournalEventVersion
+      })
+    case "PlannedAttemptExecutorCommandResponseContradicted":
+      return PlannedAttemptExecutorCommandResponseContradictedEvent.make({
+        commandOrdinal: entry.commandOrdinal,
+        observed: entry.observed,
+        occurrenceClassification: entry.occurrenceClassification,
+        plannedAttempt: entry.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    case "PlannedAttemptExecutorStateObserved":
+      return PlannedAttemptExecutorStateObservedEvent.make({
+        observation: entry.observation,
+        occurrenceClassification: entry.occurrenceClassification,
+        ordinal: entry.ordinal,
+        plannedAttempt: entry.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+  }
+}
 
 type RecordedTrackerEntry = Extract<
   RecordedCassetteEntry,
@@ -735,16 +912,28 @@ const eventForIntegrationEntry = (
 
 type RecordedOperatorDirectionEntry = Extract<
   RecordedCassetteEntry,
-  { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+  { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
 >
 
 const isRecordedOperatorDirectionEntry = (entry: RecordedCassetteEntry): entry is RecordedOperatorDirectionEntry =>
-  entry._tag === "ControlDirectionApplied" || entry._tag === "TaskClaimReacquisitionDirected"
+  entry._tag === "AttemptChoiceApplied" ||
+  entry._tag === "ControlDirectionApplied" ||
+  entry._tag === "TaskClaimReacquisitionDirected"
 
 const eventForRecordedOperatorDirectionEntry = (
   entry: RecordedOperatorDirectionEntry,
   runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent => {
+  if (entry._tag === "AttemptChoiceApplied") {
+    return AttemptChoiceAppliedEvent.make({
+      choice: entry.choice,
+      initiatedBy: entry.initiatedBy,
+      occurrenceClassification: entry.occurrenceClassification,
+      requestId: entry.requestId,
+      subject: entry.subject,
+      version: workflowJournalEventVersion
+    })
+  }
   if (entry._tag === "ControlDirectionApplied") {
     return ControlDirectionAppliedEvent.make({ ...entry, version: workflowJournalEventVersion })
   }
@@ -755,6 +944,29 @@ const eventForRecordedOperatorDirectionEntry = (
     subject: { runId, taskId: entry.taskId },
     version: workflowJournalEventVersion
   })
+}
+
+type RecordedAttemptStopEntry = Extract<
+  RecordedCassetteEntry,
+  {
+    readonly _tag: "AttemptImplementationAbandoned" | "AttemptStoppageIntended" | "StoppedAttemptClaimNoReleaseObserved"
+  }
+>
+
+const isRecordedAttemptStopEntry = (entry: RecordedCassetteEntry): entry is RecordedAttemptStopEntry =>
+  entry._tag === "AttemptImplementationAbandoned" ||
+  entry._tag === "AttemptStoppageIntended" ||
+  entry._tag === "StoppedAttemptClaimNoReleaseObserved"
+
+const eventForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): WorkflowJournalEvent => {
+  switch (entry._tag) {
+    case "AttemptStoppageIntended":
+      return AttemptStoppageIntendedEvent.make({ ...entry, version: workflowJournalEventVersion })
+    case "AttemptImplementationAbandoned":
+      return AttemptImplementationAbandonedEvent.make({ ...entry, version: workflowJournalEventVersion })
+    case "StoppedAttemptClaimNoReleaseObserved":
+      return StoppedAttemptClaimNoReleaseObservedEvent.make({ ...entry, version: workflowJournalEventVersion })
+  }
 }
 
 const priorEntryPosition = (
@@ -1001,6 +1213,7 @@ const eventForRecordedEntry = (
 ): WorkflowJournalEvent => {
   if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
   if (isRecordedOperatorDirectionEntry(entry)) return eventForRecordedOperatorDirectionEntry(entry, runId)
+  if (isRecordedAttemptStopEntry(entry)) return eventForRecordedAttemptStopEntry(entry)
   if (isRecordedIntegrationPreparationEntry(entry)) return eventForIntegrationPreparationEntry(entry, entries, index)
   if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return eventForExecutorEntry(entry)
@@ -1089,10 +1302,22 @@ export const compareRecordedCassetteCheckpoints = (
     return checkpointComparison(checkpoint, prefix(expected), prefix(actual))
   })
 
-const lyricForExecutorEntry = (entry: RecordedExecutorEntry): string =>
-  entry._tag === "PlannedAttemptExecutorWorkReported"
-    ? `The executor reported ${entry.report._tag} for attempt ${entry.report.correlation.attemptId}.`
-    : `Dalph coordinator began executor-work responsibility for task ${entry.plannedAttempt.taskId}, attempt ${entry.plannedAttempt.attemptId}.`
+const lyricForExecutorEntry = (entry: RecordedExecutorEntry): string => {
+  switch (entry._tag) {
+    case "PlannedAttemptExecutorWorkReported":
+      return `The executor returned ${entry.report._tag} for attempt ${entry.report.correlation.attemptId}.`
+    case "PlannedAttemptExecutorWorkResponsibilityBegan":
+      return `Dalph coordinator began executor-work responsibility for task ${entry.plannedAttempt.taskId}, attempt ${entry.plannedAttempt.attemptId}.`
+    case "PlannedAttemptExecutorCommandIntended":
+      return `Dalph coordinator intended executor command ${entry.command} for attempt ${entry.plannedAttempt.attemptId}.`
+    case "PlannedAttemptExecutorCommandProjectionObserved":
+      return `Dalph observed ${entry.observation._tag} while reconciling executor command ${entry.commandOrdinal} for attempt ${entry.plannedAttempt.attemptId}.`
+    case "PlannedAttemptExecutorCommandResponseContradicted":
+      return `The executor returned a response for attempt ${entry.observed.correlation.attemptId} to command ${entry.commandOrdinal} for expected attempt ${entry.plannedAttempt.attemptId}; Dalph kept the command unresolved.`
+    case "PlannedAttemptExecutorStateObserved":
+      return `Dalph observed ${entry.observation._tag} from a read-only executor projection for attempt ${entry.plannedAttempt.attemptId}.`
+  }
+}
 
 const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
   entry._tag === "TaskTrackerFactsObserved"
@@ -1198,6 +1423,7 @@ const lyricForTaskBoundaryEntry = (
   entry: Exclude<
     RecordedCassetteEntry,
     | RecordedCandidateConstructionEntry
+    | RecordedAttemptStopEntry
     | RecordedExecutorEntry
     | RecordedGitObservationEntry
     | RecordedRunEntry
@@ -1205,7 +1431,7 @@ const lyricForTaskBoundaryEntry = (
     | RecordedTargetVerificationEntry
     | RecordedTargetPromotionEntry
     | RecordedIntegrationFinalityEntry
-    | { readonly _tag: "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+    | { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
 ): string => {
   if (isRecordedClaimAcquisitionEntry(entry)) return lyricForClaimAcquisitionEntry(entry)
@@ -1220,14 +1446,29 @@ const lyricForTaskBoundaryEntry = (
 }
 
 const lyricForRecordedOperatorDirectionEntry = (entry: RecordedOperatorDirectionEntry): string => {
+  if (entry._tag === "AttemptChoiceApplied") {
+    return `Operator chose ${entry.choice} for attempt ${entry.subject.plannedAttempt.attemptId} after observing task revision ${entry.subject.observedTaskRevision}.`
+  }
   if (entry._tag === "ControlDirectionApplied") {
     return `Operator applied ${entry.direction} to ${entry.subject._tag === "Run" ? "the Run" : `task ${entry.subject.taskId}`}.`
   }
   return `Operator directed Dalph to reacquire the claim for task ${entry.taskId}.`
 }
 
+const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): string => {
+  switch (entry._tag) {
+    case "AttemptStoppageIntended":
+      return `Dalph coordinator began stopping attempt ${entry.subject.plannedAttempt.attemptId}.`
+    case "AttemptImplementationAbandoned":
+      return `Dalph coordinator abandoned implementation attempt ${entry.subject.plannedAttempt.attemptId} after proving executor quiescence.`
+    case "StoppedAttemptClaimNoReleaseObserved":
+      return `The task tracker proved that stopping attempt ${entry.subject.plannedAttempt.attemptId} must not release the current claim.`
+  }
+}
+
 const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
   if (isRecordedOperatorDirectionEntry(entry)) return lyricForRecordedOperatorDirectionEntry(entry)
+  if (isRecordedAttemptStopEntry(entry)) return lyricForRecordedAttemptStopEntry(entry)
   if (isRecordedIntegrationPreparationEntry(entry)) return lyricForIntegrationPreparationEntry(entry)
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)

@@ -15,7 +15,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { describe, expect, it } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Option, Ref, Stream } from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
@@ -36,7 +36,8 @@ import {
   makeTaskClaimReleaseOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeObservationOperation,
-  makeTrackerGraphObservationOperation
+  makeTrackerGraphObservationOperation,
+  TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
 import {
   QueuedIntegrationResponsibility,
@@ -49,12 +50,14 @@ import {
   CandidateCorrectionLimit
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
+import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import { deliveryProposalsOf } from "./delivery-proposal.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { executeAcceptedWorkflowAction, executeNewRecoveredAction } from "./recovered-delivery-action-adapter.js"
 import { DeliveryActionExecutor, type DeliveryActionExecutionLease } from "./delivery-action-executor.js"
+import { makePlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type {
   AcceptedIdentityDeliveryProposal,
   DeliveryActionProposal,
@@ -96,6 +99,14 @@ const integrationTarget = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/main")
 })
 const acceptedResult = AcceptedResult.make({ commit: GitCommitSha.make("2".repeat(40)) })
+
+it("makes stopped and ordinary claim-release route authorities mutually unconstructible", () => {
+  type StoppedRelease = Extract<Transition, { readonly _tag: "ReleaseStoppedAttemptClaim" }>["operation"]
+  type ExternalRelease = Extract<Transition, { readonly _tag: "ReleaseExternallyCompletedTaskClaim" }>["operation"]
+
+  expectTypeOf<StoppedRelease["authority"]["_tag"]>().toEqualTypeOf<"StoppedAttemptClaimReleaseAuthority">()
+  expectTypeOf<ExternalRelease["authority"]["_tag"]>().toEqualTypeOf<"WorkflowClaimReleaseAuthority">()
+})
 const queued = QueuedIntegrationResponsibility.make({
   acceptedResult,
   integrationTarget,
@@ -160,7 +171,8 @@ const inertLease: DeliveryActionExecutionLease = {
     withPermit: (_responsibility, effect) => effect
   },
   recordIntent: () => Effect.void,
-  releasePlannedAttemptPosition: () => Effect.void
+  releasePlannedAttemptPosition: () => Effect.void,
+  withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol lease")
 }
 
 const appendableJournalFor = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
@@ -190,7 +202,7 @@ describe("delivery proposal route matrix", () => {
         issues: [],
         proposals: [
           {
-            actionIdentity: { _tag: "ExistingOperationId", operationId },
+            actionIdentity: { _tag: "ExistingOperationId" },
             owner: "TicketDelivery",
             route: { _tag: "AcceptedWorkflowRoute", transition }
           }
@@ -203,6 +215,32 @@ describe("delivery proposal route matrix", () => {
     expect(proposalsFor(firstTransition)).toMatchObject({
       issues: [{ _tag: "AcceptedOperationEvidenceMissing", operationId }],
       proposals: []
+    })
+  })
+
+  it("retries Alice's exact stopped-claim release after reconciliation keeps the claim current", () => {
+    const requestId = AttemptChoiceRequestId.make({ nonce: "retry-stopped-release", runId })
+    const observationOperationId = OperationId.make("retry-stopped-release-observation")
+    const operationId = OperationId.make("retry-stopped-release-operation")
+    const operation = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.make({
+        observationOperationId,
+        requestId
+      }),
+      predecessorOperationIds: [activeClaim.operationId, observationOperationId],
+      release: { claim: activeClaim, operationId }
+    })
+    const transition = RunnableFrontierTransition.RetryStoppedAttemptClaimRelease({
+      operation,
+      requestId,
+      subject: { observedTaskRevision: TaskRevision.make("retry-stopped-release-F2"), plannedAttempt }
+    })
+
+    expect(proposalsFor(transition, new Set([operationId]))).toMatchObject({
+      issues: [],
+      proposals: [
+        { actionIdentity: { _tag: "ExistingOperationId" }, route: { _tag: "AcceptedWorkflowRoute", transition } }
+      ]
     })
   })
 
@@ -287,10 +325,7 @@ describe("delivery proposal route matrix", () => {
       expect(accepted).toMatchObject({
         issues: [],
         proposals: [
-          {
-            actionIdentity: { _tag: "ExistingOperationId", operationId },
-            route: { _tag: "AcceptedWorkflowRoute", transition }
-          }
+          { actionIdentity: { _tag: "ExistingOperationId" }, route: { _tag: "AcceptedWorkflowRoute", transition } }
         ]
       })
     }
@@ -315,14 +350,13 @@ describe("delivery proposal route matrix", () => {
     })
     expect(proposalsFor(claimTransition, new Set([responsibleClaimOperation.operationId]))).toMatchObject({
       issues: [],
-      proposals: [
-        { actionIdentity: { _tag: "ExistingOperationId", operationId: responsibleClaimOperation.operationId } }
-      ]
+      proposals: [{ actionIdentity: { _tag: "ExistingOperationId" } }]
     })
   })
 
   it("keeps new recovery actions identity-free until admission", () => {
     const release = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
       predecessorOperationIds: [activeClaim.operationId],
       release: { claim: activeClaim, operationId: OperationId.make("release-placeholder") }
     })
@@ -771,9 +805,11 @@ describe("delivery proposal route matrix", () => {
         return yield* Effect.die("missing continued executor proposal")
       }
       const releases = yield* Ref.make(0)
+      const protocolController = yield* makePlannedAttemptProtocolController()
       const lease: DeliveryActionExecutionLease = {
         ...inertLease,
-        releasePlannedAttemptPosition: () => Ref.update(releases, (count) => count + 1)
+        releasePlannedAttemptPosition: () => Ref.update(releases, (count) => count + 1),
+        withPlannedAttemptProtocol: (correlation, effect) => protocolController.withPermit(correlation, effect)
       }
       const correlation = { attemptId: plannedAttempt.attemptId, runId }
       const report = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
@@ -799,6 +835,8 @@ describe("delivery proposal route matrix", () => {
         )
       )
 
+      expect(result._tag).toBe("ExecutorReportPublished")
+      if (result._tag !== "ExecutorReportPublished") return yield* Effect.die("executor report was not published")
       expect(result.report).toEqual(report)
       expect(yield* Ref.get(releases)).toBe(0)
     })
@@ -941,6 +979,7 @@ describe("delivery proposal route matrix", () => {
       })
 
       const release = makeTaskClaimReleaseOperation({
+        authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
         predecessorOperationIds: [activeClaim.operationId],
         release: { claim: activeClaim, operationId: OperationId.make("adapter-release-placeholder") }
       })

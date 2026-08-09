@@ -6,18 +6,35 @@ import {
   type PlannedAttemptExecutorReport
 } from "@dalph/contracts"
 import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } from "../reconstruction/state.js"
-import type { WorkflowOperation } from "../../workflow/registry/operation.js"
+import type {
+  StoppedAttemptTaskClaimReleaseOperation,
+  WorkflowOperation,
+  WorkflowTaskClaimReleaseOperation
+} from "../../workflow/registry/operation.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
+import type { OperationId } from "../../workflow/identity.js"
 
 /** Exact accepted executor fact from which one continuation is authorized. */
 export type AcceptedPlannedAttemptExecutorProgress =
   | { readonly _tag: "ExecutorResponsibilityBegan"; readonly acceptedAt: JournalPosition }
   | { readonly _tag: "ExecutorReportAccepted"; readonly ordinal: PlannedAttemptExecutorReportOrdinal }
+  | { readonly _tag: "ExecutorProjectionAccepted"; readonly observedAt: JournalPosition }
 
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{
+  AttemptStoppageRequired: {
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+    readonly taskWorkPosition: "None" | "ReserveOrReuse"
+  }
+  AttemptStoppageExecutorObservationRequired: {
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
+  AttemptStoppageWait: { readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable" }
   DependencyWait: { readonly prerequisiteTaskIds: ReadonlyArray<TaskId> }
   FinalOutcome: { readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed" }
   PlannedAttemptExecutorWorkSafelySuspended: { readonly correlation: PlannedAttemptExecutorCorrelation }
@@ -25,6 +42,31 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
   }
   PlannedAttemptExecutorSuspensionRequested: Record<never, never>
+  StoppedAttemptClaimNoReleaseRequired: {
+    readonly observationOperationId: OperationId
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
+  StoppedAttemptClaimObservationRequired: {
+    readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
+  StoppedAttemptClaimReleaseRequired: {
+    readonly operation: StoppedAttemptTaskClaimReleaseOperation
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
+  /** A post-intent tracker read kept the exact claim current, so Dalph must repeat the accepted release request. */
+  StoppedAttemptClaimReleaseRetryRequired: {
+    readonly operation: StoppedAttemptTaskClaimReleaseOperation
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
+  StoppedAttemptClaimReleasePending: { readonly operationId: OperationId }
+  StoppedAttemptClaimPlanningWait: { readonly reason: "FocusedObservationContradiction" | "TrackerTargetUnavailable" }
+  StoppedAttemptClaimUnreadableWait: { readonly observationOperationId: OperationId }
+  StoppedAttemptSettled: { readonly claimDisposition: "NoRelease" | "Released" }
   PlannedAttemptGitConstraint: {
     readonly gitState:
       | "CompetingWorktreeRegistrations"
@@ -37,7 +79,7 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
       | "WorktreeLost"
   }
   TaskExternalSuccessConstraint: Record<never, never>
-  TaskExternalSuccessReleaseNeeded: { readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type }
+  TaskExternalSuccessReleaseNeeded: { readonly operation: WorkflowTaskClaimReleaseOperation }
   TaskExternalSuccessSettled: Record<never, never>
   TaskClaimMissingConstraint: Record<never, never>
   TaskClaimUnreadableWait: Record<never, never>
@@ -74,6 +116,17 @@ export type PlannedAttemptExecutorDisposition =
           | "PlannedAttemptExecutorWorkSafelySuspended"
           | "PlannedAttemptExecutorWorkTerminal"
           | "PlannedAttemptExecutorSuspensionRequested"
+          | "AttemptStoppageRequired"
+          | "AttemptStoppageExecutorObservationRequired"
+          | "AttemptStoppageWait"
+          | "StoppedAttemptClaimNoReleaseRequired"
+          | "StoppedAttemptClaimObservationRequired"
+          | "StoppedAttemptClaimReleaseRequired"
+          | "StoppedAttemptClaimReleaseRetryRequired"
+          | "StoppedAttemptClaimReleasePending"
+          | "StoppedAttemptClaimPlanningWait"
+          | "StoppedAttemptClaimUnreadableWait"
+          | "StoppedAttemptSettled"
           | "PlannedAttemptGitConstraint"
           | "TaskExternalSuccessConstraint"
           | "TaskExternalSuccessReleaseNeeded"
@@ -96,6 +149,17 @@ type WorkflowOperationDisposition = Exclude<
       | "PlannedAttemptExecutorWorkSafelySuspended"
       | "PlannedAttemptExecutorWorkTerminal"
       | "PlannedAttemptExecutorSuspensionRequested"
+      | "AttemptStoppageRequired"
+      | "AttemptStoppageExecutorObservationRequired"
+      | "AttemptStoppageWait"
+      | "StoppedAttemptClaimNoReleaseRequired"
+      | "StoppedAttemptClaimObservationRequired"
+      | "StoppedAttemptClaimReleaseRequired"
+      | "StoppedAttemptClaimReleaseRetryRequired"
+      | "StoppedAttemptClaimReleasePending"
+      | "StoppedAttemptClaimPlanningWait"
+      | "StoppedAttemptClaimUnreadableWait"
+      | "StoppedAttemptSettled"
       | "PlannedAttemptGitConstraint"
       | "TaskExternalSuccessConstraint"
       | "TaskExternalSuccessReleaseNeeded"

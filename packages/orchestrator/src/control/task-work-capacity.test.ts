@@ -31,6 +31,7 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../workflow-journal/record-key.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../workflow/protocols/planned-attempt-executor-work/events.js"
+import { plannedAttemptProtocolControllerLayer } from "../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../workflow/interpretation/interpreter.js"
 import { projectWorkflowOccurrences } from "../workflow/registry/occurrence-projection.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunPolicyRevision } from "./policy.js"
@@ -272,5 +273,9 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
 
     expect(current).toEqual({ revision: 2, taskExecutionCapacity: 1 })
     expect([...(yield* controller.snapshot).positions.keys()]).toEqual([TaskId.make("A"), TaskId.make("B")])
-  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(taskWorkCapacityControlLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer)
+  )
 )

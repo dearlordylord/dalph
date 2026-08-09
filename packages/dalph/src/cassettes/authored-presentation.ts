@@ -51,9 +51,35 @@ const targetVerificationEvidenceLyric = (evidence: AuthoredTargetVerificationEvi
     ? `The story expects public verification plan ${evidence.planId} to pass candidate ${evidence.candidateCommit} for task ${evidence.taskId}.`
     : `The story expects public verification plan ${evidence.planId} to stop candidate ${evidence.candidateCommit} with ${evidence.outcome} for task ${evidence.taskId}.`
 
+type AuthoredExecutorOrchestrationEvidence = Extract<
+  AuthoredOrchestrationEvidence,
+  {
+    readonly _tag:
+      | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorWorkReported"
+      | "PlannedAttemptExecutorWorkResponsibilityBegan"
+  }
+>
+
+const isExecutorOrchestrationEvidence = (
+  evidence: AuthoredOrchestrationEvidence
+): evidence is AuthoredExecutorOrchestrationEvidence => evidence._tag.startsWith("PlannedAttemptExecutor")
+
+const executorOrchestrationEvidenceLyric = (evidence: AuthoredExecutorOrchestrationEvidence): string => {
+  switch (evidence._tag) {
+    case "PlannedAttemptExecutorWorkResponsibilityBegan":
+      return `The story expects Dalph to assume executor-work responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
+    case "PlannedAttemptExecutorWorkReported":
+      return `The story expects executor report ${evidence.report} for attempt ${evidence.attemptId}.`
+    case "PlannedAttemptExecutorCommandProjectionObserved":
+      return `The story expects exact executor projection ${evidence.report} for attempt ${evidence.attemptId}.`
+  }
+}
+
 const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): string => {
   if (isTargetPromotionEvidence(evidence)) return targetPromotionEvidenceLyric(evidence)
   if (isTargetVerificationEvidence(evidence)) return targetVerificationEvidenceLyric(evidence)
+  if (isExecutorOrchestrationEvidence(evidence)) return executorOrchestrationEvidenceLyric(evidence)
   switch (evidence._tag) {
     case "AcceptedResultIntegrationResponsibilityBegan":
       return `The story expects Dalph to queue accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
@@ -61,16 +87,16 @@ const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): st
       return `The story expects Dalph to start integrating accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
     case "IntegrationCandidateConstructed":
       return `The story expects candidate ${evidence.candidateCommit} to have target ${evidence.expectedTargetHead} first and accepted result ${evidence.acceptedResultCommit} second.`
-    case "PlannedAttemptExecutorWorkResponsibilityBegan":
-      return `The story expects Dalph to assume executor-work responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
-    case "PlannedAttemptExecutorWorkReported":
-      return `The story expects executor report ${evidence.report} for attempt ${evidence.attemptId}.`
   }
 }
 
 // eslint-disable-next-line complexity -- Every closed protocol-evidence variant owns one maintainer-readable sentence.
 const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
   switch (evidence._tag) {
+    case "AttemptChoiceApplied":
+      return `The story expects Operator to apply ${evidence.choice} to task ${evidence.taskId}, attempt ${evidence.attemptId}, at authored revision ${evidence.observedTaskRevision}.`
+    case "AttemptImplementationAbandoned":
+      return `The story expects Dalph to abandon implementation responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
     case "AttemptWorktreeLost":
       return `The story expects Git to report the planned worktree lost for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
     case "CompatibleTargetAdvance":
@@ -95,6 +121,8 @@ const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
       return `The story expects Dalph to plan attempt ${evidence.attemptId} for task ${evidence.taskId}.`
     case "TaskWorktreeReady":
       return `The story expects the worktree for task ${evidence.taskId}, attempt ${evidence.attemptId}, to become ready.`
+    case "StoppedAttemptClaimNoReleaseObserved":
+      return `The story expects Dalph to preserve the ${evidence.claimState.toLowerCase()} claim state for stopped task ${evidence.taskId}.`
   }
 }
 
@@ -122,7 +150,10 @@ const trackerGraphLyric = (item: AuthoredTrackerGraphStoryItem): string =>
     ? `The task tracker returns ${item.graph.tasks.length} task graph facts at ${item.graph.revision}.`
     : `The task tracker fails the logical graph read because ${item.reason}.`
 
-type CoordinatorStoryItem = Exclude<AuthoredCassetteStoryItem, { readonly _tag: "CoordinatorProcessDies" }>
+type CoordinatorStoryItem = Exclude<
+  AuthoredCassetteStoryItem,
+  { readonly _tag: "CoordinatorActivationReturned" | "CoordinatorProcessDies" }
+>
 
 type AuthoredTrackerClaimStoryItem = Extract<
   CoordinatorStoryItem,
@@ -157,7 +188,10 @@ type OperatorStoryItem = Extract<
       | "OperatorAppliesControlDirection"
       | "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
       | "OperatorControlDirectionFailed"
+      | "OperatorContinuesAttempt"
       | "OperatorDirectsTaskClaimReacquisition"
+      | "OperatorRacesContinueAndStop"
+      | "OperatorStopsAttempt"
       | "SetTaskExecutionCapacity"
   }
 >
@@ -166,8 +200,43 @@ const isOperatorStoryItem = (item: RemainingCoordinatorStoryItem): item is Opera
   item._tag === "OperatorAppliesControlDirection" ||
   item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" ||
   item._tag === "OperatorControlDirectionFailed" ||
+  item._tag === "OperatorContinuesAttempt" ||
   item._tag === "OperatorDirectsTaskClaimReacquisition" ||
+  item._tag === "OperatorRacesContinueAndStop" ||
+  item._tag === "OperatorStopsAttempt" ||
   item._tag === "SetTaskExecutionCapacity"
+
+type AttemptChoiceOperatorItem = Extract<
+  OperatorStoryItem,
+  { readonly _tag: "OperatorContinuesAttempt" | "OperatorStopsAttempt" }
+>
+type ControlDirectionOperatorItem = Extract<
+  OperatorStoryItem,
+  { readonly _tag: "OperatorAppliesControlDirection" | "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" }
+>
+
+const isAttemptChoiceOperatorItem = (item: OperatorStoryItem): item is AttemptChoiceOperatorItem =>
+  item._tag === "OperatorContinuesAttempt" || item._tag === "OperatorStopsAttempt"
+
+const isControlDirectionOperatorItem = (item: OperatorStoryItem): item is ControlDirectionOperatorItem =>
+  item._tag === "OperatorAppliesControlDirection" ||
+  item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
+
+const attemptChoiceOperatorLyric = (item: AttemptChoiceOperatorItem): string => {
+  const direction = item._tag === "OperatorContinuesAttempt" ? "Continue" : "Stop"
+  const result =
+    item.expected._tag === "Rejected"
+      ? `rejection ${item.expected.reason}`
+      : item._tag === "OperatorStopsAttempt"
+        ? `status ${item.expected.status}`
+        : "ContinueApplied"
+  return `Operator applies ${direction} request ${item.requestNonce} to task ${item.taskId}, attempt ${item.attemptId}, and observes ${result}.`
+}
+
+const controlDirectionOperatorLyric = (item: ControlDirectionOperatorItem): string =>
+  `Operator applies ${item.direction} to ${
+    item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
+  }${item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" ? " while the executor request is in flight" : ""}.`
 
 const operatorLyric = (item: OperatorStoryItem): string => {
   if (item._tag === "SetTaskExecutionCapacity") {
@@ -176,14 +245,11 @@ const operatorLyric = (item: OperatorStoryItem): string => {
   if (item._tag === "OperatorControlDirectionFailed") {
     return `Dalph rejects Operator ${item.direction} for task ${item.subject.taskId}: ${item.reason}.`
   }
-  if (
-    item._tag === "OperatorAppliesControlDirection" ||
-    item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
-  ) {
-    return `Operator applies ${item.direction} to ${
-      item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
-    }${item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" ? " while the executor request is in flight" : ""}.`
+  if (isAttemptChoiceOperatorItem(item)) return attemptChoiceOperatorLyric(item)
+  if (item._tag === "OperatorRacesContinueAndStop") {
+    return `Alice concurrently submits Continue ${item.continueRequestNonce} and Stop ${item.stopRequestNonce} for task ${item.taskId}, attempt ${item.attemptId}; exactly one journaled request wins.`
   }
+  if (isControlDirectionOperatorItem(item)) return controlDirectionOperatorLyric(item)
   return `Operator request ${item.requestId} directs Dalph to reacquire the claim for task ${item.taskId}.`
 }
 
@@ -191,6 +257,8 @@ const operatorLyric = (item: OperatorStoryItem): string => {
 const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string => {
   if (isOperatorStoryItem(item)) return operatorLyric(item)
   switch (item._tag) {
+    case "DalphHoldsAdmittedContinuationBeforeExecutorIntent":
+      return `Dalph holds the admitted continuation for attempt ${item.attemptId} before its executor command intent while Alice's Stop request is applied.`
     case "DalphSelects":
       return `Dalph selects ${item.operation._tag}.`
     case "GitWorktreeObservationChanged":
@@ -215,6 +283,12 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       return `The task tracker returns "${item.title}" for task ${item.taskId}.`
     case "PlannedAttemptExecutorWorkReported":
       return `The executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
+    case "PlannedAttemptExecutorProjectionReturned":
+      return `A read-only executor projection returns ${item.report._tag} for attempt ${item.report.attemptId}.`
+    case "PlannedAttemptExecutorResponseLost":
+      return `The executor reaches ${item.report._tag} for attempt ${item.report.attemptId}, but Dalph loses the ${item.request} response: ${item.detail}`
+    case "TaskClaimReleaseResponseLost":
+      return `The task tracker applies the exact claim release for task ${item.taskId}, but Dalph loses the response: ${item.detail}`
     case "ExpectedBehavior":
       return expectedBehaviorLyric(item)
     case "InitialControlPolicy":
@@ -230,10 +304,17 @@ const coordinatorStoryLyric = (item: CoordinatorStoryItem): string => {
   return remainingCoordinatorLyric(item)
 }
 
-const storyLyric = (item: AuthoredCassetteStoryItem): string =>
-  item._tag === "CoordinatorProcessDies"
-    ? "The coordinator process and its same-process executor session die; durable and authority facts remain."
-    : coordinatorStoryLyric(item)
+const storyLyric = (item: AuthoredCassetteStoryItem): string => {
+  if (item._tag === "CoordinatorActivationReturned") {
+    return item.decision._tag === "RunMayTerminate"
+      ? "The coordinator activation returns RunMayTerminate at this authored lifecycle boundary."
+      : `The coordinator activation returns RunMustRemainActive because ${item.decision.reason} at this authored lifecycle boundary.`
+  }
+  if (item._tag === "CoordinatorProcessDies") {
+    return "The coordinator process and its same-process executor session die; durable and authority facts remain."
+  }
+  return coordinatorStoryLyric(item)
+}
 
 /** Readable prose is derived from structured story items and is never parsed. */
 export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette): string =>

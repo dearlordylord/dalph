@@ -10,6 +10,7 @@ import { OperationId } from "../identity.js"
 import { TrackerTarget as TrackerTargetSchema } from "../../authorities/task-tracker/target.js"
 import { TaskClaimAcquisition, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
+import { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(Schema.isUnique())
 
@@ -73,7 +74,15 @@ const AcquireTaskClaimOperation = Schema.TaggedStruct("AcquireTaskClaim", {
   )
 )
 
+/** Durable provenance distinguishing ordinary cleanup from one exact stopped-attempt claim disposition. */
+export const TaskClaimReleaseAuthority = Schema.TaggedUnion({
+  StoppedAttemptClaimReleaseAuthority: { observationOperationId: OperationId, requestId: AttemptChoiceRequestId },
+  WorkflowClaimReleaseAuthority: {}
+})
+export type TaskClaimReleaseAuthority = typeof TaskClaimReleaseAuthority.Type
+
 const ReleaseTaskClaimOperation = Schema.TaggedStruct("ReleaseTaskClaim", {
+  authority: TaskClaimReleaseAuthority,
   predecessorOperationIds: CausalPredecessorOperationIds,
   release: TaskClaimRelease
 }).check(
@@ -83,9 +92,22 @@ const ReleaseTaskClaimOperation = Schema.TaggedStruct("ReleaseTaskClaim", {
       predecessorOperationIds: operation.predecessorOperationIds
     })
     if (selfPredecessor !== undefined) return selfPredecessor
-    return operation.predecessorOperationIds.includes(operation.release.claim.operationId)
-      ? undefined
-      : { issue: "a claim release must causally name the exact claim acquisition", path: ["predecessorOperationIds"] }
+    if (!operation.predecessorOperationIds.includes(operation.release.claim.operationId)) {
+      return {
+        issue: "a claim release must causally name the exact claim acquisition",
+        path: ["predecessorOperationIds"]
+      }
+    }
+    if (
+      operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&
+      !operation.predecessorOperationIds.includes(operation.authority.observationOperationId)
+    ) {
+      return {
+        issue: "a stopped-attempt claim release must causally name its exact focused claim observation",
+        path: ["predecessorOperationIds"]
+      }
+    }
+    return undefined
   })
 )
 
@@ -147,6 +169,21 @@ export const WorkflowOperation = Object.assign(
   }
 )
 export type WorkflowOperation = typeof WorkflowOperation.Type
+
+type TaskClaimReleaseOperationWithAuthority<Authority extends TaskClaimReleaseAuthority> = Omit<
+  typeof WorkflowOperation.cases.ReleaseTaskClaim.Type,
+  "authority"
+> & { readonly authority: Authority }
+
+/** Release operation causally owned by one exact applied Stop request and claim observation. */
+export type StoppedAttemptTaskClaimReleaseOperation = TaskClaimReleaseOperationWithAuthority<
+  typeof TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.Type
+>
+
+/** Release operation owned by ordinary workflow cleanup rather than an applied Stop request. */
+export type WorkflowTaskClaimReleaseOperation = TaskClaimReleaseOperationWithAuthority<
+  typeof TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.Type
+>
 
 interface CausalGraphEntry {
   readonly operationId: OperationId
@@ -231,14 +268,17 @@ export const makeTaskClaimAcquisitionOperation = (fields: {
     predecessorOperationIds: canonicalPredecessors(fields.predecessorOperationIds)
   })
 
-export const makeTaskClaimReleaseOperation = (fields: {
+export const makeTaskClaimReleaseOperation = <const Authority extends TaskClaimReleaseAuthority>(fields: {
+  readonly authority: Authority
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
   readonly release: TaskClaimRelease
-}): typeof WorkflowOperation.cases.ReleaseTaskClaim.Type =>
-  WorkflowOperation.cases.ReleaseTaskClaim.make({
+}): TaskClaimReleaseOperationWithAuthority<Authority> => {
+  const operation = WorkflowOperation.cases.ReleaseTaskClaim.make({
     ...fields,
     predecessorOperationIds: canonicalPredecessors(fields.predecessorOperationIds)
   })
+  return { ...operation, authority: fields.authority }
+}
 
 export const makeTaskAttemptPlanOperation = (fields: {
   readonly operationId: OperationId

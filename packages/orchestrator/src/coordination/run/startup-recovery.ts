@@ -6,6 +6,11 @@ import { InRunJournal, type RunLifecycleJournalService } from "../../workflow-jo
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
+import { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
+import {
+  makePlannedAttemptProtocolController,
+  PlannedAttemptProtocolController
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import {
   hasUnfinishedRunResponsibility,
@@ -27,7 +32,7 @@ import {
 } from "../reconstruction/history-result.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { IntegrationTargetSelection } from "../../workflow/protocols/integration-admission/protocol.js"
-import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
+import { DeliveryRuntimeResources, deliveryRuntimeResourcesOf } from "../delivery/delivery-runtime-resources.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import {
   TargetVerificationRuntime,
@@ -108,13 +113,15 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   const taskWorkCapacityControl = yield* TaskWorkCapacityControl
   const controlDirectionApplication = yield* ControlDirectionApplication
   const taskClaimReacquisitionControl = yield* TaskClaimReacquisitionControl
+  const attemptChoiceControl = yield* AttemptChoiceControl
+  const plannedAttemptProtocolController = yield* makePlannedAttemptProtocolController()
   const ambient = yield* Effect.context<never>()
   const candidateAgent = Context.getOption(ambient, IntegrationCandidateAgent)
   const candidateGit = Context.getOption(ambient, IntegrationCandidateGit)
   const deliveryRuntimeResources = Context.getOption(ambient, DeliveryRuntimeResources)
   const runtimeResources = Option.isSome(deliveryRuntimeResources)
     ? deliveryRuntimeResources.value
-    : DeliveryRuntimeResources.of({ integrationTargets: yield* makeIntegrationTargetResourceController() })
+    : DeliveryRuntimeResources.of(deliveryRuntimeResourcesOf(yield* makeIntegrationTargetResourceController()))
   const integrationResources = runtimeResources.integrationTargets
   const recovery = yield* makeRecoveryProjection(
     runId,
@@ -133,6 +140,8 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
     Context.add(OperationIdAllocator, operationIdAllocator),
     Context.add(PlannedAttemptExecutor, executor),
     Context.add(InRunJournal, inRunJournal),
+    Context.add(AttemptChoiceControl, attemptChoiceControl),
+    Context.add(PlannedAttemptProtocolController, plannedAttemptProtocolController),
     Context.add(ControlDirectionApplication, controlDirectionApplication),
     Context.add(TaskWorkCapacityControl, taskWorkCapacityControl),
     Context.add(TaskClaimReacquisitionControl, taskClaimReacquisitionControl),

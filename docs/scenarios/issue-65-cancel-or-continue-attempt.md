@@ -71,6 +71,52 @@ or cross the integration boundary merely because Continue was applied.
 - `requires a new choice when instructions change again before continuation`
 - `lets the first journaled valid choice win a concurrent Continue and Stop race`
 
+## Runtime shutdown during delivery admission releases every process-local reservation
+
+### Starting situation
+
+There is no person acting at the interruption instant: this is an internal
+runtime-shutdown race preserving the accepted rule that delivery work cannot
+remain stuck behind lost ownership. The ordinary delivery frontier has
+selected a proposal for exact attempt P. Its admission controller has
+reserved P's exact planned-attempt protocol guard and one task-work position.
+At the first interruption point it has entered, but not completed, the final
+integration-target acquisition. At the second interruption point all three
+reservations exist and P is registered as a live delivery owner. The executor
+action has not begun and no external boundary call has occurred. These
+reservations are process-local; Git, the tracker, the executor, and the journal
+therefore have no new fact to reconcile.
+
+### Trigger and chronological behavior
+
+1. In the first interruption point, Dalph begins the final integration-target
+   reservation and runtime shutdown requests interruption before P is
+   registered as a live delivery owner.
+2. Dalph finishes the indivisible admission handoff, installs the child
+   finalizer as P's cleanup owner, and only then honors interruption. The
+   finalizer releases P's exact protocol guard, task-work position, and
+   integration-target responsibility once.
+3. In the second interruption point, P is already registered as a live owner,
+   but runtime shutdown requests interruption before the cleanup-owning child
+   has been installed. Dalph again finishes installing that child before it
+   honors interruption, and the child releases the same three exact resources
+   once.
+4. A later ordinary proposal for P can reserve all three resources through the
+   same admission controller. Its place in the frontier and the configured
+   task-work capacity are unchanged by the interrupted handoff.
+
+No person receives a new control result from this internal shutdown. On a
+later activation an operator can observe that runnable work is not stuck
+behind lost process-local ownership. Dalph must not invoke the executor
+before cleanup ownership exists, leak any reservation, release any reservation
+twice, admit beyond task-work capacity, reorder the frontier, or manufacture a
+durable ownership fact for these process-local resources.
+
+### Acceptance-test seam
+
+- `releases exact admission resources when interrupted after reservations and before owner registration`
+- `releases exact admission resources when interrupted after owner registration and before child ownership`
+
 ## Alice stops implementation after the executor proves quiescence
 
 ### Starting situation
@@ -121,6 +167,18 @@ durably records the release or no-release result. Exact redelivery of D2 returns
 the recorded direction and its current result without applying another Stop.
 Reusing D2 with different contents is a typed contradiction, and a new choice
 request after D2 was applied is stale.
+
+The maintained later-command ambiguity story uses ordinary production routes
+to make that race concrete. Dalph admits P's continuation and pauses it
+immediately before the executor command intent. Alice applies Task Pause and
+then Task Unpause; each control request performs its normal current-membership
+tracker read. The live owner of the already-admitted continuation remains held
+while Unpause makes P ready again. After the ordinary delivery graph refresh,
+the recovery frontier selects and records a fresh task-work-specification read
+returning F2. Alice then applies Stop for F1/F2, Dalph releases the held
+continuation, and its later executor command makes the earlier safe proof
+stale. No harness appends F2 or selects that read outside the production
+delivery route.
 
 Alice sees P stopped and its implementation artifacts preserved. If exact claim
 release remains unresolved, she sees that separately instead of seeing the

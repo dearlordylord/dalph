@@ -27,7 +27,8 @@ import {
 import { ActiveTaskClaim, TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import {
   makeTaskClaimReleaseOperation,
-  makeTaskWorktreeReconciliationOperation
+  makeTaskWorktreeReconciliationOperation,
+  TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
 
 const taskA = TaskId.make("task-A")
@@ -103,6 +104,7 @@ it("reconciles an already-intended exact claim release as its own responsibility
     token: ClaimToken.make("frontier-release-token")
   })
   const operation = makeTaskClaimReleaseOperation({
+    authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
     predecessorOperationIds: [claim.operationId],
     release: { claim, operationId: OperationId.make("frontier-release") }
   })
@@ -150,6 +152,43 @@ it("retains a terminal executor report for the exact planned attempt", () => {
   expect(
     deriveRunFinalityDecision(frontier, WorkflowResponsibilityState.make({ entries: [responsibility] }), true)
   ).toEqual({ _tag: "RunMayTerminate" })
+})
+
+it("keeps stopped-attempt claim release waits visible without proposing another boundary call", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  const operationId = OperationId.make("stopped-attempt-release")
+
+  const releasePending = deriveRunnableFrontier({
+    freshEligibleTasks: [],
+    responsibility: WorkflowResponsibilityState.make({ entries: [responsibility] }),
+    responsibilityFacts: [
+      {
+        _tag: "PlannedAttemptExecutorFreshFacts",
+        disposition: ResponsibilityDisposition.StoppedAttemptClaimReleasePending({ operationId }),
+        responsibility
+      }
+    ]
+  })
+  const planningWait = deriveRunnableFrontier({
+    freshEligibleTasks: [],
+    responsibility: WorkflowResponsibilityState.make({ entries: [responsibility] }),
+    responsibilityFacts: [
+      {
+        _tag: "PlannedAttemptExecutorFreshFacts",
+        disposition: ResponsibilityDisposition.StoppedAttemptClaimPlanningWait({ reason: "TrackerTargetUnavailable" }),
+        responsibility
+      }
+    ]
+  })
+
+  expect(releasePending).toMatchObject({
+    explanations: [{ _tag: "StoppedAttemptClaimReleasePending", operationId }],
+    transitions: []
+  })
+  expect(planningWait).toMatchObject({
+    explanations: [{ _tag: "StoppedAttemptClaimPlanningWait", reason: "TrackerTargetUnavailable" }],
+    transitions: []
+  })
 })
 
 it("keeps delivery active for a non-terminal wait but accepts an externally settled attempt", () => {

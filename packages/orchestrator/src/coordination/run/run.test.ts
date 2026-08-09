@@ -55,8 +55,10 @@ it.effect("hands a fresh Run to the journal bootstrap with the exact identity an
         return Effect.succeed(finality)
       },
       operatorControl: {
+        applyAttemptChoice: () => Effect.die("unused"),
         applyControlDirection: () => Effect.die("unused"),
         applyTaskClaimReacquisition: () => Effect.die("unused"),
+        readAttemptChoice: () => Effect.die("unused"),
         readTaskWorkCapacity: () => Effect.die("unused"),
         setTaskWorkCapacity: () => Effect.die("unused")
       },
@@ -82,8 +84,10 @@ it.effect("hands recovered execution to the same journal bootstrap boundary", ()
     const bootstrap = JournaledRunBootstrap.of({
       fresh: () => Effect.die("unused"),
       operatorControl: {
+        applyAttemptChoice: () => Effect.die("unused"),
         applyControlDirection: () => Effect.die("unused"),
         applyTaskClaimReacquisition: () => Effect.die("unused"),
+        readAttemptChoice: () => Effect.die("unused"),
         readTaskWorkCapacity: () => Effect.die("unused"),
         setTaskWorkCapacity: () => Effect.die("unused")
       },

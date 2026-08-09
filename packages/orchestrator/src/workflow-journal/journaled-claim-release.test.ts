@@ -8,7 +8,11 @@ import { InitialControlPolicy } from "../control/policy.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../workflow/identity.js"
-import { makeTaskClaimAcquisitionOperation, makeTaskClaimReleaseOperation } from "../workflow/registry/operation.js"
+import {
+  makeTaskClaimAcquisitionOperation,
+  makeTaskClaimReleaseOperation,
+  TaskClaimReleaseAuthority
+} from "../workflow/registry/operation.js"
 import { TaskClaimAcquiredEvent, TaskClaimAcquisitionIntendedEvent } from "../workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
@@ -57,7 +61,11 @@ const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.
 
 it.effect("records exact claim-release intent and outcome once before replay returns", () =>
   Effect.gen(function* () {
-    const operation = makeTaskClaimReleaseOperation({ predecessorOperationIds: [release.claim.operationId], release })
+    const operation = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+      predecessorOperationIds: [release.claim.operationId],
+      release
+    })
     const journal = yield* JournalStore
     yield* journal.beginRun(
       runId,

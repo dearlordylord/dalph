@@ -9,19 +9,37 @@ and what each owns. This guide covers how to write one.
 
 ## What runs a model
 
-`pnpm check:quint` runs four things per model, and each must be satisfied
-independently:
+`pnpm check:quint` supplies four independent kinds of evidence for every
+governed subject:
 
 - `quint typecheck`
 - `quint test` against the paired `*_test.qnt` file
 - `quint run` sampling, with invariants and witnesses named explicitly
-- `quint verify` exhaustively through Apalache
+- `quint verify` exhaustively through Apalache or TLC
 
-Invariant and witness names are listed by hand in `scripts/check-quint-models.mjs`,
-in both the sampled and exhaustive blocks. A model may declare an invariant the
-gate never checks, and nothing reports that. Adding an invariant means adding its
-name in two places, and `research/verification-bakeoff/mutate-specs.mjs` in a
-third.
+Usually all four commands run against the canonical model. ADR 0010 permits a
+smaller proof projection to own the exhaustive leg when the canonical subject
+state cannot finish inside the gate. The canonical model still owns its
+deterministic tests, sampled invariants and witnesses, production-backed MBT,
+and behavior vocabulary. The paired projection must run its own typecheck,
+collected deterministic and negative tests, sampled invariant/witness check,
+and complete finite-state verification with no arbitrary depth token.
+
+The current proof projections are `taskFactReconciliation_proof.qnt` and
+`plannedAttemptExecutor_proof.qnt`. Their negative test modules are the mutation
+controls for the collapsed proof state: each performs a forbidden transition
+and proves that the corresponding projected invariant turns red. The canonical
+models remain in the token-mutation census because they own runtime vocabulary
+and production-backed MBT.
+
+Invariant and witness names are explicit gate inputs. The canonical
+`plannedAttemptExecutor` and `taskFactReconciliation` lists live in
+`scripts/quint-model-obligations.mjs`, which both
+`scripts/check-quint-models.mjs` and
+`research/verification-bakeoff/mutate-specs.mjs` import. Other models list the
+same names in both scripts. A model may declare an invariant the gate never
+checks, and nothing reports that, so adding or renaming an observation means
+updating its shared manifest or every explicit checking profile.
 
 Apalache supports sum types with record payloads, so an algebraic state encoding
 costs nothing at the exhaustive step.

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- One closed schema keeps every authored boundary tag and chronology invariant reviewable together. */
 import { Effect, Schema } from "effect"
 import {
   AttemptId,
@@ -6,6 +7,7 @@ import {
   PlannedAttemptExecutorResult,
   TaskExecutorLocator,
   TaskId,
+  TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
 import {
@@ -14,6 +16,7 @@ import {
   ControlDirection,
   InitialControlPolicy,
   IntegrationCandidateGitObservation,
+  makeTaskWorkSpecification,
   PlannedBranchReady,
   PlannedWorktreeAbsent,
   PlannedWorktreeReady,
@@ -29,6 +32,9 @@ import {
   TrackerRevision,
   TrackerTarget
 } from "@dalph/orchestrator"
+import { AuthoredContinueAttemptResult, AuthoredStopAttemptResult } from "./authored-attempt-choice.js"
+import { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
+export { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
 
 const AuthoredTrackerTask = Schema.Struct({
   id: TaskId,
@@ -141,28 +147,13 @@ export const AuthoredOrchestrationEvidence = Schema.TaggedUnion({
     attemptId: AttemptId,
     report: Schema.Literals(["Running", "SafelySuspended", "TerminalAccepted", "TerminalCompleted", "TerminalFailed"])
   },
+  PlannedAttemptExecutorCommandProjectionObserved: {
+    attemptId: AttemptId,
+    report: Schema.Literals(["Running", "SafelySuspended", "TerminalAccepted", "TerminalCompleted", "TerminalFailed"])
+  },
   PlannedAttemptExecutorWorkResponsibilityBegan: { attemptId: AttemptId, taskId: TaskId }
 })
 export type AuthoredOrchestrationEvidence = typeof AuthoredOrchestrationEvidence.Type
-
-/** Optional evidence from the claim, attempt-planning, and worktree protocol. */
-export const AuthoredProtocolEvidence = Schema.TaggedUnion({
-  AttemptWorktreeLost: { attemptId: AttemptId, taskId: TaskId },
-  CompatibleTargetAdvance: { plannedBaseSha: GitCommitSha, targetHeadSha: GitCommitSha, taskId: TaskId },
-  ControlDirectionApplied: {
-    direction: ControlDirection,
-    subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
-  },
-  IncompatibleTargetRewrite: { plannedBaseSha: GitCommitSha, targetHeadSha: GitCommitSha, taskId: TaskId },
-  TaskAttemptPlanned: { attemptId: AttemptId, taskId: TaskId },
-  TaskClaimAcquired: { taskId: TaskId },
-  TaskClaimReleased: { taskId: TaskId },
-  TaskClaimObserved: { claimState: Schema.Literals(["Exact", "Foreign", "Missing"]), taskId: TaskId },
-  TaskClaimReadExhausted: { taskId: TaskId },
-  TaskClaimReacquisitionDirected: { requestId: TaskClaimReacquisitionRequestId, taskId: TaskId },
-  TaskWorktreeReady: { attemptId: AttemptId, taskId: TaskId }
-})
-export type AuthoredProtocolEvidence = typeof AuthoredProtocolEvidence.Type
 
 const AuthoredExpectedBehaviorShape = Schema.Struct({
   orchestration: Schema.NullOr(Schema.Array(AuthoredOrchestrationEvidence)),
@@ -231,8 +222,19 @@ const AuthoredTargetVerificationResult = Schema.TaggedUnion({
  * released compatibility promise.
  */
 export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
+  /** Harness lifecycle: one bounded coordinator activation returns this exact public finality decision. */
+  CoordinatorActivationReturned: {
+    decision: Schema.TaggedUnion({
+      RunMayTerminate: {},
+      RunMustRemainActive: {
+        reason: Schema.Literals(["RunnableTransition", "TrackerTargetUnsettled", "UnsettledResponsibility"])
+      }
+    })
+  },
   /** Harness lifecycle: dispose one coordinator and its same-process executor session without journaling an occurrence. */
   CoordinatorProcessDies: {},
+  /** Harness synchronization: hold this exact admitted continuation before its durable executor command intent. */
+  DalphHoldsAdmittedContinuationBeforeExecutorIntent: { attemptId: AttemptId, taskId: TaskId },
   DalphSelects: { operation: AuthoredCassetteDecision },
   /** Task-work assertions with optional complete lower-level evidence projections. */
   ExpectedBehavior: AuthoredExpectedBehavior.fields,
@@ -271,6 +273,14 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
     report: AuthoredPlannedAttemptExecutorReport,
     request: Schema.Literals(["StartOrContinue", "Suspend"])
   },
+  /** A read-only executor projection returns this exact current authority state. */
+  PlannedAttemptExecutorProjectionReturned: { report: AuthoredPlannedAttemptExecutorReport },
+  /** Executor applied the request and changed its authority state, but Dalph lost the response before journaling it. */
+  PlannedAttemptExecutorResponseLost: {
+    detail: Schema.String,
+    report: AuthoredPlannedAttemptExecutorReport,
+    request: Schema.Literals(["StartOrContinue", "Suspend"])
+  },
   OperatorAppliesControlDirection: {
     direction: ControlDirection,
     subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
@@ -286,13 +296,39 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
     reason: Schema.Literals(["IncompleteSnapshot", "OutsideCurrentTargetClosure"]),
     subject: Schema.TaggedUnion({ Task: { taskId: TaskId } })
   },
+  /** Alice applies Continue for one immutable attempt and observes the typed public result. */
+  OperatorContinuesAttempt: {
+    attemptId: AttemptId,
+    expected: AuthoredContinueAttemptResult,
+    observedTaskRevision: TaskRevision,
+    requestNonce: Schema.NonEmptyString,
+    taskId: TaskId
+  },
   OperatorDirectsTaskClaimReacquisition: { requestId: TaskClaimReacquisitionRequestId, taskId: TaskId },
+  /** Alice submits both valid directions concurrently; exactly one journaled application wins. */
+  OperatorRacesContinueAndStop: {
+    attemptId: AttemptId,
+    continueRequestNonce: Schema.NonEmptyString,
+    observedTaskRevision: TaskRevision,
+    stopRequestNonce: Schema.NonEmptyString,
+    taskId: TaskId
+  },
+  /** Alice applies Stop for one immutable attempt and observes its current durable phase. */
+  OperatorStopsAttempt: {
+    attemptId: AttemptId,
+    expected: AuthoredStopAttemptResult,
+    observedTaskRevision: TaskRevision,
+    requestNonce: Schema.NonEmptyString,
+    taskId: TaskId
+  },
   RunCoordinator: RunCoordinatorFields,
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
   TaskClaimReadFailed: { reason: Schema.Literal("Unreadable"), taskId: TaskId },
   TaskClaimCurrentReadReturned: { taskId: TaskId },
   TaskClaimReadReturned: { observation: TaskClaimObservation },
+  /** Tracker applied the exact release, but Dalph lost the mutation response before journaling its outcome. */
+  TaskClaimReleaseResponseLost: { detail: Schema.String, taskId: TaskId },
   TrackerGraphReadFailed: { reason: Schema.Literal("IncompleteSnapshot") },
   TrackerGraphReadReturned: { graph: AuthoredTrackerGraph }
 })
@@ -318,11 +354,15 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "OperatorAppliesControlDirection",
     "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
     "OperatorControlDirectionFailed",
+    "OperatorContinuesAttempt",
     "OperatorDirectsTaskClaimReacquisition",
+    "OperatorRacesContinueAndStop",
+    "OperatorStopsAttempt",
     "RunCoordinator",
     "SetTaskExecutionCapacity"
   ],
-  CassetteLifecycle: ["CoordinatorProcessDies"],
+  CassetteLifecycle: ["CoordinatorActivationReturned", "CoordinatorProcessDies"],
+  DeliverySynchronization: ["DalphHoldsAdmittedContinuationBeforeExecutorIntent"],
   DalphOperationTrace: ["DalphSelects"],
   Git: ["GitWorktreeObservationChanged"],
   IntegrationCandidateConstruction: [
@@ -337,11 +377,16 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "TargetPromotionGitReadReturned",
     "TargetPromotionGitReadFailed"
   ],
-  PlannedAttemptExecutor: ["PlannedAttemptExecutorWorkReported"],
+  PlannedAttemptExecutor: [
+    "PlannedAttemptExecutorProjectionReturned",
+    "PlannedAttemptExecutorResponseLost",
+    "PlannedAttemptExecutorWorkReported"
+  ],
   TaskTracker: [
     "TaskClaimReadFailed",
     "TaskClaimCurrentReadReturned",
     "TaskClaimReadReturned",
+    "TaskClaimReleaseResponseLost",
     "TaskWorkSpecificationReadReturned",
     "TrackerGraphReadFailed",
     "TrackerGraphReadReturned"
@@ -435,10 +480,206 @@ const behaviorAssertionsAreConsistent = Schema.makeFilter((cassette: typeof Auth
     .find((issue) => issue !== undefined)
 )
 
-const coordinatorDiesAtMostOnce = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
-  cassette.story.filter((item) => item._tag === "CoordinatorProcessDies").length <= 1
-    ? undefined
-    : "one authored cassette may dispose its coordinator process at most once"
+const minimumItemsAfterCoordinatorDeath = 2
+const coordinatorLifecycleBoundariesHaveFollowingRecoveryWork = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+    cassette.story.every(
+      (item, index) =>
+        item._tag !== "CoordinatorProcessDies" || index < cassette.story.length - minimumItemsAfterCoordinatorDeath
+    )
+      ? undefined
+      : "each authored coordinator process death must leave a later recovery interaction before terminal assertions"
+)
+
+const ambiguousBoundaryLossesImmediatelyCrash = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+    cassette.story.every(
+      (item, index) =>
+        (item._tag !== "PlannedAttemptExecutorResponseLost" && item._tag !== "TaskClaimReleaseResponseLost") ||
+        cassette.story[index + 1]?._tag === "CoordinatorProcessDies"
+    )
+      ? undefined
+      : "an authored executor or claim-release response loss must be followed immediately by coordinator process death"
+)
+
+const executorLossProjectionOffset = 2
+const lostExecutorResponsesRequireExplicitProjection = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+    cassette.story.every((item, index) => {
+      if (item._tag !== "PlannedAttemptExecutorResponseLost") return true
+      const projection = cassette.story[index + executorLossProjectionOffset]
+      return (
+        projection?._tag === "PlannedAttemptExecutorProjectionReturned" &&
+        projection.report.attemptId === item.report.attemptId
+      )
+    })
+      ? undefined
+      : "an authored lost executor response must be followed after process death by an explicit exact-attempt projection"
+)
+
+const heldPauseOffset = 1
+const heldPauseGraphSelectionOffset = 2
+const heldPauseGraphReturnOffset = 3
+const heldUnpauseOffset = 4
+const heldUnpauseGraphSelectionOffset = 5
+const heldUnpauseGraphReturnOffset = 6
+const heldRecoveryGraphSelectionOffset = 7
+const heldRecoveryGraphReturnOffset = 8
+const heldSpecificationSelectionOffset = 9
+const heldSpecificationReturnOffset = 10
+const heldStopOffset = 11
+const heldExecutorOutcomeOffset = 12
+
+type AuthoredStory = (typeof AuthoredScenarioCassetteShape.Type)["story"]
+type AdmittedContinuationHold =
+  typeof AuthoredCassetteStoryItem.cases.DalphHoldsAdmittedContinuationBeforeExecutorIntent.Type
+
+const exactTaskControlItemAt = (
+  story: AuthoredStory,
+  holdIndex: number,
+  controlOffset: number,
+  direction: "Pause" | "Unpause",
+  taskId: TaskId
+): boolean => {
+  const control = story[holdIndex + controlOffset]
+  return (
+    control?._tag === "OperatorAppliesControlDirection" &&
+    control.direction === direction &&
+    control.subject._tag === "Task" &&
+    control.subject.taskId === taskId
+  )
+}
+
+const graphReadAt = (
+  story: AuthoredStory,
+  holdIndex: number,
+  selectionOffset: number,
+  returnOffset: number
+): boolean => {
+  const selection = story[holdIndex + selectionOffset]
+  const returned = story[holdIndex + returnOffset]
+  return (
+    selection?._tag === "DalphSelects" &&
+    selection.operation._tag === "ReadTrackerGraph" &&
+    returned?._tag === "TrackerGraphReadReturned"
+  )
+}
+
+const exactTaskControlAt = (
+  story: AuthoredStory,
+  holdIndex: number,
+  controlOffset: number,
+  graphSelectionOffset: number,
+  graphReturnOffset: number,
+  direction: "Pause" | "Unpause",
+  taskId: TaskId
+): boolean =>
+  exactTaskControlItemAt(story, holdIndex, controlOffset, direction, taskId) &&
+  graphReadAt(story, holdIndex, graphSelectionOffset, graphReturnOffset)
+
+const exactHeldSpecificationAt = (
+  story: AuthoredStory,
+  holdIndex: number,
+  taskId: TaskId
+): typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type | undefined => {
+  const selection = story[holdIndex + heldSpecificationSelectionOffset]
+  const specification = story[holdIndex + heldSpecificationReturnOffset]
+  return selection?._tag === "DalphSelects" &&
+    selection.operation._tag === "ReadTaskWorkSpecification" &&
+    selection.operation.taskId === taskId &&
+    specification?._tag === "TaskWorkSpecificationReadReturned" &&
+    specification.taskId === taskId
+    ? specification
+    : undefined
+}
+
+const exactHeldStopAt = (
+  story: AuthoredStory,
+  holdIndex: number,
+  hold: AdmittedContinuationHold,
+  specification: typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type
+): boolean => {
+  const stop = story[holdIndex + heldStopOffset]
+  return (
+    stop?._tag === "OperatorStopsAttempt" &&
+    stop.attemptId === hold.attemptId &&
+    stop.taskId === hold.taskId &&
+    stop.expected._tag === "Applied" &&
+    stop.expected.status === "AwaitingQuiescence" &&
+    stop.observedTaskRevision === makeTaskWorkSpecification(specification).fingerprint
+  )
+}
+
+const exactHeldExecutorOutcomeAt = (story: AuthoredStory, holdIndex: number, attemptId: AttemptId): boolean => {
+  const outcome = story[holdIndex + heldExecutorOutcomeOffset]
+  return (
+    (outcome?._tag === "PlannedAttemptExecutorResponseLost" ||
+      outcome?._tag === "PlannedAttemptExecutorWorkReported") &&
+    outcome.request === "StartOrContinue" &&
+    outcome.report.attemptId === attemptId
+  )
+}
+
+const admittedContinuationHoldIndexes = (story: AuthoredStory): ReadonlyArray<number> =>
+  story.flatMap((item, index) => (item._tag === "DalphHoldsAdmittedContinuationBeforeExecutorIntent" ? [index] : []))
+
+const exactHeldControlReads = (story: AuthoredStory, holdIndex: number, taskId: TaskId): boolean =>
+  exactTaskControlAt(
+    story,
+    holdIndex,
+    heldPauseOffset,
+    heldPauseGraphSelectionOffset,
+    heldPauseGraphReturnOffset,
+    "Pause",
+    taskId
+  ) &&
+  exactTaskControlAt(
+    story,
+    holdIndex,
+    heldUnpauseOffset,
+    heldUnpauseGraphSelectionOffset,
+    heldUnpauseGraphReturnOffset,
+    "Unpause",
+    taskId
+  ) &&
+  graphReadAt(story, holdIndex, heldRecoveryGraphSelectionOffset, heldRecoveryGraphReturnOffset)
+
+const admittedContinuationClosureIssue = (
+  story: AuthoredStory,
+  holdIndex: number,
+  hold: AdmittedContinuationHold
+): string | undefined => {
+  if (!exactHeldControlReads(story, holdIndex, hold.taskId)) {
+    return "the admitted continuation hold must cross exact Task Pause, Unpause, and recovery graph reads"
+  }
+  const specification = exactHeldSpecificationAt(story, holdIndex, hold.taskId)
+  if (specification === undefined) {
+    return "the admitted continuation hold must be followed by the production-selected exact F2 specification read"
+  }
+  if (!exactHeldStopAt(story, holdIndex, hold, specification)) {
+    return "the admitted continuation hold must be followed by the matching applied Stop request"
+  }
+  if (!exactHeldExecutorOutcomeAt(story, holdIndex, hold.attemptId)) {
+    return "the admitted continuation hold must close with the exact StartOrContinue boundary outcome"
+  }
+  return undefined
+}
+
+const admittedContinuationHoldHasExactStopClosure = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    const holdIndexes = admittedContinuationHoldIndexes(cassette.story)
+    if (holdIndexes.length === 0) return undefined
+    if (holdIndexes.length !== 1) return "an authored cassette may hold at most one admitted continuation"
+    const holdIndex = holdIndexes[0]
+    /* v8 ignore start -- @preserve The exact-length check and tag-derived index make both defensive failures unconstructible. */
+    if (holdIndex === undefined) return "the admitted continuation hold index is missing"
+    const hold = cassette.story[holdIndex]
+    if (hold?._tag !== "DalphHoldsAdmittedContinuationBeforeExecutorIntent") {
+      return "the admitted continuation hold must remain at its decoded position"
+    }
+    /* v8 ignore stop -- @preserve */
+    return admittedContinuationClosureIssue(cassette.story, holdIndex, hold)
+  }
 )
 
 export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
@@ -454,5 +695,8 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   )
   .check(startingFactsAreConsistent)
   .check(behaviorAssertionsAreConsistent)
-  .check(coordinatorDiesAtMostOnce)
+  .check(coordinatorLifecycleBoundariesHaveFollowingRecoveryWork)
+  .check(ambiguousBoundaryLossesImmediatelyCrash)
+  .check(lostExecutorResponsesRequireExplicitProjection)
+  .check(admittedContinuationHoldHasExactStopClosure)
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type
