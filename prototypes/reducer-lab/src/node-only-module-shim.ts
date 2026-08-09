@@ -6,4 +6,5 @@ export const flock = (): never => {
 export const MigrationError = Error
 
 export const make = flock
+export const open = flock
 export const run = flock

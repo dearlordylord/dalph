@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- This adapter intentionally owns the Node-native flock descriptor. */
 import { Context, Deferred, Effect, Exit, FileSystem, Layer, Option, Schedule, Schema, Scope } from "effect"
 import { flock } from "fs-ext-extra-prebuilt"
-import { open } from "node:fs/promises"
+import * as NodeFileSystem from "node:fs/promises"
 import {
   CoordinatorLock,
   CoordinatorLockHeld,
@@ -43,7 +43,7 @@ const nativeCoordinatorFileLockLayer = Layer.succeed(
     acquireExclusive: Effect.fn("CoordinatorLock.NativeFileLock.acquireExclusive")(function* (gitCommonDirectory) {
       const file = yield* Effect.acquireRelease(
         Effect.tryPromise({
-          try: () => open(gitCommonDirectory, "r"),
+          try: () => NodeFileSystem.open(gitCommonDirectory, "r"),
           catch: (cause) => new NativeCoordinatorLockFailure({ cause })
         }),
         (opened) => Effect.tryPromise(() => opened.close()).pipe(Effect.orDie)
