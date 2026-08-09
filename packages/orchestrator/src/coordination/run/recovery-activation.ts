@@ -1,7 +1,6 @@
 /* eslint-disable max-lines -- Exact history reconstruction spans every delivery authority boundary. */
 import { Context, Effect, Option } from "effect"
 import {
-  type AttemptId,
   type IntegrationTarget,
   type PlannedTaskAttempt,
   plannedTaskAttemptEquivalence,
@@ -65,6 +64,10 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { defaultPlannedAttemptExecutorSuspensionLimit } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { sameAttemptChoiceRequestId, sameAttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
+import {
+  requiredPlannedAttemptPositionsOf,
+  type RequiredPlannedAttemptPosition
+} from "./required-planned-attempt-positions.js"
 
 import {
   makeTaskClaimReleaseOperation,
@@ -1798,11 +1801,7 @@ export type RunRecoveryProjectionError = Effect.Error<ReturnType<typeof readReco
 /** Read-only reconstructed evidence consumed by delivery. */
 export interface RunRecoveryProjectionSource {
   readonly readDeliveryProjection: Effect.Effect<RunRecoveryProjectionSnapshot, RunRecoveryProjectionError, never>
-  readonly reconstructedPlannedAttemptPositions: ReadonlyArray<{
-    readonly attemptId: AttemptId
-    readonly runId: RunId
-    readonly taskId: TaskId
-  }>
+  readonly reconstructedPlannedAttemptPositions: ReadonlyArray<RequiredPlannedAttemptPosition>
 }
 
 type RunRecoveryProjectionService = RunRecoveryProjectionSource & {
@@ -1846,38 +1845,7 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
   if (initialReduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.fail(initialReduction)
   const initialRecords = initialReduction.runState.workflowHistory.records
   const activationBaselinePosition = latestJournalPosition(initialRecords)
-  const reconstructedPlannedAttemptPositions = initialReduction.runState.responsibility.entries.flatMap(
-    (responsibility) => {
-      if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
-      const abandoned = initialRecords.some(
-        ({ event }) =>
-          event._tag === "AttemptImplementationAbandoned" &&
-          plannedTaskAttemptEquivalence(event.subject.plannedAttempt, responsibility.plannedAttempt)
-      )
-      const evidence = latestPlannedAttemptExecutorEvidence(initialRecords, responsibility.plannedAttempt)
-      const laterCommandExists =
-        evidence !== undefined &&
-        initialRecords.some(
-          ({ event, position }) =>
-            position > evidence.observedAt &&
-            event._tag === "PlannedAttemptExecutorCommandIntended" &&
-            event.plannedAttempt.runId === responsibility.plannedAttempt.runId &&
-            event.plannedAttempt.attemptId === responsibility.plannedAttempt.attemptId
-        )
-      return abandoned ||
-        (evidence !== undefined &&
-          !laterCommandExists &&
-          (evidence.report._tag === "SafelySuspended" || evidence.report._tag === "Terminal"))
-        ? []
-        : [
-            {
-              attemptId: responsibility.plannedAttempt.attemptId,
-              runId: responsibility.plannedAttempt.runId,
-              taskId: responsibility.plannedAttempt.taskId
-            }
-          ]
-    }
-  )
+  const reconstructedPlannedAttemptPositions = requiredPlannedAttemptPositionsOf(initialReduction.runState)
   const projection = readRecoveredProjection(
     runId,
     integrationResources,

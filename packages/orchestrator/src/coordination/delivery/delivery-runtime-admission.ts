@@ -171,18 +171,9 @@ const reserveTaskPositionState = (
 }
 
 /**
- * Owns proposal-native positions without inspecting action route tags.
- *
- * TODO: this is the adoption half of crash recovery — `initial.held` and
- * `synchronize` take the positions that `activeAttemptPositions` in
- * ./reactive-delivery-relations.ts derives from the journal. It is the only
- * production surface an MBT driver can observe crash recovery through, and the
- * existing driver
- * (packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts) always
- * constructs it with `held: []`, so restart-with-prior-allocations is never
- * exercised. `specs/plannedAttemptExecutor.qnt` has no crash action and holds
- * the correlation in constants, so it cannot express identity preserved across
- * a restart. See I8, I9 and I16 in research/verification-bakeoff/INVARIANTS.md.
+ * Owns proposal-native positions without inspecting action route tags. The
+ * initial basis and later synchronization adopt the exact positions that
+ * ordinary relation publication derives from accepted journal history.
  */
 export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntimeAdmission.make")(function* (
   initial: DeliveryTaskWorkAdmissionBasis,
