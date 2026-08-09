@@ -262,12 +262,6 @@ await scenario("shows only information that selects, explains, or diagnoses a ma
   assert(document.querySelectorAll("[data-role='selected-cassette-surface']").length === 1, "The Lab must expose one shared cassette surface")
   assert(document.querySelectorAll("article").length === 1, "Only the selected cassette may render a complete UI")
   assert(document.querySelectorAll("[data-role='cassette-selector'] option").length === expectedCatalogSize, "The selector must retain every catalog choice")
-  assert(document.querySelectorAll("[data-role='cassette-selector'] optgroup").length === 3, "The selector must group choices under all three runner-owned catalogs")
-  assert(
-    [...document.querySelectorAll<HTMLOptGroupElement>("[data-role='cassette-selector'] optgroup")]
-      .every(({ label }) => label.length > 0),
-    "Every selector group must name its catalog"
-  )
   const first = document.querySelector("article")
   assert(first?.querySelector("h2")?.textContent === maintainedCassetteRows[0]?.storyName, "The human story name must be primary")
   assert(first?.querySelector("h2")?.textContent?.includes("authored:") === false, "The prefixed key must not duplicate category in the heading")
@@ -305,6 +299,63 @@ await scenario("uses one shared cassette surface and replaces it when selection 
   chooseOption(selector, first.catalogKey)
   assert(document.querySelector("article")?.dataset.state === "Completed", "Returning to a completed choice must restore its retained result")
   assert(document.querySelectorAll("[data-role='execution-evidence']").length === 1, "Restored evidence must remain confined to the shared surface")
+})
+
+await scenario("keeps cassette selection and delivery frame navigation stable across disclosure toggles", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  if (row === undefined) throw new Error("The delivery-navigation fixture is missing")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: maintainedCassetteRows, runCassette: cannedRunner })
+  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLSelectElement | null
+  const selectorLabel = selector?.closest("label")
+  if (selector === null) throw new Error("The cassette selector is missing")
+  assert(selectorLabel?.textContent?.includes(`Choose cassette(${expectedCatalogSize} available)`) === true, "The ordinary selector must clearly state its action and available choice count")
+  assert(selector.querySelectorAll("optgroup").length === 3, "The ordinary selector must group choices under the three maintained catalogs")
+  const groupLabels = [...selector.querySelectorAll<HTMLOptGroupElement>("optgroup")].map(({ label }) => label).join("|")
+  assert(
+    groupLabels === "Authored coordinator stories|Target promotion protocol|Integration finality protocol",
+    `The selector groups must name the three maintained catalogs: ${groupLabels}`
+  )
+  const malformedOptions = [...selector.options].filter((option) => {
+    const choice = maintainedCassetteRows.find(({ catalogKey }) => option.value === catalogKey)
+    return choice === undefined
+      || !(option.textContent?.startsWith(choice.storyName) === true
+        && option.value === choice.catalogKey)
+  })
+  assert(malformedOptions.length === 0, `Every ordinary selector option must expose a concise story label under its catalog and retain its exact key as the value: ${malformedOptions[0]?.outerHTML ?? "unknown"}`)
+  chooseOption(selector, row.catalogKey)
+  const completed = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await completed
+  const workbench = document.querySelector<HTMLDetailsElement>("[data-role='delivery-workbench']")
+  if (workbench === null) throw new Error("The completed delivery workbench is missing")
+  assert(workbench.open, "Running one authored cassette must open its delivery workbench")
+  await Promise.resolve()
+  workbench.dispatchEvent(new Event("toggle"))
+  assert(document.querySelector("[data-role='delivery-workbench']") === workbench, "A queued native-style toggle must not replace the open workbench")
+  const status = workbench.querySelector(".delivery-timeline-controls output")
+  const next = [...workbench.querySelectorAll("button")].find(({ textContent }) => textContent === "Next frame")
+  const previous = [...workbench.querySelectorAll("button")].find(({ textContent }) => textContent === "Previous frame")
+  assert(status?.textContent?.startsWith("1 of ") === true, "The timeline must start at its first production publication")
+  next?.click()
+  assert(status?.textContent?.startsWith("2 of ") === true, "Next frame must advance the visible timeline")
+  await Promise.resolve()
+  workbench.dispatchEvent(new Event("toggle"))
+  assert(document.querySelector("[data-role='delivery-workbench']") === workbench, "Frame navigation must survive later disclosure events")
+  assert(status?.textContent?.startsWith("2 of ") === true, "A disclosure event must not reset the selected delivery frame")
+  workbench.open = false
+  await Promise.resolve()
+  workbench.dispatchEvent(new Event("toggle"))
+  workbench.open = true
+  await Promise.resolve()
+  workbench.dispatchEvent(new Event("toggle"))
+  assert(document.querySelector("[data-role='delivery-workbench']") === workbench && workbench.open, "Closing and reopening must preserve the same usable workbench")
+  assert(status?.textContent?.startsWith("2 of ") === true, "Reopening must preserve the selected delivery frame")
+  previous?.click()
+  assert(status?.textContent?.startsWith("1 of ") === true, "Previous frame must navigate back without replacing the workbench")
+  await Promise.resolve()
+  workbench.dispatchEvent(new Event("toggle"))
+  assert(status?.textContent?.startsWith("1 of ") === true, "Previous-frame navigation must persist across queued disclosure events")
 })
 
 await scenario("shows an authored cassette declared graph only as input before production observes it", () => {

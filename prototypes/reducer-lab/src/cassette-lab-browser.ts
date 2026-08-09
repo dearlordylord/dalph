@@ -261,8 +261,9 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   }
   statusLabel.append(statusFilter)
 
-  const selectionLabel = appendTextElement(controls, "label", "Selected cassette")
+  const selectionLabel = appendTextElement(controls, "label", "Choose cassette")
   selectionLabel.className = "cassette-selection"
+  const selectionText = appendTextElement(selectionLabel, "span", `(${rows.length} available)`)
   const cassetteSelector = document.createElement("select")
   cassetteSelector.dataset.role = "cassette-selector"
   selectionLabel.append(cassetteSelector)
@@ -425,7 +426,6 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     const workbench = deliveryWorkbenchHost.querySelector<HTMLDetailsElement>('[data-role="delivery-workbench"]')
     workbench?.addEventListener("toggle", () => {
       workbenchOpen = workbench.open
-      renderSelected()
     })
 
     const chronology = document.createElement("details")
@@ -532,12 +532,10 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     cassetteSelector.replaceChildren()
     for (const categoryName of categoryOrder) {
       const categoryKeys = visibleKeys.filter((key) => rowByKey.get(key)?.category === categoryName)
-      if (categoryKeys.length === 0) continue
       const firstKey = categoryKeys[0]
       if (firstKey === undefined) continue
-      const representative = rowByKey.get(firstKey)
       const group = document.createElement("optgroup")
-      group.label = representative?.categoryLabel ?? categoryName
+      group.label = rowByKey.get(firstKey)?.categoryLabel ?? categoryName
       for (const key of categoryKeys) {
         const row = rowByKey.get(key)
         if (row === undefined) continue
@@ -545,7 +543,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
         const option = appendTextElement(
           group,
           "option",
-          `${row.storyName} · ${row.catalogKey} · ${cassetteStateStatusText(state)}`
+          `${row.storyName} · ${cassetteStateStatusText(state)}`
         )
         option.value = key
         option.selected = key === selectedKey
@@ -553,6 +551,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       cassetteSelector.append(group)
     }
     cassetteSelector.disabled = visibleKeys.length === 0
+    selectionText.textContent = `(${visibleKeys.length} available)`
     const narrowed = tokens.length > 0 || category !== "All" || status !== "All"
     visibility.hidden = !narrowed
     visibility.textContent = narrowed ? `${visibleKeys.length} of ${rows.length} maintained cassettes available to select` : ""

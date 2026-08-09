@@ -210,10 +210,26 @@ The Lab must not create one article, workbench, chronology, Run button, or
 evidence tree per catalog entry. A new selection must replace the old selected
 surface rather than append to it.
 
+The cassette control is an ordinary browser select containing every choice
+admitted by the current filters. Its label says **Choose cassette** and states
+the number of available choices. Three standard option groups name the
+catalogs; each concise option names the human story and current status while
+its value retains the exact key. Opening the select must not run a cassette or
+replace the selected surface; choosing an option is the only selection trigger.
+
+After an authored cassette completes, the maintainer opens its Delivery
+workbench and chooses **Next frame**. The already-rendered workbench stays
+connected, the frame control advances from frame 1 to frame 2, and the graph
+and task facts remain on frame 2 after the browser delivers its queued native
+disclosure events. Closing and reopening the workbench preserves one usable
+timeline. The Lab must not replace an open disclosure in response to its own
+`toggle` event, blink the frame selector closed, or reset navigation to frame
+1.
+
 ### Acceptance-test mapping
 
 - `shows only information that selects, explains, or diagnoses a maintained cassette`
-  checks the source/safety context, complete grouped selector, one selected
+  checks the source/safety context, complete ordinary selector, one selected
   surface, runner and boundary facts, completion meaning, hidden pre-run
   evidence, and readable and exact declared input.
 - `searches declared behavior without changing the maintained run-all catalog`
@@ -237,6 +253,11 @@ surface rather than append to it.
   checks that all catalog choices drive one article and that changing the
   selected key replaces its identity, chronology, workbench applicability,
   action, status, and retained result without leaving the old UI visible.
+- `keeps cassette selection and delivery frame navigation stable across disclosure toggles`
+  checks the complete ordinary selector labels, runs an authored cassette,
+  queues the disclosure's native-style toggle after opening, and proves the
+  same workbench and timeline remain connected while Next and Previous frame
+  navigation persist.
 
 ## A maintainer watches an authored cassette move through delivery
 

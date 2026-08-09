@@ -400,15 +400,21 @@ export const renderCassetteDeliveryWorkbench = (
   details.open = open
   appendText(details, "summary", "Delivery workbench · graph, frontier, bounded tickets, held positions, obligations, and settlements")
   host.append(details)
-  if (!open) return
-  const heading = appendText(details, "h4", "Production delivery timeline")
-  heading.tabIndex = -1
-  const completed = state._tag === "Settled" && state.result._tag === "Completed"
-    ? state.result
-    : undefined
-  if (completed?.deliveryFrames !== null && completed?.deliveryFrames !== undefined && completed.deliveryFrames.length > 0) {
-    renderTimeline(details, authoredRow, completed.deliveryFrames)
-  } else {
-    renderNotObserved(details, authoredRow, state)
+  const renderContents = (): void => {
+    if (details.querySelector("h4") !== null) return
+    const heading = appendText(details, "h4", "Production delivery timeline")
+    heading.tabIndex = -1
+    const completed = state._tag === "Settled" && state.result._tag === "Completed"
+      ? state.result
+      : undefined
+    if (completed?.deliveryFrames !== null && completed?.deliveryFrames !== undefined && completed.deliveryFrames.length > 0) {
+      renderTimeline(details, authoredRow, completed.deliveryFrames)
+    } else {
+      renderNotObserved(details, authoredRow, state)
+    }
   }
+  if (open) renderContents()
+  details.addEventListener("toggle", () => {
+    if (details.open) renderContents()
+  })
 }
