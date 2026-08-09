@@ -503,13 +503,17 @@ const coordinatorLifecycleBoundariesHaveFollowingActivationWork = Schema.makeFil
 
 const finalTrackerReadClosesCurrentActivation = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) =>
-    cassette.story.every(
-      (item, index) =>
-        item._tag !== "RunActivationFinalTrackerGraphReadReturned" ||
+    cassette.story.every((item, index) => {
+      if (item._tag !== "RunActivationFinalTrackerGraphReadReturned") return true
+      const selection = cassette.story[index - 1]
+      return (
+        selection?._tag === "DalphSelects" &&
+        selection.operation._tag === "ReadTrackerGraph" &&
         cassette.story[index + 1]?._tag === "CoordinatorActivationReturned"
-    )
+      )
+    })
       ? undefined
-      : "each authored activation-final tracker result must be followed by that activation's public return"
+      : "each authored activation-final tracker result must close a selected graph read and be followed by that activation's public return"
 )
 
 const ambiguousBoundaryLossesImmediatelyCrash = Schema.makeFilter(

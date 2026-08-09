@@ -2962,6 +2962,26 @@ it.effect("requires one terminal assertion group and one owner for every decoded
     expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(repeatedDeathsWithLaterActivations)).not.toThrow()
 
     const finalGraphAt = singleton.story.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
+    const finalReadWithActivationReturn = {
+      ...singleton,
+      story: singleton.story.flatMap((item, index) =>
+        index === finalGraphAt && item._tag === "TrackerGraphReadReturned"
+          ? [
+              { _tag: "RunActivationFinalTrackerGraphReadReturned" as const, graph: item.graph },
+              {
+                _tag: "CoordinatorActivationReturned" as const,
+                decision: { _tag: "RunMustRemainActive" as const, reason: "TrackerTargetUnsettled" as const }
+              }
+            ]
+          : [item]
+      )
+    }
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(finalReadWithActivationReturn)).not.toThrow()
+    const finalReadWithoutSelection = {
+      ...finalReadWithActivationReturn,
+      story: finalReadWithActivationReturn.story.filter((_item, index) => index !== finalGraphAt - 1)
+    }
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(finalReadWithoutSelection)).toThrow()
     const finalReadWithoutActivationReturn = {
       ...singleton,
       story: singleton.story.map((item, index) =>
@@ -3172,10 +3192,21 @@ it.effect("reconstructs both retained holders and blocks C through a contracted 
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(contractedCapacityRetainsTwoAttemptsAuthoredCassette)
     const recorded = yield* projectRecordedCassette(run.records)
+    const reopened = foldRecordedCassette(recorded)
+    const changedAt = run.records.findIndex(({ event }) => event._tag === "TaskWorkCapacityChanged")
+    const responsibilityAt = (taskId: TaskId) =>
+      run.records.findIndex(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.taskId === taskId
+      )
     const cResponsibilityAt = run.records.findIndex(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
         event.plannedAttempt.taskId === TaskId.make("C")
+    )
+    const cClaimAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("C")
     )
     const terminalAt = (attemptId: AttemptId) =>
       run.records.findIndex(
@@ -3184,17 +3215,49 @@ it.effect("reconstructs both retained holders and blocks C through a contracted 
           event.report.correlation.attemptId === attemptId &&
           event.report._tag === "Terminal"
       )
+    const aTerminalAt = terminalAt(AttemptId.make("attempt:A:0"))
+    const bTerminalAt = terminalAt(AttemptId.make("attempt:B:1"))
+    const aResponsibilityAt = responsibilityAt(TaskId.make("A"))
+    const bResponsibilityAt = responsibilityAt(TaskId.make("B"))
+    const cStartIntents = run.records.flatMap(({ event }, index) =>
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.plannedAttempt.attemptId === AttemptId.make("attempt:C:2") &&
+      event.command === "StartOrContinue"
+        ? [{ event, index }]
+        : []
+    )
 
-    expect(cResponsibilityAt).toBeGreaterThan(terminalAt(AttemptId.make("attempt:A:0")))
-    expect(cResponsibilityAt).toBeGreaterThan(terminalAt(AttemptId.make("attempt:B:1")))
+    expect(changedAt).toBeGreaterThan(0)
+    expect(aResponsibilityAt).toBeGreaterThan(0)
+    expect(bResponsibilityAt).toBeGreaterThan(0)
+    expect(aResponsibilityAt).toBeLessThan(changedAt)
+    expect(bResponsibilityAt).toBeLessThan(changedAt)
     expect(
       run.records.filter(
         ({ event }) =>
-          event._tag === "PlannedAttemptExecutorCommandIntended" &&
-          event.plannedAttempt.attemptId === AttemptId.make("attempt:C:2") &&
-          event.command === "StartOrContinue"
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          (event.plannedAttempt.taskId === TaskId.make("A") || event.plannedAttempt.taskId === TaskId.make("B"))
       )
-    ).toHaveLength(1)
+    ).toHaveLength(2)
+    expect(aTerminalAt).toBeGreaterThan(changedAt)
+    expect(bTerminalAt).toBeGreaterThan(changedAt)
+    expect(cClaimAt).toBeGreaterThan(aTerminalAt)
+    expect(cClaimAt).toBeGreaterThan(bTerminalAt)
+    expect(cResponsibilityAt).toBeGreaterThan(aTerminalAt)
+    expect(cResponsibilityAt).toBeGreaterThan(bTerminalAt)
+    expect(cStartIntents).toHaveLength(1)
+    expect(cStartIntents[0]?.index).toBeGreaterThan(aTerminalAt)
+    expect(cStartIntents[0]?.index).toBeGreaterThan(bTerminalAt)
+    expect(run.activationOrdinals.length).toBeGreaterThan(1)
+    expect(run.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+    expect(new Set(run.records.map(({ runId }) => runId))).toEqual(new Set([run.runId]))
+    expect(reopened._tag).toBe("ValidWorkflowJournalHistory")
+    if (reopened._tag === "ValidWorkflowJournalHistory") {
+      expect(Option.getOrThrow(reopened.runState.controlPolicy)).toEqual({
+        revision: RunPolicyRevision.make(2),
+        taskExecutionCapacity: TaskWorkCapacity.make(1)
+      })
+    }
     expect(run.observedBehavior.taskWorkResults).toEqual([
       { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
       { _tag: "PlannedWorkForTaskCompleted", taskId: "B" },
