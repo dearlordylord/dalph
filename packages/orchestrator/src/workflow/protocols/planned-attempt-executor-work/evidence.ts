@@ -29,51 +29,70 @@ export interface PlannedAttemptExecutorEvidence {
 const exactCorrelation = (report: PlannedAttemptExecutorReport, plannedAttempt: PlannedTaskAttempt): boolean =>
   report.correlation.runId === plannedAttempt.runId && report.correlation.attemptId === plannedAttempt.attemptId
 
+const commandProjectionEvidence = (
+  event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorCommandProjectionObserved" }>,
+  position: JournalPosition,
+  plannedAttempt: PlannedTaskAttempt
+): ReadonlyArray<PlannedAttemptExecutorEvidence> => {
+  if (event.observation._tag === "ExactExecutorReport" && exactCorrelation(event.observation.report, plannedAttempt)) {
+    return [
+      {
+        observedAt: position,
+        report: event.observation.report,
+        source: {
+          _tag: "CommandProjection",
+          commandOrdinal: event.commandOrdinal,
+          projectionOrdinal: event.projectionOrdinal
+        }
+      }
+    ]
+  }
+  return []
+}
+
+const stateProjectionEvidence = (
+  event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorStateObserved" }>,
+  position: JournalPosition,
+  plannedAttempt: PlannedTaskAttempt
+): ReadonlyArray<PlannedAttemptExecutorEvidence> => {
+  if (event.observation._tag === "ExactExecutorReport" && exactCorrelation(event.observation.report, plannedAttempt)) {
+    return [
+      {
+        observedAt: position,
+        report: event.observation.report,
+        source: { _tag: "StateProjection", ordinal: event.ordinal }
+      }
+    ]
+  }
+  return []
+}
+
+const evidenceFromRecord = (
+  { event, position }: Pick<JournalRecord, "event" | "position">,
+  plannedAttempt: PlannedTaskAttempt
+): ReadonlyArray<PlannedAttemptExecutorEvidence> => {
+  if (event._tag === "PlannedAttemptExecutorWorkReported") {
+    return exactCorrelation(event.report, plannedAttempt)
+      ? [{ observedAt: position, report: event.report, source: { _tag: "CommandResponse", ordinal: event.ordinal } }]
+      : []
+  }
+  if (event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
+    return commandProjectionEvidence(event, position, plannedAttempt)
+  }
+  return event._tag === "PlannedAttemptExecutorStateObserved"
+    ? stateProjectionEvidence(event, position, plannedAttempt)
+    : []
+}
+
 /** Returns exact correlated executor authority while retaining how Dalph learned it. */
 export const plannedAttemptExecutorEvidence = (
   records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
   plannedAttempt: PlannedTaskAttempt,
   after?: JournalPosition
 ): ReadonlyArray<PlannedAttemptExecutorEvidence> =>
-  records.flatMap<PlannedAttemptExecutorEvidence>(({ event, position }) => {
-    if (after !== undefined && position <= after) return []
-    if (event._tag === "PlannedAttemptExecutorWorkReported" && exactCorrelation(event.report, plannedAttempt)) {
-      return [
-        { observedAt: position, report: event.report, source: { _tag: "CommandResponse", ordinal: event.ordinal } }
-      ]
-    }
-    if (
-      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-      event.observation._tag === "ExactExecutorReport" &&
-      exactCorrelation(event.observation.report, plannedAttempt)
-    ) {
-      return [
-        {
-          observedAt: position,
-          report: event.observation.report,
-          source: {
-            _tag: "CommandProjection",
-            commandOrdinal: event.commandOrdinal,
-            projectionOrdinal: event.projectionOrdinal
-          }
-        }
-      ]
-    }
-    if (
-      event._tag === "PlannedAttemptExecutorStateObserved" &&
-      event.observation._tag === "ExactExecutorReport" &&
-      exactCorrelation(event.observation.report, plannedAttempt)
-    ) {
-      return [
-        {
-          observedAt: position,
-          report: event.observation.report,
-          source: { _tag: "StateProjection", ordinal: event.ordinal }
-        }
-      ]
-    }
-    return []
-  })
+  records.flatMap((record) =>
+    after !== undefined && record.position <= after ? [] : evidenceFromRecord(record, plannedAttempt)
+  )
 
 /** Returns the newest exact executor authority evidence while preserving its provenance. */
 export const latestPlannedAttemptExecutorEvidence = (

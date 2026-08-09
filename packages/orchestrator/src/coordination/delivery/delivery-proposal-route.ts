@@ -79,10 +79,7 @@ type ObservationTransition = Extract<
 const isObservationTransition = (transition: RunnableFrontierTransition): transition is ObservationTransition =>
   transitionRoutePolicy[transition._tag] === "Observation"
 
-const recoveredObservationActionOf = (
-  transition: RunnableFrontierTransition
-): NewRecoveredWorkflowAction | undefined => {
-  if (!isObservationTransition(transition)) return undefined
+const recoveredObservationActionOf = (transition: ObservationTransition): NewRecoveredWorkflowAction => {
   switch (transition._tag) {
     case "ObservePlannedAttemptContinuationGraph":
       return {
@@ -170,5 +167,5 @@ export const newRecoveredActionOf = (
       requestId: transition.requestId
     }
   }
-  return recoveredObservationActionOf(transition)
+  return isObservationTransition(transition) ? recoveredObservationActionOf(transition) : undefined
 }

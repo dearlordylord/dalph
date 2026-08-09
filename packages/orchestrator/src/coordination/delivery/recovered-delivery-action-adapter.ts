@@ -40,15 +40,78 @@ const executeAcceptedRecovery = (runId: RunId, transition: AcceptedRecoveryTrans
   }
 }
 
+const executeRecoveredObservation = Effect.fn("DeliveryAction.executeRecoveredObservation")(function* (
+  action: Exclude<
+    NewRecoveredWorkflowAction,
+    Extract<
+      NewRecoveredWorkflowAction,
+      { readonly _tag: "TaskClaimReacquisition" | "ReleaseExternallyCompletedTaskClaim" | "ReleaseStoppedAttemptClaim" }
+    >
+  >,
+  operationId: OperationId
+) {
+  const interpreter = yield* WorkflowInterpreter
+  const trace = yield* WorkflowTrace
+  switch (action._tag) {
+    case "ReadTrackerGraph": {
+      const operation = { ...action.operation, operationId }
+      yield* trace.emit(OperationSelected.make({ operation }))
+      return yield* interpreter.readTrackerGraph(operation)
+    }
+    case "ReadTaskClaim": {
+      const operation = { ...action.operation, operationId }
+      yield* trace.emit(OperationSelected.make({ operation }))
+      return yield* interpreter.readTaskClaim(operation)
+    }
+    case "ReadTaskWorkSpecification": {
+      const operation = { ...action.operation, operationId }
+      yield* trace.emit(OperationSelected.make({ operation }))
+      return yield* interpreter.readTaskWorkSpecification(operation)
+    }
+    case "ReadTaskWorktree": {
+      const operation = { ...action.operation, operationId }
+      yield* trace.emit(OperationSelected.make({ operation }))
+      return yield* interpreter.readTaskWorktree(operation)
+    }
+    case "ReadTargetLineage": {
+      const operation = { ...action.operation, operationId }
+      yield* trace.emit(OperationSelected.make({ operation }))
+      return yield* interpreter.readTargetLineage(operation)
+    }
+  }
+})
+
+const executeAcceptedObservation = Effect.fn("DeliveryAction.executeAcceptedObservation")(function* (
+  transition: Exclude<AcceptedWorkflowTransition, AcceptedRecoveryTransition>
+) {
+  const interpreter = yield* WorkflowInterpreter
+  const trace = yield* WorkflowTrace
+  yield* trace.emit(OperationSelected.make({ operation: transition.operation }))
+  switch (transition._tag) {
+    case "ObservePlannedAttemptContinuationClaim":
+    case "ObserveResponsibleTaskClaim":
+    case "ObserveStoppedAttemptClaim":
+      return yield* interpreter.readTaskClaim(transition.operation)
+    case "ObservePlannedAttemptContinuationGraph":
+      return yield* interpreter.readTrackerGraph(transition.operation)
+    case "ObservePlannedAttemptContinuationSpecification":
+      return yield* interpreter.readTaskWorkSpecification(transition.operation)
+    case "ObservePlannedAttemptContinuationTargetLineage":
+      return yield* interpreter.readTargetLineage(transition.operation)
+    case "ObservePlannedAttemptContinuationWorktree":
+      return yield* interpreter.readTaskWorktree(transition.operation)
+  }
+})
+
 export const executeNewRecoveredAction = Effect.fn("DeliveryAction.executeNewRecoveredAction")(function* (
   action: NewRecoveredWorkflowAction,
   operationId: OperationId,
   lease: DeliveryActionExecutionLease,
   runId: RunId
 ) {
-  const interpreter = yield* WorkflowInterpreter
-  const trace = yield* WorkflowTrace
   if (action._tag === "TaskClaimReacquisition") {
+    const interpreter = yield* WorkflowInterpreter
+    const trace = yield* WorkflowTrace
     const journal = yield* InRunJournal
     const planner = yield* TaskClaimAcquisitionPlanner
     yield* runTaskClaimReacquisition({
@@ -64,6 +127,8 @@ export const executeNewRecoveredAction = Effect.fn("DeliveryAction.executeNewRec
     return
   }
   if (action._tag === "ReleaseExternallyCompletedTaskClaim" || action._tag === "ReleaseStoppedAttemptClaim") {
+    const interpreter = yield* WorkflowInterpreter
+    const trace = yield* WorkflowTrace
     const operation = makeTaskClaimReleaseOperation({
       authority: action.operation.authority,
       predecessorOperationIds: action.operation.predecessorOperationIds,
@@ -73,38 +138,7 @@ export const executeNewRecoveredAction = Effect.fn("DeliveryAction.executeNewRec
     yield* interpreter.releaseTaskClaim(operation)
     return
   }
-  switch (action._tag) {
-    case "ReadTrackerGraph": {
-      const operation = { ...action.operation, operationId }
-      yield* trace.emit(OperationSelected.make({ operation }))
-      yield* interpreter.readTrackerGraph(operation)
-      return
-    }
-    case "ReadTaskClaim": {
-      const operation = { ...action.operation, operationId }
-      yield* trace.emit(OperationSelected.make({ operation }))
-      yield* interpreter.readTaskClaim(operation)
-      return
-    }
-    case "ReadTaskWorkSpecification": {
-      const operation = { ...action.operation, operationId }
-      yield* trace.emit(OperationSelected.make({ operation }))
-      yield* interpreter.readTaskWorkSpecification(operation)
-      return
-    }
-    case "ReadTaskWorktree": {
-      const operation = { ...action.operation, operationId }
-      yield* trace.emit(OperationSelected.make({ operation }))
-      yield* interpreter.readTaskWorktree(operation)
-      return
-    }
-    case "ReadTargetLineage": {
-      const operation = { ...action.operation, operationId }
-      yield* trace.emit(OperationSelected.make({ operation }))
-      yield* interpreter.readTargetLineage(operation)
-      return
-    }
-  }
+  return yield* executeRecoveredObservation(action, operationId)
 })
 
 export const executeAcceptedWorkflowAction = Effect.fn("DeliveryAction.executeAcceptedWorkflow")(function* (
@@ -112,26 +146,5 @@ export const executeAcceptedWorkflowAction = Effect.fn("DeliveryAction.executeAc
   transition: AcceptedWorkflowTransition
 ) {
   if (isAcceptedRecoveryTransition(transition)) return yield* executeAcceptedRecovery(runId, transition)
-  const interpreter = yield* WorkflowInterpreter
-  const trace = yield* WorkflowTrace
-  yield* trace.emit(OperationSelected.make({ operation: transition.operation }))
-  switch (transition._tag) {
-    case "ObservePlannedAttemptContinuationClaim":
-    case "ObserveResponsibleTaskClaim":
-    case "ObserveStoppedAttemptClaim":
-      yield* interpreter.readTaskClaim(transition.operation)
-      return
-    case "ObservePlannedAttemptContinuationGraph":
-      yield* interpreter.readTrackerGraph(transition.operation)
-      return
-    case "ObservePlannedAttemptContinuationSpecification":
-      yield* interpreter.readTaskWorkSpecification(transition.operation)
-      return
-    case "ObservePlannedAttemptContinuationTargetLineage":
-      yield* interpreter.readTargetLineage(transition.operation)
-      return
-    case "ObservePlannedAttemptContinuationWorktree":
-      yield* interpreter.readTaskWorktree(transition.operation)
-      return
-  }
+  return yield* executeAcceptedObservation(transition)
 })

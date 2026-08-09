@@ -13,7 +13,10 @@ import {
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { latestPlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
+import {
+  latestPlannedAttemptExecutorEvidence,
+  latestUnsettledPlannedAttemptExecutorCommand
+} from "../planned-attempt-executor-work/evidence.js"
 import {
   AttemptChoiceAppliedEvent,
   AttemptChoiceRequestId,
@@ -89,6 +92,19 @@ type AttemptChoiceAppliedRecord<Choice extends "ContinueExistingAttempt" | "Stop
   }
 }
 
+type AbandonmentRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>
+}
+type NoReleaseRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "StoppedAttemptClaimNoReleaseObserved" }>
+}
+type ClaimReleasedRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimReleased" }>
+}
+type ClaimReleaseIntentRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimReleaseIntended" }>
+}
+
 /** Public application/query result: the winning record plus a choice-valid current phase. */
 export type AttemptChoiceApplicationResult =
   | { readonly _tag: "ContinueApplied"; readonly application: AttemptChoiceAppliedRecord<"ContinueExistingAttempt"> }
@@ -130,52 +146,79 @@ const matchingChoice = (records: ReadonlyArray<JournalRecord>, subject: AttemptC
           plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, subject.plannedAttempt)))
   )
 
+const abandonmentFor = (
+  records: ReadonlyArray<JournalRecord>,
+  application: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
+) =>
+  records.findLast(
+    (record): record is AbandonmentRecord =>
+      record.event._tag === "AttemptImplementationAbandoned" &&
+      sameAttemptChoiceRequestId(record.event.requestId, application.requestId) &&
+      sameAttemptChoiceSubject(record.event.subject, application.subject)
+  )
+
+const noReleaseAfter = (
+  records: ReadonlyArray<JournalRecord>,
+  abandonment: JournalRecord,
+  application: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
+) =>
+  records.findLast(
+    (record): record is NoReleaseRecord =>
+      record.position > abandonment.position &&
+      record.event._tag === "StoppedAttemptClaimNoReleaseObserved" &&
+      sameAttemptChoiceRequestId(record.event.requestId, application.requestId) &&
+      sameAttemptChoiceSubject(record.event.subject, application.subject)
+  )
+
+const claimReleaseAfter = (
+  records: ReadonlyArray<JournalRecord>,
+  abandonment: JournalRecord,
+  expectedClaim: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>["expectedClaim"]
+) =>
+  records.findLast(
+    (record): record is ClaimReleasedRecord =>
+      record.position > abandonment.position &&
+      record.event._tag === "TaskClaimReleased" &&
+      isExactTaskClaim(record.event.release.claim, expectedClaim)
+  )
+
+const claimReleaseIntentAfter = (
+  records: ReadonlyArray<JournalRecord>,
+  abandonment: JournalRecord,
+  expectedClaim: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>["expectedClaim"]
+) =>
+  records.findLast(
+    (record): record is ClaimReleaseIntentRecord =>
+      record.position > abandonment.position &&
+      record.event._tag === "TaskClaimReleaseIntended" &&
+      isExactTaskClaim(record.event.operation.release.claim, expectedClaim)
+  )
+
 const currentResultFor = (
   records: ReadonlyArray<JournalRecord>,
   application: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
     readonly choice: "StopTaskImplementation"
   }
 ): AttemptChoiceStopStatus => {
-  const abandonment = records.findLast(
-    ({ event }) =>
-      event._tag === "AttemptImplementationAbandoned" &&
-      sameAttemptChoiceRequestId(event.requestId, application.requestId) &&
-      sameAttemptChoiceSubject(event.subject, application.subject)
-  )
-  if (abandonment?.event._tag !== "AttemptImplementationAbandoned") {
+  const abandonment = abandonmentFor(records, application)
+  if (abandonment === undefined) {
     return { _tag: "AwaitingQuiescence" }
   }
   const expectedClaim = abandonment.event.expectedClaim
-  const noRelease = records.findLast(
-    ({ event, position }) =>
-      position > abandonment.position &&
-      event._tag === "StoppedAttemptClaimNoReleaseObserved" &&
-      sameAttemptChoiceRequestId(event.requestId, application.requestId) &&
-      sameAttemptChoiceSubject(event.subject, application.subject)
-  )
-  if (noRelease?.event._tag === "StoppedAttemptClaimNoReleaseObserved") {
+  const noRelease = noReleaseAfter(records, abandonment, application)
+  if (noRelease !== undefined) {
     return {
       _tag: "SettledNoRelease",
       observation: noRelease.event.observation,
       observationOperationId: noRelease.event.observationOperationId
     }
   }
-  const released = records.findLast(
-    ({ event, position }) =>
-      position > abandonment.position &&
-      event._tag === "TaskClaimReleased" &&
-      isExactTaskClaim(event.release.claim, expectedClaim)
-  )
-  if (released?.event._tag === "TaskClaimReleased") {
+  const released = claimReleaseAfter(records, abandonment, expectedClaim)
+  if (released !== undefined) {
     return { _tag: "SettledReleased", operationId: released.event.release.operationId }
   }
-  const releaseIntent = records.findLast(
-    ({ event, position }) =>
-      position > abandonment.position &&
-      event._tag === "TaskClaimReleaseIntended" &&
-      isExactTaskClaim(event.operation.release.claim, expectedClaim)
-  )
-  return releaseIntent?.event._tag === "TaskClaimReleaseIntended"
+  const releaseIntent = claimReleaseIntentAfter(records, abandonment, expectedClaim)
+  return releaseIntent !== undefined
     ? {
         _tag: "ImplementationAbandonedClaimReleasePending",
         operationId: releaseIntent.event.operation.release.operationId
@@ -210,26 +253,8 @@ const choiceIsExposed = (
   )
   if (!planned) return "AttemptNotPlanned"
   const latestReport = latestPlannedAttemptExecutorEvidence(records, request.subject.plannedAttempt)
-  const latestCommand = records.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.plannedAttempt.runId === request.subject.plannedAttempt.runId &&
-      event.plannedAttempt.attemptId === request.subject.plannedAttempt.attemptId
-  )
-  const latestCommandOrdinal =
-    latestCommand?.event._tag === "PlannedAttemptExecutorCommandIntended" ? latestCommand.event.ordinal : undefined
   const latestCommandWasSettled =
-    latestCommand === undefined ||
-    records.some(
-      ({ event, position }) =>
-        position > latestCommand.position &&
-        ((event._tag === "PlannedAttemptExecutorWorkReported" &&
-          event.report.correlation.runId === request.subject.plannedAttempt.runId &&
-          event.report.correlation.attemptId === request.subject.plannedAttempt.attemptId) ||
-          (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-            event.commandOrdinal === latestCommandOrdinal &&
-            event.observation._tag === "ExactExecutorReport"))
-    )
+    latestUnsettledPlannedAttemptExecutorCommand(records, request.subject.plannedAttempt) === undefined
   if (latestReport?.report._tag !== "SafelySuspended" || !latestCommandWasSettled) {
     return "ExecutorNotSafelySuspended"
   }
@@ -239,11 +264,54 @@ const choiceIsExposed = (
       event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
       event.observation.factFamily.taskId === request.subject.plannedAttempt.taskId
   )?.event
-  return latestSpecification?._tag === "TaskTrackerFactsObserved" &&
-    latestSpecification.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-    latestSpecification.observation.factFamily.fingerprint === request.subject.observedTaskRevision
+  return latestSpecificationMatches(latestSpecification, request) ? undefined : "ObservedFingerprintNotCurrent"
+}
+
+const latestSpecificationMatches = (
+  latestSpecification: JournalRecord["event"] | undefined,
+  request: ApplyAttemptChoiceRequest
+): boolean =>
+  latestSpecification?._tag === "TaskTrackerFactsObserved" &&
+  latestSpecification.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+  latestSpecification.observation.factFamily.fingerprint === request.subject.observedTaskRevision
+
+const redeliveryMatchesRequest = (
+  redelivered: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>,
+  request: ApplyAttemptChoiceRequest
+): boolean => redelivered.choice === request.choice && sameAttemptChoiceSubject(redelivered.subject, request.subject)
+
+const runHasBegan = (records: ReadonlyArray<JournalRecord>): boolean =>
+  records.some(({ event }) => event._tag === "WorkflowRunBegan")
+
+const integrationStartedFor = (records: ReadonlyArray<JournalRecord>, request: ApplyAttemptChoiceRequest): boolean =>
+  records.some(
+    ({ event }) =>
+      event._tag === "IntegrationStarted" &&
+      event.plannedAttempt.attemptId === request.subject.plannedAttempt.attemptId &&
+      event.plannedAttempt.runId === request.subject.plannedAttempt.runId
+  )
+
+const choicePreconditionError = (
+  records: ReadonlyArray<JournalRecord>,
+  request: ApplyAttemptChoiceRequest
+): AttemptChoiceOutsidePreIntegrationPhase | AttemptChoiceAlreadyApplied | AttemptChoiceNotAvailable | undefined => {
+  const runId = request.subject.plannedAttempt.runId
+  if (integrationStartedFor(records, request)) {
+    return new AttemptChoiceOutsidePreIntegrationPhase({ requestId: request.requestId, runId })
+  }
+  const existingChoice = matchingChoice(records, request.subject)
+  if (existingChoice?.event._tag === "AttemptChoiceApplied") {
+    return new AttemptChoiceAlreadyApplied({
+      existingPosition: existingChoice.position,
+      requestId: request.requestId,
+      runId,
+      winningRequestId: existingChoice.event.requestId
+    })
+  }
+  const unavailable = choiceIsExposed(records, request)
+  return unavailable === undefined
     ? undefined
-    : "ObservedFingerprintNotCurrent"
+    : new AttemptChoiceNotAvailable({ reason: unavailable, requestId: request.requestId, runId })
 }
 
 export const attemptChoiceControlLayer = Layer.effect(
@@ -262,7 +330,7 @@ export const attemptChoiceControlLayer = Layer.effect(
         })
       }
       const records = yield* journal.read(runId)
-      if (!records.some(({ event }) => event._tag === "WorkflowRunBegan")) {
+      if (!runHasBegan(records)) {
         return yield* new WorkflowRunNotBegan({ runId })
       }
       const redelivered = records.find(
@@ -270,10 +338,7 @@ export const attemptChoiceControlLayer = Layer.effect(
           event._tag === "AttemptChoiceApplied" && sameAttemptChoiceRequestId(event.requestId, request.requestId)
       )
       if (redelivered?.event._tag === "AttemptChoiceApplied") {
-        if (
-          redelivered.event.choice === request.choice &&
-          sameAttemptChoiceSubject(redelivered.event.subject, request.subject)
-        ) {
+        if (redeliveryMatchesRequest(redelivered.event, request)) {
           return resultFor(records, redelivered, redelivered.event)
         }
         return yield* new AttemptChoiceRequestIdentityContradiction({
@@ -282,29 +347,8 @@ export const attemptChoiceControlLayer = Layer.effect(
           runId
         })
       }
-      if (
-        records.some(
-          ({ event }) =>
-            event._tag === "IntegrationStarted" &&
-            event.plannedAttempt.attemptId === request.subject.plannedAttempt.attemptId &&
-            event.plannedAttempt.runId === runId
-        )
-      ) {
-        return yield* new AttemptChoiceOutsidePreIntegrationPhase({ requestId: request.requestId, runId })
-      }
-      const existingChoice = matchingChoice(records, request.subject)
-      if (existingChoice?.event._tag === "AttemptChoiceApplied") {
-        return yield* new AttemptChoiceAlreadyApplied({
-          existingPosition: existingChoice.position,
-          requestId: request.requestId,
-          runId,
-          winningRequestId: existingChoice.event.requestId
-        })
-      }
-      const unavailable = choiceIsExposed(records, request)
-      if (unavailable !== undefined) {
-        return yield* new AttemptChoiceNotAvailable({ reason: unavailable, requestId: request.requestId, runId })
-      }
+      const preconditionError = choicePreconditionError(records, request)
+      if (preconditionError !== undefined) return yield* preconditionError
       const event = AttemptChoiceAppliedEvent.make({
         choice: request.choice,
         initiatedBy: { _tag: "Operator" },
