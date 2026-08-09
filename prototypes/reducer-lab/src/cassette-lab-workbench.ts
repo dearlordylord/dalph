@@ -517,6 +517,9 @@ const renderTimeline = (
   parent.append(legend)
   const controls = document.createElement("div")
   controls.className = "delivery-timeline-controls"
+  controls.tabIndex = 0
+  controls.setAttribute("role", "group")
+  controls.setAttribute("aria-label", "Delivery playback controls")
   const previousLandmark = appendText(controls, "button", "← Jump")
   previousLandmark.type = "button"
   previousLandmark.dataset.role = "previous-landmark"
@@ -696,13 +699,20 @@ const renderTimeline = (
     refreshFollow()
     selectFrame(index)
   }
+  const retainPlaybackFocus = (): void => controls.focus({ preventScroll: true })
   follow.addEventListener("click", () => {
     playback.followLive = true
     refreshFollow()
     selectFrame(frames.length - 1)
   })
-  previous.addEventListener("click", () => inspectFrame(Math.max(0, playback.selectedFrameIndex - 1)))
-  next.addEventListener("click", () => inspectFrame(Math.min(frames.length - 1, playback.selectedFrameIndex + 1)))
+  previous.addEventListener("click", () => {
+    inspectFrame(Math.max(0, playback.selectedFrameIndex - 1))
+    retainPlaybackFocus()
+  })
+  next.addEventListener("click", () => {
+    inspectFrame(Math.min(frames.length - 1, playback.selectedFrameIndex + 1))
+    retainPlaybackFocus()
+  })
   const inspectPreviousLandmark = (): void => {
     const target = deliveryLandmarkIndexes.filter((index) => index < playback.selectedFrameIndex).at(-1)
     if (target !== undefined) inspectFrame(target)
@@ -711,8 +721,14 @@ const renderTimeline = (
     const target = deliveryLandmarkIndexes.find((index) => index > playback.selectedFrameIndex)
     if (target !== undefined) inspectFrame(target)
   }
-  previousLandmark.addEventListener("click", inspectPreviousLandmark)
-  nextLandmark.addEventListener("click", inspectNextLandmark)
+  previousLandmark.addEventListener("click", () => {
+    inspectPreviousLandmark()
+    retainPlaybackFocus()
+  })
+  nextLandmark.addEventListener("click", () => {
+    inspectNextLandmark()
+    retainPlaybackFocus()
+  })
   select.addEventListener("change", () => inspectFrame(Number(select.value)))
   const keyboardSurface = parent.closest<HTMLElement>("[data-role='delivery-workbench']") ?? parent
   const handleKeyboard = (event: KeyboardEvent): void => {

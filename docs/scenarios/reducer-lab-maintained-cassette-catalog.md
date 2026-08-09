@@ -269,6 +269,10 @@ keeps the chosen frame until the maintainer explicitly resumes **Follow live**.
 With focus in the workbench, the keyboard's Left and Right Arrow keys move one
 exact frame backward or forward, while `[` and `]` move to the previous or next
 delivery landmark. The visible shortcut hint names this behavior.
+When a button reaches the first or last frame and becomes unavailable, focus
+moves to the persistent delivery-playback control group instead of falling out
+of the workbench. The maintainer can immediately press the opposite Arrow key
+to move away from that endpoint without clicking the graph or another control.
 Rerunning the selected cassette replaces the old timeline handler, so one key
 press still moves exactly once rather than replaying handlers from prior runs.
 Repeated bracket input reuses the already-derived landmark index and remains
@@ -355,7 +359,9 @@ production frame replaced another.
   uses **Reset graph view** to restore the deterministic fitted layout. With
   graph focus it drives Left/Right Arrow for exact frames and `[`/`]` for
   delivery landmarks, then reruns the cassette and proves one Arrow press still
-  advances exactly one frame. A repeated-bracket stress check remains bounded
+  advances exactly one frame. It clicks into both exact-frame endpoints and
+  proves focus remains on the persistent playback group so the opposite Arrow
+  key moves away immediately. A repeated-bracket stress check remains bounded
   and leaves the page responsive, and disabled navigation buttons expose a
   not-allowed rather than wait cursor.
 

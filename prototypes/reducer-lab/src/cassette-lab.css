@@ -277,6 +277,11 @@ dd {
   z-index: 4;
 }
 
+.delivery-timeline-controls:focus-visible {
+  outline: 0.18rem solid #196b75;
+  outline-offset: 0.12rem;
+}
+
 .delivery-timeline-controls label {
   display: grid;
   flex: 1 1 20rem;
