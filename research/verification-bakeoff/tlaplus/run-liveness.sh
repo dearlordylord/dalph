@@ -41,6 +41,22 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 FAIL=0
 
+# One parser owns TLC's process/output contract for every mode below. A
+# violation marker outranks TLC's nonzero counterexample exit; a clean marker
+# is accepted only with exit zero. Everything else is inconclusive.
+classify_tlc() { # exit-code output
+  local code=$1 output=$2
+  if [[ $code == 124 ]]; then echo timeout
+  elif grep -q 'Invariant .* is violated\|Temporal properties were violated' <<<"$output"; then echo violated
+  elif [[ $code != 0 ]]; then echo no-verdict
+  elif grep -q 'Model checking completed. No error has been found\|No error has been found' <<<"$output"; then echo holds
+  else echo no-verdict; fi
+}
+
+record_no_verdict() {
+  [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1
+}
+
 if [[ ${1:-} == --arrival ]]; then
   echo "One task, ArrivalSpec: finished tickets recycle, so work keeps arriving."
   echo ""
@@ -64,9 +80,12 @@ PROPERTY $1
 EOF
     out=$(timeout "${TIMEOUT:-900}" "$JAVA" -XX:+UseParallelGC -cp "$TLA_TOOLS" tlc2.TLC \
           -config "$WORK/a.cfg" -metadir "$WORK/a$1" -workers auto DeliveryArrival 2>&1)
-    if grep -q 'No error has been found' <<<"$out"; then v="holds"
-    elif grep -q 'Temporal properties were violated' <<<"$out"; then v="violated"
-    else v="**no verdict**"; [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1; fi
+    code=$?
+    case $(classify_tlc "$code" "$out") in
+      holds) v="holds" ;;
+      violated) v="violated" ;;
+      timeout|no-verdict) v="**no verdict**"; record_no_verdict ;;
+    esac
     echo "| $1 | $2 | $v |"
   }
   arrival ReachesQuiescenceUnderArrival "eventually sealed"
@@ -93,9 +112,12 @@ PROPERTY $2
 EOF
     out=$(timeout "${TIMEOUT:-600}" "$JAVA" -XX:+UseParallelGC -cp "$TLA_TOOLS" tlc2.TLC \
           -config "$WORK/l.cfg" -metadir "$WORK/l$2$1" -workers auto DeliveryLiveness 2>&1)
-    if grep -q 'No error has been found' <<<"$out"; then v="holds"
-    elif grep -q 'Temporal properties were violated' <<<"$out"; then v="**violated**"
-    else v="no verdict"; [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1; fi
+    code=$?
+    case $(classify_tlc "$code" "$out") in
+      holds) v="holds" ;;
+      violated) v="**violated**" ;;
+      timeout|no-verdict) v="no verdict"; record_no_verdict ;;
+    esac
     [[ $v == "$3" ]] || FAIL=1
     echo "| $1 | $2 | $v |"
   }
@@ -154,21 +176,12 @@ EOF
   code=$?
   secs=$((SECONDS - start))
   states=$(grep -oE '[0-9]+ distinct states found' <<<"$out" | tail -1 | grep -oE '^[0-9]+')
-  if [[ $code == 124 ]]; then
-    verdict="**no verdict in ${TIMEOUT}s**"
-    [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1
-  elif grep -q 'Invariant .* is violated' <<<"$out"; then
-    verdict="**violated**"
-    FAIL=1
-  elif [[ $code != 0 ]]; then
-    verdict="**no verdict: TLC exited $code**"
-    [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1
-  elif grep -q 'Model checking completed. No error has been found' <<<"$out"; then
-    verdict="holds"
-  else
-    verdict="**no verdict: $(grep -m1 -E '^Error|Parsing or semantic' <<<"$out")**"
-    [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1
-  fi
+  case $(classify_tlc "$code" "$out") in
+    holds) verdict="holds" ;;
+    violated) verdict="**violated**"; FAIL=1 ;;
+    timeout) verdict="**no verdict in ${TIMEOUT}s**"; record_no_verdict ;;
+    no-verdict) verdict="**no verdict: TLC exited $code**"; record_no_verdict ;;
+  esac
   echo "| AllInvariants safety | $verdict | ${states:--} | $secs |"
   exit "$FAIL"
 fi
@@ -189,21 +202,12 @@ EOF
   secs=$((SECONDS - start))
   states=$(grep -oE '[0-9]+ distinct states found' <<<"$out" | tail -1 | grep -oE '^[0-9]+')
 
-  if [[ $code == 124 ]]; then
-    verdict="**no verdict in ${TIMEOUT}s**"
-    [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1
-  elif grep -q 'Temporal properties were violated' <<<"$out"; then
-    verdict="**violated**"
-    FAIL=1
-  elif [[ $code != 0 ]]; then
-    verdict="**no verdict: TLC exited $code**"
-    [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1
-  elif grep -q 'No error has been found' <<<"$out"; then
-    verdict="holds"
-  else
-    verdict="**no verdict: $(grep -m1 -E '^Error' <<<"$out")**"
-    [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1
-  fi
+  case $(classify_tlc "$code" "$out") in
+    holds) verdict="holds" ;;
+    violated) verdict="**violated**"; FAIL=1 ;;
+    timeout) verdict="**no verdict in ${TIMEOUT}s**"; record_no_verdict ;;
+    no-verdict) verdict="**no verdict: TLC exited $code**"; record_no_verdict ;;
+  esac
   echo "| $P | $verdict | ${states:--} | $secs |"
 done
 
@@ -223,9 +227,12 @@ start=$SECONDS
 out=$(timeout "$TIMEOUT" "$JAVA" -XX:+UseParallelGC -cp "$TLA_TOOLS" tlc2.TLC \
       -config "$WORK/w.cfg" -metadir "$WORK/wPause" -workers auto \
       DeliveryLiveness 2>&1)
-if grep -q 'Temporal properties were violated' <<<"$out"; then w="satisfiable"
-elif grep -q 'No error has been found' <<<"$out"; then w="**UNSATISFIABLE -- I17 is vacuous**"; FAIL=1
-else w="no verdict"; [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1; fi
+code=$?
+case $(classify_tlc "$code" "$out") in
+  violated) w="satisfiable" ;;
+  holds) w="**UNSATISFIABLE -- I17 is vacuous**"; FAIL=1 ;;
+  timeout|no-verdict) w="no verdict"; record_no_verdict ;;
+esac
 echo "| PauseIsSustainable (refuted: hypothesis of I17) | $w | - | $((SECONDS - start)) |"
 
 exit "$FAIL"

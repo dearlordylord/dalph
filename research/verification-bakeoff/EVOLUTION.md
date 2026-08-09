@@ -136,7 +136,7 @@ The focused Quint model adds two checker-sensitive defects:
 | A, B, C are open under capacity 2 | exactly A and B are selected; C waits behind their lower ranks | `threeTaskSelectionRespectsRankAndCapacityTest`; rank-reversal mutant 5 is rejected |
 | A records a local contradiction while B continues | only A is failed, B advances work, C remains selected under rank/capacity, and the shared run state is unchanged | `failedAIsContainedWhileBContinuesTest`; failure-leak mutant 6 is rejected |
 | The complete strengthened invariant must be inductive before reachability/liveness claims | Alloy symbolically checks the full blocker, arrival, progress, suspension, settlement, recycle, rank, and regional-failure transition relation at exactly three tasks; reversed-rank and cross-region-leak controls each produce a counterexample | `strengthenedInvIsInductiveThree` is UNSAT and both mutation checks are SAT in `alloy/DeliveryThreeStrengthened.als` |
-| Run three-task safety in the hand-authored TLC engine | TLC receives the same ten named safety invariants under `Tasks <- ThreeTasks`; completion is reported as `holds`, while timeout, invariant violation, or malformed output is never a pass | the `AllInvariants safety` row from `tlaplus/run-liveness.sh --three`: 5,292,288 distinct states, no violation |
+| Run three-task safety in the hand-authored TLC engine | TLC receives the same ten named safety invariants under `Tasks <- ThreeTasks`; completion is reported as `holds`, while timeout, invariant violation, or malformed output is never a pass | the `AllInvariants safety` row from `tlaplus/run-liveness.sh --three-safety`: 5,292,288 distinct states, no violation |
 | Attempt I17–I19 at three tasks | every timeout or checker failure is reported as no verdict | `tlaplus/run-liveness.sh --three`; the three temporal checks in `alloy/DeliveryThree.als` |
 
 ### Measurements
@@ -155,7 +155,7 @@ The focused Quint model adds two checker-sensitive defects:
   verdict in 60 seconds. I17, I18, I19, and the fair-trace witness each had no verdict
   in 30 seconds under exactly three tasks.
 - Hand-authored TLA+/TLC safety: the exact three-task run completed 5,292,288
-  distinct states in 70 seconds with no invariant violation under a 180-second
+  distinct states in 54 seconds with no invariant violation under a 180-second
   budget. Hand-authored I17–I19 still have no verdict; TLC 2.19 throws
   `NegativeArraySizeException` while constructing the three-task liveness
   checker, before it can enumerate a state. The harness reports those temporal
