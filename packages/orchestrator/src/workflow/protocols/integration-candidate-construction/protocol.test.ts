@@ -32,6 +32,7 @@ import {
   integrationStartedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
@@ -50,6 +51,8 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "../integration-admission/events.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
@@ -101,8 +104,8 @@ const started = StartedIntegrationResponsibility.make({
   acceptedResult,
   integrationTarget: target,
   plannedAttempt,
-  queuedAt: JournalPosition.make(7),
-  startedAt: JournalPosition.make(8)
+  queuedAt: JournalPosition.make(8),
+  startedAt: JournalPosition.make(9)
 })
 const lineage = TargetLineageObservation.make({
   plannedBaseIsAncestorOfTargetHead: true,
@@ -185,6 +188,19 @@ const seedStartedResponsibility = Effect.gen(function* () {
     plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
     PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
   )
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "StartOrContinue",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: commandOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
   const executorReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
   yield* journal.append(
     runId,
@@ -215,7 +231,7 @@ const seedStartedResponsibility = Effect.gen(function* () {
       acceptedResult,
       integrationTarget: target,
       plannedAttempt,
-      responsibilityBeganAt: JournalPosition.make(7),
+      responsibilityBeganAt: JournalPosition.make(8),
       version: workflowJournalEventVersion
     })
   )
