@@ -11,14 +11,24 @@ invariants in `../DELIVERY-INVARIANTS.md`, because a recording can prove an
 occurrence happened and never that one cannot.
 
 A chronology spanning many issues belongs in `../DELIVERY-STORY.md` rather than
-here. Files here are scoped to one accepted issue and carry its
-acceptance-test mapping.
+here. Accepted files are scoped to one accepted issue and carry its
+acceptance-test mapping. A pre-acceptance proposal is listed separately and
+does not satisfy the delivery gate.
 
 ## Currency
 
-Every file here corresponds to an accepted issue that is either open or closed
-as completed. No issue is abandoned, closed as not planned, or superseded, and
-no issue declares any file here outdated.
+Except for the explicitly proposed section below, every file here corresponds
+to an accepted issue that is either open or closed as completed. No issue is
+abandoned, closed as not planned, or superseded, and no issue declares any file
+here outdated.
+
+**Proposed, awaiting maintainer acceptance** — these files satisfy neither the
+scenario gate nor implementation authorization until their owning issue accepts
+the stated chronology and resolves every marked choice.
+
+| File | Issue |
+|---|---|
+| `issue-66-clean-restart-changed-attempt.md` | 66 |
 
 **Describes shipped behavior** — the owning issue is closed as completed.
 
