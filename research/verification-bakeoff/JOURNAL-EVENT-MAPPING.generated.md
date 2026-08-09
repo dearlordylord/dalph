@@ -6,26 +6,26 @@ that every mapped constructor occurs in each prover's exhaustive event consumer.
 
 | JavaScript tag | Kind | Ordered payload | Lean | Agda | Dafny |
 |---|---|---|---|---|---|
-| `ClaimIntentRecorded` | action | `task, token` | `claimIntentRecorded` | `claimIntentRecorded` | `ClaimIntentRecorded` |
-| `ClaimReleaseIntentRecorded` | action | `task, token` | `claimReleaseIntentRecorded` | `claimReleaseIntentRecorded` | `ClaimReleaseIntentRecorded` |
-| `AttemptPlanned` | action | `task, runId, attemptId` | `attemptPlanned` | `attemptPlanned` | `AttemptPlanned` |
-| `WorkAdmitted` | action | `task, attemptId` | `workAdmitted` | `workAdmitted` | `WorkAdmitted` |
-| `SuspensionRequested` | action | `task, attemptId` | `suspensionRequested` | `suspensionRequested` | `SuspensionRequested` |
-| `ResumeRequested` | action | `task, attemptId` | `resumeRequested` | `resumeRequested` | `ResumeRequested` |
-| `WorktreeIntentRecorded` | action | `task, attemptId` | `worktreeIntentRecorded` | `worktreeIntentRecorded` | `WorktreeIntentRecorded` |
-| `IntegrationSessionOpened` | action | `task, expectedHead` | `integrationSessionOpened` | `integrationSessionOpened` | `IntegrationSessionOpened` |
-| `PromotionIntentRecorded` | action | `task, expectedHead` | `promotionIntentRecorded` | `promotionIntentRecorded` | `PromotionIntentRecorded` |
-| `CandidateConstructionNonConvergent` | action | `task, reason` | `candidateConstructionNonConvergent` | `candidateConstructionNonConvergent` | `CandidateConstructionNonConvergent` |
-| `DeliverySettled` | action | `task` | `deliverySettled` | `deliverySettled` | `DeliverySettled` |
-| `WorkflowRunBegun` | action | `runId, target` | `workflowRunBegun` | `workflowRunBegun` | `WorkflowRunBegun` |
-| `WorkflowRunTerminated` | action | `runId` | `workflowRunTerminated` | `workflowRunTerminated` | `WorkflowRunTerminated` |
-| `CapacityRevised` | action | `capacity` | `capacityRevised` | `capacityRevised` | `CapacityRevised` |
-| `DirectionApplied` | action | `subject, direction` | `directionApplied` | `directionApplied` | `DirectionApplied` |
-| `TrackerFactsObserved` | occurrence | `subjects, facts, complete, contentIdentity` | `trackerFactsObserved` | `trackerFactsObserved` | `TrackerFactsObserved` |
-| `ClaimRecordRead` | occurrence | `task, owner, token` | `claimRecordRead` | `claimRecordRead` | `ClaimRecordRead` |
-| `ClaimedTaskEligibilityObserved` | occurrence | `task, revision` | `claimedTaskEligibilityObserved` | `claimedTaskEligibilityObserved` | `ClaimedTaskEligibilityObserved` |
-| `ClaimedTaskIneligible` | occurrence | `task, reason` | `claimedTaskIneligible` | `claimedTaskIneligible` | `ClaimedTaskIneligible` |
-| `WorktreeReconciliationObserved` | occurrence | `task, attemptId, outcome` | `worktreeReconciliationObserved` | `worktreeReconciliationObserved` | `WorktreeReconciliationObserved` |
-| `ExecutorReported` | occurrence | `task, attemptId, report` | `executorReported` | `executorReported` | `ExecutorReported` |
-| `PromotionOutcomeObserved` | occurrence | `task, head` | `promotionOutcomeObserved` | `promotionOutcomeObserved` | `PromotionOutcomeObserved` |
-| `TargetHeadObserved` | occurrence | `head` | `targetHeadObserved` | `targetHeadObserved` | `TargetHeadObserved` |
+| `ClaimIntentRecorded` | action | `task: Task, token: Nat` | `claimIntentRecorded` | `claimIntentRecorded` | `ClaimIntentRecorded` |
+| `ClaimReleaseIntentRecorded` | action | `task: Task, token: Nat` | `claimReleaseIntentRecorded` | `claimReleaseIntentRecorded` | `ClaimReleaseIntentRecorded` |
+| `AttemptPlanned` | action | `task: Task, runId: Nat, attemptId: Nat` | `attemptPlanned` | `attemptPlanned` | `AttemptPlanned` |
+| `WorkAdmitted` | action | `task: Task, attemptId: Nat` | `workAdmitted` | `workAdmitted` | `WorkAdmitted` |
+| `SuspensionRequested` | action | `task: Task, attemptId: Nat` | `suspensionRequested` | `suspensionRequested` | `SuspensionRequested` |
+| `ResumeRequested` | action | `task: Task, attemptId: Nat` | `resumeRequested` | `resumeRequested` | `ResumeRequested` |
+| `WorktreeIntentRecorded` | action | `task: Task, attemptId: Nat` | `worktreeIntentRecorded` | `worktreeIntentRecorded` | `WorktreeIntentRecorded` |
+| `IntegrationSessionOpened` | action | `task: Task, expectedHead: Nat` | `integrationSessionOpened` | `integrationSessionOpened` | `IntegrationSessionOpened` |
+| `PromotionIntentRecorded` | action | `task: Task, expectedHead: Nat` | `promotionIntentRecorded` | `promotionIntentRecorded` | `PromotionIntentRecorded` |
+| `CandidateConstructionNonConvergent` | action | `task: Task, reason: RetentionReason` | `candidateConstructionNonConvergent` | `candidateConstructionNonConvergent` | `CandidateConstructionNonConvergent` |
+| `DeliverySettled` | action | `task: Task` | `deliverySettled` | `deliverySettled` | `DeliverySettled` |
+| `WorkflowRunBegun` | action | `runId: Nat, target: Nat` | `workflowRunBegun` | `workflowRunBegun` | `WorkflowRunBegun` |
+| `WorkflowRunTerminated` | action | `runId: Nat` | `workflowRunTerminated` | `workflowRunTerminated` | `WorkflowRunTerminated` |
+| `CapacityRevised` | action | `capacity: Nat` | `capacityRevised` | `capacityRevised` | `CapacityRevised` |
+| `DirectionApplied` | action | `subject: Nat, direction: Direction` | `directionApplied` | `directionApplied` | `DirectionApplied` |
+| `TrackerFactsObserved` | occurrence | `subjects: TaskList, facts: FactList, complete: Bool, contentIdentity: Nat` | `trackerFactsObserved` | `trackerFactsObserved` | `TrackerFactsObserved` |
+| `ClaimRecordRead` | occurrence | `task: Task, owner: Nat, token: Nat` | `claimRecordRead` | `claimRecordRead` | `ClaimRecordRead` |
+| `ClaimedTaskEligibilityObserved` | occurrence | `task: Task, revision: Nat` | `claimedTaskEligibilityObserved` | `claimedTaskEligibilityObserved` | `ClaimedTaskEligibilityObserved` |
+| `ClaimedTaskIneligible` | occurrence | `task: Task, reason: Ineligibility` | `claimedTaskIneligible` | `claimedTaskIneligible` | `ClaimedTaskIneligible` |
+| `WorktreeReconciliationObserved` | occurrence | `task: Task, attemptId: Nat, outcome: WorktreeOutcome` | `worktreeReconciliationObserved` | `worktreeReconciliationObserved` | `WorktreeReconciliationObserved` |
+| `ExecutorReported` | occurrence | `task: Task, attemptId: Nat, report: Report` | `executorReported` | `executorReported` | `ExecutorReported` |
+| `PromotionOutcomeObserved` | occurrence | `task: Task, head: Nat` | `promotionOutcomeObserved` | `promotionOutcomeObserved` | `PromotionOutcomeObserved` |
+| `TargetHeadObserved` | occurrence | `head: Nat` | `targetHeadObserved` | `targetHeadObserved` | `TargetHeadObserved` |

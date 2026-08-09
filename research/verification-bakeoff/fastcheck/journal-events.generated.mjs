@@ -6,6 +6,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "token"
+    ],
+    "types": [
+      "Task",
+      "Nat"
     ]
   },
   {
@@ -14,6 +18,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "token"
+    ],
+    "types": [
+      "Task",
+      "Nat"
     ]
   },
   {
@@ -23,6 +31,11 @@ export const EVENT_MANIFEST = [
       "task",
       "runId",
       "attemptId"
+    ],
+    "types": [
+      "Task",
+      "Nat",
+      "Nat"
     ]
   },
   {
@@ -31,6 +44,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "attemptId"
+    ],
+    "types": [
+      "Task",
+      "Nat"
     ]
   },
   {
@@ -39,6 +56,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "attemptId"
+    ],
+    "types": [
+      "Task",
+      "Nat"
     ]
   },
   {
@@ -47,6 +68,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "attemptId"
+    ],
+    "types": [
+      "Task",
+      "Nat"
     ]
   },
   {
@@ -55,6 +80,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "attemptId"
+    ],
+    "types": [
+      "Task",
+      "Nat"
     ]
   },
   {
@@ -63,6 +92,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "expectedHead"
+    ],
+    "types": [
+      "Task",
+      "Nat"
     ]
   },
   {
@@ -71,6 +104,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "expectedHead"
+    ],
+    "types": [
+      "Task",
+      "Nat"
     ]
   },
   {
@@ -79,6 +116,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "reason"
+    ],
+    "types": [
+      "Task",
+      "RetentionReason"
     ]
   },
   {
@@ -86,6 +127,9 @@ export const EVENT_MANIFEST = [
     "kind": "action",
     "fields": [
       "task"
+    ],
+    "types": [
+      "Task"
     ]
   },
   {
@@ -94,6 +138,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "runId",
       "target"
+    ],
+    "types": [
+      "Nat",
+      "Nat"
     ]
   },
   {
@@ -101,6 +149,9 @@ export const EVENT_MANIFEST = [
     "kind": "action",
     "fields": [
       "runId"
+    ],
+    "types": [
+      "Nat"
     ]
   },
   {
@@ -108,6 +159,9 @@ export const EVENT_MANIFEST = [
     "kind": "action",
     "fields": [
       "capacity"
+    ],
+    "types": [
+      "Nat"
     ]
   },
   {
@@ -116,6 +170,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "subject",
       "direction"
+    ],
+    "types": [
+      "Nat",
+      "Direction"
     ]
   },
   {
@@ -126,6 +184,12 @@ export const EVENT_MANIFEST = [
       "facts",
       "complete",
       "contentIdentity"
+    ],
+    "types": [
+      "TaskList",
+      "FactList",
+      "Bool",
+      "Nat"
     ]
   },
   {
@@ -135,6 +199,11 @@ export const EVENT_MANIFEST = [
       "task",
       "owner",
       "token"
+    ],
+    "types": [
+      "Task",
+      "Nat",
+      "Nat"
     ]
   },
   {
@@ -143,6 +212,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "revision"
+    ],
+    "types": [
+      "Task",
+      "Nat"
     ]
   },
   {
@@ -151,6 +224,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "reason"
+    ],
+    "types": [
+      "Task",
+      "Ineligibility"
     ]
   },
   {
@@ -160,6 +237,11 @@ export const EVENT_MANIFEST = [
       "task",
       "attemptId",
       "outcome"
+    ],
+    "types": [
+      "Task",
+      "Nat",
+      "WorktreeOutcome"
     ]
   },
   {
@@ -169,6 +251,11 @@ export const EVENT_MANIFEST = [
       "task",
       "attemptId",
       "report"
+    ],
+    "types": [
+      "Task",
+      "Nat",
+      "Report"
     ]
   },
   {
@@ -177,6 +264,10 @@ export const EVENT_MANIFEST = [
     "fields": [
       "task",
       "head"
+    ],
+    "types": [
+      "Task",
+      "Nat"
     ]
   },
   {
@@ -184,6 +275,9 @@ export const EVENT_MANIFEST = [
     "kind": "occurrence",
     "fields": [
       "head"
+    ],
+    "types": [
+      "Nat"
     ]
   }
 ]

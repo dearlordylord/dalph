@@ -68,8 +68,10 @@ effects. Ticket #200 closes the earlier syntactic correspondence seam:
 `journal-events.json` generates the executable JavaScript constructors, the
 cross-language mapping table, and compiling 23-constructor witnesses for Lean,
 Agda, and Dafny. The prover guards/effects remain authored proof code—the
-generator does not pretend their semantics are definitionally equal—but Lean's
-emitted-trace refinement proves that its concrete L2 replay equals the L1 fold.
+generator does not pretend their semantics are definitionally equal. Lean adds
+state-parameterized event batches to every constructor of the pre-existing L2
+relation, proves the extension conservative in both directions, and proves the accepted
+claim-prefix and failure-attribution projections through the concrete L1 fold.
 
 ## What each checker gives away
 
@@ -206,6 +208,7 @@ This is the scenario-to-test mapping for the research-only change:
 | A passing property did not result from zero generated witnesses | existing fast-check zero-witness rejection and directed prover witnesses |
 
 No competing Dalph runtime outcome is decided here. Ticket #200 generated the
-event-alphabet correspondence and proved emitted-trace refinement in Lean; the
+event-alphabet correspondence and proved conservative L2 emission plus the
+accepted replay projections in Lean; the
 deliberate remaining boundary is separately authored guard/effect code in each
 proof language, checked by the existing concrete witnesses and mutants.

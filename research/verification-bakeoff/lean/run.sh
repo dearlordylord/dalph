@@ -25,8 +25,8 @@ node ../generate-journal-events.mjs --check || FAIL=1
 # warning on stderr must not read as an error.
 start=$SECONDS
 out_l1=$("$LEAN" L1.lean 2>&1); code_l1=$?
-out_l2=$("$LEAN" L2.lean 2>&1); code_l2=$?
 out_journal=$("$LEAN" -o Journal.olean Journal.lean 2>&1); code_journal=$?
+out_l2=$(LEAN_PATH="$PWD" "$LEAN" -o L2.olean L2.lean 2>&1); code_l2=$?
 out_refinement=$(LEAN_PATH="$PWD" "$LEAN" JournalRefinement.lean 2>&1); code_refinement=$?
 out_events=$(LEAN_PATH="$PWD" "$LEAN" JournalEvents.generated.lean 2>&1); code_events=$?
 secs=$((SECONDS - start))

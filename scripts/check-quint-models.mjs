@@ -2,7 +2,9 @@ import { performance } from "node:perf_hooks"
 
 import { quintGateRegressionBudgetMilliseconds } from "./quint-gate-policy.mjs"
 import {
+  apalacheVersion,
   assertCleanTemporalVerdict,
+  assertTlcArtifactPrepared,
   assertViolatedTemporalVerdict,
   runPreparedTemporalCheck
 } from "./quint-temporal-gate.mjs"
@@ -65,6 +67,7 @@ await run("planned-attempt executor sampled model", [
   "1"
 ])
 await runPreparedTemporalCheck({
+  assertArtifactPrepared: () => assertTlcArtifactPrepared(),
   // Quint's TLC backend loads TLC from the Apalache distribution. On a cold
   // runner this existing default-backend verification prepares/downloads that
   // versioned artifact before the temporal command is allowed to start.
@@ -80,6 +83,8 @@ await runPreparedTemporalCheck({
     "terminalReleasesPosition",
     "--max-steps",
     "20",
+    "--apalache-version",
+    apalacheVersion,
     "--verbosity",
     "1"
   ]),
@@ -90,6 +95,8 @@ await runPreparedTemporalCheck({
       "specs/plannedAttemptExecutor.qnt",
       "--backend",
       "tlc",
+      "--apalache-version",
+      apalacheVersion,
       "--temporal",
       property,
       "--verbosity",
@@ -108,6 +115,8 @@ await runPreparedTemporalCheck({
     "plannedAttemptExecutorTemporalNegative",
     "--backend",
     "tlc",
+    "--apalache-version",
+    apalacheVersion,
     "--temporal",
     property,
     "--verbosity",

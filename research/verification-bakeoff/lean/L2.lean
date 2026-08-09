@@ -17,6 +17,8 @@
   Self-contained: no Mathlib.
 -/
 
+import Journal
+
 namespace L2
 
 /-- Two tasks. `Bool` rather than `Fin 2` keeps case analysis to `cases`. -/
@@ -501,5 +503,96 @@ theorem inv_is_refutable : ∃ s : St, ¬ Inv s := by
   cases h.position with
   | inl hc => exact Bool.noConfusion hc
   | inr hp => exact Bool.noConfusion (hp false)
+
+/- ---------------------------------------------------------- event emission -/
+
+/-- The journal identifier used for each of this historical two-task model's
+    task constructors. This adds output to `Step`; it does not alter any Step
+    premise or successor state. -/
+def taskNat : TaskId → Nat
+  | false => 0
+  | true => 1
+
+/-- Exact journal output attached to every existing L2 transition. This is a
+    Prop-valued relation because Lean forbids eliminating a proof of `Step`
+    into data. Its constructors are indexed by the original Step proof, so an
+    emission cannot invent or alter a transition. -/
+inductive Emission : {s s' : St} → Step s s' → List Journal.Event → Prop where
+  | observeGraph (s) (t) (p o) : Emission (.observeGraph s t p o)
+      [.trackerFactsObserved [taskNat t]
+        [{ subject := taskNat t, present := p, isOpen := o }] false (taskNat t)]
+  | acquireClaim (s) (t) (h1 h2) : Emission (.acquireClaim s t h1 h2)
+      [.claimIntentRecorded (taskNat t) 0,
+       .claimRecordRead (taskNat t) 0 0,
+       .claimedTaskEligibilityObserved (taskNat t) 0]
+  | planAttempt (s) (t) (h1 h2) : Emission (.planAttempt s t h1 h2)
+      [.attemptPlanned (taskNat t) 0 0]
+  | beginWork (s) (t) (h1 h2 h3 h4) : Emission (.beginWork s t h1 h2 h3 h4)
+      [.worktreeIntentRecorded (taskNat t) 0,
+       .worktreeReconciliationObserved (taskNat t) 0 .created,
+       .workAdmitted (taskNat t) 0]
+  | requestSuspension (s) (t) (h1 h2) : Emission (.requestSuspension s t h1 h2)
+      [.suspensionRequested (taskNat t) 0]
+  | safelySuspend (s) (t) (h1 h2) : Emission (.safelySuspend s t h1 h2)
+      [.executorReported (taskNat t) 0 .safelySuspended]
+  | resumeWork (s) (t) (h1 h2 h3 h4) : Emission (.resumeWork s t h1 h2 h3 h4)
+      [.resumeRequested (taskNat t) 0]
+  | reportAccepted (s) (t) (h1 h2) : Emission (.reportAccepted s t h1 h2)
+      [.executorReported (taskNat t) 0 (.terminal 0)]
+  | startIntegration (s) (t) (h1 h2 h3) : Emission (.startIntegration s t h1 h2 h3)
+      [.integrationSessionOpened (taskNat t) s.head]
+  | promote (s) (t) (h1 h2 h3) : Emission (.promote s t h1 h2 h3)
+      [.promotionIntentRecorded (taskNat t) (s.ticket t).expectedHead,
+       .promotionOutcomeObserved (taskNat t) (s.ticket t).expectedHead]
+  | settle (s) (t) (h1 h2) : Emission (.settle s t h1 h2)
+      [.deliverySettled (taskNat t)]
+  | applyPause (s) (h1) : Emission (.applyPause s h1) [.directionApplied 0 .pause]
+  | applyUnpause (s) (h1) : Emission (.applyUnpause s h1) [.directionApplied 0 .unpause]
+  | changeCapacity (s) (c) (h1) : Emission (.changeCapacity s c h1) [.capacityRevised c]
+  | externalTargetAdvance (s) : Emission (.externalTargetAdvance s) [.targetHeadObserved (s.head + 1)]
+  | crash (s) (h1) : Emission (.crash s h1) []
+  | recover (s) (h1) : Emission (.recover s h1) []
+
+structure EmittedStep (s s' : St) (events : List Journal.Event) : Prop where
+  transition : Step s s'
+  emission : Emission transition events
+
+theorem EmittedStep.erases {s s' : St} {events : List Journal.Event}
+    (emitted : EmittedStep s s' events) : Step s s' :=
+  emitted.transition
+
+/-- Every old transition has output: adding journal emission neither removes
+    nor adds an L2 behavior. -/
+theorem Step.hasEmission {s s' : St} (transition : Step s s') :
+    ∃ events, EmittedStep s s' events := by
+  cases transition with
+  | observeGraph t p o => exact ⟨_, ⟨_, .observeGraph ..⟩⟩
+  | acquireClaim t h1 h2 => exact ⟨_, ⟨.acquireClaim _ t h1 h2, .acquireClaim _ t h1 h2⟩⟩
+  | planAttempt t h1 h2 => exact ⟨_, ⟨.planAttempt _ t h1 h2, .planAttempt _ t h1 h2⟩⟩
+  | beginWork t h1 h2 h3 h4 => exact ⟨_, ⟨.beginWork _ t h1 h2 h3 h4, .beginWork _ t h1 h2 h3 h4⟩⟩
+  | requestSuspension t h1 h2 => exact ⟨_, ⟨.requestSuspension _ t h1 h2, .requestSuspension _ t h1 h2⟩⟩
+  | safelySuspend t h1 h2 => exact ⟨_, ⟨.safelySuspend _ t h1 h2, .safelySuspend _ t h1 h2⟩⟩
+  | resumeWork t h1 h2 h3 h4 => exact ⟨_, ⟨.resumeWork _ t h1 h2 h3 h4, .resumeWork _ t h1 h2 h3 h4⟩⟩
+  | reportAccepted t h1 h2 => exact ⟨_, ⟨.reportAccepted _ t h1 h2, .reportAccepted _ t h1 h2⟩⟩
+  | startIntegration t h1 h2 h3 => exact ⟨_, ⟨.startIntegration _ t h1 h2 h3, .startIntegration _ t h1 h2 h3⟩⟩
+  | promote t h1 h2 h3 => exact ⟨_, ⟨.promote _ t h1 h2 h3, .promote _ t h1 h2 h3⟩⟩
+  | settle t h1 h2 => exact ⟨_, ⟨.settle _ t h1 h2, .settle _ t h1 h2⟩⟩
+  | applyPause h1 => exact ⟨_, ⟨.applyPause _ h1, .applyPause _ h1⟩⟩
+  | applyUnpause h1 => exact ⟨_, ⟨.applyUnpause _ h1, .applyUnpause _ h1⟩⟩
+  | changeCapacity c h1 => exact ⟨_, ⟨.changeCapacity _ c h1, .changeCapacity _ c h1⟩⟩
+  | externalTargetAdvance => exact ⟨_, ⟨.externalTargetAdvance _, .externalTargetAdvance _⟩⟩
+  | crash h1 => exact ⟨_, ⟨.crash _ h1, .crash _ h1⟩⟩
+  | recover h1 => exact ⟨_, ⟨.recover _ h1, .recover _ h1⟩⟩
+
+/-- Structurally invalid retained history is an input to L2 reconstruction,
+    not an ordinary successful Step. Keeping it in a distinct relation avoids
+    pretending corruption is a valid lifecycle transition while still making
+    the event output explicit for the regional/shared refinement theorem. -/
+inductive ContradictionEmission : St → List Journal.Event → Prop where
+  | local (state : St) (task : TaskId)
+      (noObligation : (state.ticket task).phase = .noObligation) :
+      ContradictionEmission state [.deliverySettled (taskNat task)]
+  | sharedUnknownTask (state : St) (task : Nat) (unknown : task ≠ 0 ∧ task ≠ 1) :
+      ContradictionEmission state [.claimIntentRecorded task 0]
 
 end L2

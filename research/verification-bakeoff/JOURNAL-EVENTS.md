@@ -229,7 +229,10 @@ bridge: it makes L2's `recover` action *equal to* folding the journal rather
 than a hand-written reconstruction that happens to look right. That would be the
 first refinement claim in the study.
 
-`lean/JournalRefinement.lean` now supplies that refinement without adding a
-journal variable to TLC: its emitting L2 wrapper appends one canonical event
-and applies the concrete L1 transition, then proves by induction that replay
-reconstructs the wrapper's modeled state.
+`lean/L2.lean` now gives every existing L2 `Step` constructor a
+state-parameterized event batch and proves the extension conservative in both
+directions; invalid retained input uses a distinct contradiction-emission
+relation rather than masquerading as a successful step.
+`lean/JournalRefinement.lean` folds those actual emissions for the accepted
+claim-prefix and regional/shared-failure scenarios, without adding a journal
+variable to TLC.

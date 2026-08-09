@@ -128,7 +128,7 @@ The focused Quint model adds two checker-sensitive defects:
 |---|---|---|
 | A, B, C are open under capacity 2 | exactly A and B are selected; C waits behind their lower ranks | `threeTaskSelectionRespectsRankAndCapacityTest`; rank-reversal mutant 5 is rejected |
 | A records a local contradiction while B continues | only A is failed, B advances work, C remains selected under rank/capacity, and the shared run state is unchanged | `failedAIsContainedWhileBContinuesTest`; failure-leak mutant 6 is rejected |
-| Strengthened safety invariant must be inductive before reachability/liveness claims | Alloy finds no counterexample to the one-step induction check at exactly three tasks | `check invIsInductiveThree` in `alloy/DeliveryThree.als` is UNSAT |
+| The complete strengthened invariant must be inductive before reachability/liveness claims | Alloy symbolically checks the full blocker, arrival, progress, suspension, settlement, recycle, rank, and regional-failure transition relation at exactly three tasks; reversed-rank and cross-region-leak controls each produce a counterexample | `strengthenedInvIsInductiveThree` is UNSAT and both mutation checks are SAT in `alloy/DeliveryThreeStrengthened.als` |
 | Attempt I17–I19 at three tasks | every timeout or checker failure is reported as no verdict | `tlaplus/run-liveness.sh --three`; the three temporal checks in `alloy/DeliveryThree.als` |
 
 ### Measurements
@@ -141,8 +141,9 @@ The focused Quint model adds two checker-sensitive defects:
 - Quint/Apalache induction: no verdict because expanding the explicit set of
   task maps would blow up the solver. This is why Alloy is the prerequisite
   induction instrument here.
-- Alloy induction: UNSAT in under one second. Reachable safety had no verdict
-  in 60 seconds. I17, I18, I19, and the fair-trace witness each had no verdict
+- Alloy strengthened induction: UNSAT in under one second; its rank and
+  failure-leak controls are SAT in under one second. Reachable safety had no
+  verdict in 60 seconds. I17, I18, I19, and the fair-trace witness each had no verdict
   in 30 seconds under exactly three tasks.
 - Hand-authored TLA+/TLC I17–I19: no verdict. TLC 2.19 throws
   `NegativeArraySizeException` while constructing the three-task liveness
@@ -159,18 +160,22 @@ production journal event, tracker call, Git call, or executor call.
 ### Correspondence boundary
 
 `journal-events.json` is now the canonical ordered manifest for all 23 event
-tags, their action/occurrence classification, and their ordered payload names.
+tags, their action/occurrence classification, and their ordered typed payloads.
 `generate-journal-events.mjs` derives the constructors executed by
 `fastcheck/journal.mjs`, an auditable JavaScript/Lean/Agda/Dafny mapping table,
 and one compiling 23-constructor witness file for each prover. The prover
 runners reject stale output and compile those witnesses. A changed tag,
 payload arity/order, or wrapper therefore makes the consumers move together.
 
-`lean/JournalRefinement.lean` makes emission part of an L2 step. One `emit`
-both applies the concrete transition and appends that exact `Event`.
-`emit_preserves_refinement` proves one-step preservation and
-`emitAll_refines` proves it for arbitrary traces. Emission wraps the existing
-concrete `Journal.step`; it does not define a second set of guards or effects.
+`lean/L2.lean` attaches a state-parameterized event batch to every constructor of its
+existing `Step` relation. `Step.hasEmission` proves every old transition has
+output; `EmittedStep.erases` proves output cannot invent a transition. Thus
+emission conservatively extends the existing L2 behavior instead of replacing
+it with the L1 reducer. Structurally invalid retained input has a separate
+`ContradictionEmission`, so corruption is not mislabeled as a successful
+lifecycle step. `JournalRefinement.lean` folds those actual emissions for the
+accepted scenarios, including A's contradiction and B's progress from one
+concrete L2 state.
 
 ### Scenario-to-test mapping
 
@@ -182,11 +187,9 @@ concrete `Journal.step`; it does not define a second set of guards or effects.
 
 ### Measurement and interpretation
 
-Lean 4.32.2 checks the journal, refinement, and generated witness with the
-other faithful Lean files in about 3 seconds (about 13 seconds including Lean
-negative controls). The refinement adds no TLC state variable and therefore
-has no state-space cost. Its authored cost is the trace induction; one-step
-preservation reduces to the already-proved fold homomorphism.
+Lean 4.32.2 checks the journal, existing L2 relation plus conservative
+emission proofs, scenario refinement, and generated witness. The refinement
+adds no TLC state variable and therefore has no state-space cost.
 
 ## #201 — fail-closed temporal production gate
 
@@ -216,7 +219,7 @@ does not claim fairness across all tasks in a Run.
 |---|---|---|
 | A developer runs the correct default gate | the visible step names `suspensionRequestEventuallyReleasesPosition` and TLC; only exit 0 plus `[ok] No violation found` is accepted | `pnpm check:quint`; `assertCleanTemporalVerdict` unit tests reject empty and unsupported output; bounded-command tests exercise timeout termination |
 | The temporal behavior is mutated to retain the position forever | TLC finds the ordinary safe-suspension counterexample; a failure without a violation marker is not accepted | `plannedAttemptExecutor_temporal_negative.qnt`; `assertViolatedTemporalVerdict` tests |
-| A fresh runner lacks TLC's Apalache distribution | the existing default-backend exhaustive check prepares the versioned artifact before TLC starts; failure prevents the temporal call | `runPreparedTemporalCheck`; hermetic cold-cache test creates an absent artifact, prepares it, and verifies it is required; preparation-failure test proves no temporal invocation |
+| A fresh runner lacks TLC's Apalache distribution | the default-backend check must create Quint's exact `apalache-dist-0.56.1/apalache/lib/apalache.jar` before TLC starts; absence fails before the temporal call | production `assertTlcArtifactPrepared`; hermetic exact-cache-path test starts absent, prepares it, and requires it; preparation-failure test proves no temporal invocation |
 
 ### Measurement
 

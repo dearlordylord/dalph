@@ -1,13 +1,19 @@
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 import { expect, test } from "vitest"
 
 // @ts-expect-error The production quality-gate helper is an executable JavaScript module.
 import * as temporalGate from "./quint-temporal-gate.mjs"
 
-const { assertCleanTemporalVerdict, assertViolatedTemporalVerdict, runPreparedTemporalCheck } = temporalGate
+const {
+  apalacheJarPath,
+  assertCleanTemporalVerdict,
+  assertTlcArtifactPrepared,
+  assertViolatedTemporalVerdict,
+  runPreparedTemporalCheck
+} = temporalGate
 
 test("accepts only a real TLC success marker", () => {
   expect(() =>
@@ -37,15 +43,23 @@ test("requires a real nonzero TLC violation for the temporal mutant", () => {
   expect(() =>
     assertViolatedTemporalVerdict({ exitCode: 1, output: "backend crashed" }, "suspensionRequestNeverReleasesPosition")
   ).toThrow("not rejected by a real TLC violation")
+  expect(() =>
+    assertViolatedTemporalVerdict(
+      { exitCode: 1, output: "[ok] No violation found" },
+      "suspensionRequestNeverReleasesPosition"
+    )
+  ).toThrow("not rejected by a real TLC violation")
 })
 
 test("prepares the TLC artifact before temporal verification", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dalph-quint-cold-cache-"))
-  const artifact = join(directory, "apalache.jar")
+  const artifact = apalacheJarPath(directory)
   try {
-    await expect(access(artifact)).rejects.toThrow()
+    await expect(assertTlcArtifactPrepared(directory)).rejects.toThrow("TLC artifact preparation did not produce")
     await runPreparedTemporalCheck({
+      assertArtifactPrepared: () => assertTlcArtifactPrepared(directory),
       prepareArtifact: async () => {
+        await mkdir(dirname(artifact), { recursive: true })
         await writeFile(artifact, "prepared")
       },
       verifyTemporal: async () => {
@@ -59,6 +73,7 @@ test("prepares the TLC artifact before temporal verification", async () => {
   let temporalWasInvoked = false
   await expect(
     runPreparedTemporalCheck({
+      assertArtifactPrepared: () => assertTlcArtifactPrepared(directory),
       prepareArtifact: async () => {
         throw new Error("artifact unavailable")
       },

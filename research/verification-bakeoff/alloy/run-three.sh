@@ -11,10 +11,10 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 FAIL=0
 
-run_command() { # name timeout expected-induction-result-or-empty
-  local name=$1 budget=$2 expected=${3:-} start=$SECONDS output code summary
+run_command() { # name timeout expected-result-or-empty spec-or-default
+  local name=$1 budget=$2 expected=${3:-} spec=${4:-$SPEC} start=$SECONDS output code summary
   output=$(timeout "$budget" java -jar "$ALLOY_JAR" exec -f -t none \
-    -o "$WORK/$name" -c "$name" "$SPEC" 2>&1 1>/dev/null)
+    -o "$WORK/$name" -c "$name" "$spec" 2>&1 1>/dev/null)
   code=$?
   if [[ $code == 124 ]]; then
     summary="no verdict in ${budget}s"
@@ -28,7 +28,9 @@ run_command() { # name timeout expected-induction-result-or-empty
 
 echo "| Command | Alloy | s |"
 echo "|---|---|---|"
-run_command invIsInductiveThree 30 UNSAT
+run_command strengthenedInvIsInductiveThree 30 UNSAT DeliveryThreeStrengthened.als
+run_command reversedRankMutationBreaksStrengthening 30 SAT DeliveryThreeStrengthened.als
+run_command failureLeakMutationBreaksStrengthening 30 SAT DeliveryThreeStrengthened.als
 run_command invAlwaysHoldsThree 60
 run_command pauseDrainsPositionsThree 30
 run_command everyBegunSettlesThree 30
