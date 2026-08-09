@@ -41,6 +41,9 @@ import {
   OperationId,
   OperationIdAllocator,
   outcomeRecordKey,
+  PlannedAttemptExecutorCommandIntendedEvent,
+  plannedAttemptExecutorCommandIntendedRecordKey,
+  PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   plannedAttemptExecutorWorkReportedRecordKey,
@@ -803,6 +806,7 @@ it.effect("publishes each accepted executor report before continuing and stops a
         plannedAttempt,
         predecessorOperationIds: [plan.operationId]
       })
+      const runningCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
       const runningOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
       yield* Effect.gen(function* () {
         const journal = yield* JournalStore
@@ -861,6 +865,18 @@ it.effect("publishes each accepted executor report before continuing and stops a
           runId,
           plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
           PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        )
+        yield* journal.append(
+          runId,
+          plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, runningCommandOrdinal),
+          PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "StartOrContinue",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal: runningCommandOrdinal,
             plannedAttempt,
             version: workflowJournalEventVersion
           })
