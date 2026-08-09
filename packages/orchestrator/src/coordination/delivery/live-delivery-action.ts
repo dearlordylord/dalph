@@ -1,3 +1,4 @@
+import type { AttemptId, RunId, TaskId } from "@dalph/contracts"
 import { Schema } from "effect"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -15,16 +16,70 @@ export type LiveDeliveryActionKey = typeof LiveDeliveryActionKey.Type
 const liveActionKey = (parts: ReadonlyArray<string>): LiveDeliveryActionKey =>
   LiveDeliveryActionKey.make(JSON.stringify(parts))
 
-const recoveredReadSubject = (proposal: DeliveryActionProposal): ReadonlyArray<string> | undefined => {
+type RecoveredTransition = Extract<
+  DeliveryActionProposal["order"],
+  { readonly _tag: "RecoveredWorkflowOrder" }
+>["transition"]
+
+const attemptBoundRecoveredReadTransitions = [
+  "ObservePlannedAttemptContinuationClaim",
+  "ObservePlannedAttemptContinuationGraph",
+  "ObservePlannedAttemptContinuationSpecification",
+  "ObservePlannedAttemptContinuationTargetLineage",
+  "ObservePlannedAttemptContinuationWorktree",
+  "ObserveStoppedAttemptClaim"
+] as const satisfies ReadonlyArray<RecoveredTransition>
+type AttemptBoundRecoveredReadTransition = (typeof attemptBoundRecoveredReadTransitions)[number]
+
+type RecoveredAction = Extract<DeliveryActionProposal["route"], { readonly _tag: "RecoveredNewActionRoute" }>["action"]
+type RecoveredReadAction = Extract<
+  RecoveredAction,
+  {
+    readonly _tag:
+      | "ReadTargetLineage"
+      | "ReadTaskClaim"
+      | "ReadTaskWorkSpecification"
+      | "ReadTaskWorktree"
+      | "ReadTrackerGraph"
+  }
+>
+
+/** Stable subject of one recovered task-tracker read across changes to its causal route. */
+type RecoveredReadSubject =
+  | {
+      readonly _tag: "Attempt"
+      readonly attemptId: AttemptId
+      readonly runId: RunId
+      readonly transition: AttemptBoundRecoveredReadTransition
+    }
+  | { readonly _tag: "Task"; readonly taskId: TaskId; readonly transition: "ObserveResponsibleTaskClaim" }
+
+const attemptBoundRecoveredReadTransitionSet: ReadonlySet<RecoveredTransition> = new Set(
+  attemptBoundRecoveredReadTransitions
+)
+
+const isAttemptBoundRecoveredReadTransition = (
+  transition: RecoveredTransition
+): transition is AttemptBoundRecoveredReadTransition => attemptBoundRecoveredReadTransitionSet.has(transition)
+
+const isRecoveredReadAction = (action: RecoveredAction): action is RecoveredReadAction =>
+  "operation" in action && action.operation._tag !== "ReleaseTaskClaim"
+
+const recoveredReadSubject = (proposal: DeliveryActionProposal): RecoveredReadSubject | undefined => {
   const route = proposal.route
   if (route._tag !== "RecoveredNewActionRoute" || proposal.order._tag !== "RecoveredWorkflowOrder") return undefined
   const action = route.action
-  if (!("operation" in action) || action.operation._tag === "ReleaseTaskClaim") return undefined
-  if (action.plannedAttempt !== null) {
-    return [proposal.order.transition, "Attempt", action.plannedAttempt.runId, action.plannedAttempt.attemptId]
+  if (!isRecoveredReadAction(action)) return undefined
+  if (action.plannedAttempt !== null && isAttemptBoundRecoveredReadTransition(proposal.order.transition)) {
+    return {
+      _tag: "Attempt",
+      attemptId: action.plannedAttempt.attemptId,
+      runId: action.plannedAttempt.runId,
+      transition: proposal.order.transition
+    }
   }
   return action._tag === "ReadTaskClaim" && proposal.order.transition === "ObserveResponsibleTaskClaim"
-    ? [proposal.order.transition, "Task", action.taskId]
+    ? { _tag: "Task", taskId: action.taskId, transition: proposal.order.transition }
     : undefined
 }
 
@@ -32,7 +87,9 @@ export const liveActionKeyOf = (proposal: DeliveryActionProposal): LiveDeliveryA
   const subject = recoveredReadSubject(proposal)
   return subject === undefined
     ? liveActionKey(["DeliveryProposal", proposal.id])
-    : liveActionKey(["RecoveredRead", ...subject])
+    : subject._tag === "Attempt"
+      ? liveActionKey(["RecoveredRead", subject.transition, subject._tag, subject.runId, subject.attemptId])
+      : liveActionKey(["RecoveredRead", subject.transition, subject._tag, subject.taskId])
 }
 
 export const proposalIsAvailable = (

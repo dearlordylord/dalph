@@ -43,6 +43,49 @@ position. These prohibitions preserve D1, D12, D15, and D41.
 - `does not allocate an operation or attempt identity before admission`
 - `passes a deferred proposal without reordering the later proposals`
 
+## A newer causal route does not repeat the same recovered tracker read
+
+### Starting situation
+
+An unfinished Run retains exact attempt A and has asked the task tracker to
+read A's current work specification after accepted graph G1. Dalph owns that
+tracker request in this process. Before it returns, accepted graph G2 changes the read's causal
+predecessor and therefore its proposal identity, but the original recovered
+transition kind, RunId, and AttemptId are unchanged. The same situation can
+occur when Dalph asks the task tracker to read the current claim record of a
+responsible task that has no planned attempt; in that case the exact subject is
+its TaskId.
+
+### Trigger and ordered boundary calls
+
+The ordinary relation publishes the G2-derived proposal while the G1-derived
+tracker request is still owned. Dalph keeps one process-local owner for the original
+recovered transition kind and exact subject, skips the duplicate proposal, and
+continues admitting unrelated work. After the first read settles, its accepted
+observation removes that recovered read from the ordinary relation, and the
+settled owner is pruned normally.
+
+The recovered transition kind is part of this process-local identity. A
+continuation claim read and a later stopped-attempt claim read for the same
+RunId and AttemptId ask the task tracker different questions about the current
+claim. Once the continuation read settles and the stopped-attempt transition is
+published, Dalph admits the stopped-attempt claim read. Release and
+claim-reacquisition actions keep their exact proposal identities; they are not
+read-coalesced. Git and executor calls do not apply because these proposals
+select only task-tracker reads.
+
+There is no person or crash in this same-process race. The maintainer sees one
+task-tracker call for each exact recovered question and ordinary independent
+progress. Dalph must not overlap or replay a read merely because its causal
+route changed, coalesce two different recovered transition kinds, or reorder
+queued proposals globally.
+
+### Acceptance-test mapping
+
+- `does not repeat one recovered observation after only its causal route changes while it is live`
+- `does not repeat one responsible-task claim read after only its causal route changes while live`
+- `runs a stopped-attempt claim read after the distinct continuation-claim read settles`
+
 ## A journaled integration-agent report selects the next exact continuation
 
 ### Starting situation

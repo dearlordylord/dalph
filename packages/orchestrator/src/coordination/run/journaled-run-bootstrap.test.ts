@@ -203,10 +203,7 @@ it.effect("retries a pre-commit Run beginning failure without entering activatio
       const beginAttempts = yield* Ref.make(0)
       const scans = yield* Ref.make(0)
       const initialPolicyEvaluations = yield* Ref.make(0)
-      const executorCalls = yield* Ref.make(0)
-      const gitCalls = yield* Ref.make(0)
       const programCalls = yield* Ref.make(0)
-      const trackerCalls = yield* Ref.make(0)
       const preCommitFailure = new JournalStorageUnavailable({
         detail: "the beginning failed before any row was committed",
         operation: "JournalStore.beginRun"
@@ -224,29 +221,19 @@ it.effect("retries a pre-commit Run beginning failure without entering activatio
       const bootstrap = yield* buildBootstrap(runId, storage)
       const policy = Ref.update(initialPolicyEvaluations, (count) => count + 1).pipe(Effect.as(initialPolicy))
       const active = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
-      const activation = Ref.update(programCalls, (count) => count + 1).pipe(
-        Effect.andThen(Ref.update(trackerCalls, (count) => count + 1)),
-        Effect.andThen(Ref.update(gitCalls, (count) => count + 1)),
-        Effect.andThen(Ref.update(executorCalls, (count) => count + 1)),
-        Effect.as(finalityProof(active))
-      )
+      const activation = Ref.update(programCalls, (count) => count + 1).pipe(Effect.as(finalityProof(active)))
 
       expect(yield* bootstrap.activate(target, policy, runId, activation).pipe(Effect.flip)).toBe(preCommitFailure)
       expect(yield* delegate.read(runId)).toEqual([])
       expect(yield* Ref.get(initialPolicyEvaluations)).toBe(1)
-      expect(yield* Ref.get(executorCalls)).toBe(0)
-      expect(yield* Ref.get(gitCalls)).toBe(0)
+      // Tracker, Git, and executor boundaries exist only inside the activation program's context.
       expect(yield* Ref.get(programCalls)).toBe(0)
-      expect(yield* Ref.get(trackerCalls)).toBe(0)
 
       expect(yield* bootstrap.activate(target, policy, runId, activation)).toEqual(active)
       expect(yield* Ref.get(initialPolicyEvaluations)).toBe(2)
       expect(yield* Ref.get(beginAttempts)).toBe(2)
       expect(yield* Ref.get(scans)).toBe(2)
-      expect(yield* Ref.get(executorCalls)).toBe(1)
-      expect(yield* Ref.get(gitCalls)).toBe(1)
       expect(yield* Ref.get(programCalls)).toBe(1)
-      expect(yield* Ref.get(trackerCalls)).toBe(1)
       expect((yield* delegate.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
     })
   ).pipe(Effect.provide(NodeCrypto.layer))

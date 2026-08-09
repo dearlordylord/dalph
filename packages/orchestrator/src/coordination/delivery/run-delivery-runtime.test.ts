@@ -50,6 +50,7 @@ import {
 import { DeliveryActionExecutor, type DeliveryActionResult, DeliverySemanticTrace } from "./delivery-action-executor.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
+import { liveActionIsPresent } from "./live-delivery-action.js"
 import {
   currentSignalOf,
   type DeliveryActionProposal,
@@ -293,6 +294,8 @@ it.effect("finds exact proposal identities in available and conflicting frontier
     expect(proposalIsPresent(available([a]), b.id)).toBe(false)
     expect(proposalIsPresent(conflicts([a.id]), a.id)).toBe(true)
     expect(proposalIsPresent(conflicts([a.id]), b.id)).toBe(false)
+    expect(liveActionIsPresent(conflicts([a.id]), a)).toBe(true)
+    expect(liveActionIsPresent(conflicts([a.id]), b)).toBe(false)
   })
 )
 
