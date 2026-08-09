@@ -3,7 +3,7 @@
 Issue:
 [Clean-restart an exact changed attempt](https://github.com/dearlordylord/dalph/issues/66)
 
-Status: proposed on 2026-08-08. The first two maintainer decisions were
+Status: proposed on 2026-08-08. The first three maintainer decisions were
 accepted on 2026-08-09. The remaining choices and the full scenario still
 await maintainer acceptance, so this file does not authorize behavior-changing
 implementation.
@@ -61,18 +61,28 @@ or separate evidence artifact stays with the selected executor. The controlled
 fake and the current generic executor boundary expose neither resource, so
 there is no such fact to inspect and no fake cleanup boundary to call.
 
-## Next maintainer decision: record P1 replacement and P2 together
+## Settled maintainer decision: record P1 replacement and P2 together
 
-Should one workflow-journal event make P1 no longer unsettled and record
-planned task attempt P2?
+The maintainer accepted this decision on 2026-08-09: one workflow-journal event
+atomically makes P1 no longer unsettled and records exact planned task attempt
+P2. There is no two-event intermediate durable state.
 
-I recommend one event. It gives a crash two exact results: P1 is unsettled and
-P2 is absent, or P1 is superseded and exact P2 exists.
+A crash has two exact journal results. If the event is absent, P1 remains
+unsettled and P2 is absent. If the event is present, P1 is superseded and exact
+P2 exists. Restart folds that event before it performs another action.
 
-Otherwise, issue #66 must use two events and define the intermediate state,
-crash recovery, and actor-visible result. Recording P1 supersession first
-leaves no successor. Recording P2 first conflicts with D3 because P1 and P2
-are both unsettled.
+## Next maintainer decision: start planned task attempt P2
+
+After Git proves P2's planned worktree is ready, should Dalph use ordinary
+bounded admission to start its planned-attempt executor work?
+
+I recommend this case. P2 is an ordinary planned task attempt. The admission
+path gives it a task-work position before Dalph asks the executor to start, and
+Alice sends no second command.
+
+Otherwise, P2 stays planned until Alice sends a new start command. Issue #66
+must define that command's exact request identity, redelivery, crash recovery,
+rejection rules, and visible wait.
 
 ## Alice restarts P1 from F2 without carrying W1 into P2
 
@@ -178,9 +188,9 @@ is superseded but P2 is absent; change P1's immutable facts; release, reacquire,
 or replace K1 merely because Alice chose Restart; reuse W1, its branch, or its
 WIP for P2; delete or reset W1; discard any P1 commit, uncommitted work, or
 journal evidence; ask an executor to discard session history or an evidence
-artifact; treat H2 as current without its Git read; cross the integration
-boundary; complete A in the tracker; or block C behind A's local replacement
-work.
+artifact; start P2 without a task-work position; treat H2 as current without
+its Git read; cross the integration boundary; complete A in the tracker; or
+block C behind A's local replacement work.
 
 ### Invariant trace required before acceptance
 
@@ -219,6 +229,8 @@ proposal remains incomplete and cannot authorize implementation.
   append`
 - `reuses one recorded planned task attempt P2 after restart instead of
   allocating P3`
+- `admits planned task attempt P2 through ordinary bounded admission without a
+  second Operator command`
 - authored and recorded cassette `changedAttemptRestartsCleanly`
 - authored and recorded cassette `changedAttemptRestartAfterSupersessionCrash`
 
