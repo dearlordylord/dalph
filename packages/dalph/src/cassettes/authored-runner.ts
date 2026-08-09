@@ -1,8 +1,15 @@
 /* eslint-disable max-lines -- One chronological adapter owns fresh, pause, crash, recovery, candidate, and terminal story boundaries. */
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
-import { GitCommitSha, type PlannedAttemptExecutorReport, type RunId } from "@dalph/contracts"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, type Result, Schema, Stream } from "effect"
+import {
+  GitCommitSha,
+  type PlannedAttemptExecutorReport,
+  type PlannedTaskAttempt,
+  type RunId,
+  type TaskRevision
+} from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
+  type AttemptChoiceApplicationResult,
   attemptChoiceControlLayer,
   AttemptChoiceRequestId,
   controlDirectionApplicationLayer,
@@ -34,10 +41,7 @@ import {
   journaledWorkflowInterpreterLayer,
   workflowInterpreterLayer,
   makeLiveDeliveryActionExecutor,
-  makeTaskWorkSpecificationObservationOperation,
   memoryJournalStoreLayer,
-  OperationId,
-  OperationSelected,
   observePlannedAttemptWorktreeThrough,
   observeTargetLineageThrough,
   reduceWorkflowJournalHistory,
@@ -81,7 +85,8 @@ import {
   controlledTrackerGraphReaderLayer,
   controlledTrackerMutationLayer
 } from "./authored-adapters.js"
-import { makeStoryCursor } from "./authored-cursor.js"
+import { makeStoryCursor, type StoryCursor } from "./authored-cursor.js"
+import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 
 export interface AuthoredScenarioCassetteRun {
@@ -128,6 +133,73 @@ const attemptChoiceFailureReason = (
       return undefined
   }
 }
+
+type AttemptChoiceControlResult = Result.Result<AttemptChoiceApplicationResult, unknown>
+
+const attemptChoiceDirectionFor = (
+  item: AuthoredAttemptChoiceItem
+): "ContinueExistingAttempt" | "StopTaskImplementation" =>
+  item._tag === "OperatorContinuesAttempt" ? "ContinueExistingAttempt" : "StopTaskImplementation"
+
+const appliedAttemptChoiceMatches = (
+  item: AuthoredAttemptChoiceItem,
+  result: AttemptChoiceApplicationResult
+): boolean => {
+  if (item.expected._tag !== "Applied") return false
+  if (item._tag === "OperatorContinuesAttempt") return result._tag === "ContinueApplied"
+  return result._tag === "StopApplied" && result.status._tag === item.expected.status
+}
+
+const queriedAttemptChoiceMatches = (
+  application: AttemptChoiceApplicationResult,
+  queried: AttemptChoiceApplicationResult
+): boolean => {
+  if (queried._tag !== application._tag) return false
+  if (queried._tag !== "StopApplied" || application._tag !== "StopApplied") return true
+  return queried.status._tag === application.status._tag
+}
+
+const attemptChoiceRejectionMatches = (item: AuthoredAttemptChoiceItem, result: AttemptChoiceControlResult): boolean =>
+  item.expected._tag === "Rejected" &&
+  result._tag === "Failure" &&
+  attemptChoiceFailureReason(result.failure) === item.expected.reason
+
+const attemptChoiceRaceHasOneWinner = (results: ReadonlyArray<AttemptChoiceControlResult>): boolean => {
+  const successes = results.filter((result) => result._tag === "Success")
+  const failures = results.filter((result) => result._tag === "Failure")
+  return (
+    successes.length === 1 &&
+    failures.length === 1 &&
+    attemptChoiceFailureReason(failures[0]?.failure) === "AlreadyApplied"
+  )
+}
+
+type CoordinatorFinalityDecision =
+  | { readonly _tag: "RunMayTerminate" }
+  | {
+      readonly _tag: "RunMustRemainActive"
+      readonly reason: "RunnableTransition" | "TrackerTargetUnsettled" | "UnsettledResponsibility"
+    }
+
+const coordinatorFinalityMatches = (
+  expected: (typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type)["decision"],
+  actual: CoordinatorFinalityDecision
+): boolean => {
+  if (expected._tag !== actual._tag) return false
+  if (expected._tag === "RunMayTerminate") return true
+  return actual._tag === "RunMustRemainActive" && expected.reason === actual.reason
+}
+
+const settleCoordinatorActivationReturn = <E>(cursor: StoryCursor, exit: Exit.Exit<CoordinatorFinalityDecision, E>) =>
+  Effect.gen(function* () {
+    if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
+    const expected = yield* cursor.consumeCoordinatorActivationReturned
+    if (!coordinatorFinalityMatches(expected.decision, exit.value)) {
+      return yield* Effect.die(
+        `authored coordinator activation expected ${JSON.stringify(expected.decision)}, received ${JSON.stringify(exit.value)}`
+      )
+    }
+  })
 
 type TargetVerificationStoryResult = Extract<
   AuthoredCassetteStoryItem,
@@ -491,13 +563,15 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       )
       const recoveredRuntimeOrdinal = yield* Ref.make(0)
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+      const unresolvedLostExecutorResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
       const runtimeLayerFor = ({ startup }: JournaledRuntimeLayerInput, recoveryOrdinal: number) => {
         const planning = planningLayer(startup === "Fresh" ? "fresh" : "recovery", recoveryOrdinal)
         const executorLayer = controlledExecutorLayer(
           cursor,
           runId,
           applyNextControlDirection,
-          survivingExecutorReports
+          survivingExecutorReports,
+          unresolvedLostExecutorResponses
         ).pipe(Layer.provide(controlPolicyLayer))
         const startupLayer = validatedStartupRecoveryLayer(
           runId,
@@ -549,10 +623,10 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
                 runId
               })
             }).pipe(Effect.orDie)
-            const driveAttemptChoice = Effect.gen(function* () {
-              const authored = yield* cursor.consumeAttemptChoice
-              if (Option.isNone(authored)) return
-              const item = authored.value
+            const requirePlannedAttempt = Effect.fn("AuthoredCassette.requirePlannedAttempt")(function* (item: {
+              readonly attemptId: AuthoredAttemptChoiceItem["attemptId"]
+              readonly taskId: AuthoredAttemptChoiceItem["taskId"]
+            }) {
               const planned = (yield* sharedJournal.read(runId)).findLast(
                 ({ event }) =>
                   event._tag === "TaskAttemptPlanned" &&
@@ -564,49 +638,82 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
                   new Error(`authored attempt choice cannot find planned attempt ${item.attemptId}`)
                 )
               }
-              const requestId = AttemptChoiceRequestId.make({ nonce: item.requestNonce, runId })
-              const result = yield* Effect.result(
+              return planned.operation.plannedAttempt
+            })
+            const applyAttemptChoice = (
+              plannedAttempt: PlannedTaskAttempt,
+              observedTaskRevision: TaskRevision,
+              choice: "ContinueExistingAttempt" | "StopTaskImplementation",
+              nonce: string
+            ) =>
+              Effect.result(
                 bootstrap.operatorControl.applyAttemptChoice({
-                  choice:
-                    item._tag === "OperatorContinuesAttempt" ? "ContinueExistingAttempt" : "StopTaskImplementation",
-                  requestId,
-                  subject: {
-                    observedTaskRevision: item.observedTaskRevision,
-                    plannedAttempt: planned.operation.plannedAttempt
-                  }
+                  choice,
+                  requestId: AttemptChoiceRequestId.make({ nonce, runId }),
+                  subject: { observedTaskRevision, plannedAttempt }
                 })
               )
+            const confirmAppliedAttemptChoice = Effect.fn("AuthoredCassette.confirmAppliedAttemptChoice")(function* (
+              item: AuthoredAttemptChoiceItem,
+              requestId: AttemptChoiceRequestId,
+              result: AttemptChoiceControlResult
+            ) {
+              if (result._tag !== "Success") {
+                return yield* Effect.die(
+                  new Error(
+                    `authored attempt choice ${item.requestNonce} failed with ${attemptChoiceFailureReason(result.failure) ?? "unexpected failure"}`
+                  )
+                )
+              }
+              if (!appliedAttemptChoiceMatches(item, result.success)) {
+                return yield* Effect.die(new Error(`authored attempt-choice result mismatch for ${item.requestNonce}`))
+              }
+              const queried = yield* bootstrap.operatorControl.readAttemptChoice(requestId)
+              if (!queriedAttemptChoiceMatches(result.success, queried)) {
+                return yield* Effect.die(new Error(`authored attempt-choice query mismatch for ${item.requestNonce}`))
+              }
+              if (item._tag === "OperatorStopsAttempt") {
+                yield* Deferred.succeed(admittedContinuationChoiceApplied, undefined)
+              }
+            })
+            const driveAttemptChoice = Effect.gen(function* () {
+              const authored = yield* cursor.consumeAttemptChoice
+              if (Option.isNone(authored)) return
+              const item = authored.value
+              const plannedAttempt = yield* requirePlannedAttempt(item)
+              const requestId = AttemptChoiceRequestId.make({ nonce: item.requestNonce, runId })
+              const result = yield* applyAttemptChoice(
+                plannedAttempt,
+                item.observedTaskRevision,
+                attemptChoiceDirectionFor(item),
+                item.requestNonce
+              )
               if (item.expected._tag === "Rejected") {
-                if (result._tag !== "Failure" || attemptChoiceFailureReason(result.failure) !== item.expected.reason) {
+                if (!attemptChoiceRejectionMatches(item, result)) {
                   return yield* Effect.die(
                     new Error(`authored attempt-choice rejection mismatch for ${item.requestNonce}`)
                   )
                 }
                 return
               }
-              if (result._tag !== "Success") {
-                return yield* Effect.die(
-                  new Error(`authored attempt choice ${item.requestNonce} failed with ${result.failure._tag}`)
-                )
-              }
-              if (
-                (item._tag === "OperatorContinuesAttempt" && result.success._tag !== "ContinueApplied") ||
-                (item._tag === "OperatorStopsAttempt" &&
-                  (result.success._tag !== "StopApplied" || result.success.status._tag !== item.expected.status))
-              ) {
-                return yield* Effect.die(new Error(`authored attempt-choice result mismatch for ${item.requestNonce}`))
-              }
-              const queried = yield* bootstrap.operatorControl.readAttemptChoice(requestId)
-              if (
-                queried._tag !== result.success._tag ||
-                (queried._tag === "StopApplied" &&
-                  result.success._tag === "StopApplied" &&
-                  queried.status._tag !== result.success.status._tag)
-              ) {
-                return yield* Effect.die(new Error(`authored attempt-choice query mismatch for ${item.requestNonce}`))
-              }
-              if (item._tag === "OperatorStopsAttempt") {
-                yield* Deferred.succeed(admittedContinuationChoiceApplied, undefined)
+              yield* confirmAppliedAttemptChoice(item, requestId, result)
+            }).pipe(Effect.orDie)
+            const driveAttemptChoiceRace = Effect.gen(function* () {
+              const authored = yield* cursor.consumeAttemptChoiceRace
+              if (Option.isNone(authored)) return
+              const item = authored.value
+              const plannedAttempt = yield* requirePlannedAttempt(item)
+              const apply = (choice: "ContinueExistingAttempt" | "StopTaskImplementation", nonce: string) =>
+                applyAttemptChoice(plannedAttempt, item.observedTaskRevision, choice, nonce)
+              const results = yield* Effect.all(
+                [
+                  apply("ContinueExistingAttempt", item.continueRequestNonce),
+                  apply("StopTaskImplementation", item.stopRequestNonce)
+                ],
+                { concurrency: "unbounded" }
+              )
+              if (!attemptChoiceRaceHasOneWinner(results)) {
+                return yield* Effect.die(new Error("authored concurrent Continue/Stop race did not produce one winner"))
               }
             }).pipe(Effect.orDie)
             const driveControlDirection = Effect.gen(function* () {
@@ -662,6 +769,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
               OperatorContinuesAttempt: driveAttemptChoice,
               OperatorAppliesControlDirection: driveControlDirection,
               OperatorDirectsTaskClaimReacquisition: driveClaimReacquisition,
+              OperatorRacesContinueAndStop: driveAttemptChoiceRace,
               OperatorStopsAttempt: driveAttemptChoice,
               SetTaskExecutionCapacity: driveCapacityChange
             }
@@ -679,8 +787,6 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       const controlledExecutorFactory = (factoryRunId: RunId, factoryTarget: typeof command.target) =>
         Effect.gen(function* () {
           const live = yield* makeLiveDeliveryActionExecutor(factoryRunId, factoryTarget)
-          const interpreter = yield* WorkflowInterpreter
-          const workflowTrace = yield* WorkflowTrace
           return {
             ...live,
             execute: (action, lease) =>
@@ -710,13 +816,6 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
                       )
                     )
                   }
-                  const operation = makeTaskWorkSpecificationObservationOperation(
-                    OperationId.make(`cassette:${factoryRunId}:admitted-continuation-race:specification`),
-                    factoryTarget,
-                    transition.plannedAttempt.taskId
-                  )
-                  yield* workflowTrace.emit(OperationSelected.make({ operation }))
-                  yield* interpreter.readTaskWorkSpecification(operation)
                   yield* Deferred.await(admittedContinuationChoiceApplied)
                 }
                 return yield* live.execute(action, lease)
@@ -724,76 +823,68 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           } satisfies DeliveryActionExecutorService
         })
 
-      const execution = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const freshRun = withAuthoredOperatorDriver(
-            runWorkflowWithControlledDeliveryActionExecutor(
-              command.target,
-              initial.policy,
-              runId,
-              controlledExecutorFactory
-            ).pipe(Effect.provide(planningLayer("fresh")))
-          )
-          if (coordinatorLifecycleBoundaryCount > 0) {
-            let coordinator = yield* Effect.forkScoped(freshRun)
-            const coordinatorActivations: Array<"Fresh" | "Recovered"> = ["Fresh"]
-            let consumedLifecycleBoundaries = 0
-            let recoveryOrdinal = 0
-            while (consumedLifecycleBoundaries < coordinatorLifecycleBoundaryCount) {
-              const boundary = yield* Effect.raceFirst(
-                cursor.awaitCoordinatorProcessDeath.pipe(Effect.as({ _tag: "CoordinatorProcessDied" as const })),
-                Fiber.await(coordinator).pipe(
-                  Effect.map((exit) => ({ _tag: "CoordinatorActivationReturned" as const, exit }))
-                )
-              )
-              consumedLifecycleBoundaries += 1
-              if (boundary._tag === "CoordinatorActivationReturned") {
-                if (Exit.isFailure(boundary.exit)) return yield* Effect.failCause(boundary.exit.cause)
-                const expected = yield* cursor.consumeCoordinatorActivationReturned
-                const actual = boundary.exit.value
-                const matches =
-                  expected.decision._tag === actual._tag &&
-                  (expected.decision._tag === "RunMayTerminate" ||
-                    (actual._tag === "RunMustRemainActive" && expected.decision.reason === actual.reason))
-                if (!matches) {
-                  return yield* Effect.die(
-                    `authored coordinator activation expected ${JSON.stringify(expected.decision)}, received ${JSON.stringify(actual)}`
-                  )
-                }
-              } else {
-                yield* Fiber.interrupt(coordinator)
-              }
-              if (yield* cursor.atTerminalAssertions) break
-              recoveryOrdinal += 1
-              const recoveredRun = withAuthoredOperatorDriver(
-                runRecoveredWorkflowWithControlledDeliveryActionExecutor(
-                  command.target,
-                  controlledExecutorFactory
-                ).pipe(Effect.provide(planningLayer("recovery", recoveryOrdinal)))
-              )
-              coordinator = yield* recoveredRun.pipe(Effect.forkScoped({ startImmediately: true }))
-              coordinatorActivations.push("Recovered")
-            }
-            yield* Effect.raceFirst(
-              cursor.awaitTerminalAssertions,
-              Fiber.join(coordinator).pipe(
-                Effect.andThen(Effect.die("recovered coordinator stopped before the authored terminal assertions"))
-              )
-            )
-            if (candidateTerminalEventTag !== undefined) yield* Deferred.await(candidateOutcomeRecorded)
-            for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
-            const recoveredCoordinatorExit = coordinator.pollUnsafe()
-            yield* Fiber.interrupt(coordinator)
-            return { coordinatorActivations, records: yield* sharedJournal.read(runId), recoveredCoordinatorExit }
-          }
-          yield* freshRun
-          return {
-            coordinatorActivations: ["Fresh"] as const,
-            records: yield* sharedJournal.read(runId),
-            recoveredCoordinatorExit: undefined
-          }
-        }).pipe(Effect.provide(application))
+      const freshRun = withAuthoredOperatorDriver(
+        runWorkflowWithControlledDeliveryActionExecutor(
+          command.target,
+          initial.policy,
+          runId,
+          controlledExecutorFactory
+        ).pipe(Effect.provide(planningLayer("fresh")))
       )
+      const runAcrossCoordinatorLifecycles = Effect.gen(function* () {
+        let coordinator = yield* Effect.forkScoped(freshRun)
+        const coordinatorActivations: Array<"Fresh" | "Recovered"> = ["Fresh"]
+        let consumedLifecycleBoundaries = 0
+        let recoveryOrdinal = 0
+        while (consumedLifecycleBoundaries < coordinatorLifecycleBoundaryCount) {
+          const boundary = yield* Effect.raceFirst(
+            cursor.awaitCoordinatorProcessDeath.pipe(Effect.as({ _tag: "CoordinatorProcessDied" as const })),
+            Fiber.await(coordinator).pipe(
+              Effect.map((exit) => ({ _tag: "CoordinatorActivationReturned" as const, exit }))
+            )
+          )
+          consumedLifecycleBoundaries += 1
+          if (boundary._tag === "CoordinatorActivationReturned") {
+            yield* settleCoordinatorActivationReturn(cursor, boundary.exit)
+          } else {
+            yield* Fiber.interrupt(coordinator)
+          }
+          if (yield* cursor.atTerminalAssertions) break
+          recoveryOrdinal += 1
+          const recoveredRun = withAuthoredOperatorDriver(
+            runRecoveredWorkflowWithControlledDeliveryActionExecutor(command.target, controlledExecutorFactory).pipe(
+              Effect.provide(planningLayer("recovery", recoveryOrdinal))
+            )
+          )
+          coordinator = yield* recoveredRun.pipe(Effect.forkScoped({ startImmediately: true }))
+          coordinatorActivations.push("Recovered")
+        }
+        yield* Effect.raceFirst(
+          cursor.awaitTerminalAssertions,
+          Fiber.join(coordinator).pipe(
+            Effect.andThen(Effect.die("recovered coordinator stopped before the authored terminal assertions"))
+          )
+        )
+        if (candidateTerminalEventTag !== undefined) yield* Deferred.await(candidateOutcomeRecorded)
+        for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
+        const recoveredCoordinatorExit = coordinator.pollUnsafe()
+        yield* Fiber.interrupt(coordinator)
+        return { coordinatorActivations, records: yield* sharedJournal.read(runId), recoveredCoordinatorExit }
+      })
+      const runFreshCoordinator = Effect.gen(function* () {
+        const coordinatorActivations: ReadonlyArray<"Fresh" | "Recovered"> = ["Fresh"]
+        yield* freshRun
+        return {
+          coordinatorActivations,
+          records: yield* sharedJournal.read(runId),
+          recoveredCoordinatorExit: undefined
+        }
+      })
+      const coordinatorExecution = Effect.gen(function* () {
+        if (coordinatorLifecycleBoundaryCount > 0) return yield* runAcrossCoordinatorLifecycles
+        return yield* runFreshCoordinator
+      })
+      const execution = yield* Effect.scoped(coordinatorExecution.pipe(Effect.provide(application)))
       const { coordinatorActivations, records, recoveredCoordinatorExit } = execution
       /* v8 ignore next -- @preserve Recovered authored runs return success after their declared final read; action failures are asserted by the direct protocol cassette. */
       if (recoveredCoordinatorExit !== undefined && Exit.isFailure(recoveredCoordinatorExit)) {

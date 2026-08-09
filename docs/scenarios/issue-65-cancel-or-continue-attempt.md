@@ -122,6 +122,18 @@ the recorded direction and its current result without applying another Stop.
 Reusing D2 with different contents is a typed contradiction, and a new choice
 request after D2 was applied is stale.
 
+The maintained later-command ambiguity story uses ordinary production routes
+to make that race concrete. Dalph admits P's continuation and pauses it
+immediately before the executor command intent. Alice applies Task Pause and
+then Task Unpause; each control request performs its normal current-membership
+tracker read. The live owner of the already-admitted continuation remains held
+while Unpause makes P ready again. After the ordinary delivery graph refresh,
+the recovery frontier selects and records a fresh task-work-specification read
+returning F2. Alice then applies Stop for F1/F2, Dalph releases the held
+continuation, and its later executor command makes the earlier safe proof
+stale. No harness appends F2 or selects that read outside the production
+delivery route.
+
 Alice sees P stopped and its implementation artifacts preserved. If exact claim
 release remains unresolved, she sees that separately instead of seeing the
 whole Stop falsely fail or falsely complete. If the claim is absent or foreign,

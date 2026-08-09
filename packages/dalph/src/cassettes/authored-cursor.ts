@@ -101,6 +101,9 @@ export interface StoryCursor {
   readonly consumeClaimReacquisitionDirection: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorDirectsTaskClaimReacquisition.Type>
   >
+  readonly consumeAttemptChoiceRace: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorRacesContinueAndStop.Type>
+  >
   readonly consumeRunCoordinator: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.RunCoordinator.Type,
     CursorFailure
@@ -335,6 +338,18 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(yield* Schema.decodeUnknownEffect(AuthoredAttemptChoiceItem)(claimed.item).pipe(Effect.orDie))
   })
+  const consumeAttemptChoiceRace = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorRacesContinueAndStop.Type =>
+        item?._tag === "OperatorRacesContinueAndStop"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorRacesContinueAndStop)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
+  })
   const consumeControlDirection = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type =>
@@ -469,6 +484,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeAdmittedContinuationExecutorIntentHold,
     consumeCoordinatorActivationReturned,
     consumeAttemptChoice,
+    consumeAttemptChoiceRace,
     consumeCapacityChange,
     consumeControlDirection,
     consumeControlDirectionFailure,

@@ -322,71 +322,87 @@ export const controlledExecutorLayer = (
   cursor: StoryCursor,
   runId: RunId,
   beforeExecutorReport: Effect.Effect<void> = Effect.void,
-  survivingReports?: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>
-) =>
-  Layer.effect(
-    PlannedAttemptExecutor,
-    Effect.gen(function* () {
-      const reports =
-        survivingReports ?? (yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()))
-      const consume = Effect.fn("AuthoredCassette.PlannedAttemptExecutor.consume")(function* (
-        request: "StartOrContinue" | "Suspend",
-        plannedAttempt: PlannedTaskAttempt
-      ) {
-        yield* beforeExecutorReport
-        yield* cursor.pauseAtCoordinatorProcessDeath
-        const item = yield* cursor.consumeExecutorReport.pipe(
-          Effect.mapError(
-            (failure) =>
-              new ControlledFakeExecutorMismatch({
-                detail:
-                  `${failure._tag} at story position ${failure.storyPosition}: ` +
-                  `expected ${failure.expected}, received ${failure.actual}`
-              })
-          )
-        )
-        const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-        if (item.request !== request || item.report.attemptId !== correlation.attemptId) {
-          return yield* new ControlledFakeExecutorMismatch({
-            detail: `authored executor expected ${item.request} for ${item.report.attemptId}, received ${request} for ${correlation.attemptId}`
+  survivingReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
+  unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>
+) => {
+  const reports = survivingReports
+  const consume = Effect.fn("AuthoredCassette.PlannedAttemptExecutor.consume")(function* (
+    request: "StartOrContinue" | "Suspend",
+    plannedAttempt: PlannedTaskAttempt
+  ) {
+    yield* beforeExecutorReport
+    yield* cursor.pauseAtCoordinatorProcessDeath
+    const item = yield* cursor.consumeExecutorReport.pipe(
+      Effect.mapError(
+        (failure) =>
+          new ControlledFakeExecutorMismatch({
+            detail:
+              `${failure._tag} at story position ${failure.storyPosition}: ` +
+              `expected ${failure.expected}, received ${failure.actual} while handling ${request}`
           })
-        }
-        const report = executorReport(item, runId)
-        yield* Ref.update(
-          reports,
-          (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
-        )
-        if (item._tag === "PlannedAttemptExecutorResponseLost") {
-          yield* cursor.pauseAtCoordinatorProcessDeath
-          return yield* Effect.never
-        }
-        return report
+      )
+    )
+    const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+    if (item.request !== request || item.report.attemptId !== correlation.attemptId) {
+      return yield* new ControlledFakeExecutorMismatch({
+        detail: `authored executor expected ${item.request} for ${item.report.attemptId}, received ${request} for ${correlation.attemptId}`
       })
-      return PlannedAttemptExecutor.of({
-        project: (correlation) =>
-          Effect.gen(function* () {
-            const projection = yield* cursor.consumeExecutorProjection
-            if (Option.isSome(projection)) {
-              if (projection.value.report.attemptId !== correlation.attemptId) {
-                return yield* Effect.die(
-                  new Error(
-                    `authored executor projection expected ${projection.value.report.attemptId}, received ${correlation.attemptId}`
-                  )
+    }
+    const report = executorReport(item, runId)
+    yield* Ref.update(
+      reports,
+      (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
+    )
+    if (item._tag === "PlannedAttemptExecutorResponseLost") {
+      yield* Ref.update(unresolvedLostResponses, (current) =>
+        new Set(current).add(plannedAttemptExecutorCorrelationKey(correlation))
+      )
+      yield* cursor.pauseAtCoordinatorProcessDeath
+      return yield* Effect.never
+    }
+    return report
+  })
+  return Layer.succeed(
+    PlannedAttemptExecutor,
+    PlannedAttemptExecutor.of({
+      project: (correlation) =>
+        Effect.gen(function* () {
+          const projection = yield* cursor.consumeExecutorProjection
+          if (Option.isNone(projection)) {
+            const unresolved = yield* Ref.get(unresolvedLostResponses)
+            if (unresolved.has(plannedAttemptExecutorCorrelationKey(correlation))) {
+              return yield* Effect.die(
+                new Error(
+                  `authored executor projection for unresolved ${correlation.attemptId} requires an explicit return`
                 )
-              }
-              const projectedReport = executorReport(projection.value, runId)
-              yield* Ref.update(
-                reports,
-                (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), projectedReport]])
               )
             }
             return Option.fromUndefinedOr(
               (yield* Ref.get(reports)).get(plannedAttemptExecutorCorrelationKey(correlation))
             )
-          }),
-        /* v8 ignore next -- Live Pause/Suspend production behavior is outside issue 170's maintained singleton. */
-        requestSuspension: (plannedAttempt) => consume("Suspend", plannedAttempt),
-        startOrContinue: (plannedAttempt) => consume("StartOrContinue", plannedAttempt)
-      })
+          }
+          if (projection.value.report.attemptId !== correlation.attemptId) {
+            return yield* Effect.die(
+              new Error(
+                `authored executor projection expected ${projection.value.report.attemptId}, received ${correlation.attemptId}`
+              )
+            )
+          }
+          const projectedReport = executorReport(projection.value, runId)
+          yield* Ref.update(
+            reports,
+            (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), projectedReport]])
+          )
+          yield* Ref.update(unresolvedLostResponses, (current) => {
+            const next = new Set(current)
+            next.delete(plannedAttemptExecutorCorrelationKey(correlation))
+            return next
+          })
+          return Option.some(projectedReport)
+        }),
+      /* v8 ignore next -- Live Pause/Suspend production behavior is outside issue 170's maintained singleton. */
+      requestSuspension: (plannedAttempt) => consume("Suspend", plannedAttempt),
+      startOrContinue: (plannedAttempt) => consume("StartOrContinue", plannedAttempt)
     })
   )
+}
