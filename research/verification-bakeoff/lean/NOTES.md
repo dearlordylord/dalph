@@ -173,6 +173,16 @@ The transition is a separately authored port of `fastcheck/journal.mjs`, not a
 machine-checked translation. `../LEARNING.md` keeps that correspondence
 boundary explicit.
 
+`JournalRefinement.lean` adds a different boundary: `StateRefines` explicitly
+compares the historical L2 fields with the state reconstructed by the Lean
+journal fold. `EmissionProgress` represents an in-flight output batch, so the
+claim-intent crash prefix is proved to be part of an actual L2 emission rather
+than merely an arbitrary list that happens to fold. The completed suffix
+refines the actual claim successor, and the regional theorem relates B's
+emitted successor while A carries additional journal-only failure evidence.
+`JournalRefinementMutants.lean` must reject resetting the prefix, leaking A's
+failure to B, and leaving the completed emission at its source state.
+
 ## Liveness: statable, and a different development
 
 I17–I19 are expressible here, unlike in Dafny, but nothing in `L2.lean` is

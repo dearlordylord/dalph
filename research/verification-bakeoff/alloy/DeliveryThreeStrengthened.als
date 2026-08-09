@@ -55,7 +55,9 @@ pred observeArrival[t : Task, b : lone Task] {
   t not in Present and t.phase = NoObligation
   b != t and Sys.arrivalsRemaining > 0
   phase' = phase and attemptId' = attemptId and work' = work
-  blocker' = blocker ++ (t -> b)
+  // `b` is lone. Remove the old domain entry first so `none` really clears
+  // an observed blocker, matching Quint's `Set()` blocker observation.
+  blocker' = (blocker - (t -> Task)) + (t -> b)
   Present' = Present + t and Opened' = Opened + t
   RetainedWithReason' = RetainedWithReason - t
   Failed' = Failed - t and Contradicted' = Contradicted - t
@@ -64,7 +66,7 @@ pred observeArrival[t : Task, b : lone Task] {
 
 pred observeBlockers[t : Task, b : lone Task] {
   t in Present and b != t and t.blocker != b
-  blocker' = blocker ++ (t -> b)
+  blocker' = (blocker - (t -> Task)) + (t -> b)
   phase' = phase and attemptId' = attemptId and work' = work
   setsUnchanged and Sys.arrivalsRemaining' = Sys.arrivalsRemaining
 }

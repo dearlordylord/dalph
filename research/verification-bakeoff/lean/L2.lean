@@ -557,6 +557,15 @@ structure EmittedStep (s s' : St) (events : List Journal.Event) : Prop where
   transition : Step s s'
   emission : Emission transition events
 
+/-- A realizable prefix of one emitted transition. The L2 transition remains
+    in flight until `remaining` is appended; therefore a coordinator crash may
+    retain `emitted` without pretending that the atomic L2 successor already
+    occurred. -/
+structure EmissionProgress (s s' : St)
+    (emitted remaining : List Journal.Event) : Prop where
+  transition : Step s s'
+  emission : Emission transition (emitted ++ remaining)
+
 theorem EmittedStep.erases {s s' : St} {events : List Journal.Event}
     (emitted : EmittedStep s s' events) : Step s s' :=
   emitted.transition

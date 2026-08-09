@@ -41,12 +41,16 @@ tlaplus/run-liveness.sh --small       # I17-I19, one task
 tlaplus/run-liveness.sh               # I17-I19, two tasks; I18 does not finish
 tlaplus/run-liveness.sh --lasso       # is the suspend/resume lasso a bug or a missing hypothesis?
 tlaplus/run-liveness.sh --arrival     # I19 when new work keeps arriving; neither verdict is usable
+TIMEOUT=180 tlaplus/run-liveness.sh --three-safety # n=3 safety, fails without a verdict
+ALLOW_NO_VERDICT=1 TIMEOUT=30 tlaplus/run-liveness.sh --three # bounded n=3 temporal measurements
 node fastcheck/liveness.mjs           # bounded liveness surrogate, and its witnesses
 node fastcheck/liveness.mjs --no-abandon   # the negative control that fails to fire
 node fastcheck/journal-run.mjs        # the I15 fold: four propositions + negative controls
 alloy/run.sh                          # relational structure search, seconds
 alloy/run.sh DeliveryL2.als           # the protocol, temporal + inductiveness
 alloy/run.sh DeliveryLiveness.als     # I17-I19, all three, ~131s
+alloy/run-three.sh --induction       # n=3 strengthened induction + two controls
+ALLOW_NO_VERDICT=1 alloy/run-three.sh # n=3 induction + bounded safety/liveness measurements
 dafny/run.sh                          # verified code, seconds
 lean/run.sh                           # proofs, seconds
 agda/run.sh                           # --safe proofs + journal mutants, seconds
@@ -88,6 +92,11 @@ re-run results), with four caveats a fresh session should know:
 Each `run.sh` checks the faithful encoding *and* confirms the seeded defects are
 rejected. The second half is not optional: a tool that accepts the mutants has
 proved nothing about the faithful one.
+
+`ALLOW_NO_VERDICT=1` is deliberately visible on the two n=3 measurement
+commands. Without it, a timeout or missing checker verdict exits nonzero. With
+it, exit zero means the bounded measurements were rendered; rows saying `no
+verdict` remain inconclusive and are never proof evidence.
 
 ## Relationship to the production models
 

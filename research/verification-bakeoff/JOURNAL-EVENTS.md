@@ -224,15 +224,19 @@ silently. No model in this study reaches either function.
 
 ## Why this is more than a fifth L1 property
 
-L1 and L2 are currently two unconnected exercises. The homomorphism is the
-bridge: it makes L2's `recover` action *equal to* folding the journal rather
-than a hand-written reconstruction that happens to look right. That would be the
-first refinement claim in the study.
+L1 and L2 began as two unconnected exercises. Homomorphism alone does not
+connect them: a projection relation must also state which folded L1 fields
+correspond to an L2 state, and an emitted transition must preserve it.
 
 `lean/L2.lean` now gives every existing L2 `Step` constructor a
 state-parameterized event batch and proves the extension conservative in both
 directions; invalid retained input uses a distinct contradiction-emission
 relation rather than masquerading as a successful step.
-`lean/JournalRefinement.lean` folds those actual emissions for the accepted
-claim-prefix and regional/shared-failure scenarios, without adding a journal
-variable to TLC.
+`lean/JournalRefinement.lean` defines that projection explicitly. It proves the
+accepted claim prefix is a realizable prefix of an actual emitted transition,
+that the completed fold refines the transition's L2 successor, and that A's
+local contradiction does not prevent B's emitted successor from being
+reconstructed. Three separately attributed false refinement claims must be
+rejected by Lean. This scenario-scoped L2→L1 result adds no journal variable to
+TLC and is distinct from the still-unproved cross-language equivalence between
+the JavaScript and prover ports.

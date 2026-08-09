@@ -27,7 +27,7 @@ start=$SECONDS
 out_l1=$("$LEAN" L1.lean 2>&1); code_l1=$?
 out_journal=$("$LEAN" -o Journal.olean Journal.lean 2>&1); code_journal=$?
 out_l2=$(LEAN_PATH="$PWD" "$LEAN" -o L2.olean L2.lean 2>&1); code_l2=$?
-out_refinement=$(LEAN_PATH="$PWD" "$LEAN" JournalRefinement.lean 2>&1); code_refinement=$?
+out_refinement=$(LEAN_PATH="$PWD" "$LEAN" -o JournalRefinement.olean JournalRefinement.lean 2>&1); code_refinement=$?
 out_events=$(LEAN_PATH="$PWD" "$LEAN" JournalEvents.generated.lean 2>&1); code_events=$?
 secs=$((SECONDS - start))
 if [[ $code_l1 == 0 && $code_l2 == 0 && $code_journal == 0 && $code_refinement == 0 && $code_events == 0 ]]; then
@@ -52,7 +52,7 @@ for theorem in selectM1_bounded retentionM2 selectReversed_prefix; do
   first=$(grep -n "^theorem $theorem" L1Mutants.lean | cut -d: -f1)
   # The mutant's range ends at the next doc comment (the next mutant) or `end`.
   last=$(awk -v s="$first" 'NR > s && (/^\/--/ || /^end /) { print NR; exit }' L1Mutants.lean)
-  last=${last:-$(wc -l < L1Mutants.lean)}
+  last=${last:-$(( $(wc -l < L1Mutants.lean) + 1 ))}
   hits=$(grep -E '^L1Mutants\.lean:[0-9]+:[0-9]+: error' <<<"$out" \
          | cut -d: -f2 | awk -v lo="$first" -v hi="$last" '$1 >= lo && $1 < hi' | wc -l)
   if [[ $hits -gt 0 ]]; then
@@ -67,6 +67,32 @@ echo "| L1Mutants.lean | 3 rejections | $verdict | $secs |"
 
 echo ""
 grep -E '^L1Mutants\.lean:[0-9]+:[0-9]+: error' <<<"$out" | cut -c1-110 | sed 's/^/    /'
+
+# #200 refinement controls: the concrete projection must reject losing the
+# pending prefix, leaking A's failure into B, and retaining the L2 source after
+# the completed claim emission.
+start=$SECONDS
+out=$(LEAN_PATH="$PWD" "$LEAN" JournalRefinementMutants.lean 2>&1)
+secs=$((SECONDS - start))
+
+rejected=0
+detail=""
+for theorem in resetPendingAtCrashMutant crossRegionFailureWriteMutant completedEmissionKeepsSourceMutant; do
+  first=$(grep -n "^theorem $theorem" JournalRefinementMutants.lean | cut -d: -f1)
+  last=$(awk -v s="$first" 'NR > s && (/^\/--/ || /^end /) { print NR; exit }' JournalRefinementMutants.lean)
+  last=${last:-$(( $(wc -l < JournalRefinementMutants.lean) + 1 ))}
+  hits=$(grep -E '^JournalRefinementMutants\.lean:[0-9]+:[0-9]+: error' <<<"$out" \
+         | cut -d: -f2 | awk -v lo="$first" -v hi="$last" '$1 >= lo && $1 < hi' | wc -l)
+  if [[ $hits -gt 0 ]]; then rejected=$((rejected + 1))
+  else detail="$detail **$theorem not rejected**"; fi
+done
+verdict=$([[ $rejected == 3 ]] && echo "3 rejected" || echo "**only $rejected/3 rejected:$detail**")
+[[ $rejected == 3 ]] || FAIL=1
+echo "| JournalRefinementMutants.lean | 3 rejections | $verdict | $secs |"
+
+echo ""
+grep -E '^JournalRefinementMutants\.lean:[0-9]+:[0-9]+: error' <<<"$out" \
+  | cut -c1-125 | sed 's/^/    /'
 
 echo ""
 LEAN="$LEAN" node ../prover-mutants.mjs lean || FAIL=1

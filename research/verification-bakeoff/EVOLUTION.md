@@ -53,12 +53,19 @@ Quint 0.32.0 on Linux aarch64:
 
 ```sh
 node research/verification-bakeoff/quint/run-evolution.mjs
-research/verification-bakeoff/alloy/run-three.sh
-TIMEOUT=30 research/verification-bakeoff/tlaplus/run-liveness.sh --three
+research/verification-bakeoff/lean/run.sh
+TIMEOUT=180 research/verification-bakeoff/tlaplus/run-liveness.sh --three-safety
+research/verification-bakeoff/alloy/run-three.sh --induction
+ALLOW_NO_VERDICT=1 research/verification-bakeoff/alloy/run-three.sh
+ALLOW_NO_VERDICT=1 TIMEOUT=30 research/verification-bakeoff/tlaplus/run-liveness.sh --three
 ```
 
-The harness treats a timeout, missing verdict marker, unexpectedly passing
-mutant, or zero-witness run as failure.
+The proof runners treat a timeout, missing verdict marker, wrong SAT/UNSAT
+result, unexpectedly passing mutant, or zero-witness run as failure. The two
+commands with `ALLOW_NO_VERDICT=1` are explicitly bounded measurement runs:
+their zero exit status means every measurement was attempted and rendered, not
+that an inconclusive property was proved. Without that opt-in, either runner
+exits nonzero on every timeout or missing verdict.
 
 ## #198 — finite work preserved through suspension
 
@@ -129,6 +136,7 @@ The focused Quint model adds two checker-sensitive defects:
 | A, B, C are open under capacity 2 | exactly A and B are selected; C waits behind their lower ranks | `threeTaskSelectionRespectsRankAndCapacityTest`; rank-reversal mutant 5 is rejected |
 | A records a local contradiction while B continues | only A is failed, B advances work, C remains selected under rank/capacity, and the shared run state is unchanged | `failedAIsContainedWhileBContinuesTest`; failure-leak mutant 6 is rejected |
 | The complete strengthened invariant must be inductive before reachability/liveness claims | Alloy symbolically checks the full blocker, arrival, progress, suspension, settlement, recycle, rank, and regional-failure transition relation at exactly three tasks; reversed-rank and cross-region-leak controls each produce a counterexample | `strengthenedInvIsInductiveThree` is UNSAT and both mutation checks are SAT in `alloy/DeliveryThreeStrengthened.als` |
+| Run three-task safety in the hand-authored TLC engine | TLC receives the same ten named safety invariants under `Tasks <- ThreeTasks`; completion is reported as `holds`, while timeout, invariant violation, or malformed output is never a pass | the `AllInvariants safety` row from `tlaplus/run-liveness.sh --three`: 5,292,288 distinct states, no violation |
 | Attempt I17–I19 at three tasks | every timeout or checker failure is reported as no verdict | `tlaplus/run-liveness.sh --three`; the three temporal checks in `alloy/DeliveryThree.als` |
 
 ### Measurements
@@ -141,14 +149,18 @@ The focused Quint model adds two checker-sensitive defects:
 - Quint/Apalache induction: no verdict because expanding the explicit set of
   task maps would blow up the solver. This is why Alloy is the prerequisite
   induction instrument here.
-- Alloy strengthened induction: UNSAT in under one second; its rank and
+- Alloy strengthened induction after correcting empty blocker observations to
+  remove the prior blocker relation: UNSAT in one second; its rank and
   failure-leak controls are SAT in under one second. Reachable safety had no
   verdict in 60 seconds. I17, I18, I19, and the fair-trace witness each had no verdict
   in 30 seconds under exactly three tasks.
-- Hand-authored TLA+/TLC I17–I19: no verdict. TLC 2.19 throws
+- Hand-authored TLA+/TLC safety: the exact three-task run completed 5,292,288
+  distinct states in 70 seconds with no invariant violation under a 180-second
+  budget. Hand-authored I17–I19 still have no verdict; TLC 2.19 throws
   `NegativeArraySizeException` while constructing the three-task liveness
-  checker, before it can enumerate a state. The harness reports that error as
-  no verdict rather than pass.
+  checker, before it can enumerate a state. The harness reports those temporal
+  outcomes as no verdict and exits nonzero unless measurement mode is
+  explicitly chosen.
 
 ## #200 — emitted journal refinement
 
@@ -167,29 +179,37 @@ and one compiling 23-constructor witness file for each prover. The prover
 runners reject stale output and compile those witnesses. A changed tag,
 payload arity/order, or wrapper therefore makes the consumers move together.
 
-`lean/L2.lean` attaches a state-parameterized event batch to every constructor of its
-existing `Step` relation. `Step.hasEmission` proves every old transition has
-output; `EmittedStep.erases` proves output cannot invent a transition. Thus
-emission conservatively extends the existing L2 behavior instead of replacing
-it with the L1 reducer. Structurally invalid retained input has a separate
-`ContradictionEmission`, so corruption is not mislabeled as a successful
-lifecycle step. `JournalRefinement.lean` folds those actual emissions for the
-accepted scenarios, including A's contradiction and B's progress from one
-concrete L2 state.
+`lean/L2.lean` attaches a state-parameterized event batch to every constructor
+of its existing `Step` relation. `Step.hasEmission` proves every old transition
+has output; `EmittedStep.erases` proves output cannot invent a transition.
+`EmissionProgress` identifies an emitted prefix and remaining suffix of one
+actual transition without claiming its successor occurred early.
+
+`JournalRefinement.lean` defines `StateRefines`, an explicit projection from
+the journal reconstruction to every historical L2 field represented there.
+The claim theorem relates the actual emitted transition's source, realizable
+intent prefix, completed fold, and L2 successor through that relation. The
+regional theorem starts A's contradictory input and B's actual emitted step
+from one related state, then proves the folded result still refines B's L2
+successor while only A carries a failure. Structurally invalid input remains a
+separate `ContradictionEmission`, so corruption is not mislabeled as a
+successful lifecycle step.
 
 ### Scenario-to-test mapping
 
 | Accepted scenario | Concrete result | Executable evidence |
 |---|---|---|
-| A claim intent is retained when the coordinator dies before the tracker result; appending the reread equals resuming the prefix | the prefix has `claimPending = true`; uninterrupted and resumed folds are equal | Lean `crash_prefix_retains_claim_intent` and `intent_outcome_resume_refinement`; fast-check directed P2 witness; reset-on-resume mutant M2 is caught |
-| A fails locally while B progresses; a shared contradiction fails the Run | A has a failure, B reaches `Claimed`, and the Run remains live; an event naming an unknown task fails the Run | Lean `regional_failure_is_contained` and `shared_failure_fails_run`; P3 theorem and cross-region-write mutants in every prover |
+| A claim intent is retained when the coordinator dies before the tracker result; appending the reread equals resuming the prefix | the prefix is proved to belong to an actual acquire-claim emission, has `claimPending = true`, and its suffix reconstructs the emitted transition's L2 successor | Lean `claim_intent_is_realizable_emission_prefix`, `claim_emission_fold_refines_l2_successor`, and `intent_crash_outcome_refinement`; `resetPendingAtCrashMutant` and `completedEmissionKeepsSourceMutant` are rejected |
+| A fails locally while B progresses; a shared contradiction fails the Run | the final journal state refines B's actual emitted L2 successor, only A fails, and the Run remains live; an unknown-task emission instead fails the Run | Lean `regional_failure_refines_emitted_b_successor` and `shared_failure_refinement`; `crossRegionFailureWriteMutant` plus the general P3 mutants are rejected |
 | All 23 JavaScript/prover consumers share one alphabet | generated constructor witnesses compile in Lean, Agda, and Dafny; JavaScript constructors come from the manifest | `generate-journal-events.mjs --check`, each prover `run.sh`, and exhaustive-classifier mutants |
 
 ### Measurement and interpretation
 
 Lean 4.32.2 checks the journal, existing L2 relation plus conservative
-emission proofs, scenario refinement, and generated witness. The refinement
-adds no TLC state variable and therefore has no state-space cost.
+emission/prefix proofs, explicit projection refinement, and generated witness.
+`JournalRefinementMutants.lean` seeds three false correspondence claims and the
+runner requires Lean to reject each separately. The refinement adds no TLC
+state variable and therefore has no state-space cost.
 
 ## #201 — fail-closed temporal production gate
 

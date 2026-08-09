@@ -24,8 +24,11 @@ level. Read `JOURNAL-EVENTS.md` and `LEARNING.md`, then compare
 `lean/Journal.lean`, `agda/Journal.agda`, `dafny/Journal.dfy`, and
 `fastcheck/journal-run.mjs`. Those files separate two claims that are easy to
 blur: the provers establish universal fold algebra for a typed local/shared
-kernel, while fast-check exercises the concrete event guards. No artifact yet
-proves refinement between those two semantics.
+kernel, while fast-check exercises the concrete event guards. Lean's
+`JournalRefinement.lean` additionally proves the accepted L2 claim/crash and
+regional-failure projections through the concrete Lean fold. No artifact
+proves that the separately authored JavaScript and prover interpreters are
+identical for all inputs.
 
 ## Proposition 1 — the bound (I1)
 

@@ -70,8 +70,14 @@ cross-language mapping table, and compiling 23-constructor witnesses for Lean,
 Agda, and Dafny. The prover guards/effects remain authored proof code—the
 generator does not pretend their semantics are definitionally equal. Lean adds
 state-parameterized event batches to every constructor of the pre-existing L2
-relation, proves the extension conservative in both directions, and proves the accepted
-claim-prefix and failure-attribution projections through the concrete L1 fold.
+relation and proves the extension conservative in both directions. Its
+separate `StateRefines` relation then connects the accepted claim-prefix and
+failure-attribution emissions to the concrete L1 fold and actual L2 successor.
+`EmissionProgress` proves the crash prefix belongs to the emitted transition
+instead of assuming an arbitrary list prefix is realizable; three
+refinement-specific false claims are checker-rejected. This is a
+scenario-scoped L2→L1 result, not a proof that the separately authored
+JavaScript and prover interpreters are identical for all inputs.
 
 ## What each checker gives away
 

@@ -450,8 +450,11 @@ interaction carries the exact `RunId` and `AttemptId`) is absent from all seven
 L1/L2 encodings; `oneAttemptPerTask` counts attempts and never names one. I15
 was absent when this audit was written, but the follow-up now gives its pure
 journal fold a concrete fast-check model plus Lean, Agda, and Dafny proofs.
-That follow-up proves reconstruction laws, not append-only storage behavior or
-an L1↔L2 refinement, so those claims remain outside the result.
+The later #200 work additionally proves the accepted claim/crash and regional
+Lean L2→L1 projections through an explicit relation. It does not prove
+append-only storage behavior, universal refinement for every L2 transition, or
+cross-language equivalence of the separately authored JavaScript/prover ports;
+those broader claims remain outside the result.
 
 **Two more are in exactly one.** I11 and I12 exist only in `alloy/Delivery.als`
 — and I11 only became a result during this audit, having been a `P implies P`
