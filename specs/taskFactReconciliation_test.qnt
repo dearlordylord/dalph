@@ -91,6 +91,7 @@ module taskFactReconciliationTest {
 
   run continueReadsEveryFreshAuthorityAndResumesOnlyPTest = {
     init
+      .then(observeF2Change)
       .then(applyContinueF2)
       .then(readFreshExactGraph)
       .then(readFreshExactSpecification)
@@ -113,6 +114,7 @@ module taskFactReconciliationTest {
 
   run fingerprintF3RequiresNewChoiceBeforeContinuationTest = {
     init
+      .then(observeF2Change)
       .then(applyContinueF2)
       .then(readFreshExactGraph)
       .then(observeF3BeforeContinuation)
@@ -141,6 +143,7 @@ module taskFactReconciliationTest {
     init
       .then(rejectRunMismatchedRequest)
       .expect(state.lastControlResult == RequestRunBindingMismatch)
+      .then(observeF2Change)
       .then(applyContinueF2)
       .then(rejectPersistedRequestContentReuse)
       .expect(and {
@@ -153,6 +156,7 @@ module taskFactReconciliationTest {
 
   run exactRedeliveryCoalescesWithoutAnotherChoiceTest = {
     init
+      .then(observeF2Change)
       .then(applyContinueF2)
       .then(redeliverExactF2Choice)
       .expect(and {
@@ -164,6 +168,7 @@ module taskFactReconciliationTest {
 
   run continueWinsFirstJournaledChoiceRaceTest = {
     init
+      .then(observeF2Change)
       .then(applyContinueF2)
       .then(rejectLosingF2Choice)
       .expect(and {
@@ -176,6 +181,7 @@ module taskFactReconciliationTest {
 
   run stopWinsFirstJournaledChoiceRaceTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(rejectLosingF2Choice)
       .expect(and {
@@ -190,6 +196,7 @@ module taskFactReconciliationTest {
     init
       .then(observeExactTerminal)
       .then(beginIntegration)
+      .then(observeF2Change)
       .then(rejectStopPastIntegrationCutoff)
       .expect(and {
         state.lastControlResult == ChoiceOutsidePreIntegration,
@@ -202,6 +209,7 @@ module taskFactReconciliationTest {
   run retainedSafeProofStopsWithoutHoldingPositionTest = {
     init
       .expect(not(state.positionHeld))
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .expect(and {
@@ -215,10 +223,16 @@ module taskFactReconciliationTest {
       })
   }
 
-  run retainedExactTerminalProofCanStopBeforeCutoffTest = {
+  run terminalAfterAppliedStopCanProveStoppageTest = {
     init
-      .then(observeExactTerminal)
+      .then(observeF2Change)
       .then(applyStopF2)
+      .then(requireStoppageReconciliation)
+      .then(recordStoppageIntent)
+      .then(callStoppage)
+      .then(loseStoppageResponse)
+      .then(recoverStopActivation)
+      .then(projectExactTerminalForStoppage)
       .then(abandonImplementation)
       .expect(and {
         state.executorEvidence == ExactTerminal,
@@ -228,17 +242,26 @@ module taskFactReconciliationTest {
       })
   }
 
+  run terminalObservationAloneExposesNeitherChoiceTest = {
+    init
+      .then(observeF2Change)
+      .then(observeExactTerminal)
+      .expect(terminalObservationAloneExposesNoChoice)
+  }
+
   run projectedRunningSettlesIntentButNeverProvesQuiescenceTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(requireStoppageReconciliation)
       .then(recordStoppageIntent)
       .then(callStoppage)
       .then(loseStoppageResponse)
+      .then(recoverStopActivation)
       .then(projectExactRunningForStoppage)
       .expect(and {
         state.stopCommandSettlementCount == 1,
-        state.lastSettledStopCommandOrdinal == 1,
+        state.lastSettledStopCommandOrdinal == 2,
         state.stopStage == NeedQuiescence,
         state.implementationResponsibilityRetained,
         state.positionHeld,
@@ -259,21 +282,23 @@ module taskFactReconciliationTest {
 
   run threeRunningStoppageCallsStillAllowLaterReadOnlySafeProofTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(requireStoppageReconciliation)
       .then(recordStoppageIntent)
       .then(callStoppage)
       .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
       .then(recoverStopActivation)
+      .then(projectExactRunningForStoppage)
       .then(recordStoppageIntent)
       .then(callStoppage)
       .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
       .then(recoverStopActivation)
+      .then(projectExactRunningForStoppage)
       .then(recordStoppageIntent)
       .then(callStoppage)
       .then(loseStoppageResponse)
+      .then(recoverStopActivation)
       .then(projectExactRunningForStoppage)
       .expect(and {
         state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
@@ -282,7 +307,6 @@ module taskFactReconciliationTest {
       })
       .then(recoverStopActivation)
       .then(projectReadOnlyExactSafeAfterStoppageLimit)
-      .then(abandonImplementation)
       .expect(and {
         not(state.implementationResponsibilityRetained),
         not(state.positionHeld),
@@ -292,6 +316,7 @@ module taskFactReconciliationTest {
 
   run stopReleasesOnlyFreshlyConfirmedExactClaimTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(observeExactClaim)
@@ -308,6 +333,7 @@ module taskFactReconciliationTest {
 
   run stoppedAttemptLeavesAbsentClaimUnchangedTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(observeAbsentClaim)
@@ -320,6 +346,7 @@ module taskFactReconciliationTest {
 
   run stoppedAttemptLeavesForeignClaimUnchangedAndBProgressesTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(selectIndependentTaskB)
@@ -335,6 +362,7 @@ module taskFactReconciliationTest {
 
   run unreadableClaimRetainsSeparateResponsibilityAcrossBoundedRecoveryTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(observeUnreadableClaim)
@@ -357,6 +385,7 @@ module taskFactReconciliationTest {
 
   run ambiguousClaimReleaseReconcilesBeforeBoundedRetryTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(observeExactClaim)
@@ -364,6 +393,7 @@ module taskFactReconciliationTest {
       .then(loseClaimReleaseResponse)
       .then(projectClaimStillExact)
       .then(recoverClaimActivation)
+      .then(observeExactClaim)
       .then(releaseExactClaim)
       .expect(and {
         state.claimReleaseCallCount == 2,
@@ -375,6 +405,7 @@ module taskFactReconciliationTest {
 
   run lostClaimReleaseResponseCanProjectExactReleaseTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(observeExactClaim)
@@ -389,8 +420,9 @@ module taskFactReconciliationTest {
       })
   }
 
-  run claimReleaseCallsStopAtThreeAcrossLaterActivationsTest = {
+  run lostExactAuthorizedReleaseCanLaterObserveAbsentWithoutMutationTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(observeExactClaim)
@@ -398,9 +430,30 @@ module taskFactReconciliationTest {
       .then(loseClaimReleaseResponse)
       .then(projectClaimStillExact)
       .then(recoverClaimActivation)
+      .then(observeAbsentClaim)
+      .expect(and {
+        state.claimResult == NoReleaseAbsent,
+        state.claimReleaseCallCount == 1,
+        state.claimReleaseCallCountAtNonExactObservation == 1,
+        absentForeignUnreadableClaimsAreNeverMutated,
+      })
+  }
+
+  run claimReleaseCallsStopAtThreeAcrossLaterActivationsTest = {
+    init
+      .then(observeF2Change)
+      .then(applyStopF2)
+      .then(abandonImplementation)
+      .then(observeExactClaim)
+      .then(recordClaimReleaseIntent)
       .then(loseClaimReleaseResponse)
       .then(projectClaimStillExact)
       .then(recoverClaimActivation)
+      .then(observeExactClaim)
+      .then(loseClaimReleaseResponse)
+      .then(projectClaimStillExact)
+      .then(recoverClaimActivation)
+      .then(observeExactClaim)
       .then(loseClaimReleaseResponse)
       .then(projectClaimStillExact)
       .expect(and {

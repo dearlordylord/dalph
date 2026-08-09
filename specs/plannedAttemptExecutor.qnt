@@ -117,7 +117,6 @@ module plannedAttemptExecutor {
     commandResponseSettlementCount: int,
     reconciliationProjectionsThisActivation: int,
     recoveryCount: int,
-    postSuspendLimitReadOnlyRecoveryAvailable: bool,
     responseAmbiguous: bool,
     lastSettlement: LastSettlement,
     lastAction: ActionTag,
@@ -479,7 +478,7 @@ module plannedAttemptExecutor {
       or not(isNoCommand(state.commandState))
       or state.evidence != NoEvidence
       or state.reconciliationProjectionsThisActivation != 1
-      or state.postSuspendLimitReadOnlyRecoveryAvailable
+      or state.recoveryCount <= RECOVERY_LIMIT
 
   // Running or unavailable current-state evidence cannot prove quiescence.
   // Safe suspension and terminal status are the only active-responsibility
@@ -576,7 +575,6 @@ module plannedAttemptExecutor {
       commandResponseSettlementCount: 0,
       reconciliationProjectionsThisActivation: 0,
       recoveryCount: 0,
-      postSuspendLimitReadOnlyRecoveryAvailable: true,
       responseAmbiguous: false,
       lastSettlement: NoSettlement,
       lastAction: InitializedAction,
@@ -695,6 +693,10 @@ module plannedAttemptExecutor {
 
   action recordFreshStateProjection(observation: ExecutorStateObservation): bool = all {
     canRecordFreshStateProjection(state),
+    state.suspendIntentsSinceRunning != SUSPEND_COMMAND_LIMIT
+      or state.recoveryCount < RECOVERY_LIMIT
+      or observation == ExecutorStateSafelySuspended
+      or observation == ExecutorStateTerminal,
     state' = {
       ...state,
       evidence: FreshStateProjection({
@@ -772,15 +774,30 @@ module plannedAttemptExecutor {
   // unmatched command remains durable; after an exact Running settlement, a
   // later activation may instead use a read-only fresh-state projection.
   action recoverActivation: bool = all {
-    (isCalled(state.commandState) and state.responseAmbiguous)
-      or isNoCommand(state.commandState),
-    state.reconciliationProjectionsThisActivation == 1,
+    if (isCalled(state.commandState) and state.responseAmbiguous)
+      if (state.evidence == NoEvidence) state.reconciliationProjectionsThisActivation <= 1
+      else and {
+        isCommandProjectionEvidence(state.evidence),
+        not(commandProjectionIsExact(commandProjectionOf(state.evidence).outcome)),
+      }
+    else
+      and {
+        isNoCommand(state.commandState),
+        state.reconciliationProjectionsThisActivation == 1,
+        state.evidence == NoEvidence
+          or and {
+            isFreshStateProjectionEvidence(state.evidence),
+            freshStateProjectionOf(state.evidence).observation == ExecutorStateRunning
+              or freshStateProjectionOf(state.evidence).observation == ExecutorStateUnavailable,
+          },
+      },
     state.recoveryCount < RECOVERY_LIMIT
       or and {
         state.suspendIntentsSinceRunning == SUSPEND_COMMAND_LIMIT,
         isNoCommand(state.commandState),
         state.evidence == NoEvidence,
-        state.postSuspendLimitReadOnlyRecoveryAvailable,
+        state.reconciliationProjectionsThisActivation == 1,
+        state.recoveryCount == RECOVERY_LIMIT,
       },
     state' = {
       ...state,
@@ -789,10 +806,6 @@ module plannedAttemptExecutor {
       recoveryCount:
         if (state.recoveryCount < RECOVERY_LIMIT) state.recoveryCount + 1
         else state.recoveryCount,
-      postSuspendLimitReadOnlyRecoveryAvailable:
-        if (state.suspendIntentsSinceRunning == SUSPEND_COMMAND_LIMIT
-          and isNoCommand(state.commandState)) false
-        else state.postSuspendLimitReadOnlyRecoveryAvailable,
       lastAction: RecoveryActivatedAction,
     },
   }
@@ -815,6 +828,47 @@ module plannedAttemptExecutor {
       settleCommandResponse,
       settleCommandProjection,
       recoverActivation,
+    }
+  }
+
+  // Executable conformance keeps every boundary outcome but chooses only from
+  // actions enabled by the current durable command/evidence phase. This avoids
+  // spending samples on a large mostly-disabled union.
+  action mbtStep: bool = {
+    nondet report = EXECUTOR_REPORTS.oneOf()
+    nondet commandProjection = COMMAND_PROJECTION_OUTCOMES.oneOf()
+    nondet stateObservation = STATE_OBSERVATIONS.oneOf()
+    any {
+      all { state.status == ResponsibilityNotBegun, any { beginResponsibility } },
+      all { isIntendedKind(state.commandState, StartOrContinueCommand), any { callStartOrContinue } },
+      all { isIntendedKind(state.commandState, SuspendCommand), any { callSuspend } },
+      all {
+        isCalled(state.commandState),
+        state.evidence == NoEvidence,
+        not(state.responseAmbiguous),
+        any { receiveCommandResponse(report), loseCommandResponse },
+      },
+      all {
+        isCalled(state.commandState),
+        state.evidence == NoEvidence,
+        state.responseAmbiguous,
+        any { recordCommandProjection(commandProjection), recoverActivation },
+      },
+      all { isCommandResponseEvidence(state.evidence), any { settleCommandResponse } },
+      all {
+        isCommandProjectionEvidence(state.evidence),
+        any { settleCommandProjection, recoverActivation },
+      },
+      all {
+        isFreshStateProjectionEvidence(state.evidence),
+        any { acceptFreshStateProjectionProof, recoverActivation },
+      },
+      all {
+        isNoCommand(state.commandState),
+        state.evidence == NoEvidence,
+        state.status != ResponsibilityNotBegun,
+        any { recordStartOrContinueIntent, recordSuspendIntent, recordFreshStateProjection(stateObservation) },
+      },
     }
   }
 }
