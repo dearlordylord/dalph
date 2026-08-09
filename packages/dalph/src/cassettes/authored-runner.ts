@@ -119,7 +119,9 @@ const operatorControlFailureMatches = (
 const attemptChoiceFailureReason = (
   failure: unknown
 ): "AlreadyApplied" | "IdentityContradiction" | "NotAvailable" | "OutsidePreIntegrationPhase" | undefined => {
+  /* v8 ignore start -- @preserve AttemptChoiceControl exposes only its closed tagged error union to these callers. */
   if (typeof failure !== "object" || failure === null || !("_tag" in failure)) return undefined
+  /* v8 ignore stop -- @preserve */
   switch (failure._tag) {
     case "AttemptChoiceAlreadyApplied":
       return "AlreadyApplied"
@@ -129,8 +131,10 @@ const attemptChoiceFailureReason = (
       return "NotAvailable"
     case "AttemptChoiceOutsidePreIntegrationPhase":
       return "OutsidePreIntegrationPhase"
+    /* v8 ignore start -- @preserve The closed AttemptChoiceControl failure union is exhausted above. */
     default:
       return undefined
+    /* v8 ignore stop -- @preserve */
   }
 }
 
@@ -145,7 +149,9 @@ const appliedAttemptChoiceMatches = (
   item: AuthoredAttemptChoiceItem,
   result: AttemptChoiceApplicationResult
 ): boolean => {
+  /* v8 ignore start -- @preserve The driver calls this matcher only after selecting an Applied authored result. */
   if (item.expected._tag !== "Applied") return false
+  /* v8 ignore stop -- @preserve */
   if (item._tag === "OperatorContinuesAttempt") return result._tag === "ContinueApplied"
   return result._tag === "StopApplied" && result.status._tag === item.expected.status
 }
@@ -154,7 +160,9 @@ const queriedAttemptChoiceMatches = (
   application: AttemptChoiceApplicationResult,
   queried: AttemptChoiceApplicationResult
 ): boolean => {
+  /* v8 ignore start -- @preserve The immediate journal-derived query must retain the application result's direction tag. */
   if (queried._tag !== application._tag) return false
+  /* v8 ignore stop -- @preserve */
   if (queried._tag !== "StopApplied" || application._tag !== "StopApplied") return true
   return queried.status._tag === application.status._tag
 }
@@ -186,7 +194,9 @@ const coordinatorFinalityMatches = (
   actual: CoordinatorFinalityDecision
 ): boolean => {
   if (expected._tag !== actual._tag) return false
+  /* v8 ignore start -- @preserve Authored activation boundaries separate recoveries that must remain active; terminal runs have no following activation boundary. */
   if (expected._tag === "RunMayTerminate") return true
+  /* v8 ignore stop -- @preserve */
   return actual._tag === "RunMustRemainActive" && expected.reason === actual.reason
 }
 
@@ -335,22 +345,23 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           Ref.get(verificationReports).pipe(
             Effect.flatMap((reports) => {
               const existing = reports.get(request.requestId)
-              return existing === undefined
-                ? cursor.consumeTargetVerificationReturned.pipe(
-                    Effect.mapError(
-                      /* v8 ignore next -- @preserve Maintained verification cassettes supply the declared wrapper return; generic cursor mismatch behavior is tested at the cursor seam. */
-                      (failure) =>
-                        new TargetVerificationBoundaryFailure({
-                          detail: `${failure._tag} at story position ${failure.storyPosition}`,
-                          requestId: request.requestId
-                        })
-                    ),
-                    Effect.map((item) => targetVerificationTerminalFrom(item.result, request)),
-                    Effect.tap((terminal) =>
-                      Ref.update(verificationReports, (current) => new Map(current).set(request.requestId, terminal))
-                    )
-                  )
-                : Effect.succeed(existing)
+              /* v8 ignore start -- @preserve The journaled verification protocol settles its exact request before another delivery can select it; this cache is a fail-safe for an invalid duplicate boundary call. */
+              if (existing !== undefined) return Effect.succeed(existing)
+              /* v8 ignore stop -- @preserve */
+              return cursor.consumeTargetVerificationReturned.pipe(
+                Effect.mapError(
+                  /* v8 ignore next -- @preserve Maintained verification cassettes supply the declared wrapper return; generic cursor mismatch behavior is tested at the cursor seam. */
+                  (failure) =>
+                    new TargetVerificationBoundaryFailure({
+                      detail: `${failure._tag} at story position ${failure.storyPosition}`,
+                      requestId: request.requestId
+                    })
+                ),
+                Effect.map((item) => targetVerificationTerminalFrom(item.result, request)),
+                Effect.tap((terminal) =>
+                  Ref.update(verificationReports, (current) => new Map(current).set(request.requestId, terminal))
+                )
+              )
             })
           )
       })
@@ -409,7 +420,10 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       )
       const activeOperatorControl = yield* Ref.make<
         JournaledRunBootstrap["Service"]["operatorControl"]["applyControlDirection"]
-      >(() => Effect.die("operator control is not installed"))
+      >(
+        /* v8 ignore next -- @preserve The controlled driver starts only after installing the bootstrap operator control. */
+        () => Effect.die("operator control is not installed")
+      )
       const applyNextControlDirection = Effect.gen(function* () {
         const direction = yield* cursor.consumeInFlightExecutorControlDirection
         if (Option.isNone(direction)) return
@@ -659,19 +673,27 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
               result: AttemptChoiceControlResult
             ) {
               if (result._tag !== "Success") {
-                return yield* Effect.die(
-                  new Error(
-                    `authored attempt choice ${item.requestNonce} failed with ${attemptChoiceFailureReason(result.failure) ?? "unexpected failure"}`
+                const reason = attemptChoiceFailureReason(result.failure)
+                /* v8 ignore start -- @preserve AttemptChoiceControl's closed tagged failure union is classified exhaustively. */
+                if (reason === undefined) {
+                  return yield* Effect.die(
+                    new Error(`authored attempt choice ${item.requestNonce} failed with unexpected failure`)
                   )
+                }
+                /* v8 ignore stop -- @preserve */
+                return yield* Effect.die(
+                  new Error(`authored attempt choice ${item.requestNonce} failed with ${reason}`)
                 )
               }
               if (!appliedAttemptChoiceMatches(item, result.success)) {
                 return yield* Effect.die(new Error(`authored attempt-choice result mismatch for ${item.requestNonce}`))
               }
               const queried = yield* bootstrap.operatorControl.readAttemptChoice(requestId)
+              /* v8 ignore start -- @preserve The query is derived from the exact application record written immediately above. */
               if (!queriedAttemptChoiceMatches(result.success, queried)) {
                 return yield* Effect.die(new Error(`authored attempt-choice query mismatch for ${item.requestNonce}`))
               }
+              /* v8 ignore stop -- @preserve */
               if (item._tag === "OperatorStopsAttempt") {
                 yield* Deferred.succeed(admittedContinuationChoiceApplied, undefined)
               }
@@ -700,7 +722,9 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
             }).pipe(Effect.orDie)
             const driveAttemptChoiceRace = Effect.gen(function* () {
               const authored = yield* cursor.consumeAttemptChoiceRace
+              /* v8 ignore start -- @preserve The tag-selected driver runs only while the race item is current. */
               if (Option.isNone(authored)) return
+              /* v8 ignore stop -- @preserve */
               const item = authored.value
               const plannedAttempt = yield* requirePlannedAttempt(item)
               const apply = (choice: "ContinueExistingAttempt" | "StopTaskImplementation", nonce: string) =>
@@ -712,9 +736,11 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
                 ],
                 { concurrency: "unbounded" }
               )
+              /* v8 ignore start -- @preserve Atomic request-key application makes one success and one AlreadyApplied failure exhaustive. */
               if (!attemptChoiceRaceHasOneWinner(results)) {
                 return yield* Effect.die(new Error("authored concurrent Continue/Stop race did not produce one winner"))
               }
+              /* v8 ignore stop -- @preserve */
             }).pipe(Effect.orDie)
             const driveControlDirection = Effect.gen(function* () {
               const direction = yield* cursor.consumeControlDirection
@@ -794,6 +820,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
                 const hold = yield* cursor.consumeAdmittedContinuationExecutorIntentHold
                 if (Option.isSome(hold)) {
                   const expected = hold.value
+                  /* v8 ignore start -- @preserve Hold closure validation places this synchronization only before the exact admitted Continue action. */
                   if (
                     action._tag !== "IdentityFreeAction" ||
                     action.proposal.route._tag !== "IdentityFreeWorkflowRoute" ||
@@ -805,7 +832,9 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
                       )
                     )
                   }
+                  /* v8 ignore stop -- @preserve */
                   const transition = action.proposal.route.transition
+                  /* v8 ignore start -- @preserve Hold closure binds the same exact task and attempt through Stop and the executor outcome. */
                   if (
                     transition.plannedAttempt.attemptId !== expected.attemptId ||
                     transition.plannedAttempt.taskId !== expected.taskId
@@ -816,6 +845,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
                       )
                     )
                   }
+                  /* v8 ignore stop -- @preserve */
                   yield* Deferred.await(admittedContinuationChoiceApplied)
                 }
                 return yield* live.execute(action, lease)

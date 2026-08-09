@@ -671,12 +671,13 @@ const admittedContinuationHoldHasExactStopClosure = Schema.makeFilter(
     if (holdIndexes.length === 0) return undefined
     if (holdIndexes.length !== 1) return "an authored cassette may hold at most one admitted continuation"
     const holdIndex = holdIndexes[0]
-    /* v8 ignore next -- defensive totality for noUncheckedIndexedAccess after the exact-length check. */
+    /* v8 ignore start -- @preserve The exact-length check and tag-derived index make both defensive failures unconstructible. */
     if (holdIndex === undefined) return "the admitted continuation hold index is missing"
     const hold = cassette.story[holdIndex]
     if (hold?._tag !== "DalphHoldsAdmittedContinuationBeforeExecutorIntent") {
       return "the admitted continuation hold must remain at its decoded position"
     }
+    /* v8 ignore stop -- @preserve */
     return admittedContinuationClosureIssue(cassette.story, holdIndex, hold)
   }
 )

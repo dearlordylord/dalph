@@ -210,17 +210,14 @@ export const controlledTrackerMutationLayer = (cursor: StoryCursor, tracker: Tra
                   .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim)))
               }
               const attempted = { _tag: "ActiveTaskClaim" as const, ...acquisition }
-              /* v8 ignore next -- @preserve Active-observation redelivery and conflict behavior is covered by the ignored underlying acquisition-contract block below. */
               if (observed._tag === "UnclaimedTask") {
                 return tracker
                   .acquireTaskClaim(acquisition)
                   .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim)))
               }
-              /* v8 ignore start -- @preserve Exact redelivery is covered by the underlying acquisition contract. */
               return isExactTaskClaim(observed, attempted)
                 ? Effect.succeed(observed)
                 : Effect.fail(new TaskClaimConflict({ attempted: acquisition, observed }))
-              /* v8 ignore stop -- @preserve */
             })
           ),
         readTaskClaim,
@@ -358,6 +355,7 @@ export const controlledExecutorLayer = (
         new Set(current).add(plannedAttemptExecutorCorrelationKey(correlation))
       )
       yield* cursor.pauseAtCoordinatorProcessDeath
+      /* v8 ignore next -- @preserve The death barrier interrupts this executor fiber and never resumes it. */
       return yield* Effect.never
     }
     return report

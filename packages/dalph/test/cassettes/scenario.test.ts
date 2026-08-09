@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Effect, Option, Schema } from "effect"
+import { Cause, Effect, Exit, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -9,7 +9,9 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedAttemptExecutor,
   PlannedAttemptExecutorReport,
+  plannedAttemptExecutorCorrelationKey,
   RunId,
   TaskBranchRef,
   TaskId,
@@ -20,6 +22,7 @@ import {
   AttemptWorktreeLost,
   CandidateContinuationLimit,
   CandidateCorrectionLimit,
+  controlledTrackerMutationLayerFrom,
   ClaimOwner,
   ClaimToken,
   CompetingWorktreeRegistrations,
@@ -53,6 +56,7 @@ import {
   makeTaskWorktreeObservationOperation,
   OperationId,
   originatingActionForTargetLineageObservation,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedWorktreeReady,
@@ -61,8 +65,10 @@ import {
   reduceWorkflowJournalHistory,
   RunPolicyRevision,
   TrackerRevision,
+  TrackerMutation,
   TaskWorkCapacity,
   TaskClaimReacquisitionRequestId,
+  TaskClaimReacquisitionDirectedEvent,
   TaskClaimReleaseAuthority,
   TaskLifecycle,
   TaskTrackerFactsObservedEvent,
@@ -81,7 +87,7 @@ import {
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
   acceptedResultRestartsIntoIntegrationAuthoredCassette,
-  type AuthoredCassetteStoryItem,
+  AuthoredCassetteStoryItem,
   AuthoredScenarioCassette,
   CassetteIdentityRenaming,
   changedAgainAttemptRequiresNewChoiceAuthoredCassette,
@@ -135,6 +141,9 @@ import {
   verifyRecordedCassetteRoundTrip,
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
+import { controlledExecutorLayer, controlledTrackerMutationLayer } from "../../src/cassettes/authored-adapters.js"
+import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
+import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
 
 it("renders every maintained authored cassette from its structured story", () => {
   for (const cassette of Object.values(maintainedAuthoredCassetteCatalog)) {
@@ -170,6 +179,189 @@ const exactExecutorReportTags = (records: ReadonlyArray<JournalRecord>): Readonl
     }
     return []
   })
+
+const identityCassetteRenaming = CassetteIdentityRenaming.make({
+  attemptIds: [],
+  claimTokens: [],
+  integrationCandidateIds: [],
+  integrationCandidateResourceLocators: [],
+  integrationSessionIds: [],
+  operationIds: [],
+  runIds: [],
+  taskBranchRefs: [],
+  worktreeLocators: []
+})
+
+it.effect("preserves exact, conflicting, and unclaimed authored acquisition observations", () =>
+  Effect.gen(function* () {
+    const exactAcquisition = {
+      operationId: OperationId.make("coverage-authored-exact-operation"),
+      owner: ClaimOwner.make("coverage-authored-owner"),
+      taskId: TaskId.make("coverage-authored-exact-task"),
+      token: ClaimToken.make("coverage-authored-exact-token")
+    }
+    const conflictingObservation = {
+      _tag: "ActiveTaskClaim" as const,
+      operationId: OperationId.make("coverage-authored-foreign-operation"),
+      owner: ClaimOwner.make("coverage-authored-foreign-owner"),
+      taskId: TaskId.make("coverage-authored-conflicting-task"),
+      token: ClaimToken.make("coverage-authored-foreign-token")
+    }
+    const conflictingAcquisition = {
+      operationId: OperationId.make("coverage-authored-conflicting-operation"),
+      owner: ClaimOwner.make("coverage-authored-owner"),
+      taskId: conflictingObservation.taskId,
+      token: ClaimToken.make("coverage-authored-conflicting-token")
+    }
+    const unclaimedTaskId = TaskId.make("coverage-authored-unclaimed-task")
+    const cursor = yield* makeStoryCursor([
+      { _tag: "TaskClaimReadReturned", observation: { _tag: "ActiveTaskClaim", ...exactAcquisition } },
+      { _tag: "TaskClaimReadReturned", observation: conflictingObservation },
+      { _tag: "TaskClaimReadReturned", observation: UnclaimedTask.make({ taskId: unclaimedTaskId }) }
+    ])
+
+    yield* Effect.gen(function* () {
+      const base = yield* TrackerMutation
+      yield* Effect.gen(function* () {
+        const tracker = yield* TrackerMutation
+        yield* tracker.readTaskClaim(exactAcquisition.taskId)
+        expect(yield* tracker.acquireTaskClaim(exactAcquisition)).toEqual({
+          _tag: "ActiveTaskClaim",
+          ...exactAcquisition
+        })
+
+        yield* tracker.readTaskClaim(conflictingObservation.taskId)
+        expect(yield* tracker.acquireTaskClaim(conflictingAcquisition).pipe(Effect.flip)).toMatchObject({
+          _tag: "TrackerMutation.TaskClaimConflict",
+          attempted: conflictingAcquisition,
+          observed: conflictingObservation
+        })
+
+        yield* tracker.readTaskClaim(unclaimedTaskId)
+        expect(
+          yield* tracker.acquireTaskClaim({
+            operationId: OperationId.make("coverage-authored-unclaimed-operation"),
+            owner: ClaimOwner.make("coverage-authored-owner"),
+            taskId: unclaimedTaskId,
+            token: ClaimToken.make("coverage-authored-unclaimed-token")
+          })
+        ).toMatchObject({ _tag: "ActiveTaskClaim", taskId: unclaimedTaskId })
+      }).pipe(Effect.provide(controlledTrackerMutationLayer(cursor, base)))
+    }).pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
+  })
+)
+
+it.effect("fails closed at cursor and executor-projection boundaries", () =>
+  Effect.gen(function* () {
+    const requestId = TaskClaimReacquisitionRequestId.make("coverage-reacquisition")
+    const cursor = yield* makeStoryCursor([
+      { _tag: "OperatorDirectsTaskClaimReacquisition", requestId, taskId: TaskId.make("A") }
+    ])
+    expect(Option.isNone(yield* cursor.consumeAttemptChoiceRace)).toBe(true)
+    expect(yield* cursor.consumeClaimReacquisitionDirection).toEqual(
+      Option.some({ _tag: "OperatorDirectsTaskClaimReacquisition", requestId, taskId: TaskId.make("A") })
+    )
+    const emptyCursor = yield* makeStoryCursor([])
+    expect(yield* emptyCursor.consumeExecutorReport.pipe(Effect.flip)).toMatchObject({ expected: "EndOfStory" })
+
+    const runId = RunId.make("coverage-executor-projection-run")
+    const correlation = { attemptId: AttemptId.make("coverage-executor-projection-attempt"), runId }
+    const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+    const unresolved = yield* Ref.make<ReadonlySet<string>>(
+      new Set([plannedAttemptExecutorCorrelationKey(correlation)])
+    )
+    const missingProjectionExit = yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      return yield* executor.project(correlation)
+    }).pipe(Effect.provide(controlledExecutorLayer(emptyCursor, runId, Effect.void, reports, unresolved)), Effect.exit)
+    expect(Exit.isFailure(missingProjectionExit)).toBe(true)
+    if (Exit.isFailure(missingProjectionExit)) {
+      expect(Cause.pretty(missingProjectionExit.cause)).toContain("requires an explicit return")
+    }
+
+    const contradictoryCursor = yield* makeStoryCursor([
+      {
+        _tag: "PlannedAttemptExecutorProjectionReturned",
+        report: { _tag: "Running", attemptId: AttemptId.make("another-projected-attempt") }
+      }
+    ])
+    const contradictoryExit = yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      return yield* executor.project(correlation)
+    }).pipe(
+      Effect.provide(
+        controlledExecutorLayer(
+          contradictoryCursor,
+          runId,
+          Effect.void,
+          yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()),
+          yield* Ref.make<ReadonlySet<string>>(new Set())
+        )
+      ),
+      Effect.exit
+    )
+    expect(Exit.isFailure(contradictoryExit)).toBe(true)
+    if (Exit.isFailure(contradictoryExit)) {
+      expect(Cause.pretty(contradictoryExit.cause)).toContain("another-projected-attempt")
+    }
+  })
+)
+
+it.effect("projects reacquisition and non-exact executor evidence through the authored assertion boundary", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("coverage-authored-outcome-run")
+    const taskId = TaskId.make("coverage-authored-outcome-task")
+    const requestId = TaskClaimReacquisitionRequestId.make("coverage-authored-outcome-request")
+    const direction = TaskClaimReacquisitionDirectedEvent.make({
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId,
+      subject: { runId, taskId },
+      version: workflowJournalEventVersion
+    })
+    const directionAssertions = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
+      orchestration: null,
+      protocol: [{ _tag: "TaskClaimReacquisitionDirected", requestId, taskId }],
+      taskWork: { absences: [], results: [] }
+    })
+    expect(
+      (yield* assertAuthoredExpectedBehavior(
+        [
+          {
+            event: direction,
+            key: describeJournalEvent(direction).expectedKey,
+            position: JournalPosition.make(1),
+            runId
+          }
+        ],
+        directionAssertions
+      )).protocolEvidence
+    ).toEqual([{ _tag: "TaskClaimReacquisitionDirected", requestId, taskId }])
+
+    const run = yield* runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette)
+    const projection = run.records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
+    if (projection?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") {
+      return yield* Effect.die("missing command projection")
+    }
+    const unavailable = PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+      commandOrdinal: projection.event.commandOrdinal,
+      observation: { _tag: "ExecutorStateUnavailable" },
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt: projection.event.plannedAttempt,
+      projectionOrdinal: projection.event.projectionOrdinal,
+      version: workflowJournalEventVersion
+    })
+    const noEvidenceAssertions = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
+      orchestration: [],
+      protocol: null,
+      taskWork: { absences: [], results: [] }
+    })
+    expect(
+      (yield* assertAuthoredExpectedBehavior([{ ...projection, event: unavailable }], noEvidenceAssertions))
+        .orchestrationEvidence
+    ).toEqual([])
+  })
+)
 
 it.effect("records both task fingerprints when Alice continues the exact attempt", () =>
   Effect.gen(function* () {
@@ -1806,6 +1998,9 @@ it.effect("reconciles a lost promotion response and never sends a fourth request
 
     const recorded = yield* projectRecordedCassette(run.records)
     expect(renderRecordedCassetteLyrics(recorded)).toContain("after 3 ambiguous compare-and-set attempts")
+    expect(foldRecordedCassette(yield* renameRecordedCassette(recorded, identityCassetteRenaming))._tag).toBe(
+      "ValidWorkflowJournalHistory"
+    )
     expect(
       verifyRecordedCassetteRoundTrip(run.records, recorded).every(
         ({ workflowHistoryEquivalent }) => workflowHistoryEquivalent
@@ -1841,7 +2036,51 @@ it.effect("records stale H2 and never overwrites it", () =>
     )
     const recorded = yield* projectRecordedCassette(run.records)
     expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(foldRecordedCassette(yield* renameRecordedCassette(recorded, identityCassetteRenaming))._tag).toBe(
+      "ValidWorkflowJournalHistory"
+    )
     expect(renderRecordedCassetteLyrics(recorded)).toContain("preserved a different target head")
+  })
+)
+
+it.effect("records a rejected target compare-and-set as stale exact authority", () =>
+  Effect.gen(function* () {
+    const observedHeadSha = GitCommitSha.make("2222222222222222222222222222222222222222")
+    const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.targetPromotionSuccess,
+      name: "Git rejects target promotion after another exact target-head change",
+      story: maintainedAuthoredCassetteCatalog.targetPromotionSuccess.story.map((item) => {
+        if (item._tag === "TargetPromotionCompareAndSetReturned") {
+          return { ...item, result: { _tag: "RejectedExpectedHead", observedHeadSha } }
+        }
+        if (item._tag !== "ExpectedBehavior" || item.orchestration === null) return item
+        return {
+          ...item,
+          orchestration: item.orchestration.map((evidence) =>
+            evidence._tag === "TargetPromotionSucceeded"
+              ? {
+                  _tag: "TargetPromotionStale",
+                  basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+                  candidateCommit: evidence.candidateCommit,
+                  expectedTargetHead: evidence.expectedTargetHead,
+                  observation: "CompareAndSetRejected",
+                  observedTargetHead: observedHeadSha,
+                  taskId: evidence.taskId
+                }
+              : evidence
+          )
+        }
+      })
+    })
+    const run = yield* runAuthoredScenarioCassette(cassette)
+    expect(run.records.find(({ event }) => event._tag === "TargetPromotionStale")?.event).toMatchObject({
+      basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+      observation: { _tag: "CompareAndSetRejected", observedHeadSha }
+    })
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(foldRecordedCassette(yield* renameRecordedCassette(recorded, identityCassetteRenaming))._tag).toBe(
+      "ValidWorkflowJournalHistory"
+    )
   })
 )
 
@@ -2044,6 +2283,10 @@ it.effect("records and alpha-renames verification terminal and contradiction occ
     expect(contradictoryRecorded.entries.some(({ _tag }) => _tag === "TargetVerificationCorrelationContradicted")).toBe(
       true
     )
+    expect(foldRecordedCassette(contradictoryRecorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(
+      foldRecordedCassette(yield* renameRecordedCassette(contradictoryRecorded, identityCassetteRenaming))._tag
+    ).toBe("ValidWorkflowJournalHistory")
     expect(renderRecordedCassetteLyrics(contradictoryRecorded)).toContain("foreign correlation")
   })
 )
@@ -2139,6 +2382,39 @@ it.effect("round-trips every non-submitting integration-agent report", () =>
       exhaustedRecorded.entries.find(({ _tag }) => _tag === "IntegrationCandidateContinuationLimitReached")
     ).toMatchObject({ continuationCount: 2, continuationLimit: 2 })
     expect(renderRecordedCassetteLyrics(exhaustedRecorded)).toContain("2 automatic agent continuations")
+  })
+)
+
+it.effect("fails closed when one nonterminal agent report cannot satisfy automatic continuation", () =>
+  Effect.gen(function* () {
+    let keptReport = false
+    const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.candidateConflictRecovery,
+      name: "one declared integration-agent outcome bounds the authored activation",
+      story: maintainedAuthoredCassetteCatalog.candidateConflictRecovery.story.flatMap(
+        (item): ReadonlyArray<unknown> => {
+          if (item._tag === "IntegrationCandidateGitValidationReturned") return []
+          if (item._tag === "IntegrationCandidateAgentReported") {
+            if (keptReport) return []
+            keptReport = true
+            return [{ ...item, report: { _tag: "ExitedWithoutCandidate" } }]
+          }
+          if (item._tag !== "ExpectedBehavior") return [item]
+          return [
+            {
+              ...item,
+              orchestration:
+                item.orchestration?.filter(({ _tag }) => _tag !== "IntegrationCandidateConstructed") ?? null
+            }
+          ]
+        }
+      )
+    })
+    const exit = yield* runAuthoredScenarioCassette(cassette).pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect(Cause.pretty(exit.cause)).toContain("candidate frontier invoked the agent without an authored report")
+    }
   })
 )
 
@@ -2660,6 +2936,42 @@ it.effect("requires one terminal assertion group and one owner for every decoded
       )
     }
     expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(holdWithoutExactUnpause)).toThrow()
+
+    const heldStory = changedAttemptStopLostThirdSuspensionAuthoredCassette.story
+    const holdIndex = heldStory.findIndex(({ _tag }) => _tag === "DalphHoldsAdmittedContinuationBeforeExecutorIntent")
+    const stopIndex = heldStory.findIndex((item, index) => index > holdIndex && item._tag === "OperatorStopsAttempt")
+    const heldSpecificationIndex = heldStory.findIndex(
+      (item, index) => index > holdIndex && index < stopIndex && item._tag === "TaskWorkSpecificationReadReturned"
+    )
+    const holdWithoutExactSpecification = {
+      ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
+      story: heldStory.map((item, index) =>
+        index === heldSpecificationIndex && item._tag === "TaskWorkSpecificationReadReturned"
+          ? { _tag: "TaskClaimCurrentReadReturned", taskId: "A" }
+          : item
+      )
+    }
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(holdWithoutExactSpecification)).toThrow()
+
+    const holdWithoutExecutorOutcome = {
+      ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
+      story: heldStory.map((item, index) =>
+        index > stopIndex && item._tag === "PlannedAttemptExecutorResponseLost" && item.request === "StartOrContinue"
+          ? { ...item, request: "Suspend" }
+          : item
+      )
+    }
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(holdWithoutExecutorOutcome)).toThrow()
+
+    const holdClosedByReturnedExecutorReport = {
+      ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
+      story: heldStory.map((item, index) =>
+        index > stopIndex && item._tag === "PlannedAttemptExecutorResponseLost" && item.request === "StartOrContinue"
+          ? { _tag: "PlannedAttemptExecutorWorkReported", report: item.report, request: item.request }
+          : item
+      )
+    }
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(holdClosedByReturnedExecutorReport)).not.toThrow()
 
     const assertions = singleton.story.at(-1)
     if (assertions?._tag !== "ExpectedBehavior") return yield* Effect.die("missing singleton assertions")
@@ -3357,6 +3669,56 @@ it.effect("reports mismatches through the surface that owns the current story it
     expect((yield* runAuthoredScenarioCassette(wrongAttempt).pipe(Effect.flip))._tag).toBe(
       "ControlledFakeExecutorMismatch"
     )
+
+    const lifecycleFailure = {
+      ...wrongExecutorItem,
+      story: [
+        ...wrongExecutorItem.story.slice(0, -1),
+        { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
+        wrongExecutorItem.story.at(-1)
+      ]
+    }
+    expect(Exit.isFailure(yield* runAuthoredScenarioCassette(lifecycleFailure).pipe(Effect.exit))).toBe(true)
+
+    const missingPlannedAttempt = {
+      ...changedAttemptContinuesAuthoredCassette,
+      story: changedAttemptContinuesAuthoredCassette.story.map((item) =>
+        item._tag === "OperatorContinuesAttempt" ? { ...item, attemptId: "missing-attempt" } : item
+      )
+    }
+    expect(Exit.isFailure(yield* runAuthoredScenarioCassette(missingPlannedAttempt).pipe(Effect.exit))).toBe(true)
+
+    const unavailableAppliedChoice = {
+      ...changedAttemptContinuesAuthoredCassette,
+      story: changedAttemptContinuesAuthoredCassette.story.map((item) =>
+        item._tag === "OperatorContinuesAttempt"
+          ? { ...item, observedTaskRevision: "unavailable-authored-revision" }
+          : item
+      )
+    }
+    expect(Exit.isFailure(yield* runAuthoredScenarioCassette(unavailableAppliedChoice).pipe(Effect.exit))).toBe(true)
+
+    const mismatchedRejection = {
+      ...postIntegrationAttemptChoiceRejectedAuthoredCassette,
+      story: postIntegrationAttemptChoiceRejectedAuthoredCassette.story.map((item) =>
+        item._tag === "OperatorContinuesAttempt" && item.expected._tag === "Rejected"
+          ? { ...item, expected: { _tag: "Rejected", reason: "NotAvailable" } }
+          : item
+      )
+    }
+    expect(Exit.isFailure(yield* runAuthoredScenarioCassette(mismatchedRejection).pipe(Effect.exit))).toBe(true)
+  })
+)
+
+it.effect("rejects a contradictory coordinator activation return decision", () =>
+  Effect.gen(function* () {
+    const mismatched = {
+      ...changedAttemptStopRemainsUnprovedAuthoredCassette,
+      story: changedAttemptStopRemainsUnprovedAuthoredCassette.story.map((item) =>
+        item._tag === "CoordinatorActivationReturned" ? { ...item, decision: { _tag: "RunMayTerminate" } } : item
+      )
+    }
+    expect(Exit.isFailure(yield* runAuthoredScenarioCassette(mismatched).pipe(Effect.exit))).toBe(true)
   })
 )
 
@@ -3426,6 +3788,79 @@ it.effect("records a foreign claim from an authored recovery story and safely su
     expect(renderAuthoredCassetteLyrics(unreadableRun.cassette)).toContain(
       "The task tracker cannot read the claim for task A."
     )
+  })
+)
+
+it.effect("drives a public operator claim-reacquisition request through recovered delivery", () =>
+  Effect.gen(function* () {
+    const expected = singleton.story.at(-1)
+    if (expected?._tag !== "ExpectedBehavior") return yield* Effect.die("singleton has no terminal assertions")
+    const storyBeforeAssertions = singleton.story
+      .slice(0, -1)
+      .flatMap((item) =>
+        item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal"
+          ? [{ _tag: "CoordinatorProcessDies" as const }]
+          : [item]
+      )
+    const requestId = TaskClaimReacquisitionRequestId.make("coverage-reacquire-missing-A")
+    const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+      ...singleton,
+      name: "an operator replaces a missing claim with a fresh claim identity",
+      story: [
+        ...storyBeforeAssertions,
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Implement the accepted singleton behavior.",
+          taskId: "A",
+          title: "Implement singleton"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+        { _tag: "TaskClaimReadReturned", observation: UnclaimedTask.make({ taskId: TaskId.make("A") }) },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+          request: "Suspend"
+        },
+        { _tag: "OperatorDirectsTaskClaimReacquisition", requestId, taskId: "A" },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: singleton.startingFacts.trackerGraph },
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Implement the accepted singleton behavior.",
+          taskId: "A",
+          title: "Implement singleton"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+        { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+          request: "StartOrContinue"
+        },
+        {
+          _tag: "CoordinatorActivationReturned",
+          decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
+        },
+        { ...expected, orchestration: null, protocol: null }
+      ]
+    })
+
+    const run = yield* runAuthoredScenarioCassette(cassette)
+    const acquisitionIntents = run.records.flatMap(({ event }) =>
+      event._tag === "TaskClaimAcquisitionIntended" ? [event.operation] : []
+    )
+    expect(acquisitionIntents).toHaveLength(2)
+    expect(acquisitionIntents[1]).toMatchObject({
+      authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId }
+    })
+    expect(
+      run.records.some(({ event }) => event._tag === "TaskClaimReacquisitionDirected" && event.requestId === requestId)
+    ).toBe(true)
   })
 )
 
@@ -3586,13 +4021,22 @@ it.effect("matches optional orchestration and protocol evidence in exact order",
           ? {
               ...item,
               protocol: [
+                {
+                  _tag: "AttemptChoiceApplied",
+                  attemptId: "attempt:A:0",
+                  choice: "ContinueExistingAttempt",
+                  observedTaskRevision: "render-observed-revision",
+                  taskId: "A"
+                },
+                { _tag: "AttemptImplementationAbandoned", attemptId: "attempt:A:0", taskId: "A" },
                 { _tag: "TaskClaimAcquired", taskId: "A" },
                 { _tag: "TaskClaimReleased", taskId: "A" },
                 { _tag: "TaskClaimObserved", claimState: "Missing", taskId: "A" },
                 { _tag: "TaskClaimReadExhausted", taskId: "A" },
                 { _tag: "TaskClaimReacquisitionDirected", requestId: "render-reacquisition", taskId: "A" },
                 { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
-                { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" }
+                { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+                { _tag: "StoppedAttemptClaimNoReleaseObserved", claimState: "Foreign", taskId: "A" }
               ]
             }
           : item
@@ -3605,6 +4049,24 @@ it.effect("matches optional orchestration and protocol evidence in exact order",
     expect(allProtocolLyrics).toContain(
       "Operator request render-reacquisition to direct Dalph to reacquire the claim for task A"
     )
+    expect(allProtocolLyrics).toContain("apply ContinueExistingAttempt")
+    expect(allProtocolLyrics).toContain("abandon implementation responsibility")
+    expect(allProtocolLyrics).toContain("preserve the foreign claim state")
+
+    const terminalBoundaryCassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+      ...allProtocolCassette,
+      story: [
+        ...allProtocolCassette.story.slice(0, -1),
+        { _tag: "OperatorDirectsTaskClaimReacquisition", requestId: "render-operator-reacquisition", taskId: "A" },
+        { _tag: "TargetPromotionGitReadFailed", detail: "the current target head is unreadable" },
+        { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
+        allProtocolCassette.story.at(-1)
+      ]
+    })
+    const terminalBoundaryLyrics = renderAuthoredCassetteLyrics(terminalBoundaryCassette)
+    expect(terminalBoundaryLyrics).toContain("Operator request render-operator-reacquisition directs Dalph")
+    expect(terminalBoundaryLyrics).toContain("cannot complete the current-head candidate-ancestry read")
+    expect(terminalBoundaryLyrics).toContain("returns RunMayTerminate")
   })
 )
 
@@ -4158,19 +4620,84 @@ it.effect(
         expect(encodedAfter).not.toContain(`"${from}"`)
         expect(encodedAfter).toContain(`"${to}"`)
       }
-      const [stoppageRun, noReleaseRun] = yield* Effect.all([
+      const [stoppageRun, noReleaseRun, foreignNoReleaseRun] = yield* Effect.all([
         runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette),
-        runAuthoredScenarioCassette(changedAttemptStopReleaseResponseLostAuthoredCassette)
+        runAuthoredScenarioCassette(changedAttemptStopReleaseResponseLostAuthoredCassette),
+        runAuthoredScenarioCassette(changedAttemptStopsWithForeignClaimAuthoredCassette)
       ])
-      const [stoppageRecorded, noReleaseRecorded] = yield* Effect.all([
+      const [stoppageRecorded, noReleaseRecorded, foreignNoReleaseRecorded] = yield* Effect.all([
         projectRecordedCassette(stoppageRun.records),
-        projectRecordedCassette(noReleaseRun.records)
+        projectRecordedCassette(noReleaseRun.records),
+        projectRecordedCassette(foreignNoReleaseRun.records)
       ])
       expectRecordedRoundTrip(stoppageRun.records, stoppageRecorded)
       expectRecordedRoundTrip(noReleaseRun.records, noReleaseRecorded)
+      expectRecordedRoundTrip(foreignNoReleaseRun.records, foreignNoReleaseRecorded)
+      const [renamedStoppage, renamedNoRelease, renamedForeignNoRelease] = yield* Effect.all([
+        renameRecordedCassette(stoppageRecorded, renaming),
+        renameRecordedCassette(noReleaseRecorded, renaming),
+        renameRecordedCassette(foreignNoReleaseRecorded, renaming)
+      ])
+      const stopLyrics = [renamedStoppage, renamedNoRelease, renamedForeignNoRelease]
+        .map(renderRecordedCassetteLyrics)
+        .join("\n")
+      expect(stopLyrics).toContain("began stopping attempt")
+      expect(stopLyrics).toContain("abandoned implementation attempt")
+      expect(stopLyrics).toContain("must not release the current claim")
+      expect(stopLyrics).toContain("while reconciling executor command")
+      expect(stopLyrics).toContain("read-only executor projection")
+
+      const projectionEntry = stoppageRecorded.entries.find(
+        (entry) => entry._tag === "PlannedAttemptExecutorCommandProjectionObserved"
+      )
+      const stateEntry = stoppageRecorded.entries.find((entry) => entry._tag === "PlannedAttemptExecutorStateObserved")
+      if (
+        projectionEntry?._tag !== "PlannedAttemptExecutorCommandProjectionObserved" ||
+        projectionEntry.observation._tag !== "ExactExecutorReport" ||
+        stateEntry?._tag !== "PlannedAttemptExecutorStateObserved" ||
+        stateEntry.observation._tag !== "ExactExecutorReport"
+      ) {
+        return yield* Effect.die("Stop recording must contain exact command and state projections")
+      }
+      const executorObservationVariants = RecordedCassette.make({
+        _tag: "RecordedCassette",
+        entries: [
+          {
+            ...projectionEntry,
+            observation: { _tag: "ExecutorReportContradiction", observed: projectionEntry.observation.report }
+          },
+          { ...projectionEntry, observation: { _tag: "ExecutorStateUnavailable" } },
+          {
+            ...stateEntry,
+            observation: { _tag: "ExecutorReportContradiction", observed: stateEntry.observation.report }
+          },
+          { ...stateEntry, observation: { _tag: "ExecutorStateUnavailable" } }
+        ],
+        runId: stoppageRecorded.runId,
+        schemaVersion: recordedCassetteVersion
+      })
+      const renamedExecutorObservationVariants = yield* renameRecordedCassette(executorObservationVariants, renaming)
+      expect(
+        renamedExecutorObservationVariants.entries.map((entry) =>
+          entry._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+          entry._tag === "PlannedAttemptExecutorStateObserved"
+            ? entry.observation._tag
+            : undefined
+        )
+      ).toEqual([
+        "ExecutorReportContradiction",
+        "ExecutorStateUnavailable",
+        "ExecutorReportContradiction",
+        "ExecutorStateUnavailable"
+      ])
       expect(
         new Set(
-          [...recorded.entries, ...stoppageRecorded.entries, ...noReleaseRecorded.entries].map(({ _tag }) => _tag)
+          [
+            ...recorded.entries,
+            ...stoppageRecorded.entries,
+            ...noReleaseRecorded.entries,
+            ...foreignNoReleaseRecorded.entries
+          ].map(({ _tag }) => _tag)
         )
       ).toEqual(
         new Set(
@@ -4728,6 +5255,12 @@ it.effect("reconciles a lost completion-claim replacement without allocating ano
     expect(run.replacementCalls).toBe(1)
     expect(run.journalTags.filter((tag) => tag === "CompletionClaimReplacementIntended")).toHaveLength(1)
     expect(run.journalTags.filter((tag) => tag === "CompletionClaimReplaced")).toHaveLength(1)
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(foldRecordedCassette(yield* renameRecordedCassette(recorded, identityCassetteRenaming))._tag).toBe(
+      "ValidWorkflowJournalHistory"
+    )
+    expect(renderRecordedCassetteLyrics(recorded)).toContain("completion-claim replacement attempt")
   })
 )
 
