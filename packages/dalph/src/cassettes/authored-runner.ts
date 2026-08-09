@@ -99,11 +99,12 @@ export interface AuthoredScenarioCassetteRun {
   readonly runId: RunId
 }
 
-interface AuthoredDeliveryFact {
+interface AuthoredTaggedDiagnostic {
   readonly kind: string
   readonly exact: string
 }
 
+/** Zero-based count of authored interactions consumed when a production delivery publication was captured. */
 const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
   Schema.brand("AuthoredStoryPosition")
 )
@@ -150,21 +151,21 @@ export interface AuthoredDeliveryFrame {
         readonly taskId: TaskId
         readonly standing: "Excluded"
         readonly taskRevision: null
-        readonly reasons: ReadonlyArray<AuthoredDeliveryFact>
+        readonly reasons: ReadonlyArray<AuthoredTaggedDiagnostic>
       }
   >
   readonly tickets: ReadonlyArray<{
     readonly taskId: TaskId
-    readonly placement: AuthoredDeliveryFact
+    readonly placement: AuthoredTaggedDiagnostic
     readonly rank: BoundedTicketRank | null
-    readonly reasons: ReadonlyArray<AuthoredDeliveryFact>
+    readonly reasons: ReadonlyArray<AuthoredTaggedDiagnostic>
   }>
   readonly deliveries: ReadonlyArray<{
     readonly taskId: TaskId
-    readonly placement: AuthoredDeliveryFact
-    readonly evidence: ReadonlyArray<AuthoredDeliveryFact>
-    readonly standings: ReadonlyArray<AuthoredDeliveryFact>
-    readonly obligations: ReadonlyArray<AuthoredDeliveryFact>
+    readonly placement: AuthoredTaggedDiagnostic
+    readonly evidence: ReadonlyArray<AuthoredTaggedDiagnostic>
+    readonly standings: ReadonlyArray<AuthoredTaggedDiagnostic>
+    readonly obligations: ReadonlyArray<AuthoredTaggedDiagnostic>
   }>
   readonly settlements: ReadonlyArray<{ readonly taskId: TaskId; readonly attemptId: AttemptId }>
   readonly trackerReflection: { readonly _tag: "DeliveryReflection"; readonly settlementCount: number }
@@ -172,10 +173,13 @@ export interface AuthoredDeliveryFrame {
   readonly actionPlanning:
     | {
         readonly _tag: "DeliveryProposalsAvailable"
-        readonly proposals: ReadonlyArray<AuthoredDeliveryFact>
-        readonly isolatedIssues: ReadonlyArray<AuthoredDeliveryFact>
+        readonly proposals: ReadonlyArray<AuthoredTaggedDiagnostic>
+        readonly isolatedIssues: ReadonlyArray<AuthoredTaggedDiagnostic>
       }
-    | { readonly _tag: "DeliveryProposalOwnershipConflict"; readonly conflicts: ReadonlyArray<AuthoredDeliveryFact> }
+    | {
+        readonly _tag: "DeliveryProposalOwnershipConflict"
+        readonly conflicts: ReadonlyArray<AuthoredTaggedDiagnostic>
+      }
 }
 
 /** One exact production delivery publication correlated to the authored story cursor. */
@@ -191,7 +195,7 @@ export interface AuthoredScenarioCassetteRunOptions {
 }
 
 const diagnosticJsonIndent = 2
-const authoredDeliveryFactOf = (value: { readonly _tag: string }): AuthoredDeliveryFact => ({
+const authoredTaggedDiagnosticOf = (value: { readonly _tag: string }): AuthoredTaggedDiagnostic => ({
   kind: value._tag,
   exact: JSON.stringify(value, null, diagnosticJsonIndent)
 })
@@ -201,7 +205,7 @@ const authoredDeliveryFrameOf = (
   consequences: DeliveryConsequences,
   runtime: DeliveryRuntimeEvaluation
 ): AuthoredDeliveryFrame => {
-  const conflictFacts: Array<AuthoredDeliveryFact> = []
+  const conflictFacts: Array<AuthoredTaggedDiagnostic> = []
   if (runtime.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
     for (const conflict of runtime.proposedActions.conflicts) {
       conflictFacts.push({
@@ -248,21 +252,21 @@ const authoredDeliveryFrameOf = (
             taskId: standing.taskId,
             standing: standing._tag,
             taskRevision: null,
-            reasons: standing.reasons.map(authoredDeliveryFactOf)
+            reasons: standing.reasons.map(authoredTaggedDiagnosticOf)
           }
     ),
     tickets: consequences.tickets.placements.map(({ placement, taskId }) => ({
       taskId,
-      placement: authoredDeliveryFactOf(placement),
+      placement: authoredTaggedDiagnosticOf(placement),
       rank: "rank" in placement ? placement.rank : null,
-      reasons: placement._tag === "GraphExcluded" ? placement.reasons.map(authoredDeliveryFactOf) : []
+      reasons: placement._tag === "GraphExcluded" ? placement.reasons.map(authoredTaggedDiagnosticOf) : []
     })),
     deliveries: consequences.ticketDeliveries.deliveries.map((ticket) => ({
       taskId: ticket.taskId,
-      placement: authoredDeliveryFactOf(ticket.placement),
-      evidence: ticket.evidence.map(authoredDeliveryFactOf),
-      standings: ticket.standings.map(authoredDeliveryFactOf),
-      obligations: ticket.obligations.map(authoredDeliveryFactOf)
+      placement: authoredTaggedDiagnosticOf(ticket.placement),
+      evidence: ticket.evidence.map(authoredTaggedDiagnosticOf),
+      standings: ticket.standings.map(authoredTaggedDiagnosticOf),
+      obligations: ticket.obligations.map(authoredTaggedDiagnosticOf)
     })),
     settlements: consequences.settlements.settlements.map(({ attemptId, taskId }) => ({ attemptId, taskId })),
     trackerReflection: {
@@ -273,8 +277,8 @@ const authoredDeliveryFrameOf = (
       runtime.proposedActions._tag === "DeliveryProposalsAvailable"
         ? {
             _tag: "DeliveryProposalsAvailable",
-            proposals: runtime.proposedActions.proposals.map(authoredDeliveryFactOf),
-            isolatedIssues: runtime.proposedActions.isolatedIssues.map(authoredDeliveryFactOf)
+            proposals: runtime.proposedActions.proposals.map(authoredTaggedDiagnosticOf),
+            isolatedIssues: runtime.proposedActions.isolatedIssues.map(authoredTaggedDiagnosticOf)
           }
         : { _tag: "DeliveryProposalOwnershipConflict", conflicts: conflictFacts }
   }

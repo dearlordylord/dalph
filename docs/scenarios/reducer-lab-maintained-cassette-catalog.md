@@ -417,6 +417,10 @@ overflow, and terminal journal evidence remains collapsed until requested.
   publication consumed several declared interactions, it also checks the
   visible chronology retains both the concrete Operator Pause and the later
   executor Running report instead of showing only the final raw tag.
+- `retains every conflicting production proposal owner in the delivery frame`
+  evaluates one exact captured publication whose production proposal owners
+  collide and checks that the serializable frame retains the conflict instead
+  of presenting either proposal as an action that ran.
 - `shows production delivery frames before the authored cassette settles`
   holds an authored runner open, publishes exact projected frames through its
   controlled observer, and checks that the running shared workbench follows

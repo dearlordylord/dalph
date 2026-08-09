@@ -123,6 +123,10 @@ import {
   verifyRecordedCassetteRoundTrip,
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
+import {
+  evaluateAuthoredDeliveryPublication,
+  type AuthoredDeliveryPublication
+} from "../../src/cassettes/authored-runner.js"
 
 it("renders every maintained authored cassette from its structured story", () => {
   for (const cassette of Object.values(maintainedAuthoredCassetteCatalog)) {
@@ -1818,6 +1822,43 @@ it.effect("notifies the read-only delivery observer before returning the termina
       storyPosition: run.deliveryFrames[0]?.storyPosition
     })
     expect(publications.at(-1)?.storyPosition).toBe(run.deliveryFrames.at(-1)?.storyPosition)
+  })
+)
+
+it.effect("retains every conflicting production proposal owner in the delivery frame", () =>
+  Effect.gen(function* () {
+    let captured: AuthoredDeliveryPublication | undefined
+    yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette, {
+      onDeliveryPublication: (publication) => {
+        captured ??= publication
+      }
+    })
+    if (captured === undefined) return expect.fail("expected a delivery publication")
+    const trackerProposal = captured.bundle.legacy.trackerGraphProposals[0]
+    if (trackerProposal === undefined) return expect.fail("expected the initial tracker graph proposal")
+
+    const frame = yield* evaluateAuthoredDeliveryPublication({
+      ...captured,
+      bundle: {
+        ...captured.bundle,
+        legacy: {
+          ...captured.bundle.legacy,
+          proposalContributions: {
+            ...captured.bundle.legacy.proposalContributions,
+            ticketDelivery: [{ ...trackerProposal, owner: "TicketDelivery" }]
+          }
+        }
+      }
+    })
+
+    expect(frame.actionPlanning._tag).toBe("DeliveryProposalOwnershipConflict")
+    if (frame.actionPlanning._tag !== "DeliveryProposalOwnershipConflict") {
+      return expect.fail("expected the production proposal ownership conflict")
+    }
+    expect(frame.actionPlanning.conflicts).toHaveLength(1)
+    expect(JSON.parse(frame.actionPlanning.conflicts[0]?.exact ?? "null")).toMatchObject({
+      owners: ["TrackerGraph", "TicketDelivery"]
+    })
   })
 )
 
