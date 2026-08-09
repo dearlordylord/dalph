@@ -236,24 +236,31 @@ const authoredTaggedDiagnosticOf = (value: { readonly _tag: string }): AuthoredT
 })
 
 type DeliveryObligation = DeliveryConsequences["ticketDeliveries"]["deliveries"][number]["obligations"][number]
+type WorkflowResponsibility = Extract<DeliveryObligation, { readonly _tag: "WorkflowResponsibility" }>["responsibility"]
+
+const authoredWorkflowResponsibilityCorrelation = (
+  responsibility: WorkflowResponsibility
+): Pick<AuthoredObligationDiagnostic, "attemptId" | "summary"> => {
+  switch (responsibility._tag) {
+    case "TaskClaimResponsibility":
+      return { attemptId: null, summary: "task-claim acquisition responsibility" }
+    case "TaskClaimReleaseResponsibility":
+      return { attemptId: null, summary: "task-claim release responsibility" }
+    case "TaskWorktreeResponsibility":
+      return { attemptId: null, summary: "Git worktree responsibility" }
+    case "PlannedAttemptExecutorWorkResponsibility":
+      return {
+        attemptId: responsibility.plannedAttempt.attemptId,
+        summary: `planned-attempt executor responsibility · attempt ID ${responsibility.plannedAttempt.attemptId}`
+      }
+  }
+}
 
 const authoredObligationDiagnosticOf = (obligation: DeliveryObligation): AuthoredObligationDiagnostic => {
   const correlation = (() => {
     switch (obligation._tag) {
       case "WorkflowResponsibility":
-        switch (obligation.responsibility._tag) {
-          case "TaskClaimResponsibility":
-            return { attemptId: null, summary: "task-claim acquisition responsibility" }
-          case "TaskClaimReleaseResponsibility":
-            return { attemptId: null, summary: "task-claim release responsibility" }
-          case "TaskWorktreeResponsibility":
-            return { attemptId: null, summary: "Git worktree responsibility" }
-          case "PlannedAttemptExecutorWorkResponsibility":
-            return {
-              attemptId: obligation.responsibility.plannedAttempt.attemptId,
-              summary: `planned-attempt executor responsibility · attempt ID ${obligation.responsibility.plannedAttempt.attemptId}`
-            }
-        }
+        return authoredWorkflowResponsibilityCorrelation(obligation.responsibility)
       case "AcceptedAwaitingIntegration":
         return {
           attemptId: obligation.accepted.plannedAttempt.attemptId,
