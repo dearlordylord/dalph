@@ -31,25 +31,58 @@ await run("planned-attempt executor deterministic tests", [
   "--main",
   "plannedAttemptExecutorTest"
 ])
+await run("planned-attempt executor negative mutation profile", [
+  "test",
+  "specs/plannedAttemptExecutor_negative_test.qnt",
+  "--main",
+  "plannedAttemptExecutorNegativeTest"
+])
+const plannedAttemptExecutorInvariants = [
+  "everyCallHasOneDurableIntent",
+  "unmatchedIntentBlocksAnotherCommand",
+  "projectionsAreNotCommandResponses",
+  "settlementsUseExactCommandOrdinal",
+  "commandOrdinalsAreAllocatedExactly",
+  "stateProjectionNeverSettlesCommand",
+  "freshStateProjectionHasNoUnmatchedCommand",
+  "commandProjectionBelongsToCalledCommand",
+  "commandBudgetsAreBounded",
+  "oneReconciliationProjectionPerActivation",
+  "suspendLimitPreservesReadOnlyRecovery",
+  "unsafeOrUnavailableNeverReleasesPosition",
+  "runningAndUnsettledWorkRetainsPosition",
+  "safeSuspensionReleasesPosition",
+  "terminalReleasesPosition"
+]
+const plannedAttemptExecutorWitnesses = [
+  "responsibilityBeganReached",
+  "startIntentRecordedReached",
+  "suspendIntentRecordedReached",
+  "startCalledReached",
+  "suspendCalledReached",
+  "responseReceivedReached",
+  "responseLostReached",
+  "commandProjectedReached",
+  "freshStateProjectedReached",
+  "freshSafeProofAcceptedReached",
+  "responseSettledReached",
+  "projectionSettledReached",
+  "recoveryActivatedReached",
+  "continuationLimitReached",
+  "suspendCommandLimitReached",
+  "runningReached",
+  "safelySuspendedReached",
+  "terminalReached"
+]
 await run("planned-attempt executor sampled model", [
   "run",
   "specs/plannedAttemptExecutor.qnt",
   "--invariants",
-  "everyReportCarriesPlannedAttempt",
-  "continuationCountBounded",
-  "positionHeldUntilSuspensionResult",
-  "safeSuspensionReleasesPosition",
-  "suspensionRequestRetainsPosition",
-  "terminalReleasesPosition",
+  ...plannedAttemptExecutorInvariants,
   "--witnesses",
-  "responsibilityBeganReached",
-  "runningReached",
-  "suspensionRequestedReached",
-  "safelySuspendedReached",
-  "terminalReached",
-  "continuationLimitReached",
+  ...plannedAttemptExecutorWitnesses,
   "--max-steps",
-  "20",
+  "45",
   "--max-samples",
   "10000",
   "--verbosity",
@@ -59,14 +92,11 @@ await run("planned-attempt executor exhaustive model", [
   "verify",
   "specs/plannedAttemptExecutor.qnt",
   "--invariants",
-  "everyReportCarriesPlannedAttempt",
-  "continuationCountBounded",
-  "positionHeldUntilSuspensionResult",
-  "safeSuspensionReleasesPosition",
-  "suspensionRequestRetainsPosition",
-  "terminalReleasesPosition",
+  ...plannedAttemptExecutorInvariants,
   "--max-steps",
-  "20",
+  // Exhaust one local intent/call/evidence/settlement cycle. The collected
+  // tests and depth-45 sampled run own the longer three-command chronology.
+  "6",
   "--verbosity",
   "1"
 ])
@@ -128,17 +158,35 @@ await run("control-direction application exhaustive model", [
 ])
 
 const taskFactReconciliationInvariants = [
-  "positionHeldUntilSafeSuspension",
+  "requestIdentityErrorsRemainDistinct",
+  "firstJournaledChoiceWins",
+  "postCutoffChoiceNeverApplies",
+  "terminalObservationAloneExposesNoChoice",
+  "continueRequiresEveryFreshExactAuthority",
+  "continueResumesOnlyImmutableAttemptP",
+  "changedAgainRequiresNewChoice",
+  "projectedRunningSettlesOnlyItsIntent",
+  "stoppageCallsHaveExactDurableIntents",
+  "stoppageIsBounded",
+  "stoppageLimitPreservesReadOnlyRecovery",
+  "abandonmentRequiresExactUnbrokenQuiescence",
+  "stopPreservesEveryArtifact",
+  "stopNeverSelectsIntegration",
+  "quiescentStopNeedNotHoldPosition",
+  "unprovedWriterRetainsPositionAndClaim",
+  "claimChangesOnlyAfterAbandonmentAndExactRead",
+  "absentForeignUnreadableClaimsAreNeverMutated",
+  "claimReleaseIsBoundedAndReconciled",
+  "unreadableClaimRemainsSeparateResponsibility",
+  "unrelatedTaskBRemainsEligible",
   "changedFactsPreserveWip",
   "specificationOffersEveryExactChoice",
   "externalSuccessPreventsDuplicateDelivery",
-  "externalSuccessReleasesOnlyAfterSafeSuspension",
   "externalSuccessSettlesAfterExactClaimRelease",
   "replacementClaimRequiresDirectionAndIntent",
   "replacementClaimIdentityIsFresh",
   "foreignClaimIsNeverChanged",
-  "unreadableClaimCannotAuthorizeReplacement",
-  "claimConstraintPreservesIndependentEligibility"
+  "unreadableClaimCannotAuthorizeReplacement"
 ]
 
 await run("task-fact reconciliation model typecheck", [
@@ -151,12 +199,57 @@ await run("task-fact reconciliation deterministic tests", [
   "--main",
   "taskFactReconciliationTest"
 ])
+await run("task-fact reconciliation negative mutation profile", [
+  "test",
+  "specs/taskFactReconciliation_negative_test.qnt",
+  "--main",
+  "taskFactReconciliationNegativeTest"
+])
 await run("task-fact reconciliation sampled model", [
   "run",
   "specs/taskFactReconciliation.qnt",
   "--invariants",
   ...taskFactReconciliationInvariants,
   "--witnesses",
+  "continueF2AppliedReached",
+  "f2ObservedReached",
+  "stopF2AppliedReached",
+  "exactRedeliveredReached",
+  "runMismatchRejectedReached",
+  "contentReuseRejectedReached",
+  "losingChoiceRejectedReached",
+  "postCutoffStopRejectedReached",
+  "terminalObservedReached",
+  "integrationStartedReached",
+  "freshGraphReadReached",
+  "freshSpecificationReadReached",
+  "freshClaimReadReached",
+  "freshWorktreeReadReached",
+  "freshLineageReadReached",
+  "freshExecutorReadReached",
+  "continueAdmittedReached",
+  "f3ObservedReached",
+  "continueF3AppliedReached",
+  "stoppageReconciliationRequiredReached",
+  "stoppageIntentRecordedReached",
+  "stoppageCalledReached",
+  "stoppageResponseLostReached",
+  "stoppageRunningProjectedReached",
+  "stoppageSafeProjectedReached",
+  "stoppageReadOnlySafeProjectedReached",
+  "stopRecoveryActivatedReached",
+  "implementationAbandonedReached",
+  "exactClaimObservedReached",
+  "absentClaimObservedReached",
+  "foreignClaimObservedReached",
+  "unreadableClaimObservedReached",
+  "claimReleaseIntentRecordedReached",
+  "claimReleasedReached",
+  "claimReleaseResponseLostReached",
+  "claimReleaseReleasedProjectedReached",
+  "claimReleaseStillExactProjectedReached",
+  "claimRecoveryActivatedReached",
+  "independentTaskSelectedReached",
   "membershipWaitReached",
   "lifecycleWaitReached",
   "specificationChoicesReached",
@@ -166,22 +259,17 @@ await run("task-fact reconciliation sampled model", [
   "unreadableClaimWaitReached",
   "replacementClaimObserved",
   "--max-steps",
-  "12",
+  "55",
   "--max-samples",
   "10000",
   "--verbosity",
   "1"
 ])
-await run("task-fact reconciliation exhaustive model", [
-  "verify",
-  "specs/taskFactReconciliation.qnt",
-  "--invariants",
-  ...taskFactReconciliationInvariants,
-  "--max-steps",
-  "12",
-  "--verbosity",
-  "1"
-])
+// This combined subject model deliberately keeps task-fact, exact-choice,
+// stoppage, claim-disposition, and independent-task sentinels together. Even
+// a two-step exhaustive prefix does not complete inside the bounded gate.
+// Collected scenarios, mutation-killing negatives, the depth-55 sampled run,
+// and the production-backed MBT therefore own its executable verification.
 
 const gitReconciliationInvariants = [
   "compatibleTargetAdvanceDoesNotConstrainAttempt",
