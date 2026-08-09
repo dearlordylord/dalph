@@ -154,6 +154,43 @@ it("retains a terminal executor report for the exact planned attempt", () => {
   ).toEqual({ _tag: "RunMayTerminate" })
 })
 
+it("keeps stopped-attempt claim release waits visible without proposing another boundary call", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  const operationId = OperationId.make("stopped-attempt-release")
+
+  const releasePending = deriveRunnableFrontier({
+    freshEligibleTasks: [],
+    responsibility: WorkflowResponsibilityState.make({ entries: [responsibility] }),
+    responsibilityFacts: [
+      {
+        _tag: "PlannedAttemptExecutorFreshFacts",
+        disposition: ResponsibilityDisposition.StoppedAttemptClaimReleasePending({ operationId }),
+        responsibility
+      }
+    ]
+  })
+  const planningWait = deriveRunnableFrontier({
+    freshEligibleTasks: [],
+    responsibility: WorkflowResponsibilityState.make({ entries: [responsibility] }),
+    responsibilityFacts: [
+      {
+        _tag: "PlannedAttemptExecutorFreshFacts",
+        disposition: ResponsibilityDisposition.StoppedAttemptClaimPlanningWait({ reason: "TrackerTargetUnavailable" }),
+        responsibility
+      }
+    ]
+  })
+
+  expect(releasePending).toMatchObject({
+    explanations: [{ _tag: "StoppedAttemptClaimReleasePending", operationId }],
+    transitions: []
+  })
+  expect(planningWait).toMatchObject({
+    explanations: [{ _tag: "StoppedAttemptClaimPlanningWait", reason: "TrackerTargetUnavailable" }],
+    transitions: []
+  })
+})
+
 it("keeps delivery active for a non-terminal wait but accepts an externally settled attempt", () => {
   const responsibility = executionResponsibilityFor(taskA)
   const state = WorkflowResponsibilityState.make({ entries: [responsibility] })

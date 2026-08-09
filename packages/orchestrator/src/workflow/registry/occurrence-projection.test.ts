@@ -44,7 +44,9 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   workflowRunBeganRecordKey,
   workflowRunTerminatedRecordKey,
-  controlDirectionAppliedRecordKey
+  controlDirectionAppliedRecordKey,
+  attemptChoiceAppliedRecordKey,
+  taskClaimReacquisitionDirectedRecordKey
 } from "../../workflow-journal/record-key.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
@@ -90,6 +92,11 @@ import {
   ControlDirectionAppliedEvent,
   ControlDirectionApplicationOrdinal
 } from "../protocols/control-direction-application/events.js"
+import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
+import {
+  TaskClaimReacquisitionDirectedEvent,
+  TaskClaimReacquisitionRequestId
+} from "../protocols/task-claim-reacquisition/events.js"
 
 const runId = RunId.make("occurrence-run")
 const operation = makeTrackerGraphObservationOperation(
@@ -719,6 +726,50 @@ it.effect("projects only the applied direction and rejects unsupported operator 
         ordinal,
         recordedAt: JournalPosition.make(1),
         subject: { _tag: "Run", runId }
+      }
+    ])
+  })
+)
+
+it.effect("projects Alice's distinct attempt-choice and claim-reacquisition actions", () =>
+  Effect.gen(function* () {
+    const choiceRequestId = AttemptChoiceRequestId.make({ nonce: "occurrence-choice", runId })
+    const reacquisitionRequestId = TaskClaimReacquisitionRequestId.make("occurrence-reacquire")
+    const projection = yield* projectWorkflowOccurrences([
+      {
+        event: AttemptChoiceAppliedEvent.make({
+          choice: "ContinueExistingAttempt",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId: choiceRequestId,
+          subject: { observedTaskRevision: TaskRevision.make("occurrence-changed-revision"), plannedAttempt },
+          version: workflowJournalEventVersion
+        }),
+        key: attemptChoiceAppliedRecordKey(choiceRequestId),
+        position: JournalPosition.make(1),
+        runId
+      },
+      {
+        event: TaskClaimReacquisitionDirectedEvent.make({
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId: reacquisitionRequestId,
+          subject: { runId, taskId: plannedAttempt.taskId },
+          version: workflowJournalEventVersion
+        }),
+        key: taskClaimReacquisitionDirectedRecordKey(reacquisitionRequestId),
+        position: JournalPosition.make(2),
+        runId
+      }
+    ])
+
+    expect(projection.occurrences).toMatchObject([
+      { _tag: "AppliedAttemptChoice", requestId: choiceRequestId, subject: { plannedAttempt } },
+      {
+        _tag: "AppliedTaskClaimReacquisitionDirection",
+        requestId: reacquisitionRequestId,
+        runId,
+        taskId: plannedAttempt.taskId
       }
     ])
   })

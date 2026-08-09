@@ -223,6 +223,7 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
       event._tag === "PlannedAttemptExecutorWorkReported" && sameCorrelation(correlation, event.report.correlation)
   )
   const acceptedReports = acceptedReportRecords.flatMap(({ event }) =>
+    /* v8 ignore next -- acceptedReportRecords is closed by the immediately preceding exact-tag and exact-correlation filter. */
     event._tag === "PlannedAttemptExecutorWorkReported" && sameCorrelation(correlation, event.report.correlation)
       ? [event.report]
       : []
