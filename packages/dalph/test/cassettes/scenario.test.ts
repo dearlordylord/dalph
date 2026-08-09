@@ -3221,7 +3221,7 @@ it.effect("reconstructs both retained holders and blocks C through a contracted 
     const bResponsibilityAt = responsibilityAt(TaskId.make("B"))
     const cStartIntents = run.records.flatMap(({ event }, index) =>
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.plannedAttempt.attemptId === AttemptId.make("attempt:C:2") &&
+      event.plannedAttempt.attemptId === AttemptId.make("attempt:C:0") &&
       event.command === "StartOrContinue"
         ? [{ event, index }]
         : []
@@ -3248,7 +3248,7 @@ it.effect("reconstructs both retained holders and blocks C through a contracted 
     expect(cStartIntents).toHaveLength(1)
     expect(cStartIntents[0]?.index).toBeGreaterThan(aTerminalAt)
     expect(cStartIntents[0]?.index).toBeGreaterThan(bTerminalAt)
-    expect(run.activationOrdinals.length).toBeGreaterThan(1)
+    expect(run.activationOrdinals).toEqual([1, 2])
     expect(run.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
     expect(new Set(run.records.map(({ runId }) => runId))).toEqual(new Set([run.runId]))
     expect(reopened._tag).toBe("ValidWorkflowJournalHistory")

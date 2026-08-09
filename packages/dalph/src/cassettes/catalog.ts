@@ -1437,17 +1437,17 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette = Schema.decod
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "B" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:B:1", taskId: "B" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
       request: "StartOrContinue"
     },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "B" } },
-    { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:B:1", taskId: "B" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Terminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } },
@@ -1464,22 +1464,13 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette = Schema.decod
       taskId: "C",
       title: "Implement third task"
     },
-    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:2", taskId: "C" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:2", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:0", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:0", taskId: "C" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", attemptId: "attempt:C:2", result: { _tag: "Completed" } },
+      report: { _tag: "Terminal", attemptId: "attempt:C:0", result: { _tag: "Completed" } },
       request: "StartOrContinue"
     },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "RunActivationFinalTrackerGraphReadReturned", graph: threeEligibleTasksGraph },
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
-    },
-    ...taskControlMembershipRead(threeEligibleTasksGraph),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "RunActivationFinalTrackerGraphReadReturned", graph: threeEligibleTasksGraph },
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
