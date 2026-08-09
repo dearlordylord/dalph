@@ -530,7 +530,7 @@ const renderTimeline = (
       ? `This timeline contains ${settlementCount} established delivery settlements and their tracker-reflection meaning.`
       : running
         ? "No established delivery settlement has appeared in this running timeline yet."
-        : "Current catalog limitation: no maintained authored cassette publishes a non-empty graph-level settlement frame. Direct integration-finality cassettes execute that protocol without fabricating graph delivery state here."
+        : "This cassette publishes no non-empty graph-level settlement frame. Direct integration-finality cassettes execute that protocol without fabricating graph delivery state here."
   }
 
   const refreshFollow = (): void => {

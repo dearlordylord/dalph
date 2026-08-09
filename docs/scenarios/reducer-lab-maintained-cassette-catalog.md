@@ -395,13 +395,18 @@ worktree, and integration responsibilities. Terms such as
 `IdentityFreeWorkflowRoute` stay in the secondary exact JSON rather than
 becoming the human action label.
 
-No currently maintained authored cassette crosses the separate direct
-integration-finality protocol and then triggers another graph-level delivery
-publication. Consequently the authored workbench currently demonstrates the
-settlement and tracker-reflection layers only in their exact empty state. It
-says this explicitly; it must not imply that the current maintained catalog contains
-a populated graph-level settlement frame, and it must not synthesize one from
-the direct protocol cassette.
+The linked `authored:deliveryInvariantStory` spine crosses the ordinary
+production completion-finality boundary. After promotion, the controlled
+tracker returns the exact active claim, applies the exact replacement, later
+publishes a complete successful graph, returns the exact completion claim, and
+applies its deletion. Dalph itself records `IntegrationFinalitySettled`; the
+next production delivery publication contains the task-scoped settlement and
+its descriptive tracker reflection. The Lab does not call the direct protocol
+runner, append a settlement, or infer one from executor completion. The same
+spine begins with five production-observed tasks, crosses a coordinator death
+with A's exact integration obligation intact, and later publishes seven tasks.
+The prose story's manifest names which other beats are proven only by narrower
+maintained cassettes and which combined beats remain unimplemented.
 
 The Lab must not project a frontier from declared input, fabricate a privately
 branded journaled graph observation, infer missing topology from durable task
@@ -496,9 +501,25 @@ task whose exact facts are correlated below.
   Pause and accepted-result frames name the exact human action, task/attempt,
   task-work or integration-target resource requirement, and live-operation
   wait when present while retaining the raw proposal separately.
-- `states when the maintained authored catalog has not exercised a populated settlement layer`
-  checks zero-settlement frames identify that current catalog limitation and
-  do not claim a populated tracker-reflection example.
+- `settles a promoted authored task through the real completion-claim boundary`
+  checks the exact promotion, replacement intent/attempt/outcome, later fresh
+  successful tracker observation, deletion intent/attempt/outcome, and
+  `IntegrationFinalitySettled` order, plus a non-empty production settlement
+  and tracker-reflection frame. It also proves the cassette does not fabricate
+  whole-Run termination.
+- `keeps every delivery-story beat linked to maintained evidence or an explicit implementation gap`
+  checks the document's 22 stable beat IDs, exact catalog keys, explicit gap
+  reasons, and generated manifest block in both directions.
+- `shows the linked delivery story evolving from five to seven production-observed tasks`
+  runs the linked spine through the public authored runner and checks its
+  five-task and seven-task graph publications, exhaustive seven-task frontier,
+  recovered exact obligation, terminal authored assertion, and populated
+  settlement frame.
+- `shows the linked delivery story growing across restart and completion finality`
+  checks the same returned production frames through the Lab presentation
+  model: five graph nodes grow to seven exhaustive frontier entries, A's exact
+  obligation survives into Recovered, and A later has an established
+  settlement plus non-empty tracker reflection.
 - `keeps multi-task chronology landmarks attributable` checks task lifecycle
   landmarks include the task identity instead of rendering indistinguishable
   repeated lifecycle fragments.
@@ -518,7 +539,11 @@ task whose exact facts are correlated below.
 - The real-browser command listens for a delivery-frame event before the
   selected cassette's settled event, proves the article is still Running when
   a real frame appears, and then checks final auto-follow, rewind, disclosure
-  stability, and the complete current-catalog terminal summary.
+  stability, and the complete current-catalog terminal summary. Its
+  `drives the linked five-to-seven task delivery story through restart and completion finality`
+  checkpoint additionally observes both graph sizes while the linked cassette
+  is still Running, selects its recovered seven-task frame, and checks the
+  terminal settlement coverage through the actual served application.
 - `does not fabricate a graph workbench for direct protocol cassettes` checks
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.

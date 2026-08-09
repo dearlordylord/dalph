@@ -157,16 +157,33 @@ type CoordinatorStoryItem = Exclude<
 
 type AuthoredTrackerClaimStoryItem = Extract<
   CoordinatorStoryItem,
-  { readonly _tag: "TaskClaimCurrentReadReturned" | "TaskClaimReadFailed" | "TaskClaimReadReturned" }
+  {
+    readonly _tag:
+      | "CompletionClaimDeletionApplied"
+      | "CompletionClaimReadReturned"
+      | "CompletionClaimReplacementApplied"
+      | "TaskClaimCurrentReadReturned"
+      | "TaskClaimReadFailed"
+      | "TaskClaimReadReturned"
+  }
 >
 
 const isTrackerClaimStoryItem = (item: CoordinatorStoryItem): item is AuthoredTrackerClaimStoryItem =>
+  item._tag === "CompletionClaimDeletionApplied" ||
+  item._tag === "CompletionClaimReadReturned" ||
+  item._tag === "CompletionClaimReplacementApplied" ||
   item._tag === "TaskClaimCurrentReadReturned" ||
   item._tag === "TaskClaimReadFailed" ||
   item._tag === "TaskClaimReadReturned"
 
 const trackerClaimLyric = (item: AuthoredTrackerClaimStoryItem): string => {
   switch (item._tag) {
+    case "CompletionClaimDeletionApplied":
+      return `The task tracker deletes the exact completion claim for task ${item.taskId}.`
+    case "CompletionClaimReadReturned":
+      return `The task tracker returns the exact ${item.claim.toLowerCase()} claim for finality task ${item.taskId}.`
+    case "CompletionClaimReplacementApplied":
+      return `The task tracker replaces task ${item.taskId}'s active claim with its exact promotion-correlated completion claim.`
     case "TaskClaimCurrentReadReturned":
       return `The task tracker returns its current exact claim for task ${item.taskId}.`
     case "TaskClaimReadFailed":

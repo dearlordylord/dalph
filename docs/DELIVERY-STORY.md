@@ -4,12 +4,15 @@ One Run, told twice: as beats a person can follow, and as a state table that
 makes each beat's arithmetic checkable. The story is chosen to touch as many of
 `docs/DELIVERY-INVARIANTS.md` as one chronology can.
 
-Both registers are prose. The executable register is the maintained cassette
-`authored:deliveryInvariantStory` — one long recorded Run covering this whole
-chronology. The checked-in delivery-story manifest maps every numbered beat to
-one non-empty, ordered range of authored interactions and back to this exact
-document. Repository tests fail when the document, manifest, catalog key, or
-cassette chronology changes without the others.
+Both registers are prose. The maintained cassette
+`authored:deliveryInvariantStory` is the executable spine: one real Run grows
+from five to seven production-observed tasks, crosses a coordinator restart,
+promotes A, and settles A through the exact completion-claim boundary. Existing
+maintained cassettes cover several narrower beats. The checked-in manifest below
+maps every beat either to that spine, to exact maintained slice evidence, or to
+an explicit implementation gap. Repository tests fail when the document,
+manifest, catalog key, or cited catalog changes without the others. The Lab
+never fabricates the missing combined chronology.
 
 Alice is the Operator. `Gₙ` is a tracker graph revision. Capacity is the
 configured bound on concurrent task work. A task is **held** while it occupies a
@@ -136,8 +139,8 @@ record normal termination.
 
 Held plus retained is the whole of what Dalph owes at any row, and the rule is
 load-bearing: an accepted result is an obligation before it is integrated, so a
-task appears in Retained from the moment its executor reports until its
-promotion settles it. That is why A is retained at rows 13 and 14, and why B, C
+task appears in Retained from the moment its executor reports until exact
+completion finality settles it. That is why A is retained at rows 13 and 14, and why B, C
 and D are retained at row 21 while their results pass through integration.
 
 A row whose held count exceeds capacity is legal and appears twice, at 7 and 9:
@@ -179,30 +182,53 @@ consistent with `INVARIANTS.md`: I9 is modelled by no tool in the study.
 
 The maintained catalog key is `authored:deliveryInvariantStory`. Its source
 manifest names this document and all 22 beat numbers; this document names the
-same key. `runs the linked delivery invariant story through all twenty-two
-beats` checks that both directions agree, every beat owns a non-empty ordered
-interaction range, and the complete cassette reaches its declared end through
-`runAuthoredScenarioCassette`.
+same key. `keeps every delivery-story beat linked to maintained evidence or an
+explicit implementation gap` checks both directions, exact catalog keys, and
+the byte-for-byte manifest block. `shows the linked delivery story evolving
+from five to seven production-observed tasks` runs the executable spine through
+`runAuthoredScenarioCassette` and checks that it reaches its declared end.
 
 - `shows the linked delivery story evolving from five to seven production-observed tasks`
   checks the literal production delivery frames begin with established `G₀`
-  tasks A–E, later establish `G₅` tasks A–G, and retain the exhaustive frontier
-  plus bounded desired-ticket placement at each graph publication.
-- `applies the delivery-story capacity contraction without evicting A C or D`
-  checks the Operator's 3 → 2 change leaves all three exact task-work positions
-  held and blocks another admission until one is released.
-- `preserves A C and D held responsibilities across the delivery-story restart`
-  checks the first Recovered publication retains the same Run and Attempt IDs
-  and exact workflow responsibilities while graph authority is re-established
-  from a new tracker read.
-- `settles every promoted delivery-story task through the production completion-claim boundary`
-  checks promotion alone settles nothing, each exact completion claim is
-  replaced and deleted only after the declared fresh successful tracker read,
-  and all seven task-scoped delivery settlements are established before normal
-  Run termination.
-- `drives the linked delivery story live through the graph-first Reducer Lab`
-  is the real-browser acceptance path. It selects the ordinary catalog option,
-  watches frames arrive while production is running, sees five nodes grow to
-  seven, sees frontier, desired tickets, actual held positions, and exact
-  responsibilities on the graph, and crosses the restart without losing the
-  before-crash correlations.
+  tasks A–E, later establish `G₅` tasks A–G, retain the exhaustive seven-task
+  frontier, preserve A's exact recovered obligation, and establish A's
+  production settlement.
+- `settles a promoted authored task through the real completion-claim boundary`
+  checks promotion alone settles nothing; the exact A claim is replaced and
+  deleted only after the declared fresh successful tracker read, producing one
+  real settlement/reflection frame without claiming whole-Run termination.
+- `shows the linked delivery story growing across restart and completion finality`
+  checks those graph, restart, and settlement facts through the Lab's actual
+  presentation model.
+- The real-browser checkpoint `drives the linked five-to-seven task delivery story through restart and completion finality`
+  selects the ordinary catalog option, observes both graph sizes while the
+  production run is still Running, selects a recovered seven-task frame, and
+  verifies populated settlement evidence. Capacity contraction, three
+  simultaneous holders, and seven-task finality remain the explicit manifest
+  gaps; no acceptance mapping claims them.
+
+<!-- DELIVERY-STORY-MANIFEST:START -->
+cassette|authored:deliveryInvariantStory
+DS-01|DemonstratedBySpine|authored:deliveryInvariantStory
+DS-02|NotImplemented|No maintained run admits A, B, and C together yet.
+DS-03|DemonstratedByMaintainedSlice|authored:changedAttemptContinues
+DS-04|DemonstratedByMaintainedSlice|authored:changedAttemptContinues
+DS-05|DemonstratedByMaintainedSlice|authored:changedAttemptContinues,authored:changedAttemptStopsAndReleases
+DS-06|DemonstratedByMaintainedSlice|authored:taskPauseLetsIndependentTaskContinue
+DS-07|DemonstratedByMaintainedSlice|authored:dependentTasksCompleteInOneRun
+DS-08|DemonstratedBySpine|authored:deliveryInvariantStory
+DS-09|DemonstratedBySpine|authored:deliveryInvariantStory
+DS-10|DemonstratedByMaintainedSlice|authored:taskPauseLetsIndependentTaskContinue
+DS-11|DemonstratedByMaintainedSlice|authored:taskPauseLetsIndependentTaskContinue
+DS-12|DemonstratedByMaintainedSlice|authored:changedAttemptContinues
+DS-13|DemonstratedByMaintainedSlice|authored:acceptedResultRestartsIntoIntegration
+DS-14|DemonstratedBySpine|authored:deliveryInvariantStory
+DS-15|DemonstratedBySpine|authored:deliveryInvariantStory
+DS-16|DemonstratedByMaintainedSlice|authored:targetPromotionStaleBeforeCompareAndSet
+DS-17|DemonstratedBySpine|authored:deliveryInvariantStory
+DS-18|DemonstratedByMaintainedSlice|authored:taskUnpauseAfterSafeSuspension
+DS-19|NotImplemented|No maintained run combines the retained C attempt with a later capacity increase.
+DS-20|DemonstratedBySpine|authored:deliveryInvariantStory
+DS-21|NotImplemented|No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology.
+DS-22|NotImplemented|Whole-run seven-task completion and normal Run termination are not implemented as one cassette.
+<!-- DELIVERY-STORY-MANIFEST:END -->

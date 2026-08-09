@@ -24,6 +24,7 @@ import {
   deterministicTaskClaimAcquisitionPlannerLayer,
   CandidateCorrectionLimit,
   CandidateContinuationLimit,
+  CompletionClaimBoundary,
   type BoundedTicketRank,
   DeliveryRelationPublicationObserver,
   evaluateDeliveryRelationInputBundle,
@@ -93,15 +94,11 @@ import {
   type AuthoredObservedBehavior,
   type AuthoredScenarioCassette as ScenarioCassette
 } from "./authored-domain.js"
-import {
-  controlledExecutorLayer,
-  controlledTrace,
-  controlledTrackerGraphReaderLayer,
-  controlledTrackerMutationLayer
-} from "./authored-adapters.js"
+import { controlledExecutorLayer, controlledTrace, controlledTrackerGraphReaderLayer } from "./authored-adapters.js"
 import { makeStoryCursor, type StoryCursor } from "./authored-cursor.js"
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
+import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
 
 export interface AuthoredScenarioCassetteRun {
   readonly cassette: ScenarioCassette
@@ -939,7 +936,17 @@ const runAuthoredScenarioCassetteWith = (request: {
               : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
         }).pipe(Effect.orDie)
       })
-      const trackerMutationLayer = controlledTrackerMutationLayer(cursor, Context.get(sharedContext, TrackerMutation))
+      const trackerAuthority = yield* Layer.build(
+        controlledTrackerAuthorityLayer(cursor, Context.get(sharedContext, TrackerMutation))
+      )
+      const trackerMutationLayer = Layer.succeed(TrackerMutation, Context.get(trackerAuthority, TrackerMutation))
+      const completionClaimBoundary = Context.get(trackerAuthority, CompletionClaimBoundary)
+      const completionFinalityConfigured = cassette.story.some(
+        (item) =>
+          item._tag === "CompletionClaimReadReturned" ||
+          item._tag === "CompletionClaimReplacementApplied" ||
+          item._tag === "CompletionClaimDeletionApplied"
+      )
       const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
       const testGitWorktree = Context.get(sharedContext, TestGitWorktree)
@@ -1100,7 +1107,8 @@ const runAuthoredScenarioCassetteWith = (request: {
           verificationPlan === undefined
             ? undefined
             : { boundary: targetVerificationBoundary, evidenceStore, plan: verificationPlan },
-          targetPromotionStory ? { git: targetPromotionGit } : undefined
+          targetPromotionStory ? { git: targetPromotionGit } : undefined,
+          completionFinalityConfigured ? completionClaimBoundary : undefined
         ).pipe(
           Layer.provide(candidateLayer),
           Layer.provide(interpreterLayer),

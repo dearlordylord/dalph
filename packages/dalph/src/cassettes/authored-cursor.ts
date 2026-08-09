@@ -51,6 +51,18 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type,
     CursorFailure
   >
+  readonly consumeCompletionClaimDeletionApplied: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CompletionClaimDeletionApplied.Type,
+    CursorFailure
+  >
+  readonly consumeCompletionClaimReadReturned: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CompletionClaimReadReturned.Type,
+    CursorFailure
+  >
+  readonly consumeCompletionClaimReplacementApplied: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CompletionClaimReplacementApplied.Type,
+    CursorFailure
+  >
   readonly consumeAdmittedContinuationExecutorIntentHold: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsAdmittedContinuationBeforeExecutorIntent.Type>
   >
@@ -447,6 +459,25 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(yield* Schema.decodeUnknownEffect(AuthoredTaskClaimReadItem)(claimed.item).pipe(Effect.orDie))
   })
+  const consumeCompletionClaimDeletionApplied = consume("CompletionClaimDeletionApplied").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionClaimDeletionApplied)(item).pipe(
+        Effect.orDie
+      )
+    )
+  )
+  const consumeCompletionClaimReadReturned = consume("CompletionClaimReadReturned").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionClaimReadReturned)(item).pipe(Effect.orDie)
+    )
+  )
+  const consumeCompletionClaimReplacementApplied = consume("CompletionClaimReplacementApplied").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionClaimReplacementApplied)(item).pipe(
+        Effect.orDie
+      )
+    )
+  )
   const consumeTaskClaimReleaseResponseLost = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.TaskClaimReleaseResponseLost.Type =>
@@ -486,6 +517,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     awaitCoordinatorProcessDeath: Queue.take(coordinatorProcessDeaths),
     consumeAdmittedContinuationExecutorIntentHold,
     consumeCoordinatorActivationReturned,
+    consumeCompletionClaimDeletionApplied,
+    consumeCompletionClaimReadReturned,
+    consumeCompletionClaimReplacementApplied,
     consumeAttemptChoice,
     consumeAttemptChoiceRace,
     consumeCapacityChange,

@@ -6,8 +6,7 @@ import {
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   type PlannedTaskAttempt,
-  type RunId,
-  type TaskId
+  type RunId
 } from "@dalph/contracts"
 import {
   makeTaskWorkSpecification,
@@ -17,14 +16,6 @@ import {
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
   TrackerGraphReader,
-  TrackerMutation,
-  TaskClaimConflict,
-  TaskClaimOwnershipConflict,
-  TaskClaimReadFailure,
-  type TaskClaimObservation,
-  UnclaimedTask,
-  isExactTaskClaim,
-  OperationId,
   type TraceItem,
   type WorkflowOperation,
   WorkflowTrace
@@ -139,132 +130,6 @@ const actualDecision = (item: TraceItem): CassetteDecision | undefined => {
       })
   }
 }
-
-/** Owns the cassette's coherent logical claim state and optional authored read failures. */
-export const controlledTrackerMutationLayer = (cursor: StoryCursor, tracker: TrackerMutation["Service"]) =>
-  Layer.effect(
-    TrackerMutation,
-    Effect.gen(function* () {
-      const authoredObservations = yield* Ref.make<ReadonlyMap<TaskId, TaskClaimObservation>>(new Map())
-      const currentObservation: TrackerMutation["Service"]["readTaskClaim"] = (taskId) =>
-        Ref.get(authoredObservations).pipe(
-          Effect.flatMap((observations) => {
-            const observation = observations.get(taskId)
-            return observation === undefined ? tracker.readTaskClaim(taskId) : Effect.succeed(observation)
-          })
-        )
-      const setObservation = (taskId: TaskId, observation: TaskClaimObservation) =>
-        Ref.update(authoredObservations, (observations) => new Map(observations).set(taskId, observation))
-      const applyAuthoredObservation = (observation: TaskClaimObservation) =>
-        Effect.gen(function* () {
-          if (observation._tag === "UnclaimedTask") {
-            const current = yield* tracker.readTaskClaim(observation.taskId)
-            /* v8 ignore start -- @preserve Repeating an authored absence needs no second underlying release. */
-            if (current._tag === "ActiveTaskClaim") {
-              yield* tracker
-                .releaseTaskClaim({
-                  claim: current,
-                  operationId: OperationId.make(`authored-external-claim-loss:${current.operationId}`)
-                })
-                .pipe(Effect.orDie)
-            }
-            /* v8 ignore stop -- @preserve */
-          }
-          yield* setObservation(observation.taskId, observation)
-          return observation
-        })
-      const readTaskClaim: TrackerMutation["Service"]["readTaskClaim"] = (taskId) =>
-        cursor.consumeTaskClaimRead.pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => currentObservation(taskId),
-              onSome: (item) => {
-                if (item._tag === "TaskClaimCurrentReadReturned") {
-                  return item.taskId === taskId
-                    ? currentObservation(taskId)
-                    : /* v8 ignore next -- @preserve Decoded authored claim reads must name the requested task. */
-                      Effect.die(`authored cassette returned current claim ${item.taskId} for ${taskId}`)
-                }
-                if (item._tag === "TaskClaimReadFailed") {
-                  return item.taskId === taskId
-                    ? Effect.fail(new TaskClaimReadFailure({ detail: item.reason, taskId }))
-                    : /* v8 ignore next -- @preserve Decoded authored failures must name the requested task. */
-                      Effect.die(`authored cassette returned unreadable claim ${item.taskId} for ${taskId}`)
-                }
-                return item.observation.taskId === taskId
-                  ? applyAuthoredObservation(item.observation)
-                  : /* v8 ignore next -- @preserve Decoded authored observations must name the requested task. */
-                    Effect.die(`authored cassette returned task claim ${item.observation.taskId} for ${taskId}`)
-              }
-            })
-          )
-        )
-      return TrackerMutation.of({
-        acquireTaskClaim: (acquisition) =>
-          Ref.get(authoredObservations).pipe(
-            Effect.flatMap((observations) => {
-              const observed = observations.get(acquisition.taskId)
-              if (observed === undefined) {
-                return tracker
-                  .acquireTaskClaim(acquisition)
-                  .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim)))
-              }
-              const attempted = { _tag: "ActiveTaskClaim" as const, ...acquisition }
-              if (observed._tag === "UnclaimedTask") {
-                return tracker
-                  .acquireTaskClaim(acquisition)
-                  .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim)))
-              }
-              return isExactTaskClaim(observed, attempted)
-                ? Effect.succeed(observed)
-                : Effect.fail(new TaskClaimConflict({ attempted: acquisition, observed }))
-            })
-          ),
-        readTaskClaim,
-        /* v8 ignore start -- @preserve Release variants are covered by the tracker contract and composed cassette outcomes. */
-        releaseTaskClaim: (release) => {
-          const applyRelease = Ref.get(authoredObservations).pipe(
-            Effect.flatMap((observations) => {
-              const observed = observations.get(release.claim.taskId)
-              if (observed === undefined) {
-                return tracker
-                  .releaseTaskClaim(release)
-                  .pipe(
-                    Effect.tap(() =>
-                      setObservation(release.claim.taskId, UnclaimedTask.make({ taskId: release.claim.taskId }))
-                    )
-                  )
-              }
-              /* v8 ignore next -- @preserve Ownership-conflict variants are covered by the tracker contract. */
-              return observed._tag === "ActiveTaskClaim" && isExactTaskClaim(observed, release.claim)
-                ? tracker
-                    .releaseTaskClaim(release)
-                    .pipe(
-                      Effect.tap(() =>
-                        setObservation(release.claim.taskId, UnclaimedTask.make({ taskId: release.claim.taskId }))
-                      )
-                    )
-                : Effect.fail(new TaskClaimOwnershipConflict({ attempted: release.claim, observed }))
-            })
-          )
-          return cursor.consumeTaskClaimReleaseResponseLost.pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => applyRelease,
-                onSome: (lost) =>
-                  lost.taskId !== release.claim.taskId
-                    ? Effect.die(
-                        `authored cassette lost claim-release response for ${lost.taskId} while releasing ${release.claim.taskId}`
-                      )
-                    : applyRelease.pipe(Effect.andThen(cursor.pauseAtCoordinatorProcessDeath))
-              })
-            )
-          )
-        }
-        /* v8 ignore stop -- @preserve */
-      })
-    })
-  )
 
 const encodedDecision = (decision: CassetteDecision): string =>
   JSON.stringify(Schema.encodeUnknownSync(AuthoredCassetteDecision)(decision))

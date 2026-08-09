@@ -5,6 +5,7 @@ const labUrl = process.env.REDUCER_LAB_URL ?? "http://determined_johnson.orb.loc
 const terminalTimeoutMs = 180_000
 const insecureOriginCassette = "authored:candidateCorrectionAfterUnreadableGit"
 const framedCassette = "authored:dependentTasksCompleteInOneRun"
+const linkedDeliveryStoryCassette = "authored:deliveryInvariantStory"
 
 const browser = await chromium.launch({ headless: true })
 try {
@@ -160,6 +161,50 @@ try {
   assert.equal(await frameSelector.inputValue(), String(frameCount - 1))
   assert.equal(await workbench.getAttribute("open"), "")
   assert.equal(await page.locator("#selected-cassette").getAttribute("data-catalog-key"), framedCassette)
+
+  await page.reload({ waitUntil: "networkidle" })
+  await selector.selectOption(linkedDeliveryStoryCassette)
+  await page.evaluate(() => {
+    globalThis.__linkedDeliveryStoryTrace = []
+    document.querySelector("#root")?.addEventListener("dalph-cassette-lab:delivery-frame", () => {
+      const article = document.querySelector("#selected-cassette")
+      const graph = document.querySelector("dalph-delivery-graph")
+      globalThis.__linkedDeliveryStoryTrace.push({
+        activation: document.querySelector('[data-role="delivery-frame"]')?.textContent ?? "",
+        state: article?.getAttribute("data-state"),
+        taskCount: graph?.projection?.tasks.length ?? 0
+      })
+    })
+  })
+  await page.getByRole("button", { name: /Run selected cassette:/u }).click()
+  await page.waitForFunction(
+    (catalogKey) => document.querySelector("#selected-cassette")?.getAttribute("data-catalog-key") === catalogKey
+      && document.querySelector("#selected-cassette")?.getAttribute("data-state") === "Completed",
+    linkedDeliveryStoryCassette,
+    { timeout: terminalTimeoutMs }
+  )
+  const linkedTrace = await page.evaluate(() => globalThis.__linkedDeliveryStoryTrace)
+  assert.ok(linkedTrace.some(({ state, taskCount }) => state === "Running" && taskCount === 5))
+  assert.ok(linkedTrace.some(({ state, taskCount }) => state === "Running" && taskCount === 7))
+  const linkedWorkbench = page.locator('[data-role="delivery-workbench"]')
+  const linkedFrameSelector = linkedWorkbench.getByLabel("Delivery frame")
+  const linkedFrameTruth = await page.evaluate(() => {
+    const select = document.querySelector('[data-role="delivery-workbench"] select')
+    const graph = document.querySelector("dalph-delivery-graph")
+    if (!(select instanceof HTMLSelectElement) || graph === null) return []
+    return [...select.options].map((option) => {
+      select.value = option.value
+      select.dispatchEvent(new Event("change"))
+      return {
+        facts: document.querySelector('[data-role="delivery-frame"]')?.textContent ?? "",
+        taskCount: graph.projection?.tasks.length ?? 0
+      }
+    })
+  })
+  assert.ok(linkedFrameTruth.some(({ facts, taskCount }) => taskCount === 7 && /Recovered/u.test(facts)))
+  assert.match(await linkedWorkbench.locator(".delivery-settlement-coverage").textContent() ?? "", /established delivery settlements/u)
+  assert.ok(await linkedFrameSelector.locator("option").count() > 1)
+  console.log("✓ drives the linked five-to-seven task delivery story through restart and completion finality")
 
   await page.reload({ waitUntil: "networkidle" })
   await page.getByRole("button", { name: `Run all ${maintainedCassetteCount} cassettes` }).click()

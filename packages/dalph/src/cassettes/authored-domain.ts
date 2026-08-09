@@ -233,6 +233,12 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   },
   /** Harness lifecycle: dispose one coordinator and its same-process executor session without journaling an occurrence. */
   CoordinatorProcessDies: {},
+  /** The tracker applied deletion of the exact promotion-correlated completion claim. */
+  CompletionClaimDeletionApplied: { taskId: TaskId },
+  /** The tracker reports which exact claim kind is current for finality reconciliation. */
+  CompletionClaimReadReturned: { claim: Schema.Literals(["Active", "Completion"]), taskId: TaskId },
+  /** The tracker applied replacement of the active claim with the exact completion claim. */
+  CompletionClaimReplacementApplied: { taskId: TaskId },
   /** Harness synchronization: hold this exact admitted continuation before its durable executor command intent. */
   DalphHoldsAdmittedContinuationBeforeExecutorIntent: { attemptId: AttemptId, taskId: TaskId },
   DalphSelects: { operation: AuthoredCassetteDecision },
@@ -383,6 +389,9 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "PlannedAttemptExecutorWorkReported"
   ],
   TaskTracker: [
+    "CompletionClaimDeletionApplied",
+    "CompletionClaimReadReturned",
+    "CompletionClaimReplacementApplied",
     "TaskClaimReadFailed",
     "TaskClaimCurrentReadReturned",
     "TaskClaimReadReturned",

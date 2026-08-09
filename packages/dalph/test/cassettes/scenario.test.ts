@@ -146,7 +146,8 @@ import {
   evaluateAuthoredDeliveryPublication,
   type AuthoredDeliveryPublication
 } from "../../src/cassettes/authored-runner.js"
-import { controlledExecutorLayer, controlledTrackerMutationLayer } from "../../src/cassettes/authored-adapters.js"
+import { controlledExecutorLayer } from "../../src/cassettes/authored-adapters.js"
+import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
 import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
 
@@ -253,7 +254,7 @@ it.effect("preserves exact, conflicting, and unclaimed authored acquisition obse
             token: ClaimToken.make("coverage-authored-unclaimed-token")
           })
         ).toMatchObject({ _tag: "ActiveTaskClaim", taskId: unclaimedTaskId })
-      }).pipe(Effect.provide(controlledTrackerMutationLayer(cursor, base)))
+      }).pipe(Effect.provide(controlledTrackerAuthorityLayer(cursor, base)))
     }).pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
   })
 )
@@ -1846,6 +1847,97 @@ it.effect("records completion finality after valid candidate verification and pr
       })
     )
     expect(foldRecordedCassette(renamed)._tag).toBe("ValidWorkflowJournalHistory")
+  })
+)
+
+it.effect("settles a promoted authored task through the real completion-claim boundary", () =>
+  Effect.gen(function* () {
+    const promoted = maintainedAuthoredCassetteCatalog.targetPromotionSuccess
+    const completedGraph = {
+      revision: "authored-finality-success",
+      tasks: [{ id: "A", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
+    } as const
+    const settledGraph = { revision: "authored-finality-settled", tasks: [] } as const
+    const finalityStory = promoted.story.flatMap(
+      (item): ReadonlyArray<unknown> =>
+        item._tag !== "ExpectedBehavior"
+          ? [item]
+          : [
+              { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" },
+              { _tag: "CompletionClaimReplacementApplied", taskId: "A" },
+              {
+                _tag: "CoordinatorActivationReturned",
+                decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+              },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+              { _tag: "TrackerGraphReadReturned", graph: completedGraph },
+              { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
+              { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+              { _tag: "TrackerGraphReadReturned", graph: settledGraph },
+              {
+                _tag: "CoordinatorActivationReturned",
+                decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+              },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+              { _tag: "TrackerGraphReadReturned", graph: settledGraph },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+              { _tag: "TrackerGraphReadReturned", graph: settledGraph },
+              {
+                _tag: "CoordinatorActivationReturned",
+                decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+              },
+              item
+            ]
+    )
+
+    const run = yield* runAuthoredScenarioCassette({ ...promoted, story: finalityStory })
+    const tags = run.records.map(({ event }) => event._tag)
+    const ordered = [
+      "TargetPromotionObservedSuccess",
+      "CompletionClaimReplacementIntended",
+      "CompletionClaimReplacementAttemptIntended",
+      "CompletionClaimReplaced",
+      "TaskTrackerFactsObserved",
+      "CompletionClaimDeletionIntended",
+      "CompletionClaimDeletionAttemptIntended",
+      "CompletionClaimDeleted",
+      "IntegrationFinalitySettled"
+    ] as const
+    let previousPosition = -1
+    const positions = ordered.map((tag) => {
+      previousPosition = tags.indexOf(tag, previousPosition + 1)
+      return previousPosition
+    })
+
+    expect(positions.every((position) => position >= 0)).toBe(true)
+    expect(positions).toEqual(positions.toSorted((left, right) => left - right))
+    expect(tags).not.toContain("WorkflowRunTerminated")
+    expect(run.deliveryFrames.some(({ settlements }) => settlements.some(({ taskId }) => taskId === "A"))).toBe(true)
+    expect(run.deliveryFrames.some(({ trackerReflection }) => trackerReflection.settlementCount > 0)).toBe(true)
+  })
+)
+
+it.effect("shows the linked delivery story evolving from five to seven production-observed tasks", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory)
+    const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
+    const fiveTasks = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 5)
+    const sevenTasks = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 7)
+    const recoveredResponsibility = run.deliveryFrames.find(
+      ({ activation, deliveries, graph }) =>
+        activation === "Recovered" &&
+        graph._tag === "Established" &&
+        graph.tasks.length === 7 &&
+        deliveries.some(({ obligations, taskId }) => taskId === "A" && obligations.length > 0)
+    )
+
+    expect(fiveTasks).toBeDefined()
+    expect(sevenTasks).toBeDefined()
+    expect(sevenTasks?.frontier).toHaveLength(7)
+    expect(recoveredResponsibility).toBeDefined()
+    expect(run.deliveryFrames.some(({ settlements }) => settlements.some(({ taskId }) => taskId === "A"))).toBe(true)
+    expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
   })
 )
 

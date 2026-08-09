@@ -1761,6 +1761,90 @@ export const targetPromotionSuccessAuthoredCassette = promotionScenarioFrom(
   }
 )
 
+const deliveryStoryStartingGraph = {
+  revision: "delivery-story-G0",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    ...["B", "C", "D", "E"].map((id) => ({
+      id,
+      lifecycle: { _tag: "Open" as const },
+      parentTaskId: null,
+      prerequisiteIds: ["A"]
+    }))
+  ]
+} as const
+
+const deliveryStoryExpandedGraph = {
+  revision: "delivery-story-G5",
+  tasks: [
+    ...deliveryStoryStartingGraph.tasks,
+    ...["F", "G"].map((id) => ({
+      id,
+      lifecycle: { _tag: "Open" as const },
+      parentTaskId: null,
+      prerequisiteIds: ["A"]
+    }))
+  ]
+} as const
+
+const deliveryStorySuccessfulGraph = {
+  revision: "delivery-story-G6",
+  tasks: deliveryStoryExpandedGraph.tasks.map((task) => ({
+    ...task,
+    lifecycle: { _tag: "CompletedSuccessfully" as const }
+  }))
+} as const
+
+const deliveryStoryBase = (() => {
+  let recovered = false
+  return targetPromotionSuccessAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (item._tag === "CoordinatorProcessDies") recovered = true
+    if (item._tag === "TrackerGraphReadReturned") {
+      return [{ ...item, graph: recovered ? deliveryStoryExpandedGraph : deliveryStoryStartingGraph }]
+    }
+    if (item._tag !== "ExpectedBehavior") return [item]
+    return [
+      { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" },
+      { _tag: "CompletionClaimReplacementApplied", taskId: "A" },
+      {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryStorySuccessfulGraph },
+      { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
+      { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryStorySuccessfulGraph },
+      {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryStorySuccessfulGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryStorySuccessfulGraph },
+      {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      item
+    ]
+  })
+})()
+
+/**
+ * The executable spine linked from docs/DELIVERY-STORY.md. It exercises the
+ * ordinary delivery runtime from a five-task graph through restart, a
+ * seven-task graph, promotion, and exact completion-finality settlement.
+ */
+export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...targetPromotionSuccessAuthoredCassette,
+  name: "the delivery invariant story grows from five to seven tasks across restart and finality",
+  startingFacts: { ...targetPromotionSuccessAuthoredCassette.startingFacts, trackerGraph: deliveryStoryStartingGraph },
+  story: deliveryStoryBase
+})
+
 /** Three lost mutation responses are each reconciled against H; exhaustion sends no fourth request. */
 export const targetPromotionAmbiguityExhaustionAuthoredCassette = promotionScenarioFrom(
   "reconciles a lost promotion response and never sends a fourth request",
@@ -1894,6 +1978,7 @@ export const maintainedAuthoredCassetteCatalog = defineAuthoredCassetteCatalog({
   changedAttemptStopsWithAbsentClaim: changedAttemptStopsWithAbsentClaimAuthoredCassette,
   changedAttemptStopsWithForeignClaim: changedAttemptStopsWithForeignClaimAuthoredCassette,
   compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
+  deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
   dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
   incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
   lostPlannedWorktreeSafelySuspends: lostPlannedWorktreeSafelySuspendsAuthoredCassette,

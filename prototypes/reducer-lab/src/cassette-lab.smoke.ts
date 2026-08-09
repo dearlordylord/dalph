@@ -91,6 +91,37 @@ await scenario("captures every authored delivery frame from the real production 
   }
 })
 
+await scenario("shows the linked delivery story growing across restart and completion finality", () => {
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The linked story must complete with frames")
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) return
+  assert(
+    result.deliveryFrames.some(({ graph }) => graph._tag === "Established" && graph.tasks.length === 5),
+    "The linked story must show the five-task production graph"
+  )
+  assert(
+    result.deliveryFrames.some(
+      ({ frontier, graph }) => graph._tag === "Established" && graph.tasks.length === 7 && frontier.length === 7
+    ),
+    "The linked story must show the exhaustive seven-task production frontier"
+  )
+  assert(
+    result.deliveryFrames.some(
+      ({ activation, deliveries }) =>
+        activation === "Recovered" &&
+        deliveries.some(({ obligations, taskId }) => taskId === "A" && obligations.length > 0)
+    ),
+    "The linked story must preserve A's exact responsibility across restart"
+  )
+  assert(
+    result.deliveryFrames.some(
+      ({ settlements, trackerReflection }) =>
+        settlements.some(({ taskId }) => taskId === "A") && trackerReflection.settlementCount > 0
+    ),
+    "The linked story must show the production settlement and tracker reflection"
+  )
+})
+
 await scenario("keeps a dependant blocked after executor completion until a later tracker observation", () => {
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The dependant story must return delivery frames")
@@ -731,7 +762,7 @@ await scenario("uses production authored prose for current story items", () => {
   )
 })
 
-await scenario("states when the maintained authored catalog has not exercised a populated settlement layer", async () => {
+await scenario("states when the selected authored cassette has no populated settlement layer", async () => {
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
   if (row === undefined) throw new Error("The dependency delivery row is missing")
@@ -740,8 +771,8 @@ await scenario("states when the maintained authored catalog has not exercised a 
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await done
   assert(
-    document.querySelector(".delivery-settlement-coverage")?.textContent?.includes("no maintained authored cassette publishes a non-empty graph-level settlement frame") === true,
-    "The workbench must state the maintained-catalog settlement limitation instead of implying populated evidence"
+    document.querySelector(".delivery-settlement-coverage")?.textContent?.includes("This cassette publishes no non-empty graph-level settlement frame") === true,
+    "The workbench must state the selected cassette's settlement limitation instead of implying populated evidence"
   )
 })
 
