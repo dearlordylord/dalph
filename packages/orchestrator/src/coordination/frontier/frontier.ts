@@ -109,6 +109,12 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
   }
+  /** Repeats one already-intended stopped-attempt claim release after the tracker kept that exact claim current. */
+  RetryStoppedAttemptClaimRelease: {
+    readonly operation: StoppedAttemptTaskClaimReleaseOperation
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
   SuspendPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ReconcileTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
   ReconcileTaskClaimRelease: { readonly operationId: OperationId; readonly taskId: TaskId }
@@ -164,6 +170,7 @@ type AttemptStopTransition = Extract<
       | "ObserveStoppedAttemptClaim"
       | "RecordStoppedAttemptClaimNoRelease"
       | "ReleaseStoppedAttemptClaim"
+      | "RetryStoppedAttemptClaimRelease"
   }
 >
 
@@ -172,7 +179,8 @@ const isAttemptStopTransition = (transition: RunnableFrontierTransition): transi
   transition._tag === "ObserveAttemptStoppageExecutor" ||
   transition._tag === "ObserveStoppedAttemptClaim" ||
   transition._tag === "RecordStoppedAttemptClaimNoRelease" ||
-  transition._tag === "ReleaseStoppedAttemptClaim"
+  transition._tag === "ReleaseStoppedAttemptClaim" ||
+  transition._tag === "RetryStoppedAttemptClaimRelease"
 
 export const runnableTransitionTaskId = (transition: RunnableFrontierTransition): TaskId => {
   if (isAttemptStopTransition(transition)) return transition.subject.plannedAttempt.taskId
@@ -225,6 +233,7 @@ const transitionTrackerGraphRequirements = {
   RecordStoppedAttemptClaimNoRelease: "AcceptedHistorySufficient",
   ReleaseExternallyCompletedTaskClaim: "CurrentTrackerGraphRequired",
   ReleaseStoppedAttemptClaim: "AcceptedHistorySufficient",
+  RetryStoppedAttemptClaimRelease: "AcceptedHistorySufficient",
   ReleaseStartedIntegrationTarget: "AcceptedHistorySufficient",
   StartPlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
   StartQueuedIntegration: "CurrentTrackerGraphRequired",
@@ -512,6 +521,9 @@ const executorDecisionFor = (
       }),
       StoppedAttemptClaimReleaseRequired: ({ operation, requestId, subject }) => ({
         transition: RunnableFrontierTransition.ReleaseStoppedAttemptClaim({ operation, requestId, subject })
+      }),
+      StoppedAttemptClaimReleaseRetryRequired: ({ operation, requestId, subject }) => ({
+        transition: RunnableFrontierTransition.RetryStoppedAttemptClaimRelease({ operation, requestId, subject })
       }),
       StoppedAttemptClaimReleasePending: ({ operationId }) => ({
         explanation: FrontierExplanation.StoppedAttemptClaimReleasePending({

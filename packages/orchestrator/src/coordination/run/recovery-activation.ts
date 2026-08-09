@@ -334,7 +334,7 @@ const observedStoppedClaimDisposition = (
       return ResponsibilityDisposition.StoppedAttemptClaimPlanningWait({ reason: "FocusedObservationContradiction" })
     }
     /* v8 ignore stop */
-    return ResponsibilityDisposition.StoppedAttemptClaimReleaseRequired({
+    return ResponsibilityDisposition.StoppedAttemptClaimReleaseRetryRequired({
       operation: { ...releaseIntent.event.operation, authority: releaseIntent.event.operation.authority },
       requestId,
       subject
@@ -1107,6 +1107,7 @@ const transitionTagsAllowedWhilePaused = new Set<RunnableFrontierTransition["_ta
   "ReconcileTaskClaimRelease",
   "ReconcileTaskWorktree",
   "ReleaseStoppedAttemptClaim",
+  "RetryStoppedAttemptClaimRelease",
   "SuspendPlannedAttemptExecutorWork",
   "ReleaseStartedIntegrationTarget"
 ])
@@ -1603,6 +1604,7 @@ const journaledFreshTransitionTags = new Set<RunnableFrontierTransition["_tag"]>
   "ReleaseExternallyCompletedTaskClaim",
   "RecordStoppedAttemptClaimNoRelease",
   "ReleaseStoppedAttemptClaim",
+  "RetryStoppedAttemptClaimRelease",
   "ReleaseStartedIntegrationTarget",
   "SuspendPlannedAttemptExecutorWork",
   "StartQueuedIntegration"

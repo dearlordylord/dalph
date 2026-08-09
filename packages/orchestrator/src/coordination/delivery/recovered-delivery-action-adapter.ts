@@ -14,19 +14,21 @@ import { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-r
 import type { DeliveryActionExecutionLease } from "./delivery-action-executor.js"
 import type { AcceptedWorkflowTransition, NewRecoveredWorkflowAction } from "./delivery-action-proposal.js"
 import type { OperationId } from "../../workflow/identity.js"
+import { acceptedTransitionExecutionOf, type TransitionForAcceptedExecution } from "./delivery-transition-policy.js"
 
-type AcceptedRecoveryTransition = Extract<
-  AcceptedWorkflowTransition,
-  { readonly _tag: "CheckTaskClaim" | "ReconcileTaskClaim" | "ReconcileTaskClaimRelease" | "ReconcileTaskWorktree" }
->
+type AcceptedRecoveryTransition = TransitionForAcceptedExecution<"Recovery">
+
+type AcceptedObservationTransition = TransitionForAcceptedExecution<"Observation">
+type StoppedClaimReleaseRetryTransition = TransitionForAcceptedExecution<"StoppedClaimReleaseRetry">
 
 const isAcceptedRecoveryTransition = (
   transition: AcceptedWorkflowTransition
-): transition is AcceptedRecoveryTransition =>
-  transition._tag === "CheckTaskClaim" ||
-  transition._tag === "ReconcileTaskClaim" ||
-  transition._tag === "ReconcileTaskClaimRelease" ||
-  transition._tag === "ReconcileTaskWorktree"
+): transition is AcceptedRecoveryTransition => acceptedTransitionExecutionOf(transition) === "Recovery"
+
+const isStoppedClaimReleaseRetryTransition = (
+  transition: AcceptedWorkflowTransition
+): transition is StoppedClaimReleaseRetryTransition =>
+  acceptedTransitionExecutionOf(transition) === "StoppedClaimReleaseRetry"
 
 const executeAcceptedRecovery = (runId: RunId, transition: AcceptedRecoveryTransition) => {
   switch (transition._tag) {
@@ -82,7 +84,7 @@ const executeRecoveredObservation = Effect.fn("DeliveryAction.executeRecoveredOb
 })
 
 const executeAcceptedObservation = Effect.fn("DeliveryAction.executeAcceptedObservation")(function* (
-  transition: Exclude<AcceptedWorkflowTransition, AcceptedRecoveryTransition>
+  transition: AcceptedObservationTransition
 ) {
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
@@ -145,6 +147,12 @@ export const executeAcceptedWorkflowAction = Effect.fn("DeliveryAction.executeAc
   runId: RunId,
   transition: AcceptedWorkflowTransition
 ) {
+  if (isStoppedClaimReleaseRetryTransition(transition)) {
+    const interpreter = yield* WorkflowInterpreter
+    const trace = yield* WorkflowTrace
+    yield* trace.emit(OperationSelected.make({ operation: transition.operation }))
+    return yield* interpreter.releaseTaskClaim(transition.operation)
+  }
   if (isAcceptedRecoveryTransition(transition)) return yield* executeAcceptedRecovery(runId, transition)
   return yield* executeAcceptedObservation(transition)
 })

@@ -50,6 +50,7 @@ import {
   CandidateCorrectionLimit
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
+import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import { deliveryProposalsOf } from "./delivery-proposal.js"
@@ -199,7 +200,7 @@ describe("delivery proposal route matrix", () => {
         issues: [],
         proposals: [
           {
-            actionIdentity: { _tag: "ExistingOperationId", operationId },
+            actionIdentity: { _tag: "ExistingOperationId" },
             owner: "TicketDelivery",
             route: { _tag: "AcceptedWorkflowRoute", transition }
           }
@@ -212,6 +213,32 @@ describe("delivery proposal route matrix", () => {
     expect(proposalsFor(firstTransition)).toMatchObject({
       issues: [{ _tag: "AcceptedOperationEvidenceMissing", operationId }],
       proposals: []
+    })
+  })
+
+  it("retries Alice's exact stopped-claim release after reconciliation keeps the claim current", () => {
+    const requestId = AttemptChoiceRequestId.make({ nonce: "retry-stopped-release", runId })
+    const observationOperationId = OperationId.make("retry-stopped-release-observation")
+    const operationId = OperationId.make("retry-stopped-release-operation")
+    const operation = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.make({
+        observationOperationId,
+        requestId
+      }),
+      predecessorOperationIds: [activeClaim.operationId, observationOperationId],
+      release: { claim: activeClaim, operationId }
+    })
+    const transition = RunnableFrontierTransition.RetryStoppedAttemptClaimRelease({
+      operation,
+      requestId,
+      subject: { observedTaskRevision: TaskRevision.make("retry-stopped-release-F2"), plannedAttempt }
+    })
+
+    expect(proposalsFor(transition, new Set([operationId]))).toMatchObject({
+      issues: [],
+      proposals: [
+        { actionIdentity: { _tag: "ExistingOperationId" }, route: { _tag: "AcceptedWorkflowRoute", transition } }
+      ]
     })
   })
 
@@ -296,10 +323,7 @@ describe("delivery proposal route matrix", () => {
       expect(accepted).toMatchObject({
         issues: [],
         proposals: [
-          {
-            actionIdentity: { _tag: "ExistingOperationId", operationId },
-            route: { _tag: "AcceptedWorkflowRoute", transition }
-          }
+          { actionIdentity: { _tag: "ExistingOperationId" }, route: { _tag: "AcceptedWorkflowRoute", transition } }
         ]
       })
     }
@@ -324,9 +348,7 @@ describe("delivery proposal route matrix", () => {
     })
     expect(proposalsFor(claimTransition, new Set([responsibleClaimOperation.operationId]))).toMatchObject({
       issues: [],
-      proposals: [
-        { actionIdentity: { _tag: "ExistingOperationId", operationId: responsibleClaimOperation.operationId } }
-      ]
+      proposals: [{ actionIdentity: { _tag: "ExistingOperationId" } }]
     })
   })
 

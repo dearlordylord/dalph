@@ -1,5 +1,5 @@
 import type { PlannedAttemptExecutorCorrelation, TaskId } from "@dalph/contracts"
-import { Effect, Ref } from "effect"
+import { Effect, Ref, Schema } from "effect"
 import type { DeliveryProposalId, DeliveryTaskWorkAdmissionBasis } from "./relations.js"
 import type { DeliveryActionProposal, TaskWorkPositionRequirement } from "./delivery-action-proposal.js"
 import type {
@@ -19,6 +19,7 @@ type TaskWorkPosition =
 interface AdmissionState {
   readonly capacity: DeliveryTaskWorkAdmissionBasis["capacity"]
   readonly positions: ReadonlyMap<TaskId, TaskWorkPosition>
+  readonly protocolOwners: ReadonlyMap<PlannedAttemptProtocolGuardKey, DeliveryProposalId>
 }
 
 export interface DeliveryAdmissionReservation {
@@ -44,7 +45,13 @@ export interface DeliveryRuntimeAdmissionController {
     proposal: DeliveryActionProposal
   ) => Effect.Effect<
     | { readonly _tag: "Admitted"; readonly reservation: DeliveryAdmissionReservation }
-    | { readonly _tag: "Deferred"; readonly reason: "IntegrationTargetUnavailable" | "TaskWorkPositionUnavailable" }
+    | {
+        readonly _tag: "Deferred"
+        readonly reason:
+          | "IntegrationTargetUnavailable"
+          | "PlannedAttemptProtocolUnavailable"
+          | "TaskWorkPositionUnavailable"
+      }
   >
 }
 
@@ -53,9 +60,20 @@ const sameCorrelation = (
   right: PlannedAttemptExecutorCorrelation
 ): boolean => left?.attemptId === right.attemptId && left.runId === right.runId
 
+/** Process-local structural identity of the guard for one exact Run and planned attempt. */
+const PlannedAttemptProtocolGuardKey = Schema.NonEmptyString.pipe(Schema.brand("PlannedAttemptProtocolGuardKey"))
+type PlannedAttemptProtocolGuardKey = typeof PlannedAttemptProtocolGuardKey.Type
+
+const plannedAttemptProtocolKey = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptProtocolGuardKey =>
+  PlannedAttemptProtocolGuardKey.make(JSON.stringify({ attemptId: correlation.attemptId, runId: correlation.runId }))
+
 interface TaskPositionReservation {
   readonly admitted: boolean
   readonly createdFor: TaskId | null
+}
+
+interface PlannedAttemptProtocolReservation {
+  readonly admitted: boolean
 }
 
 type ExistingTaskPositionRequirement = Extract<TaskWorkPositionRequirement, { readonly mode: "Existing" }>
@@ -68,13 +86,14 @@ const unchangedTaskReservation = (
 
 const reserveExistingTaskPosition = (
   requirement: ExistingTaskPositionRequirement,
+  correlation: PlannedAttemptExecutorCorrelation,
   current: AdmissionState
 ): readonly [TaskPositionReservation, AdmissionState] => {
   const existing = current.positions.get(requirement.taskId)
   return unchangedTaskReservation(
     existing !== undefined &&
       existing._tag !== "PendingRuntimePosition" &&
-      sameCorrelation(existing.correlation, requirement.correlation),
+      sameCorrelation(existing.correlation, correlation),
     current
   )
 }
@@ -82,13 +101,14 @@ const reserveExistingTaskPosition = (
 const reserveReusableTaskPosition = (
   proposal: DeliveryActionProposal,
   requirement: ReusableTaskPositionRequirement,
+  retainAs: PlannedAttemptExecutorCorrelation | undefined,
   current: AdmissionState
 ): readonly [TaskPositionReservation, AdmissionState] => {
   const existing = current.positions.get(requirement.taskId)
   if (existing !== undefined) {
-    if (requirement.retainAs === undefined) return unchangedTaskReservation(true, current)
+    if (retainAs === undefined) return unchangedTaskReservation(true, current)
     if (existing._tag !== "PendingRuntimePosition") {
-      return unchangedTaskReservation(sameCorrelation(existing.correlation, requirement.retainAs), current)
+      return unchangedTaskReservation(sameCorrelation(existing.correlation, retainAs), current)
     }
     return [
       { admitted: true, createdFor: null },
@@ -96,7 +116,7 @@ const reserveReusableTaskPosition = (
         ...current,
         positions: new Map(current.positions).set(requirement.taskId, {
           _tag: "BoundRuntimePosition",
-          correlation: requirement.retainAs,
+          correlation: retainAs,
           proposalId: existing.proposalId
         })
       }
@@ -104,9 +124,9 @@ const reserveReusableTaskPosition = (
   }
   if (current.positions.size >= current.capacity) return unchangedTaskReservation(false, current)
   const position: TaskWorkPosition =
-    requirement.retainAs === undefined
+    retainAs === undefined
       ? { _tag: "PendingRuntimePosition", proposalId: proposal.id }
-      : { _tag: "BoundRuntimePosition", correlation: requirement.retainAs, proposalId: proposal.id }
+      : { _tag: "BoundRuntimePosition", correlation: retainAs, proposalId: proposal.id }
   return [
     { admitted: true, createdFor: requirement.taskId },
     { ...current, positions: new Map(current.positions).set(requirement.taskId, position) }
@@ -117,11 +137,22 @@ const reserveTaskPositionState = (
   proposal: DeliveryActionProposal,
   current: AdmissionState
 ): readonly [TaskPositionReservation, AdmissionState] => {
-  const requirement = proposal.admission.taskWorkPosition
+  const admission = proposal.admission
+  const requirement = admission.taskWorkPosition
   if (requirement._tag === "NoTaskWorkPosition") return unchangedTaskReservation(true, current)
-  return requirement.mode === "Existing"
-    ? reserveExistingTaskPosition(requirement, current)
-    : reserveReusableTaskPosition(proposal, requirement, current)
+  if (requirement.mode === "Existing") {
+    /* v8 ignore start -- DeliveryAdmissionRequirements makes Existing without an exact correlation unconstructible. */
+    if (admission.plannedAttemptProtocol._tag !== "PlannedAttemptProtocolRequired") {
+      return unchangedTaskReservation(false, current)
+    }
+    /* v8 ignore stop */
+    return reserveExistingTaskPosition(requirement, admission.plannedAttemptProtocol.correlation, current)
+  }
+  const retainAs =
+    admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired"
+      ? admission.plannedAttemptProtocol.correlation
+      : undefined
+  return reserveReusableTaskPosition(proposal, requirement, retainAs, current)
 }
 
 /**
@@ -149,7 +180,8 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
         taskId,
         { _tag: "AcceptedAttemptPosition" as const, correlation } satisfies TaskWorkPosition
       ])
-    )
+    ),
+    protocolOwners: new Map()
   })
 
   const synchronize = Effect.fn("DeliveryRuntimeAdmission.synchronize")((basis: DeliveryTaskWorkAdmissionBasis) =>
@@ -168,9 +200,37 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
           positions.set(taskId, { _tag: "BoundRuntimePosition", correlation, proposalId: currentPosition.proposalId })
         }
       }
-      return { capacity: basis.capacity, positions }
+      return { ...current, capacity: basis.capacity, positions }
     })
   )
+
+  const reservePlannedAttemptProtocol = (
+    proposal: DeliveryActionProposal
+  ): Effect.Effect<PlannedAttemptProtocolReservation> =>
+    Ref.modify(state, (current): readonly [PlannedAttemptProtocolReservation, AdmissionState] => {
+      const requirement = proposal.admission.plannedAttemptProtocol
+      if (requirement._tag === "NoPlannedAttemptProtocol") {
+        return [{ admitted: true }, current] as const
+      }
+      const key = plannedAttemptProtocolKey(requirement.correlation)
+      if (current.protocolOwners.has(key)) return [{ admitted: false }, current] as const
+      return [
+        { admitted: true },
+        { ...current, protocolOwners: new Map(current.protocolOwners).set(key, proposal.id) }
+      ] as const
+    })
+
+  const releasePlannedAttemptProtocol = (proposal: DeliveryActionProposal) => {
+    const requirement = proposal.admission.plannedAttemptProtocol
+    if (requirement._tag === "NoPlannedAttemptProtocol") return Effect.void
+    const key = plannedAttemptProtocolKey(requirement.correlation)
+    return Ref.update(state, (current) => {
+      if (current.protocolOwners.get(key) !== proposal.id) return current
+      const protocolOwners = new Map(current.protocolOwners)
+      protocolOwners.delete(key)
+      return { ...current, protocolOwners }
+    })
+  }
 
   const reserveTaskPosition = (proposal: DeliveryActionProposal) =>
     Ref.modify(state, (current) => reserveTaskPositionState(proposal, current))
@@ -204,13 +264,19 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
   })
 
   const tryReserve = Effect.fn("DeliveryRuntimeAdmission.tryReserve")(function* (proposal: DeliveryActionProposal) {
+    const protocol = yield* reservePlannedAttemptProtocol(proposal)
+    if (!protocol.admitted) {
+      return { _tag: "Deferred" as const, reason: "PlannedAttemptProtocolUnavailable" as const }
+    }
     const task = yield* reserveTaskPosition(proposal)
     if (!task.admitted) {
+      yield* releasePlannedAttemptProtocol(proposal)
       return { _tag: "Deferred" as const, reason: "TaskWorkPositionUnavailable" as const }
     }
     const integration = yield* reserveIntegration(proposal)
     if (!integration.admitted) {
       if (task.createdFor !== null) yield* releaseTaskReservation(task.createdFor, proposal.id)
+      yield* releasePlannedAttemptProtocol(proposal)
       return { _tag: "Deferred" as const, reason: "IntegrationTargetUnavailable" as const }
     }
     return {
@@ -233,6 +299,19 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
     if (reservation.acquiredIntegrationResponsibility !== null) {
       yield* integrationTargets.release(reservation.acquiredIntegrationResponsibility)
     }
+    yield* releasePlannedAttemptProtocol(reservation.proposal)
+  })
+
+  const complete = Effect.fn("DeliveryRuntimeAdmission.complete")(function* (
+    reservation: DeliveryAdmissionReservation
+  ) {
+    if (
+      reservation.createdTaskPositionFor !== null &&
+      reservation.proposal.admission.plannedAttemptProtocol._tag === "NoPlannedAttemptProtocol"
+    ) {
+      yield* releaseTaskReservation(reservation.createdTaskPositionFor, reservation.proposal.id)
+    }
+    yield* releasePlannedAttemptProtocol(reservation.proposal)
   })
 
   return {
@@ -260,13 +339,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
         positions.delete(found[0])
         return { ...current, positions }
       }),
-    complete: (reservation) =>
-      reservation.createdTaskPositionFor !== null &&
-      reservation.proposal.admission.taskWorkPosition._tag === "TaskWorkPositionRequired" &&
-      reservation.proposal.admission.taskWorkPosition.mode === "ReserveOrReuse" &&
-      reservation.proposal.admission.taskWorkPosition.retainAs === undefined
-        ? releaseTaskReservation(reservation.createdTaskPositionFor, reservation.proposal.id)
-        : Effect.void,
+    complete,
     rollback,
     snapshot: Ref.get(state),
     synchronize,

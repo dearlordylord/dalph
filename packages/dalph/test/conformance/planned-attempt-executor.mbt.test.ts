@@ -59,10 +59,10 @@ const continuationProposal = {
   }),
   admission: {
     integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+    plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
     taskWorkPosition: {
       _tag: "TaskWorkPositionRequired" as const,
       mode: "ReserveOrReuse" as const,
-      retainAs: correlation,
       taskId: plannedAttempt.taskId
     }
   },
@@ -221,6 +221,7 @@ const executorConformanceDriver = defineDriver(
       if (!snapshot.positions.has(plannedAttempt.taskId)) {
         const decision = yield* admission.tryReserve(continuationProposal)
         if (decision._tag === "Deferred") return yield* Effect.die("planned attempt must be admitted")
+        yield* admission.bindPlannedAttemptPosition(plannedAttempt.taskId, correlation)
       }
     })
     const releasePosition = Effect.fn("ExecutorModel.releasePosition")(function* () {

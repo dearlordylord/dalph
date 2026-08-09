@@ -25,6 +25,12 @@ import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/tas
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { transitionTaskWorkPosition } from "../../../coordination/frontier/transition-task-work.js"
 import { makeJournaledFreshRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
+import { acceptedOperationIdsOf } from "../../../coordination/delivery/delivery-evidence.js"
+import {
+  acceptedWorkflowTransitionOperationId,
+  deliveryProposalsOf
+} from "../../../coordination/delivery/delivery-proposal.js"
+import { executeAcceptedWorkflowAction } from "../../../coordination/delivery/recovered-delivery-action-adapter.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
@@ -84,7 +90,7 @@ import {
   AttemptStoppageIntendedEvent,
   StoppedAttemptClaimNoReleaseObservedEvent
 } from "./events.js"
-import { AuthoritativeTaskClaimObserved, WorkflowInterpreter } from "../../interpretation/interpreter.js"
+import { AuthoritativeTaskClaimObserved, WorkflowInterpreter, WorkflowTrace } from "../../interpretation/interpreter.js"
 import { AuthoritativeTaskClaimReleased } from "../task-claim-release/protocol.js"
 import { advanceAttemptStoppage, observeAttemptStoppageExecutor, recordStoppedAttemptClaimNoRelease } from "./stop.js"
 
@@ -1511,6 +1517,110 @@ it.effect("releases only the freshly confirmed exact claim after Stop", () =>
       expect.objectContaining({ _tag: "StoppedAttemptSettled", claimDisposition: "Released" })
     )
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("retries the same stopped-claim release after reconstruction confirms the exact claim remains", () =>
+  Effect.gen(function* () {
+    yield* appendExposedStop()
+    yield* advanceAttemptStoppage(requestId, subject).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.die("unused projection"),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      )
+    )
+    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const releases = yield* Ref.make<ReadonlyArray<OperationId>>([])
+    const base = Layer.succeed(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: unusedBoundary,
+        readTaskClaim: () => Effect.succeed(AuthoritativeTaskClaimObserved.make({ observation: exactClaim })),
+        readTaskWorktree: unusedBoundary,
+        readTargetLineage: unusedBoundary,
+        readTrackerGraph: unusedBoundary,
+        readTaskWorkSpecification: unusedBoundary,
+        reconcileTaskWorktree: unusedBoundary,
+        recordTaskAttemptPlan: unusedBoundary,
+        releaseTaskClaim: (operation) =>
+          Effect.gen(function* () {
+            const attempted = yield* Ref.updateAndGet(releases, (current) => [
+              ...current,
+              operation.release.operationId
+            ])
+            if (attempted.length === 1) {
+              return yield* new TaskClaimReleaseFailure({
+                detail: "response lost while the exact claim remained current",
+                release: operation.release
+              })
+            }
+            return AuthoritativeTaskClaimReleased.make({ release: operation.release })
+          })
+      })
+    )
+
+    yield* Effect.gen(function* () {
+      const interpreter = yield* WorkflowInterpreter
+      const firstRead = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
+        ({ _tag }) => _tag === "ObserveStoppedAttemptClaim"
+      )
+      if (firstRead?._tag !== "ObserveStoppedAttemptClaim") return yield* Effect.die("missing first claim read")
+      yield* interpreter.readTaskClaim(firstRead.operation)
+
+      const release = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
+        ({ _tag }) => _tag === "ReleaseStoppedAttemptClaim"
+      )
+      if (release?._tag !== "ReleaseStoppedAttemptClaim") return yield* Effect.die("missing claim release")
+      expect((yield* Effect.result(interpreter.releaseTaskClaim(release.operation)))._tag).toBe("Failure")
+
+      const reconcileRead = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
+        ({ _tag }) => _tag === "ObserveStoppedAttemptClaim"
+      )
+      if (reconcileRead?._tag !== "ObserveStoppedAttemptClaim") {
+        return yield* Effect.die("missing claim release reconciliation read")
+      }
+      yield* interpreter.readTaskClaim(reconcileRead.operation)
+
+      const retry = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
+        ({ _tag }) => _tag === "RetryStoppedAttemptClaimRelease"
+      )
+      if (retry?._tag !== "RetryStoppedAttemptClaimRelease") {
+        return yield* Effect.die("missing exact stopped-claim release retry")
+      }
+      expect(retry.operation.release.operationId).toBe(release.operation.release.operationId)
+      const records = yield* (yield* JournalStore).read(runId)
+      const contributions = deliveryProposalsOf({
+        acceptedOperationIds: acceptedOperationIdsOf(records),
+        fresh: [],
+        runId,
+        transitions: [retry]
+      })
+      expect(contributions.issues).toEqual([])
+      const proposal = contributions.ticketDelivery[0]
+      if (proposal?.actionIdentity._tag !== "ExistingOperationId" || proposal.route._tag !== "AcceptedWorkflowRoute") {
+        return yield* Effect.die("exact retry did not use the accepted-operation route")
+      }
+      expect(acceptedWorkflowTransitionOperationId(proposal.route.transition)).toBe(
+        release.operation.release.operationId
+      )
+      yield* executeAcceptedWorkflowAction(runId, proposal.route.transition).pipe(
+        Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+      )
+    }).pipe(Effect.provide(journaledWorkflowInterpreterLayer(runId, base)))
+
+    const records = yield* (yield* JournalStore).read(runId)
+    const [firstAttempt, retryAttempt] = yield* Ref.get(releases)
+    expect(firstAttempt).toBeDefined()
+    expect(retryAttempt).toBe(firstAttempt)
+    expect(records.filter(({ event }) => event._tag === "TaskClaimReleaseIntended")).toHaveLength(1)
+    expect(records.filter(({ event }) => event._tag === "TaskClaimReleased")).toHaveLength(1)
+    expect((yield* recovery.readDeliveryProjection).frontier.explanations).toContainEqual(
+      expect.objectContaining({ _tag: "StoppedAttemptSettled", claimDisposition: "Released" })
+    )
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 

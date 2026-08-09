@@ -184,7 +184,10 @@ export type DeliverySemanticTraceEvent =
   | {
       readonly _tag: "ProposalDeferred"
       readonly proposalId: DeliveryProposalId
-      readonly reason: "IntegrationTargetUnavailable" | "TaskWorkPositionUnavailable"
+      readonly reason:
+        | "IntegrationTargetUnavailable"
+        | "PlannedAttemptProtocolUnavailable"
+        | "TaskWorkPositionUnavailable"
     }
 
 export interface DeliverySemanticTraceService {

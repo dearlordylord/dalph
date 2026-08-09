@@ -35,7 +35,12 @@ import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-c
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
-import { DeliveryProposalId, deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import {
+  acceptedWorkflowTransitionOperationId,
+  DeliveryProposalId,
+  deliveryProposalsOf,
+  trackerGraphReadProposalOf
+} from "./delivery-proposal.js"
 import { DeliveryActionExecutor, type DeliveryActionResult, DeliverySemanticTrace } from "./delivery-action-executor.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
@@ -104,6 +109,7 @@ const proposal = (ordinal: number, taskId: TaskId): DeliveryActionProposal => ({
   }),
   admission: {
     integrationTarget: { _tag: "NoIntegrationTargetResource" },
+    plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" },
     taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId }
   },
   id: DeliveryProposalId.make(`runtime-proposal:${ordinal}:${taskId}`),
@@ -657,6 +663,7 @@ it.effect("releases acquired integration ownership and its relation subscriber o
           }),
           queuedAt: JournalPosition.make(40)
         },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
         taskWorkPosition: { _tag: "NoTaskWorkPosition" as const }
       }
     }
@@ -716,6 +723,7 @@ it.effect("rolls back acquired integration ownership when the action fails", () 
           }),
           queuedAt: JournalPosition.make(41)
         },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
         taskWorkPosition: { _tag: "NoTaskWorkPosition" as const }
       }
     }
@@ -886,7 +894,7 @@ it.effect("materializes accepted and source-derived operation identities only af
               action._tag === "FreshOperationAction"
                 ? action.operationId
                 : action._tag === "AcceptedOperationAction"
-                  ? action.proposal.actionIdentity.operationId
+                  ? acceptedWorkflowTransitionOperationId(action.proposal.route.transition)
                   : "unexpected"
           }
         ]).pipe(

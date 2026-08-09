@@ -135,7 +135,7 @@ describe("deliveryProposalsOf", () => {
     }).ticketDelivery
 
     expect(proposal).toMatchObject({
-      actionIdentity: { _tag: "ExistingOperationId", operationId },
+      actionIdentity: { _tag: "ExistingOperationId" },
       admission: {
         integrationTarget: { _tag: "NoIntegrationTargetResource" },
         taskWorkPosition: { _tag: "NoTaskWorkPosition" }

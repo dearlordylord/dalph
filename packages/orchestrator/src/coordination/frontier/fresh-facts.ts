@@ -57,6 +57,12 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
   }
+  /** A post-intent tracker read kept the exact claim current, so Dalph must repeat the accepted release request. */
+  StoppedAttemptClaimReleaseRetryRequired: {
+    readonly operation: StoppedAttemptTaskClaimReleaseOperation
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
   StoppedAttemptClaimReleasePending: { readonly operationId: OperationId }
   StoppedAttemptClaimPlanningWait: { readonly reason: "FocusedObservationContradiction" | "TrackerTargetUnavailable" }
   StoppedAttemptClaimUnreadableWait: { readonly observationOperationId: OperationId }
@@ -116,6 +122,7 @@ export type PlannedAttemptExecutorDisposition =
           | "StoppedAttemptClaimNoReleaseRequired"
           | "StoppedAttemptClaimObservationRequired"
           | "StoppedAttemptClaimReleaseRequired"
+          | "StoppedAttemptClaimReleaseRetryRequired"
           | "StoppedAttemptClaimReleasePending"
           | "StoppedAttemptClaimPlanningWait"
           | "StoppedAttemptClaimUnreadableWait"
@@ -148,6 +155,7 @@ type WorkflowOperationDisposition = Exclude<
       | "StoppedAttemptClaimNoReleaseRequired"
       | "StoppedAttemptClaimObservationRequired"
       | "StoppedAttemptClaimReleaseRequired"
+      | "StoppedAttemptClaimReleaseRetryRequired"
       | "StoppedAttemptClaimReleasePending"
       | "StoppedAttemptClaimPlanningWait"
       | "StoppedAttemptClaimUnreadableWait"

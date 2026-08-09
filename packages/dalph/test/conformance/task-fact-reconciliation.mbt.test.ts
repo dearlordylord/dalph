@@ -266,12 +266,8 @@ const continuationProposal = {
   }),
   admission: {
     integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
-    taskWorkPosition: {
-      _tag: "TaskWorkPositionRequired" as const,
-      mode: "ReserveOrReuse" as const,
-      retainAs: correlation,
-      taskId
-    }
+    plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+    taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId }
   },
   id: DeliveryProposalId.make("task-fact-model-continuation")
 }
@@ -541,6 +537,7 @@ const taskFactReconciliationDriver = defineDriver(
       if (!snapshot.positions.has(taskId)) {
         const decision = yield* admission.tryReserve(continuationProposal)
         if (decision._tag === "Deferred") return yield* Effect.die("task position must be available")
+        yield* admission.bindPlannedAttemptPosition(taskId, correlation)
       }
     })
     const releasePosition = Effect.fn("TaskFactModel.releasePosition")(function* () {

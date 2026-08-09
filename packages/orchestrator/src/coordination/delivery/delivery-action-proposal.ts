@@ -19,6 +19,7 @@ import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/t
 import type { RunnableFrontierTransition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { FreshWorkflowStep } from "./fresh-workflow-step.js"
+import type { TransitionForRoute } from "./delivery-transition-policy.js"
 
 /** Stable structural identity of one exact proposed action; it is not a journal OperationId. */
 export const DeliveryProposalId = Schema.NonEmptyString.pipe(Schema.brand("DeliveryProposalId"))
@@ -66,19 +67,16 @@ export type DeliveryProposalOrderEvidence =
 /** The task-work position the runtime must prove before it may perform this action. */
 export type TaskWorkPositionRequirement =
   | { readonly _tag: "NoTaskWorkPosition" }
-  | {
-      readonly _tag: "TaskWorkPositionRequired"
-      readonly correlation: PlannedAttemptExecutorCorrelation
-      readonly mode: "Existing"
-      readonly taskId: TaskId
-    }
-  | {
-      readonly _tag: "TaskWorkPositionRequired"
-      readonly mode: "ReserveOrReuse"
-      /** The exact attempt identity this position retains once it is already known. */
-      readonly retainAs?: PlannedAttemptExecutorCorrelation
-      readonly taskId: TaskId
-    }
+  | { readonly _tag: "TaskWorkPositionRequired"; readonly mode: "Existing"; readonly taskId: TaskId }
+  | { readonly _tag: "TaskWorkPositionRequired"; readonly mode: "ReserveOrReuse"; readonly taskId: TaskId }
+
+/**
+ * Process-local exclusion between executor commands and a Stop decision that may abandon the same exact attempt.
+ * It is neither executor authority nor a task-work capacity position and disappears on process loss.
+ */
+export type PlannedAttemptProtocolRequirement =
+  | { readonly _tag: "NoPlannedAttemptProtocol" }
+  | { readonly _tag: "PlannedAttemptProtocolRequired"; readonly correlation: PlannedAttemptExecutorCorrelation }
 
 /** Exact repository/ref resource use required by an integration action. */
 export type IntegrationTargetResourceRequirement =
@@ -90,10 +88,25 @@ export type IntegrationTargetResourceRequirement =
       readonly queuedAt: JournalPosition
     }
 
-export interface DeliveryAdmissionRequirements {
-  readonly integrationTarget: IntegrationTargetResourceRequirement
-  readonly taskWorkPosition: TaskWorkPositionRequirement
-}
+type UncorrelatedTaskWorkPositionRequirement = Exclude<TaskWorkPositionRequirement, { readonly mode: "Existing" }>
+
+/** One coherent admission requirement; an exact attempt correlation is carried once and shared by both resources. */
+export type DeliveryAdmissionRequirements = { readonly integrationTarget: IntegrationTargetResourceRequirement } & (
+  | {
+      readonly plannedAttemptProtocol: Extract<
+        PlannedAttemptProtocolRequirement,
+        { readonly _tag: "NoPlannedAttemptProtocol" }
+      >
+      readonly taskWorkPosition: UncorrelatedTaskWorkPositionRequirement
+    }
+  | {
+      readonly plannedAttemptProtocol: Extract<
+        PlannedAttemptProtocolRequirement,
+        { readonly _tag: "PlannedAttemptProtocolRequired" }
+      >
+      readonly taskWorkPosition: TaskWorkPositionRequirement
+    }
+)
 
 type TrackerGraphReadOperation = typeof WorkflowOperation.cases.ReadTrackerGraph.Type
 type TaskClaimReadOperation = typeof WorkflowOperation.cases.ReadTaskClaim.Type
@@ -185,50 +198,22 @@ export interface FreshAttemptPlanningRoute {
 
 export type FreshOperationRoute = FreshAttemptPlanningRoute | FreshOperationOnlyRoute
 
-export type AcceptedWorkflowTransition = Extract<
-  RunnableFrontierTransition,
-  {
-    readonly _tag:
-      | "CheckTaskClaim"
-      | "ReconcileTaskClaim"
-      | "ReconcileTaskClaimRelease"
-      | "ReconcileTaskWorktree"
-      | "ObservePlannedAttemptContinuationClaim"
-      | "ObservePlannedAttemptContinuationGraph"
-      | "ObservePlannedAttemptContinuationSpecification"
-      | "ObservePlannedAttemptContinuationTargetLineage"
-      | "ObservePlannedAttemptContinuationWorktree"
-      | "ObserveResponsibleTaskClaim"
-      | "ObserveStoppedAttemptClaim"
-  }
->
+export type AcceptedWorkflowTransition = TransitionForRoute<"AcceptedOperation"> | TransitionForRoute<"Observation">
 
 export interface AcceptedWorkflowRoute {
   readonly _tag: "AcceptedWorkflowRoute"
   readonly transition: AcceptedWorkflowTransition
 }
 
-export type IdentityFreeWorkflowTransition = Extract<
-  RunnableFrontierTransition,
-  {
-    readonly _tag:
-      | "AcquireStartedIntegrationTarget"
-      | "AdvanceAttemptStoppage"
-      | "ObserveAttemptStoppageExecutor"
-      | "ContinuePlannedAttemptExecutorWork"
-      | "ObservePlannedAttemptContinuationExecutor"
-      | "ContinueStartedIntegrationCandidate"
-      | "RunTargetVerification"
-      | "RunTargetPromotion"
-      | "ReplacePromotedTaskClaim"
-      | "DeleteCompletedTaskCompletionClaim"
-      | "QueueAcceptedResultIntegrationResponsibility"
-      | "RecordStoppedAttemptClaimNoRelease"
-      | "ReleaseStartedIntegrationTarget"
-      | "StartQueuedIntegration"
-      | "SuspendPlannedAttemptExecutorWork"
-  }
->
+/** The one operation identity already carried by an accepted route's transition. */
+export const acceptedWorkflowTransitionOperationId = (transition: AcceptedWorkflowTransition): OperationId => {
+  if ("operationId" in transition) return transition.operationId
+  return transition.operation._tag === "ReleaseTaskClaim"
+    ? transition.operation.release.operationId
+    : transition.operation.operationId
+}
+
+export type IdentityFreeWorkflowTransition = TransitionForRoute<"IdentityFree">
 
 export type IdentityFreeWorkflowRoute =
   | { readonly _tag: "FreshExecutorWorkflowRoute"; readonly step: FreshExecutorStep }
@@ -265,7 +250,7 @@ export type FreshIdentityDeliveryProposal =
 
 /** Reconciliation reuses the exact OperationId established by accepted intent. */
 export interface AcceptedIdentityDeliveryProposal extends DeliveryProposalBase {
-  readonly actionIdentity: { readonly _tag: "ExistingOperationId"; readonly operationId: OperationId }
+  readonly actionIdentity: { readonly _tag: "ExistingOperationId" }
   readonly route: AcceptedWorkflowRoute
 }
 
@@ -359,6 +344,7 @@ export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput)
     actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } },
     admission: {
       integrationTarget: { _tag: "NoIntegrationTargetResource" },
+      plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" },
       taskWorkPosition: { _tag: "NoTaskWorkPosition" }
     },
     id: deliveryProposalIdOf(input.runId, route),

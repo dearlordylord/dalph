@@ -1,11 +1,17 @@
 import { it } from "@effect/vitest"
 import {
   AttemptId,
+  GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedTaskAttempt,
   RunId,
-  TaskId
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
 } from "@dalph/contracts"
 import { Effect } from "effect"
 import { expect } from "vitest"
@@ -16,10 +22,23 @@ import type { TaskWorkPositionRequirement } from "./delivery-action-proposal.js"
 import { makeDeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { RunnableFrontierTransition } from "../frontier/frontier.js"
+import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
+import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
 
 const runId = RunId.make("admission-test-run")
 const taskId = TaskId.make("A")
 const correlation = { attemptId: AttemptId.make("attempt:A:0"), runId }
+const plannedAttempt = PlannedTaskAttempt.make({
+  attemptId: correlation.attemptId,
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/attempt-A-0"),
+  executor: TaskExecutorLocator.make("executor:admission-test"),
+  runId,
+  taskId,
+  taskRevision: TaskRevision.make("admission-test-F1"),
+  worktree: WorktreeLocator.make("/worktrees/attempt-A-0")
+})
 
 // TODO(#54): no case here contracts capacity below the number of held
 // positions. The ceiling binds admission only, so existing holders must keep
@@ -42,6 +61,7 @@ it.effect("executor start reserves an exact planned-attempt position", () =>
       }),
       admission: {
         integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
         taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId }
       },
       id: DeliveryProposalId.make("reserve-A")
@@ -50,17 +70,59 @@ it.effect("executor start reserves an exact planned-attempt position", () =>
       ...proposal,
       admission: {
         ...proposal.admission,
-        taskWorkPosition: {
-          _tag: "TaskWorkPositionRequired" as const,
-          mode: "ReserveOrReuse" as const,
-          retainAs: correlation,
-          taskId
-        }
+        plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired" as const, correlation },
+        taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId }
       },
       id: DeliveryProposalId.make("start-A")
     }
     expect((yield* admission.tryReserve(start))._tag).toBe("Admitted")
     expect((yield* admission.snapshot).positions.get(taskId)).toMatchObject({ correlation })
+  })
+)
+
+it.effect("keeps proof-based Stop behind an already admitted continuation until its command can be recorded", () =>
+  Effect.gen(function* () {
+    const admission = yield* makeDeliveryRuntimeAdmissionController(
+      { capacity: TaskWorkCapacity.make(1), held: [] },
+      yield* makeIntegrationTargetResourceController()
+    )
+    const continuationTransition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+      plannedAttempt
+    })
+    const stopTransition = RunnableFrontierTransition.AdvanceAttemptStoppage({
+      requestId: AttemptChoiceRequestId.make({ nonce: "proof-based-stop", runId }),
+      subject: { observedTaskRevision: TaskRevision.make("admission-test-F2"), plannedAttempt },
+      taskWorkPosition: "None"
+    })
+    const proposals = deliveryProposalsOf({
+      acceptedOperationIds: new Set(),
+      fresh: [],
+      runId,
+      transitions: [continuationTransition, stopTransition]
+    })
+    expect(proposals.issues).toEqual([])
+    const [continuation, stop] = proposals.ticketDelivery
+    if (continuation === undefined || stop === undefined) return yield* Effect.die("missing production proposals")
+    expect(continuation.admission).toMatchObject({
+      plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired", correlation },
+      taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse" }
+    })
+    expect(stop.admission).toMatchObject({
+      plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired", correlation },
+      taskWorkPosition: { _tag: "NoTaskWorkPosition" }
+    })
+    const held = yield* admission.tryReserve(continuation)
+    if (held._tag !== "Admitted") return yield* Effect.die("continuation was not admitted")
+
+    expect(yield* admission.tryReserve(stop)).toMatchObject({
+      _tag: "Deferred",
+      reason: "PlannedAttemptProtocolUnavailable"
+    })
+
+    yield* admission.complete(held.reservation)
+    expect((yield* admission.snapshot).positions.get(taskId)).toMatchObject({ correlation })
+    expect((yield* admission.tryReserve(stop))._tag).toBe("Admitted")
   })
 )
 
@@ -79,6 +141,7 @@ it.effect("a successful claim action releases its temporary task-work reservatio
       }),
       admission: {
         integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
         taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId }
       },
       id: DeliveryProposalId.make("claim-A")
@@ -99,30 +162,51 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
       { capacity: TaskWorkCapacity.make(3), held: [{ correlation, taskId }] },
       integrationTargets
     )
-    const proposalFor = (id: string, taskWorkPosition: TaskWorkPositionRequirement) => ({
-      ...trackerGraphReadProposalOf({
-        acceptedAt: JournalPosition.make(1),
-        purpose: "EstablishCurrentGraph",
-        runId,
-        target: FixtureTarget.make("admission-exhaustive-target")
-      }),
-      admission: { integrationTarget: { _tag: "NoIntegrationTargetResource" as const }, taskWorkPosition },
+    const proposalBase = trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(1),
+      purpose: "EstablishCurrentGraph",
+      runId,
+      target: FixtureTarget.make("admission-exhaustive-target")
+    })
+    const proposalFor = (
+      id: string,
+      taskWorkPosition: Exclude<TaskWorkPositionRequirement, { readonly mode: "Existing" }>
+    ) => ({
+      ...proposalBase,
+      admission: {
+        integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+        taskWorkPosition
+      },
       id: DeliveryProposalId.make(id)
     })
-    const matchingExisting = proposalFor("matching-existing", {
-      _tag: "TaskWorkPositionRequired",
-      correlation,
-      mode: "Existing",
-      taskId
+    const correlatedProposalFor = (
+      id: string,
+      taskWorkPosition: TaskWorkPositionRequirement,
+      exactCorrelation: typeof correlation
+    ) => ({
+      ...proposalBase,
+      admission: {
+        integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+        plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired" as const, correlation: exactCorrelation },
+        taskWorkPosition
+      },
+      id: DeliveryProposalId.make(id)
     })
+    const matchingExisting = correlatedProposalFor(
+      "matching-existing",
+      { _tag: "TaskWorkPositionRequired", mode: "Existing", taskId },
+      correlation
+    )
     const otherCorrelation = { attemptId: AttemptId.make("attempt:A:other"), runId }
-    const mismatchingExisting = proposalFor("mismatching-existing", {
-      _tag: "TaskWorkPositionRequired",
-      correlation: otherCorrelation,
-      mode: "Existing",
-      taskId
-    })
-    expect((yield* admission.tryReserve(matchingExisting))._tag).toBe("Admitted")
+    const mismatchingExisting = correlatedProposalFor(
+      "mismatching-existing",
+      { _tag: "TaskWorkPositionRequired", mode: "Existing", taskId },
+      otherCorrelation
+    )
+    const matchingReservation = yield* admission.tryReserve(matchingExisting)
+    expect(matchingReservation._tag).toBe("Admitted")
+    if (matchingReservation._tag === "Admitted") yield* admission.complete(matchingReservation.reservation)
     expect((yield* admission.tryReserve(mismatchingExisting))._tag).toBe("Deferred")
     expect(
       (yield* admission.tryReserve(
@@ -133,16 +217,15 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
         })
       ))._tag
     ).toBe("Admitted")
-    expect(
-      (yield* admission.tryReserve(
-        proposalFor("reuse-existing-with-matching-binding", {
-          _tag: "TaskWorkPositionRequired",
-          mode: "ReserveOrReuse",
-          retainAs: correlation,
-          taskId
-        })
-      ))._tag
-    ).toBe("Admitted")
+    const reused = yield* admission.tryReserve(
+      correlatedProposalFor(
+        "reuse-existing-with-matching-binding",
+        { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId },
+        correlation
+      )
+    )
+    expect(reused._tag).toBe("Admitted")
+    if (reused._tag === "Admitted") yield* admission.complete(reused.reservation)
 
     const pendingTaskId = TaskId.make("pending")
     const pending = proposalFor("pending-position", {
@@ -153,18 +236,18 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
     const pendingReservation = yield* admission.tryReserve(pending)
     expect(pendingReservation._tag).toBe("Admitted")
     const boundFromPending = yield* admission.tryReserve(
-      proposalFor("bind-pending-position", {
-        _tag: "TaskWorkPositionRequired",
-        mode: "ReserveOrReuse",
-        retainAs: otherCorrelation,
-        taskId: pendingTaskId
-      })
+      correlatedProposalFor(
+        "bind-pending-position",
+        { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: pendingTaskId },
+        otherCorrelation
+      )
     )
     expect(boundFromPending._tag).toBe("Admitted")
     expect((yield* admission.snapshot).positions.get(pendingTaskId)).toMatchObject({
       _tag: "BoundRuntimePosition",
       correlation: otherCorrelation
     })
+    if (boundFromPending._tag === "Admitted") yield* admission.complete(boundFromPending.reservation)
     const synchronizedPendingTaskId = TaskId.make("synchronized-pending")
     const synchronizedPending = yield* admission.tryReserve(
       proposalFor("synchronized-pending-position", {
@@ -209,6 +292,7 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
           integrationTarget,
           queuedAt: JournalPosition.make(11)
         },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
         taskWorkPosition: {
           _tag: "TaskWorkPositionRequired" as const,
           mode: "ReserveOrReuse" as const,
@@ -230,6 +314,7 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
           access: "UseHeld" as const,
           queuedAt: heldAt
         },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
         taskWorkPosition: { _tag: "NoTaskWorkPosition" as const }
       },
       id: DeliveryProposalId.make("use-held-integration")

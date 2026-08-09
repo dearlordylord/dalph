@@ -1,51 +1,12 @@
 import type { OperationId } from "../../workflow/identity.js"
 import { runnableTransitionTaskId, type RunnableFrontierTransition } from "../frontier/frontier.js"
 import type { NewRecoveredWorkflowAction } from "./delivery-action-proposal.js"
-
-type TransitionRoutePolicy = "AcceptedOperation" | "FreshProvenance" | "IdentityFree" | "NewOperation" | "Observation"
-
-/** Closed route policy: tags sharing a spelling may still be distinguished by accepted evidence and provenance. */
-export const transitionRoutePolicy = {
-  AcquireStartedIntegrationTarget: "IdentityFree",
-  AdvanceAttemptStoppage: "IdentityFree",
-  CheckTaskClaim: "AcceptedOperation",
-  CommitFreshTaskClaimIntent: "FreshProvenance",
-  CommitTaskClaimReacquisitionIntent: "NewOperation",
-  ContinueFreshWorkflowOperation: "FreshProvenance",
-  ContinuePlannedAttemptExecutorWork: "IdentityFree",
-  ObservePlannedAttemptContinuationExecutor: "IdentityFree",
-  ObserveAttemptStoppageExecutor: "IdentityFree",
-  ContinueStartedIntegrationCandidate: "IdentityFree",
-  RunTargetVerification: "IdentityFree",
-  RunTargetPromotion: "IdentityFree",
-  ReplacePromotedTaskClaim: "IdentityFree",
-  DeleteCompletedTaskCompletionClaim: "IdentityFree",
-  ObservePlannedAttemptContinuationClaim: "Observation",
-  ObservePlannedAttemptContinuationGraph: "Observation",
-  ObservePlannedAttemptContinuationSpecification: "Observation",
-  ObservePlannedAttemptContinuationTargetLineage: "Observation",
-  ObservePlannedAttemptContinuationWorktree: "Observation",
-  ObserveResponsibleTaskClaim: "Observation",
-  ObserveStoppedAttemptClaim: "Observation",
-  QueueAcceptedResultIntegrationResponsibility: "IdentityFree",
-  ReconcileTaskClaim: "AcceptedOperation",
-  ReconcileTaskClaimRelease: "AcceptedOperation",
-  ReconcileTaskWorktree: "AcceptedOperation",
-  RecordStoppedAttemptClaimNoRelease: "IdentityFree",
-  ReleaseExternallyCompletedTaskClaim: "NewOperation",
-  ReleaseStoppedAttemptClaim: "NewOperation",
-  ReleaseStartedIntegrationTarget: "IdentityFree",
-  StartPlannedAttemptExecutorWork: "FreshProvenance",
-  StartQueuedIntegration: "IdentityFree",
-  SuspendPlannedAttemptExecutorWork: "IdentityFree"
-} as const satisfies Record<RunnableFrontierTransition["_tag"], TransitionRoutePolicy>
+import { deliveryTransitionPolicy, type TransitionForRoute } from "./delivery-transition-policy.js"
 
 export const isFreshProvenanceTransition = (
   transition: RunnableFrontierTransition
-): transition is Extract<
-  RunnableFrontierTransition,
-  { readonly _tag: "CommitFreshTaskClaimIntent" | "ContinueFreshWorkflowOperation" | "StartPlannedAttemptExecutorWork" }
-> => transitionRoutePolicy[transition._tag] === "FreshProvenance"
+): transition is TransitionForRoute<"FreshProvenance"> =>
+  deliveryTransitionPolicy[transition._tag].route === "FreshProvenance"
 
 export const operationIdOf = (transition: RunnableFrontierTransition): OperationId | undefined => {
   if ("operationId" in transition) return transition.operationId
@@ -62,22 +23,10 @@ const withoutOperationId = <A extends { readonly operationId: OperationId }>({
   ...operation
 }: A): Omit<A, "operationId"> => operation
 
-type ObservationTransition = Extract<
-  RunnableFrontierTransition,
-  {
-    readonly _tag:
-      | "ObservePlannedAttemptContinuationClaim"
-      | "ObservePlannedAttemptContinuationGraph"
-      | "ObservePlannedAttemptContinuationSpecification"
-      | "ObservePlannedAttemptContinuationTargetLineage"
-      | "ObservePlannedAttemptContinuationWorktree"
-      | "ObserveResponsibleTaskClaim"
-      | "ObserveStoppedAttemptClaim"
-  }
->
+type ObservationTransition = TransitionForRoute<"Observation">
 
 const isObservationTransition = (transition: RunnableFrontierTransition): transition is ObservationTransition =>
-  transitionRoutePolicy[transition._tag] === "Observation"
+  deliveryTransitionPolicy[transition._tag].route === "Observation"
 
 const recoveredObservationActionOf = (transition: ObservationTransition): NewRecoveredWorkflowAction => {
   switch (transition._tag) {

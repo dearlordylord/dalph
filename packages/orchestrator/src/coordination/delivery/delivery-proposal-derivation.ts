@@ -30,16 +30,18 @@ import {
   type IdentityFreeWorkflowRoute,
   type IntegrationTargetResourceRequirement,
   type NewRecoveredWorkflowAction,
+  type PlannedAttemptProtocolRequirement,
   type TaskWorkPositionRequirement
 } from "./delivery-action-proposal.js"
 import { freshOperationIdentity, recoveredIdentityFor } from "./delivery-proposal-identity.js"
 import type { FreshWorkflowStep } from "./fresh-workflow-step.js"
+import { isFreshProvenanceTransition, newRecoveredActionOf, operationIdOf } from "./delivery-proposal-route.js"
 import {
-  isFreshProvenanceTransition,
-  newRecoveredActionOf,
-  operationIdOf,
-  transitionRoutePolicy
-} from "./delivery-proposal-route.js"
+  deliveryTransitionPolicy,
+  type TransitionForRoute,
+  usesPlannedAttemptProtocol,
+  usesStopSubjectProtocol
+} from "./delivery-transition-policy.js"
 
 const freshDecisionKey = (runId: DeliveryProposalsInput["runId"], decision: FreshDecision): string =>
   selectedTransitionKey(makeSelectedTransitionIdentity(runId, decision.transition))
@@ -51,30 +53,41 @@ const taskWorkPositionFor = (transition: RunnableFrontierTransition): TaskWorkPo
   const mode = transitionTaskWorkPosition(transition)
   if (mode === null) return { _tag: "NoTaskWorkPosition" }
   const taskId = runnableTransitionTaskId(transition)
-  if (mode === "Existing") {
-    /* v8 ignore start -- transitionTaskWorkPosition returns Existing only for executor suspension. */
-    if (transition._tag !== "SuspendPlannedAttemptExecutorWork") {
-      return { _tag: "NoTaskWorkPosition" }
-    }
-    /* v8 ignore stop */
+  return { _tag: "TaskWorkPositionRequired", mode, taskId }
+}
+
+const plannedAttemptProtocolFor = (transition: RunnableFrontierTransition): PlannedAttemptProtocolRequirement => {
+  if (usesStopSubjectProtocol(transition)) {
     return {
-      _tag: "TaskWorkPositionRequired",
-      correlation: plannedAttemptExecutorCorrelation(transition.plannedAttempt),
-      mode,
-      taskId
+      _tag: "PlannedAttemptProtocolRequired",
+      correlation: plannedAttemptExecutorCorrelation(transition.subject.plannedAttempt)
     }
   }
-  return {
-    _tag: "TaskWorkPositionRequired",
-    mode,
-    ...(transition._tag === "AdvanceAttemptStoppage" || transition._tag === "ObserveAttemptStoppageExecutor"
-      ? { retainAs: plannedAttemptExecutorCorrelation(transition.subject.plannedAttempt) }
-      : transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-          transition._tag === "StartPlannedAttemptExecutorWork"
-        ? { retainAs: plannedAttemptExecutorCorrelation(transition.plannedAttempt) }
-        : {}),
-    taskId
+  if (usesPlannedAttemptProtocol(transition)) {
+    return {
+      _tag: "PlannedAttemptProtocolRequired",
+      correlation: plannedAttemptExecutorCorrelation(transition.plannedAttempt)
+    }
   }
+  return { _tag: "NoPlannedAttemptProtocol" }
+}
+
+const admissionFor = (
+  transition: RunnableFrontierTransition,
+  integrationResponsibilities: ReadonlyArray<IntegrationResponsibility>
+): DeliveryAdmissionRequirements | undefined => {
+  const integrationTarget = integrationTargetFor(transition, integrationResponsibilities)
+  const plannedAttemptProtocol = plannedAttemptProtocolFor(transition)
+  const taskWorkPosition = taskWorkPositionFor(transition)
+  if (plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired") {
+    return { integrationTarget, plannedAttemptProtocol, taskWorkPosition }
+  }
+  /* v8 ignore start -- the closed transition maps assign Existing only to guarded executor suspension. */
+  if (taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "Existing") {
+    return undefined
+  }
+  /* v8 ignore stop */
+  return { integrationTarget, plannedAttemptProtocol, taskWorkPosition }
 }
 
 const integrationResponsibilityFor = (
@@ -307,40 +320,20 @@ const routePolicyContradiction = (
 })
 /* v8 ignore stop */
 
-type AcceptedOperationTransition = Extract<
-  RunnableFrontierTransition,
-  { readonly _tag: "CheckTaskClaim" | "ReconcileTaskClaim" | "ReconcileTaskClaimRelease" | "ReconcileTaskWorktree" }
->
+type AcceptedOperationTransition = TransitionForRoute<"AcceptedOperation">
 
-type IdentityFreeTransition = Extract<
-  RunnableFrontierTransition,
-  {
-    readonly _tag:
-      | "AcquireStartedIntegrationTarget"
-      | "ContinuePlannedAttemptExecutorWork"
-      | "ObservePlannedAttemptContinuationExecutor"
-      | "ContinueStartedIntegrationCandidate"
-      | "RunTargetVerification"
-      | "RunTargetPromotion"
-      | "ReplacePromotedTaskClaim"
-      | "DeleteCompletedTaskCompletionClaim"
-      | "QueueAcceptedResultIntegrationResponsibility"
-      | "ReleaseStartedIntegrationTarget"
-      | "StartQueuedIntegration"
-      | "SuspendPlannedAttemptExecutorWork"
-  }
->
+type IdentityFreeTransition = TransitionForRoute<"IdentityFree">
 
 const isAcceptedOperationTransition = (
   transition: RunnableFrontierTransition
-): transition is AcceptedOperationTransition => transitionRoutePolicy[transition._tag] === "AcceptedOperation"
+): transition is AcceptedOperationTransition => deliveryTransitionPolicy[transition._tag].route === "AcceptedOperation"
 
 const isIdentityFreeTransition = (transition: RunnableFrontierTransition): transition is IdentityFreeTransition =>
-  transitionRoutePolicy[transition._tag] === "IdentityFree"
+  deliveryTransitionPolicy[transition._tag].route === "IdentityFree"
 
 const isAcceptedRouteTransition = (transition: RunnableFrontierTransition): transition is AcceptedWorkflowTransition =>
-  transitionRoutePolicy[transition._tag] === "AcceptedOperation" ||
-  transitionRoutePolicy[transition._tag] === "Observation"
+  deliveryTransitionPolicy[transition._tag].route === "AcceptedOperation" ||
+  deliveryTransitionPolicy[transition._tag].route === "Observation"
 
 const recoveredRouteProposalOf = (
   context: ProposalContext,
@@ -364,7 +357,7 @@ const recoveredRouteProposalOf = (
     const route: AcceptedWorkflowRoute = { _tag: "AcceptedWorkflowRoute", transition }
     return {
       _tag: "ProposalDerived",
-      proposal: { ...proposalBase(context, route), actionIdentity: { _tag: "ExistingOperationId", operationId }, route }
+      proposal: { ...proposalBase(context, route), actionIdentity: { _tag: "ExistingOperationId" }, route }
     }
   }
   /* v8 ignore start -- identity-free selection is derived only for identity-free transition tags. */
@@ -386,9 +379,13 @@ const recoveredProposalOf = (
 ): DerivedProposal => {
   if (isFreshProvenanceTransition(transition)) return missingProvenance(transition)
   if (isAcceptedOperationTransition(transition)) {
-    return acceptedOperationIds.has(transition.operationId)
-      ? recoveredRouteProposalOf(context, undefined, transition.operationId, transition)
-      : missingAcceptedOperation(transition.operationId, transition)
+    const operationId = operationIdOf(transition)
+    /* v8 ignore start -- every accepted-operation transition carries its identity in one closed typed location. */
+    if (operationId === undefined) return routePolicyContradiction(transition)
+    /* v8 ignore stop */
+    return acceptedOperationIds.has(operationId)
+      ? recoveredRouteProposalOf(context, undefined, operationId, transition)
+      : missingAcceptedOperation(operationId, transition)
   }
   const operationId = operationIdOf(transition)
   const isAcceptedOperation = operationId !== undefined && acceptedOperationIds.has(operationId)
@@ -425,10 +422,13 @@ export const deliveryProposalsOf = (input: DeliveryProposalsInput): DeliveryProp
 
   for (const [index, transition] of input.transitions.entries()) {
     const fresh = freshByTransition.get(transitionKey(input.runId, transition))
-    const admission: DeliveryAdmissionRequirements = {
-      integrationTarget: integrationTargetFor(transition, integrationResponsibilities),
-      taskWorkPosition: taskWorkPositionFor(transition)
+    const admission = admissionFor(transition, integrationResponsibilities)
+    /* v8 ignore start -- the closed transition maps make an uncorrelated Existing requirement unreachable. */
+    if (admission === undefined) {
+      appendDerived(contributions, routePolicyContradiction(transition))
+      continue
     }
+    /* v8 ignore stop */
     const owner: DeliveryProposalOwner = isSettlementTransition(transition, integrationResponsibilities)
       ? "DeliverySettlement"
       : "TicketDelivery"
