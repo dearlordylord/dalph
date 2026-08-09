@@ -153,7 +153,7 @@ const trackerGraphLyric = (item: AuthoredTrackerGraphStoryItem): string =>
   item._tag === "TrackerGraphReadFailed"
     ? `The task tracker fails the logical graph read because ${item.reason}.`
     : item._tag === "RunActivationFinalTrackerGraphReadReturned"
-      ? `The task tracker returns this activation's final ${item.graph.tasks.length} task graph facts at ${item.graph.revision}.`
+      ? `The task tracker returns ${item.graph.tasks.length} task graph facts for this activation's final complete target-closure read at ${item.graph.revision}.`
       : `The task tracker returns ${item.graph.tasks.length} task graph facts at ${item.graph.revision}.`
 
 type CoordinatorStoryItem = Exclude<

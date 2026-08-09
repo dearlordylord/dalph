@@ -2525,7 +2525,7 @@ it.effect("performs one final tracker read before the current bounded activation
     expect(run.activationOrdinals).toEqual([1])
     expect(cassette.story.filter(({ _tag }) => _tag === "RunActivationFinalTrackerGraphReadReturned")).toHaveLength(1)
     expect(graphObservations.at(-1)?._tag).toBe("UnchangedTaskTrackerFactsReconfirmed")
-    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("this activation's final")
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("final complete target-closure read")
     expect(run.records.at(-1)?.event._tag).toBe("TaskTrackerFactsObserved")
     expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
     expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A"])
