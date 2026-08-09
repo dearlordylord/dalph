@@ -370,7 +370,10 @@ export {
   type JournaledRunBootstrapError,
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
+  type ControlledDeliveryActionExecutorFactory,
   runRecoveredWorkflow,
+  runRecoveredWorkflowWithControlledDeliveryActionExecutor,
+  runWorkflowWithControlledDeliveryActionExecutor,
   runWorkflow
 } from "./coordination/run/run.js"
 export { runControlledWorkflow } from "./coordination/run/controlled-workflow.js"
@@ -438,7 +441,11 @@ export {
 export { delivery } from "./coordination/delivery/delivery.js"
 export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-planning.js"
 export { deliveryRuntime } from "./coordination/delivery/delivery-runtime-adapter.js"
-export { DeliveryActionExecutor } from "./coordination/delivery/delivery-action-executor.js"
+export {
+  DeliveryActionExecutor,
+  type DeliveryActionExecutorService,
+  type MaterializedDeliveryAction
+} from "./coordination/delivery/delivery-action-executor.js"
 export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"
 export { DeliveryAcceptedFactPublication } from "./coordination/delivery/delivery-accepted-fact-publication.js"
 export {
@@ -516,6 +523,7 @@ export {
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,

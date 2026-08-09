@@ -225,8 +225,8 @@ export const controlledTrackerMutationLayer = (cursor: StoryCursor, tracker: Tra
           ),
         readTaskClaim,
         /* v8 ignore start -- @preserve Release variants are covered by the tracker contract and composed cassette outcomes. */
-        releaseTaskClaim: (release) =>
-          Ref.get(authoredObservations).pipe(
+        releaseTaskClaim: (release) => {
+          const applyRelease = Ref.get(authoredObservations).pipe(
             Effect.flatMap((observations) => {
               const observed = observations.get(release.claim.taskId)
               if (observed === undefined) {
@@ -250,6 +250,20 @@ export const controlledTrackerMutationLayer = (cursor: StoryCursor, tracker: Tra
                 : Effect.fail(new TaskClaimOwnershipConflict({ attempted: release.claim, observed }))
             })
           )
+          return cursor.consumeTaskClaimReleaseResponseLost.pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => applyRelease,
+                onSome: (lost) =>
+                  lost.taskId !== release.claim.taskId
+                    ? Effect.die(
+                        `authored cassette lost claim-release response for ${lost.taskId} while releasing ${release.claim.taskId}`
+                      )
+                    : applyRelease.pipe(Effect.andThen(cursor.pauseAtCoordinatorProcessDeath))
+              })
+            )
+          )
+        }
         /* v8 ignore stop -- @preserve */
       })
     })
@@ -282,7 +296,15 @@ export const controlledTrace = (cursor: StoryCursor): WorkflowTrace["Service"] =
   })
 
 const executorReport = (
-  item: Extract<AuthoredCassetteStoryItem, { readonly _tag: "PlannedAttemptExecutorWorkReported" }>,
+  item: Extract<
+    AuthoredCassetteStoryItem,
+    {
+      readonly _tag:
+        | "PlannedAttemptExecutorProjectionReturned"
+        | "PlannedAttemptExecutorResponseLost"
+        | "PlannedAttemptExecutorWorkReported"
+    }
+  >,
   runId: RunId
 ): PlannedAttemptExecutorReport => {
   const correlation = { attemptId: item.report.attemptId, runId }
@@ -299,12 +321,14 @@ const executorReport = (
 export const controlledExecutorLayer = (
   cursor: StoryCursor,
   runId: RunId,
-  beforeExecutorReport: Effect.Effect<void> = Effect.void
+  beforeExecutorReport: Effect.Effect<void> = Effect.void,
+  survivingReports?: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>
 ) =>
   Layer.effect(
     PlannedAttemptExecutor,
     Effect.gen(function* () {
-      const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+      const reports =
+        survivingReports ?? (yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()))
       const consume = Effect.fn("AuthoredCassette.PlannedAttemptExecutor.consume")(function* (
         request: "StartOrContinue" | "Suspend",
         plannedAttempt: PlannedTaskAttempt
@@ -332,16 +356,34 @@ export const controlledExecutorLayer = (
           reports,
           (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
         )
+        if (item._tag === "PlannedAttemptExecutorResponseLost") {
+          yield* cursor.pauseAtCoordinatorProcessDeath
+          return yield* Effect.never
+        }
         return report
       })
       return PlannedAttemptExecutor.of({
-        /* v8 ignore next -- The maintained singleton does not reconstruct an independently surviving executor report. */
         project: (correlation) =>
-          Ref.get(reports).pipe(
-            Effect.map((current) =>
-              Option.fromUndefinedOr(current.get(plannedAttemptExecutorCorrelationKey(correlation)))
+          Effect.gen(function* () {
+            const projection = yield* cursor.consumeExecutorProjection
+            if (Option.isSome(projection)) {
+              if (projection.value.report.attemptId !== correlation.attemptId) {
+                return yield* Effect.die(
+                  new Error(
+                    `authored executor projection expected ${projection.value.report.attemptId}, received ${correlation.attemptId}`
+                  )
+                )
+              }
+              const projectedReport = executorReport(projection.value, runId)
+              yield* Ref.update(
+                reports,
+                (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), projectedReport]])
+              )
+            }
+            return Option.fromUndefinedOr(
+              (yield* Ref.get(reports)).get(plannedAttemptExecutorCorrelationKey(correlation))
             )
-          ),
+          }),
         /* v8 ignore next -- Live Pause/Suspend production behavior is outside issue 170's maintained singleton. */
         requestSuspension: (plannedAttempt) => consume("Suspend", plannedAttempt),
         startOrContinue: (plannedAttempt) => consume("StartOrContinue", plannedAttempt)

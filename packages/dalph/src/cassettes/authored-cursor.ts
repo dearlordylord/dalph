@@ -1,4 +1,5 @@
-import { Deferred, Effect, Option, Schema, Stream, SubscriptionRef } from "effect"
+/* eslint-disable max-lines -- One cursor atomically owns every authored story interaction and optional boundary probe. */
+import { Deferred, Effect, Option, Queue, Schema, Stream, SubscriptionRef } from "effect"
 import {
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
@@ -6,7 +7,9 @@ import {
 } from "./authored-domain.js"
 import {
   AuthoredAttemptChoiceItem,
+  AuthoredPlannedAttemptExecutorOutcomeItem,
   AuthoredTaskClaimReadItem,
+  isAuthoredPlannedAttemptExecutorOutcomeItem,
   isAuthoredAttemptChoiceItem,
   isTaskClaimReadItem,
   type AuthoredAttemptChoiceItem as AttemptChoiceItem
@@ -42,14 +45,21 @@ export interface StoryCursor {
   readonly awaitCoordinatorProcessDeath: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type
   >
+  readonly consumeCoordinatorActivationReturned: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type,
+    CursorFailure
+  >
+  readonly consumeAdmittedContinuationExecutorIntentHold: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsAdmittedContinuationBeforeExecutorIntent.Type>
+  >
   readonly consumeCapacityChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
   >
   readonly consumeAttemptChoice: Effect.Effect<Option.Option<AttemptChoiceItem>>
   readonly consumeDalphSelection: Effect.Effect<typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type, CursorFailure>
-  readonly consumeExecutorReport: Effect.Effect<
-    typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.Type,
-    CursorFailure
+  readonly consumeExecutorReport: Effect.Effect<AuthoredPlannedAttemptExecutorOutcomeItem, CursorFailure>
+  readonly consumeExecutorProjection: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type>
   >
   readonly consumeGitWorktreeObservationChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.GitWorktreeObservationChanged.Type>
@@ -106,6 +116,9 @@ export interface StoryCursor {
       | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.Type
     >
   >
+  readonly consumeTaskClaimReleaseResponseLost: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.TaskClaimReleaseResponseLost.Type>
+  >
   readonly consumeTerminalAssertions: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.ExpectedBehavior.Type,
     CursorFailure
@@ -120,8 +133,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   story: ReadonlyArray<StoryItem>
 ): Effect.fn.Return<StoryCursor> {
   const position = yield* SubscriptionRef.make(0)
-  const coordinatorProcessDeath =
-    yield* Deferred.make<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
+  const coordinatorProcessDeaths =
+    yield* Queue.unbounded<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
   const terminalAssertionsReached = yield* Deferred.make<void>()
   const claimNext = <A extends StoryItem>(
     predicate: (item: StoryItem | undefined) => item is A
@@ -160,13 +173,46 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.DalphSelects)(item).pipe(Effect.orDie)
     )
   )
-  const consumeExecutorReport = consume("PlannedAttemptExecutorWorkReported").pipe(
+  const consumeCoordinatorActivationReturned = consume("CoordinatorActivationReturned").pipe(
     Effect.flatMap((item) =>
-      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported)(item).pipe(
-        Effect.orDie
-      )
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned)(item).pipe(Effect.orDie)
     )
   )
+  const consumeAdmittedContinuationExecutorIntentHold = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.DalphHoldsAdmittedContinuationBeforeExecutorIntent.Type =>
+        item?._tag === "DalphHoldsAdmittedContinuationBeforeExecutorIntent"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(
+        AuthoredCassetteStoryItem.cases.DalphHoldsAdmittedContinuationBeforeExecutorIntent
+      )(claimed.item).pipe(Effect.orDie)
+    )
+  })
+  const consumeExecutorReport = Effect.gen(function* () {
+    const claimed = yield* claimNext(isAuthoredPlannedAttemptExecutorOutcomeItem)
+    if (claimed._tag === "Mismatch") {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: "PlannedAttemptExecutorResponseLost | PlannedAttemptExecutorWorkReported",
+        expected: claimed.item?._tag ?? "EndOfStory",
+        storyPosition: claimed.index
+      })
+    }
+    return yield* Schema.decodeUnknownEffect(AuthoredPlannedAttemptExecutorOutcomeItem)(claimed.item).pipe(Effect.orDie)
+  })
+  const consumeExecutorProjection = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type =>
+        item?._tag === "PlannedAttemptExecutorProjectionReturned"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
+  })
   const consumeInitialPolicy = consume("InitialControlPolicy").pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.InitialControlPolicy)(item).pipe(Effect.orDie)
@@ -364,7 +410,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     const decoded = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorProcessDies)(
       claimed.item
     ).pipe(Effect.orDie)
-    yield* Deferred.succeed(coordinatorProcessDeath, decoded)
+    yield* Queue.offer(coordinatorProcessDeaths, decoded)
     return yield* Effect.never
   })
   const consumeRunCoordinator = consume("RunCoordinator").pipe(
@@ -383,6 +429,18 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     const claimed = yield* claimNext(isTaskClaimReadItem)
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(yield* Schema.decodeUnknownEffect(AuthoredTaskClaimReadItem)(claimed.item).pipe(Effect.orDie))
+  })
+  const consumeTaskClaimReleaseResponseLost = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.TaskClaimReleaseResponseLost.Type =>
+        item?._tag === "TaskClaimReleaseResponseLost"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TaskClaimReleaseResponseLost)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
   })
   const consumeTerminalAssertions = consume("ExpectedBehavior").pipe(
     Effect.flatMap((item) =>
@@ -407,7 +465,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   return {
     atTerminalAssertions,
     awaitTerminalAssertions: Deferred.await(terminalAssertionsReached),
-    awaitCoordinatorProcessDeath: Deferred.await(coordinatorProcessDeath),
+    awaitCoordinatorProcessDeath: Queue.take(coordinatorProcessDeaths),
+    consumeAdmittedContinuationExecutorIntentHold,
+    consumeCoordinatorActivationReturned,
     consumeAttemptChoice,
     consumeCapacityChange,
     consumeControlDirection,
@@ -415,6 +475,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeInFlightExecutorControlDirection,
     consumeClaimReacquisitionDirection,
     consumeDalphSelection,
+    consumeExecutorProjection,
     consumeExecutorReport,
     consumeGitWorktreeObservationChange,
     consumeInitialPolicy,
@@ -425,6 +486,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeTargetPromotionGitRead,
     consumeRunCoordinator,
     consumeTaskClaimRead,
+    consumeTaskClaimReleaseResponseLost,
     consumeTaskWorkSpecification,
     consumeTerminalAssertions,
     consumeTrackerGraph,

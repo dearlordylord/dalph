@@ -128,7 +128,10 @@ const trackerGraphLyric = (item: AuthoredTrackerGraphStoryItem): string =>
     ? `The task tracker returns ${item.graph.tasks.length} task graph facts at ${item.graph.revision}.`
     : `The task tracker fails the logical graph read because ${item.reason}.`
 
-type CoordinatorStoryItem = Exclude<AuthoredCassetteStoryItem, { readonly _tag: "CoordinatorProcessDies" }>
+type CoordinatorStoryItem = Exclude<
+  AuthoredCassetteStoryItem,
+  { readonly _tag: "CoordinatorActivationReturned" | "CoordinatorProcessDies" }
+>
 
 type AuthoredTrackerClaimStoryItem = Extract<
   CoordinatorStoryItem,
@@ -211,6 +214,8 @@ const operatorLyric = (item: OperatorStoryItem): string => {
 const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string => {
   if (isOperatorStoryItem(item)) return operatorLyric(item)
   switch (item._tag) {
+    case "DalphHoldsAdmittedContinuationBeforeExecutorIntent":
+      return `Dalph holds the admitted continuation for attempt ${item.attemptId} before its executor command intent while Alice's Stop request is applied.`
     case "DalphSelects":
       return `Dalph selects ${item.operation._tag}.`
     case "GitWorktreeObservationChanged":
@@ -235,6 +240,12 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       return `The task tracker returns "${item.title}" for task ${item.taskId}.`
     case "PlannedAttemptExecutorWorkReported":
       return `The executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
+    case "PlannedAttemptExecutorProjectionReturned":
+      return `A read-only executor projection returns ${item.report._tag} for attempt ${item.report.attemptId}.`
+    case "PlannedAttemptExecutorResponseLost":
+      return `The executor reaches ${item.report._tag} for attempt ${item.report.attemptId}, but Dalph loses the ${item.request} response: ${item.detail}`
+    case "TaskClaimReleaseResponseLost":
+      return `The task tracker applies the exact claim release for task ${item.taskId}, but Dalph loses the response: ${item.detail}`
     case "ExpectedBehavior":
       return expectedBehaviorLyric(item)
     case "InitialControlPolicy":
@@ -250,10 +261,17 @@ const coordinatorStoryLyric = (item: CoordinatorStoryItem): string => {
   return remainingCoordinatorLyric(item)
 }
 
-const storyLyric = (item: AuthoredCassetteStoryItem): string =>
-  item._tag === "CoordinatorProcessDies"
-    ? "The coordinator process and its same-process executor session die; durable and authority facts remain."
-    : coordinatorStoryLyric(item)
+const storyLyric = (item: AuthoredCassetteStoryItem): string => {
+  if (item._tag === "CoordinatorActivationReturned") {
+    return item.decision._tag === "RunMayTerminate"
+      ? "The coordinator activation returns RunMayTerminate before a later recovery activation."
+      : `The coordinator activation returns RunMustRemainActive because ${item.decision.reason} before a later recovery activation.`
+  }
+  if (item._tag === "CoordinatorProcessDies") {
+    return "The coordinator process and its same-process executor session die; durable and authority facts remain."
+  }
+  return coordinatorStoryLyric(item)
+}
 
 /** Readable prose is derived from structured story items and is never parsed. */
 export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette): string =>

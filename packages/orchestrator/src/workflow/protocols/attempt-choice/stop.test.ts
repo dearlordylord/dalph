@@ -365,6 +365,112 @@ it.effect("issues three suspension commands, never a fourth, then abandons after
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
+it.effect("reconciles a lost third suspension response before the bounded read-only Stop observation", () =>
+  Effect.gen(function* () {
+    yield* appendExposedStop()
+    const journal = yield* JournalStore
+    const startOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, startOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: startOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const runningOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, runningOrdinal),
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: runningOrdinal,
+        report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+        version: workflowJournalEventVersion
+      })
+    )
+    const suspensionCalls = yield* Ref.make(0)
+    const executorWithLostThirdResponse = PlannedAttemptExecutor.of({
+      project: () => Effect.succeed(Option.some(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))),
+      requestSuspension: () =>
+        Ref.updateAndGet(suspensionCalls, (count) => count + 1).pipe(
+          Effect.flatMap((count) =>
+            count === 3
+              ? Effect.die("third suspension response lost")
+              : Effect.succeed(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+          )
+        ),
+      startOrContinue: () => Effect.die("unused continuation")
+    })
+    yield* advanceAttemptStoppage(requestId, subject).pipe(
+      Effect.andThen(advanceAttemptStoppage(requestId, subject)),
+      Effect.provideService(PlannedAttemptExecutor, executorWithLostThirdResponse)
+    )
+    expect(
+      (yield* advanceAttemptStoppage(requestId, subject).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executorWithLostThirdResponse),
+        Effect.exit
+      ))._tag
+    ).toBe("Failure")
+
+    const afterLostResponse = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const reconciliation = (yield* afterLostResponse.readDeliveryProjection).frontier.transitions.find(
+      ({ _tag }) => _tag === "AdvanceAttemptStoppage"
+    )
+    expect(reconciliation).toMatchObject({ _tag: "AdvanceAttemptStoppage", requestId, subject })
+    expect(
+      (yield* afterLostResponse.readDeliveryProjection).frontier.transitions.some(
+        ({ _tag }) => _tag === "ObserveAttemptStoppageExecutor"
+      )
+    ).toBe(false)
+    yield* advanceAttemptStoppage(requestId, subject).pipe(
+      Effect.provideService(PlannedAttemptExecutor, executorWithLostThirdResponse)
+    )
+
+    const afterCommandProjection = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const observation = (yield* afterCommandProjection.readDeliveryProjection).frontier.transitions.find(
+      ({ _tag }) => _tag === "ObserveAttemptStoppageExecutor"
+    )
+    expect(observation).toMatchObject({ _tag: "ObserveAttemptStoppageExecutor", requestId, subject })
+    yield* observeAttemptStoppageExecutor(requestId, subject).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () =>
+            Effect.succeed(Option.some(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))),
+          requestSuspension: () => Effect.die("a fourth suspension command is forbidden"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      )
+    )
+    const records = yield* journal.read(runId)
+    const lastSuspend = records.findLast(
+      ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+    )
+    const commandProjection = records.find(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+        event.commandOrdinal ===
+          (lastSuspend?.event._tag === "PlannedAttemptExecutorCommandIntended" ? lastSuspend.event.ordinal : -1)
+    )
+    const stateProjection = records.findLast(({ event }) => event._tag === "PlannedAttemptExecutorStateObserved")
+
+    expect(yield* Ref.get(suspensionCalls)).toBe(3)
+    expect(
+      records.filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+      )
+    ).toHaveLength(3)
+    expect(commandProjection?.position).toBeGreaterThan(lastSuspend?.position ?? 0)
+    expect(stateProjection?.position).toBeGreaterThan(commandProjection?.position ?? 0)
+    expect(records.filter(({ event }) => event._tag === "AttemptImplementationAbandoned")).toHaveLength(1)
+    expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
 it.effect("derives a no-release result only from the exact journaled focused claim observation", () =>
   Effect.gen(function* () {
     yield* appendExposedStop()

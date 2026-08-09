@@ -15,7 +15,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { describe, expect, it } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Option, Ref, Stream } from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
@@ -97,6 +97,14 @@ const integrationTarget = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/main")
 })
 const acceptedResult = AcceptedResult.make({ commit: GitCommitSha.make("2".repeat(40)) })
+
+it("makes stopped and ordinary claim-release route authorities mutually unconstructible", () => {
+  type StoppedRelease = Extract<Transition, { readonly _tag: "ReleaseStoppedAttemptClaim" }>["operation"]
+  type ExternalRelease = Extract<Transition, { readonly _tag: "ReleaseExternallyCompletedTaskClaim" }>["operation"]
+
+  expectTypeOf<StoppedRelease["authority"]["_tag"]>().toEqualTypeOf<"StoppedAttemptClaimReleaseAuthority">()
+  expectTypeOf<ExternalRelease["authority"]["_tag"]>().toEqualTypeOf<"WorkflowClaimReleaseAuthority">()
+})
 const queued = QueuedIntegrationResponsibility.make({
   acceptedResult,
   integrationTarget,

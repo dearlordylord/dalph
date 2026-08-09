@@ -59,7 +59,10 @@ import {
 import { targetPromotionRequestIdForCandidate } from "../../workflow/protocols/target-promotion/events.js"
 import type { TargetVerificationRuntimeInput } from "../../workflow/protocols/target-verification/runtime.js"
 import type { TargetPromotionRuntimeInput } from "../../workflow/protocols/target-promotion/runtime.js"
-import { latestPlannedAttemptExecutorEvidence } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import {
+  latestPlannedAttemptExecutorEvidence,
+  latestUnsettledPlannedAttemptExecutorCommand
+} from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { defaultPlannedAttemptExecutorSuspensionLimit } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { sameAttemptChoiceRequestId, sameAttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
 
@@ -206,6 +209,13 @@ const stoppedAttemptDisposition = (
         reason: stopWaitReasonFor(latestStopExecutorRecord.event)
       })
     }
+    if (!quiescenceIsAlreadyProved && latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)) {
+      return ResponsibilityDisposition.AttemptStoppageRequired({
+        requestId,
+        subject,
+        taskWorkPosition: "ReserveOrReuse"
+      })
+    }
     if (!quiescenceIsAlreadyProved && suspensionCommandCount >= defaultPlannedAttemptExecutorSuspensionLimit) {
       return ResponsibilityDisposition.AttemptStoppageExecutorObservationRequired({ requestId, subject })
     }
@@ -286,8 +296,11 @@ const stoppedAttemptDisposition = (
     })
   }
   if (releaseIntent?.event._tag === "TaskClaimReleaseIntended") {
+    if (releaseIntent.event.operation.authority._tag !== "StoppedAttemptClaimReleaseAuthority") {
+      return ResponsibilityDisposition.StoppedAttemptClaimPlanningWait({ reason: "FocusedObservationContradiction" })
+    }
     return ResponsibilityDisposition.StoppedAttemptClaimReleaseRequired({
-      operation: releaseIntent.event.operation,
+      operation: { ...releaseIntent.event.operation, authority: releaseIntent.event.operation.authority },
       requestId,
       subject
     })

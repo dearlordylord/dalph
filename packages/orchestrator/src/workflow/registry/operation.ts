@@ -170,6 +170,21 @@ export const WorkflowOperation = Object.assign(
 )
 export type WorkflowOperation = typeof WorkflowOperation.Type
 
+type TaskClaimReleaseOperationWithAuthority<Authority extends TaskClaimReleaseAuthority> = Omit<
+  typeof WorkflowOperation.cases.ReleaseTaskClaim.Type,
+  "authority"
+> & { readonly authority: Authority }
+
+/** Release operation causally owned by one exact applied Stop request and claim observation. */
+export type StoppedAttemptTaskClaimReleaseOperation = TaskClaimReleaseOperationWithAuthority<
+  typeof TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.Type
+>
+
+/** Release operation owned by ordinary workflow cleanup rather than an applied Stop request. */
+export type WorkflowTaskClaimReleaseOperation = TaskClaimReleaseOperationWithAuthority<
+  typeof TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.Type
+>
+
 interface CausalGraphEntry {
   readonly operationId: OperationId
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
@@ -253,15 +268,17 @@ export const makeTaskClaimAcquisitionOperation = (fields: {
     predecessorOperationIds: canonicalPredecessors(fields.predecessorOperationIds)
   })
 
-export const makeTaskClaimReleaseOperation = (fields: {
-  readonly authority: TaskClaimReleaseAuthority
+export const makeTaskClaimReleaseOperation = <const Authority extends TaskClaimReleaseAuthority>(fields: {
+  readonly authority: Authority
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
   readonly release: TaskClaimRelease
-}): typeof WorkflowOperation.cases.ReleaseTaskClaim.Type =>
-  WorkflowOperation.cases.ReleaseTaskClaim.make({
+}): TaskClaimReleaseOperationWithAuthority<Authority> => {
+  const operation = WorkflowOperation.cases.ReleaseTaskClaim.make({
     ...fields,
     predecessorOperationIds: canonicalPredecessors(fields.predecessorOperationIds)
   })
+  return { ...operation, authority: fields.authority }
+}
 
 export const makeTaskAttemptPlanOperation = (fields: {
   readonly operationId: OperationId

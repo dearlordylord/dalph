@@ -6,7 +6,11 @@ import {
   type PlannedAttemptExecutorReport
 } from "@dalph/contracts"
 import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } from "../reconstruction/state.js"
-import type { WorkflowOperation } from "../../workflow/registry/operation.js"
+import type {
+  StoppedAttemptTaskClaimReleaseOperation,
+  WorkflowOperation,
+  WorkflowTaskClaimReleaseOperation
+} from "../../workflow/registry/operation.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
@@ -49,7 +53,7 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly subject: AttemptChoiceSubject
   }
   StoppedAttemptClaimReleaseRequired: {
-    readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+    readonly operation: StoppedAttemptTaskClaimReleaseOperation
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
   }
@@ -69,7 +73,7 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
       | "WorktreeLost"
   }
   TaskExternalSuccessConstraint: Record<never, never>
-  TaskExternalSuccessReleaseNeeded: { readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type }
+  TaskExternalSuccessReleaseNeeded: { readonly operation: WorkflowTaskClaimReleaseOperation }
   TaskExternalSuccessSettled: Record<never, never>
   TaskClaimMissingConstraint: Record<never, never>
   TaskClaimUnreadableWait: Record<never, never>

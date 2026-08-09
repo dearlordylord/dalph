@@ -180,10 +180,37 @@ const runDeliveryComposition = Effect.fn("Delivery.runComposition")(function* <
   )
 })
 
-const runJournaledDelivery = (runId: RunId, target: TrackerTarget) =>
-  runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () =>
-    makeLiveDeliveryActionExecutor(runId, target)
-  )
+/** Required factory seam for an explicit controlled composition of the ordinary delivery runtime. */
+export type ControlledDeliveryActionExecutorFactory<E = never, R = never> = (
+  runId: RunId,
+  target: TrackerTarget
+) => Effect.Effect<DeliveryActionExecutorService, E, R>
+
+const liveDeliveryActionExecutorFactory = (runId: RunId, target: TrackerTarget) =>
+  makeLiveDeliveryActionExecutor(runId, target)
+
+const runJournaledDelivery = <E, R>(
+  runId: RunId,
+  target: TrackerTarget,
+  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>
+) => runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () => executorFactory(runId, target))
+
+/** Explicit controlled composition; production callers use {@link runWorkflow}. */
+export const runWorkflowWithControlledDeliveryActionExecutor = <E, R>(
+  target: TrackerTarget,
+  initialControlPolicy: InitialControlPolicy,
+  runId: AllocatedFreshWorkflowRunId,
+  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>
+) =>
+  Effect.gen(function* () {
+    const bootstrap = yield* JournaledRunBootstrap
+    return yield* bootstrap.fresh(
+      target,
+      initialControlPolicy,
+      runId,
+      runJournaledDelivery(runId, target, executorFactory)
+    )
+  })
 
 /** Runs a fresh workflow through the ordinary delivery composition. */
 export const runWorkflow = (
@@ -191,13 +218,18 @@ export const runWorkflow = (
   initialControlPolicy: InitialControlPolicy,
   runId: AllocatedFreshWorkflowRunId
 ) =>
-  Effect.gen(function* () {
-    const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.fresh(target, initialControlPolicy, runId, runJournaledDelivery(runId, target))
-  })
+  runWorkflowWithControlledDeliveryActionExecutor(
+    target,
+    initialControlPolicy,
+    runId,
+    liveDeliveryActionExecutorFactory
+  )
 
-/** Runs the exact reconstructed identity through the same ordinary delivery composition. */
-export const runRecoveredWorkflow = (target: TrackerTarget) =>
+/** Explicit controlled recovery composition; production callers use {@link runRecoveredWorkflow}. */
+export const runRecoveredWorkflowWithControlledDeliveryActionExecutor = <E, R>(
+  target: TrackerTarget,
+  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>
+) =>
   Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
     return yield* bootstrap.recovered(
@@ -209,7 +241,11 @@ export const runRecoveredWorkflow = (target: TrackerTarget) =>
           return yield* Effect.die("a recovered workflow requires authoritative recovered activation")
         }
         /* v8 ignore stop */
-        return yield* runJournaledDelivery(recovery.runId, target)
+        return yield* runJournaledDelivery(recovery.runId, target, executorFactory)
       })
     )
   })
+
+/** Runs the exact reconstructed identity through the same ordinary delivery composition. */
+export const runRecoveredWorkflow = (target: TrackerTarget) =>
+  runRecoveredWorkflowWithControlledDeliveryActionExecutor(target, liveDeliveryActionExecutorFactory)

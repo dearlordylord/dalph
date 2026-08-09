@@ -16,7 +16,7 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { InRunJournal } from "../../../workflow-journal/store.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -34,7 +34,7 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "./events.js"
-import { plannedAttemptExecutorEvidence } from "./evidence.js"
+import { latestUnsettledPlannedAttemptExecutorCommand, plannedAttemptExecutorEvidence } from "./evidence.js"
 
 /** An executor response named a different planned attempt than Dalph requested. */
 export class PlannedAttemptExecutorCorrelationMismatch extends Schema.TaggedErrorClass<PlannedAttemptExecutorCorrelationMismatch>()(
@@ -86,31 +86,6 @@ export class PlannedAttemptExecutorResponsibilityMissing extends Schema.TaggedEr
 
 const sameCorrelation = (left: PlannedAttemptExecutorCorrelation, right: PlannedAttemptExecutorCorrelation): boolean =>
   left.attemptId === right.attemptId && left.runId === right.runId
-
-const latestUnsettledExecutorCommand = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) => {
-  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-  const command = records.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.plannedAttempt.runId === plannedAttempt.runId &&
-      event.plannedAttempt.attemptId === plannedAttempt.attemptId
-  )
-  if (command?.event._tag !== "PlannedAttemptExecutorCommandIntended") return undefined
-  const commandEvent = command.event
-  const settled = records.some(({ event, position }) => {
-    if (position <= command.position) return false
-    if (event._tag === "PlannedAttemptExecutorWorkReported") {
-      return sameCorrelation(correlation, event.report.correlation)
-    }
-    return (
-      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-      event.commandOrdinal === commandEvent.ordinal &&
-      event.observation._tag === "ExactExecutorReport" &&
-      sameCorrelation(correlation, event.observation.report.correlation)
-    )
-  })
-  return settled ? undefined : commandEvent
-}
 
 /** Records ownership before any adapter records a command intent or crosses the executor boundary. */
 export const beginPlannedAttemptExecutorResponsibility = Effect.fn(
@@ -192,7 +167,7 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
         event.plannedAttempt.runId === plannedAttempt.runId &&
         event.plannedAttempt.attemptId === plannedAttempt.attemptId
     ).length
-  const unsettledCommand = latestUnsettledExecutorCommand(records, plannedAttempt)
+  const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
   if (unsettledCommand !== undefined) {
     const intent = unsettledCommand
     const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(
@@ -340,7 +315,7 @@ export const observePlannedAttemptExecutorState = Effect.fn("PlannedAttemptExecu
       requested: plannedAttempt
     })
   }
-  const unsettledCommand = latestUnsettledExecutorCommand(records, plannedAttempt)
+  const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
   if (unsettledCommand !== undefined) {
     return yield* new PlannedAttemptExecutorCommandReconciliationRequired({
       commandOrdinal: unsettledCommand.ordinal,

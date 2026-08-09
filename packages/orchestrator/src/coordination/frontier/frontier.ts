@@ -22,7 +22,11 @@ import type {
   StartedIntegrationResponsibility,
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
-import type { WorkflowOperation } from "../../workflow/registry/operation.js"
+import type {
+  StoppedAttemptTaskClaimReleaseOperation,
+  WorkflowOperation,
+  WorkflowTaskClaimReleaseOperation
+} from "../../workflow/registry/operation.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type {
   CandidateContinuationLimit,
@@ -101,7 +105,7 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly subject: AttemptChoiceSubject
   }
   ReleaseStoppedAttemptClaim: {
-    readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+    readonly operation: StoppedAttemptTaskClaimReleaseOperation
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
   }
@@ -109,7 +113,7 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   ReconcileTaskClaim: { readonly operationId: OperationId; readonly taskId: TaskId }
   ReconcileTaskClaimRelease: { readonly operationId: OperationId; readonly taskId: TaskId }
   ReleaseExternallyCompletedTaskClaim: {
-    readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+    readonly operation: WorkflowTaskClaimReleaseOperation
     readonly plannedAttempt: PlannedTaskAttempt
   }
   ReconcileTaskWorktree: { readonly operationId: OperationId; readonly taskId: TaskId }

@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- One chronological adapter owns fresh, pause, crash, recovery, candidate, and terminal story boundaries. */
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
-import { GitCommitSha, type RunId } from "@dalph/contracts"
+import { GitCommitSha, type PlannedAttemptExecutorReport, type RunId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
   attemptChoiceControlLayer,
@@ -33,13 +33,17 @@ import {
   type JournaledRuntimeLayerInput,
   journaledWorkflowInterpreterLayer,
   workflowInterpreterLayer,
+  makeLiveDeliveryActionExecutor,
+  makeTaskWorkSpecificationObservationOperation,
   memoryJournalStoreLayer,
+  OperationId,
+  OperationSelected,
   observePlannedAttemptWorktreeThrough,
   observeTargetLineageThrough,
   reduceWorkflowJournalHistory,
   runGitWorktreeReconciliation,
-  runRecoveredWorkflow,
-  runWorkflow,
+  runRecoveredWorkflowWithControlledDeliveryActionExecutor,
+  runWorkflowWithControlledDeliveryActionExecutor,
   validatedStartupRecoveryLayer,
   taskWorkCapacityControlLayer,
   TargetLineageObservation,
@@ -60,6 +64,7 @@ import {
   TestGitWorktree,
   TrackerMutation,
   TrackerAdapterReadError,
+  type DeliveryActionExecutorService,
   WorkflowInterpreter,
   WorkflowTrace
 } from "@dalph/orchestrator"
@@ -193,6 +198,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       })
       const cursor = yield* makeStoryCursor(cassette.story)
       const candidateOutcomeRecorded = yield* Deferred.make<void>()
+      const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
       const targetVerificationStory = cassette.story.some((item) => item._tag === "TargetVerificationReturned")
       const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
       const candidateTerminalEventTag = targetVerificationStory
@@ -225,7 +231,9 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
-      const coordinatorDies = cassette.story.some((item) => item._tag === "CoordinatorProcessDies")
+      const coordinatorLifecycleBoundaryCount = cassette.story.filter(
+        (item) => item._tag === "CoordinatorActivationReturned" || item._tag === "CoordinatorProcessDies"
+      ).length
       const trace = controlledTrace(cursor)
       const sharedContext = yield* Layer.build(
         Layer.mergeAll(
@@ -382,10 +390,14 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       )
       const controlPolicyLayer = Layer.merge(baseControlPolicyLayer, operatorControlLayer)
       const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer)
-      const planningLayer = (phase: "fresh" | "recovery") =>
+      const planningLayer = (phase: "fresh" | "recovery", recoveryOrdinal = 1) =>
         Layer.mergeAll(
           deterministicOperationIdAllocatorLayer(
-            phase === "fresh" ? `cassette:${runId}:operation` : `cassette:${runId}:recovery:operation`
+            phase === "fresh"
+              ? `cassette:${runId}:operation`
+              : recoveryOrdinal === 1
+                ? `cassette:${runId}:recovery:operation`
+                : `cassette:${runId}:recovery:${recoveryOrdinal}:operation`
           ),
           deterministicTaskClaimAcquisitionPlannerLayer({
             owner: command.claimOwner,
@@ -477,11 +489,16 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         /* v8 ignore next -- startup only requires capability presence; cassette mutations use controlled authorities. */
         CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
       )
-      const runtimeLayer = ({ startup }: JournaledRuntimeLayerInput) => {
-        const planning = planningLayer(startup === "Fresh" ? "fresh" : "recovery")
-        const executorLayer = controlledExecutorLayer(cursor, runId, applyNextControlDirection).pipe(
-          Layer.provide(controlPolicyLayer)
-        )
+      const recoveredRuntimeOrdinal = yield* Ref.make(0)
+      const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+      const runtimeLayerFor = ({ startup }: JournaledRuntimeLayerInput, recoveryOrdinal: number) => {
+        const planning = planningLayer(startup === "Fresh" ? "fresh" : "recovery", recoveryOrdinal)
+        const executorLayer = controlledExecutorLayer(
+          cursor,
+          runId,
+          applyNextControlDirection,
+          survivingExecutorReports
+        ).pipe(Layer.provide(controlPolicyLayer))
         const startupLayer = validatedStartupRecoveryLayer(
           runId,
           command.integrationTarget,
@@ -502,6 +519,14 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         )
         return startupLayer
       }
+      const runtimeLayer = (input: JournaledRuntimeLayerInput) =>
+        input.startup === "Fresh"
+          ? runtimeLayerFor(input, 0)
+          : Layer.unwrap(
+              Ref.updateAndGet(recoveredRuntimeOrdinal, (ordinal) => ordinal + 1).pipe(
+                Effect.map((ordinal) => runtimeLayerFor(input, ordinal))
+              )
+            )
       const application = journaledRunBootstrapLayer(runId, runtimeLayer).pipe(
         Layer.provide(journalLayer),
         Layer.provide(coordinatorOwnershipLayer)
@@ -572,8 +597,16 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
                 return yield* Effect.die(new Error(`authored attempt-choice result mismatch for ${item.requestNonce}`))
               }
               const queried = yield* bootstrap.operatorControl.readAttemptChoice(requestId)
-              if (queried._tag !== result.success._tag) {
+              if (
+                queried._tag !== result.success._tag ||
+                (queried._tag === "StopApplied" &&
+                  result.success._tag === "StopApplied" &&
+                  queried.status._tag !== result.success.status._tag)
+              ) {
                 return yield* Effect.die(new Error(`authored attempt-choice query mismatch for ${item.requestNonce}`))
+              }
+              if (item._tag === "OperatorStopsAttempt") {
+                yield* Deferred.succeed(admittedContinuationChoiceApplied, undefined)
               }
             }).pipe(Effect.orDie)
             const driveControlDirection = Effect.gen(function* () {
@@ -643,41 +676,125 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           })
         )
 
+      const controlledExecutorFactory = (factoryRunId: RunId, factoryTarget: typeof command.target) =>
+        Effect.gen(function* () {
+          const live = yield* makeLiveDeliveryActionExecutor(factoryRunId, factoryTarget)
+          const interpreter = yield* WorkflowInterpreter
+          const workflowTrace = yield* WorkflowTrace
+          return {
+            ...live,
+            execute: (action, lease) =>
+              Effect.gen(function* () {
+                const hold = yield* cursor.consumeAdmittedContinuationExecutorIntentHold
+                if (Option.isSome(hold)) {
+                  const expected = hold.value
+                  if (
+                    action._tag !== "IdentityFreeAction" ||
+                    action.proposal.route._tag !== "IdentityFreeWorkflowRoute" ||
+                    action.proposal.route.transition._tag !== "ContinuePlannedAttemptExecutorWork"
+                  ) {
+                    return yield* Effect.die(
+                      new Error(
+                        `authored continuation hold expected ContinuePlannedAttemptExecutorWork, received ${action.proposal.route._tag}`
+                      )
+                    )
+                  }
+                  const transition = action.proposal.route.transition
+                  if (
+                    transition.plannedAttempt.attemptId !== expected.attemptId ||
+                    transition.plannedAttempt.taskId !== expected.taskId
+                  ) {
+                    return yield* Effect.die(
+                      new Error(
+                        `authored continuation hold expected ${expected.taskId}/${expected.attemptId}, received ${transition.plannedAttempt.taskId}/${transition.plannedAttempt.attemptId}`
+                      )
+                    )
+                  }
+                  const operation = makeTaskWorkSpecificationObservationOperation(
+                    OperationId.make(`cassette:${factoryRunId}:admitted-continuation-race:specification`),
+                    factoryTarget,
+                    transition.plannedAttempt.taskId
+                  )
+                  yield* workflowTrace.emit(OperationSelected.make({ operation }))
+                  yield* interpreter.readTaskWorkSpecification(operation)
+                  yield* Deferred.await(admittedContinuationChoiceApplied)
+                }
+                return yield* live.execute(action, lease)
+              })
+          } satisfies DeliveryActionExecutorService
+        })
+
       const execution = yield* Effect.scoped(
         Effect.gen(function* () {
           const freshRun = withAuthoredOperatorDriver(
-            runWorkflow(command.target, initial.policy, runId).pipe(Effect.provide(planningLayer("fresh")))
+            runWorkflowWithControlledDeliveryActionExecutor(
+              command.target,
+              initial.policy,
+              runId,
+              controlledExecutorFactory
+            ).pipe(Effect.provide(planningLayer("fresh")))
           )
-          if (coordinatorDies) {
-            const coordinator = yield* Effect.forkScoped(freshRun)
-            yield* Effect.raceFirst(
-              cursor.awaitCoordinatorProcessDeath,
-              Fiber.join(coordinator).pipe(
-                Effect.andThen(Effect.die("fresh coordinator stopped before its authored process-death boundary"))
+          if (coordinatorLifecycleBoundaryCount > 0) {
+            let coordinator = yield* Effect.forkScoped(freshRun)
+            const coordinatorActivations: Array<"Fresh" | "Recovered"> = ["Fresh"]
+            let consumedLifecycleBoundaries = 0
+            let recoveryOrdinal = 0
+            while (consumedLifecycleBoundaries < coordinatorLifecycleBoundaryCount) {
+              const boundary = yield* Effect.raceFirst(
+                cursor.awaitCoordinatorProcessDeath.pipe(Effect.as({ _tag: "CoordinatorProcessDied" as const })),
+                Fiber.await(coordinator).pipe(
+                  Effect.map((exit) => ({ _tag: "CoordinatorActivationReturned" as const, exit }))
+                )
               )
-            )
-            yield* Fiber.interrupt(coordinator)
-            const recoveredRun = withAuthoredOperatorDriver(
-              runRecoveredWorkflow(command.target).pipe(Effect.provide(planningLayer("recovery")))
-            )
-            const recovered = yield* recoveredRun.pipe(Effect.forkScoped({ startImmediately: true }))
+              consumedLifecycleBoundaries += 1
+              if (boundary._tag === "CoordinatorActivationReturned") {
+                if (Exit.isFailure(boundary.exit)) return yield* Effect.failCause(boundary.exit.cause)
+                const expected = yield* cursor.consumeCoordinatorActivationReturned
+                const actual = boundary.exit.value
+                const matches =
+                  expected.decision._tag === actual._tag &&
+                  (expected.decision._tag === "RunMayTerminate" ||
+                    (actual._tag === "RunMustRemainActive" && expected.decision.reason === actual.reason))
+                if (!matches) {
+                  return yield* Effect.die(
+                    `authored coordinator activation expected ${JSON.stringify(expected.decision)}, received ${JSON.stringify(actual)}`
+                  )
+                }
+              } else {
+                yield* Fiber.interrupt(coordinator)
+              }
+              if (yield* cursor.atTerminalAssertions) break
+              recoveryOrdinal += 1
+              const recoveredRun = withAuthoredOperatorDriver(
+                runRecoveredWorkflowWithControlledDeliveryActionExecutor(
+                  command.target,
+                  controlledExecutorFactory
+                ).pipe(Effect.provide(planningLayer("recovery", recoveryOrdinal)))
+              )
+              coordinator = yield* recoveredRun.pipe(Effect.forkScoped({ startImmediately: true }))
+              coordinatorActivations.push("Recovered")
+            }
             yield* Effect.raceFirst(
               cursor.awaitTerminalAssertions,
-              Fiber.join(recovered).pipe(
+              Fiber.join(coordinator).pipe(
                 Effect.andThen(Effect.die("recovered coordinator stopped before the authored terminal assertions"))
               )
             )
             if (candidateTerminalEventTag !== undefined) yield* Deferred.await(candidateOutcomeRecorded)
             for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
-            const recoveredCoordinatorExit = recovered.pollUnsafe()
-            yield* Fiber.interrupt(recovered)
-            return { records: yield* sharedJournal.read(runId), recoveredCoordinatorExit }
+            const recoveredCoordinatorExit = coordinator.pollUnsafe()
+            yield* Fiber.interrupt(coordinator)
+            return { coordinatorActivations, records: yield* sharedJournal.read(runId), recoveredCoordinatorExit }
           }
           yield* freshRun
-          return { records: yield* sharedJournal.read(runId), recoveredCoordinatorExit: undefined }
+          return {
+            coordinatorActivations: ["Fresh"] as const,
+            records: yield* sharedJournal.read(runId),
+            recoveredCoordinatorExit: undefined
+          }
         }).pipe(Effect.provide(application))
       )
-      const { records, recoveredCoordinatorExit } = execution
+      const { coordinatorActivations, records, recoveredCoordinatorExit } = execution
       /* v8 ignore next -- @preserve Recovered authored runs return success after their declared final read; action failures are asserted by the direct protocol cassette. */
       if (recoveredCoordinatorExit !== undefined && Exit.isFailure(recoveredCoordinatorExit)) {
         return yield* Effect.failCause(recoveredCoordinatorExit.cause)
@@ -690,7 +807,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       const observedBehavior = behaviorExit.value
       return {
         cassette,
-        coordinatorActivations: coordinatorDies ? ["Fresh", "Recovered"] : ["Fresh"],
+        coordinatorActivations,
         history: reduceWorkflowJournalHistory(runId, records),
         observedBehavior,
         records,

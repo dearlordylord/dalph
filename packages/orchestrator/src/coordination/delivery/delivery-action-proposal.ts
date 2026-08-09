@@ -9,7 +9,11 @@ import { Schema } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
-import type { WorkflowOperation } from "../../workflow/registry/operation.js"
+import type {
+  StoppedAttemptTaskClaimReleaseOperation,
+  WorkflowOperation,
+  WorkflowTaskClaimReleaseOperation
+} from "../../workflow/registry/operation.js"
 import type { IntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type { RunnableFrontierTransition } from "../frontier/frontier.js"
@@ -97,6 +101,12 @@ type TaskSpecificationReadOperation = typeof WorkflowOperation.cases.ReadTaskWor
 type WorktreeReadOperation = typeof WorkflowOperation.cases.ReadTaskWorktree.Type
 type TargetLineageReadOperation = typeof WorkflowOperation.cases.ReadTargetLineage.Type
 type TaskClaimReleaseOperation = typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+type NewReleaseOperation<Operation extends TaskClaimReleaseOperation> = {
+  readonly _tag: "ReleaseTaskClaim"
+  readonly authority: Operation["authority"]
+  readonly predecessorOperationIds: Operation["predecessorOperationIds"]
+  readonly release: Omit<Operation["release"], "operationId">
+}
 
 /** Exact fields of a new authority action before its OperationId is allocated. */
 export type NewRecoveredWorkflowAction =
@@ -128,22 +138,12 @@ export type NewRecoveredWorkflowAction =
     }
   | {
       readonly _tag: "ReleaseExternallyCompletedTaskClaim"
-      readonly operation: {
-        readonly _tag: "ReleaseTaskClaim"
-        readonly authority: TaskClaimReleaseOperation["authority"]
-        readonly predecessorOperationIds: TaskClaimReleaseOperation["predecessorOperationIds"]
-        readonly release: Omit<TaskClaimReleaseOperation["release"], "operationId">
-      }
+      readonly operation: NewReleaseOperation<WorkflowTaskClaimReleaseOperation>
       readonly plannedAttempt: PlannedTaskAttempt
     }
   | {
       readonly _tag: "ReleaseStoppedAttemptClaim"
-      readonly operation: {
-        readonly _tag: "ReleaseTaskClaim"
-        readonly authority: TaskClaimReleaseOperation["authority"]
-        readonly predecessorOperationIds: TaskClaimReleaseOperation["predecessorOperationIds"]
-        readonly release: Omit<TaskClaimReleaseOperation["release"], "operationId">
-      }
+      readonly operation: NewReleaseOperation<StoppedAttemptTaskClaimReleaseOperation>
       readonly plannedAttempt: PlannedTaskAttempt
       readonly requestId: Extract<
         RunnableFrontierTransition,

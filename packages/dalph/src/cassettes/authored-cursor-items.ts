@@ -34,3 +34,20 @@ export const isTaskClaimReadItem = (item: unknown): item is AuthoredTaskClaimRea
   (item._tag === "TaskClaimReadFailed" ||
     item._tag === "TaskClaimCurrentReadReturned" ||
     item._tag === "TaskClaimReadReturned")
+
+export type AuthoredPlannedAttemptExecutorOutcomeItem =
+  | typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorResponseLost.Type
+  | typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.Type
+
+export const AuthoredPlannedAttemptExecutorOutcomeItem = Schema.Union([
+  AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorResponseLost,
+  AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported
+])
+
+export const isAuthoredPlannedAttemptExecutorOutcomeItem = (
+  item: unknown
+): item is AuthoredPlannedAttemptExecutorOutcomeItem =>
+  typeof item === "object" &&
+  item !== null &&
+  "_tag" in item &&
+  (item._tag === "PlannedAttemptExecutorResponseLost" || item._tag === "PlannedAttemptExecutorWorkReported")
