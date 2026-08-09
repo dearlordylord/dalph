@@ -45,20 +45,87 @@ const firstNamedString = (value: unknown, names: ReadonlySet<string>): string | 
   return undefined
 }
 
+const taggedName = (value: unknown): string | undefined => {
+  const tag = objectRecord(value)?._tag
+  return typeof tag === "string" ? tag : undefined
+}
+
+const wordsFromTag = (value: string): string =>
+  value.replace(/Route$/u, "").replace(/(?<=[a-z])(?=[A-Z])/gu, " ")
+
+const proposalAction = (value: unknown, taskId: string | undefined, fallback: string): string => {
+  const route = objectRecord(objectRecord(value)?.route)
+  const routeTag = taggedName(route)
+  const actionTag = routeTag === "IdentityFreeWorkflowRoute" || routeTag === "AcceptedWorkflowRoute"
+    ? taggedName(route?.transition)
+    : routeTag === "FreshWorkflowRoute" || routeTag === "FreshExecutorWorkflowRoute"
+      ? taggedName(route?.step)
+      : routeTag === "RecoveredNewActionRoute"
+        ? taggedName(route?.action)
+        : routeTag
+  if (actionTag === undefined) return fallback
+  if (actionTag === "TrackerGraphReadRoute") {
+    const purpose = firstNamedString(route, new Set(["purpose"]))
+    return purpose === "EstablishCurrentGraph"
+      ? "Read the tracker graph to establish the current graph"
+      : "Read the tracker graph"
+  }
+  if (actionTag === "QueueAcceptedResultIntegrationResponsibility") {
+    return taskId === undefined ? "Queue an accepted result for integration" : `Queue task ${taskId}'s accepted result for integration`
+  }
+  if (actionTag === "SuspendPlannedAttemptExecutorWork") {
+    return taskId === undefined
+      ? "Request safe suspension of planned-attempt executor work"
+      : `Request safe suspension of task ${taskId}'s planned-attempt executor work`
+  }
+  return wordsFromTag(actionTag)
+}
+
+const proposalAdmission = (value: unknown): string => {
+  const admission = objectRecord(objectRecord(value)?.admission)
+  const taskWork = objectRecord(admission?.taskWorkPosition)
+  const taskWorkText = taggedName(taskWork) === "TaskWorkPositionRequired"
+    ? taskWork?.mode === "Existing"
+      ? "requires the existing task-work position"
+      : "must reserve or reuse a task-work position"
+    : "needs no task-work position"
+  const integrationTarget = objectRecord(admission?.integrationTarget)
+  const targetText = taggedName(integrationTarget) !== "IntegrationTargetResourceRequired"
+    ? "needs no integration-target resource"
+    : integrationTarget?.access === "Acquire"
+      ? "must acquire the integration-target resource"
+      : integrationTarget?.access === "Release"
+        ? "must release the held integration-target resource"
+        : "requires the held integration-target resource"
+  return `${taskWorkText} · ${targetText}`
+}
+
 const proposalSummary = (fact: { readonly exact: string; readonly kind: string }): string => {
   try {
     const value: unknown = JSON.parse(fact.exact)
-    const route = firstNamedString(value, new Set(["transition", "step"]))
-      ?? firstNamedString(objectRecord(value)?.route, new Set(["_tag"]))
-      ?? fact.kind
-    const action = route === "TrackerGraphReadRoute"
-      ? "Read the tracker graph again"
-      : route.replace(/Route$/u, "").replace(/(?<=[a-z])(?=[A-Z])/gu, " ")
+    const record = objectRecord(value)
     const taskId = firstNamedString(value, new Set(["taskId"]))
+    if (taggedName(value) !== "DeliveryActionProposal") {
+      if (fact.kind === "DeliveryProposalOwnershipConflict") {
+        const owners = Array.isArray(record?.owners) ? record.owners.map(String) : []
+        return `Proposal ownership conflict${typeof record?.id === "string" ? ` for ${record.id}` : ""}: ${owners.length === 0 ? "owners unavailable" : owners.join(" and ")} · planning fails closed`
+      }
+      const transition = firstNamedString(value, new Set(["transition"]))
+      return `${wordsFromTag(taggedName(value) ?? fact.kind)}${taskId === undefined ? "" : ` · task ${taskId}`}${transition === undefined ? "" : ` · ${wordsFromTag(transition)}`}`
+    }
     const attemptId = firstNamedString(value, new Set(["attemptId"]))
     const owner = firstNamedString(value, new Set(["owner"]))
     const ownerText = owner?.replace(/(?<=[a-z])(?=[A-Z])/gu, " ").toLowerCase()
-    return `${action}${taskId === undefined ? "" : ` for task ${taskId}`}${attemptId === undefined ? "" : ` · attempt ${attemptId}`}${ownerText === undefined ? "" : ` · planned by the ${ownerText} layer`}`
+    const waitsFor = record?.waitsForLiveOperationId
+    const action = proposalAction(value, taskId, fact.kind)
+    return [
+      action,
+      taskId === undefined || action.includes(`task ${taskId}`) ? undefined : `task ${taskId}`,
+      attemptId === undefined ? undefined : `attempt ${attemptId}`,
+      proposalAdmission(value),
+      typeof waitsFor === "string" ? `waits for live operation ${waitsFor}` : undefined,
+      ownerText === undefined ? undefined : `planned by the ${ownerText} layer`
+    ].filter((part): part is string => part !== undefined).join(" · ")
   } catch {
     return fact.kind
   }
@@ -117,7 +184,8 @@ const taskFacts = (frame: AuthoredDeliveryFrame, taskId: string) => {
       : frontier.standing === "Eligible"
         ? `eligible at task revision ${frontier.taskRevision}`
         : `excluded: ${frontier.reasons.map(({ kind }) => kind).join(", ")}`,
-    held: held.length === 0 ? "none" : held.map(({ attemptId, runId }) => `${runId} / ${attemptId}`).join("; "),
+    heldFacts: held,
+    held: held.length === 0 ? "none" : held.map(({ attemptId }) => attemptId).join("; "),
     settlement: settlements.length === 0 ? "none" : settlements.map(({ attemptId }) => attemptId).join("; "),
     ticketFact: ticket,
     ticket: ticket === undefined
@@ -360,6 +428,12 @@ const renderTaskTable = (parent: HTMLElement, frame: AuthoredDeliveryFrame): voi
     }
     const heldCell = appendText(row, "td", facts.held)
     heldCell.dataset.label = "Does it occupy task-work capacity?"
+    if (facts.heldFacts.length > 0) {
+      const details = document.createElement("details")
+      appendText(details, "summary", "Exact Run and attempt correlation")
+      appendText(details, "pre", JSON.stringify(facts.heldFacts, null, 2))
+      heldCell.append(details)
+    }
     const deliveryCell = document.createElement("td")
     deliveryCell.dataset.label = "What responsibility or obligation exists?"
     renderDeliveryFacts(deliveryCell, facts.delivery)
@@ -513,13 +587,15 @@ const renderTimeline = (
     "Production layer chain: observed graph → exhaustive frontier → bounded desired tickets → ticket deliveries → settlements → descriptive tracker reflection → downstream action planning. Reflection does not prove a tracker mutation, and a proposal does not prove an action ran.",
     "delivery-layer-chain"
   )
+  const settlementCoverage = appendText(parent, "p", "", "delivery-settlement-coverage")
   const legend = document.createElement("ul")
   legend.className = "delivery-graph-legend"
   for (const value of [
     "Blue border: frontier eligible",
-    "Purple fill: selected bounded ticket",
+    "Purple halo: selected bounded ticket",
     "Double border: actual held task-work position",
     "Gold fill: retained ticket-delivery standing",
+    "Cyan outer outline: selected task correlated with the facts below",
     "Excluded tasks remain visible with their exact graph reason in task facts",
     "Settlement appears only from established settlement evidence, never from executor Terminal alone"
   ]) appendText(legend, "li", value)
@@ -542,6 +618,15 @@ const renderTimeline = (
   frameHost.dataset.role = "delivery-frame"
   let frames = initialFrames
   let running = initiallyRunning
+
+  const refreshSettlementCoverage = (): void => {
+    const settlementCount = frames.reduce((total, frame) => total + frame.settlements.length, 0)
+    settlementCoverage.textContent = settlementCount > 0
+      ? `This timeline contains ${settlementCount} established delivery settlements and their tracker-reflection meaning.`
+      : running
+        ? "No established delivery settlement has appeared in this running timeline yet."
+        : "Current catalog limitation: no maintained authored cassette publishes a non-empty graph-level settlement frame. Direct integration-finality cassettes execute that protocol without fabricating graph delivery state here."
+  }
 
   const refreshFollow = (): void => {
     follow.setAttribute("aria-pressed", String(playback.followLive))
@@ -568,7 +653,9 @@ const renderTimeline = (
       frameHost,
       "aside",
       playback.selectedTaskId === null
-        ? "Select a task in the graph summary to correlate its graph state with exact delivery facts."
+        ? frame.graph._tag === "Established"
+          ? "Select a task in the graph summary to correlate its graph state with exact delivery facts."
+          : "No production-observed task is selectable in this frame because the graph is not established. Journal-recovered positions and obligations remain in the delivery facts below."
         : selectedTaskSummary(frame, playback.selectedTaskId),
       "selected-task-facts"
     )
@@ -619,6 +706,7 @@ const renderTimeline = (
   const update = (nextFrames: ReadonlyArray<AuthoredDeliveryFrame>, nextRunning: boolean): void => {
     frames = nextFrames
     running = nextRunning
+    refreshSettlementCoverage()
     select.replaceChildren()
     for (const [index, frame] of frames.entries()) {
       const option = document.createElement("option")

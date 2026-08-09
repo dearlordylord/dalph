@@ -125,6 +125,10 @@ const shadowCss = `
       #fbf8f1;
     background-size: 24px 24px;
   }
+  :host([data-empty]) {
+    min-height: 0;
+    background: #fbf8f1;
+  }
   #canvas { position: relative; width: 100%; height: 430px; }
   #empty {
     min-height: 430px;
@@ -132,6 +136,11 @@ const shadowCss = `
     place-items: center;
     color: #726b60;
     font: italic 14px system-ui, sans-serif;
+  }
+  :host([data-empty]) #empty {
+    min-height: 0;
+    padding: 1rem;
+    text-align: center;
   }
   [hidden] { display: none !important; }
   #summary {
@@ -163,6 +172,7 @@ const shadowCss = `
     :host { min-height: 340px; }
     #canvas { height: 340px; }
     #empty { min-height: 340px; }
+    :host([data-empty]) #empty { min-height: 0; }
   }
 `
 
@@ -199,9 +209,10 @@ const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
   {
     selector: "node:selected, node.selected-task",
     style: {
-      "background-color": "#dce8dc",
-      "border-color": "#295b46",
-      "border-width": 4
+      "outline-color": "#00a7c4",
+      "outline-offset": 11,
+      "outline-opacity": 1,
+      "outline-width": 4
     }
   },
   {
@@ -210,7 +221,12 @@ const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
   },
   {
     selector: "node.display-placement",
-    style: { "background-color": "#e8e1f2" }
+    style: {
+      "underlay-color": "#7656a0",
+      "underlay-opacity": 0.5,
+      "underlay-padding": 7,
+      "underlay-shape": "round-rectangle"
+    }
   },
   {
     selector: "node.display-held",
@@ -383,12 +399,18 @@ class DalphDeliveryGraphElement extends HTMLElement {
     this.#core?.destroy()
     this.#core = null
     const projection = this.#projection
-    this.#renderSummary(projection)
-    if (projection === null || (projection.tasks.length === 0 && projection.edges.length === 0)) {
+    const empty = projection === null || (projection.tasks.length === 0 && projection.edges.length === 0)
+    if (empty) this.setAttribute("data-empty", "")
+    else this.removeAttribute("data-empty")
+    this.#summary.hidden = empty
+    if (empty) {
+      this.#summary.replaceChildren()
       this.#canvas.hidden = true
       this.#empty.hidden = false
+      this.#empty.textContent = projection?.status ?? "Graph projection unavailable."
       return
     }
+    this.#renderSummary(projection)
     if (typeof this.ownerDocument.defaultView?.getComputedStyle !== "function") {
       this.#canvas.hidden = true
       this.#empty.hidden = true

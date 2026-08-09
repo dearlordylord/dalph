@@ -293,6 +293,21 @@ const storyItemSummary = (item: Readonly<Record<string, unknown>>): string => {
 }
 
 const storyItemLandmark = (item: Readonly<Record<string, unknown>>): string | null => {
+  if (item._tag === "TrackerGraphReadReturned") {
+    const graph = typeof item.graph === "object" && item.graph !== null
+      ? item.graph as Readonly<Record<string, unknown>>
+      : undefined
+    const tasks = Array.isArray(graph?.tasks) ? graph.tasks : []
+    const taskStates = tasks.flatMap((task) => {
+      if (typeof task !== "object" || task === null) return []
+      const record = task as Readonly<Record<string, unknown>>
+      const lifecycle = typeof record.lifecycle === "object" && record.lifecycle !== null
+        ? (record.lifecycle as Readonly<Record<string, unknown>>)._tag
+        : undefined
+      return [`task ${String(record.id ?? "unknown")} ${String(lifecycle ?? "unknown lifecycle")}`]
+    })
+    return `Tracker returned graph ${String(graph?.revision ?? "without a revision")}${taskStates.length === 0 ? " with no tasks" : `: ${taskStates.join("; ")}`}`
+  }
   if (
     item._tag === "OperatorAppliesControlDirection"
     || item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"

@@ -527,7 +527,9 @@ await scenario("shows graph observation provenance quiescence and planned action
 
 await scenario("explains restart continuity at the Fresh to Recovered boundary", async () => {
   const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:runPauseRestartsPassively")
+  const row = maintainedCassetteRows.find(({ catalogKey }) =>
+    catalogKey === "authored:acceptedResultRestartsIntoIntegration"
+  )
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The restart delivery fixture is missing")
@@ -546,6 +548,168 @@ await scenario("explains restart continuity at the Fresh to Recovered boundary",
   const boundary = document.querySelector(".delivery-restart-boundary")?.textContent ?? ""
   assert(boundary.includes("Coordinator restarted: Fresh → Recovered"), "The first recovered publication must visibly mark the process restart")
   assert(boundary.includes("Survived unchanged") && boundary.includes("task A"), "The restart marker must name exact held-position and obligation continuity")
+})
+
+await scenario("keeps graph-not-established recovery frames compact and truthful", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) =>
+    catalogKey === "authored:acceptedResultRestartsIntoIntegration"
+  )
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The recovery delivery fixture is missing")
+  }
+  const emptyIndex = result.deliveryFrames.findIndex(({ activation, graph }) =>
+    activation === "Recovered" && graph._tag === "NotEstablished"
+  )
+  const establishedIndex = result.deliveryFrames.findIndex((frame, index) =>
+    index > emptyIndex && frame.graph._tag === "Established"
+  )
+  if (emptyIndex < 0 || establishedIndex < 0) throw new Error("The recovery graph transition is missing")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
+  if (timeline === null) throw new Error("The recovery delivery timeline is missing")
+  chooseOption(timeline, String(emptyIndex))
+  const emptyGraph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+    projection?: { readonly tasks: ReadonlyArray<unknown> }
+  }) | null
+  assert(emptyGraph?.projection?.tasks.length === 0, "The recovery frame must retain the exact graph-not-established projection")
+  assert(
+    document.querySelector("[data-role='selected-task-facts']")?.textContent?.includes("No production-observed task is selectable") === true,
+    "An empty recovery graph must not invite impossible task selection"
+  )
+  chooseOption(timeline, String(establishedIndex))
+  const establishedGraph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+    projection?: { readonly tasks: ReadonlyArray<unknown> }
+  }) | null
+  assert((establishedGraph?.projection?.tasks.length ?? 0) > 0, "A later observed graph must restore its useful task projection")
+})
+
+await scenario("names concrete planned transitions and their admission requirements", async () => {
+  const summaryFor = async (marker: string): Promise<string> => {
+    const match = everyResult.flatMap((result) => {
+      if (result._tag !== "Completed" || result.deliveryFrames === null) return []
+      return result.deliveryFrames.flatMap((frame, frameIndex) => {
+        const values = frame.actionPlanning._tag === "DeliveryProposalsAvailable"
+          ? frame.actionPlanning.proposals
+          : frame.actionPlanning.conflicts
+        return values.some(({ exact }) => exact.includes(marker)) ? [{ frameIndex, key: result.catalogKey }] : []
+      })
+    })[0]
+    if (match === undefined) throw new Error(`No maintained delivery proposal contains ${marker}`)
+    const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === match.key)
+    if (row === undefined) throw new Error(`The proposal row ${match.key} is missing`)
+    const { document, root, settled } = installDom()
+    mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+    const done = settled(singleCassetteSettledEvent)
+    ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+    await done
+    const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
+    if (timeline === null) throw new Error("The planned-action timeline is missing")
+    chooseOption(timeline, String(match.frameIndex))
+    const item = [...document.querySelectorAll("[data-role='delivery-action-planning'] li")].find((candidate) =>
+      candidate.querySelector("pre")?.textContent?.includes(marker)
+    )
+    return item?.querySelector(":scope > span")?.textContent ?? ""
+  }
+
+  const fresh = await summaryFor('"_tag": "FreshWorkflowRoute"')
+  assert(fresh.includes("Read Current Task Graph"), "Fresh workflow proposals must name their concrete step")
+  assert(fresh.includes("waits for live operation"), "A proposal must name the live operation that blocks it")
+  const recovered = await summaryFor('"_tag": "RecoveredNewActionRoute"')
+  assert(recovered.startsWith("Read") && !recovered.startsWith("Recovered New Action"), "Recovered proposals must name their concrete authority action")
+  const pause = await summaryFor('"_tag": "SuspendPlannedAttemptExecutorWork"')
+  assert(pause.includes("Request safe suspension of task A's planned-attempt executor work"), "Pause planning must use the concrete task action")
+  assert(pause.includes("requires the existing task-work position"), "Pause planning must explain its exact position admission")
+  const queued = await summaryFor('"_tag": "QueueAcceptedResultIntegrationResponsibility"')
+  assert(queued.includes("Queue task A's accepted result for integration"), "Accepted-result planning must name the concrete integration action")
+  assert(queued.includes("needs no task-work position") && queued.includes("needs no integration-target resource"), "Accepted-result queueing must state its non-admission requirements")
+  const targetResource = await summaryFor('"_tag": "IntegrationTargetResourceRequired"')
+  assert(
+    targetResource.includes("must acquire the integration-target resource")
+      || targetResource.includes("must release the held integration-target resource")
+      || targetResource.includes("requires the held integration-target resource"),
+    "Integration proposals must explain their exact target-resource admission"
+  )
+})
+
+await scenario("states when the maintained authored catalog has not exercised a populated settlement layer", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  if (row === undefined) throw new Error("The dependency delivery row is missing")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  assert(
+    document.querySelector(".delivery-settlement-coverage")?.textContent?.includes("no maintained authored cassette publishes a non-empty graph-level settlement frame") === true,
+    "The workbench must state the maintained-catalog settlement limitation instead of implying populated evidence"
+  )
+})
+
+await scenario("keeps multi-task chronology landmarks attributable", () => {
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  if (row === undefined) throw new Error("The dependency delivery row is missing")
+  assert(
+    row.storyItemLandmarks.some((landmark) => landmark?.includes("task A") === true && landmark.includes("task B")),
+    "A multi-task tracker graph return must name each task beside its lifecycle"
+  )
+})
+
+await scenario("composes simultaneous graph ticket held and delivery encodings", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The dependency delivery fixture is missing")
+  }
+  const combinedIndex = result.deliveryFrames.findIndex((frame) =>
+    frame.graph._tag === "Established"
+    && frame.graph.tasks.some(({ id }) => {
+      const ticket = frame.tickets.find(({ taskId }) => taskId === id)
+      const delivery = frame.deliveries.find(({ taskId }) => taskId === id)
+      return ticket?.placement.kind === "Selected" && delivery !== undefined
+    })
+  )
+  if (combinedIndex < 0) throw new Error("No frame combines selected-ticket and delivery standing")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
+  if (timeline === null) throw new Error("The dependency delivery timeline is missing")
+  chooseOption(timeline, String(combinedIndex))
+  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+    projection?: { readonly tasks: ReadonlyArray<{ readonly display?: { readonly classes?: ReadonlyArray<string> } }> }
+  }) | null
+  assert(
+    graph?.projection?.tasks.some(({ display }) =>
+      display?.classes?.includes("placement") === true && display.classes.includes("standing")
+    ) === true,
+    "A task must retain simultaneous selected-ticket and ticket-delivery encodings"
+  )
+  const legend = document.querySelector(".delivery-graph-legend")?.textContent ?? ""
+  assert(legend.includes("Purple halo") && legend.includes("Gold fill"), "The legend must name composable ticket and delivery encodings")
+})
+
+await scenario("keeps selected-task feedback separate from delivery encodings", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  if (row === undefined) throw new Error("The dependency delivery row is missing")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+    selectedTaskId?: string | null
+  }) | null
+  graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: "A" } }))
+  assert(graph?.selectedTaskId === "A", "Graph selection must remain controlled without changing its delivery projection")
+  assert(document.querySelector("tr[data-task-id='A']")?.getAttribute("aria-current") === "true", "Selected-task feedback must retain its accessible table correlation")
+  assert(document.querySelector(".delivery-graph-legend")?.textContent?.includes("Cyan outer outline") === true, "The interaction highlight must be explained separately from domain encodings")
 })
 
 await scenario("shows grouping relationships exact obligations and settlement state", async () => {

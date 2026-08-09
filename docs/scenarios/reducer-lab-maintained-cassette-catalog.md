@@ -366,6 +366,26 @@ and recorded position, graph and task revisions, capacity, and quiescence
 disposition. The cassette chronology and raw journal remain available as the
 control/evidence record rather than replacing the graph.
 
+When a recovery publication has not yet established a graph, the Lab replaces
+the large empty canvas with a compact explanation that there are no observed
+tasks to select. Reconstructed held positions and ticket-delivery obligations
+remain visible below; the Lab does not invite the maintainer to use an empty
+graph summary.
+
+The concise action-plan projection names the concrete production transition,
+its task or attempt correlation, whether it must reserve or reuse a task-work
+position or integration-target resource, and any live operation it must wait
+for. Terms such as `IdentityFreeWorkflowRoute` stay in the secondary exact
+JSON rather than becoming the human action label.
+
+No currently maintained authored cassette crosses the separate direct
+integration-finality protocol and then triggers another graph-level delivery
+publication. Consequently the authored workbench currently demonstrates the
+settlement and tracker-reflection layers only in their exact empty state. It
+says this explicitly; it must not imply that the 40-cassette catalog contains
+a populated graph-level settlement frame, and it must not synthesize one from
+the direct protocol cassette.
+
 The Lab must not project a frontier from declared input, fabricate a privately
 branded journaled graph observation, infer missing topology from durable task
 membership, call a selected bounded ticket an admitted or held position,
@@ -380,6 +400,14 @@ Graph nodes contain compact state labels; exact evidence and correlations stay
 in selected-task facts. At a narrow viewport the frame control fits the
 viewport, per-task facts remain readable without page-wide horizontal
 overflow, and terminal journal evidence remains collapsed until requested.
+At desktop width all six per-task meanings remain visible without an implicit
+multi-screen horizontal scroll; opaque revisions and correlations wrap or stay
+inside secondary disclosures. Simultaneous graph eligibility, selected desired
+ticket, held position, and retained ticket-delivery standing use composable
+visual encodings, so one fill rule must not erase another fact promised by the
+legend. Selecting a task adds a separate interaction highlight without
+replacing any of those domain encodings, and the legend identifies it as the
+task whose exact facts are correlated below.
 
 ### Acceptance-test mapping
 
@@ -431,10 +459,32 @@ overflow, and terminal journal evidence remains collapsed until requested.
 - `explains restart continuity at the Fresh to Recovered boundary` selects the
   first Recovered frame and checks the visible restart marker plus held-position
   and obligation continuity.
+- `keeps graph-not-established recovery frames compact and truthful` checks an
+  empty recovery projection has no large canvas and explains that there is no
+  observed task to select while recovered delivery facts remain available.
+- `names concrete planned transitions and their admission requirements` checks
+  Pause and accepted-result frames name the exact human action, task/attempt,
+  task-work or integration-target resource requirement, and live-operation
+  wait when present while retaining the raw proposal separately.
+- `states when the maintained authored catalog has not exercised a populated settlement layer`
+  checks zero-settlement frames identify that current catalog limitation and
+  do not claim a populated tracker-reflection example.
+- `keeps multi-task chronology landmarks attributable` checks task lifecycle
+  landmarks include the task identity instead of rendering indistinguishable
+  repeated lifecycle fragments.
 - `keeps populated graphs truthful and delivery evidence usable at narrow width`
   checks the graph shadow empty state is hidden for a populated projection,
   narrow task facts retain their labels, and journal chronology is collapsed
   by default.
+- `keeps every per-task meaning visible at desktop width` checks the task-state
+  presentation does not hide held positions, obligations, or settlements
+  behind multi-screen horizontal overflow.
+- `composes simultaneous graph ticket held and delivery encodings` checks a
+  task with several simultaneous facts visibly retains every legend encoding
+  instead of a later fill rule erasing selected-ticket meaning.
+- `keeps selected-task feedback separate from delivery encodings` checks task
+  selection visibly changes the graph while preserving the frontier, desired
+  ticket, held-position, and retained-standing encodings.
 - The real-browser command listens for a delivery-frame event before the
   selected cassette's settled event, proves the article is still Running when
   a real frame appears, and then checks final auto-follow, rewind, disclosure

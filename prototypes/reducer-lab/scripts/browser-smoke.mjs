@@ -92,6 +92,63 @@ try {
   assert.ok(graphRendered.canvasChildren > 0)
   assert.deepEqual(graphRendered.taskIds, ["A", "B"])
   assert.match(graphRendered.relationships, /A blocks B/u)
+  const graphLocator = page.locator("dalph-delivery-graph")
+  await graphLocator.locator("#summary > summary").click()
+  const beforeSelection = await graphLocator.screenshot()
+  await graphLocator.locator('button[data-task-id="A"]').click()
+  const afterSelection = await graphLocator.screenshot()
+  assert.equal(beforeSelection.equals(afterSelection), false)
+  assert.equal(await page.locator('tr[data-task-id="A"]').getAttribute("aria-current"), "true")
+  console.log("✓ keeps selected-task feedback separate from delivery encodings")
+
+  const desktopTaskTruth = await page.locator('[data-role="delivery-task-state"]').evaluate((table) => {
+    const tableRect = table.getBoundingClientRect()
+    const lastCell = table.querySelector("tbody tr td:last-child")?.getBoundingClientRect()
+    return {
+      clientWidth: table.clientWidth,
+      lastCellRight: lastCell?.right ?? Number.POSITIVE_INFINITY,
+      scrollWidth: table.scrollWidth,
+      tableRight: tableRect.right
+    }
+  })
+  assert.ok(desktopTaskTruth.scrollWidth <= desktopTaskTruth.clientWidth + 1)
+  assert.ok(desktopTaskTruth.lastCellRight <= desktopTaskTruth.tableRight + 1)
+  console.log("✓ keeps every per-task meaning visible at desktop width")
+
+  const combinedEncoding = await page.evaluate(() => {
+    const selector = document.querySelector('[data-role="delivery-workbench"] select')
+    const graph = document.querySelector("dalph-delivery-graph")
+    if (!(selector instanceof HTMLSelectElement) || graph === null) return false
+    for (const option of selector.options) {
+      selector.value = option.value
+      selector.dispatchEvent(new Event("change"))
+      if (graph.projection?.tasks.some(({ display }) =>
+        display?.classes?.includes("placement") && display.classes.includes("standing")
+      )) return true
+    }
+    return false
+  })
+  assert.equal(combinedEncoding, true)
+  console.log("✓ composes simultaneous graph ticket held and delivery encodings")
+
+  await frameSelector.selectOption("0")
+  const emptyGraphTruth = await page.locator("dalph-delivery-graph").evaluate((element) => {
+    const summary = element.shadowRoot?.querySelector("#summary")
+    return {
+      compactHeight: element.getBoundingClientRect().height,
+      empty: element.hasAttribute("data-empty"),
+      summaryHidden: summary?.hasAttribute("hidden") ?? false
+    }
+  })
+  assert.equal(emptyGraphTruth.empty, true)
+  assert.equal(emptyGraphTruth.summaryHidden, true)
+  assert.ok(emptyGraphTruth.compactHeight < 200)
+  assert.doesNotMatch(
+    await workbench.locator('[data-role="selected-task-facts"]').textContent() ?? "",
+    /Select a task in the graph summary/u
+  )
+  console.log("✓ keeps graph-not-established recovery frames compact and truthful")
+  await frameSelector.selectOption(String(frameCount - 2))
 
   await workbenchDisclosure.click()
   assert.equal(await workbench.getAttribute("open"), null)

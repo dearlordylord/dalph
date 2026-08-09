@@ -281,12 +281,24 @@ dd {
 }
 
 [data-role="delivery-task-state"] {
+  display: table;
+  table-layout: fixed;
   margin-bottom: 1rem;
+  max-height: none;
+  overflow: visible;
 }
 
+[data-role="delivery-task-state"] th,
 [data-role="delivery-task-state"] td {
+  overflow-wrap: anywhere;
   white-space: normal;
   vertical-align: top;
+}
+
+[data-role="delivery-task-state"] pre {
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .declared-chronology p {
