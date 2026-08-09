@@ -393,14 +393,13 @@ const recoveredProposalOf = (
   return recoveredRouteProposalOf(context, newAction, operationId, transition)
 }
 
-const appendDerived = (
-  contributions: {
-    readonly deliverySettlement: Array<DeliveryActionProposal>
-    readonly issues: Array<DeliveryProposalContributions["issues"][number]>
-    readonly ticketDelivery: Array<DeliveryActionProposal>
-  },
-  derived: DerivedProposal
-): void => {
+interface MutableDeliveryProposalContributions {
+  readonly deliverySettlement: Array<DeliveryActionProposal>
+  readonly issues: Array<DeliveryProposalContributions["issues"][number]>
+  readonly ticketDelivery: Array<DeliveryActionProposal>
+}
+
+const appendDerived = (contributions: MutableDeliveryProposalContributions, derived: DerivedProposal): void => {
   if (derived._tag === "ProposalIssue") {
     contributions.issues.push(derived.issue)
     return
@@ -409,49 +408,69 @@ const appendDerived = (
   else contributions.ticketDelivery.push(derived.proposal)
 }
 
-/** Converts one already-reconciled transition order into immutable action routes without performing an action. */
-export const deliveryProposalsOf = (input: DeliveryProposalsInput): DeliveryProposalContributions => {
-  const freshByTransition = new Map(input.fresh.map((decision) => [freshDecisionKey(input.runId, decision), decision]))
-  const integrationResponsibilities = input.integrationResponsibilities ?? []
-  const workflowResponsibilities = input.responsibilities ?? []
-  const contributions: {
-    deliverySettlement: Array<DeliveryActionProposal>
-    issues: Array<DeliveryProposalContributions["issues"][number]>
-    ticketDelivery: Array<DeliveryActionProposal>
-  } = { deliverySettlement: [], issues: [], ticketDelivery: [] }
+interface DeliveryProposalDerivationFrame {
+  readonly acceptedAt: DeliveryProposalsInput["acceptedAt"]
+  readonly acceptedOperationIds: DeliveryProposalsInput["acceptedOperationIds"]
+  readonly freshByTransition: ReadonlyMap<string, FreshDecision>
+  readonly integrationResponsibilities: ReadonlyArray<IntegrationResponsibility>
+  readonly responsibilities: ReadonlyArray<WorkflowResponsibilityEntry>
+  readonly runId: DeliveryProposalsInput["runId"]
+}
 
-  for (const [index, transition] of input.transitions.entries()) {
-    const fresh = freshByTransition.get(transitionKey(input.runId, transition))
-    const admission = admissionFor(transition, integrationResponsibilities)
-    /* v8 ignore start -- the closed transition maps make an uncorrelated Existing requirement unreachable. */
-    if (admission === undefined) {
-      appendDerived(contributions, routePolicyContradiction(transition))
-      continue
-    }
-    /* v8 ignore stop */
-    const owner: DeliveryProposalOwner = isSettlementTransition(transition, integrationResponsibilities)
-      ? "DeliverySettlement"
-      : "TicketDelivery"
-    const order = orderFor(
+const appendContributionForTransition = (
+  contributions: MutableDeliveryProposalContributions,
+  frame: DeliveryProposalDerivationFrame,
+  index: number,
+  transition: RunnableFrontierTransition
+): void => {
+  const fresh = frame.freshByTransition.get(transitionKey(frame.runId, transition))
+  const admission = admissionFor(transition, frame.integrationResponsibilities)
+  /* v8 ignore start -- the closed transition maps make an uncorrelated Existing requirement unreachable. */
+  if (admission === undefined) {
+    appendDerived(contributions, routePolicyContradiction(transition))
+    return
+  }
+  /* v8 ignore stop */
+  const integrationResponsibility = integrationResponsibilityFor(transition, frame.integrationResponsibilities)
+  const owner: DeliveryProposalOwner = isSettlementTransition(transition, frame.integrationResponsibilities)
+    ? "DeliverySettlement"
+    : "TicketDelivery"
+  const context: ProposalContext = {
+    admission,
+    order: orderFor(
       transition,
       fresh?.step,
       DeliveryProposalOrdinal.make(index),
-      input.acceptedAt,
-      responsibilityBeganAtFor(transition, workflowResponsibilities),
-      integrationResponsibilityFor(transition, integrationResponsibilities)
-    )
-    const context: ProposalContext = {
-      admission,
-      order,
-      owner,
-      runId: input.runId,
-      waitsForLiveOperationId: runnableTransitionOperationId(transition) ?? null
-    }
-    const derived =
-      fresh === undefined
-        ? recoveredProposalOf(input.acceptedOperationIds, context, transition)
-        : freshProposalOf(context, fresh)
-    appendDerived(contributions, derived)
+      frame.acceptedAt,
+      responsibilityBeganAtFor(transition, frame.responsibilities),
+      integrationResponsibility
+    ),
+    owner,
+    runId: frame.runId,
+    waitsForLiveOperationId: runnableTransitionOperationId(transition) ?? null
+  }
+  appendDerived(
+    contributions,
+    fresh === undefined
+      ? recoveredProposalOf(frame.acceptedOperationIds, context, transition)
+      : freshProposalOf(context, fresh)
+  )
+}
+
+/** Converts one already-reconciled transition order into immutable action routes without performing an action. */
+export const deliveryProposalsOf = (input: DeliveryProposalsInput): DeliveryProposalContributions => {
+  const frame: DeliveryProposalDerivationFrame = {
+    acceptedAt: input.acceptedAt,
+    acceptedOperationIds: input.acceptedOperationIds,
+    freshByTransition: new Map(input.fresh.map((decision) => [freshDecisionKey(input.runId, decision), decision])),
+    integrationResponsibilities: input.integrationResponsibilities ?? [],
+    responsibilities: input.responsibilities ?? [],
+    runId: input.runId
+  }
+  const contributions: MutableDeliveryProposalContributions = { deliverySettlement: [], issues: [], ticketDelivery: [] }
+
+  for (const [index, transition] of input.transitions.entries()) {
+    appendContributionForTransition(contributions, frame, index, transition)
   }
   return contributions
 }
