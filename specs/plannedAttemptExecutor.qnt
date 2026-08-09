@@ -160,6 +160,25 @@ module plannedAttemptExecutor {
 
   val continuationLimitReached: bool = state.consecutiveRunningReports == CONTINUATION_LIMIT
 
+  pure def suspensionRequested(status: Status): bool = match status {
+    | SuspensionRequested(_) => true
+    | _ => false
+  }
+
+  /// After Dalph asks the executor to suspend this exact planned attempt, the
+  /// task-work position is eventually released. `reportSafelySuspended` needs
+  /// only weak fairness: while the request remains pending its exact planned
+  /// report is continuously enabled. A terminal report may win first and also
+  /// releases the position, which is why the consequent names the owned
+  /// resource rather than requiring one particular executor outcome.
+  ///
+  /// The one-attempt bound is this owning model's accepted boundary: correlation
+  /// is checked against one durable planned `(RunId, AttemptId)`, not a claim
+  /// about scheduling every task in a Run.
+  temporal suspensionRequestEventuallyReleasesPosition =
+    reportSafelySuspended.weakFair(Set(state)) implies
+      always(suspensionRequested(state.status) implies eventually(not(state.positionHeld)))
+
   action init: bool = all {
     state' = {
       status: ResponsibilityNotBegun,

@@ -31,6 +31,20 @@ test("counts complete and unterminated stdout and stderr lines", async () => {
   expect(result).toEqual({ outputLineCount: 3 })
 })
 
+test("captures output and an accepted nonzero exit for verdict inspection", async () => {
+  const result = await runBoundedCommand({
+    acceptedExitCodes: [7],
+    args: ["-e", "process.stdout.write('verdict'); process.exit(7)"],
+    captureOutput: true,
+    executable: process.execPath,
+    forwardOutput: false,
+    name: "captured verdict fixture",
+    timeoutMilliseconds: 2000
+  })
+
+  expect(result).toEqual({ exitCode: 7, output: "verdict", outputLineCount: 1 })
+})
+
 test.skipIf(process.platform === "win32")(
   "kills a resistant descendant after the process-group leader exits",
   async () => {

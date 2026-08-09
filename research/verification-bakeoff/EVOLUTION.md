@@ -187,3 +187,43 @@ other faithful Lean files in about 3 seconds (about 13 seconds including Lean
 negative controls). The refinement adds no TLC state variable and therefore
 has no state-space cost. Its authored cost is the trace induction; one-step
 preservation reduces to the already-proved fold homomorphism.
+
+## #201 — fail-closed temporal production gate
+
+Planned Base SHA: `0eeed5468f88e6c4bb8ba75b321c959efc8104dd`.
+
+This changes only the formal quality gate. It does not change a Dalph runtime
+transition, boundary call, journal event, Git fact, or tracker fact.
+
+### Chosen property and assumptions
+
+The owning production model `specs/plannedAttemptExecutor.qnt` now states
+`suspensionRequestEventuallyReleasesPosition`: after Dalph asks the executor
+to safely suspend the exact planned attempt, the task-work position is
+eventually released. Weak fairness is applied only to
+`reportSafelySuspended`. That is faithful because the exact planned report is
+continuously enabled while the request remains pending; a terminal report may
+arrive first and also releases the position. Requiring eventual release avoids
+incorrectly demanding a SafelySuspended report after a Terminal report.
+
+The model's one-attempt bound is intentional. This property governs one
+already-planned `(RunId, AttemptId)` and its one owned task-work position; it
+does not claim fairness across all tasks in a Run.
+
+### Scenario-to-test mapping
+
+| Accepted scenario | Concrete result | Executable evidence |
+|---|---|---|
+| A developer runs the correct default gate | the visible step names `suspensionRequestEventuallyReleasesPosition` and TLC; only exit 0 plus `[ok] No violation found` is accepted | `pnpm check:quint`; `assertCleanTemporalVerdict` unit tests reject empty and unsupported output; bounded-command tests exercise timeout termination |
+| The temporal behavior is mutated to retain the position forever | TLC finds the ordinary safe-suspension counterexample; a failure without a violation marker is not accepted | `plannedAttemptExecutor_temporal_negative.qnt`; `assertViolatedTemporalVerdict` tests |
+| A fresh runner lacks TLC's Apalache distribution | the existing default-backend exhaustive check prepares the versioned artifact before TLC starts; failure prevents the temporal call | `runPreparedTemporalCheck`; hermetic cold-cache test creates an absent artifact, prepares it, and verifies it is required; preparation-failure test proves no temporal invocation |
+
+### Measurement
+
+On Linux aarch64 with Quint 0.32.0, the correct temporal property completed in
+about 0.68 seconds and its mutant in about 0.69 seconds. The complete
+`pnpm check:quint` gate completed in 84.27 seconds, including artifact
+preparation, every existing model check, the real TLC verdict, and the mutant.
+The gate enforces the 150-second budget as a decreasing wall-clock deadline,
+so a hung temporal command cannot consume a fresh per-command allowance and
+then report the overrun only after later work.

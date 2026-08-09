@@ -1,6 +1,11 @@
 import { performance } from "node:perf_hooks"
 
 import { quintGateRegressionBudgetMilliseconds } from "./quint-gate-policy.mjs"
+import {
+  assertCleanTemporalVerdict,
+  assertViolatedTemporalVerdict,
+  runPreparedTemporalCheck
+} from "./quint-temporal-gate.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const pnpmEntryPoint = process.env.npm_execpath
@@ -9,17 +14,21 @@ if (pnpmEntryPoint === undefined) {
   throw new Error("Run this model gate through pnpm")
 }
 
-const run = async (name, args) => {
+const startedAt = performance.now()
+
+const remainingBudgetMilliseconds = () =>
+  Math.max(1, quintGateRegressionBudgetMilliseconds - (performance.now() - startedAt))
+
+const run = async (name, args, options = {}) => {
   process.stdout.write(`\n== ${name} ==\n`)
-  await runBoundedCommand({
+  return runBoundedCommand({
     args: [pnpmEntryPoint, "quint", ...args],
     executable: process.execPath,
     name,
-    timeoutMilliseconds: quintGateRegressionBudgetMilliseconds
+    timeoutMilliseconds: remainingBudgetMilliseconds(),
+    ...options
   })
 }
-
-const startedAt = performance.now()
 
 await run("planned-attempt executor model typecheck", [
   "typecheck",
@@ -55,21 +64,57 @@ await run("planned-attempt executor sampled model", [
   "--verbosity",
   "1"
 ])
-await run("planned-attempt executor exhaustive model", [
-  "verify",
-  "specs/plannedAttemptExecutor.qnt",
-  "--invariants",
-  "everyReportCarriesPlannedAttempt",
-  "continuationCountBounded",
-  "positionHeldUntilSuspensionResult",
-  "safeSuspensionReleasesPosition",
-  "suspensionRequestRetainsPosition",
-  "terminalReleasesPosition",
-  "--max-steps",
-  "20",
-  "--verbosity",
-  "1"
-])
+await runPreparedTemporalCheck({
+  // Quint's TLC backend loads TLC from the Apalache distribution. On a cold
+  // runner this existing default-backend verification prepares/downloads that
+  // versioned artifact before the temporal command is allowed to start.
+  prepareArtifact: () => run("planned-attempt executor exhaustive model and TLC artifact preparation", [
+    "verify",
+    "specs/plannedAttemptExecutor.qnt",
+    "--invariants",
+    "everyReportCarriesPlannedAttempt",
+    "continuationCountBounded",
+    "positionHeldUntilSuspensionResult",
+    "safeSuspensionReleasesPosition",
+    "suspensionRequestRetainsPosition",
+    "terminalReleasesPosition",
+    "--max-steps",
+    "20",
+    "--verbosity",
+    "1"
+  ]),
+  verifyTemporal: async () => {
+    const property = "suspensionRequestEventuallyReleasesPosition"
+    const verdict = await run(`planned-attempt executor temporal ${property} (TLC)`, [
+      "verify",
+      "specs/plannedAttemptExecutor.qnt",
+      "--backend",
+      "tlc",
+      "--temporal",
+      property,
+      "--verbosity",
+      "1"
+    ], { captureOutput: true })
+    assertCleanTemporalVerdict(verdict, property)
+  }
+})
+
+{
+  const property = "suspensionRequestNeverReleasesPosition"
+  const verdict = await run(`planned-attempt executor temporal mutant ${property} (TLC)`, [
+    "verify",
+    "specs/plannedAttemptExecutor_temporal_negative.qnt",
+    "--main",
+    "plannedAttemptExecutorTemporalNegative",
+    "--backend",
+    "tlc",
+    "--temporal",
+    property,
+    "--verbosity",
+    "1"
+  ], { acceptedExitCodes: [1], captureOutput: true })
+  assertViolatedTemporalVerdict(verdict, property)
+}
 
 const controlDirectionApplicationInvariants = [
   "appliedDirectionIsOperatorInitiated",
