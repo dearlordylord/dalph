@@ -29,7 +29,7 @@ it rather than in a delivery invariant list.
 the seven tools are bound to no Dalph code at all, so `→ I10` means a model
 states the invariant, never that the shipped code is checked against it. What
 checks production is indexed per function under "Coverage per production
-surface" in `../research/verification-bakeoff/INVARIANTS.md`, and the six
+surface" in `../research/verification-bakeoff/INVARIANTS.md`, and the seven
 subject-scoped models under `specs/` that reach production do so through
 `packages/dalph/test/conformance/*.mbt.test.ts`. `integrationFinality` covers
 post-promotion claim cleanup and task-local settlement without claiming Run
@@ -280,9 +280,10 @@ and no record for another target is placed under a Run. The lifecycle Journal
 rejects a direct second beginning even though application-level establishment
 is idempotent.
 → `checked` in `fastcheck/journal.mjs`, as fold guards rather than as a stated
-property. Future `runEstablishment.oneBeginningPerRun` checks that same guard
-through application entry. This is a property of which records may be admitted,
-not of the reduction function, which is why it is separate from D32.
+property. `runActivation.oneBeginningPerRun` checks that same guard through the
+application entry, including the ambiguous-beginning retry. This is a property
+of which records may be admitted, not of the reduction function, which is why
+it is separate from D32.
 
 ## Progress
 
@@ -301,15 +302,19 @@ tracker observation may support the activation's next decision. Quiescence is
 never inferred from process loss, a timeout, a boundary result not yet published
 by delivery planning, or missing session data. D35 owns termination.
 → `I19` and `integrationFinality`'s empty-frontier witness with a retained
-unrelated responsibility.
+unrelated responsibility. `runActivation.finalityReadRequiresQuiescence` and
+`runActivation.establishmentSourceDoesNotChangeActivationBounds` check the
+single later read for both newly established and reconstructed Runs.
 
 **D35 A Run does not terminate while it owes work.** Termination requires a
 later accepted complete tracker observation proving the target settled, no
 outstanding obligation, no executable action, and no live action owner. An
 unsettled retained responsibility keeps the Run active.
 → `integrationFinality` proves that an empty frontier cannot settle its
-retained task responsibility; whole-Run termination remains owned by issue
-#102 and is outside this subject model.
+retained task responsibility.
+`runActivation.terminationRequiresNoRetainedResponsibilityOrPosition` checks
+whole-Run termination only after both durable retained attempts and their
+independently reconstructed positions are gone.
 
 **D36 No busy loop on unchanged facts.** One activation performs at most one
 post-quiescence tracker reconfirmation. It runs any actions introduced by that
@@ -318,9 +323,9 @@ produce repeated work or continuous polling. A later activation may perform
 its own one-shot reconfirmation. This bound and finality path are identical
 whether establishment just appended the Run beginning or reconstructed an
 existing unfinished history.
-→ future `runEstablishment.establishmentSourceDoesNotChangeActivationBounds`;
-existing models enable actions by state rather than by observation, so they do
-not otherwise distinguish this parity.
+→ `runActivation.establishmentSourceDoesNotChangeActivationBounds`; its
+deterministic parity scenario and production-backed conformance adapter enter
+the same bounded path after both a new beginning and existing history.
 
 **D37 Every Run is convergeable.** *Not implemented: no Operator resolution
 exists for a task closed without success or removed from the target closure, so
@@ -377,9 +382,8 @@ invocation. When durable history holds more than one unfinished Run, startup
 fails closed naming every Run identity it found and mutates no tracker, Git, or
 executor state for any of them. Historical responsibility entries belonging to
 another Run are neither folded into the selected Run nor silently ignored.
-→ future
-`runEstablishment.atMostOneDiscoveredUnfinishedRunMayActivate`; every current
-model has exactly one Run.
+→ `runActivation.atMostOneDiscoveredUnfinishedRunMayActivate`; its collected
+negative profile chooses one of two histories and turns the invariant red.
 
 **D39 Run establishment is idempotent and not caller-classified.** For one exact
 Run identity and target, absent history evaluates the lazy initial policy and
@@ -387,9 +391,10 @@ appends one beginning. Existing history is decoded and reduced in full and
 reconstructs that exact Run without evaluating a replacement initial value or
 appending another beginning. A caller never selects a separate restoration
 start. Invalid, mismatched, or terminated history never reaches activation.
-→ future `runEstablishment.oneBeginningPerRun`,
-`runEstablishment.onlyExactEstablishedRunActivates`, and
-`runEstablishment.terminatedRunIsFinal`.
+→ `runActivation.oneBeginningPerRun`,
+`runActivation.onlyExactEstablishedRunActivates`, and
+`runActivation.terminatedRunIsFinal`, backed by the unified bootstrap
+conformance adapter.
 
 **D40 Initial and current capacity policy come from durable Run history.** The
 initial policy source is evaluated only when exact history is absent and is
@@ -398,9 +403,11 @@ comes from that beginning plus later applied changes. It is neither a process
 default nor a replacement caller argument. Before new admission, held positions
 are derived from exact unfinished responsibilities under that reconstructed
 policy; a process-local position map is never restored as authority.
-→ future `runEstablishment.existingHistorySkipsInitialPolicy` and
-`runEstablishment.activationRestoresHeldAdmission`; current models treat
-capacity as a free variable with no provenance.
+→ `runActivation.existingHistorySkipsInitialPolicy`,
+`runActivation.existingHistoryUsesLatestDurablePolicy`, and
+`runActivation.everyDurableRetainedAttemptHasExactPosition`. The production
+adapter asserts that the ordinary delivery relation's exact admission basis is
+equal to the Run-recovery projection before giving it to admission.
 
 ## Serialized integration
 

@@ -69,7 +69,7 @@ export class JournaledRunIdentityMismatch extends Schema.TaggedError<JournaledRu
   { expectedRunId: RunId, requestedRunId: RunId }
 ) {}
 
-/** An Operator request arrived while no fresh or recovered Run runtime was installed. */
+/** An Operator request arrived while no established Run activation was installed. */
 export class JournaledRunNotActive extends Schema.TaggedError<JournaledRunNotActive>()("JournaledRunNotActive", {}) {}
 
 export interface JournaledRunBootstrapService {

@@ -1,4 +1,4 @@
-import { plannedAttemptExecutorCorrelation, type AttemptId, type RunId, type TaskId } from "@dalph/contracts"
+import { type RunId, type TaskId } from "@dalph/contracts"
 import { Deferred, Effect, Layer, Option, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
@@ -8,6 +8,7 @@ import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { runnableTransitionTaskId, transitionTrackerGraphRequirement } from "../frontier/frontier.js"
 import type { RunRecoveryProjectionSource } from "../run/recovery-activation.js"
+import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import { deriveFreshWorkflowDecisions } from "../run/fresh-workflow.js"
 import {
@@ -25,7 +26,6 @@ import {
   DeliveryRelationReconciliationError,
   type DeliveryRelationSourceError,
   type DeliveryRelationInputBundle,
-  type DeliveryRuntimeFacts,
   type TicketDeliveryEvidence,
   type TrackerGraphActionProposal
 } from "./relations.js"
@@ -88,45 +88,6 @@ const trackerGraphProposalsOf = (
   }
   return []
 }
-
-const latestExecutorReport = (records: ReadonlyArray<JournalRecord>, attemptId: AttemptId) =>
-  records.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === attemptId
-  )?.event
-
-/**
- * Rebuilds held task-work positions from journal history after process loss.
- * The correlation comes from the stored planned attempt, so restart continues
- * the exact `(RunId, AttemptId)` rather than minting a replacement, and a
- * position is surrendered only on a SafelySuspended or Terminal report —
- * process loss is neither.
- *
- * TODO: this is the derivation half of crash recovery and no model covers it.
- * It carries I9, I10 and I16 of research/verification-bakeoff/INVARIANTS.md at
- * once, and I9 is `not modelled` in all seven tools because no model here
- * carries a RunId or an AttemptId at all. The adoption half is
- * `makeDeliveryRuntimeAdmissionController` and `synchronize` in
- * ./delivery-runtime-admission.ts; a crash/recover model needs both ends.
- * Correctness of the fold this reads from is I15, which
- * research/verification-bakeoff/JOURNAL-EVENTS.md designs and nothing builds.
- */
-const activeAttemptPositions = (
-  state: Effect.Success<JournalService["state"]["get"]>
-): DeliveryRuntimeFacts["taskWork"]["held"] =>
-  state.reconstructed.responsibility.entries.flatMap((responsibility) => {
-    if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
-    const latest = latestExecutorReport(state.records, responsibility.plannedAttempt.attemptId)
-    return latest?._tag === "PlannedAttemptExecutorWorkReported" &&
-      (latest.report._tag === "SafelySuspended" || latest.report._tag === "Terminal")
-      ? []
-      : [
-          {
-            correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
-            taskId: responsibility.plannedAttempt.taskId
-          }
-        ]
-  })
 
 /**
  * Keeps one effectful reconciliation subscription hot while all exposed
@@ -191,7 +152,13 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
           quiescence: runIsPaused
             ? { _tag: "QuiescencePassive", reason: "RunPaused" }
             : { _tag: "TrackerReconfirmationAllowed" },
-          taskWork: { capacity: policy.taskExecutionCapacity, held: activeAttemptPositions(journal) }
+          taskWork: {
+            capacity: policy.taskExecutionCapacity,
+            held: requiredPlannedAttemptPositionsOf(journal.reconstructed).map(({ attemptId, runId, taskId }) => ({
+              correlation: { attemptId, runId },
+              taskId
+            }))
+          }
         },
         trackerGraphProposals
       },

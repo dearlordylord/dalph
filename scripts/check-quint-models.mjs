@@ -356,7 +356,7 @@ await run("Run activation sampled model", [
   "--witnesses",
   ...runActivationWitnesses,
   "--max-steps",
-  "24",
+  "28",
   "--max-samples",
   "10000",
   "--verbosity",

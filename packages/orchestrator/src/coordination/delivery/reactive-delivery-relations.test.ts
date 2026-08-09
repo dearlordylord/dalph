@@ -2,15 +2,17 @@ import { it } from "@effect/vitest"
 import {
   AttemptId,
   GitCommitSha,
+  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Cause, Deferred, Effect, Fiber, Option, Ref, Stream } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
@@ -20,8 +22,9 @@ import { InitialControlPolicy } from "../../control/policy.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { OperationId } from "../../workflow/identity.js"
-import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import { TaskAttemptPlannedEvent, taskTrackerReadIntent } from "../../workflow/registry/event.js"
 import {
+  makeTaskAttemptPlanOperation,
   makeTaskClaimReleaseOperation,
   makeTrackerGraphObservationOperation,
   TaskClaimReleaseAuthority
@@ -34,20 +37,41 @@ import { makeTaskTrackerFactsObservedFromRead } from "../../workflow/protocols/t
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
+  attemptPlanRecordKey,
   controlDirectionAppliedRecordKey,
   intentRecordKey,
-  outcomeRecordKey
+  outcomeRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandProjectionObservedRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
-import { JournalHistoryInvalid, JournalStore } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalHistoryInvalid, JournalStore } from "../../workflow-journal/store.js"
 import {
   ControlDirectionApplicationOrdinal,
   ControlDirectionAppliedEvent
 } from "../../workflow/protocols/control-direction-application/events.js"
+import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
+import { makeRunRecoveryProjection } from "../run/recovery-activation.js"
 import { type JournalState, makeJournal } from "./journal.js"
 import { delivery } from "./delivery.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
@@ -55,6 +79,8 @@ import {
   DeliveryRelationPublicationObserver,
   evaluateDeliveryRelationInputBundle
 } from "./delivery-publication-observer.js"
+import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
+import { makeDeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
   DeliveryControlPolicyMissing,
@@ -84,6 +110,128 @@ const makeJournalService = Effect.gen(function* () {
   if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
   return yield* makeJournal(runId, target, initial, storage)
 })
+
+const appendExecutorResponsibility = Effect.fn("ReactiveDeliveryTest.appendExecutorResponsibility")(function* (
+  journal: Effect.Success<typeof makeJournalService>
+) {
+  const plan = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("reactive-delivery-recovered-plan"),
+    plannedAttempt: recoveredAttempt,
+    predecessorOperationIds: []
+  })
+  yield* journal.append(
+    runId,
+    attemptPlanRecordKey(recoveredAttempt.attemptId),
+    TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(recoveredAttempt.attemptId),
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+      plannedAttempt: recoveredAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+})
+
+const appendStartOrContinue = Effect.fn("ReactiveDeliveryTest.appendStartOrContinue")(function* (
+  journal: Effect.Success<typeof makeJournalService>,
+  ordinal: number
+) {
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(ordinal)
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(recoveredAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "StartOrContinue",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: commandOrdinal,
+      plannedAttempt: recoveredAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+})
+
+const appendDirectExecutorReport = Effect.fn("ReactiveDeliveryTest.appendDirectExecutorReport")(function* (
+  journal: Effect.Success<typeof makeJournalService>,
+  report: PlannedAttemptExecutorReport,
+  ordinal: number
+) {
+  const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(ordinal)
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorWorkReportedRecordKey(recoveredAttempt.attemptId, reportOrdinal),
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: reportOrdinal,
+      report,
+      version: workflowJournalEventVersion
+    })
+  )
+})
+
+const appendCommandProjection = Effect.fn("ReactiveDeliveryTest.appendCommandProjection")(function* (
+  journal: Effect.Success<typeof makeJournalService>,
+  report: PlannedAttemptExecutorReport,
+  commandOrdinalValue = 1
+) {
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(commandOrdinalValue)
+  const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorCommandProjectionObservedRecordKey(
+      recoveredAttempt.attemptId,
+      commandOrdinal,
+      projectionOrdinal
+    ),
+    PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+      commandOrdinal,
+      observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({ report }),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt: recoveredAttempt,
+      projectionOrdinal,
+      version: workflowJournalEventVersion
+    })
+  )
+})
+
+const appendStateProjection = Effect.fn("ReactiveDeliveryTest.appendStateProjection")(function* (
+  journal: Effect.Success<typeof makeJournalService>,
+  observation: PlannedAttemptExecutorStateObservation
+) {
+  const ordinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorStateObservedRecordKey(recoveredAttempt.attemptId, ordinal),
+    PlannedAttemptExecutorStateObservedEvent.make({
+      observation,
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal,
+      plannedAttempt: recoveredAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+})
+
+const nextAttemptProposal = () => {
+  const nextAttempt = PlannedTaskAttempt.make({
+    ...recoveredAttempt,
+    attemptId: AttemptId.make("reactive-delivery-next-attempt"),
+    branch: TaskBranchRef.make("refs/heads/dalph/reactive-delivery-next"),
+    worktree: WorktreeLocator.make("/worktrees/reactive-delivery-next")
+  })
+  const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+    acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+    plannedAttempt: nextAttempt
+  })
+  const proposals = deliveryProposalsOf({
+    acceptedOperationIds: new Set(),
+    fresh: [],
+    runId,
+    transitions: [transition]
+  })
+  return Option.getOrThrow(Option.fromUndefinedOr(proposals.ticketDelivery[0]))
+}
 
 const currentProjection = (stateGet: Effect.Effect<JournalState>) => ({
   readDeliveryProjection: stateGet.pipe(
@@ -175,6 +323,146 @@ it.effect("records the initial and later exact production bundles without changi
         Effect.flatMap((signal) => signal.get)
       )
       expect(current.graph._tag).toBe("GraphEstablished")
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("retains the exact task-work position after a safe report when a later start remains unresolved", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      yield* appendExecutorResponsibility(journal)
+      yield* appendStartOrContinue(journal, 1)
+      yield* appendDirectExecutorReport(
+        journal,
+        PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+          correlation: plannedAttemptExecutorCorrelation(recoveredAttempt)
+        }),
+        1
+      )
+      yield* appendStartOrContinue(journal, 2)
+
+      const recovery = yield* makeRunRecoveryProjection(runId).pipe(Effect.provideService(InRunJournal, journal))
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const current = yield* relation.get
+      const expectedPosition = {
+        correlation: plannedAttemptExecutorCorrelation(recoveredAttempt),
+        taskId: recoveredAttempt.taskId
+      }
+
+      expect(recovery.reconstructedPlannedAttemptPositions).toEqual([
+        { attemptId: recoveredAttempt.attemptId, runId, taskId: recoveredAttempt.taskId }
+      ])
+      expect(current.taskWork.held).toEqual([expectedPosition])
+      const admission = yield* makeDeliveryRuntimeAdmissionController(
+        current.taskWork,
+        yield* makeIntegrationTargetResourceController()
+      ).pipe(Effect.provide(Layer.fresh(plannedAttemptProtocolControllerLayer)))
+      expect(yield* admission.tryReserve(nextAttemptProposal())).toMatchObject({
+        _tag: "Deferred",
+        reason: "TaskWorkPositionUnavailable"
+      })
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("releases the exact position after a safely suspended command projection", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      yield* appendExecutorResponsibility(journal)
+      yield* appendStartOrContinue(journal, 1)
+      yield* appendCommandProjection(
+        journal,
+        PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+          correlation: plannedAttemptExecutorCorrelation(recoveredAttempt)
+        })
+      )
+
+      const recovery = yield* makeRunRecoveryProjection(runId).pipe(Effect.provideService(InRunJournal, journal))
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const current = yield* relation.get
+
+      expect(recovery.reconstructedPlannedAttemptPositions).toEqual([])
+      expect(current.taskWork.held).toEqual([])
+      const admission = yield* makeDeliveryRuntimeAdmissionController(
+        current.taskWork,
+        yield* makeIntegrationTargetResourceController()
+      ).pipe(Effect.provide(Layer.fresh(plannedAttemptProtocolControllerLayer)))
+      expect((yield* admission.tryReserve(nextAttemptProposal()))._tag).toBe("Admitted")
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("releases the exact position after a terminal command projection", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      yield* appendExecutorResponsibility(journal)
+      yield* appendStartOrContinue(journal, 1)
+      yield* appendCommandProjection(
+        journal,
+        PlannedAttemptExecutorReport.cases.Terminal.make({
+          correlation: plannedAttemptExecutorCorrelation(recoveredAttempt),
+          result: { _tag: "Failed" }
+        })
+      )
+
+      const recovery = yield* makeRunRecoveryProjection(runId).pipe(Effect.provideService(InRunJournal, journal))
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+
+      expect(recovery.reconstructedPlannedAttemptPositions).toEqual([])
+      expect((yield* relation.get).taskWork.held).toEqual([])
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("releases the exact position from a command-free safely suspended state projection", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      yield* appendExecutorResponsibility(journal)
+      yield* appendStateProjection(
+        journal,
+        PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+            correlation: plannedAttemptExecutorCorrelation(recoveredAttempt)
+          })
+        })
+      )
+
+      const recovery = yield* makeRunRecoveryProjection(runId).pipe(Effect.provideService(InRunJournal, journal))
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+
+      expect(recovery.reconstructedPlannedAttemptPositions).toEqual([])
+      expect((yield* relation.get).taskWork.held).toEqual([])
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("retains the exact position when a command-free state projection is unavailable", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      yield* appendExecutorResponsibility(journal)
+      yield* appendStateProjection(
+        journal,
+        PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnavailable.make({})
+      )
+
+      const recovery = yield* makeRunRecoveryProjection(runId).pipe(Effect.provideService(InRunJournal, journal))
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const expected = [{ attemptId: recoveredAttempt.attemptId, runId, taskId: recoveredAttempt.taskId }]
+
+      expect(recovery.reconstructedPlannedAttemptPositions).toEqual(expected)
+      expect((yield* relation.get).taskWork.held).toEqual([
+        { correlation: plannedAttemptExecutorCorrelation(recoveredAttempt), taskId: recoveredAttempt.taskId }
+      ])
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )

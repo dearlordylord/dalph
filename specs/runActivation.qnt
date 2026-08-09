@@ -6,8 +6,8 @@
 module runActivation {
   type RunId = R1 | R2
   type TrackerTarget = Target1 | Target2
-  type TaskId = TaskA | TaskB
-  type AttemptId = AttemptA | AttemptB
+  type TaskId = TaskA | TaskB | TaskC
+  type AttemptId = AttemptA | AttemptB | AttemptC
 
   type PolicyRevision = PolicyRevision0 | PolicyRevision1
   type TaskCapacity = Capacity1 | Capacity2
@@ -167,10 +167,16 @@ module runActivation {
     attemptId: AttemptA,
   }
 
-  pure val INDEPENDENT_ATTEMPT_B: AttemptCorrelation = {
+  pure val RETAINED_ATTEMPT_B: AttemptCorrelation = {
     runId: R1,
     taskId: TaskB,
     attemptId: AttemptB,
+  }
+
+  pure val INDEPENDENT_ATTEMPT_C: AttemptCorrelation = {
+    runId: R1,
+    taskId: TaskC,
+    attemptId: AttemptC,
   }
 
   pure val EMPTY_FACTS: RunHistoryFacts = {
@@ -201,7 +207,7 @@ module runActivation {
     initialPolicy: INITIAL_POLICY,
     latestPolicy: CONTRACTED_POLICY,
     retainedAttempt: ExactRetainedAttempt(RETAINED_ATTEMPT_A),
-    otherRetainedAttempt: ExactRetainedAttempt(INDEPENDENT_ATTEMPT_B),
+    otherRetainedAttempt: ExactRetainedAttempt(RETAINED_ATTEMPT_B),
   }
 
   pure val TARGET_MISMATCHED_FACTS: RunHistoryFacts = {
@@ -224,11 +230,6 @@ module runActivation {
 
   pure def unfinishedFacts(history: StartupHistory): RunHistoryFacts = match history {
     | OneUnfinishedHistory(facts) => facts
-    | _ => EMPTY_FACTS
-  }
-
-  pure def terminatedFacts(history: StartupHistory): RunHistoryFacts = match history {
-    | TerminatedHistory(facts) => facts
     | _ => EMPTY_FACTS
   }
 
@@ -271,6 +272,11 @@ module runActivation {
   pure def removeRetainedAttempt(facts: RunHistoryFacts): RunHistoryFacts = {
     ...facts,
     retainedAttempt: NoRetainedAttempt,
+  }
+
+  pure def removeOtherRetainedAttempt(facts: RunHistoryFacts): RunHistoryFacts = {
+    ...facts,
+    otherRetainedAttempt: NoRetainedAttempt,
   }
 
   pure def retainAttempt(facts: RunHistoryFacts, correlation: AttemptCorrelation): RunHistoryFacts = {
@@ -381,25 +387,30 @@ module runActivation {
     | _ => true
   }
 
-  val activationRestoresHeldAdmission: bool = match state.durable.history {
-    | OneUnfinishedHistory(facts) => match facts.retainedAttempt {
-        | ExactRetainedAttempt(correlation) =>
-            state.process.phase != ActivatingRun
-              or and {
-                state.process.heldPosition == ExactTaskPosition(correlation),
-                state.process.otherHeldPosition == positionFor(facts.otherRetainedAttempt),
-              }
-        | NoRetainedAttempt => true
-      }
+  val everyDurableRetainedAttemptHasExactPosition: bool = match state.durable.history {
+    | OneUnfinishedHistory(facts) =>
+        state.process.phase != ActivatingRun
+          or and {
+            match facts.retainedAttempt {
+              | ExactRetainedAttempt(correlation) =>
+                  state.process.heldPosition == ExactTaskPosition(correlation)
+              | NoRetainedAttempt => state.process.heldPosition == NoTaskPosition
+            },
+            match facts.otherRetainedAttempt {
+              | ExactRetainedAttempt(correlation) =>
+                  state.process.otherHeldPosition == ExactTaskPosition(correlation)
+              | NoRetainedAttempt => state.process.otherHeldPosition == NoTaskPosition
+            },
+          }
     | _ => true
   }
 
   val independentAdmissionRequiresAvailablePosition: bool =
     not(state.process.independentTaskAdmitted)
       or and {
-        state.process.heldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_B),
+        state.process.heldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_C),
         unfinishedFacts(state.durable.history).retainedAttempt
-          == ExactRetainedAttempt(INDEPENDENT_ATTEMPT_B),
+          == ExactRetainedAttempt(INDEPENDENT_ATTEMPT_C),
       }
 
   val latestPolicyControlsAdmission: bool =
@@ -432,11 +443,16 @@ module runActivation {
     state.trace.terminationAppends == 0
       or state.trace.terminationHadLaterSettledObservation
 
-  val terminationRequiresEveryRetainedPositionSettled: bool =
+  val terminationRequiresNoRetainedResponsibilityOrPosition: bool =
     state.trace.terminationAppends == 0
-      or and {
-        state.process.heldPosition == NoTaskPosition,
-        state.process.otherHeldPosition == NoTaskPosition,
+      or match state.durable.history {
+        | TerminatedHistory(facts) => and {
+            facts.retainedAttempt == NoRetainedAttempt,
+            facts.otherRetainedAttempt == NoRetainedAttempt,
+            state.process.heldPosition == NoTaskPosition,
+            state.process.otherHeldPosition == NoTaskPosition,
+          }
+        | _ => false
       }
 
   val trackerCallsRequireEstablishedHistory: bool =
@@ -465,7 +481,7 @@ module runActivation {
     state.trace.trackerCalls <= 4,
     state.trace.gitCalls == 0,
     state.trace.executorCalls >= 0,
-    state.trace.executorCalls <= 3,
+    state.trace.executorCalls <= 4,
     state.trace.processLosses >= 0,
     state.trace.processLosses <= 1,
   }
@@ -520,7 +536,12 @@ module runActivation {
     state.process.phase == ActivatingRun
       and establishedFacts(state.process.establishedRun).latestPolicy == CONTRACTED_POLICY
       and state.process.heldPosition == ExactTaskPosition(RETAINED_ATTEMPT_A)
-      and state.process.otherHeldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_B)
+      and state.process.otherHeldPosition == ExactTaskPosition(RETAINED_ATTEMPT_B)
+  val otherRetainedAttemptSettledReached: bool =
+    state.process.phase == ActivatingRun
+      and establishedFacts(state.process.establishedRun).latestPolicy == CONTRACTED_POLICY
+      and unfinishedFacts(state.durable.history).otherRetainedAttempt == NoRetainedAttempt
+      and state.trace.executorCalls >= 2
 
   action init: bool = all {
     state' = {
@@ -835,6 +856,35 @@ module runActivation {
     },
   }
 
+  action settleOtherRetainedAttempt: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.otherHeldPosition == ExactTaskPosition(RETAINED_ATTEMPT_B),
+    unfinishedFacts(state.durable.history).otherRetainedAttempt
+      == ExactRetainedAttempt(RETAINED_ATTEMPT_B),
+    exactRequestedUnfinished(state.durable.history, state.requestedRunId, state.requestedTarget),
+    state' = {
+      ...state,
+      durable: {
+        ...state.durable,
+        history: OneUnfinishedHistory(
+          removeOtherRetainedAttempt(unfinishedFacts(state.durable.history))
+        ),
+      },
+      trackerFinality: {
+        ...state.trackerFinality,
+        responsibilitiesSettled: state.process.heldPosition == NoTaskPosition,
+      },
+      process: {
+        ...state.process,
+        establishedRun: ExactEstablishedRun(
+          removeOtherRetainedAttempt(establishedFacts(state.process.establishedRun))
+        ),
+        otherHeldPosition: NoTaskPosition,
+      },
+      trace: { ...state.trace, executorCalls: state.trace.executorCalls + 1 },
+    },
+  }
+
   action admitIndependentTask: bool = all {
     newIndependentAdmissionAllowed,
     state' = {
@@ -842,16 +892,16 @@ module runActivation {
       durable: {
         ...state.durable,
         history: OneUnfinishedHistory(
-          retainAttempt(unfinishedFacts(state.durable.history), INDEPENDENT_ATTEMPT_B)
+          retainAttempt(unfinishedFacts(state.durable.history), INDEPENDENT_ATTEMPT_C)
         ),
       },
       trackerFinality: { ...state.trackerFinality, responsibilitiesSettled: false },
       process: {
         ...state.process,
         establishedRun: ExactEstablishedRun(
-          retainAttempt(establishedFacts(state.process.establishedRun), INDEPENDENT_ATTEMPT_B)
+          retainAttempt(establishedFacts(state.process.establishedRun), INDEPENDENT_ATTEMPT_C)
         ),
-        heldPosition: ExactTaskPosition(INDEPENDENT_ATTEMPT_B),
+        heldPosition: ExactTaskPosition(INDEPENDENT_ATTEMPT_C),
         independentTaskAdmitted: true,
         liveActionOwner: true,
       },
@@ -861,7 +911,7 @@ module runActivation {
 
   action settleIndependentTask: bool = all {
     state.process.phase == ActivatingRun,
-    state.process.heldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_B),
+    state.process.heldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_C),
     exactRequestedUnfinished(state.durable.history, state.requestedRunId, state.requestedTarget),
     state' = {
       ...state,
@@ -928,6 +978,8 @@ module runActivation {
     finalityObservationIsSettled(state.process.finalityObservation),
     state.process.heldPosition == NoTaskPosition,
     state.process.otherHeldPosition == NoTaskPosition,
+    unfinishedFacts(state.durable.history).retainedAttempt == NoRetainedAttempt,
+    unfinishedFacts(state.durable.history).otherRetainedAttempt == NoRetainedAttempt,
     not(state.process.liveActionOwner),
     exactRequestedUnfinished(state.durable.history, state.requestedRunId, state.requestedTarget),
     state.trace.terminationAppends == 0,
@@ -988,6 +1040,7 @@ module runActivation {
     activateEstablishedRun,
     readInitialTrackerGraph,
     settleRetainedAttempt,
+    settleOtherRetainedAttempt,
     admitIndependentTask,
     settleIndependentTask,
     trackerFactsBecomeSettled,

@@ -55,7 +55,7 @@ export const StartupRecoveryIssue = Schema.Union([
 ])
 export type StartupRecoveryIssue = typeof StartupRecoveryIssue.Type
 
-/** Startup found preserved history that cannot be reconstructed safely. */
+/** Run establishment found preserved history that cannot be reconstructed safely. */
 export class StartupRecoveryBlocked extends Schema.TaggedError<StartupRecoveryBlocked>()("StartupRecoveryBlocked", {
   issues: Schema.Array(StartupRecoveryIssue)
 }) {}
@@ -96,7 +96,7 @@ export const inspectStartupRecovery = Effect.fn("StartupRecovery.inspect")(funct
   return reductions.find((reduction) => reduction._tag === "ValidWorkflowJournalHistory" && reduction.runId === runId)
 })
 
-const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(function* (
+const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function* (
   runId: RunId,
   integrationTarget: IntegrationTarget | undefined,
   candidateCorrectionLimit: CandidateCorrectionLimit | undefined,
@@ -160,7 +160,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   if (integrationFinality !== undefined) {
     context = Context.add(context, CompletionClaimBoundary, CompletionClaimBoundary.of(integrationFinality))
   }
-  /* v8 ignore next -- @preserve Production startup installs its configured integration target; targetless composition is covered at frontier configuration wait. */
+  /* v8 ignore next -- @preserve Production activation installs its configured integration target; targetless composition is covered at frontier configuration wait. */
   return integrationTarget === undefined ? context : Context.add(context, IntegrationTargetSelection, integrationTarget)
 })
 
@@ -175,7 +175,7 @@ export const validatedRunActivationLayer = (
   integrationFinality?: CompletionClaimBoundaryService
 ) =>
   Layer.effectContext(
-    makeStartupRecoveryContext(
+    makeRunActivationContext(
       runId,
       integrationTarget,
       candidateCorrectionLimit,

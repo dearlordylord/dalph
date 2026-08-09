@@ -172,20 +172,24 @@ termination rules because R existed before this invocation.
   `replays idempotent Run establishment and bounded activation through production seams`
   proves reconstructed admission crosses the unified public bootstrap before
   new work is considered.
+- Production-backed conformance test
+  `reactivates the same incomplete Run through the same unified bootstrap entry`
+  proves the later invocation keeps R and does not append another beginning.
 - `specs/runActivation.qnt` tests
   `existingHistorySkipsInitialPolicyTest` and
   `heldAdmissionReconstructedBeforeNewWorkTest` collect those two traces;
   invariants `existingHistorySkipsInitialPolicy` and
-  `activationRestoresHeldAdmission` reject eager fallback evaluation and
-  unbounded admission.
+  `everyDurableRetainedAttemptHasExactPosition` reject eager fallback
+  evaluation and a missing reconstructed position.
 - Existing planned-attempt model invariant
   `oneReconciliationProjectionPerActivation` and production protocol test
   `requires exact command reconciliation before a generic executor-state observation`
-  prove the executor ambiguity boundary. A later application test
-  `reconstructs an ambiguous executor command before activating its continuation`
-  must prove the Run-establishment composition rather than restating that
-  protocol.
-- The production-backed conformance test above and `specs/runActivation.qnt` test
+  prove the executor ambiguity boundary. Production-backed conformance test
+  `reconciles an ambiguous executor command before continuation through unified Run activation`
+  proves the Run-establishment composition rather than restating that protocol.
+- Production-backed conformance test
+  `permits only one final tracker read in each unified Run activation` and
+  `specs/runActivation.qnt` test
   `newAndReconstructedActivationHaveFinalityParityTest` prove uninterrupted
   finality parity. The model invariant is
   `establishmentSourceDoesNotChangeActivationBounds`.
@@ -232,14 +236,16 @@ B's responsibility or position remains.
   before and after A releases its position.
 - `specs/runActivation.qnt` tests
   `contractedRetainedHolderIsRestoredDespiteCapacityTest` and
-  `contractedCapacityBlocksNewAdmissionAfterRetainedHolderSettlesTest` collect
-  the chronology. Invariants `activationRestoresHeldAdmission`,
+  `contractedCapacityBlocksNewAdmissionAfterRetainedHolderSettlesTest`, and
+  `bothRetainedAttemptsSettleBeforeNewTaskAdmissionTest` collect the chronology.
+  Invariants `everyDurableRetainedAttemptHasExactPosition`,
   `latestPolicyControlsAdmission`, and
-  `terminationRequiresEveryRetainedPositionSettled` reject eviction, admission
-  above the latest ceiling, and termination with a retained holder. Negative
-  tests `admissionBeyondContractedCapacityIsDetectedTest` and
-  `terminationWithOtherRetainedPositionIsDetectedTest` prove those families
-  can turn red.
+  `terminationRequiresNoRetainedResponsibilityOrPosition` reject eviction,
+  admission above the latest ceiling, and termination with a retained holder.
+  Negative tests `lostOtherReconstructedPositionIsDetectedTest`,
+  `admittingCAfterDroppingRetainedBIsDetectedTest`, and
+  `terminatingAfterDroppingRetainedBIsDetectedTest` prove B cannot disappear
+  after A settles and those safety families can turn red.
 
 ## Existing startup history must match the exact Run and target
 

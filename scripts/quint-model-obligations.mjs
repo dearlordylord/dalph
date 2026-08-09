@@ -54,14 +54,14 @@ export const runActivationObligations = Object.freeze({
     "onlyExactEstablishedRunActivates",
     "atMostOneDiscoveredUnfinishedRunMayActivate",
     "terminatedRunIsFinal",
-    "activationRestoresHeldAdmission",
+    "everyDurableRetainedAttemptHasExactPosition",
     "independentAdmissionRequiresAvailablePosition",
     "latestPolicyControlsAdmission",
     "establishmentSourceDoesNotChangeActivationBounds",
     "activationStartsAfterDurableBeginning",
     "finalityReadRequiresQuiescence",
     "terminationRequiresLaterSettledObservation",
-    "terminationRequiresEveryRetainedPositionSettled",
+    "terminationRequiresNoRetainedResponsibilityOrPosition",
     "trackerCallsRequireEstablishedHistory",
     "processLossPreservesDurableHistory",
     "modelIsFiniteAndBounded"
@@ -86,7 +86,8 @@ export const runActivationObligations = Object.freeze({
     "multipleUnfinishedBlockedReached",
     "terminatedHistoryBlockedReached",
     "independentAdmissionReached",
-    "contractedRetainedPositionReached"
+    "contractedRetainedPositionReached",
+    "otherRetainedAttemptSettledReached"
   ])
 })
 
