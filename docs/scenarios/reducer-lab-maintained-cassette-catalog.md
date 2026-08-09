@@ -260,6 +260,17 @@ because they intentionally have no delivery workbench. As production publishes f
 one timeline control strip and one current-frame surface. The maintainer does
 not open, close, or rediscover the primary visualization.
 
+The compact statement **Desired tickets are not held capacity** remains visible
+beside the primary playback experience. Playback controls and the graph precede
+the longer provenance, production-layer chain, and graph legend, which are
+collapsed under **How to read this delivery graph** until the maintainer asks
+for them. The visible playback help says that **Frame** moves to an adjacent
+production publication, **Jump** moves to a dependency wave, restart, or end,
+and **Live** follows the newest publication. A timeline with no established
+settlement says only **Established settlements in this timeline: 0** beside the
+graph; the cross-catalog explanation of direct integration-finality behavior is
+secondary reading-guide material rather than the primary result.
+
 While **Follow live** is active, new frames update that current-frame surface.
 The frame controls and the top of the graph remain at stable document
 positions; variable change summaries and task facts appear after the graph so
@@ -273,6 +284,8 @@ When a button reaches the first or last frame and becomes unavailable, focus
 moves to the persistent delivery-playback control group instead of falling out
 of the workbench. The maintainer can immediately press the opposite Arrow key
 to move away from that endpoint without clicking the graph or another control.
+An enabled playback button keeps its native focus, so repeated Space or Enter
+activation continues moving in the same direction before the endpoint.
 Rerunning the selected cassette replaces the old timeline handler, so one key
 press still moves exactly once rather than replaying handlers from prior runs.
 Repeated bracket input reuses the already-derived landmark index and remains
@@ -317,6 +330,12 @@ production frame replaced another.
 
 ### Acceptance-test mapping
 
+- `derives delivery playback controls, landmarks, and endpoint focus from one pure state machine`
+  drives the schema-backed Following-live/Inspecting-frame model through exact
+  frame, landmark, live-update, and endpoint messages; checks all labels,
+  availability, status, landmark reasons, and the single named focus command
+  without a DOM renderer. The browser interprets that command as the one
+  necessary focus-effect island.
 - `shows only information that selects, explains, or diagnoses a maintained cassette`
   checks the source/safety context, complete ordinary selector, one selected
   surface, runner and boundary facts, completion meaning, hidden pre-run
@@ -341,7 +360,10 @@ production frame replaced another.
   action, status, and retained result without leaving the old UI visible.
 - `keeps one permanent delivery workbench stable while frames and selections change`
   checks the complete ordinary selector labels, checks its Run/Rerun action is
-  inside the authored workbench, runs an authored cassette,
+  inside the authored workbench, runs an authored cassette, checks that
+  playback and the graph precede the collapsed provenance, layer chain, legend,
+  and direct-protocol caveat while the capacity distinction and exact
+  Frame/Jump/Live meanings remain visible,
   proves the permanent section supports Next and Previous navigation, and
   restores the retained frame after selecting away and back.
 - `shows production delivery frames before the authored cassette settles`
@@ -361,7 +383,8 @@ production frame replaced another.
   delivery landmarks, then reruns the cassette and proves one Arrow press still
   advances exactly one frame. It clicks into both exact-frame endpoints and
   proves focus remains on the persistent playback group so the opposite Arrow
-  key moves away immediately. A repeated-bracket stress check remains bounded
+  key moves away immediately, while an enabled intermediate button keeps focus
+  for a second keyboard activation. A repeated-bracket stress check remains bounded
   and leaves the page responsive, and disabled navigation buttons expose a
   not-allowed rather than wait cursor.
 

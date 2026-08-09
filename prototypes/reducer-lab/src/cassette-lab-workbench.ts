@@ -1,11 +1,34 @@
 import type { AuthoredDeliveryFrame } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
+import { TaskId } from "../../../packages/contracts/src/task-identity.ts"
 import {
+  deliveryGraphEncoding,
+  deliveryGraphInterpretationNotes,
   deliveryGraphTag,
   type DeliveryGraphElement,
   type DeliveryGraphProjection
 } from "./delivery-graph-element.ts"
 import type { maintainedCassetteRows } from "./cassette-lab.ts"
 import type { CassetteState } from "./cassette-lab-view.ts"
+import {
+  DeliveryFrameIndex,
+  deliveryPlaybackShortcutMessage,
+  deliveryPlaybackViewContract,
+  deliveryPlaybackFramesFrom,
+  type DeliveryPlaybackCommand,
+  type DeliveryPlaybackMessage,
+  type DeliveryPlaybackModel,
+  ExactFrameSelected,
+  FollowLiveRequested,
+  FramesUpdated,
+  makeDeliveryPlaybackModel,
+  NextFrameRequested,
+  NextLandmarkRequested,
+  PreviousFrameRequested,
+  PreviousLandmarkRequested,
+  projectDeliveryPlayback,
+  TaskSelectedRequested,
+  updateDeliveryPlayback
+} from "./delivery-playback.ts"
 
 type CassetteRow = (typeof maintainedCassetteRows)[number]
 type AuthoredRow = CassetteRow & {
@@ -107,11 +130,11 @@ const frameProjection = (row: AuthoredRow, frame: AuthoredDeliveryFrame, index: 
       return {
         display: {
           classes: [
-            facts.frontierFact?.standing === "Eligible" ? "frontier" : "",
-            facts.ticket.startsWith("Selected") ? "placement" : "",
-            facts.held === "none" ? "" : "held",
-            facts.delivery === undefined ? "" : "standing"
-          ].filter((value) => value.length > 0),
+            facts.frontierFact?.standing === "Eligible" ? deliveryGraphEncoding.frontierEligible.className : null,
+            facts.ticket.startsWith("Selected") ? deliveryGraphEncoding.selectedTicket.className : null,
+            facts.held === "none" ? null : deliveryGraphEncoding.heldPosition.className,
+            facts.delivery === undefined ? null : deliveryGraphEncoding.retainedStanding.className
+          ].filter((value) => value !== null),
           labels: [
             `Frontier: ${facts.frontierFact?.standing === "Eligible" ? "eligible" : facts.frontier}`,
             `Desired ticket: ${facts.ticket}`,
@@ -425,15 +448,11 @@ const frameChangeSummary = (
 }
 
 export interface DeliveryWorkbenchPlaybackState {
-  followLive: boolean
-  selectedFrameIndex: number
-  selectedTaskId: string | null
+  model: DeliveryPlaybackModel
 }
 
 export const makeDeliveryWorkbenchPlaybackState = (): DeliveryWorkbenchPlaybackState => ({
-  followLive: true,
-  selectedFrameIndex: 0,
-  selectedTaskId: null
+  model: makeDeliveryPlaybackModel()
 })
 
 interface DeliveryTimelineController {
@@ -489,14 +508,17 @@ const renderTimeline = (
   playback: DeliveryWorkbenchPlaybackState,
   initiallyRunning: boolean
 ): DeliveryTimelineController => {
+  const readingGuide = document.createElement("details")
+  readingGuide.className = "delivery-reading-guide"
+  appendText(readingGuide, "summary", "How to read this delivery graph")
   appendText(
-    parent,
+    readingGuide,
     "p",
     "Each frame was captured from the production reactive delivery publication during the cassette run, then projected through the literal production delivery composition. Desired bounded tickets and actual held task-work positions remain separate.",
     "delivery-provenance"
   )
   appendText(
-    parent,
+    readingGuide,
     "p",
     "Production layer chain: observed graph → exhaustive frontier → bounded desired tickets → ticket deliveries → settlements → descriptive tracker reflection → downstream action planning. Reflection does not prove a tracker mutation, and a proposal does not prove an action ran.",
     "delivery-layer-chain"
@@ -506,46 +528,55 @@ const renderTimeline = (
   const legend = document.createElement("ul")
   legend.className = "delivery-graph-legend"
   for (const value of [
-    "Blue border: frontier eligible",
-    "Purple halo: selected bounded ticket",
-    "Double border: actual held task-work position",
-    "Gold fill: retained ticket-delivery standing",
-    "Cyan outer outline: selected task correlated with the facts below",
-    "Excluded tasks remain visible with their exact graph reason in task facts",
-    "Settlement appears only from established settlement evidence, never from executor Terminal alone"
+    deliveryGraphEncoding.frontierEligible.legend,
+    deliveryGraphEncoding.selectedTicket.legend,
+    deliveryGraphEncoding.heldPosition.legend,
+    deliveryGraphEncoding.retainedStanding.legend,
+    deliveryGraphEncoding.selectedTask.legend,
+    ...deliveryGraphInterpretationNotes
   ]) appendText(legend, "li", value)
-  parent.append(legend)
+  readingGuide.append(legend)
+  appendText(
+    readingGuide,
+    "p",
+    "Direct integration-finality cassettes run their protocol in the selected cassette surface without fabricating graph delivery state.",
+    "delivery-direct-protocol-note"
+  )
   const controls = document.createElement("div")
   controls.className = "delivery-timeline-controls"
-  controls.tabIndex = 0
+  controls.tabIndex = -1
   controls.setAttribute("role", "group")
-  controls.setAttribute("aria-label", "Delivery playback controls")
-  const previousLandmark = appendText(controls, "button", "← Jump")
+  controls.setAttribute("aria-label", deliveryPlaybackViewContract.groupLabel)
+  const previousLandmark = appendText(controls, "button", deliveryPlaybackViewContract.previousLandmark.label)
   previousLandmark.type = "button"
   previousLandmark.dataset.role = "previous-landmark"
-  previousLandmark.setAttribute("aria-label", "Previous delivery landmark")
-  const previous = appendText(controls, "button", "← Frame")
+  previousLandmark.setAttribute("aria-label", deliveryPlaybackViewContract.previousLandmark.accessibleName)
+  const previous = appendText(controls, "button", deliveryPlaybackViewContract.previousFrame.label)
   previous.type = "button"
   previous.dataset.role = "previous-frame"
-  previous.setAttribute("aria-label", "Previous frame")
-  const follow = appendText(controls, "button", "Live")
+  previous.setAttribute("aria-label", deliveryPlaybackViewContract.previousFrame.accessibleName)
+  const follow = appendText(controls, "button", deliveryPlaybackViewContract.followLive.label)
   follow.type = "button"
   follow.dataset.role = "follow-live"
-  follow.setAttribute("aria-label", "Follow live")
-  const selectLabel = appendText(controls, "label", "Delivery frame")
+  follow.setAttribute("aria-label", deliveryPlaybackViewContract.followLive.accessibleName)
+  const selectLabel = appendText(controls, "label", deliveryPlaybackViewContract.frameSelectorLabel)
   const select = document.createElement("select")
   selectLabel.append(select)
-  const next = appendText(controls, "button", "Frame →")
+  const next = appendText(controls, "button", deliveryPlaybackViewContract.nextFrame.label)
   next.type = "button"
   next.dataset.role = "next-frame"
-  next.setAttribute("aria-label", "Next frame")
-  const nextLandmark = appendText(controls, "button", "Jump →")
+  next.setAttribute("aria-label", deliveryPlaybackViewContract.nextFrame.accessibleName)
+  const nextLandmark = appendText(controls, "button", deliveryPlaybackViewContract.nextLandmark.label)
   nextLandmark.type = "button"
   nextLandmark.dataset.role = "next-landmark"
-  nextLandmark.setAttribute("aria-label", "Next delivery landmark")
+  nextLandmark.setAttribute("aria-label", deliveryPlaybackViewContract.nextLandmark.accessibleName)
   const status = document.createElement("output")
+  status.setAttribute("aria-label", deliveryPlaybackViewContract.statusLabel)
+  status.setAttribute("aria-live", "polite")
   controls.append(status)
-  const shortcuts = appendText(parent, "p", "Keyboard: ←/→ exact frame · [/] delivery landmark", "delivery-playback-shortcuts")
+  const shortcuts = document.createElement("p")
+  shortcuts.className = "delivery-playback-shortcuts"
+  shortcuts.textContent = deliveryPlaybackViewContract.help
   const frameHost = document.createElement("div")
   frameHost.dataset.role = "delivery-frame"
   const graphViewControls = document.createElement("div")
@@ -569,6 +600,7 @@ const renderTimeline = (
   const taskFactsHost = document.createElement("div")
   taskFactsDisclosure.append(taskFactsHost)
   frameHost.prepend(graphViewControls, graph, settlementCoverage)
+  settlementCoverage.after(readingGuide)
   frameHost.append(factsHost, taskFactsDisclosure)
   let frames = initialFrames
   let running = initiallyRunning
@@ -588,101 +620,24 @@ const renderTimeline = (
       ? `This timeline contains ${distinctSettlementCount} distinct established delivery ${settlementNoun}`
         + ` across ${settlementBearingPublicationCount} production ${publicationNoun};`
         + ` ${reflectionPossessive} tracker-reflection meaning remains visible in every carrying frame.`
-      : running
-        ? "No established delivery settlement has appeared in this running timeline yet."
-        : "This cassette publishes no non-empty graph-level settlement frame. Direct integration-finality cassettes execute that protocol without fabricating graph delivery state here."
+      : "Established settlements in this timeline: 0."
   }
 
-  const refreshFollow = (): void => {
-    follow.setAttribute("aria-pressed", String(playback.followLive))
-    follow.textContent = playback.followLive ? "Live: on" : "Live"
-  }
+  const playbackFrames = (): ReturnType<typeof deliveryPlaybackFramesFrom> =>
+    deliveryPlaybackFramesFrom(
+      frames.map((frame, index) => ({
+        activationOrdinal: frame.activationOrdinal,
+        eligibleTaskIds: frame.graph._tag === "Established"
+          ? frame.graph.tasks
+            .filter(({ id }) => taskFacts(frame, id).frontierFact?.standing === "Eligible")
+            .map(({ id }) => id)
+          : [],
+        label: frameLabel(frame, index)
+      })),
+      running
+    )
 
-  const eligibleFrontierSignature = (frame: AuthoredDeliveryFrame): string | undefined => {
-    if (frame.graph._tag !== "Established") return undefined
-    const eligible = frame.graph.tasks
-      .filter(({ id }) => taskFacts(frame, id).frontierFact?.standing === "Eligible")
-      .map(({ id }) => id)
-      .toSorted()
-    return eligible.length === 0 ? undefined : JSON.stringify(eligible)
-  }
-
-  const computeLandmarkIndexes = (): ReadonlyArray<number> => {
-    const landmarks = [0]
-    const firstFrame = frames[0]
-    let lastEligibleFrontier = firstFrame === undefined ? undefined : eligibleFrontierSignature(firstFrame)
-    for (let index = 1; index < frames.length; index += 1) {
-      const frame = frames[index]
-      const previousFrame = frames[index - 1]
-      if (frame === undefined || previousFrame === undefined) continue
-      if (previousFrame.activationOrdinal !== frame.activationOrdinal) {
-        landmarks.push(index)
-        continue
-      }
-      const eligibleFrontier = eligibleFrontierSignature(frame)
-      const nextFrame = frames[index + 1]
-      const nextEligibleFrontier = nextFrame === undefined ? undefined : eligibleFrontierSignature(nextFrame)
-      if (
-        eligibleFrontier !== undefined
-        && eligibleFrontier !== lastEligibleFrontier
-        && eligibleFrontier === nextEligibleFrontier
-      ) {
-        landmarks.push(index)
-        lastEligibleFrontier = eligibleFrontier
-      }
-    }
-    const terminalIndex = frames.length - 1
-    if (!running && terminalIndex >= 0 && landmarks.at(-1) !== terminalIndex) landmarks.push(terminalIndex)
-    return landmarks
-  }
-  let deliveryLandmarkIndexes: ReadonlyArray<number> = []
-
-  const refreshNavigation = (index: number): void => {
-    const newerCount = Math.max(0, frames.length - index - 1)
-    status.textContent = `${index + 1} / ${frames.length} · ${running ? "running" : "settled"}`
-      + `${playback.followLive ? " · live" : ` · history · ${newerCount} newer`}`
-    previous.disabled = index === 0
-    next.disabled = index === frames.length - 1
-    previousLandmark.disabled = !deliveryLandmarkIndexes.some((landmark) => landmark < index)
-    nextLandmark.disabled = !deliveryLandmarkIndexes.some((landmark) => landmark > index)
-  }
-
-  const applyTaskSelection = (): void => {
-    graph.selectedTaskId = playback.selectedTaskId
-    for (const taskRow of taskFactsHost.querySelectorAll<HTMLTableRowElement>("tr[data-task-id]")) {
-      const selected = taskRow.dataset.taskId === playback.selectedTaskId
-      taskRow.classList.toggle("selected-task-row", selected)
-      if (selected) taskRow.setAttribute("aria-current", "true")
-      else taskRow.removeAttribute("aria-current")
-    }
-  }
-
-  const show = (index: number): void => {
-    const frame = frames[index]
-    if (frame === undefined) return
-    playback.selectedFrameIndex = index
-    graph.projection = frameProjection(row, frame, index)
-    resetGraphView.disabled = frame.graph._tag !== "Established"
-    change.textContent = frameChangeSummary(frames[index - 1], frame, row)
-    const restartSummary = restartContinuity(frames[index - 1], frame)
-    restart.hidden = restartSummary === undefined
-    restart.textContent = restartSummary ?? ""
-    factsHost.replaceChildren()
-    renderFrameFacts(factsHost, row, frame, running)
-    selectedTask.textContent = playback.selectedTaskId === null
-      ? frame.graph._tag === "Established"
-        ? "Select a task in the graph summary to correlate its graph state with exact delivery facts."
-        : "No production-observed task is selectable in this frame because the graph is not established. Journal-recovered positions and obligations remain in the delivery facts below."
-      : selectedTaskSummary(frame, playback.selectedTaskId)
-    taskFactsHost.replaceChildren()
-    renderTaskTable(taskFactsHost, frame)
-    const taskCount = taskFactsHost.querySelectorAll("tr[data-task-id]").length
-    taskFactsSummary.textContent = `All task delivery facts · ${taskCount} ${taskCount === 1 ? "task" : "tasks"}`
-    applyTaskSelection()
-    renderedFrame = frame
-    refreshNavigation(index)
-  }
-  const selectFrame = (index: number): void => {
+  const setNativeSelectedFrame = (index: number): void => {
     for (const option of select.options) {
       if (option.value === String(index)) option.setAttribute("selected", "")
       else option.removeAttribute("selected")
@@ -692,72 +647,115 @@ const renderTimeline = (
     } catch {
       // Linkedom exposes a getter-only value; selected attributes above keep the acceptance DOM deterministic.
     }
-    show(index)
   }
-  const inspectFrame = (index: number): void => {
-    playback.followLive = false
-    refreshFollow()
-    selectFrame(index)
+
+  const applyTaskSelection = (): void => {
+    const selectedTaskId = projectDeliveryPlayback(playback.model).selectedTaskId
+    graph.selectedTaskId = selectedTaskId
+    for (const taskRow of taskFactsHost.querySelectorAll<HTMLTableRowElement>("tr[data-task-id]")) {
+      const selected = taskRow.dataset.taskId === selectedTaskId
+      taskRow.classList.toggle("selected-task-row", selected)
+      if (selected) taskRow.setAttribute("aria-current", "true")
+      else taskRow.removeAttribute("aria-current")
+    }
   }
-  const retainPlaybackFocus = (): void => controls.focus({ preventScroll: true })
-  follow.addEventListener("click", () => {
-    playback.followLive = true
-    refreshFollow()
-    selectFrame(frames.length - 1)
-  })
-  previous.addEventListener("click", () => {
-    inspectFrame(Math.max(0, playback.selectedFrameIndex - 1))
-    retainPlaybackFocus()
-  })
-  next.addEventListener("click", () => {
-    inspectFrame(Math.min(frames.length - 1, playback.selectedFrameIndex + 1))
-    retainPlaybackFocus()
-  })
-  const inspectPreviousLandmark = (): void => {
-    const target = deliveryLandmarkIndexes.filter((index) => index < playback.selectedFrameIndex).at(-1)
-    if (target !== undefined) inspectFrame(target)
+
+  const show = (index: number): void => {
+    const frame = frames[index]
+    if (frame === undefined) return
+    graph.projection = frameProjection(row, frame, index)
+    resetGraphView.disabled = frame.graph._tag !== "Established"
+    change.textContent = frameChangeSummary(frames[index - 1], frame, row)
+    const restartSummary = restartContinuity(frames[index - 1], frame)
+    restart.hidden = restartSummary === undefined
+    restart.textContent = restartSummary ?? ""
+    factsHost.replaceChildren()
+    renderFrameFacts(factsHost, row, frame, running)
+    const selectedTaskId = projectDeliveryPlayback(playback.model).selectedTaskId
+    selectedTask.textContent = selectedTaskId === null
+      ? frame.graph._tag === "Established"
+        ? "Select a task in the graph summary to correlate its graph state with exact delivery facts."
+        : "No production-observed task is selectable in this frame because the graph is not established. Journal-recovered positions and obligations remain in the delivery facts below."
+      : selectedTaskSummary(frame, selectedTaskId)
+    taskFactsHost.replaceChildren()
+    renderTaskTable(taskFactsHost, frame)
+    const taskCount = taskFactsHost.querySelectorAll("tr[data-task-id]").length
+    taskFactsSummary.textContent = `All task delivery facts · ${taskCount} ${taskCount === 1 ? "task" : "tasks"}`
+    applyTaskSelection()
+    renderedFrame = frame
   }
-  const inspectNextLandmark = (): void => {
-    const target = deliveryLandmarkIndexes.find((index) => index > playback.selectedFrameIndex)
-    if (target !== undefined) inspectFrame(target)
+
+  const renderPlayback = (commands: ReadonlyArray<DeliveryPlaybackCommand> = []): void => {
+    const projection = projectDeliveryPlayback(playback.model)
+    follow.setAttribute("aria-pressed", String(projection.followingLive))
+    follow.textContent = projection.followingLive
+      ? deliveryPlaybackViewContract.followLive.activeLabel
+      : deliveryPlaybackViewContract.followLive.label
+    status.textContent = projection.status
+    previous.disabled = !projection.previousFrameAvailable
+    next.disabled = !projection.nextFrameAvailable
+    previousLandmark.disabled = !projection.previousLandmarkAvailable
+    nextLandmark.disabled = !projection.nextLandmarkAvailable
+    for (const frameOption of projection.frameOptions) {
+      const index = frameOption.frameIndex
+      const option = select.options[index] ?? document.createElement("option")
+      option.value = String(index)
+      option.textContent = frameOption.landmarkLabel === null
+        ? frameOption.label
+        : `${frameOption.label} · Landmark: ${frameOption.landmarkLabel}`
+      option.dataset.landmark = frameOption.landmarkLabel ?? ""
+      if (select.options[index] === undefined) select.append(option)
+    }
+    const selectedIndex = projection.currentFrameIndex
+    if (selectedIndex !== null) {
+      setNativeSelectedFrame(selectedIndex)
+      if (frames[selectedIndex] !== renderedFrame) show(selectedIndex)
+    }
+    // Necessary imperative island: browsers drop focus when a focused button
+    // becomes disabled. The pure update emits this command only at that edge.
+    for (const command of commands) {
+      switch (command._tag) {
+        case "FocusDeliveryPlaybackControls":
+          controls.focus({ preventScroll: true })
+          break
+      }
+    }
   }
-  previousLandmark.addEventListener("click", () => {
-    inspectPreviousLandmark()
-    retainPlaybackFocus()
-  })
-  nextLandmark.addEventListener("click", () => {
-    inspectNextLandmark()
-    retainPlaybackFocus()
-  })
-  select.addEventListener("change", () => inspectFrame(Number(select.value)))
+
+  const dispatchPlayback = (message: DeliveryPlaybackMessage): void => {
+    const [model, commands] = updateDeliveryPlayback(playback.model, message)
+    playback.model = model
+    renderPlayback(commands)
+  }
+
+  follow.addEventListener("click", () => dispatchPlayback(FollowLiveRequested.make({})))
+  previous.addEventListener("click", () =>
+    dispatchPlayback(PreviousFrameRequested.make({ source: "PlaybackControl" })))
+  next.addEventListener("click", () =>
+    dispatchPlayback(NextFrameRequested.make({ source: "PlaybackControl" })))
+  previousLandmark.addEventListener("click", () =>
+    dispatchPlayback(PreviousLandmarkRequested.make({ source: "PlaybackControl" })))
+  nextLandmark.addEventListener("click", () =>
+    dispatchPlayback(NextLandmarkRequested.make({ source: "PlaybackControl" })))
+  select.addEventListener("change", () =>
+    dispatchPlayback(ExactFrameSelected.make({ frameIndex: DeliveryFrameIndex.make(Number(select.value)) })))
   const keyboardSurface = parent.closest<HTMLElement>("[data-role='delivery-workbench']") ?? parent
   const handleKeyboard = (event: KeyboardEvent): void => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
     if (event.target instanceof HTMLSelectElement || event.target instanceof HTMLInputElement) return
-    switch (event.key) {
-      case "ArrowLeft":
-        inspectFrame(Math.max(0, playback.selectedFrameIndex - 1))
-        break
-      case "ArrowRight":
-        inspectFrame(Math.min(frames.length - 1, playback.selectedFrameIndex + 1))
-        break
-      case "[":
-        inspectPreviousLandmark()
-        break
-      case "]":
-        inspectNextLandmark()
-        break
-      default:
-        return
-    }
+    const message = deliveryPlaybackShortcutMessage(event.key)
+    if (message === null) return
+    dispatchPlayback(message)
     event.preventDefault()
   }
   keyboardSurface.addEventListener("keydown", handleKeyboard)
   graph.addEventListener("task-selected", (event) => {
-    playback.selectedTaskId = (event as CustomEvent<{ readonly taskId: string }>).detail.taskId
-    const frame = frames[playback.selectedFrameIndex]
+    const taskId = TaskId.make((event as CustomEvent<{ readonly taskId: string }>).detail.taskId)
+    dispatchPlayback(TaskSelectedRequested.make({ taskId }))
+    const selectedFrameIndex = projectDeliveryPlayback(playback.model).currentFrameIndex
+    const frame = selectedFrameIndex === null ? undefined : frames[selectedFrameIndex]
     if (frame === undefined) return
-    selectedTask.textContent = selectedTaskSummary(frame, playback.selectedTaskId)
+    selectedTask.textContent = selectedTaskSummary(frame, taskId)
     applyTaskSelection()
   })
   resetGraphView.addEventListener("click", () => graph.resetView())
@@ -765,23 +763,8 @@ const renderTimeline = (
   const update = (nextFrames: ReadonlyArray<AuthoredDeliveryFrame>, nextRunning: boolean): void => {
     frames = nextFrames
     running = nextRunning
-    deliveryLandmarkIndexes = computeLandmarkIndexes()
     refreshSettlementCoverage()
-    for (let index = select.options.length; index < frames.length; index += 1) {
-      const frame = frames[index]
-      if (frame === undefined) continue
-      const option = document.createElement("option")
-      option.value = String(index)
-      option.textContent = frameLabel(frame, index)
-      select.append(option)
-    }
-    const selectedIndex = playback.followLive
-      ? frames.length - 1
-      : Math.min(playback.selectedFrameIndex, frames.length - 1)
-    refreshFollow()
-    const nextIndex = Math.max(0, selectedIndex)
-    if (frames[nextIndex] !== renderedFrame) selectFrame(nextIndex)
-    else refreshNavigation(nextIndex)
+    dispatchPlayback(FramesUpdated.make({ frames: playbackFrames(), running }))
   }
   update(initialFrames, initiallyRunning)
   return {
@@ -820,6 +803,7 @@ export const renderCassetteDeliveryWorkbench = (
     "delivery-workbench-purpose"
   )
   if (cassetteControls !== undefined) section.append(cassetteControls)
+  appendText(section, "p", "Desired tickets are not held capacity.", "delivery-capacity-note")
   host.append(section)
   const content = document.createElement("div")
   content.className = "delivery-workbench-content"

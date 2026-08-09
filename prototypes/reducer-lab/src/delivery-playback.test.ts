@@ -1,7 +1,13 @@
 import { strict as assert } from "node:assert"
+import { Schema } from "effect"
+import { TaskId } from "../../../packages/contracts/src/task-identity.ts"
+import { AuthoredRunActivationOrdinal } from "../../../packages/dalph/src/cassettes/authored-domain.ts"
 import {
   DeliveryFrameIndex,
-  DeliveryPlaybackFrame,
+  deliveryPlaybackShortcutMessage,
+  deliveryPlaybackViewContract,
+  deliveryPlaybackFramesFrom,
+  DeliveryPlaybackModel,
   ExactFrameSelected,
   FollowLiveRequested,
   FramesUpdated,
@@ -11,31 +17,94 @@ import {
   PreviousFrameRequested,
   PreviousLandmarkRequested,
   projectDeliveryPlayback,
+  TaskSelectedRequested,
   updateDeliveryPlayback
 } from "./delivery-playback.ts"
 
-const frames = [
-  DeliveryPlaybackFrame.make({ label: "1. initial", landmark: false }),
-  DeliveryPlaybackFrame.make({ label: "2. repeated publication", landmark: false }),
-  DeliveryPlaybackFrame.make({ label: "3. frontier B+C", landmark: true }),
-  DeliveryPlaybackFrame.make({ label: "4. terminal", landmark: false })
-]
+const frame = (activationOrdinal: number, eligibleTaskIds: ReadonlyArray<string>, label: string) => ({
+  activationOrdinal: AuthoredRunActivationOrdinal.make(activationOrdinal),
+  eligibleTaskIds: eligibleTaskIds.map((taskId) => TaskId.make(taskId)),
+  label
+})
+
+const frames = deliveryPlaybackFramesFrom([
+  frame(1, ["A"], "1. initial"),
+  frame(1, ["B", "C"], "2. frontier B+C begins"),
+  frame(1, ["B", "C"], "3. stable frontier B+C"),
+  frame(2, [], "4. restart and terminal")
+], false)
 
 const following = makeDeliveryPlaybackModel(frames, false)
+
+assert.deepEqual(deliveryPlaybackViewContract, {
+  groupLabel: "Delivery playback controls",
+  help: "Frame = adjacent production publication · Jump = dependency wave, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
+  nextFrame: { accessibleName: "Next frame", label: "Frame →", shortcut: "ArrowRight" },
+  nextLandmark: { accessibleName: "Next delivery landmark", label: "Jump →", shortcut: "]" },
+  previousFrame: { accessibleName: "Previous frame", label: "← Frame", shortcut: "ArrowLeft" },
+  previousLandmark: { accessibleName: "Previous delivery landmark", label: "← Jump", shortcut: "[" },
+  followLive: { accessibleName: "Follow live", activeLabel: "Live: on", label: "Live" },
+  frameSelectorLabel: "Delivery frame",
+  statusLabel: "Delivery playback position"
+})
+assert.equal(deliveryPlaybackShortcutMessage("ArrowLeft")?._tag, "PreviousFrameRequested")
+assert.equal(deliveryPlaybackShortcutMessage("ArrowRight")?._tag, "NextFrameRequested")
+assert.equal(deliveryPlaybackShortcutMessage("[")?._tag, "PreviousLandmarkRequested")
+assert.equal(deliveryPlaybackShortcutMessage("]")?._tag, "NextLandmarkRequested")
+assert.equal(deliveryPlaybackShortcutMessage("Enter"), null)
+
+const decodedEmpty = Schema.decodeUnknownSync(DeliveryPlaybackModel)({
+  _tag: "EmptyDeliveryPlayback",
+  frames: [],
+  position: { _tag: "InspectingFrame", frameIndex: 0 },
+  running: false,
+  taskSelection: { _tag: "NoTaskSelected" }
+})
+assert.equal(decodedEmpty._tag, "EmptyDeliveryPlayback")
+assert.equal("position" in decodedEmpty, false)
+assert.throws(() => Schema.decodeUnknownSync(DeliveryPlaybackModel)({
+  _tag: "PopulatedDeliveryPlayback",
+  frames,
+  position: { _tag: "InspectingFrame", frameIndex: frames.length },
+  running: false,
+  taskSelection: { _tag: "NoTaskSelected" }
+}))
 
 {
   const projection = projectDeliveryPlayback(following)
   assert.equal(projection.currentFrameIndex, 3)
   assert.equal(projection.followingLive, true)
-  assert.deepEqual(projection.landmarkIndexes, [0, 2, 3])
+  assert.deepEqual(projection.landmarkIndexes, [0, 1, 3])
   assert.equal(projection.nextFrameAvailable, false)
+  assert.equal(projection.selectedTaskId, null)
   assert.equal(projection.status, "4 / 4 · settled · live")
-  assert.deepEqual(projection.frameOptions.map(({ label, landmark, selected }) => ({ label, landmark, selected })), [
-    { label: "1. initial", landmark: true, selected: false },
-    { label: "2. repeated publication", landmark: false, selected: false },
-    { label: "3. frontier B+C", landmark: true, selected: false },
-    { label: "4. terminal", landmark: true, selected: true }
+  assert.deepEqual(projection.frameOptions.map(({ label, landmarkLabel, selected }) => ({
+    label,
+    landmarkLabel,
+    selected
+  })), [
+    { label: "1. initial", landmarkLabel: "initial publication", selected: false },
+    { label: "2. frontier B+C begins", landmarkLabel: "eligible frontier B+C", selected: false },
+    { label: "3. stable frontier B+C", landmarkLabel: null, selected: false },
+    {
+      label: "4. restart and terminal",
+      landmarkLabel: "coordinator restart into activation 2; settled terminal publication",
+      selected: true
+    }
   ])
+}
+
+{
+  const [selected] = updateDeliveryPlayback(
+    following,
+    TaskSelectedRequested.make({ taskId: TaskId.make("B") })
+  )
+  assert.equal(projectDeliveryPlayback(selected).selectedTaskId, "B")
+  const [updated] = updateDeliveryPlayback(
+    selected,
+    FramesUpdated.make({ frames, running: false })
+  )
+  assert.equal(projectDeliveryPlayback(updated).selectedTaskId, "B")
 }
 
 {
@@ -92,7 +161,7 @@ const following = makeDeliveryPlaybackModel(frames, false)
     first,
     NextLandmarkRequested.make({ source: "WorkbenchShortcut" })
   )
-  assert.equal(projectDeliveryPlayback(nextLandmark).currentFrameIndex, 2)
+  assert.equal(projectDeliveryPlayback(nextLandmark).currentFrameIndex, 1)
   const [lastLandmark, commands] = updateDeliveryPlayback(
     nextLandmark,
     NextLandmarkRequested.make({ source: "PlaybackControl" })
@@ -103,7 +172,7 @@ const following = makeDeliveryPlaybackModel(frames, false)
     lastLandmark,
     PreviousLandmarkRequested.make({ source: "PlaybackControl" })
   )
-  assert.equal(projectDeliveryPlayback(firstLandmark).currentFrameIndex, 2)
+  assert.equal(projectDeliveryPlayback(firstLandmark).currentFrameIndex, 1)
   assert.deepEqual(reverseCommands, [])
   const [initialLandmark, endpointCommands] = updateDeliveryPlayback(
     firstLandmark,
@@ -118,7 +187,13 @@ const following = makeDeliveryPlaybackModel(frames, false)
     following,
     ExactFrameSelected.make({ frameIndex: DeliveryFrameIndex.make(1) })
   )
-  const appended = [...frames, DeliveryPlaybackFrame.make({ label: "5. later live frame", landmark: true })]
+  const appended = deliveryPlaybackFramesFrom([
+    frame(1, ["A"], "1. initial"),
+    frame(1, ["B", "C"], "2. frontier B+C begins"),
+    frame(1, ["B", "C"], "3. stable frontier B+C"),
+    frame(2, [], "4. restart"),
+    frame(2, ["D"], "5. later live frame")
+  ], true)
   const [retained] = updateDeliveryPlayback(
     historical,
     FramesUpdated.make({ frames: appended, running: true })
@@ -130,7 +205,14 @@ const following = makeDeliveryPlaybackModel(frames, false)
   const [followed] = updateDeliveryPlayback(
     live,
     FramesUpdated.make({
-      frames: [...appended, DeliveryPlaybackFrame.make({ label: "6. newest", landmark: false })],
+      frames: deliveryPlaybackFramesFrom([
+        frame(1, ["A"], "1. initial"),
+        frame(1, ["B", "C"], "2. frontier B+C begins"),
+        frame(1, ["B", "C"], "3. stable frontier B+C"),
+        frame(2, [], "4. restart"),
+        frame(2, ["D"], "5. later live frame"),
+        frame(2, ["D"], "6. newest")
+      ], true),
       running: true
     })
   )
@@ -147,3 +229,5 @@ const following = makeDeliveryPlaybackModel(frames, false)
   assert.equal(unchanged, empty)
   assert.deepEqual(commands, [])
 }
+
+console.log("✓ derives delivery playback controls, landmarks, and endpoint focus from one pure state machine")

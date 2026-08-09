@@ -8,6 +8,7 @@ import {
   type DeliveryGraphEdge,
   type DeliveryGraphProjection,
   type DeliveryGraphTask,
+  deliveryGraphEncoding,
   deliveryGraphTag
 } from "./delivery-graph-element.ts"
 
@@ -86,7 +87,7 @@ const graphElements = (
   const nodes: ReadonlyArray<ElementDefinition> = renderedTasks(projection).map((task) => ({
     classes: [
       task.missing ? "missing-endpoint" : undefined,
-      selectedTaskId === task.id ? "selected-task" : undefined,
+      selectedTaskId === task.id ? deliveryGraphEncoding.selectedTask.className : undefined,
       ...(task.display?.classes ?? []).map(safeClassToken)
     ].filter((value): value is string => value !== undefined).join(" "),
     data: {
@@ -220,7 +221,7 @@ const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
     }
   },
   {
-    selector: "node:selected, node.selected-task",
+    selector: `node:selected, node.${deliveryGraphEncoding.selectedTask.className}`,
     style: {
       "outline-color": "#00a7c4",
       "outline-offset": 11,
@@ -229,11 +230,11 @@ const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
     }
   },
   {
-    selector: "node.display-frontier",
+    selector: `node.display-${deliveryGraphEncoding.frontierEligible.className}`,
     style: { "border-color": "#2e6788" }
   },
   {
-    selector: "node.display-placement",
+    selector: `node.display-${deliveryGraphEncoding.selectedTicket.className}`,
     style: {
       "underlay-color": "#7656a0",
       "underlay-opacity": 0.5,
@@ -242,11 +243,11 @@ const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
     }
   },
   {
-    selector: "node.display-held",
+    selector: `node.display-${deliveryGraphEncoding.heldPosition.className}`,
     style: { "border-style": "double", "border-width": 5 }
   },
   {
-    selector: "node.display-standing",
+    selector: `node.display-${deliveryGraphEncoding.retainedStanding.className}`,
     style: { "background-color": "#f2e5be" }
   },
   {
@@ -356,8 +357,10 @@ class DalphDeliveryGraphElement extends HTMLElement {
   set selectedTaskId(value: string | null) {
     this.#selectedTaskId = value
     if (this.#core !== null) {
-      this.#core.nodes().unselect().removeClass("selected-task")
-      if (value !== null) this.#core.getElementById(value).addClass("selected-task").select()
+      this.#core.nodes().unselect().removeClass(deliveryGraphEncoding.selectedTask.className)
+      if (value !== null) {
+        this.#core.getElementById(value).addClass(deliveryGraphEncoding.selectedTask.className).select()
+      }
     }
     this.#updateSummarySelection()
   }

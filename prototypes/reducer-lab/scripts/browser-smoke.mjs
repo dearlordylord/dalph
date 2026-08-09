@@ -38,6 +38,10 @@ try {
 
   await page.reload({ waitUntil: "networkidle" })
   await selector.selectOption(framedCassette)
+  assert.equal(
+    await page.locator('[data-role="delivery-workbench"] .delivery-capacity-note').textContent(),
+    "Desired tickets are not held capacity."
+  )
   await page.evaluate(() => {
     globalThis.__deliveryFrameTrace = []
     globalThis.__deliverySurfaceStability = []
@@ -93,7 +97,36 @@ try {
   const workbench = page.locator('[data-role="delivery-workbench"]')
   assert.equal(await workbench.evaluate((element) => element.tagName), "SECTION")
   assert.equal(await workbench.locator(":scope > summary").count(), 0)
+  const readingGuide = workbench.locator(".delivery-reading-guide")
+  assert.equal(await readingGuide.evaluate((element) => element.tagName), "DETAILS")
+  assert.equal(await readingGuide.evaluate((element) => element.hasAttribute("open")), false)
+  assert.equal(await readingGuide.locator(".delivery-provenance").count(), 1)
+  assert.equal(await readingGuide.locator(".delivery-layer-chain").count(), 1)
+  assert.equal(await readingGuide.locator(".delivery-graph-legend").count(), 1)
+  assert.equal(await readingGuide.locator(".delivery-direct-protocol-note").isVisible(), false)
+  assert.equal(
+    await workbench.locator(".delivery-capacity-note").textContent(),
+    "Desired tickets are not held capacity."
+  )
+  assert.equal(
+    await workbench.locator(".delivery-playback-shortcuts").textContent(),
+    "Frame = adjacent production publication · Jump = dependency wave, restart, or end · Live = follow newest · Keys: ←/→ and [/]."
+  )
+  const primaryBeforeGuide = await workbench.evaluate((element) => {
+    const controls = element.querySelector(".delivery-timeline-controls")
+    const graph = element.querySelector("dalph-delivery-graph")
+    const guide = element.querySelector(".delivery-reading-guide")
+    return controls !== null && graph !== null && guide !== null
+      && Boolean(controls.compareDocumentPosition(guide) & Node.DOCUMENT_POSITION_FOLLOWING)
+      && Boolean(graph.compareDocumentPosition(guide) & Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+  assert.equal(primaryBeforeGuide, true)
   const frameSelector = workbench.getByLabel("Delivery frame")
+  await frameSelector.selectOption("0")
+  assert.equal(
+    await workbench.locator(".delivery-settlement-coverage").textContent(),
+    "Established settlements in this timeline: 0."
+  )
   await page.waitForFunction(
     () => document.querySelector('[data-role="delivery-workbench"] select')?.options.length > 1,
     undefined,
@@ -159,8 +192,16 @@ try {
   await page.keyboard.press("ArrowRight")
   assert.equal(await frameSelector.inputValue(), "1")
   const playbackControls = workbench.getByRole("group", { name: "Delivery playback controls" })
+  const nextFrameButton = workbench.getByRole("button", { name: "Next frame" })
+  await frameSelector.selectOption("1")
+  await nextFrameButton.click()
+  assert.equal(await frameSelector.inputValue(), "2")
+  assert.equal(await nextFrameButton.evaluate((element) => document.activeElement === element), true)
+  await page.keyboard.press("Enter")
+  assert.equal(await frameSelector.inputValue(), "3")
+  assert.equal(await nextFrameButton.evaluate((element) => document.activeElement === element), true)
   await frameSelector.selectOption(String(frameCount - 2))
-  await workbench.getByRole("button", { name: "Next frame" }).click()
+  await nextFrameButton.click()
   assert.equal(await frameSelector.inputValue(), String(frameCount - 1))
   assert.equal(await playbackControls.evaluate((element) => document.activeElement === element), true)
   await page.keyboard.press("ArrowLeft")

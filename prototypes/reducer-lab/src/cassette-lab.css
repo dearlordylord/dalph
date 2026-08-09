@@ -201,6 +201,7 @@ dd {
 
 .delivery-workbench > .delivery-workbench-purpose,
 .delivery-workbench > .selected-cassette-controls,
+.delivery-workbench > .delivery-capacity-note,
 .delivery-workbench > .delivery-workbench-content {
   margin-left: 1rem;
   margin-right: 1rem;
@@ -213,6 +214,13 @@ dd {
 
 .delivery-workbench-purpose {
   color: #344a41;
+}
+
+.delivery-capacity-note {
+  color: #344a41;
+  font-size: 0.86rem;
+  font-weight: 700;
+  margin: 0.65rem 0 0.25rem;
 }
 
 .delivery-provenance,
@@ -250,6 +258,23 @@ dd {
   gap: 0.45rem 1.2rem;
   list-style: none;
   padding: 0;
+}
+
+.delivery-reading-guide {
+  border-bottom: 1px solid #c8c0b3;
+  border-top: 1px solid #c8c0b3;
+  margin: 0.75rem 0 1rem;
+  padding: 0.6rem 0;
+}
+
+.delivery-reading-guide > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.delivery-direct-protocol-note {
+  color: #5f584e;
+  font-size: 0.82rem;
 }
 
 .delivery-frame-change {
@@ -487,6 +512,7 @@ pre {
 
   .delivery-workbench > .delivery-workbench-purpose,
   .delivery-workbench > .selected-cassette-controls,
+  .delivery-workbench > .delivery-capacity-note,
   .delivery-workbench > .delivery-workbench-content {
     margin-left: 0.65rem;
     margin-right: 0.65rem;

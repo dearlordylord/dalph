@@ -388,6 +388,10 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
     document.querySelector("[data-role='delivery-workbench'] > .selected-cassette-controls button") !== null,
     "An authored cassette Run/Rerun action must live inside its delivery workbench"
   )
+  assert(
+    document.querySelector("[data-role='delivery-workbench'] > .delivery-capacity-note")?.textContent === "Desired tickets are not held capacity.",
+    "The desired-ticket and held-capacity distinction must remain visible before production runs"
+  )
   const completed = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await completed
@@ -395,6 +399,24 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
   if (workbench === null) throw new Error("The completed delivery workbench is missing")
   assert(workbench.tagName === "SECTION", "The primary delivery workbench must be a permanent section, not a disclosure")
   assert(workbench.querySelector(":scope > summary") === null, "The primary visualization must not hide behind an accordion control")
+  const readingGuide = workbench.querySelector<HTMLDetailsElement>(".delivery-reading-guide")
+  assert(readingGuide?.hasAttribute("open") === false, "The explanatory delivery manual must be collapsed by default")
+  assert(readingGuide?.querySelector(".delivery-provenance") !== null, "The collapsed delivery manual must retain production provenance")
+  assert(readingGuide?.querySelector(".delivery-layer-chain") !== null, "The collapsed delivery manual must retain the production layer chain")
+  assert(readingGuide?.querySelector(".delivery-graph-legend") !== null, "The collapsed delivery manual must retain the graph legend")
+  const descendants = [...workbench.querySelectorAll("*")]
+  assert(
+    descendants.indexOf(workbench.querySelector(".delivery-timeline-controls")!) < descendants.indexOf(readingGuide!),
+    "Playback controls must precede the explanatory delivery manual"
+  )
+  assert(
+    descendants.indexOf(workbench.querySelector("dalph-delivery-graph")!) < descendants.indexOf(readingGuide!),
+    "The primary graph must precede the explanatory delivery manual"
+  )
+  assert(
+    workbench.querySelector(".delivery-playback-shortcuts")?.textContent === "Frame = adjacent production publication · Jump = dependency wave, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
+    "Visible playback help must distinguish adjacent frames, delivery landmarks, and live following"
+  )
   const status = workbench.querySelector(".delivery-timeline-controls output")
   const next = workbench.querySelector<HTMLButtonElement>("button[data-role='next-frame']")
   const previous = workbench.querySelector<HTMLButtonElement>("button[data-role='previous-frame']")
@@ -798,7 +820,7 @@ await scenario("uses production authored prose for current story items", () => {
   )
 })
 
-await scenario("states when the selected authored cassette has no populated settlement layer", async () => {
+await scenario("reports zero established settlements and keeps the direct-protocol caveat secondary", async () => {
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
   if (row === undefined) throw new Error("The dependency delivery row is missing")
@@ -807,8 +829,12 @@ await scenario("states when the selected authored cassette has no populated sett
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await done
   assert(
-    document.querySelector(".delivery-settlement-coverage")?.textContent?.includes("This cassette publishes no non-empty graph-level settlement frame") === true,
-    "The workbench must state the selected cassette's settlement limitation instead of implying populated evidence"
+    document.querySelector(".delivery-settlement-coverage")?.textContent === "Established settlements in this timeline: 0.",
+    "The workbench must report the timeline's zero established settlements without unrelated primary explanation"
+  )
+  assert(
+    document.querySelector(".delivery-reading-guide:not([open]) .delivery-direct-protocol-note")?.textContent?.includes("Direct integration-finality cassettes") === true,
+    "The direct-protocol caveat must remain available as collapsed secondary guidance"
   )
 })
 

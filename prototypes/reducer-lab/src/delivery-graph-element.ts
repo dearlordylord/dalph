@@ -1,13 +1,33 @@
 /** The two tracker-owned relationships displayed by the delivery graph. */
 export type DeliveryGraphEdgeKind = "Prerequisite" | "Grouping"
 
+/** One registry owns each visual encoding and the sentence that explains it. */
+export const deliveryGraphEncoding = {
+  frontierEligible: { className: "frontier", legend: "Blue border: frontier eligible" },
+  heldPosition: { className: "held", legend: "Double border: actual held task-work position" },
+  retainedStanding: { className: "standing", legend: "Gold fill: retained ticket-delivery standing" },
+  selectedTask: {
+    className: "selected-task",
+    legend: "Cyan outer outline: selected task correlated with the facts below"
+  },
+  selectedTicket: { className: "placement", legend: "Purple halo: selected bounded ticket" }
+} as const
+
+export type DeliveryGraphDisplayClass =
+  (typeof deliveryGraphEncoding)[keyof typeof deliveryGraphEncoding]["className"]
+
+export const deliveryGraphInterpretationNotes = [
+  "Excluded tasks remain visible with their exact graph reason in task facts",
+  "Settlement appears only from established settlement evidence, never from executor Terminal alone"
+] as const
+
 /**
  * Presentation hints derived by the caller from one coherent delivery frame.
  * They are labels and CSS-safe class tokens, not another source of workflow
  * truth.
  */
 export interface DeliveryGraphTaskDisplay {
-  readonly classes?: ReadonlyArray<string>
+  readonly classes?: ReadonlyArray<DeliveryGraphDisplayClass>
   readonly labels?: ReadonlyArray<string>
 }
 
