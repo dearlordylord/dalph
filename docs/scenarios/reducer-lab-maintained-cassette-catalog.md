@@ -474,6 +474,11 @@ task whose exact facts are correlated below.
   evaluates one exact captured publication whose production proposal owners
   collide and checks that the serializable frame retains the conflict instead
   of presenting either proposal as an action that ran.
+- `projects every isolated action-planning issue through its typed maintainer meaning`
+  evaluates one exact captured publication containing each of the three
+  production planning-issue variants and checks that the visible evidence
+  names Dalph's blocked action and the concrete missing evidence, provenance,
+  or contradictory policy reason without presenting any proposal as executed.
 - `shows production delivery frames before the authored cassette settles`
   holds an authored runner open, publishes exact projected frames through its
   controlled observer, and checks that the running shared workbench follows
