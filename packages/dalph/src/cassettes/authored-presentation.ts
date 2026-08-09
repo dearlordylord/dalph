@@ -304,7 +304,8 @@ const coordinatorStoryLyric = (item: CoordinatorStoryItem): string => {
   return remainingCoordinatorLyric(item)
 }
 
-const storyLyric = (item: AuthoredCassetteStoryItem): string => {
+/** One exhaustive maintainer-readable sentence derived directly from a typed authored story item. */
+export const renderAuthoredStoryItemLyric = (item: AuthoredCassetteStoryItem): string => {
   if (item._tag === "CoordinatorActivationReturned") {
     return item.decision._tag === "RunMayTerminate"
       ? "The coordinator activation returns RunMayTerminate at this authored lifecycle boundary."
@@ -318,4 +319,4 @@ const storyLyric = (item: AuthoredCassetteStoryItem): string => {
 
 /** Readable prose is derived from structured story items and is never parsed. */
 export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette): string =>
-  [`Scenario: ${cassette.name}.`, ...cassette.story.map(storyLyric)].join("\n")
+  [`Scenario: ${cassette.name}.`, ...cassette.story.map(renderAuthoredStoryItemLyric)].join("\n")

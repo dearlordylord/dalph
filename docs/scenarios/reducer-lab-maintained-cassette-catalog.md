@@ -167,6 +167,12 @@ shows a readable one-column sequence and retains the exact JSON under a second
 disclosure; both are labelled as input, not execution proof. An evidence
 disclosure is absent until a run produces a result.
 
+For authored coordinator cassettes, each readable declared interaction comes
+from the exhaustive production authored-story presenter while the item remains
+typed. The defining Continue/Stop race, executor projections, and lost boundary
+responses appear as concrete actor/action/boundary prose rather than raw `_tag`
+names; the exact structured input remains in the secondary disclosure.
+
 When the maintainer runs the selected cassette, its shared surface immediately stops displaying its
 previous result, says that production code is running with controlled
 boundaries, and disables overlapping commands. When the maintainer runs the
@@ -308,7 +314,8 @@ the graph, records accepted graph observations and later workflow facts, and
 the production reactive delivery layer publishes each coherent input revision
 that the ordinary runtime consumes. A read-only cassette observer records
 those exact immutable publications, the current Fresh or Recovered activation,
-and the authored story position reached at publication time. It does not alter
+its zero-based coordinator-activation ordinal, and the authored story position
+reached at publication time. It does not alter
 the publication, select an action, append a journal event, or call a boundary.
 
 The Lab projects each recorded publication through the literal production
@@ -349,9 +356,10 @@ excluded, A's terminal executor report releasing its task-work position while
 B remains graph-blocked, and only a later tracker observation of A's successful
 lifecycle making B eligible. For a pause cassette, a Pause direction alone
 does not release A's held position; the frame after the exact safely-suspended
-report does. For a recovery cassette, Fresh and Recovered frames are visibly
-separated and retain the same exact planned attempt where the cassette does.
-The first Recovered frame names the restart boundary and summarizes which held
+report does. For a recovery cassette, every coordinator activation is visibly
+separated, including later Recovered-to-Recovered restarts, and retains the
+same exact planned attempt where the cassette does. The first frame of each
+activation names its ordinal restart boundary and summarizes which held
 positions and exact obligations survived, changed, or disappeared. The
 maintainer does not have to infer restart continuity only by comparing raw
 JSON.
@@ -378,9 +386,13 @@ while the exact production proposal union is still available. The browser does
 not reparse raw diagnostic JSON to rediscover route, admission, ownership, or
 correlation. The projection names the concrete production transition,
 its task or attempt correlation, whether it must reserve or reuse a task-work
-position or integration-target resource, and any live operation it must wait
-for. Terms such as `IdentityFreeWorkflowRoute` stay in the secondary exact
-JSON rather than becoming the human action label.
+position, exclusive planned-attempt protocol, or integration-target resource,
+and any live operation it must wait for. When two proposals call the same
+authority read for different workflow purposes, the concise summary names both
+purposes. Exact obligation summaries distinguish executor-work, claim-release,
+worktree, and integration responsibilities. Terms such as
+`IdentityFreeWorkflowRoute` stay in the secondary exact JSON rather than
+becoming the human action label.
 
 No currently maintained authored cassette crosses the separate direct
 integration-finality protocol and then triggers another graph-level delivery
@@ -430,6 +442,9 @@ task whose exact facts are correlated below.
 - `shows grouping relationships exact obligations and settlement state` checks
   a production-observed parent relation becomes a grouping edge and that the
   task table exposes exact obligations and current settlement state.
+- `uses production authored prose for current story items` checks the defining
+  Continue/Stop race and a read-only executor projection use the exhaustive
+  typed production presenter rather than the Lab's generic tag formatter.
 - `keeps a dependant blocked after executor completion until a later tracker observation`
   checks the maintained dependent-task timeline rather than inferring release
   from the declared story.
@@ -439,9 +454,14 @@ task whose exact facts are correlated below.
 - `keeps a paused task held until the exact safe-suspension report` checks the
   Pause direction and Running report leave A's exact attempt in the held map,
   and only the declared `SafelySuspended` report releases it.
-- `separates Fresh and Recovered delivery frames across authored coordinator death`
-  checks activation boundaries and exact attempt correlation in a maintained
-  recovery cassette.
+- `separates every coordinator activation in a multi-restart delivery timeline`
+  checks activation ordinals, every Fresh-to-Recovered and
+  Recovered-to-Recovered boundary, and exact attempt correlation in a maintained
+  multi-restart cassette.
+- `distinguishes competing claim reads and exact responsibilities after Stop recovery`
+  checks same-boundary reads retain their different workflow purposes, the
+  exclusive planned-attempt protocol is visible, and executor-work and
+  claim-release responsibilities remain distinct.
 - `shows graph observation provenance quiescence and planned actions` selects
   an established paused publication and checks its exact graph-read
   correlation, `RunPaused` passive disposition, and the downstream

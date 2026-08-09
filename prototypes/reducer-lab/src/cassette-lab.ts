@@ -10,6 +10,7 @@ import {
   runAuthoredScenarioCassette
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import { maintainedAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/catalog.ts"
+import { renderAuthoredStoryItemLyric } from "../../../packages/dalph/src/cassettes/authored-presentation.ts"
 import {
   maintainedIntegrationFinalityProtocolCassetteCatalog
 } from "../../../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts"
@@ -79,6 +80,7 @@ interface MaintainedCassetteDescriptor {
   readonly input: unknown
   readonly surface: CassetteDeliverySurface
   readonly story: ReadonlyArray<{ readonly _tag: string }>
+  readonly storyItemSummaries: ReadonlyArray<string>
   readonly storyName: string
 }
 
@@ -208,6 +210,7 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
     }
   },
   story: cassette.story,
+  storyItemSummaries: cassette.story.map(renderAuthoredStoryItemLyric),
   storyName: cassette.name
 }))
 
@@ -231,6 +234,7 @@ const targetPromotionDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
   input: cassette,
   surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story,
+  storyItemSummaries: cassette.story.map((item) => storyItemSummary(item)),
   storyName: cassette.name
 }))
 
@@ -254,6 +258,7 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
   input: cassette,
   surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story,
+  storyItemSummaries: cassette.story.map((item) => storyItemSummary(item)),
   storyName: cassette.name
 }))
 
@@ -267,7 +272,7 @@ const descriptorByKey = new Map(descriptors.map((descriptor) => [descriptor.cata
 
 export const maintainedCassetteKeys = descriptors.map(({ catalogKey }) => catalogKey)
 
-const storyItemSummary = (item: Readonly<Record<string, unknown>>): string => {
+function storyItemSummary(item: Readonly<Record<string, unknown>>): string {
   const fragments: Array<string> = [String(item._tag)]
   const visit = (value: unknown, path: string, depth: number): void => {
     if (depth > 4 || fragments.length >= 8 || typeof value !== "object" || value === null) return
@@ -330,7 +335,15 @@ const storyItemLandmark = (item: Readonly<Record<string, unknown>>): string | nu
   return null
 }
 
-export const maintainedCassetteRows = descriptors.map(({ catalogKey, category, input, story, storyName, surface }) => {
+export const maintainedCassetteRows = descriptors.map(({
+  catalogKey,
+  category,
+  input,
+  story,
+  storyItemSummaries,
+  storyName,
+  surface
+}) => {
   const metadata = cassetteCategoryMetadata[category]
   return {
     catalogKey,
@@ -343,7 +356,7 @@ export const maintainedCassetteRows = descriptors.map(({ catalogKey, category, i
     surface,
     storyItemTags: story.map(({ _tag }) => _tag),
     storyItemLandmarks: story.map((item) => storyItemLandmark(item)),
-    storyItemSummaries: story.map((item) => storyItemSummary(item)),
+    storyItemSummaries,
     storyName,
     totalItemCount: story.length
   }

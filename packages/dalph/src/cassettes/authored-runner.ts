@@ -128,6 +128,7 @@ interface AuthoredActionPlanningFact extends AuthoredTaggedDiagnostic {
 
 interface AuthoredObligationDiagnostic extends AuthoredTaggedDiagnostic {
   readonly attemptId: AttemptId | null
+  readonly summary: string
 }
 
 /** Zero-based count of authored interactions consumed when a production delivery publication was captured. */
@@ -136,8 +137,15 @@ const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 )
 type AuthoredStoryPosition = typeof AuthoredStoryPosition.Type
 
+/** Zero-based identity of one coordinator process activation within an authored cassette run. */
+const AuthoredActivationOrdinal = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("AuthoredActivationOrdinal")
+)
+type AuthoredActivationOrdinal = typeof AuthoredActivationOrdinal.Type
+
 export interface AuthoredDeliveryFrame {
   readonly activation: "Fresh" | "Recovered"
+  readonly activationOrdinal: AuthoredActivationOrdinal
   readonly storyPosition: AuthoredStoryPosition
   readonly acceptedAt: JournalPosition | null
   readonly graph:
@@ -211,6 +219,7 @@ export interface AuthoredDeliveryFrame {
 /** One exact production delivery publication correlated to the authored story cursor. */
 export interface AuthoredDeliveryPublication {
   readonly activation: "Fresh" | "Recovered"
+  readonly activationOrdinal: AuthoredActivationOrdinal
   readonly storyPosition: AuthoredStoryPosition
   readonly bundle: DeliveryRelationInputBundle
 }
@@ -229,20 +238,40 @@ const authoredTaggedDiagnosticOf = (value: { readonly _tag: string }): AuthoredT
 type DeliveryObligation = DeliveryConsequences["ticketDeliveries"]["deliveries"][number]["obligations"][number]
 
 const authoredObligationDiagnosticOf = (obligation: DeliveryObligation): AuthoredObligationDiagnostic => {
-  const attemptId = (() => {
+  const correlation = (() => {
     switch (obligation._tag) {
       case "WorkflowResponsibility":
-        return obligation.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
-          ? obligation.responsibility.plannedAttempt.attemptId
-          : null
+        switch (obligation.responsibility._tag) {
+          case "TaskClaimResponsibility":
+            return { attemptId: null, summary: "task-claim acquisition responsibility" }
+          case "TaskClaimReleaseResponsibility":
+            return { attemptId: null, summary: "task-claim release responsibility" }
+          case "TaskWorktreeResponsibility":
+            return { attemptId: null, summary: "Git worktree responsibility" }
+          case "PlannedAttemptExecutorWorkResponsibility":
+            return {
+              attemptId: obligation.responsibility.plannedAttempt.attemptId,
+              summary: `planned-attempt executor responsibility · attempt ${obligation.responsibility.plannedAttempt.attemptId}`
+            }
+        }
       case "AcceptedAwaitingIntegration":
-        return obligation.accepted.plannedAttempt.attemptId
+        return {
+          attemptId: obligation.accepted.plannedAttempt.attemptId,
+          summary: `accepted result awaiting integration · attempt ${obligation.accepted.plannedAttempt.attemptId}`
+        }
       case "QueuedIntegration":
+        return {
+          attemptId: obligation.responsibility.plannedAttempt.attemptId,
+          summary: `queued integration responsibility · attempt ${obligation.responsibility.plannedAttempt.attemptId}`
+        }
       case "StartedIntegration":
-        return obligation.responsibility.plannedAttempt.attemptId
+        return {
+          attemptId: obligation.responsibility.plannedAttempt.attemptId,
+          summary: `started integration responsibility · attempt ${obligation.responsibility.plannedAttempt.attemptId}`
+        }
     }
   })()
-  return { attemptId, kind: obligation._tag, exact: JSON.stringify(obligation, null, diagnosticJsonIndent) }
+  return { ...correlation, kind: obligation._tag, exact: JSON.stringify(obligation, null, diagnosticJsonIndent) }
 }
 
 type DeliveryProposal = Extract<
@@ -258,39 +287,89 @@ type DeliveryProposalConflict = Extract<
   { readonly _tag: "DeliveryProposalOwnershipConflict" }
 >["conflicts"][number]
 
-const wordsFromDomainTag = (tag: string): string => tag.replace(/(?<=[a-z])(?=[A-Z])/gu, " ")
+type ProposalActionTagForRoute<Route> = Route extends { readonly _tag: "TrackerGraphReadRoute" }
+  ? "TrackerGraphReadRoute"
+  : Route extends { readonly step: { readonly _tag: infer Tag extends string } }
+    ? Tag
+    : Route extends { readonly action: { readonly _tag: infer Tag extends string } }
+      ? Tag
+      : Route extends { readonly transition: { readonly _tag: infer Tag extends string } }
+        ? Tag
+        : never
+type ProposalActionTag = ProposalActionTagForRoute<DeliveryProposal["route"]>
+type ActionMeaningTag = ProposalActionTag | DeliveryProposalIssue["transition"]
+
+const proposalActionLabels = {
+  AcquireStartedIntegrationTarget: "Acquire the integration-target position for started integration",
+  AcquireTaskClaim: "Ask the tracker to create the task claim",
+  AdvanceAttemptStoppage: "Advance the exact Stop decision for the planned attempt",
+  CheckTaskClaim: "Check the tracker result for the accepted task-claim request",
+  CommitFreshTaskClaimIntent: "Record intent to create the task claim",
+  CommitTaskClaimReacquisitionIntent: "Record intent to reacquire the task claim",
+  ContinueFreshWorkflowOperation: "Call the authority boundary for the freshly journaled intent",
+  ContinuePlannedAttemptExecutorWork: "Tell the executor to continue the exact planned attempt",
+  ContinueStartedIntegrationCandidate: "Ask the candidate agent to continue the exact started integration",
+  DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
+  ObserveAttemptStoppageExecutor: "Check the executor for safe suspension or a terminal result after Stop",
+  ObservePlannedAttemptContinuationClaim: "Check the tracker claim before continuing the planned attempt",
+  ObservePlannedAttemptContinuationExecutor: "Check the executor before continuing the planned attempt",
+  ObservePlannedAttemptContinuationGraph: "Check the tracker graph before continuing the planned attempt",
+  ObservePlannedAttemptContinuationSpecification:
+    "Check tracker work instructions before continuing the planned attempt",
+  ObservePlannedAttemptContinuationTargetLineage: "Check Git target lineage before continuing the planned attempt",
+  ObservePlannedAttemptContinuationWorktree: "Check the Git worktree before continuing the planned attempt",
+  ObserveResponsibleTaskClaim: "Check the tracker claim held by the current workflow responsibility",
+  ObserveStoppedAttemptClaim: "Check the tracker claim before releasing a stopped attempt",
+  QueueAcceptedResultIntegrationResponsibility: "Queue the accepted result for integration",
+  ReadCurrentTaskGraph: "Read the tracker graph for the selected task",
+  ReadPostClaimGraph: "Read the tracker graph after creating the task claim",
+  ReadTargetLineage: "Read current target lineage from Git",
+  ReadTaskClaim: "Read the current task claim from the tracker",
+  ReadTaskWorkSpecification: "Read the task's work instructions from the tracker",
+  ReadTaskWorktree: "Check the exact Git worktree after restart",
+  ReadTrackerGraph: "Read the current tracker graph after restart",
+  ReconcileTaskClaim: "Check the tracker after an ambiguous task-claim request",
+  ReconcileTaskClaimRelease: "Check the tracker after an ambiguous claim-release request",
+  ReconcileTaskWorktree: "Check or create the exact Git worktree",
+  RecordStoppedAttemptClaimNoRelease: "Record that the stopped attempt has no exact claim to release",
+  RecordTaskAttemptPlan: "Record the exact planned task attempt in Dalph's journal",
+  ReleaseExternallyCompletedTaskClaim: "Ask the tracker to release the externally completed task's claim",
+  ReleaseStartedIntegrationTarget: "Release the held integration-target position",
+  ReleaseStoppedAttemptClaim: "Ask the tracker to release the stopped attempt's exact claim",
+  ReplacePromotedTaskClaim: "Ask the tracker to replace the promoted task claim with its completion claim",
+  RetryStoppedAttemptClaimRelease: "Retry the exact stopped-attempt claim release",
+  RunTargetPromotion: "Compare and set the integration target to the verified candidate commit",
+  RunTargetVerification: "Run the configured checks for the exact candidate commit",
+  StartPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
+  StartQueuedIntegration: "Start the exact queued integration responsibility",
+  SuspendPlannedAttemptExecutorWork: "Request safe suspension of the exact planned-attempt executor work",
+  TaskClaimReacquisition: "Try to reacquire the exact task claim",
+  TrackerGraphReadRoute: "Read the tracker graph to establish the current graph"
+} as const satisfies Record<ActionMeaningTag, string>
+
+const proposalOwnerLabels = {
+  DeliveryReflection: "delivery reflection",
+  DeliverySettlement: "delivery settlement",
+  TicketDelivery: "ticket delivery",
+  TrackerGraph: "tracker graph"
+} as const satisfies Record<DeliveryProposal["owner"], string>
 
 const proposalTaskId = (proposal: DeliveryProposal): TaskId | null =>
   "taskId" in proposal.order ? proposal.order.taskId : null
 
-const proposalAction = (proposal: DeliveryProposal, taskId: TaskId | null): string => {
-  const action = (() => {
-    switch (proposal.route._tag) {
-      case "TrackerGraphReadRoute":
-        return "Read the tracker graph to establish the current graph"
-      case "FreshWorkflowRoute":
-      case "FreshExecutorWorkflowRoute":
-        return wordsFromDomainTag(proposal.route.step._tag)
-      case "RecoveredNewActionRoute":
-        return wordsFromDomainTag(proposal.route.action._tag)
-      case "AcceptedWorkflowRoute":
-      case "IdentityFreeWorkflowRoute":
-        return wordsFromDomainTag(proposal.route.transition._tag)
-    }
-  })()
-  if (proposal.route._tag === "IdentityFreeWorkflowRoute") {
-    if (proposal.route.transition._tag === "QueueAcceptedResultIntegrationResponsibility") {
-      return taskId === null
-        ? "Queue an accepted result for integration"
-        : `Queue task ${taskId}'s accepted result for integration`
-    }
-    if (proposal.route.transition._tag === "SuspendPlannedAttemptExecutorWork") {
-      return taskId === null
-        ? "Request safe suspension of planned-attempt executor work"
-        : `Request safe suspension of task ${taskId}'s planned-attempt executor work`
-    }
+const proposalActionTag = (proposal: DeliveryProposal): ProposalActionTag => {
+  switch (proposal.route._tag) {
+    case "TrackerGraphReadRoute":
+      return proposal.route._tag
+    case "FreshWorkflowRoute":
+    case "FreshExecutorWorkflowRoute":
+      return proposal.route.step._tag
+    case "RecoveredNewActionRoute":
+      return proposal.route.action._tag
+    case "AcceptedWorkflowRoute":
+    case "IdentityFreeWorkflowRoute":
+      return proposal.route.transition._tag
   }
-  return action
 }
 
 const taskWorkAdmissionSummary = (proposal: DeliveryProposal): string => {
@@ -325,28 +404,43 @@ const integrationTargetAdmissionSummary = (proposal: DeliveryProposal): string =
   }
 }
 
+const plannedAttemptProtocolAdmissionSummary = (proposal: DeliveryProposal): string => {
+  const requirement = proposal.admission.plannedAttemptProtocol
+  switch (requirement._tag) {
+    case "NoPlannedAttemptProtocol":
+      return "needs no exclusive planned-attempt protocol"
+    case "PlannedAttemptProtocolRequired":
+      return `requires the exclusive planned-attempt protocol for attempt ${requirement.correlation.attemptId}`
+  }
+}
+
 const authoredActionProposalFactOf = (proposal: DeliveryProposal): AuthoredActionPlanningFact => {
   const taskId = proposalTaskId(proposal)
   const attemptId =
     proposal.admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired"
       ? proposal.admission.plannedAttemptProtocol.correlation.attemptId
       : null
-  const action = proposalAction(proposal, taskId)
-  const owner = wordsFromDomainTag(proposal.owner).toLowerCase()
+  const action = proposalActionLabels[proposalActionTag(proposal)]
+  const recoveredPurpose =
+    proposal.order._tag === "RecoveredWorkflowOrder" ? proposalActionLabels[proposal.order.transition] : undefined
+  const purpose =
+    recoveredPurpose === undefined || recoveredPurpose === action ? undefined : `for ${recoveredPurpose.toLowerCase()}`
   return {
     attemptId,
     kind: proposal._tag,
     taskId,
     summary: [
       action,
-      taskId === null || action.includes(`task ${taskId}`) ? undefined : `task ${taskId}`,
+      taskId === null ? undefined : `task ${taskId}`,
       attemptId === null ? undefined : `attempt ${attemptId}`,
+      purpose,
+      plannedAttemptProtocolAdmissionSummary(proposal),
       taskWorkAdmissionSummary(proposal),
       integrationTargetAdmissionSummary(proposal),
       proposal.waitsForLiveOperationId === null
         ? undefined
         : `waits for live operation ${proposal.waitsForLiveOperationId}`,
-      `planned by the ${owner} layer`
+      `planned by the ${proposalOwnerLabels[proposal.owner]} layer`
     ]
       .filter((part): part is string => part !== undefined)
       .join(" · "),
@@ -354,13 +448,26 @@ const authoredActionProposalFactOf = (proposal: DeliveryProposal): AuthoredActio
   }
 }
 
-const authoredActionIssueFactOf = (issue: DeliveryProposalIssue): AuthoredActionPlanningFact => ({
-  attemptId: null,
-  kind: issue._tag,
-  taskId: issue.taskId,
-  summary: `${wordsFromDomainTag(issue._tag)} · task ${issue.taskId} · ${wordsFromDomainTag(issue.transition)}`,
-  exact: JSON.stringify(issue, null, diagnosticJsonIndent)
-})
+const authoredActionIssueFactOf = (issue: DeliveryProposalIssue): AuthoredActionPlanningFact => {
+  const action = proposalActionLabels[issue.transition]
+  const summary = (() => {
+    switch (issue._tag) {
+      case "AcceptedOperationEvidenceMissing":
+        return `Cannot ${action.toLowerCase()} because accepted journal evidence is missing`
+      case "FreshRouteProvenanceMissing":
+        return `Cannot ${action.toLowerCase()} because fresh route provenance is missing`
+      case "TypedRoutePolicyContradiction":
+        return `Cannot ${action.toLowerCase()} because the typed route policy contradicts this transition`
+    }
+  })()
+  return {
+    attemptId: null,
+    kind: issue._tag,
+    taskId: issue.taskId,
+    summary: `${summary} · task ${issue.taskId}`,
+    exact: JSON.stringify(issue, null, diagnosticJsonIndent)
+  }
+}
 
 const authoredActionConflictFactOf = (conflict: DeliveryProposalConflict): AuthoredActionPlanningFact => ({
   attemptId: null,
@@ -383,6 +490,7 @@ const authoredDeliveryFrameOf = (
   }
   return {
     activation: captured.activation,
+    activationOrdinal: captured.activationOrdinal,
     storyPosition: captured.storyPosition,
     acceptedAt: captured.bundle.legacy.runtimeFacts.acceptedAt,
     graph:
@@ -647,14 +755,22 @@ const runAuthoredScenarioCassetteWith = (request: {
         discard: true
       })
       const cursor = yield* makeStoryCursor(cassette.story)
-      const activeDeliveryActivation = yield* Ref.make<"Fresh" | "Recovered">("Fresh")
+      const activeDeliveryActivation = yield* Ref.make<{
+        readonly activation: "Fresh" | "Recovered"
+        readonly ordinal: AuthoredActivationOrdinal
+      }>({ activation: "Fresh", ordinal: AuthoredActivationOrdinal.make(0) })
       const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const publicationObserver = DeliveryRelationPublicationObserver.of({
         observe: (bundle) =>
           Effect.gen(function* () {
-            const activation = yield* Ref.get(activeDeliveryActivation)
+            const { activation, ordinal: activationOrdinal } = yield* Ref.get(activeDeliveryActivation)
             const storyPosition = yield* cursor.storyPosition
-            const publication = { activation, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
+            const publication = {
+              activation,
+              activationOrdinal,
+              storyPosition: AuthoredStoryPosition.make(storyPosition),
+              bundle
+            }
             yield* Ref.update(capturedDeliveryPublications, (captured) => [...captured, publication])
             // A read-only diagnostic observer defect never changes production cassette execution.
             yield* Effect.exit(Effect.sync(() => options.onDeliveryPublication?.(publication)))
@@ -1262,7 +1378,10 @@ const runAuthoredScenarioCassetteWith = (request: {
           }
           if (yield* cursor.atTerminalAssertions) break
           recoveryOrdinal += 1
-          yield* Ref.set(activeDeliveryActivation, "Recovered")
+          yield* Ref.set(activeDeliveryActivation, {
+            activation: "Recovered" as const,
+            ordinal: AuthoredActivationOrdinal.make(recoveryOrdinal)
+          })
           const recoveredRun = withAuthoredOperatorDriver(
             runRecoveredWorkflowWithControlledDeliveryActionExecutor(command.target, controlledExecutorFactory).pipe(
               Effect.provide(planningLayer("recovery", recoveryOrdinal))

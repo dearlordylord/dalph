@@ -55,7 +55,7 @@ const declaredProjection = (row: AuthoredRow): DeliveryGraphProjection => ({
 const frameLabel = (frame: AuthoredDeliveryFrame, index: number): string => {
   const graph = frame.graph._tag === "Established" ? `observed graph ${frame.graph.revision}` : "graph not established"
   const accepted = frame.acceptedAt === null ? "no accepted facts" : `facts through journal ${frame.acceptedAt}`
-  return `${index + 1}. ${frame.activation} · ${frame.storyPosition} declared interactions consumed · ${graph} · ${accepted}`
+  return `${index + 1}. ${frame.activation} activation ${frame.activationOrdinal + 1} · ${frame.storyPosition} declared interactions consumed · ${graph} · ${accepted}`
 }
 
 const deliverySummary = (delivery: AuthoredDeliveryFrame["deliveries"][number] | undefined): string =>
@@ -63,7 +63,7 @@ const deliverySummary = (delivery: AuthoredDeliveryFrame["deliveries"][number] |
     ? "none"
     : `placement: ${delivery.placement.kind} · standings: ${delivery.standings.map(({ kind }) => kind).join(" + ")}`
       + `${delivery.evidence.length === 0 ? "" : ` · evidence: ${delivery.evidence.map(({ kind }) => kind).join(", ")}`}`
-      + `${delivery.obligations.length === 0 ? "" : ` · obligations: ${delivery.obligations.map(({ kind }) => kind).join(", ")}`}`
+      + `${delivery.obligations.length === 0 ? "" : ` · obligations: ${delivery.obligations.map(({ summary }) => summary).join(", ")}`}`
 
 const taskFacts = (frame: AuthoredDeliveryFrame, taskId: string) => {
   const frontier = frame.frontier.find((item) => item.taskId === taskId)
@@ -113,7 +113,7 @@ const frameProjection = (row: AuthoredRow, frame: AuthoredDeliveryFrame, index: 
             `Frontier: ${facts.frontierFact?.standing === "Eligible" ? "eligible" : facts.frontier}`,
             `Desired ticket: ${facts.ticket}`,
             `Held: ${facts.held === "none" ? "no" : "yes"}`,
-            `Obligations: ${facts.delivery?.obligations.map(({ kind }) => kind).join(", ") || "none"}`
+            `Obligations: ${facts.delivery?.obligations.map(({ summary }) => summary).join(", ") || "none"}`
           ]
         },
         id,
@@ -152,8 +152,8 @@ const renderFrameFacts = (
     [
       "Production activation",
       frame.activation === "Fresh"
-        ? "Fresh · initial coordinator process"
-        : "Recovered · coordinator restarted from accepted journal history"
+        ? `Fresh · activation 1 (ordinal ${frame.activationOrdinal}) · initial coordinator process`
+        : `Recovered · activation ${frame.activationOrdinal + 1} (ordinal ${frame.activationOrdinal}) · coordinator restarted from accepted journal history`
     ],
     [
       "Authored input consumed",
@@ -254,14 +254,23 @@ const renderDeliveryFacts = (
   parent.append(placement)
   for (const [label, values] of [
     ["Evidence", delivery.evidence],
-    ["Standings", delivery.standings],
-    ["Exact obligations", delivery.obligations]
+    ["Standings", delivery.standings]
   ] as const) {
     if (values.length === 0) continue
     const details = document.createElement("details")
     appendText(details, "summary", `${label}: ${values.map(({ kind }) => kind).join(", ")}`)
     appendText(details, "pre", values.map(({ exact }) => exact).join("\n"))
     parent.append(details)
+  }
+  if (delivery.obligations.length > 0) {
+    const obligations = document.createElement("details")
+    appendText(
+      obligations,
+      "summary",
+      `Exact obligations: ${delivery.obligations.map(({ summary }) => summary).join(", ")}`
+    )
+    appendText(obligations, "pre", delivery.obligations.map(({ exact }) => exact).join("\n"))
+    parent.append(obligations)
   }
 }
 
@@ -270,9 +279,7 @@ const selectedTaskSummary = (frame: AuthoredDeliveryFrame, taskId: string): stri
   const planningValues = frame.actionPlanning._tag === "DeliveryProposalsAvailable"
     ? [...frame.actionPlanning.proposals, ...frame.actionPlanning.isolatedIssues]
     : frame.actionPlanning.conflicts
-  const linkedPlanning = planningValues.filter(({ exact }) =>
-    exact.includes(`"taskId": "${taskId}"`) || exact.includes(`"taskId":"${taskId}"`)
-  )
+  const linkedPlanning = planningValues.filter((fact) => fact.taskId === taskId)
   const heldAttempts = frame.heldPositions.filter(({ taskId: heldTaskId }) => heldTaskId === taskId)
     .map(({ attemptId }) => attemptId)
   return `Selected task ${taskId}. Graph: ${facts.frontier}. Desired ticket: ${facts.ticket}. Held position: ${heldAttempts.length === 0 ? "none" : heldAttempts.join(", ")}. Settlement: ${facts.settlement}.${linkedPlanning.length === 0 ? " No planned action is correlated to this task in this frame." : ` Planned actions: ${linkedPlanning.map(proposalSummary).join("; ")}.`}`
@@ -365,7 +372,11 @@ const frameChangeSummary = (
 ): string => {
   if (previous === undefined) return "Initial current-first production publication."
   const changes: Array<string> = []
-  if (previous.activation !== frame.activation) changes.push(`${previous.activation} → ${frame.activation} activation`)
+  if (previous.activationOrdinal !== frame.activationOrdinal) {
+    changes.push(
+      `${previous.activation} activation ${previous.activationOrdinal + 1} → ${frame.activation} activation ${frame.activationOrdinal + 1}`
+    )
+  }
   if (JSON.stringify(previous.quiescence) !== JSON.stringify(frame.quiescence)) {
     changes.push(`quiescence ${previous.quiescence._tag} → ${frame.quiescence._tag}`)
   }
@@ -436,10 +447,10 @@ const exactCorrelations = (frame: AuthoredDeliveryFrame): ReadonlyArray<ExactCor
     summary: `held position · task ${taskId} · attempt ${attemptId} · Run ${runId}`
   })),
   ...frame.deliveries.flatMap(({ obligations, taskId }) =>
-    obligations.map(({ attemptId, exact, kind }) =>
+    obligations.map(({ exact, kind, summary }) =>
       ({
         key: `obligation:${taskId}:${kind}:${exact}`,
-        summary: `obligation · task ${taskId} · ${kind}${attemptId === null ? "" : ` · attempt ${attemptId}`}`
+        summary: `obligation · task ${taskId} · ${summary}`
       })
     )
   )
@@ -449,13 +460,17 @@ const restartContinuity = (
   previous: AuthoredDeliveryFrame | undefined,
   frame: AuthoredDeliveryFrame
 ): string | undefined => {
-  if (previous?.activation !== "Fresh" || frame.activation !== "Recovered") return undefined
+  if (
+    previous === undefined ||
+    frame.activation !== "Recovered" ||
+    previous.activationOrdinal === frame.activationOrdinal
+  ) return undefined
   const before = new Map(exactCorrelations(previous).map((fact) => [fact.key, fact]))
   const after = new Map(exactCorrelations(frame).map((fact) => [fact.key, fact]))
   const retained = [...before].filter(([key]) => after.has(key)).map(([, fact]) => fact.summary)
   const removed = [...before.keys()].filter((key) => !after.has(key))
   const added = [...after.keys()].filter((key) => !before.has(key))
-  return `Coordinator restarted: Fresh → Recovered. Survived unchanged: ${retained.length === 0 ? "none" : retained.join("; ")}. ${removed.length} correlations disappeared; ${added.length} appeared after recovery.`
+  return `Coordinator restarted: ${previous.activation} activation ${previous.activationOrdinal + 1} → Recovered activation ${frame.activationOrdinal + 1}. Survived unchanged: ${retained.length === 0 ? "none" : retained.join("; ")}. ${removed.length} correlations disappeared; ${added.length} appeared after recovery.`
 }
 
 const renderTimeline = (

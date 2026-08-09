@@ -2583,7 +2583,7 @@ it.effect(
       expect(trackerRead).toMatchObject({
         attemptId: null,
         summary:
-          "Read the tracker graph to establish the current graph · needs no task-work position · needs no integration-target resource · planned by the tracker graph layer",
+          "Read the tracker graph to establish the current graph · needs no exclusive planned-attempt protocol · needs no task-work position · needs no integration-target resource · planned by the tracker graph layer",
         taskId: null
       })
       expect(() => JSON.stringify(run.deliveryFrames)).not.toThrow()
@@ -2592,10 +2592,14 @@ it.effect(
 
 it.effect("notifies the read-only delivery observer before returning the terminal authored result", () =>
   Effect.gen(function* () {
-    const publications: Array<{ readonly activation: "Fresh" | "Recovered"; readonly storyPosition: number }> = []
+    const publications: Array<{
+      readonly activation: "Fresh" | "Recovered"
+      readonly activationOrdinal: number
+      readonly storyPosition: number
+    }> = []
     const run = yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette, {
-      onDeliveryPublication: ({ activation, storyPosition }) => {
-        publications.push({ activation, storyPosition })
+      onDeliveryPublication: ({ activation, activationOrdinal, storyPosition }) => {
+        publications.push({ activation, activationOrdinal, storyPosition })
       }
     })
 
@@ -2603,6 +2607,7 @@ it.effect("notifies the read-only delivery observer before returning the termina
     expect(publications.length).toBeGreaterThan(1)
     expect(publications[0]).toEqual({
       activation: run.deliveryFrames[0]?.activation,
+      activationOrdinal: run.deliveryFrames[0]?.activationOrdinal,
       storyPosition: run.deliveryFrames[0]?.storyPosition
     })
     expect(publications.at(-1)?.storyPosition).toBe(run.deliveryFrames.at(-1)?.storyPosition)
@@ -2665,6 +2670,34 @@ it.effect("separates Fresh and Recovered delivery frames across authored coordin
     const recoveredHeld = recovered.flatMap(({ heldPositions }) => heldPositions)
     expect(freshHeld.some(({ attemptId }) => attemptId === "attempt:A:0")).toBe(true)
     expect(recoveredHeld.some(({ attemptId }) => attemptId === "attempt:A:0")).toBe(true)
+  })
+)
+
+it.effect("separates every coordinator activation in a multi-restart delivery timeline", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette)
+    const activationOrdinals = [...new Set(run.deliveryFrames.map(({ activationOrdinal }) => activationOrdinal))]
+
+    expect(run.coordinatorActivations).toEqual([
+      "Fresh",
+      "Recovered",
+      "Recovered",
+      "Recovered",
+      "Recovered",
+      "Recovered",
+      "Recovered"
+    ])
+    expect(activationOrdinals).toEqual([0, 1, 2, 3, 4, 5, 6])
+    for (const ordinal of activationOrdinals) {
+      const frames = run.deliveryFrames.filter(({ activationOrdinal }) => activationOrdinal === ordinal)
+      expect(frames.length).toBeGreaterThan(0)
+      expect(frames.every(({ activation }) => activation === (ordinal === 0 ? "Fresh" : "Recovered"))).toBe(true)
+    }
+    expect(
+      run.deliveryFrames
+        .filter(({ activationOrdinal }) => activationOrdinal > 0)
+        .some(({ heldPositions }) => heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0"))
+    ).toBe(true)
   })
 )
 

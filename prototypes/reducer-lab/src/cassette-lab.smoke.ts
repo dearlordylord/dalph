@@ -546,8 +546,40 @@ await scenario("explains restart continuity at the Fresh to Recovered boundary",
   if (timeline === null) throw new Error("The recovery delivery timeline is missing")
   chooseOption(timeline, String(recoveredIndex))
   const boundary = document.querySelector(".delivery-restart-boundary")?.textContent ?? ""
-  assert(boundary.includes("Coordinator restarted: Fresh → Recovered"), "The first recovered publication must visibly mark the process restart")
+  assert(
+    boundary.includes("Coordinator restarted: Fresh activation 1 → Recovered activation 2"),
+    "The first recovered publication must visibly mark the process restart"
+  )
   assert(boundary.includes("Survived unchanged") && boundary.includes("task A"), "The restart marker must name exact held-position and obligation continuity")
+})
+
+await scenario("separates every coordinator activation in a multi-restart delivery timeline", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) =>
+    catalogKey === "authored:changedAttemptStopLostThirdSuspension"
+  )
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The multi-restart delivery fixture is missing")
+  }
+  const boundaryIndexes = result.deliveryFrames.flatMap((frame, index) =>
+    index > 0 && frame.activationOrdinal !== result.deliveryFrames?.[index - 1]?.activationOrdinal ? [index] : []
+  )
+  assert(boundaryIndexes.length === 6, "Every recovered coordinator process must retain a distinct frame boundary")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
+  if (timeline === null) throw new Error("The multi-restart delivery timeline is missing")
+  for (const [boundaryOrdinal, frameIndex] of boundaryIndexes.entries()) {
+    chooseOption(timeline, String(frameIndex))
+    const marker = document.querySelector(".delivery-restart-boundary")?.textContent ?? ""
+    assert(
+      marker.includes(`activation ${boundaryOrdinal + 1} → Recovered activation ${boundaryOrdinal + 2}`),
+      `Recovery activation ${boundaryOrdinal + 2} must have its own visible boundary`
+    )
+  }
 })
 
 await scenario("keeps graph-not-established recovery frames compact and truthful", async () => {
@@ -617,15 +649,16 @@ await scenario("names concrete planned transitions and their admission requireme
   }
 
   const fresh = await summaryFor('"_tag": "FreshWorkflowRoute"')
-  assert(fresh.includes("Read Current Task Graph"), "Fresh workflow proposals must name their concrete step")
+  assert(fresh.includes("Read the tracker graph for the selected task"), "Fresh workflow proposals must name their concrete boundary action")
   assert(fresh.includes("waits for live operation"), "A proposal must name the live operation that blocks it")
   const recovered = await summaryFor('"_tag": "RecoveredNewActionRoute"')
   assert(recovered.startsWith("Read") && !recovered.startsWith("Recovered New Action"), "Recovered proposals must name their concrete authority action")
   const pause = await summaryFor('"_tag": "SuspendPlannedAttemptExecutorWork"')
-  assert(pause.includes("Request safe suspension of task A's planned-attempt executor work"), "Pause planning must use the concrete task action")
+  assert(pause.includes("Request safe suspension of the exact planned-attempt executor work") && pause.includes("task A"), "Pause planning must use the concrete task action")
+  assert(pause.includes("requires the exclusive planned-attempt protocol for attempt attempt:A:0"), "Pause planning must expose its process-local executor/Stop exclusion")
   assert(pause.includes("requires the existing task-work position"), "Pause planning must explain its exact position admission")
   const queued = await summaryFor('"_tag": "QueueAcceptedResultIntegrationResponsibility"')
-  assert(queued.includes("Queue task A's accepted result for integration"), "Accepted-result planning must name the concrete integration action")
+  assert(queued.includes("Queue the accepted result for integration") && queued.includes("task A"), "Accepted-result planning must name the concrete integration action")
   assert(queued.includes("needs no task-work position") && queued.includes("needs no integration-target resource"), "Accepted-result queueing must state its non-admission requirements")
   const targetResource = await summaryFor('"_tag": "IntegrationTargetResourceRequired"')
   assert(
@@ -633,6 +666,61 @@ await scenario("names concrete planned transitions and their admission requireme
       || targetResource.includes("must release the held integration-target resource")
       || targetResource.includes("requires the held integration-target resource"),
     "Integration proposals must explain their exact target-resource admission"
+  )
+})
+
+await scenario("distinguishes competing claim reads and exact responsibilities after Stop recovery", () => {
+  const result = resultByKey.get("authored:changedAttemptStopReleaseResponseLost")
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The lost claim-release response fixture is missing")
+  }
+  const frame = result.deliveryFrames.find(({ actionPlanning, deliveries }) => {
+    if (actionPlanning._tag !== "DeliveryProposalsAvailable") return false
+    const summaries = actionPlanning.proposals.map(({ summary }) => summary)
+    const obligations = deliveries.flatMap((delivery) => delivery.obligations.map(({ summary }) => summary))
+    return summaries.some((summary) => summary.includes("current workflow responsibility"))
+      && summaries.some((summary) => summary.includes("before releasing a stopped attempt"))
+      && obligations.some((summary) => summary.includes("planned-attempt executor responsibility"))
+      && obligations.some((summary) => summary.includes("task-claim release responsibility"))
+  })
+  if (frame === undefined || frame.actionPlanning._tag !== "DeliveryProposalsAvailable") {
+    throw new Error("The distinct Stop-recovery claim-read frame is missing")
+  }
+  const claimReads = frame.actionPlanning.proposals.filter(({ summary }) =>
+    summary.startsWith("Read the current task claim from the tracker")
+  )
+  assert(claimReads.length === 2, "Both exact tracker claim reads must remain visible")
+  assert(
+    new Set(claimReads.map(({ summary }) => summary)).size === 2,
+    "The same tracker boundary call must retain each distinct workflow purpose"
+  )
+  const protocolProposal = result.deliveryFrames.flatMap(({ actionPlanning }) =>
+    actionPlanning._tag === "DeliveryProposalsAvailable" ? actionPlanning.proposals : []
+  ).find(({ summary }) => summary.includes("requires the exclusive planned-attempt protocol for attempt attempt:A:0"))
+  assert(
+    protocolProposal !== undefined,
+    "The Stop chronology must expose the process-local executor/Stop exclusion where production requires it"
+  )
+})
+
+await scenario("uses production authored prose for current story items", () => {
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:changedAttemptChoiceRace")
+  const projectionRow = maintainedCassetteRows.find(({ catalogKey }) =>
+    catalogKey === "authored:changedAttemptStopRemainsUnproved"
+  )
+  if (row === undefined || projectionRow === undefined) throw new Error("The authored prose fixtures are missing")
+  const raceIndex = row.storyItemTags.indexOf("OperatorRacesContinueAndStop")
+  const projectionIndex = projectionRow.storyItemTags.indexOf("PlannedAttemptExecutorProjectionReturned")
+  const race = row.storyItemSummaries[raceIndex] ?? ""
+  const projection = projectionRow.storyItemSummaries[projectionIndex] ?? ""
+  assert(
+    race.includes("Alice concurrently submits Continue") && race.includes("exactly one journaled request wins"),
+    "The defining race must use the exhaustive production authored presenter"
+  )
+  assert(
+    projection.includes("A read-only executor projection returns")
+      && !projection.includes("PlannedAttemptExecutorProjectionReturned"),
+    "Executor projection input must be described as a readable boundary event rather than a raw tag"
   )
 })
 
