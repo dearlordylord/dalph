@@ -26,6 +26,35 @@ module taskFactReconciliationNegativeTest {
     },
   }
 
+  action applyContinueAfterTerminalAlone: bool = all {
+    state.executorEvidence == ExactTerminal,
+    state.f2WinningChoice == NoChoice,
+    state' = {
+      ...state,
+      f2WinningChoice: ContinueChoice,
+      firstF2Choice: ContinueChoice,
+      winningRequestId: CONTINUE_D1,
+      winningSubject: SUBJECT_F2,
+      appliedChoiceCount: 1,
+      authorizedFingerprint: F2,
+      continueStage: NeedFreshGraph,
+    },
+  }
+
+  action applyStopAfterTerminalAlone: bool = all {
+    state.executorEvidence == ExactTerminal,
+    state.f2WinningChoice == NoChoice,
+    state' = {
+      ...state,
+      f2WinningChoice: StopChoice,
+      firstF2Choice: StopChoice,
+      winningRequestId: STOP_D2,
+      winningSubject: SUBJECT_F2,
+      appliedChoiceCount: 1,
+      stopStage: NeedQuiescence,
+    },
+  }
+
   action resumeWithoutEveryFreshAuthority: bool = all {
     state.continueStage == NeedFreshClaim,
     state' = { ...state, continueStage: ContinueResumed, resumedAttempt: AttemptP, positionHeld: true },
@@ -106,11 +135,11 @@ module taskFactReconciliationNegativeTest {
     state' = { ...state, stopProjectionsThisActivation: 2 },
   }
 
-  action consumePostLimitReadOnlyStoppageRecovery: bool = all {
+  action makePostLimitReadOnlyStoppageRecoveryUnavailable: bool = all {
     state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
     not(stopCommandActive(state)),
     state.stopProjectionsThisActivation == 1,
-    state' = { ...state, stopRecoveryCount: RECOVERY_LIMIT },
+    state' = { ...state, stopRecoveryCount: RECOVERY_LIMIT + 1 },
   }
 
   action makeFourthClaimReleaseCall: bool = all {
@@ -138,6 +167,7 @@ module taskFactReconciliationNegativeTest {
 
   run laterChoiceCannotOverwriteFirstJournaledWinnerTest = {
     init
+      .then(observeF2Change)
       .then(applyContinueF2)
       .then(overwriteFirstF2Choice)
       .expect(not(firstJournaledChoiceWins))
@@ -147,12 +177,30 @@ module taskFactReconciliationNegativeTest {
     init
       .then(observeExactTerminal)
       .then(beginIntegration)
+      .then(observeF2Change)
       .then(applyStopAfterCutoff)
       .expect(not(postCutoffChoiceNeverApplies))
   }
 
+  run terminalAloneCannotAuthorizeContinueTest = {
+    init
+      .then(observeF2Change)
+      .then(observeExactTerminal)
+      .then(applyContinueAfterTerminalAlone)
+      .expect(not(terminalObservationAloneExposesNoChoice))
+  }
+
+  run terminalAloneCannotAuthorizeStopTest = {
+    init
+      .then(observeF2Change)
+      .then(observeExactTerminal)
+      .then(applyStopAfterTerminalAlone)
+      .expect(not(terminalObservationAloneExposesNoChoice))
+  }
+
   run missingFreshAuthoritiesCannotResumeTest = {
     init
+      .then(observeF2Change)
       .then(applyContinueF2)
       .then(readFreshExactGraph)
       .then(readFreshExactSpecification)
@@ -162,6 +210,7 @@ module taskFactReconciliationNegativeTest {
 
   run replacementAttemptCannotUseContinueAuthorityTest = {
     init
+      .then(observeF2Change)
       .then(applyContinueF2)
       .then(readFreshExactGraph)
       .then(readFreshExactSpecification)
@@ -175,7 +224,9 @@ module taskFactReconciliationNegativeTest {
 
   run F2AuthorityCannotResumeAfterF3Test = {
     init
+      .then(observeF2Change)
       .then(applyContinueF2)
+      .then(readFreshExactGraph)
       .then(observeF3BeforeContinuation)
       .then(resumeF2AfterF3WithoutNewChoice)
       .expect(not(changedAgainRequiresNewChoice))
@@ -183,6 +234,7 @@ module taskFactReconciliationNegativeTest {
 
   run projectedRunningCannotAuthorizeAbandonmentTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(requireStoppageReconciliation)
       .then(recordStoppageIntent)
@@ -195,6 +247,7 @@ module taskFactReconciliationNegativeTest {
 
   run brokenSafeEvidenceCannotAuthorizeAbandonmentTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(requireStoppageReconciliation)
       .then({ state' = { ...state, executorEvidence: ExactSafelySuspended } })
@@ -204,6 +257,7 @@ module taskFactReconciliationNegativeTest {
 
   run claimCannotReleaseBeforeImplementationAbandonmentTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(releaseClaimBeforeAbandonment)
       .expect(not(claimChangesOnlyAfterAbandonmentAndExactRead))
@@ -211,6 +265,7 @@ module taskFactReconciliationNegativeTest {
 
   run unreadableClaimCannotBeReleasedTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(observeUnreadableClaim)
@@ -218,8 +273,19 @@ module taskFactReconciliationNegativeTest {
       .expect(not(absentForeignUnreadableClaimsAreNeverMutated))
   }
 
+  run absentClaimCannotBeReleasedTest = {
+    init
+      .then(observeF2Change)
+      .then(applyStopF2)
+      .then(abandonImplementation)
+      .then(observeAbsentClaim)
+      .then(releaseAbsentOrForeignClaim)
+      .expect(not(absentForeignUnreadableClaimsAreNeverMutated))
+  }
+
   run foreignClaimCannotBeReleasedTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(observeForeignClaim)
@@ -229,6 +295,7 @@ module taskFactReconciliationNegativeTest {
 
   run stopCannotDestroyArtifactsTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(destroyStoppedArtifacts)
@@ -237,6 +304,7 @@ module taskFactReconciliationNegativeTest {
 
   run stopCannotSelectIntegrationTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(integrateStoppedAttempt)
       .expect(not(stopNeverSelectsIntegration))
@@ -244,6 +312,7 @@ module taskFactReconciliationNegativeTest {
 
   run fourthStoppageIntentViolatesBoundTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(requireStoppageReconciliation)
       .then(recordStoppageIntent)
@@ -266,6 +335,7 @@ module taskFactReconciliationNegativeTest {
 
   run secondProjectionInOneActivationViolatesBoundTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(requireStoppageReconciliation)
       .then(recordStoppageIntent)
@@ -278,6 +348,7 @@ module taskFactReconciliationNegativeTest {
 
   run stoppageLimitCannotBecomePermanentReadOnlyDeadEndTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(requireStoppageReconciliation)
       .then(recordStoppageIntent)
@@ -294,12 +365,13 @@ module taskFactReconciliationNegativeTest {
       .then(callStoppage)
       .then(loseStoppageResponse)
       .then(projectExactRunningForStoppage)
-      .then(consumePostLimitReadOnlyStoppageRecovery)
+      .then(makePostLimitReadOnlyStoppageRecoveryUnavailable)
       .expect(not(stoppageLimitPreservesReadOnlyRecovery))
   }
 
   run fourthClaimReleaseCallViolatesBoundTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(observeExactClaim)
@@ -307,9 +379,11 @@ module taskFactReconciliationNegativeTest {
       .then(loseClaimReleaseResponse)
       .then(projectClaimStillExact)
       .then(recoverClaimActivation)
+      .then(observeExactClaim)
       .then(loseClaimReleaseResponse)
       .then(projectClaimStillExact)
       .then(recoverClaimActivation)
+      .then(observeExactClaim)
       .then(loseClaimReleaseResponse)
       .then(projectClaimStillExact)
       .then(makeFourthClaimReleaseCall)
@@ -318,6 +392,7 @@ module taskFactReconciliationNegativeTest {
 
   run unreadableClaimCannotLoseSeparateResponsibilityTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(abandonImplementation)
       .then(observeUnreadableClaim)
@@ -327,6 +402,7 @@ module taskFactReconciliationNegativeTest {
 
   run unprovedWriterCannotReleaseTaskPositionTest = {
     init
+      .then(observeF2Change)
       .then(applyStopF2)
       .then(requireStoppageReconciliation)
       .then(releasePositionWhileWriterIsUnproved)

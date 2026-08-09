@@ -203,6 +203,7 @@ module plannedAttemptExecutorTest {
       .then(recordSuspendIntent)
       .then(callSuspend)
       .then(loseCommandResponse)
+      .then(recoverActivation)
       .then(recordCommandProjection(CommandProjectionExactRunning))
       .then(settleCommandProjection)
       .expect(and {

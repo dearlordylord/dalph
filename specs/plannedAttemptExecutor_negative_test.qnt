@@ -159,11 +159,11 @@ module plannedAttemptExecutorNegativeTest {
     },
   }
 
-  action consumeReadOnlyRecoveryAfterThirdRunningSuspend: bool = all {
+  action makeReadOnlyRecoveryPermanentlyUnavailable: bool = all {
     state.suspendIntentsSinceRunning == SUSPEND_COMMAND_LIMIT,
     isNoCommand(state.commandState),
     state.reconciliationProjectionsThisActivation == 1,
-    state' = { ...state, postSuspendLimitReadOnlyRecoveryAvailable: false },
+    state' = { ...state, recoveryCount: RECOVERY_LIMIT + 1 },
   }
 
   run callWithoutIntentViolatesDurabilityTest = {
@@ -318,7 +318,30 @@ module plannedAttemptExecutorNegativeTest {
       .then(loseCommandResponse)
       .then(recordCommandProjection(CommandProjectionExactRunning))
       .then(settleCommandProjection)
-      .then(consumeReadOnlyRecoveryAfterThirdRunningSuspend)
+      .then(makeReadOnlyRecoveryPermanentlyUnavailable)
       .expect(not(suspendLimitPreservesReadOnlyRecovery))
+  }
+
+  run thirdLostSuspendCannotUseGenericStateProjectionTest = {
+    init
+      .then(beginResponsibility)
+      .then(recordStartOrContinueIntent)
+      .then(callStartOrContinue)
+      .then(receiveCommandResponse(ReportRunning))
+      .then(settleCommandResponse)
+      .then(recordSuspendIntent)
+      .then(callSuspend)
+      .then(receiveCommandResponse(ReportRunning))
+      .then(settleCommandResponse)
+      .then(recordSuspendIntent)
+      .then(callSuspend)
+      .then(receiveCommandResponse(ReportRunning))
+      .then(settleCommandResponse)
+      .then(recordSuspendIntent)
+      .then(callSuspend)
+      .then(loseCommandResponse)
+      .then(recoverActivation)
+      .then(misclassifyUnmatchedReadAsFreshStateProjection(ExecutorStateSafelySuspended))
+      .expect(not(freshStateProjectionHasNoUnmatchedCommand))
   }
 }

@@ -88,6 +88,7 @@ module taskFactReconciliation {
   // LastAction makes each protocol transition independently witnessable.
   type ActionTag =
     | InitializedAction
+    | F2ObservedAction
     | ContinueF2AppliedAction
     | StopF2AppliedAction
     | ExactRedeliveredAction
@@ -112,6 +113,7 @@ module taskFactReconciliation {
     | StoppageResponseLostAction
     | StoppageRunningProjectedAction
     | StoppageSafeProjectedAction
+    | StoppageTerminalProjectedAction
     | StoppageReadOnlySafeProjectedAction
     | StopRecoveryActivatedAction
     | ImplementationAbandonedAction
@@ -186,6 +188,9 @@ module taskFactReconciliation {
     claimReleaseAuthorizedByExactRead: bool,
     claimReleaseIntentRecorded: bool,
     claimReleaseCallCount: int,
+    // Boundary-call count when current claim authority last became non-exact.
+    // Earlier calls authorized by an exact read remain valid history.
+    claimReleaseCallCountAtNonExactObservation: int,
     claimReleaseResponseAmbiguous: bool,
     claimReleaseProjectionsThisActivation: int,
     unresolvedClaimReleaseResponsibility: bool,
@@ -234,6 +239,7 @@ module taskFactReconciliation {
   pure val STOP_D2: RequestId = { runId: RUN_R, nonce: 2 }
   pure val CONTINUE_D3: RequestId = { runId: RUN_R, nonce: 3 }
   pure val WRONG_RUN_D1: RequestId = { runId: OTHER_RUN, nonce: 1 }
+  pure val NO_REQUEST: RequestId = { runId: 0, nonce: 0 }
 
   pure def sameRequestId(left: RequestId, right: RequestId): bool =
     left.runId == right.runId and left.nonce == right.nonce
@@ -283,6 +289,9 @@ module taskFactReconciliation {
         state.stopStage == NotStopping,
       }
 
+  val terminalObservationAloneExposesNoChoice: bool =
+    state.lastAction != TerminalObservedAction or state.f2WinningChoice == NoChoice
+
   val continueRequiresEveryFreshExactAuthority: bool =
     state.continueStage != ContinueResumed or exactContinueFacts(state)
 
@@ -299,7 +308,7 @@ module taskFactReconciliation {
       or and {
         state.executorEvidence == ExactRunning,
         state.stopCommandSettlementCount > 0,
-        state.lastSettledStopCommandOrdinal == state.stopCommandSettlementCount,
+        state.lastSettledStopCommandOrdinal == state.stopCommandSettlementCount + 1,
         state.implementationResponsibilityRetained,
         state.stopStage == NeedQuiescence,
       }
@@ -311,8 +320,9 @@ module taskFactReconciliation {
       == state.stopCommandSettlementCount + (if (stopCommandActive(state)) 1 else 0),
     state.stopCommandCallCount
       == state.stopCommandSettlementCount + (if (state.stopCommandCalled) 1 else 0),
-    state.nextStopCommandOrdinal == state.stopCommandIntentCount + 1,
-    state.lastSettledStopCommandOrdinal == state.stopCommandSettlementCount,
+    state.nextStopCommandOrdinal == state.stopCommandIntentCount + 2,
+    state.lastSettledStopCommandOrdinal
+      == if (state.stopCommandSettlementCount == 0) 0 else state.stopCommandSettlementCount + 1,
   }
 
   val stoppageIsBounded: bool = and {
@@ -327,7 +337,7 @@ module taskFactReconciliation {
       or stopCommandActive(state)
       or state.executorEvidence != ExactRunning
       or state.stopProjectionsThisActivation != 1
-      or state.stopRecoveryCount < RECOVERY_LIMIT
+      or state.stopRecoveryCount <= RECOVERY_LIMIT
 
   val abandonmentRequiresExactUnbrokenQuiescence: bool =
     not(state.implementationResponsibilityRetained) implies and {
@@ -371,10 +381,10 @@ module taskFactReconciliation {
 
   val absentForeignUnreadableClaimsAreNeverMutated: bool =
     not(
-      state.claimResult == NoReleaseAbsent
-        or state.claimResult == NoReleaseForeign
+      state.claimObservation == ClaimAbsent
+        or state.claimObservation == ClaimForeign
         or state.claimObservation == ClaimUnreadable
-    ) or state.claimReleaseCallCount == 0
+    ) or state.claimReleaseCallCount == state.claimReleaseCallCountAtNonExactObservation
 
   val claimReleaseIsBoundedAndReconciled: bool = and {
     state.claimReleaseCallCount <= 3,
@@ -434,6 +444,7 @@ module taskFactReconciliation {
       and state.factDecision == ContinueWork
 
   val continueF2AppliedReached: bool = state.lastAction == ContinueF2AppliedAction
+  val f2ObservedReached: bool = state.lastAction == F2ObservedAction
   val stopF2AppliedReached: bool = state.lastAction == StopF2AppliedAction
   val exactRedeliveredReached: bool = state.lastAction == ExactRedeliveredAction
   val runMismatchRejectedReached: bool = state.lastAction == RunMismatchRejectedAction
@@ -502,11 +513,11 @@ module taskFactReconciliation {
   action init: bool = all {
     state' = {
       phase: PreIntegration,
-      currentFingerprint: F2,
+      currentFingerprint: F1,
       firstF2Choice: NoChoice,
       f2WinningChoice: NoChoice,
       f3WinningChoice: NoChoice,
-      winningRequestId: CONTINUE_D1,
+      winningRequestId: NO_REQUEST,
       winningSubject: SUBJECT_F2,
       appliedChoiceCount: 0,
       lastControlResult: NoControlResult,
@@ -524,7 +535,8 @@ module taskFactReconciliation {
       implementationResponsibilityRetained: true,
       positionHeld: false,
       stopStage: NotStopping,
-      nextStopCommandOrdinal: 1,
+      // The accepted attempt already journaled StartOrContinue ordinal 1.
+      nextStopCommandOrdinal: 2,
       activeStopCommandOrdinal: 0,
       lastSettledStopCommandOrdinal: 0,
       stopCommandIntentCount: 0,
@@ -542,6 +554,7 @@ module taskFactReconciliation {
       claimReleaseAuthorizedByExactRead: false,
       claimReleaseIntentRecorded: false,
       claimReleaseCallCount: 0,
+      claimReleaseCallCountAtNonExactObservation: 0,
       claimReleaseResponseAmbiguous: false,
       claimReleaseProjectionsThisActivation: 0,
       unresolvedClaimReleaseResponsibility: false,
@@ -569,11 +582,22 @@ module taskFactReconciliation {
     }
   }
 
+  action observeF2Change: bool = all {
+    state.currentFingerprint == F1,
+    state.f2WinningChoice == NoChoice,
+    state' = {
+      ...state,
+      currentFingerprint: F2,
+      lastAction: F2ObservedAction,
+    },
+  }
+
   action applyContinueF2: bool = all {
     state.phase == PreIntegration,
     state.f2WinningChoice == NoChoice,
     state.currentFingerprint == F2,
-    exactQuiescence(state),
+    state.executorEvidence == ExactSafelySuspended,
+    state.quiescenceUnbroken,
     CONTINUE_D1.runId == SUBJECT_F2.runId,
     state' = {
       ...state,
@@ -594,7 +618,8 @@ module taskFactReconciliation {
     state.phase == PreIntegration,
     state.f2WinningChoice == NoChoice,
     state.currentFingerprint == F2,
-    exactQuiescence(state),
+    state.executorEvidence == ExactSafelySuspended,
+    state.quiescenceUnbroken,
     STOP_D2.runId == SUBJECT_F2.runId,
     state' = {
       ...state,
@@ -666,6 +691,7 @@ module taskFactReconciliation {
 
   action beginIntegration: bool = all {
     state.f2WinningChoice == NoChoice,
+    state.currentFingerprint == F1,
     state.executorEvidence == ExactTerminal,
     state' = {
       ...state,
@@ -677,6 +703,7 @@ module taskFactReconciliation {
 
   action rejectStopPastIntegrationCutoff: bool = all {
     state.phase == IntegrationStarted,
+    state.currentFingerprint == F2,
     state.f2WinningChoice == NoChoice,
     state.lastControlResult != ChoiceOutsidePreIntegration,
     state' = {
@@ -746,6 +773,7 @@ module taskFactReconciliation {
       continueStage: ContinueResumed,
       resumedAttempt: AttemptP,
       executorEvidence: ExactRunning,
+      quiescenceUnbroken: false,
       runningProjectionSettledStopIntent: false,
       positionHeld: true,
       lastAction: ContinueAdmittedAction,
@@ -754,7 +782,9 @@ module taskFactReconciliation {
 
   action observeF3BeforeContinuation: bool = all {
     state.f2WinningChoice == ContinueChoice,
-    state.continueStage != ContinueResumed,
+    state.f3WinningChoice == NoChoice,
+    state.authorizedFingerprint == F2,
+    state.continueStage == NeedFreshSpecification,
     state' = {
       ...state,
       currentFingerprint: F3,
@@ -789,14 +819,14 @@ module taskFactReconciliation {
     },
   }
 
-  // A later or ambiguous executor command breaks retained proof. Stop now
-  // needs its durable stoppage intent and exact command-projection protocol.
+  // A later exact Running projection breaks retained proof. Stop now needs its
+  // durable stoppage intent and exact command-projection protocol.
   action requireStoppageReconciliation: bool = all {
     state.stopStage == NeedQuiescence,
     exactQuiescence(state),
     state' = {
       ...state,
-      executorEvidence: ExecutorUnavailable,
+      executorEvidence: ExactRunning,
       quiescenceUnbroken: false,
       runningProjectionSettledStopIntent: false,
       positionHeld: true,
@@ -875,14 +905,45 @@ module taskFactReconciliation {
     },
   }
 
+  action projectExactTerminalForStoppage: bool = all {
+    state.stopCommandCalled,
+    state.stopResponseAmbiguous,
+    state.stopProjectionsThisActivation == 0,
+    state' = {
+      ...state,
+      executorEvidence: ExactTerminal,
+      runningProjectionSettledStopIntent: false,
+      quiescenceUnbroken: true,
+      lastSettledStopCommandOrdinal: state.activeStopCommandOrdinal,
+      activeStopCommandOrdinal: 0,
+      stopCommandSettlementCount: state.stopCommandSettlementCount + 1,
+      stopCommandCalled: false,
+      stopResponseAmbiguous: false,
+      stopProjectionsThisActivation: 1,
+      positionHeld: false,
+      lastAction: StoppageTerminalProjectedAction,
+    },
+  }
+
   action recoverStopActivation: bool = all {
     state.stopStage == NeedQuiescence,
-    state.stopProjectionsThisActivation == 1,
-    state.stopRecoveryCount < RECOVERY_LIMIT,
+    if (stopCommandActive(state) and state.stopCommandCalled and state.stopResponseAmbiguous)
+      state.stopProjectionsThisActivation <= 1
+    else
+      not(stopCommandActive(state)) and state.stopProjectionsThisActivation == 1,
+    state.stopRecoveryCount < RECOVERY_LIMIT
+      or and {
+        state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+        not(stopCommandActive(state)),
+        state.stopProjectionsThisActivation == 1,
+        state.stopRecoveryCount == RECOVERY_LIMIT,
+      },
     state' = {
       ...state,
       stopProjectionsThisActivation: 0,
-      stopRecoveryCount: state.stopRecoveryCount + 1,
+      stopRecoveryCount:
+        if (state.stopRecoveryCount < RECOVERY_LIMIT) state.stopRecoveryCount + 1
+        else state.stopRecoveryCount,
       lastAction: StopRecoveryActivatedAction,
     },
   }
@@ -901,6 +962,9 @@ module taskFactReconciliation {
       runningProjectionSettledStopIntent: false,
       stopProjectionsThisActivation: 1,
       positionHeld: false,
+      implementationResponsibilityRetained: false,
+      unresolvedClaimReleaseResponsibility: true,
+      stopStage: NeedClaimObservation,
       lastAction: StoppageReadOnlySafeProjectedAction,
     },
   }
@@ -914,6 +978,7 @@ module taskFactReconciliation {
       ...state,
       implementationResponsibilityRetained: false,
       positionHeld: false,
+      unresolvedClaimReleaseResponsibility: true,
       stopStage: NeedClaimObservation,
       lastAction: ImplementationAbandonedAction,
     },
@@ -942,6 +1007,7 @@ module taskFactReconciliation {
       claimResult: NoReleaseAbsent,
       exactClaimHeld: false,
       claimReadsThisActivation: 1,
+      claimReleaseCallCountAtNonExactObservation: state.claimReleaseCallCount,
       unresolvedClaimReleaseResponsibility: false,
       stopStage: StopComplete,
       lastAction: AbsentClaimObservedAction,
@@ -957,6 +1023,7 @@ module taskFactReconciliation {
       claimResult: NoReleaseForeign,
       exactClaimHeld: false,
       claimReadsThisActivation: 1,
+      claimReleaseCallCountAtNonExactObservation: state.claimReleaseCallCount,
       unresolvedClaimReleaseResponsibility: false,
       stopStage: StopComplete,
       lastAction: ForeignClaimObservedAction,
@@ -970,6 +1037,7 @@ module taskFactReconciliation {
       ...state,
       claimObservation: ClaimUnreadable,
       claimReadsThisActivation: 1,
+      claimReleaseCallCountAtNonExactObservation: state.claimReleaseCallCount,
       unresolvedClaimReleaseResponsibility: true,
       stopStage: StopWaiting,
       lastAction: UnreadableClaimObservedAction,
@@ -996,6 +1064,7 @@ module taskFactReconciliation {
     state' = {
       ...state,
       claimReleaseCallCount: state.claimReleaseCallCount + 1,
+      claimReleaseCallCountAtNonExactObservation: state.claimReleaseCallCount + 1,
       claimObservation: ClaimAbsent,
       claimResult: ExactClaimReleased,
       exactClaimHeld: false,
@@ -1028,6 +1097,7 @@ module taskFactReconciliation {
       claimReleaseResponseAmbiguous: false,
       claimReleaseProjectionsThisActivation: 1,
       claimObservation: ClaimAbsent,
+      claimReleaseCallCountAtNonExactObservation: state.claimReleaseCallCount,
       claimResult: ExactClaimReleased,
       unresolvedClaimReleaseResponsibility: false,
       stopStage: StopComplete,
@@ -1058,15 +1128,14 @@ module taskFactReconciliation {
       claimReleaseProjectionsThisActivation: 0,
       claimReleaseResponseAmbiguous: false,
       claimRecoveryCount: state.claimRecoveryCount + 1,
-      stopStage:
-        if (state.stopStage == ClaimReleaseRetryWait) NeedClaimRelease
-        else NeedClaimObservation,
+      stopStage: NeedClaimObservation,
       lastAction: ClaimRecoveryActivatedAction,
     },
   }
 
   action selectIndependentTaskB: bool = all {
     state.independentTaskEligible,
+    not(state.independentTaskSelected),
     (stopChoiceApplied(state) and state.stopStage != StopComplete)
       or state.constraint == MissingClaimConstraint
       or state.constraint == ForeignClaimConstraint
@@ -1311,6 +1380,7 @@ module taskFactReconciliation {
   }
 
   action step: bool = any {
+    observeF2Change,
     applyContinueF2,
     applyStopF2,
     redeliverExactF2Choice,
@@ -1333,8 +1403,9 @@ module taskFactReconciliation {
     recordStoppageIntent,
     callStoppage,
     loseStoppageResponse,
-    projectExactRunningForStoppage,
-    projectExactSafeForStoppage,
+      projectExactRunningForStoppage,
+      projectExactSafeForStoppage,
+      projectExactTerminalForStoppage,
     recoverStopActivation,
     projectReadOnlyExactSafeAfterStoppageLimit,
     abandonImplementation,
@@ -1366,5 +1437,192 @@ module taskFactReconciliation {
     observeFreshLifecycleReopen,
     releaseExternalSuccessExactClaim,
     requestOwnedClaimMutation,
+  }
+
+  // Executable conformance intentionally exercises the #65 boundary slice.
+  // The older task-fact scenarios remain collected above and in `step`, while
+  // this phase-directed relation avoids spending samples on actions whose
+  // guards cannot hold while retaining every #65 branch as a real choice.
+  // Keep every phase guard inline under the top-level disjunction. The Quint
+  // TypeScript backend otherwise reports a named helper action instead of the
+  // selected production action for some nested branches.
+  action mbtStep: bool = any {
+    all {
+      state.f2WinningChoice == NoChoice,
+      if (state.phase == IntegrationStarted) any { observeF2Change, rejectStopPastIntegrationCutoff }
+      else if (state.currentFingerprint == F1)
+        any { observeF2Change, rejectRunMismatchedRequest, observeExactTerminal, beginIntegration }
+      else any { applyContinueF2, applyStopF2, rejectRunMismatchedRequest, observeExactTerminal },
+    },
+    all {
+      state.f2WinningChoice == ContinueChoice,
+      state.continueStage == NeedFreshGraph,
+      any { readFreshExactGraph, redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+    all {
+      state.f2WinningChoice == ContinueChoice,
+      state.continueStage == NeedFreshSpecification,
+      any {
+        readFreshExactSpecification,
+        observeF3BeforeContinuation,
+        redeliverExactF2Choice,
+        rejectPersistedRequestContentReuse,
+        rejectLosingF2Choice,
+      },
+    },
+    all {
+      state.f2WinningChoice == ContinueChoice,
+      state.continueStage == NeedFreshClaim,
+      any { readFreshExactClaim, redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+    all {
+      state.f2WinningChoice == ContinueChoice,
+      state.continueStage == NeedFreshWorktree,
+      any { readFreshExactWorktree, redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+    all {
+      state.f2WinningChoice == ContinueChoice,
+      state.continueStage == NeedFreshLineage,
+      any { readFreshExactLineage, redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+    all {
+      state.f2WinningChoice == ContinueChoice,
+      state.continueStage == NeedFreshExecutor,
+      any { readFreshExactExecutor, redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+    all {
+      state.f2WinningChoice == ContinueChoice,
+      state.continueStage == ReadyToResume,
+      any { admitSameAttemptP, redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+    all {
+      state.f2WinningChoice == ContinueChoice,
+      state.continueStage == NewChoiceRequired,
+      any { applyContinueF3, redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+    all {
+      state.f2WinningChoice == ContinueChoice,
+      state.continueStage == ContinueResumed or state.continueStage == ContinueWaiting,
+      any { redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == NeedQuiescence,
+      stopCommandActive(state),
+      not(state.stopCommandCalled),
+      any { callStoppage },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == NeedQuiescence,
+      stopCommandActive(state),
+      state.stopCommandCalled,
+      not(state.stopResponseAmbiguous),
+      any { loseStoppageResponse },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == NeedQuiescence,
+      stopCommandActive(state),
+      state.stopCommandCalled,
+      state.stopResponseAmbiguous,
+      state.stopProjectionsThisActivation == 0,
+      any {
+        projectExactRunningForStoppage,
+        projectExactSafeForStoppage,
+        projectExactTerminalForStoppage,
+        recoverStopActivation,
+      },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == NeedQuiescence,
+      stopCommandActive(state),
+      state.stopCommandCalled,
+      state.stopResponseAmbiguous,
+      state.stopProjectionsThisActivation != 0,
+      any { recoverStopActivation },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == NeedQuiescence,
+      not(stopCommandActive(state)),
+      exactQuiescence(state),
+      any {
+        requireStoppageReconciliation,
+        abandonImplementation,
+        redeliverExactF2Choice,
+        rejectPersistedRequestContentReuse,
+        rejectLosingF2Choice,
+      },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == NeedQuiescence,
+      not(stopCommandActive(state)),
+      not(exactQuiescence(state)),
+      state.stopProjectionsThisActivation == 1,
+      any { recoverStopActivation },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == NeedQuiescence,
+      not(stopCommandActive(state)),
+      not(exactQuiescence(state)),
+      state.stopProjectionsThisActivation != 1,
+      state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+      any { projectReadOnlyExactSafeAfterStoppageLimit },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == NeedQuiescence,
+      not(stopCommandActive(state)),
+      not(exactQuiescence(state)),
+      state.stopProjectionsThisActivation != 1,
+      state.stopCommandIntentCount != STOP_COMMAND_LIMIT,
+      any {
+        recordStoppageIntent,
+        selectIndependentTaskB,
+        redeliverExactF2Choice,
+        rejectPersistedRequestContentReuse,
+        rejectLosingF2Choice,
+      },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == NeedClaimObservation,
+      any {
+        observeExactClaim,
+        observeAbsentClaim,
+        observeForeignClaim,
+        observeUnreadableClaim,
+        selectIndependentTaskB,
+      },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == NeedClaimRelease,
+      any { recordClaimReleaseIntent, releaseExactClaim, loseClaimReleaseResponse },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == ClaimReleaseAmbiguous,
+      any { projectClaimReleased, projectClaimStillExact, selectIndependentTaskB },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == ClaimReleaseRetryWait,
+      any { recoverClaimActivation },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == StopWaiting,
+      any { recoverClaimActivation, selectIndependentTaskB },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.stopStage == ImplementationAbandoned or state.stopStage == StopComplete,
+      any { redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
   }
 }
