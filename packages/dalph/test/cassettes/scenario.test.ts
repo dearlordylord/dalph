@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Effect, Option, Schema } from "effect"
+import { Crypto, Effect, Option, PlatformError, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -383,6 +383,28 @@ it.effect("accepts successful recovered completion at the terminal assertion bou
     expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
     expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
     expect(run.observedBehavior).toBeDefined()
+  })
+)
+
+it.effect("fails recovered verification promptly when terminal evidence cannot be recorded", () =>
+  Effect.gen(function* () {
+    const digestFailure = PlatformError.systemError({
+      _tag: "Unknown",
+      description: "controlled evidence digest unavailable",
+      method: "digest",
+      module: "AuthoredCassetteTest"
+    })
+    const failure = yield* runAuthoredScenarioCassetteWithCrypto(
+      maintainedAuthoredCassetteCatalog.candidateCorrectionAfterUnreadableGit
+    ).pipe(
+      Effect.provideService(
+        Crypto.Crypto,
+        Crypto.make({ digest: () => Effect.fail(digestFailure), randomBytes: (size) => new Uint8Array(size) })
+      ),
+      Effect.flip
+    )
+
+    expect(failure._tag).toBe("EvidenceStoreFailure")
   })
 )
 

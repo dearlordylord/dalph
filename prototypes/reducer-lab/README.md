@@ -52,5 +52,13 @@ pnpm --filter @dalph/reducer-lab-prototype smoke
 pnpm --filter @dalph/reducer-lab-prototype build
 ```
 
+Drive the running application through real Chromium (install the Playwright
+browser once with `pnpm --filter @dalph/reducer-lab-prototype exec playwright install chromium`):
+
+```sh
+REDUCER_LAB_URL=http://determined_johnson.orb.local:4173/ \
+  pnpm --filter @dalph/reducer-lab-prototype browser-smoke
+```
+
 The accepted chronology and scenario-to-test mapping are in
 `docs/scenarios/reducer-lab-maintained-cassette-catalog.md`.

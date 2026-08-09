@@ -96,6 +96,10 @@ in-memory adapters; recovery inside a cassette occurs only at an authored
   runs a maintained recovery story and requires its recovered coordinator and
   terminal assertions both to complete without hiding failures or waiting
   forever after a coordinator stops before its required terminal event.
+- `fails recovered verification promptly when terminal evidence cannot be recorded`
+  makes the controlled evidence digest fail after the final authored boundary
+  and requires the recovered runner to return that failure rather than wait
+  forever for an event it can no longer record.
 - `shows only information that selects, explains, or diagnoses a maintained cassette`
   checks that the browser selector contains every catalog choice while one
   shared surface exposes the safety boundary, declared input, production
@@ -130,6 +134,10 @@ discards all displayed results.
   is the command-independent execution proof for the whole catalog.
 - `the real browser entry runs every maintained cassette and retains every terminal result`
   checks the browser update path and the exact completed/failed summary.
+- `browser-smoke drives the real Orb application through every maintained cassette`
+  runs through the package's `browser-smoke` command against `REDUCER_LAB_URL`, completes
+  the insecure-origin verification cassette, then requires all 40 choices to
+  settle with no failure or Lab defect and exercises retained frame navigation.
 - `runs browser Run all sequentially without changing its complete cassette set`
   holds five controlled runners, proves only one starts initially, then proves
   the next starts as the prior cassette settles and every choice retains its result.
