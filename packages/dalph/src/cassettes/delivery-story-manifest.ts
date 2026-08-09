@@ -95,8 +95,8 @@ const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeat
 
 /**
  * Machine-readable coverage for the prose story. The long spine proves the
- * graph/restart/finality path; existing maintained stories prove narrower
- * beats; unsupported combined behavior remains explicit instead of fabricated.
+ * graph/restart/finality path; one maintained story proves one narrower beat;
+ * unsupported combined behavior remains explicit instead of fabricated.
  */
 export const deliveryStoryManifest = {
   cassetteKey: "authored:deliveryInvariantStory" as const,
@@ -107,10 +107,9 @@ export const deliveryStoryManifest = {
       "The maintained spine observes five tasks, but B through E are A-blocked rather than all eligible."
     ),
     missing("DS-02", "No maintained run admits A, B, and C together yet."),
-    slice(
+    missing(
       "DS-03",
-      ["authored:changedAttemptContinues"],
-      scenarioTest("records both task fingerprints when Alice continues the exact attempt")
+      "No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change."
     ),
     missing(
       "DS-04",

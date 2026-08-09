@@ -7,8 +7,8 @@ makes each beat's arithmetic checkable. The story is chosen to touch as many of
 Both registers are prose. The maintained cassette
 `authored:deliveryInvariantStory` is the executable spine: one real Run grows
 from five to seven production-observed tasks, crosses a coordinator restart,
-promotes A, and settles A through the exact completion-claim boundary. Existing
-maintained cassettes cover several narrower beats. The checked-in manifest below
+promotes A, and settles A through the exact completion-claim boundary. An
+existing maintained cassette covers one narrower beat. The checked-in manifest below
 maps every beat either to that spine, to exact maintained slice evidence, or to
 an explicit implementation gap. Repository tests fail when the document,
 manifest, catalog key, or cited catalog changes without the others. The Lab
@@ -214,7 +214,7 @@ declared end.
 cassette|authored:deliveryInvariantStory
 DS-01|NotImplemented|The maintained spine observes five tasks, but B through E are A-blocked rather than all eligible.
 DS-02|NotImplemented|No maintained run admits A, B, and C together yet.
-DS-03|DemonstratedByMaintainedSlice|authored:changedAttemptContinues|packages/dalph/test/cassettes/scenario.test.ts#it.effect#records both task fingerprints when Alice continues the exact attempt
+DS-03|NotImplemented|No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change.
 DS-04|NotImplemented|No named acceptance test proves B's changed graph/specification rereads, safe-suspension request, and retained position together.
 DS-05|NotImplemented|The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart.
 DS-06|NotImplemented|No maintained run admits D after B's changed-instruction suspension releases one of three held positions.
