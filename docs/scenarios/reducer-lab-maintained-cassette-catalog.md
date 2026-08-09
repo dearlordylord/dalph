@@ -359,7 +359,7 @@ does not release A's held position; the frame after the exact safely-suspended
 report does. For a recovery cassette, every coordinator activation is visibly
 separated, including later Recovered-to-Recovered restarts, and retains the
 same exact planned attempt where the cassette does. The first frame of each
-activation names its ordinal restart boundary and summarizes which held
+activation names its numbered restart boundary and summarizes which held
 positions and exact obligations survived, changed, or disappeared. The
 maintainer does not have to infer restart continuity only by comparing raw
 JSON.
@@ -386,7 +386,8 @@ while the exact production proposal union is still available. The browser does
 not reparse raw diagnostic JSON to rediscover route, admission, ownership, or
 correlation. The projection names the concrete production transition,
 its task or attempt correlation, whether it must reserve or reuse a task-work
-position, exclusive planned-attempt protocol, or integration-target resource,
+position, serialization with executor commands and Continue or Stop, or an
+integration-target resource,
 and any live operation it must wait for. When two proposals call the same
 authority read for different workflow purposes, the concise summary names both
 purposes. Exact obligation summaries distinguish executor-work, claim-release,
@@ -460,7 +461,7 @@ task whose exact facts are correlated below.
   multi-restart cassette.
 - `distinguishes competing claim reads and exact responsibilities after Stop recovery`
   checks same-boundary reads retain their different workflow purposes, the
-  exclusive planned-attempt protocol is visible, and executor-work and
+  executor/Continue-or-Stop serialization is visible, and executor-work and
   claim-release responsibilities remain distinct.
 - `shows graph observation provenance quiescence and planned actions` selects
   an established paused publication and checks its exact graph-read

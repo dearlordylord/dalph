@@ -2583,7 +2583,7 @@ it.effect(
       expect(trackerRead).toMatchObject({
         attemptId: null,
         summary:
-          "Read the tracker graph to establish the current graph · needs no exclusive planned-attempt protocol · needs no task-work position · needs no integration-target resource · planned by the tracker graph layer",
+          "Read the tracker graph to establish the current graph · needs no executor/Continue-or-Stop serialization · needs no task-work position · needs no integration-target resource · planned by the tracker graph layer",
         taskId: null
       })
       expect(() => JSON.stringify(run.deliveryFrames)).not.toThrow()

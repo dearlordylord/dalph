@@ -251,23 +251,23 @@ const authoredObligationDiagnosticOf = (obligation: DeliveryObligation): Authore
           case "PlannedAttemptExecutorWorkResponsibility":
             return {
               attemptId: obligation.responsibility.plannedAttempt.attemptId,
-              summary: `planned-attempt executor responsibility · attempt ${obligation.responsibility.plannedAttempt.attemptId}`
+              summary: `planned-attempt executor responsibility · attempt ID ${obligation.responsibility.plannedAttempt.attemptId}`
             }
         }
       case "AcceptedAwaitingIntegration":
         return {
           attemptId: obligation.accepted.plannedAttempt.attemptId,
-          summary: `accepted result awaiting integration · attempt ${obligation.accepted.plannedAttempt.attemptId}`
+          summary: `accepted result awaiting integration · attempt ID ${obligation.accepted.plannedAttempt.attemptId}`
         }
       case "QueuedIntegration":
         return {
           attemptId: obligation.responsibility.plannedAttempt.attemptId,
-          summary: `queued integration responsibility · attempt ${obligation.responsibility.plannedAttempt.attemptId}`
+          summary: `queued integration responsibility · attempt ID ${obligation.responsibility.plannedAttempt.attemptId}`
         }
       case "StartedIntegration":
         return {
           attemptId: obligation.responsibility.plannedAttempt.attemptId,
-          summary: `started integration responsibility · attempt ${obligation.responsibility.plannedAttempt.attemptId}`
+          summary: `started integration responsibility · attempt ID ${obligation.responsibility.plannedAttempt.attemptId}`
         }
     }
   })()
@@ -306,7 +306,7 @@ const proposalActionLabels = {
   CheckTaskClaim: "Check the tracker result for the accepted task-claim request",
   CommitFreshTaskClaimIntent: "Record intent to create the task claim",
   CommitTaskClaimReacquisitionIntent: "Record intent to reacquire the task claim",
-  ContinueFreshWorkflowOperation: "Call the authority boundary for the freshly journaled intent",
+  ContinueFreshWorkflowOperation: "Dalph sends the already-journaled request to its recorded owning system",
   ContinuePlannedAttemptExecutorWork: "Tell the executor to continue the exact planned attempt",
   ContinueStartedIntegrationCandidate: "Ask the candidate agent to continue the exact started integration",
   DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
@@ -408,9 +408,9 @@ const plannedAttemptProtocolAdmissionSummary = (proposal: DeliveryProposal): str
   const requirement = proposal.admission.plannedAttemptProtocol
   switch (requirement._tag) {
     case "NoPlannedAttemptProtocol":
-      return "needs no exclusive planned-attempt protocol"
+      return "needs no executor/Continue-or-Stop serialization"
     case "PlannedAttemptProtocolRequired":
-      return `requires the exclusive planned-attempt protocol for attempt ${requirement.correlation.attemptId}`
+      return "must serialize this action with executor commands and Continue or Stop"
   }
 }
 
@@ -424,7 +424,7 @@ const authoredActionProposalFactOf = (proposal: DeliveryProposal): AuthoredActio
   const recoveredPurpose =
     proposal.order._tag === "RecoveredWorkflowOrder" ? proposalActionLabels[proposal.order.transition] : undefined
   const purpose =
-    recoveredPurpose === undefined || recoveredPurpose === action ? undefined : `for ${recoveredPurpose.toLowerCase()}`
+    recoveredPurpose === undefined || recoveredPurpose === action ? undefined : `to ${recoveredPurpose.toLowerCase()}`
   return {
     attemptId,
     kind: proposal._tag,
@@ -432,7 +432,7 @@ const authoredActionProposalFactOf = (proposal: DeliveryProposal): AuthoredActio
     summary: [
       action,
       taskId === null ? undefined : `task ${taskId}`,
-      attemptId === null ? undefined : `attempt ${attemptId}`,
+      attemptId === null ? undefined : `attempt ID ${attemptId}`,
       purpose,
       plannedAttemptProtocolAdmissionSummary(proposal),
       taskWorkAdmissionSummary(proposal),

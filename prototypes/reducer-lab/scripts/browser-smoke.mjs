@@ -91,6 +91,7 @@ try {
   })
   assert.ok(graphRendered.canvasChildren > 0)
   assert.deepEqual(graphRendered.taskIds, ["A", "B"])
+  assert.match(graphRendered.relationships, /Graph summary · 2 tasks · 1 relationship/u)
   assert.match(graphRendered.relationships, /A blocks B/u)
   const graphLocator = page.locator("dalph-delivery-graph")
   await graphLocator.locator("#summary > summary").click()

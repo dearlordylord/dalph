@@ -349,7 +349,7 @@ class DalphDeliveryGraphElement extends HTMLElement {
     const heading = document.createElement("summary")
     heading.textContent = projection === null
       ? "Graph summary unavailable"
-      : `Graph summary · ${projection.tasks.length} tasks · ${projection.edges.length} relationships`
+      : `Graph summary · ${projection.tasks.length} ${projection.tasks.length === 1 ? "task" : "tasks"} · ${projection.edges.length} ${projection.edges.length === 1 ? "relationship" : "relationships"}`
     this.#summary.append(heading)
     if (projection === null) return
 

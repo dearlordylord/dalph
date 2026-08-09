@@ -655,7 +655,11 @@ await scenario("names concrete planned transitions and their admission requireme
   assert(recovered.startsWith("Read") && !recovered.startsWith("Recovered New Action"), "Recovered proposals must name their concrete authority action")
   const pause = await summaryFor('"_tag": "SuspendPlannedAttemptExecutorWork"')
   assert(pause.includes("Request safe suspension of the exact planned-attempt executor work") && pause.includes("task A"), "Pause planning must use the concrete task action")
-  assert(pause.includes("requires the exclusive planned-attempt protocol for attempt attempt:A:0"), "Pause planning must expose its process-local executor/Stop exclusion")
+  assert(
+    pause.includes("attempt ID attempt:A:0")
+      && pause.includes("must serialize this action with executor commands and Continue or Stop"),
+    "Pause planning must expose one exact attempt correlation and its process-local executor/Stop exclusion"
+  )
   assert(pause.includes("requires the existing task-work position"), "Pause planning must explain its exact position admission")
   const queued = await summaryFor('"_tag": "QueueAcceptedResultIntegrationResponsibility"')
   assert(queued.includes("Queue the accepted result for integration") && queued.includes("task A"), "Accepted-result planning must name the concrete integration action")
@@ -696,7 +700,10 @@ await scenario("distinguishes competing claim reads and exact responsibilities a
   )
   const protocolProposal = result.deliveryFrames.flatMap(({ actionPlanning }) =>
     actionPlanning._tag === "DeliveryProposalsAvailable" ? actionPlanning.proposals : []
-  ).find(({ summary }) => summary.includes("requires the exclusive planned-attempt protocol for attempt attempt:A:0"))
+  ).find(({ summary }) =>
+    summary.includes("attempt ID attempt:A:0")
+    && summary.includes("must serialize this action with executor commands and Continue or Stop")
+  )
   assert(
     protocolProposal !== undefined,
     "The Stop chronology must expose the process-local executor/Stop exclusion where production requires it"

@@ -152,8 +152,8 @@ const renderFrameFacts = (
     [
       "Production activation",
       frame.activation === "Fresh"
-        ? `Fresh · activation 1 (ordinal ${frame.activationOrdinal}) · initial coordinator process`
-        : `Recovered · activation ${frame.activationOrdinal + 1} (ordinal ${frame.activationOrdinal}) · coordinator restarted from accepted journal history`
+        ? "Fresh activation 1 · initial coordinator process"
+        : `Recovered activation ${frame.activationOrdinal + 1} · coordinator restarted from accepted journal history`
     ],
     [
       "Authored input consumed",
