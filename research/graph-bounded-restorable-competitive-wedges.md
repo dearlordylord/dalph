@@ -633,7 +633,7 @@ The limitations matter just as much:
 - Scoped finalizers cannot prove cleanup happened after process death.
 - Typed errors do not protect against a wrong domain model or incomplete
   authority read.
-- This repository currently pins Effect `4.0.0-beta.99`; beta API churn,
+- This repository currently pins Effect `4.0.0-beta.106`; beta API churn,
   ecosystem maturity, and hiring familiarity are engineering costs that need
   containment.
 

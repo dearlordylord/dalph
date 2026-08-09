@@ -4,7 +4,7 @@ import type { TaskClaimObservation, TrackerMutationService } from "../../../auth
 import { taskClaimObservationAttemptBound } from "./bound.js"
 
 /** Three authoritative reads could not establish the current task claim. */
-export class TaskClaimObservationDidNotConverge extends Schema.TaggedErrorClass<TaskClaimObservationDidNotConverge>()(
+export class TaskClaimObservationDidNotConverge extends Schema.TaggedError<TaskClaimObservationDidNotConverge>()(
   "TaskClaimObservationDidNotConverge",
   { attempts: Schema.Literal(taskClaimObservationAttemptBound), detail: Schema.String, taskId: TaskId }
 ) {}

@@ -33,7 +33,7 @@ import {
 } from "./manifest.js"
 
 /** Configuration changed the selected plan after Dalph durably fixed it in an intent. */
-export class TargetVerificationPlanChanged extends Schema.TaggedErrorClass<TargetVerificationPlanChanged>()(
+export class TargetVerificationPlanChanged extends Schema.TaggedError<TargetVerificationPlanChanged>()(
   "TargetVerificationPlanChanged",
   {
     recordedPlanId: TargetVerificationPlanId,
@@ -43,19 +43,19 @@ export class TargetVerificationPlanChanged extends Schema.TaggedErrorClass<Targe
 ) {}
 
 /** A durable request identity was presented with a different candidate binding. */
-export class TargetVerificationIntentContradiction extends Schema.TaggedErrorClass<TargetVerificationIntentContradiction>()(
+export class TargetVerificationIntentContradiction extends Schema.TaggedError<TargetVerificationIntentContradiction>()(
   "TargetVerificationIntentContradiction",
   { recorded: TargetVerificationCorrelation, requested: TargetVerificationCorrelation }
 ) {}
 
 /** The configured plan belongs to a different repository/ref target. */
-export class TargetVerificationPlanTargetMismatch extends Schema.TaggedErrorClass<TargetVerificationPlanTargetMismatch>()(
+export class TargetVerificationPlanTargetMismatch extends Schema.TaggedError<TargetVerificationPlanTargetMismatch>()(
   "TargetVerificationPlanTargetMismatch",
   { requestId: TargetVerificationRequestId }
 ) {}
 
 /** One wrapper report repeated an artifact name and therefore could not form a canonical manifest. */
-export class TargetVerificationArtifactNamesContradict extends Schema.TaggedErrorClass<TargetVerificationArtifactNamesContradict>()(
+export class TargetVerificationArtifactNamesContradict extends Schema.TaggedError<TargetVerificationArtifactNamesContradict>()(
   "TargetVerificationArtifactNamesContradict",
   { artifactName: TargetVerificationArtifactName, requestId: TargetVerificationRequestId }
 ) {}

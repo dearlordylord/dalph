@@ -239,6 +239,12 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   },
   /** Harness lifecycle: dispose one coordinator and its same-process executor session without journaling an occurrence. */
   CoordinatorProcessDies: {},
+  /** The tracker applied deletion of the exact promotion-correlated completion claim. */
+  CompletionClaimDeletionApplied: { taskId: TaskId },
+  /** The tracker reports which exact claim kind is current for finality reconciliation. */
+  CompletionClaimReadReturned: { claim: Schema.Literals(["Active", "Completion"]), taskId: TaskId },
+  /** The tracker applied replacement of the active claim with the exact completion claim. */
+  CompletionClaimReplacementApplied: { taskId: TaskId },
   /** Harness synchronization: hold this exact admitted continuation before its durable executor command intent. */
   DalphHoldsAdmittedContinuationBeforeExecutorIntent: { attemptId: AttemptId, taskId: TaskId },
   DalphSelects: { operation: AuthoredCassetteDecision },
@@ -392,6 +398,9 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "PlannedAttemptExecutorWorkReported"
   ],
   TaskTracker: [
+    "CompletionClaimDeletionApplied",
+    "CompletionClaimReadReturned",
+    "CompletionClaimReplacementApplied",
     "TaskClaimReadFailed",
     "TaskClaimCurrentReadReturned",
     "TaskClaimReadReturned",
@@ -404,7 +413,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   TerminalAssertion: ["ExpectedBehavior"]
 })
 
-export class AuthoredCassetteStoryItemOwnerContradiction extends Schema.TaggedErrorClass<AuthoredCassetteStoryItemOwnerContradiction>()(
+export class AuthoredCassetteStoryItemOwnerContradiction extends Schema.TaggedError<AuthoredCassetteStoryItemOwnerContradiction>()(
   "AuthoredCassetteStoryItemOwnerContradiction",
   { registrations: Schema.Array(Schema.String), tag: Schema.String }
 ) {}
@@ -541,6 +550,47 @@ const lostExecutorResponsesRequireExplicitProjection = Schema.makeFilter(
       ? undefined
       : "an authored lost executor response must be followed after process death by an explicit exact-attempt projection"
 )
+
+type CompletionFinalityStoryItem = Extract<
+  AuthoredCassetteStoryItem,
+  {
+    readonly _tag:
+      | "CompletionClaimDeletionApplied"
+      | "CompletionClaimReadReturned"
+      | "CompletionClaimReplacementApplied"
+  }
+>
+
+const completionFinalityStoryItemTags = new Set<AuthoredCassetteStoryItem["_tag"]>([
+  "CompletionClaimDeletionApplied",
+  "CompletionClaimReadReturned",
+  "CompletionClaimReplacementApplied"
+])
+
+const isCompletionFinalityStoryItem = (item: AuthoredCassetteStoryItem): item is CompletionFinalityStoryItem =>
+  completionFinalityStoryItemTags.has(item._tag)
+
+const completionFinalityStoryIsComplete = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+  const finalityItems = cassette.story.filter(isCompletionFinalityStoryItem)
+  if (finalityItems.length === 0) return undefined
+  const taskIds = Array.from(new Set(finalityItems.map(({ taskId }) => taskId)))
+  const expectedSteps = ["Read:Active", "Replace", "Read:Completion", "Delete"]
+  const incompleteTaskId = taskIds.find((taskId) => {
+    const actualSteps = finalityItems
+      .filter((item) => item.taskId === taskId)
+      .map((item) =>
+        item._tag === "CompletionClaimReadReturned"
+          ? `Read:${item.claim}`
+          : item._tag === "CompletionClaimReplacementApplied"
+            ? "Replace"
+            : "Delete"
+      )
+    return JSON.stringify(actualSteps) !== JSON.stringify(expectedSteps)
+  })?.[0]
+  return incompleteTaskId === undefined
+    ? undefined
+    : `authored completion finality for ${incompleteTaskId} must read Active, replace, read Completion, and delete exactly once in order`
+})
 
 const heldPauseOffset = 1
 const heldPauseGraphSelectionOffset = 2
@@ -724,5 +774,6 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   .check(finalTrackerReadClosesCurrentActivation)
   .check(ambiguousBoundaryLossesImmediatelyCrash)
   .check(lostExecutorResponsesRequireExplicitProjection)
+  .check(completionFinalityStoryIsComplete)
   .check(admittedContinuationHoldHasExactStopClosure)
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type

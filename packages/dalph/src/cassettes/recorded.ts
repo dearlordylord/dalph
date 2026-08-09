@@ -732,7 +732,7 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
   return recordTaskBoundaryEntry(event)
 }
 
-export class EmptyJournalCannotBeRecorded extends Schema.TaggedErrorClass<EmptyJournalCannotBeRecorded>()(
+export class EmptyJournalCannotBeRecorded extends Schema.TaggedError<EmptyJournalCannotBeRecorded>()(
   "EmptyJournalCannotBeRecorded",
   {}
 ) {}

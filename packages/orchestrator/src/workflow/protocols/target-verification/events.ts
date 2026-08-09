@@ -66,7 +66,7 @@ export const TargetVerificationBoundaryReport = TargetVerificationTerminal
 export type TargetVerificationBoundaryReport = TargetVerificationTerminal
 
 /** The repository wrapper could not provide a truthful result for this request. */
-export class TargetVerificationBoundaryFailure extends Schema.TaggedErrorClass<TargetVerificationBoundaryFailure>()(
+export class TargetVerificationBoundaryFailure extends Schema.TaggedError<TargetVerificationBoundaryFailure>()(
   "TargetVerificationBoundaryFailure",
   { detail: Schema.String, requestId: TargetVerificationRequestId }
 ) {}

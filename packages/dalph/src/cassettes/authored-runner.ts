@@ -1,10 +1,12 @@
 /* eslint-disable max-lines -- One chronological adapter owns activation, pause, crash, candidate, and terminal story boundaries. */
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, type Result, Schema, Stream } from "effect"
 import {
+  type AttemptId,
   GitCommitSha,
   type PlannedAttemptExecutorReport,
   type PlannedTaskAttempt,
   type RunId,
+  type TaskId,
   type TaskRevision
 } from "@dalph/contracts"
 import {
@@ -22,6 +24,15 @@ import {
   deterministicTaskClaimAcquisitionPlannerLayer,
   CandidateCorrectionLimit,
   CandidateContinuationLimit,
+  CompletionClaimBoundary,
+  type BoundedTicketRank,
+  DeliveryRelationPublicationObserver,
+  evaluateDeliveryRelationInputBundle,
+  evaluateDeliveryRuntimeInputBundle,
+  type DeliveryConsequences,
+  type DeliveryRelationInputBundle,
+  type DeliveryRuntimeEvaluation,
+  type JournaledTrackerGraphObservation,
   freshWorkflowRunId,
   GitTargetLineage,
   IntegrationCandidateAgent,
@@ -33,6 +44,7 @@ import {
   gitTargetLineageTestLayer,
   gitWorktreeTestLayer,
   type JournalRecord,
+  type JournalPosition,
   JournalStore,
   journalStoreCapabilities,
   JournaledRunBootstrap,
@@ -49,6 +61,7 @@ import {
   runWorkflowWithControlledDeliveryActionExecutor,
   validatedRunActivationLayer,
   taskWorkCapacityControlLayer,
+  type TaskWorkCapacity,
   TargetLineageObservation,
   TargetVerificationArtifact,
   TargetVerificationBoundary,
@@ -66,6 +79,8 @@ import {
   EvidenceStore,
   TestGitWorktree,
   TrackerMutation,
+  type TrackerRevision,
+  type TrackerTask,
   TrackerAdapterReadError,
   type DeliveryActionExecutorService,
   WorkflowInterpreter,
@@ -80,24 +95,476 @@ import {
   type AuthoredObservedBehavior,
   type AuthoredScenarioCassette as ScenarioCassette
 } from "./authored-domain.js"
-import {
-  controlledExecutorLayer,
-  controlledTrace,
-  controlledTrackerGraphReaderLayer,
-  controlledTrackerMutationLayer
-} from "./authored-adapters.js"
+import { controlledExecutorLayer, controlledTrace, controlledTrackerGraphReaderLayer } from "./authored-adapters.js"
 import { makeStoryCursor, type StoryCursor } from "./authored-cursor.js"
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
+import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
 
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
   readonly cassette: ScenarioCassette
+  readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame>
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
   readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
   readonly runId: RunId
 }
+
+interface AuthoredTaggedDiagnostic {
+  readonly kind: string
+  readonly exact: string
+}
+
+interface AuthoredActionPlanningFact extends AuthoredTaggedDiagnostic {
+  readonly attemptId: AttemptId | null
+  /** Human-facing meaning derived while the production proposal or issue remains typed. */
+  readonly summary: string
+  /** Exact task correlation when the production value carries one. */
+  readonly taskId: TaskId | null
+}
+
+interface AuthoredObligationDiagnostic extends AuthoredTaggedDiagnostic {
+  readonly attemptId: AttemptId | null
+  readonly summary: string
+}
+
+/** Zero-based count of authored interactions consumed when a production delivery publication was captured. */
+const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("AuthoredStoryPosition")
+)
+type AuthoredStoryPosition = typeof AuthoredStoryPosition.Type
+
+export interface AuthoredDeliveryFrame {
+  readonly activationOrdinal: AuthoredRunActivationOrdinalType
+  readonly storyPosition: AuthoredStoryPosition
+  readonly acceptedAt: JournalPosition | null
+  readonly graph:
+    | { readonly _tag: "NotEstablished" }
+    | {
+        readonly _tag: "Established"
+        readonly revision: TrackerRevision
+        /** Exact journal-backed logical read that established this graph publication. */
+        readonly observation: {
+          readonly operationId: JournaledTrackerGraphObservation["operationId"]
+          readonly contentIdentity: JournaledTrackerGraphObservation["contentIdentity"]
+          readonly recordedAt: JournaledTrackerGraphObservation["recordedAt"]
+        }
+        readonly tasks: ReadonlyArray<{
+          readonly id: TaskId
+          readonly lifecycle: TrackerTask["lifecycle"]["_tag"]
+          readonly parentTaskId: TaskId | null
+          readonly prerequisiteIds: ReadonlyArray<TaskId>
+        }>
+      }
+  readonly capacity: TaskWorkCapacity
+  /** Whether this exact runtime publication permits a finality read or must remain passive. */
+  readonly quiescence: DeliveryRelationInputBundle["legacy"]["runtimeFacts"]["quiescence"]
+  readonly heldPositions: ReadonlyArray<{
+    readonly taskId: TaskId
+    readonly runId: RunId
+    readonly attemptId: AttemptId
+  }>
+  readonly frontier: ReadonlyArray<
+    | {
+        readonly taskId: TaskId
+        readonly standing: "Eligible"
+        readonly taskRevision: TaskRevision
+        readonly reasons: readonly []
+      }
+    | {
+        readonly taskId: TaskId
+        readonly standing: "Excluded"
+        readonly taskRevision: null
+        readonly reasons: ReadonlyArray<AuthoredTaggedDiagnostic>
+      }
+  >
+  readonly tickets: ReadonlyArray<{
+    readonly taskId: TaskId
+    readonly placement: AuthoredTaggedDiagnostic
+    readonly rank: BoundedTicketRank | null
+    readonly reasons: ReadonlyArray<AuthoredTaggedDiagnostic>
+  }>
+  readonly deliveries: ReadonlyArray<{
+    readonly taskId: TaskId
+    readonly placement: AuthoredTaggedDiagnostic
+    readonly evidence: ReadonlyArray<AuthoredTaggedDiagnostic>
+    readonly standings: ReadonlyArray<AuthoredTaggedDiagnostic>
+    readonly obligations: ReadonlyArray<AuthoredObligationDiagnostic>
+  }>
+  readonly settlements: ReadonlyArray<{ readonly taskId: TaskId; readonly attemptId: AttemptId }>
+  readonly trackerReflection: { readonly _tag: "DeliveryReflection"; readonly settlementCount: number }
+  /** Downstream action-planning result; observing it performs no action. */
+  readonly actionPlanning:
+    | {
+        readonly _tag: "DeliveryProposalsAvailable"
+        readonly proposals: ReadonlyArray<AuthoredActionPlanningFact>
+        readonly isolatedIssues: ReadonlyArray<AuthoredActionPlanningFact>
+      }
+    | {
+        readonly _tag: "DeliveryProposalOwnershipConflict"
+        readonly conflicts: ReadonlyArray<AuthoredActionPlanningFact>
+      }
+}
+
+/** One exact production delivery publication correlated to the authored story cursor. */
+export interface AuthoredDeliveryPublication {
+  readonly activationOrdinal: AuthoredRunActivationOrdinalType
+  readonly storyPosition: AuthoredStoryPosition
+  readonly bundle: DeliveryRelationInputBundle
+}
+
+export interface AuthoredScenarioCassetteRunOptions {
+  /** Synchronous read-only notification; callers must move expensive projection outside the runtime turn. */
+  readonly onDeliveryPublication?: (publication: AuthoredDeliveryPublication) => void
+}
+
+const diagnosticJsonIndent = 2
+const authoredTaggedDiagnosticOf = (value: { readonly _tag: string }): AuthoredTaggedDiagnostic => ({
+  kind: value._tag,
+  exact: JSON.stringify(value, null, diagnosticJsonIndent)
+})
+
+type DeliveryObligation = DeliveryConsequences["ticketDeliveries"]["deliveries"][number]["obligations"][number]
+type WorkflowResponsibility = Extract<DeliveryObligation, { readonly _tag: "WorkflowResponsibility" }>["responsibility"]
+
+const authoredWorkflowResponsibilityCorrelation = (
+  responsibility: WorkflowResponsibility
+): Pick<AuthoredObligationDiagnostic, "attemptId" | "summary"> => {
+  switch (responsibility._tag) {
+    case "TaskClaimResponsibility":
+      return { attemptId: null, summary: "task-claim acquisition responsibility" }
+    case "TaskClaimReleaseResponsibility":
+      return { attemptId: null, summary: "task-claim release responsibility" }
+    case "TaskWorktreeResponsibility":
+      return { attemptId: null, summary: "Git worktree responsibility" }
+    case "PlannedAttemptExecutorWorkResponsibility":
+      return {
+        attemptId: responsibility.plannedAttempt.attemptId,
+        summary: `planned-attempt executor responsibility · attempt ID ${responsibility.plannedAttempt.attemptId}`
+      }
+  }
+}
+
+const authoredObligationDiagnosticOf = (obligation: DeliveryObligation): AuthoredObligationDiagnostic => {
+  const correlation = (() => {
+    switch (obligation._tag) {
+      case "WorkflowResponsibility":
+        return authoredWorkflowResponsibilityCorrelation(obligation.responsibility)
+      case "AcceptedAwaitingIntegration":
+        return {
+          attemptId: obligation.accepted.plannedAttempt.attemptId,
+          summary: `accepted result awaiting integration · attempt ID ${obligation.accepted.plannedAttempt.attemptId}`
+        }
+      case "QueuedIntegration":
+        return {
+          attemptId: obligation.responsibility.plannedAttempt.attemptId,
+          summary: `queued integration responsibility · attempt ID ${obligation.responsibility.plannedAttempt.attemptId}`
+        }
+      case "StartedIntegration":
+        return {
+          attemptId: obligation.responsibility.plannedAttempt.attemptId,
+          summary: `started integration responsibility · attempt ID ${obligation.responsibility.plannedAttempt.attemptId}`
+        }
+    }
+  })()
+  return { ...correlation, kind: obligation._tag, exact: JSON.stringify(obligation, null, diagnosticJsonIndent) }
+}
+
+type DeliveryProposal = Extract<
+  DeliveryRuntimeEvaluation["proposedActions"],
+  { readonly _tag: "DeliveryProposalsAvailable" }
+>["proposals"][number]
+type DeliveryProposalIssue = Extract<
+  DeliveryRuntimeEvaluation["proposedActions"],
+  { readonly _tag: "DeliveryProposalsAvailable" }
+>["isolatedIssues"][number]
+type DeliveryProposalConflict = Extract<
+  DeliveryRuntimeEvaluation["proposedActions"],
+  { readonly _tag: "DeliveryProposalOwnershipConflict" }
+>["conflicts"][number]
+
+type ProposalActionTagForRoute<Route> = Route extends { readonly _tag: "TrackerGraphReadRoute" }
+  ? "TrackerGraphReadRoute"
+  : Route extends { readonly step: { readonly _tag: infer Tag extends string } }
+    ? Tag
+    : Route extends { readonly action: { readonly _tag: infer Tag extends string } }
+      ? Tag
+      : Route extends { readonly transition: { readonly _tag: infer Tag extends string } }
+        ? Tag
+        : never
+type ProposalActionTag = ProposalActionTagForRoute<DeliveryProposal["route"]>
+type ActionMeaningTag = ProposalActionTag | DeliveryProposalIssue["transition"]
+
+const proposalActionLabels = {
+  AcquireStartedIntegrationTarget: "Acquire the integration-target position for started integration",
+  AcquireTaskClaim: "Ask the tracker to create the task claim",
+  AdvanceAttemptStoppage: "Advance the exact Stop decision for the planned attempt",
+  CheckTaskClaim: "Check the tracker result for the accepted task-claim request",
+  CommitFreshTaskClaimIntent: "Record intent to create the task claim",
+  CommitTaskClaimReacquisitionIntent: "Record intent to reacquire the task claim",
+  ContinueFreshWorkflowOperation: "Send the already-journaled request to its recorded owning system",
+  ContinuePlannedAttemptExecutorWork: "Tell the executor to continue the exact planned attempt",
+  ContinueStartedIntegrationCandidate: "Ask the candidate agent to continue the exact started integration",
+  DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
+  ObserveAttemptStoppageExecutor: "Check the executor for safe suspension or a terminal result after Stop",
+  ObservePlannedAttemptContinuationClaim: "Check the tracker claim before continuing the planned attempt",
+  ObservePlannedAttemptContinuationExecutor: "Check the executor before continuing the planned attempt",
+  ObservePlannedAttemptContinuationGraph: "Check the tracker graph before continuing the planned attempt",
+  ObservePlannedAttemptContinuationSpecification:
+    "Check tracker work instructions before continuing the planned attempt",
+  ObservePlannedAttemptContinuationTargetLineage: "Check Git target lineage before continuing the planned attempt",
+  ObservePlannedAttemptContinuationWorktree: "Check the Git worktree before continuing the planned attempt",
+  ObserveResponsibleTaskClaim: "Check the tracker claim held by the current workflow responsibility",
+  ObserveStoppedAttemptClaim: "Check the tracker claim before releasing a stopped attempt",
+  QueueAcceptedResultIntegrationResponsibility: "Queue the accepted result for integration",
+  ReadCurrentTaskGraph: "Read the tracker graph for the selected task",
+  ReadPostClaimGraph: "Read the tracker graph after creating the task claim",
+  ReadTargetLineage: "Read current target lineage from Git",
+  ReadTaskClaim: "Read the current task claim from the tracker",
+  ReadTaskWorkSpecification: "Read the task's work instructions from the tracker",
+  ReadTaskWorktree: "Check the exact Git worktree after restart",
+  ReadTrackerGraph: "Read the current tracker graph after restart",
+  ReconcileTaskClaim: "Check the tracker after an ambiguous task-claim request",
+  ReconcileTaskClaimRelease: "Check the tracker after an ambiguous claim-release request",
+  ReconcileTaskWorktree: "Check or create the exact Git worktree",
+  RecordStoppedAttemptClaimNoRelease: "Record that the stopped attempt has no exact claim to release",
+  RecordTaskAttemptPlan: "Record the exact planned task attempt in Dalph's journal",
+  ReleaseExternallyCompletedTaskClaim: "Ask the tracker to release the externally completed task's claim",
+  ReleaseStartedIntegrationTarget: "Release the held integration-target position",
+  ReleaseStoppedAttemptClaim: "Ask the tracker to release the stopped attempt's exact claim",
+  ReplacePromotedTaskClaim: "Ask the tracker to replace the promoted task claim with its completion claim",
+  RetryStoppedAttemptClaimRelease: "Retry the exact stopped-attempt claim release",
+  RunTargetPromotion: "Compare and set the integration target to the verified candidate commit",
+  RunTargetVerification: "Run the configured checks for the exact candidate commit",
+  StartPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
+  StartQueuedIntegration: "Start the exact queued integration responsibility",
+  SuspendPlannedAttemptExecutorWork: "Request safe suspension of the exact planned-attempt executor work",
+  TaskClaimReacquisition: "Try to reacquire the exact task claim",
+  TrackerGraphReadRoute: "Read the tracker graph to establish the current graph"
+} as const satisfies Record<ActionMeaningTag, string>
+
+const proposalOwnerLabels = {
+  DeliveryReflection: "delivery reflection",
+  DeliverySettlement: "delivery settlement",
+  TicketDelivery: "ticket delivery",
+  TrackerGraph: "tracker graph"
+} as const satisfies Record<DeliveryProposal["owner"], string>
+
+const proposalTaskId = (proposal: DeliveryProposal): TaskId | null =>
+  "taskId" in proposal.order ? proposal.order.taskId : null
+
+const proposalActionTag = (proposal: DeliveryProposal): ProposalActionTag => {
+  switch (proposal.route._tag) {
+    case "TrackerGraphReadRoute":
+      return proposal.route._tag
+    case "FreshWorkflowRoute":
+    case "FreshExecutorWorkflowRoute":
+      return proposal.route.step._tag
+    case "RecoveredNewActionRoute":
+      return proposal.route.action._tag
+    case "AcceptedWorkflowRoute":
+    case "IdentityFreeWorkflowRoute":
+      return proposal.route.transition._tag
+  }
+}
+
+const taskWorkAdmissionSummary = (proposal: DeliveryProposal): string => {
+  const requirement = proposal.admission.taskWorkPosition
+  switch (requirement._tag) {
+    case "NoTaskWorkPosition":
+      return "needs no task-work position"
+    case "TaskWorkPositionRequired":
+      switch (requirement.mode) {
+        case "Existing":
+          return "requires the existing task-work position"
+        case "ReserveOrReuse":
+          return "must reserve or reuse a task-work position"
+      }
+  }
+}
+
+const integrationTargetAdmissionSummary = (proposal: DeliveryProposal): string => {
+  const requirement = proposal.admission.integrationTarget
+  switch (requirement._tag) {
+    case "NoIntegrationTargetResource":
+      return "needs no integration-target resource"
+    case "IntegrationTargetResourceRequired":
+      switch (requirement.access) {
+        case "Acquire":
+          return "must acquire the integration-target resource"
+        case "Release":
+          return "must release the held integration-target resource"
+        case "UseHeld":
+          return "requires the held integration-target resource"
+      }
+  }
+}
+
+const plannedAttemptProtocolAdmissionSummary = (proposal: DeliveryProposal): string => {
+  const requirement = proposal.admission.plannedAttemptProtocol
+  switch (requirement._tag) {
+    case "NoPlannedAttemptProtocol":
+      return "needs no executor/Continue-or-Stop serialization"
+    case "PlannedAttemptProtocolRequired":
+      return "must serialize this action with executor commands and Continue or Stop"
+  }
+}
+
+const authoredActionProposalFactOf = (proposal: DeliveryProposal): AuthoredActionPlanningFact => {
+  const taskId = proposalTaskId(proposal)
+  const attemptId =
+    proposal.admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired"
+      ? proposal.admission.plannedAttemptProtocol.correlation.attemptId
+      : null
+  const action = proposalActionLabels[proposalActionTag(proposal)]
+  const recoveredPurpose =
+    proposal.order._tag === "RecoveredWorkflowOrder" ? proposalActionLabels[proposal.order.transition] : undefined
+  const purpose =
+    recoveredPurpose === undefined || recoveredPurpose === action ? undefined : `to ${recoveredPurpose.toLowerCase()}`
+  return {
+    attemptId,
+    kind: proposal._tag,
+    taskId,
+    summary: [
+      action,
+      taskId === null ? undefined : `task ${taskId}`,
+      attemptId === null ? undefined : `attempt ID ${attemptId}`,
+      purpose,
+      plannedAttemptProtocolAdmissionSummary(proposal),
+      taskWorkAdmissionSummary(proposal),
+      integrationTargetAdmissionSummary(proposal),
+      proposal.waitsForLiveOperationId === null
+        ? undefined
+        : `waits for live operation ${proposal.waitsForLiveOperationId}`,
+      `planned by the ${proposalOwnerLabels[proposal.owner]} layer`
+    ]
+      .filter((part): part is string => part !== undefined)
+      .join(" · "),
+    exact: JSON.stringify(proposal, null, diagnosticJsonIndent)
+  }
+}
+
+const authoredActionIssueFactOf = (issue: DeliveryProposalIssue): AuthoredActionPlanningFact => {
+  const action = proposalActionLabels[issue.transition]
+  const summary = (() => {
+    switch (issue._tag) {
+      case "AcceptedOperationEvidenceMissing":
+        return `Dalph cannot ${action.toLowerCase()} because accepted journal evidence is missing`
+      case "FreshRouteProvenanceMissing":
+        return `Dalph cannot ${action.toLowerCase()} because fresh route provenance is missing`
+      case "TypedRoutePolicyContradiction":
+        return `Dalph cannot ${action.toLowerCase()} because the typed route policy contradicts this transition`
+    }
+  })()
+  return {
+    attemptId: null,
+    kind: issue._tag,
+    taskId: issue.taskId,
+    summary: `${summary} · task ${issue.taskId}`,
+    exact: JSON.stringify(issue, null, diagnosticJsonIndent)
+  }
+}
+
+const authoredActionConflictFactOf = (conflict: DeliveryProposalConflict): AuthoredActionPlanningFact => ({
+  attemptId: null,
+  kind: "DeliveryProposalOwnershipConflict",
+  taskId: null,
+  summary: `Proposal ownership conflict for ${conflict.id}: ${conflict.owners.join(" and ")} · planning fails closed`,
+  exact: JSON.stringify(conflict, null, diagnosticJsonIndent)
+})
+
+const authoredDeliveryFrameOf = (
+  captured: AuthoredDeliveryPublication,
+  consequences: DeliveryConsequences,
+  runtime: DeliveryRuntimeEvaluation
+): AuthoredDeliveryFrame => {
+  const conflictFacts: Array<AuthoredActionPlanningFact> = []
+  if (runtime.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
+    for (const conflict of runtime.proposedActions.conflicts) {
+      conflictFacts.push(authoredActionConflictFactOf(conflict))
+    }
+  }
+  return {
+    activationOrdinal: captured.activationOrdinal,
+    storyPosition: captured.storyPosition,
+    acceptedAt: captured.bundle.legacy.runtimeFacts.acceptedAt,
+    graph:
+      consequences.graph._tag === "GraphNotEstablished"
+        ? { _tag: "NotEstablished" }
+        : {
+            _tag: "Established",
+            revision: consequences.graph.observation.snapshot.revision,
+            observation: {
+              operationId: consequences.graph.observation.operationId,
+              contentIdentity: consequences.graph.observation.contentIdentity,
+              recordedAt: consequences.graph.observation.recordedAt
+            },
+            tasks: consequences.graph.observation.snapshot
+              .toWire()
+              .tasks.map((task) => ({
+                id: task.id,
+                lifecycle: task.lifecycle._tag,
+                parentTaskId: task.parentTaskId,
+                prerequisiteIds: task.prerequisiteIds
+              }))
+          },
+    capacity: captured.bundle.legacy.runtimeFacts.taskWork.capacity,
+    quiescence: captured.bundle.legacy.runtimeFacts.quiescence,
+    heldPositions: captured.bundle.legacy.runtimeFacts.taskWork.held.map(({ correlation, taskId }) => ({
+      taskId,
+      runId: correlation.runId,
+      attemptId: correlation.attemptId
+    })),
+    frontier: consequences.frontier.standings.map((standing) =>
+      standing._tag === "Eligible"
+        ? { taskId: standing.taskId, standing: standing._tag, taskRevision: standing.taskRevision, reasons: [] }
+        : {
+            taskId: standing.taskId,
+            standing: standing._tag,
+            taskRevision: null,
+            reasons: standing.reasons.map(authoredTaggedDiagnosticOf)
+          }
+    ),
+    tickets: consequences.tickets.placements.map(({ placement, taskId }) => ({
+      taskId,
+      placement: authoredTaggedDiagnosticOf(placement),
+      rank: "rank" in placement ? placement.rank : null,
+      reasons: placement._tag === "GraphExcluded" ? placement.reasons.map(authoredTaggedDiagnosticOf) : []
+    })),
+    deliveries: consequences.ticketDeliveries.deliveries.map((ticket) => ({
+      taskId: ticket.taskId,
+      placement: authoredTaggedDiagnosticOf(ticket.placement),
+      evidence: ticket.evidence.map(authoredTaggedDiagnosticOf),
+      standings: ticket.standings.map(authoredTaggedDiagnosticOf),
+      obligations: ticket.obligations.map(authoredObligationDiagnosticOf)
+    })),
+    settlements: consequences.settlements.settlements.map(({ attemptId, taskId }) => ({ attemptId, taskId })),
+    trackerReflection: {
+      _tag: consequences.trackerConsequences._tag,
+      settlementCount: consequences.trackerConsequences.source.settlements.length
+    },
+    actionPlanning:
+      runtime.proposedActions._tag === "DeliveryProposalsAvailable"
+        ? {
+            _tag: "DeliveryProposalsAvailable",
+            proposals: runtime.proposedActions.proposals.map(authoredActionProposalFactOf),
+            isolatedIssues: runtime.proposedActions.isolatedIssues.map(authoredActionIssueFactOf)
+          }
+        : { _tag: "DeliveryProposalOwnershipConflict", conflicts: conflictFacts }
+  }
+}
+
+/** Projects one exact captured publication through the literal production delivery composition. */
+export const evaluateAuthoredDeliveryPublication = Effect.fn("AuthoredCassette.evaluateDeliveryPublication")(function* (
+  publication: AuthoredDeliveryPublication
+) {
+  const { consequences, runtime } = yield* Effect.all({
+    consequences: evaluateDeliveryRelationInputBundle(publication.bundle),
+    runtime: evaluateDeliveryRuntimeInputBundle(publication.bundle)
+  })
+  return authoredDeliveryFrameOf(publication, consequences, runtime)
+})
 
 const minimumCorrectionExhaustionValidationCount = 2
 const authoredCandidateContinuationLimit = 2
@@ -271,8 +738,12 @@ const targetVerificationTerminalFrom = (
 }
 
 /** Decodes and drives one story through the ordinary production delivery program. */
-const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(function* (input: unknown) {
-  return yield* Effect.scoped(
+const runAuthoredScenarioCassetteWith = (request: {
+  readonly input: unknown
+  readonly options: AuthoredScenarioCassetteRunOptions
+}) => {
+  const { input, options } = request
+  return Effect.scoped(
     // eslint-disable-next-line complexity -- One chronological adapter owns activation, crash, candidate, and terminal story boundaries.
     Effect.gen(function* () {
       const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette, { onExcessProperty: "error" })(input)
@@ -280,6 +751,21 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         discard: true
       })
       const cursor = yield* makeStoryCursor(cassette.story)
+      const activeDeliveryActivation = yield* Ref.make<AuthoredRunActivationOrdinalType>(
+        AuthoredRunActivationOrdinal.make(1)
+      )
+      const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
+      const publicationObserver = DeliveryRelationPublicationObserver.of({
+        observe: (bundle) =>
+          Effect.gen(function* () {
+            const activationOrdinal = yield* Ref.get(activeDeliveryActivation)
+            const storyPosition = yield* cursor.storyPosition
+            const publication = { activationOrdinal, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
+            yield* Ref.update(capturedDeliveryPublications, (captured) => [...captured, publication])
+            // A read-only diagnostic observer defect never changes production cassette execution.
+            yield* Effect.exit(Effect.sync(() => options.onDeliveryPublication?.(publication)))
+          })
+      })
       const candidateOutcomeRecorded = yield* Deferred.make<void>()
       const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
       const targetVerificationStory = cassette.story.some((item) => item._tag === "TargetVerificationReturned")
@@ -436,7 +922,17 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
               : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
         }).pipe(Effect.orDie)
       })
-      const trackerMutationLayer = controlledTrackerMutationLayer(cursor, Context.get(sharedContext, TrackerMutation))
+      const trackerAuthority = yield* Layer.build(
+        controlledTrackerAuthorityLayer(cursor, Context.get(sharedContext, TrackerMutation))
+      )
+      const trackerMutationLayer = Layer.succeed(TrackerMutation, Context.get(trackerAuthority, TrackerMutation))
+      const completionClaimBoundary = Context.get(trackerAuthority, CompletionClaimBoundary)
+      const completionFinalityConfigured = cassette.story.some(
+        (item) =>
+          item._tag === "CompletionClaimReadReturned" ||
+          item._tag === "CompletionClaimReplacementApplied" ||
+          item._tag === "CompletionClaimDeletionApplied"
+      )
       const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
       const testGitWorktree = Context.get(sharedContext, TestGitWorktree)
@@ -590,7 +1086,8 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           verificationPlan === undefined
             ? undefined
             : { boundary: targetVerificationBoundary, evidenceStore, plan: verificationPlan },
-          targetPromotionStory ? { git: targetPromotionGit } : undefined
+          targetPromotionStory ? { git: targetPromotionGit } : undefined,
+          completionFinalityConfigured ? completionClaimBoundary : undefined
         ).pipe(
           Layer.provide(candidateLayer),
           Layer.provide(interpreterLayer),
@@ -854,13 +1351,17 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         )
       )
       const activateRun = (activationOrdinal: AuthoredRunActivationOrdinalType) =>
-        withAuthoredOperatorDriver(
-          runWorkflowWithControlledDeliveryActionExecutor(
-            command.target,
-            initialControlPolicySource,
-            runId,
-            controlledExecutorFactory
-          ).pipe(Effect.provide(planningLayer(activationOrdinal)))
+        Ref.set(activeDeliveryActivation, activationOrdinal).pipe(
+          Effect.andThen(
+            withAuthoredOperatorDriver(
+              runWorkflowWithControlledDeliveryActionExecutor(
+                command.target,
+                initialControlPolicySource,
+                runId,
+                controlledExecutorFactory
+              ).pipe(Effect.provide(planningLayer(activationOrdinal)))
+            )
+          )
         )
       const runAcrossActivations = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
@@ -892,7 +1393,14 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
             Effect.andThen(Effect.die("coordinator activation stopped before the authored terminal assertions"))
           )
         )
-        if (candidateTerminalEventTag !== undefined) yield* Deferred.await(candidateOutcomeRecorded)
+        if (candidateTerminalEventTag !== undefined) {
+          yield* Effect.raceFirst(
+            Deferred.await(candidateOutcomeRecorded),
+            Fiber.join(coordinator).pipe(
+              Effect.andThen(Effect.die(`coordinator stopped before recording ${candidateTerminalEventTag}`))
+            )
+          )
+        }
         for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
         const coordinatorExitAtAssertions = coordinator.pollUnsafe()
         yield* Fiber.interrupt(coordinator)
@@ -908,7 +1416,12 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         if (coordinatorLifecycleBoundaryCount > 0) return yield* runAcrossActivations
         return yield* runSingleActivation
       })
-      const execution = yield* Effect.scoped(coordinatorExecution.pipe(Effect.provide(application)))
+      const execution = yield* Effect.scoped(
+        coordinatorExecution.pipe(
+          Effect.provide(application),
+          Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver)
+        )
+      )
       const { activationOrdinals, coordinatorExitAtAssertions, records } = execution
       /* v8 ignore next -- @preserve Later authored activations return after their declared final read; action failures are asserted by the direct protocol cassette. */
       if (coordinatorExitAtAssertions !== undefined && Exit.isFailure(coordinatorExitAtAssertions)) {
@@ -920,9 +1433,14 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         return yield* Effect.failCause(behaviorExit.cause)
       }
       const observedBehavior = behaviorExit.value
+      const deliveryFrames = yield* Effect.forEach(
+        yield* Ref.get(capturedDeliveryPublications),
+        evaluateAuthoredDeliveryPublication
+      )
       return {
         activationOrdinals,
         cassette,
+        deliveryFrames,
         history: reduceWorkflowJournalHistory(runId, records),
         observedBehavior,
         records,
@@ -930,9 +1448,8 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       } satisfies AuthoredScenarioCassetteRun
     })
   )
-})
+}
 
 /** Decodes and drives one story through the production coordinator activation program. */
-export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")((input: unknown) =>
-  runAuthoredScenarioCassetteWith(input)
-)
+export const runAuthoredScenarioCassette = (input: unknown, options: AuthoredScenarioCassetteRunOptions = {}) =>
+  runAuthoredScenarioCassetteWith({ input, options })

@@ -1,0 +1,27 @@
+{
+  "name": "@dalph/reducer-lab-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "browser-smoke": "node scripts/browser-smoke.mjs",
+    "build": "vite build",
+    "dev": "vite --host 0.0.0.0",
+    "smoke": "node scripts/smoke.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.3.0",
+    "@effect/platform-browser": "4.0.0-beta.106",
+    "cytoscape": "3.34.0",
+    "cytoscape-dagre": "4.0.0",
+    "effect": "4.0.0-beta.106",
+    "foldkit": "0.141.2"
+  },
+  "devDependencies": {
+    "@types/cytoscape-dagre": "2.3.4",
+    "linkedom": "0.18.12",
+    "playwright": "1.62.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
+  }
+}

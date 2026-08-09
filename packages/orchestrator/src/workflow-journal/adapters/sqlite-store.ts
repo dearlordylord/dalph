@@ -155,10 +155,9 @@ const decodeBoundary = <A>(
   input: unknown,
   operation: JournalDataCorruption["operation"]
 ): Effect.Effect<A, JournalDataCorruption> =>
-  Effect.try({
-    try: () => Schema.decodeUnknownSync(schema)(input),
-    catch: (cause) => new JournalDataCorruption({ detail: String(cause), operation })
-  })
+  Schema.decodeUnknownEffect(schema)(input).pipe(
+    Effect.mapError((cause) => new JournalDataCorruption({ detail: String(cause), operation }))
+  )
 
 const parseEvent = (
   row: Pick<PersistedJournalRow, "event_kind" | "event_version" | "payload_json">,

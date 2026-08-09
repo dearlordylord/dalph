@@ -1,7 +1,7 @@
 import type { Effect } from "effect"
 import { Context, Schema } from "effect"
 
-export class TraceOutputError extends Schema.TaggedErrorClass<TraceOutputError>()("TraceOutput.TraceOutputError", {
+export class TraceOutputError extends Schema.TaggedError<TraceOutputError>()("TraceOutput.TraceOutputError", {
   detail: Schema.String
 }) {}
 

@@ -27,24 +27,24 @@ export const PlannedWorktreeAbsent = Schema.TaggedStruct("PlannedWorktreeAbsent"
 export type PlannedWorktreeAbsent = typeof PlannedWorktreeAbsent.Type
 
 /** The planned path exists but Git does not register it as a worktree. */
-export class UntrackedWorktreePath extends Schema.TaggedErrorClass<UntrackedWorktreePath>()("UntrackedWorktreePath", {
+export class UntrackedWorktreePath extends Schema.TaggedError<UntrackedWorktreePath>()("UntrackedWorktreePath", {
   worktree: WorktreeLocator
 }) {}
 
 /** The planned branch is registered at a different worktree and remains untouched. */
-export class ForeignWorktreeRegistration extends Schema.TaggedErrorClass<ForeignWorktreeRegistration>()(
+export class ForeignWorktreeRegistration extends Schema.TaggedError<ForeignWorktreeRegistration>()(
   "ForeignWorktreeRegistration",
   { branch: TaskBranchRef, plannedWorktree: WorktreeLocator, registeredWorktree: WorktreeLocator }
 ) {}
 
 /** The planned path is registered to a different branch and remains untouched. */
-export class ConflictingWorktreeRegistration extends Schema.TaggedErrorClass<ConflictingWorktreeRegistration>()(
+export class ConflictingWorktreeRegistration extends Schema.TaggedError<ConflictingWorktreeRegistration>()(
   "ConflictingWorktreeRegistration",
   { observedBranch: TaskBranchRef, observedHead: GitCommitSha, plannedBranch: TaskBranchRef, worktree: WorktreeLocator }
 ) {}
 
 /** The planned path and branch are each registered to different competing resources. */
-export class CompetingWorktreeRegistrations extends Schema.TaggedErrorClass<CompetingWorktreeRegistrations>()(
+export class CompetingWorktreeRegistrations extends Schema.TaggedError<CompetingWorktreeRegistrations>()(
   "CompetingWorktreeRegistrations",
   {
     observedBranchAtPlannedWorktree: TaskBranchRef,
@@ -56,7 +56,7 @@ export class CompetingWorktreeRegistrations extends Schema.TaggedErrorClass<Comp
 ) {}
 
 /** The declared Base is not an ancestor of current HEAD; Dalph never repairs the branch. */
-export class WorktreeBaseMismatch extends Schema.TaggedErrorClass<WorktreeBaseMismatch>()("WorktreeBaseMismatch", {
+export class WorktreeBaseMismatch extends Schema.TaggedError<WorktreeBaseMismatch>()("WorktreeBaseMismatch", {
   baseSha: GitCommitSha,
   branch: TaskBranchRef,
   headSha: GitCommitSha,
@@ -64,17 +64,17 @@ export class WorktreeBaseMismatch extends Schema.TaggedErrorClass<WorktreeBaseMi
 }) {}
 
 /** Git returned mutually inconsistent branch/worktree facts which require operator repair. */
-export class ContradictoryWorktreeState extends Schema.TaggedErrorClass<ContradictoryWorktreeState>()(
+export class ContradictoryWorktreeState extends Schema.TaggedError<ContradictoryWorktreeState>()(
   "ContradictoryWorktreeState",
   { detail: Schema.String, worktree: WorktreeLocator }
 ) {}
 
-export class GitWorktreeReadFailure extends Schema.TaggedErrorClass<GitWorktreeReadFailure>()(
-  "GitWorktreeReadFailure",
-  { detail: Schema.String, worktree: WorktreeLocator }
-) {}
+export class GitWorktreeReadFailure extends Schema.TaggedError<GitWorktreeReadFailure>()("GitWorktreeReadFailure", {
+  detail: Schema.String,
+  worktree: WorktreeLocator
+}) {}
 
-export class GitWorktreeCreateFailure extends Schema.TaggedErrorClass<GitWorktreeCreateFailure>()(
+export class GitWorktreeCreateFailure extends Schema.TaggedError<GitWorktreeCreateFailure>()(
   "GitWorktreeCreateFailure",
   { detail: Schema.String, worktree: WorktreeLocator }
 ) {}

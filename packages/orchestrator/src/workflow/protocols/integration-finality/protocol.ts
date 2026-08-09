@@ -43,31 +43,31 @@ import { OperationId } from "../../identity.js"
 import { latestFreshCompletedTaskObservationFor } from "./state.js"
 
 /** The offered claim is not the exact claim authorized by promotion history. */
-export class CompletionClaimPremiseContradiction extends Schema.TaggedErrorClass<CompletionClaimPremiseContradiction>()(
+export class CompletionClaimPremiseContradiction extends Schema.TaggedError<CompletionClaimPremiseContradiction>()(
   "IntegrationFinality.CompletionClaimPremiseContradiction",
   { claim: CompletionTaskClaim, detail: Schema.String }
 ) {}
 
 /** Replacement requires durable proof that the exact candidate was promoted. */
-export class CompletionClaimPromotionRequired extends Schema.TaggedErrorClass<CompletionClaimPromotionRequired>()(
+export class CompletionClaimPromotionRequired extends Schema.TaggedError<CompletionClaimPromotionRequired>()(
   "IntegrationFinality.CompletionClaimPromotionRequired",
   { claim: CompletionTaskClaim }
 ) {}
 
 /** Deletion requires a prior replacement outcome for this exact completion claim. */
-export class CompletionClaimReplacementRequired extends Schema.TaggedErrorClass<CompletionClaimReplacementRequired>()(
+export class CompletionClaimReplacementRequired extends Schema.TaggedError<CompletionClaimReplacementRequired>()(
   "IntegrationFinality.CompletionClaimReplacementRequired",
   { claim: CompletionTaskClaim }
 ) {}
 
 /** Deletion requires the fresh tracker observation to be durably present. */
-export class FreshTrackerSuccessRequired extends Schema.TaggedErrorClass<FreshTrackerSuccessRequired>()(
+export class FreshTrackerSuccessRequired extends Schema.TaggedError<FreshTrackerSuccessRequired>()(
   "IntegrationFinality.FreshTrackerSuccessRequired",
   { claim: CompletionTaskClaim, observation: FreshCompletedTaskObservation }
 ) {}
 
 /** Three exact requests did not establish the requested claim disposition. */
-export class CompletionClaimDidNotConverge extends Schema.TaggedErrorClass<CompletionClaimDidNotConverge>()(
+export class CompletionClaimDidNotConverge extends Schema.TaggedError<CompletionClaimDidNotConverge>()(
   "IntegrationFinality.CompletionClaimDidNotConverge",
   {
     attempts: Schema.Int,

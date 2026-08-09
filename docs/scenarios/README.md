@@ -70,3 +70,8 @@ for the runtime occurrence-classification milestone, and
 `run-establishment-and-activation.md` is accepted in the maintainer
 conversation that unified initialization and restoration under one idempotent
 Run entry.
+
+`reducer-lab-maintained-cassette-catalog.md` is accepted by the maintainer's
+explicit lab synchronization request. It maps every maintained cassette to
+production-runner execution evidence and covers the authored runner's
+successful-recovery scheduling boundary.

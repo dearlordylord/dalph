@@ -100,7 +100,7 @@ construction.
 - `serializes one exact target while allowing another target and releases only
   its owner` proves the process-local controller is distinct from task-work
   capacity and journal state.
-- `recovers an accepted result in journal order and crosses its integration
+- `continues an accepted result after process death and crosses its integration
   cutoff once` records the terminal accepted result, coordinator death,
   recovered selection, integration-start occurrence, and tracker blocker
   through the production-shaped controlled fake providers.

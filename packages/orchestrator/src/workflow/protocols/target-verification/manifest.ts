@@ -24,7 +24,7 @@ export const TargetVerificationManifest = Schema.Struct({
 export type TargetVerificationManifest = typeof TargetVerificationManifest.Type
 
 /** Wrapper evidence could not form or reproduce one complete deterministic manifest. */
-export class TargetVerificationManifestInvalid extends Schema.TaggedErrorClass<TargetVerificationManifestInvalid>()(
+export class TargetVerificationManifestInvalid extends Schema.TaggedError<TargetVerificationManifestInvalid>()(
   "TargetVerificationManifestInvalid",
   { detail: Schema.String, requestId: TargetVerificationRequestId }
 ) {}

@@ -166,7 +166,7 @@ exist.
 
 The concrete implementation should use Effect V4 `Context.Service`, named
 `Effect.fn` operations, Schema-decoded boundary values, and
-`Schema.TaggedErrorClass` failures. The signatures below describe the domain
+`Schema.TaggedError` failures. The signatures below describe the domain
 surface rather than fixing incidental TypeScript syntax.
 
 ### `TrackerGraphReader`

@@ -4,11 +4,16 @@ One Run, told twice: as beats a person can follow, and as a state table that
 makes each beat's arithmetic checkable. The story is chosen to touch as many of
 `docs/DELIVERY-INVARIANTS.md` as one chronology can.
 
-Both registers are prose. The executable register is a cassette — one long
-recorded Run covering this whole chronology — and the beats and the table are
-written to become its script. A model run over the same chronology is the
-cheaper intermediate, useful for proving each beat is reachable before the
-cassette is recorded.
+Both registers are prose. The maintained cassette
+`authored:deliveryInvariantStory` is an executable graph-and-restart slice: one
+real Run consumes the double diamond A → B+C → D → E+F → G, and reconstructs
+the exact B and C task-work positions after a coordinator restart. The separate
+`authored:deliveryFinalitySpine` retains the real A promotion and
+completion-finality chronology. Neither cassette pretends to execute all 22
+beats below. The checked-in manifest maps every beat either to exact maintained
+evidence or to an explicit implementation gap. Repository tests fail when the
+document, manifest, catalog key, or cited evidence changes without the others.
+The Lab never fabricates the missing combined chronology.
 
 Alice is the Operator. `Gₙ` is a tracker graph revision. Capacity is the
 configured bound on concurrent task work. A task is **held** while it occupies a
@@ -76,24 +81,35 @@ expected head. The head has moved. The offer does not apply, and the stale head
 selects reconciliation rather than a force update.
 
 **17.** Dalph re-reads the target head, rebuilds the candidate against it, and
-promotes. A settles, and its integration target is released.
+promotes. The physical integration-target position is released, but promotion
+does not settle A. Dalph replaces A's exact active claim with a
+promotion-correlated completion claim. A later complete tracker read reports A
+successfully completed in `G₃` with that exact completion claim. Dalph deletes
+only that claim, records A's delivery settlement, and removes A's retained
+integration-completion responsibility.
 
-**18.** Alice reopens C. `G₃`. Only the lifecycle wait clears; every other fact
+**18.** Alice reopens C. `G₄`. Only the lifecycle wait clears; every other fact
 must independently authorize resumption. C needs a position and none is free.
 
 **19.** Alice raises capacity back to three. C is admitted and resumes its
 original attempt.
 
 **20.** Alice adds two tasks, F and G, to the tracker, both inside the target
-closure. `G₄`. Dalph's next complete read finds them eligible, and they wait for
+closure. `G₅`. Dalph's next complete read finds them eligible, and they wait for
 capacity behind the three tasks already running.
 
-**21.** B, C and D settle in turn. Each released position admits one of E, F, G
-in graph order.
+**21.** B, C and D report accepted results in turn. Each task releases its
+task-work position, passes through the same exact candidate, verification,
+promotion, completion-claim replacement, fresh tracker-success, claim-deletion,
+and delivery-settlement protocol as A, and then admits one of E, F, G in graph
+order.
 
-**22.** The last executor reports, its result is integrated and promoted, and
-every task in the closure is successfully complete. No action is executable and
-no obligation is outstanding, so the Run may terminate.
+**22.** E, F and G report accepted results and each passes through that same
+production integration and completion-finality protocol. A later complete
+tracker read reports all seven tasks in `G₅` successfully complete with no
+claim left to clean up. No action is executable and no obligation is
+outstanding, so the coordinator returns `RunMayTerminate` and the Run may
+record normal termination.
 
 ## The state table
 
@@ -115,17 +131,17 @@ no obligation is outstanding, so the Run may terminate.
 | 14 | A queued for integration | G₂ | 2 | B D | A C | — | D10 |
 | 15 | candidate built | G₂ | 2 | B D | A C | — | **D26** |
 | 16 | promotion finds a stale head | G₂ | 2 | B D | A C | — | **D27** |
-| 17 | reconciled and promoted; A settles | G₂ | 2 | B D | C | — | D27 D28 D33 |
-| 18 | C reopened | G₃ | 2 | B D | C | — | D9 D19 |
-| 19 | capacity 2 → 3; C admitted | G₃ | 3 | B C D | — | — | D6 D13 |
-| 20 | F and G added | G₄ | 3 | B C D | — | — | D7 D9 |
-| 21 | B C D settle; E F G admitted | G₄ | 3 | E F G | B C D | — | D6 D33 |
-| 22 | all complete | G₄ | 3 | — | — | — | **D34 D35** |
+| 17 | A promoted; exact completion claim deleted after fresh tracker success; A settles | G₃ | 2 | B D | C | — | D24 D27 D28 D33 |
+| 18 | C reopened | G₄ | 2 | B D | C | — | D9 D19 |
+| 19 | capacity 2 → 3; C admitted | G₄ | 3 | B C D | — | — | D6 D13 |
+| 20 | F and G added | G₅ | 3 | B C D | — | — | D7 D9 |
+| 21 | B C D settle through completion finality; E F G admitted | G₅ | 3 | E F G | — | — | D6 D24 D33 |
+| 22 | all complete and all exact completion claims removed | G₅ | 3 | — | — | — | **D34 D35** |
 
 Held plus retained is the whole of what Dalph owes at any row, and the rule is
 load-bearing: an accepted result is an obligation before it is integrated, so a
-task appears in Retained from the moment its executor reports until its
-promotion settles it. That is why A is retained at rows 13 and 14, and why B, C
+task appears in Retained from the moment its executor reports until exact
+completion finality settles it. That is why A is retained at rows 13 and 14, and why B, C
 and D are retained at row 21 while their results pass through integration.
 
 A row whose held count exceeds capacity is legal and appears twice, at 7 and 9:
@@ -162,3 +178,64 @@ Every executor report here is matched to the attempt that asked for it, and
 every claim named in a release is the one Dalph currently holds. Those are I9
 and I11. The story depends on both and demonstrates neither, which is
 consistent with `INVARIANTS.md`: I9 is modelled by no tool in the study.
+
+## Executable linkage and acceptance tests
+
+The maintained catalog key is `authored:deliveryInvariantStory`. Its source
+manifest names this document and all 22 beat numbers; this document names the
+same key. Every demonstrated manifest row also names the exact registered
+acceptance test that checks its evidence; a catalog key by itself is not proof.
+`keeps every delivery-story beat linked to maintained evidence or an explicit
+implementation gap` checks both directions, exact catalog keys, exact test
+declarations, and the byte-for-byte manifest block. `consumes the double-diamond
+frontier through production delivery waves` runs the executable graph slice
+through `runAuthoredScenarioCassette` and checks that it reaches its declared
+end.
+
+- `consumes the double-diamond frontier through production delivery waves`
+  checks the exact eight prerequisite edges, the ordered eligible waves A,
+  B+C, D, E+F, G, and empty, and real executor responsibility plus terminal
+  evidence for every task.
+- `preserves the double-diamond middle wave across coordinator restart` checks
+  that B and C both hold task-work positions before death and that recovered
+  publications retain the same Run and Attempt identities.
+- `settles a promoted authored task through the real completion-claim boundary`
+  checks promotion alone settles nothing; the exact A claim is replaced and
+  deleted only after the declared fresh successful tracker read, producing one
+  real settlement/reflection frame without claiming whole-Run termination.
+- `shows the double-diamond frontier being consumed on one graph` checks the
+  same topology, waves, and recovered B/C correlations through the Lab's
+  presentation model.
+- The real-browser checkpoint drives that catalog option while it is Running,
+  traverses the rendered frames, and checks the exact graph, frontier waves,
+  and recovered middle-wave responsibilities. The manifest explicitly
+  identifies every beat whose full actor, authority facts, and chronology are
+  still missing; no acceptance mapping claims those gaps.
+
+<!-- DELIVERY-STORY-MANIFEST:START -->
+cassette|authored:deliveryInvariantStory
+cassette-test|packages/dalph/test/cassettes/scenario.test.ts#it.effect#consumes the double-diamond frontier through production delivery waves
+cassette-test|packages/dalph/test/cassettes/scenario.test.ts#it.effect#preserves the double-diamond middle wave across coordinator restart
+DS-01|NotImplemented|The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks.
+DS-02|NotImplemented|No maintained run admits A, B, and C together yet.
+DS-03|NotImplemented|No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change.
+DS-04|NotImplemented|No named acceptance test proves B's changed graph/specification rereads, safe-suspension request, and retained position together.
+DS-05|NotImplemented|The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart.
+DS-06|NotImplemented|No maintained run admits D after B's changed-instruction suspension releases one of three held positions.
+DS-07|NotImplemented|No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held.
+DS-08|DemonstratedBySpine|authored:deliveryInvariantStory|packages/dalph/test/cassettes/scenario.test.ts#it.effect#preserves the double-diamond middle wave across coordinator restart
+DS-09|NotImplemented|The maintained double diamond recovers held B and C, not held A, C, and D plus retained B.
+DS-10|NotImplemented|No maintained run closes C without success and then asks its exact executor to suspend.
+DS-11|NotImplemented|No maintained run releases closed C's position while retaining its reversible lifecycle wait.
+DS-12|NotImplemented|No maintained run applies Continue to retained B while two other tasks consume all current capacity.
+DS-13|NotImplemented|No maintained run releases A's position after its accepted result and then admits already-owned B.
+DS-14|DemonstratedByMaintainedSlice|authored:acceptedResultRestartsIntoIntegration|packages/dalph/test/cassettes/scenario.test.ts#it.effect#continues an accepted result after process death and crosses its integration cutoff once
+DS-15|NotImplemented|No named acceptance test proves the candidate's exact ordered expected-head and accepted-result parents for this beat.
+DS-16|NotImplemented|The maintained stale-head cassette detects H2 before compare-and-set; it does not send the beat's rejected exact-head offer.
+DS-17|NotImplemented|The separate A-finality spine settles A, but does not first reconcile a stale head and rebuild its successor candidate.
+DS-18|NotImplemented|No maintained run reopens a tracker lifecycle wait for C; Operator task Unpause is a different phenomenon.
+DS-19|NotImplemented|No maintained run combines the retained C attempt with a later capacity increase.
+DS-20|NotImplemented|The maintained double diamond makes E and F eligible together, then G; it does not add F and G behind three running tasks.
+DS-21|NotImplemented|No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology.
+DS-22|NotImplemented|Whole-run seven-task completion and normal Run termination are not implemented as one cassette.
+<!-- DELIVERY-STORY-MANIFEST:END -->

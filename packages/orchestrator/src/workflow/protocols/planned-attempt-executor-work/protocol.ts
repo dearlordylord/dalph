@@ -40,55 +40,55 @@ import { latestUnsettledPlannedAttemptExecutorCommand, plannedAttemptExecutorEvi
 import { type PlannedAttemptProtocolPermit, withPlannedAttemptProtocolPermit } from "./protocol-controller.js"
 
 /** An executor response named a different planned attempt than Dalph requested. */
-export class PlannedAttemptExecutorCorrelationMismatch extends Schema.TaggedErrorClass<PlannedAttemptExecutorCorrelationMismatch>()(
+export class PlannedAttemptExecutorCorrelationMismatch extends Schema.TaggedError<PlannedAttemptExecutorCorrelationMismatch>()(
   "PlannedAttemptExecutorCorrelationMismatch",
   { expected: PlannedAttemptExecutorCorrelation, observed: PlannedAttemptExecutorCorrelation }
 ) {}
 
 /** The exact attempt consumed its durable start-or-continue budget while the executor still reported Running. */
-export class PlannedAttemptExecutorContinuationLimitReached extends Schema.TaggedErrorClass<PlannedAttemptExecutorContinuationLimitReached>()(
+export class PlannedAttemptExecutorContinuationLimitReached extends Schema.TaggedError<PlannedAttemptExecutorContinuationLimitReached>()(
   "PlannedAttemptExecutorContinuationLimitReached",
   { correlation: PlannedAttemptExecutorCorrelation, limit: PlannedAttemptExecutorContinuationLimit }
 ) {}
 
 /** Executor work cannot restart after Dalph durably abandoned the exact planned attempt. */
-export class PlannedAttemptExecutorResponsibilityAbandoned extends Schema.TaggedErrorClass<PlannedAttemptExecutorResponsibilityAbandoned>()(
+export class PlannedAttemptExecutorResponsibilityAbandoned extends Schema.TaggedError<PlannedAttemptExecutorResponsibilityAbandoned>()(
   "PlannedAttemptExecutorResponsibilityAbandoned",
   { correlation: PlannedAttemptExecutorCorrelation }
 ) {}
 
 /** The exact attempt consumed its durable suspension-command budget without proving quiescence. */
-export class PlannedAttemptExecutorSuspensionLimitReached extends Schema.TaggedErrorClass<PlannedAttemptExecutorSuspensionLimitReached>()(
+export class PlannedAttemptExecutorSuspensionLimitReached extends Schema.TaggedError<PlannedAttemptExecutorSuspensionLimitReached>()(
   "PlannedAttemptExecutorSuspensionLimitReached",
   { correlation: PlannedAttemptExecutorCorrelation, limit: PlannedAttemptExecutorSuspensionLimit }
 ) {}
 
 /** Read-only reconciliation could not find authoritative state for one unmatched command intent. */
-export class PlannedAttemptExecutorProjectionUnavailable extends Schema.TaggedErrorClass<PlannedAttemptExecutorProjectionUnavailable>()(
+export class PlannedAttemptExecutorProjectionUnavailable extends Schema.TaggedError<PlannedAttemptExecutorProjectionUnavailable>()(
   "PlannedAttemptExecutorProjectionUnavailable",
   { commandOrdinal: PlannedAttemptExecutorCommandOrdinal, correlation: PlannedAttemptExecutorCorrelation }
 ) {}
 
 /** A generic current-state read cannot bypass reconciliation of an ambiguous executor command. */
-export class PlannedAttemptExecutorCommandReconciliationRequired extends Schema.TaggedErrorClass<PlannedAttemptExecutorCommandReconciliationRequired>()(
+export class PlannedAttemptExecutorCommandReconciliationRequired extends Schema.TaggedError<PlannedAttemptExecutorCommandReconciliationRequired>()(
   "PlannedAttemptExecutorCommandReconciliationRequired",
   { commandOrdinal: PlannedAttemptExecutorCommandOrdinal, correlation: PlannedAttemptExecutorCorrelation }
 ) {}
 
 /** A current-state read found no authoritative executor state for the exact attempt. */
-export class PlannedAttemptExecutorStateUnavailable extends Schema.TaggedErrorClass<PlannedAttemptExecutorStateUnavailable>()(
+export class PlannedAttemptExecutorStateUnavailable extends Schema.TaggedError<PlannedAttemptExecutorStateUnavailable>()(
   "PlannedAttemptExecutorStateUnavailable",
   { correlation: PlannedAttemptExecutorCorrelation }
 ) {}
 
 /** A journaled responsibility uses this identity for a different immutable attempt plan. */
-export class PlannedAttemptExecutorResponsibilityContradiction extends Schema.TaggedErrorClass<PlannedAttemptExecutorResponsibilityContradiction>()(
+export class PlannedAttemptExecutorResponsibilityContradiction extends Schema.TaggedError<PlannedAttemptExecutorResponsibilityContradiction>()(
   "PlannedAttemptExecutorResponsibilityContradiction",
   { accepted: PlannedTaskAttemptSchema, requested: PlannedTaskAttemptSchema }
 ) {}
 
 /** A read-only executor observation has no exact journaled workflow responsibility to observe. */
-export class PlannedAttemptExecutorResponsibilityMissing extends Schema.TaggedErrorClass<PlannedAttemptExecutorResponsibilityMissing>()(
+export class PlannedAttemptExecutorResponsibilityMissing extends Schema.TaggedError<PlannedAttemptExecutorResponsibilityMissing>()(
   "PlannedAttemptExecutorResponsibilityMissing",
   { correlation: PlannedAttemptExecutorCorrelation }
 ) {}

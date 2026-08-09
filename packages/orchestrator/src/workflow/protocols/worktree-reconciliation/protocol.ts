@@ -13,7 +13,7 @@ export const TaskWorktreeReconciliationResult = AuthoritativeTaskWorktreeReady
 export type TaskWorktreeReconciliationResult = typeof TaskWorktreeReconciliationResult.Type
 
 /** Journal history cannot prove the exact ready worktree required before agent work. */
-export class TaskWorktreeHistoryContradiction extends Schema.TaggedErrorClass<TaskWorktreeHistoryContradiction>()(
+export class TaskWorktreeHistoryContradiction extends Schema.TaggedError<TaskWorktreeHistoryContradiction>()(
   "TaskWorktreeHistoryContradiction",
   {
     attemptId: AttemptId,

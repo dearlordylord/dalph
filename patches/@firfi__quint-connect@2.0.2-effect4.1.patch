@@ -1,0 +1,58 @@
+diff --git a/dist/cli/errors.js b/dist/cli/errors.js
+index c2798a8001198d76c44e2fe02d41dde18cecde04..0eedc3432ab7f31e41d0acd8b8f116767c4bb8ac 100644
+--- a/dist/cli/errors.js
++++ b/dist/cli/errors.js
+@@ -1,11 +1,11 @@
+ import { Schema } from "effect";
+-export class QuintError extends Schema.TaggedErrorClass()("QuintError", {
++export class QuintError extends Schema.TaggedError()("QuintError", {
+     message: Schema.String,
+     stderr: Schema.optional(Schema.String),
+     exitCode: Schema.optional(Schema.Number)
+ }) {
+ }
+-export class QuintNotFoundError extends Schema.TaggedErrorClass()("QuintNotFoundError", {
++export class QuintNotFoundError extends Schema.TaggedError()("QuintNotFoundError", {
+     message: Schema.String
+ }) {
+ }
+diff --git a/dist/cli/managed-process.js b/dist/cli/managed-process.js
+index 8bc2e16286ad8d4701e427e19a2da31b5894c676..2c3a97d23b73225944fb7233f6d67cc4e0a5b915 100644
+--- a/dist/cli/managed-process.js
++++ b/dist/cli/managed-process.js
+@@ -1,5 +1,5 @@
+ import { Effect, Option, Schema } from "effect";
+-class ProcessStartError extends Schema.TaggedErrorClass()("ProcessStartError", {
++class ProcessStartError extends Schema.TaggedError()("ProcessStartError", {
+     message: Schema.String,
+     code: Schema.optional(Schema.String)
+ }) {
+diff --git a/dist/runner/replay-errors.js b/dist/runner/replay-errors.js
+index 270c5e66bce438215dbf076274187be6fa32beca..2d032ae0bed996a9d8b3c2934a2094d5d00d2b2e 100644
+--- a/dist/runner/replay-errors.js
++++ b/dist/runner/replay-errors.js
+@@ -1,5 +1,5 @@
+ import { Effect, Schema } from "effect";
+-export class StateMismatchError extends Schema.TaggedErrorClass()("StateMismatchError", {
++export class StateMismatchError extends Schema.TaggedError()("StateMismatchError", {
+     message: Schema.String,
+     traceIndex: Schema.Number,
+     stepIndex: Schema.Number,
+@@ -8,7 +8,7 @@ export class StateMismatchError extends Schema.TaggedErrorClass()("StateMismatch
+     showDiff: Schema.Boolean.pipe(Schema.withConstructorDefault(Effect.succeed(true)), Schema.withDecodingDefault(Effect.succeed(true)))
+ }) {
+ }
+-export class TraceReplayError extends Schema.TaggedErrorClass()("TraceReplayError", {
++export class TraceReplayError extends Schema.TaggedError()("TraceReplayError", {
+     message: Schema.String,
+     traceIndex: Schema.Number,
+     stepIndex: Schema.Number,
+@@ -16,7 +16,7 @@ export class TraceReplayError extends Schema.TaggedErrorClass()("TraceReplayErro
+     cause: Schema.optional(Schema.Unknown)
+ }) {
+ }
+-export class NoTracesError extends Schema.TaggedErrorClass()("NoTracesError", {
++export class NoTracesError extends Schema.TaggedError()("NoTracesError", {
+     message: Schema.String
+ }) {
+ }

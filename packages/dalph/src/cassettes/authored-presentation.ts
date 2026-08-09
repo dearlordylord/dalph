@@ -1,3 +1,4 @@
+import { Match } from "effect"
 import type {
   AuthoredCassetteStoryItem,
   AuthoredOrchestrationEvidence,
@@ -5,6 +6,73 @@ import type {
   AuthoredScenarioCassette,
   AuthoredTaskWorkResult
 } from "./authored-domain.js"
+
+/**
+ * One authored boundary occurrence worth exposing as a delivery-playback
+ * landmark. This projection belongs with the typed authored vocabulary so a
+ * browser harness never has to reinterpret raw story tags.
+ */
+const noLandmark = (): null => null
+
+const trackerGraphLandmark = (
+  graph: Extract<AuthoredCassetteStoryItem, { readonly _tag: "RunActivationFinalTrackerGraphReadReturned" }>["graph"],
+  readMeaning: string
+): string => {
+  const taskStates = graph.tasks.map((task) => `task ${task.id} ${task.lifecycle._tag}`)
+  return `${readMeaning} ${graph.revision}${taskStates.length === 0 ? " with no tasks" : `: ${taskStates.join("; ")}`}`
+}
+
+export const renderAuthoredStoryItemLandmark = Match.type<AuthoredCassetteStoryItem>().pipe(
+  Match.tagsExhaustive({
+    CompletionClaimDeletionApplied: noLandmark,
+    CompletionClaimReadReturned: noLandmark,
+    CompletionClaimReplacementApplied: noLandmark,
+    CoordinatorActivationReturned: noLandmark,
+    CoordinatorProcessDies: () =>
+      "The coordinator process died; the next activation reconstructs accepted journal history",
+    DalphHoldsAdmittedContinuationBeforeExecutorIntent: noLandmark,
+    DalphSelects: noLandmark,
+    ExpectedBehavior: noLandmark,
+    GitWorktreeObservationChanged: noLandmark,
+    InitialControlPolicy: noLandmark,
+    IntegrationCandidateAgentReported: noLandmark,
+    IntegrationCandidateGitValidationFailed: noLandmark,
+    IntegrationCandidateGitValidationReturned: noLandmark,
+    OperatorAppliesControlDirection: (item) => {
+      const target = item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
+      return `Operator ${item.direction.toLowerCase()}d ${target}`
+    },
+    OperatorAppliesControlDirectionWhileExecutorRequestInFlight: (item) => {
+      const target = item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
+      return `Operator ${item.direction.toLowerCase()}d ${target} while its executor request was in flight`
+    },
+    OperatorContinuesAttempt: noLandmark,
+    OperatorControlDirectionFailed: noLandmark,
+    OperatorDirectsTaskClaimReacquisition: noLandmark,
+    OperatorRacesContinueAndStop: noLandmark,
+    OperatorStopsAttempt: noLandmark,
+    PlannedAttemptExecutorProjectionReturned: noLandmark,
+    PlannedAttemptExecutorResponseLost: noLandmark,
+    PlannedAttemptExecutorWorkReported: (item) =>
+      `Attempt ${item.report.attemptId} reported ${item.report._tag}${item.report._tag === "SafelySuspended" ? "; its held position can now be released" : ""}`,
+    RunActivationFinalTrackerGraphReadReturned: (item) =>
+      trackerGraphLandmark(item.graph, "Activation-final tracker read returned graph"),
+    RunCoordinator: noLandmark,
+    SetTaskExecutionCapacity: noLandmark,
+    TargetPromotionCompareAndSetResponseLost: noLandmark,
+    TargetPromotionCompareAndSetReturned: noLandmark,
+    TargetPromotionGitReadFailed: noLandmark,
+    TargetPromotionGitReadReturned: noLandmark,
+    TargetVerificationReturned: noLandmark,
+    TaskClaimCurrentReadReturned: noLandmark,
+    TaskClaimReadFailed: noLandmark,
+    TaskClaimReadReturned: noLandmark,
+    TaskClaimReleaseResponseLost: noLandmark,
+    TaskWorkSpecificationReadReturned: noLandmark,
+    TrackerGraphReadFailed: noLandmark,
+    TrackerGraphReadReturned: (item) => trackerGraphLandmark(item.graph, "Tracker returned graph")
+  })
+)
 
 const taskWorkResultLyric = (result: AuthoredTaskWorkResult): string => {
   switch (result._tag) {
@@ -163,16 +231,33 @@ type CoordinatorStoryItem = Exclude<
 
 type AuthoredTrackerClaimStoryItem = Extract<
   CoordinatorStoryItem,
-  { readonly _tag: "TaskClaimCurrentReadReturned" | "TaskClaimReadFailed" | "TaskClaimReadReturned" }
+  {
+    readonly _tag:
+      | "CompletionClaimDeletionApplied"
+      | "CompletionClaimReadReturned"
+      | "CompletionClaimReplacementApplied"
+      | "TaskClaimCurrentReadReturned"
+      | "TaskClaimReadFailed"
+      | "TaskClaimReadReturned"
+  }
 >
 
 const isTrackerClaimStoryItem = (item: CoordinatorStoryItem): item is AuthoredTrackerClaimStoryItem =>
+  item._tag === "CompletionClaimDeletionApplied" ||
+  item._tag === "CompletionClaimReadReturned" ||
+  item._tag === "CompletionClaimReplacementApplied" ||
   item._tag === "TaskClaimCurrentReadReturned" ||
   item._tag === "TaskClaimReadFailed" ||
   item._tag === "TaskClaimReadReturned"
 
 const trackerClaimLyric = (item: AuthoredTrackerClaimStoryItem): string => {
   switch (item._tag) {
+    case "CompletionClaimDeletionApplied":
+      return `The task tracker deletes the exact completion claim for task ${item.taskId}.`
+    case "CompletionClaimReadReturned":
+      return `The task tracker returns the exact ${item.claim.toLowerCase()} claim for finality task ${item.taskId}.`
+    case "CompletionClaimReplacementApplied":
+      return `The task tracker replaces task ${item.taskId}'s active claim with its exact promotion-correlated completion claim.`
     case "TaskClaimCurrentReadReturned":
       return `The task tracker returns its current exact claim for task ${item.taskId}.`
     case "TaskClaimReadFailed":
@@ -310,7 +395,8 @@ const coordinatorStoryLyric = (item: CoordinatorStoryItem): string => {
   return remainingCoordinatorLyric(item)
 }
 
-const storyLyric = (item: AuthoredCassetteStoryItem): string => {
+/** One exhaustive maintainer-readable sentence derived directly from a typed authored story item. */
+export const renderAuthoredStoryItemLyric = (item: AuthoredCassetteStoryItem): string => {
   if (item._tag === "CoordinatorActivationReturned") {
     return item.decision._tag === "RunMayTerminate"
       ? "The coordinator activation returns RunMayTerminate at this authored lifecycle boundary."
@@ -324,4 +410,4 @@ const storyLyric = (item: AuthoredCassetteStoryItem): string => {
 
 /** Readable prose is derived from structured story items and is never parsed. */
 export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette): string =>
-  [`Scenario: ${cassette.name}.`, ...cassette.story.map(storyLyric)].join("\n")
+  [`Scenario: ${cassette.name}.`, ...cassette.story.map(renderAuthoredStoryItemLyric)].join("\n")

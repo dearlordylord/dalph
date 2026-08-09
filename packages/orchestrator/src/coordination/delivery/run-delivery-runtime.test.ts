@@ -360,10 +360,26 @@ it("keeps exact proposal identity for routes outside semantic recovered-read own
     ...nonLineageIntegrationRead,
     id: DeliveryProposalId.make("runtime-fallback-non-lineage-integration-read")
   }
+  const continuationClaim = recoveredProposalFor(
+    RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({
+      operation: makeTaskClaimObservationOperation(
+        OperationId.make("runtime-fallback-continuation-claim"),
+        target,
+        plannedAttempt.taskId
+      ),
+      plannedAttempt
+    })
+  )
+  const mismatchedRecoveredRead = { ...responsibleClaim, order: continuationClaim.order }
+  const anotherMismatchedRecoveredRead = {
+    ...mismatchedRecoveredRead,
+    id: DeliveryProposalId.make("runtime-fallback-mismatched-recovered-read")
+  }
 
   expect(liveActionKeyOf(nonRecoveredOrder)).not.toBe(liveActionKeyOf(anotherNonRecoveredOrder))
   expect(liveActionKeyOf(nonRecoveredRoute)).not.toBe(liveActionKeyOf(anotherNonRecoveredRoute))
   expect(liveActionKeyOf(nonLineageIntegrationRead)).not.toBe(liveActionKeyOf(anotherNonLineageIntegrationRead))
+  expect(liveActionKeyOf(mismatchedRecoveredRead)).not.toBe(liveActionKeyOf(anotherMismatchedRecoveredRead))
 })
 
 it.effect("classifies a nonempty executable frontier as runnable before finality", () =>

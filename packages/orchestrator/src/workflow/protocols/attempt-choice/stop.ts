@@ -35,19 +35,19 @@ import {
 } from "./events.js"
 
 /** Stop cannot advance because its exact applied operator choice is absent or contradictory. */
-export class AttemptStopChoiceContradiction extends Schema.TaggedErrorClass<AttemptStopChoiceContradiction>()(
+export class AttemptStopChoiceContradiction extends Schema.TaggedError<AttemptStopChoiceContradiction>()(
   "AttemptStopChoiceContradiction",
   { requestId: AttemptChoiceRequestId, subject: AttemptChoiceSubject }
 ) {}
 
 /** Stop cannot abandon responsibility without the exact claim that authorized the immutable attempt. */
-export class AttemptStopClaimAuthorityMissing extends Schema.TaggedErrorClass<AttemptStopClaimAuthorityMissing>()(
+export class AttemptStopClaimAuthorityMissing extends Schema.TaggedError<AttemptStopClaimAuthorityMissing>()(
   "AttemptStopClaimAuthorityMissing",
   { requestId: AttemptChoiceRequestId, subject: AttemptChoiceSubject }
 ) {}
 
 /** A no-release result contradicted the exact stopped-attempt claim or its focused tracker read. */
-export class StoppedAttemptClaimObservationContradiction extends Schema.TaggedErrorClass<StoppedAttemptClaimObservationContradiction>()(
+export class StoppedAttemptClaimObservationContradiction extends Schema.TaggedError<StoppedAttemptClaimObservationContradiction>()(
   "StoppedAttemptClaimObservationContradiction",
   {
     observation: TaskClaimObservation,
@@ -58,7 +58,7 @@ export class StoppedAttemptClaimObservationContradiction extends Schema.TaggedEr
 ) {}
 
 /** No journaled focused claim observation owns the requested no-release conclusion. */
-export class StoppedAttemptClaimObservationMissing extends Schema.TaggedErrorClass<StoppedAttemptClaimObservationMissing>()(
+export class StoppedAttemptClaimObservationMissing extends Schema.TaggedError<StoppedAttemptClaimObservationMissing>()(
   "StoppedAttemptClaimObservationMissing",
   { observationOperationId: OperationId, requestId: AttemptChoiceRequestId, subject: AttemptChoiceSubject }
 ) {}

@@ -21,13 +21,13 @@ const effectClassInheritanceOnly = {
       if (factory.object.type !== "Identifier" || factory.property.type !== "Identifier") return false
       return (
         (factory.object.name === "Context" && factory.property.name === "Service")
-        || (factory.object.name === "Schema" && factory.property.name === "TaggedErrorClass")
+        || (factory.object.name === "Schema" && factory.property.name === "TaggedError")
       )
     }
 
     const checkInheritance = (node) => {
       if (node.superClass !== null && !isAllowedEffectFactory(node.superClass)) {
-        report(context, node, "Class inheritance is restricted to Context.Service and Schema.TaggedErrorClass.")
+        report(context, node, "Class inheritance is restricted to Context.Service and Schema.TaggedError.")
       }
     }
 

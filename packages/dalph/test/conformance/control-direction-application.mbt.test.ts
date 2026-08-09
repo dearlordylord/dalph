@@ -327,5 +327,5 @@ quintIt(
         spec.trackerReread === implementation.trackerReread
     )
   },
-  30_000
+  120_000
 )

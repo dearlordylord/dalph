@@ -15,22 +15,22 @@ import {
   type AuthoredAttemptChoiceItem as AttemptChoiceItem
 } from "./authored-cursor-items.js"
 
-export class AuthoredCassetteInteractionMismatch extends Schema.TaggedErrorClass<AuthoredCassetteInteractionMismatch>()(
+export class AuthoredCassetteInteractionMismatch extends Schema.TaggedError<AuthoredCassetteInteractionMismatch>()(
   "AuthoredCassetteInteractionMismatch",
   { actual: Schema.String, expected: Schema.String, storyPosition: Schema.Int }
 ) {}
 
-export class AuthoredIntegrationCandidateGitValidationFailure extends Schema.TaggedErrorClass<AuthoredIntegrationCandidateGitValidationFailure>()(
+export class AuthoredIntegrationCandidateGitValidationFailure extends Schema.TaggedError<AuthoredIntegrationCandidateGitValidationFailure>()(
   "AuthoredIntegrationCandidateGitValidationFailure",
   { detail: Schema.String, storyPosition: Schema.Int }
 ) {}
 
-export class AuthoredTargetPromotionCompareAndSetFailure extends Schema.TaggedErrorClass<AuthoredTargetPromotionCompareAndSetFailure>()(
+export class AuthoredTargetPromotionCompareAndSetFailure extends Schema.TaggedError<AuthoredTargetPromotionCompareAndSetFailure>()(
   "AuthoredTargetPromotionCompareAndSetFailure",
   { detail: Schema.String, storyPosition: Schema.Int }
 ) {}
 
-export class AuthoredTargetPromotionGitReadFailure extends Schema.TaggedErrorClass<AuthoredTargetPromotionGitReadFailure>()(
+export class AuthoredTargetPromotionGitReadFailure extends Schema.TaggedError<AuthoredTargetPromotionGitReadFailure>()(
   "AuthoredTargetPromotionGitReadFailure",
   { detail: Schema.String, storyPosition: Schema.Int }
 ) {}
@@ -40,6 +40,8 @@ type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
   | { readonly _tag: "Mismatch"; readonly index: number; readonly item: StoryItem | undefined }
 export interface StoryCursor {
+  /** Current zero-based position after all successfully consumed authored items. */
+  readonly storyPosition: Effect.Effect<number>
   readonly atTerminalAssertions: Effect.Effect<boolean>
   readonly awaitTerminalAssertions: Effect.Effect<void>
   readonly awaitCoordinatorProcessDeath: Effect.Effect<
@@ -47,6 +49,18 @@ export interface StoryCursor {
   >
   readonly consumeCoordinatorActivationReturned: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type,
+    CursorFailure
+  >
+  readonly consumeCompletionClaimDeletionApplied: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CompletionClaimDeletionApplied.Type,
+    CursorFailure
+  >
+  readonly consumeCompletionClaimReadReturned: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CompletionClaimReadReturned.Type,
+    CursorFailure
+  >
+  readonly consumeCompletionClaimReplacementApplied: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CompletionClaimReplacementApplied.Type,
     CursorFailure
   >
   readonly consumeAdmittedContinuationExecutorIntentHold: Effect.Effect<
@@ -445,6 +459,25 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(yield* Schema.decodeUnknownEffect(AuthoredTaskClaimReadItem)(claimed.item).pipe(Effect.orDie))
   })
+  const consumeCompletionClaimDeletionApplied = consume("CompletionClaimDeletionApplied").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionClaimDeletionApplied)(item).pipe(
+        Effect.orDie
+      )
+    )
+  )
+  const consumeCompletionClaimReadReturned = consume("CompletionClaimReadReturned").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionClaimReadReturned)(item).pipe(Effect.orDie)
+    )
+  )
+  const consumeCompletionClaimReplacementApplied = consume("CompletionClaimReplacementApplied").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionClaimReplacementApplied)(item).pipe(
+        Effect.orDie
+      )
+    )
+  )
   const consumeTaskClaimReleaseResponseLost = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.TaskClaimReleaseResponseLost.Type =>
@@ -480,11 +513,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(claimed.item).pipe(Effect.orDie)
   })
   return {
+    storyPosition: SubscriptionRef.get(position),
     atTerminalAssertions,
     awaitTerminalAssertions: Deferred.await(terminalAssertionsReached),
     awaitCoordinatorProcessDeath: Queue.take(coordinatorProcessDeaths),
     consumeAdmittedContinuationExecutorIntentHold,
     consumeCoordinatorActivationReturned,
+    consumeCompletionClaimDeletionApplied,
+    consumeCompletionClaimReadReturned,
+    consumeCompletionClaimReplacementApplied,
     consumeAttemptChoice,
     consumeAttemptChoiceRace,
     consumeCapacityChange,

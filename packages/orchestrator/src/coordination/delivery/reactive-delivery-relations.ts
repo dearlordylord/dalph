@@ -20,6 +20,7 @@ import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-prop
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import { DeliveryRelationPublicationObserver } from "./delivery-publication-observer.js"
 import {
   type CurrentSignal,
   DeliveryRelationReconciliationError,
@@ -31,7 +32,7 @@ import {
 import type { JournalService } from "./journal.js"
 
 /** Journal history cannot drive delivery until its initial control policy exists. */
-export class DeliveryControlPolicyMissing extends Schema.TaggedErrorClass<DeliveryControlPolicyMissing>()(
+export class DeliveryControlPolicyMissing extends Schema.TaggedError<DeliveryControlPolicyMissing>()(
   "DeliveryControlPolicyMissing",
   {}
 ) {}
@@ -99,6 +100,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   recovery: RunRecoveryProjectionSource,
   integrationTargets: IntegrationTargetResourceController
 ) {
+  const publicationObserver = yield* DeliveryRelationPublicationObserver
   const recoveredAttemptIds = new Set(recovery.reconstructedPlannedAttemptPositions.map(({ attemptId }) => attemptId))
   const readCoherentJournalProjection = Effect.fn("DeliveryRelations.readCoherentJournalProjection")(function* () {
     for (;;) {
@@ -190,12 +192,16 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
 
   const initial = yield* deriveBundle()
   const state = yield* SubscriptionRef.make<ReactiveDeliveryStatus>({ _tag: "ReactiveDeliveryOpen", bundle: initial })
+  yield* publicationObserver.observe(initial)
   const gate = yield* Semaphore.make(1)
   const refresh = gate.withPermit(
     deriveBundle().pipe(
       Effect.matchCauseEffect({
         onFailure: (cause) => SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed", cause }),
-        onSuccess: (bundle) => SubscriptionRef.set(state, { _tag: "ReactiveDeliveryOpen", bundle })
+        onSuccess: (bundle) =>
+          SubscriptionRef.set(state, { _tag: "ReactiveDeliveryOpen", bundle }).pipe(
+            Effect.andThen(publicationObserver.observe(bundle))
+          )
       })
     )
   )

@@ -10,7 +10,7 @@ export const TargetLineageObservation = Schema.Struct({
 })
 export type TargetLineageObservation = typeof TargetLineageObservation.Type
 
-export class GitTargetLineageReadFailure extends Schema.TaggedErrorClass<GitTargetLineageReadFailure>()(
+export class GitTargetLineageReadFailure extends Schema.TaggedError<GitTargetLineageReadFailure>()(
   "GitTargetLineageReadFailure",
   { detail: Schema.String, plannedBaseSha: GitCommitSha, target: IntegrationTarget }
 ) {}

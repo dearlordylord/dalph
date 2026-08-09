@@ -11,12 +11,12 @@ import {
 } from "../../../authorities/task-tracker/claim-mutation.js"
 
 /** A bounded claim acquisition never reached an authoritative owned claim. */
-export class TaskClaimAcquisitionDidNotConverge extends Schema.TaggedErrorClass<TaskClaimAcquisitionDidNotConverge>()(
+export class TaskClaimAcquisitionDidNotConverge extends Schema.TaggedError<TaskClaimAcquisitionDidNotConverge>()(
   "TaskClaimAcquisitionDidNotConverge",
   { acquisition: TaskClaimAcquisition, attempts: Schema.Int }
 ) {}
 
-class RepeatTaskClaimObservation extends Schema.TaggedErrorClass<RepeatTaskClaimObservation>()(
+class RepeatTaskClaimObservation extends Schema.TaggedError<RepeatTaskClaimObservation>()(
   "RepeatTaskClaimObservation",
   {}
 ) {}

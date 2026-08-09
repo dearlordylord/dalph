@@ -8,13 +8,13 @@ import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 
 /** Journal history does not yet contain a graph usable by delivery. */
-export class CurrentDeliveryGraphUnavailable extends Schema.TaggedErrorClass<CurrentDeliveryGraphUnavailable>()(
+export class CurrentDeliveryGraphUnavailable extends Schema.TaggedError<CurrentDeliveryGraphUnavailable>()(
   "CurrentDeliveryGraphUnavailable",
   {}
 ) {}
 
 /** Validated journal history unexpectedly lacks its initial control policy. */
-export class CurrentDeliveryControlPolicyUnavailable extends Schema.TaggedErrorClass<CurrentDeliveryControlPolicyUnavailable>()(
+export class CurrentDeliveryControlPolicyUnavailable extends Schema.TaggedError<CurrentDeliveryControlPolicyUnavailable>()(
   "CurrentDeliveryControlPolicyUnavailable",
   {}
 ) {}

@@ -73,19 +73,19 @@ export const integrationTargetSelectionLayer = (target: IntegrationTarget) =>
   Layer.succeed(IntegrationTargetSelection, target)
 
 /** An accepted result cannot be queued until coordinator integration policy selects a target. */
-export class IntegrationTargetUnavailable extends Schema.TaggedErrorClass<IntegrationTargetUnavailable>()(
+export class IntegrationTargetUnavailable extends Schema.TaggedError<IntegrationTargetUnavailable>()(
   "IntegrationTargetUnavailable",
   { attemptId: AttemptId, runId: RunId }
 ) {}
 
 /** An unjournaled invocation cannot assume durable integration responsibility. */
-export class IntegrationJournalUnavailable extends Schema.TaggedErrorClass<IntegrationJournalUnavailable>()(
+export class IntegrationJournalUnavailable extends Schema.TaggedError<IntegrationJournalUnavailable>()(
   "IntegrationJournalUnavailable",
   { attemptId: AttemptId, runId: RunId }
 ) {}
 
 /** The coordinator tried to queue a result before that exact executor outcome was durable. */
-export class AcceptedResultNotDurable extends Schema.TaggedErrorClass<AcceptedResultNotDurable>()(
+export class AcceptedResultNotDurable extends Schema.TaggedError<AcceptedResultNotDurable>()(
   "AcceptedResultNotDurable",
   { attemptId: AttemptId, runId: RunId }
 ) {}

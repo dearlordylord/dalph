@@ -10,13 +10,13 @@ import type { TaskClaimReacquisitionRequestId } from "./events.js"
 import { taskClaimReacquisitionOperationId } from "./plan.js"
 
 /** A selected explicit reacquisition has no configured identity planner. */
-export class TaskClaimReacquisitionPlannerUnavailable extends Schema.TaggedErrorClass<TaskClaimReacquisitionPlannerUnavailable>()(
+export class TaskClaimReacquisitionPlannerUnavailable extends Schema.TaggedError<TaskClaimReacquisitionPlannerUnavailable>()(
   "TaskClaimReacquisitionPlannerUnavailable",
   { taskId: TaskId }
 ) {}
 
 /** The configured planner could not allocate the replacement claim identity. */
-export class TaskClaimReacquisitionPlanningFailed extends Schema.TaggedErrorClass<TaskClaimReacquisitionPlanningFailed>()(
+export class TaskClaimReacquisitionPlanningFailed extends Schema.TaggedError<TaskClaimReacquisitionPlanningFailed>()(
   "TaskClaimReacquisitionPlanningFailed",
   { detail: Schema.String, taskId: TaskId }
 ) {}

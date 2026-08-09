@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Effect, Exit, Option, Ref, Schema } from "effect"
+import { Cause, Crypto, Effect, Exit, Option, PlatformError, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -73,6 +73,7 @@ import {
   TaskLifecycle,
   TaskTrackerFactsObservedEvent,
   taskTrackerReadIntent,
+  taskRevisionFor,
   UntrackedWorktreePath,
   UnclaimedTask,
   WorktreeBaseMismatch,
@@ -142,7 +143,12 @@ import {
   verifyRecordedCassetteRoundTrip,
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
-import { controlledExecutorLayer, controlledTrackerMutationLayer } from "../../src/cassettes/authored-adapters.js"
+import {
+  evaluateAuthoredDeliveryPublication,
+  type AuthoredDeliveryPublication
+} from "../../src/cassettes/authored-runner.js"
+import { controlledExecutorLayer } from "../../src/cassettes/authored-adapters.js"
+import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
 import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
 
@@ -156,8 +162,10 @@ const exactClaimAuthorities = (...attemptIds: ReadonlyArray<AttemptId>) =>
   new Map(attemptIds.map((attemptId) => [attemptId, { _tag: "Exact" as const }]))
 
 const singleton = singletonTaskCompletesAuthoredCassette
-const runAuthoredScenarioCassette = (input: unknown) =>
-  runAuthoredScenarioCassetteWithCrypto(input).pipe(Effect.provide(NodeCrypto.layer))
+const runAuthoredScenarioCassette = (
+  input: unknown,
+  options: Parameters<typeof runAuthoredScenarioCassetteWithCrypto>[1] = {}
+) => runAuthoredScenarioCassetteWithCrypto(input, options).pipe(Effect.provide(NodeCrypto.layer))
 
 const expectRecordedRoundTrip = (records: ReadonlyArray<JournalRecord>, recorded: RecordedCassette) =>
   expect(
@@ -247,7 +255,7 @@ it.effect("preserves exact, conflicting, and unclaimed authored acquisition obse
             token: ClaimToken.make("coverage-authored-unclaimed-token")
           })
         ).toMatchObject({ _tag: "ActiveTaskClaim", taskId: unclaimedTaskId })
-      }).pipe(Effect.provide(controlledTrackerMutationLayer(cursor, base)))
+      }).pipe(Effect.provide(controlledTrackerAuthorityLayer(cursor, base)))
     }).pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
   })
 )
@@ -455,6 +463,11 @@ it.effect("reopens Continue and performs fresh reads before admitting the same a
 
     expect(choiceAt).toBeGreaterThan(0)
     expect(run.activationOrdinals).toEqual([1, 2, 3])
+    const firstLaterActivationFrame = run.deliveryFrames.findIndex(({ activationOrdinal }) => activationOrdinal === 2)
+    expect(firstLaterActivationFrame).toBeGreaterThan(0)
+    expect(
+      run.deliveryFrames.slice(firstLaterActivationFrame).every(({ activationOrdinal }) => activationOrdinal >= 2)
+    ).toBe(true)
     expect(continuedAt).toBeGreaterThan(choiceAt)
     expect(between).toEqual([
       "TaskTrackerReadIntentRecorded",
@@ -1062,6 +1075,38 @@ it.effect("restarts a confirmed paused Run without selecting new forward progres
           checkpoint.pureSelectionEquivalent
       )
     ).toBe(true)
+  })
+)
+
+it.effect("accepts successful recovered completion at the terminal assertion boundary", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runPauseRestartsPassivelyAuthoredCassette)
+
+    expect(run.activationOrdinals).toEqual([1, 2])
+    expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
+    expect(run.observedBehavior).toBeDefined()
+  })
+)
+
+it.effect("fails recovered verification promptly when terminal evidence cannot be recorded", () =>
+  Effect.gen(function* () {
+    const digestFailure = PlatformError.systemError({
+      _tag: "Unknown",
+      description: "controlled evidence digest unavailable",
+      method: "digest",
+      module: "AuthoredCassetteTest"
+    })
+    const failure = yield* runAuthoredScenarioCassetteWithCrypto(
+      maintainedAuthoredCassetteCatalog.candidateCorrectionAfterUnreadableGit
+    ).pipe(
+      Effect.provideService(
+        Crypto.Crypto,
+        Crypto.make({ digest: () => Effect.fail(digestFailure), randomBytes: (size) => new Uint8Array(size) })
+      ),
+      Effect.flip
+    )
+
+    expect(failure._tag).toBe("EvidenceStoreFailure")
   })
 )
 
@@ -1806,6 +1851,156 @@ it.effect("records completion finality after valid candidate verification and pr
   })
 )
 
+it.effect("settles a promoted authored task through the real completion-claim boundary", () =>
+  Effect.gen(function* () {
+    const promoted = maintainedAuthoredCassetteCatalog.targetPromotionSuccess
+    const completedGraph = {
+      revision: "authored-finality-success",
+      tasks: [{ id: "A", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
+    } as const
+    const settledGraph = { revision: "authored-finality-settled", tasks: [] } as const
+    const finalityStory = promoted.story.flatMap(
+      (item): ReadonlyArray<unknown> =>
+        item._tag !== "ExpectedBehavior"
+          ? [item]
+          : [
+              { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" },
+              { _tag: "CompletionClaimReplacementApplied", taskId: "A" },
+              {
+                _tag: "CoordinatorActivationReturned",
+                decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+              },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+              { _tag: "TrackerGraphReadReturned", graph: completedGraph },
+              { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
+              { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+              { _tag: "TrackerGraphReadReturned", graph: settledGraph },
+              {
+                _tag: "CoordinatorActivationReturned",
+                decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+              },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+              { _tag: "TrackerGraphReadReturned", graph: settledGraph },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+              { _tag: "TrackerGraphReadReturned", graph: settledGraph },
+              {
+                _tag: "CoordinatorActivationReturned",
+                decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+              },
+              item
+            ]
+    )
+
+    const run = yield* runAuthoredScenarioCassette({ ...promoted, story: finalityStory })
+    const tags = run.records.map(({ event }) => event._tag)
+    const ordered = [
+      "TargetPromotionObservedSuccess",
+      "CompletionClaimReplacementIntended",
+      "CompletionClaimReplacementAttemptIntended",
+      "CompletionClaimReplaced",
+      "TaskTrackerFactsObserved",
+      "CompletionClaimDeletionIntended",
+      "CompletionClaimDeletionAttemptIntended",
+      "CompletionClaimDeleted",
+      "IntegrationFinalitySettled"
+    ] as const
+    let previousPosition = -1
+    const positions = ordered.map((tag) => {
+      previousPosition = tags.indexOf(tag, previousPosition + 1)
+      return previousPosition
+    })
+
+    expect(positions.every((position) => position >= 0)).toBe(true)
+    expect(positions).toEqual(positions.toSorted((left, right) => left - right))
+    expect(tags).not.toContain("WorkflowRunTerminated")
+    expect(run.deliveryFrames.some(({ settlements }) => settlements.some(({ taskId }) => taskId === "A"))).toBe(true)
+    expect(run.deliveryFrames.some(({ trackerReflection }) => trackerReflection.settlementCount > 0)).toBe(true)
+  })
+)
+
+it.effect("consumes the double-diamond frontier through production delivery waves", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory)
+    const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
+    const sevenTasks = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 7)
+    const edges =
+      sevenTasks?.graph._tag === "Established"
+        ? sevenTasks.graph.tasks.flatMap(({ id, prerequisiteIds }) =>
+            prerequisiteIds.map((prerequisiteId) => `${prerequisiteId}->${id}`)
+          )
+        : []
+    const eligibleWaves = established.map(({ frontier }) =>
+      frontier
+        .filter(({ standing }) => standing === "Eligible")
+        .map(({ taskId }) => taskId)
+        .toSorted()
+        .join("+")
+    )
+    const expectedWaves = ["A", "B+C", "D", "E+F", "G", ""]
+    let previousWave = -1
+    const wavePositions = expectedWaves.map((wave) => {
+      previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
+      return previousWave
+    })
+    const taskByAttempt = new Map(
+      run.records.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+          ? [[event.plannedAttempt.attemptId, event.plannedAttempt.taskId] as const]
+          : []
+      )
+    )
+    const taskWork = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+        ? [`began:${event.plannedAttempt.taskId}`]
+        : event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
+          ? [`terminal:${taskByAttempt.get(event.report.correlation.attemptId)}`]
+          : []
+    )
+
+    expect(sevenTasks).toBeDefined()
+    expect(edges.toSorted()).toEqual(["A->B", "A->C", "B->D", "C->D", "D->E", "D->F", "E->G", "F->G"])
+    expect(sevenTasks?.frontier).toHaveLength(7)
+    expect(wavePositions.every((position) => position >= 0)).toBe(true)
+    expect(run.deliveryFrames.every(({ capacity, heldPositions }) => capacity === 2 && heldPositions.length <= 2)).toBe(
+      true
+    )
+    expect(
+      run.deliveryFrames.some(({ heldPositions }) =>
+        ["E", "F"].every((taskId) => heldPositions.some((position) => position.taskId === taskId))
+      )
+    ).toBe(true)
+    expect(taskWork.toSorted()).toEqual(
+      ["A", "B", "C", "D", "E", "F", "G"].flatMap((taskId) => [`began:${taskId}`, `terminal:${taskId}`]).toSorted()
+    )
+    expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
+  })
+)
+
+it.effect("preserves the double-diamond middle wave across coordinator restart", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory)
+    const initial = run.deliveryFrames.find(
+      ({ activationOrdinal, heldPositions }) =>
+        activationOrdinal === 1 &&
+        heldPositions.some(({ taskId }) => taskId === "B") &&
+        heldPositions.some(({ taskId }) => taskId === "C")
+    )
+    const later = run.deliveryFrames.find(({ activationOrdinal }) => activationOrdinal === 2)
+    const correlations = (frame: NonNullable<typeof initial>) =>
+      frame.heldPositions
+        .filter(({ taskId }) => taskId === "B" || taskId === "C")
+        .map(({ attemptId, runId, taskId }) => `${taskId}:${runId}:${attemptId}`)
+        .toSorted()
+
+    expect(initial).toBeDefined()
+    expect(later).toBeDefined()
+    if (initial === undefined || later === undefined) return
+    expect(later.heldPositions.map(({ taskId }) => taskId).toSorted()).toEqual(["B", "C"])
+    expect(correlations(later)).toEqual(correlations(initial))
+  })
+)
+
 it.effect("preserves promoted M across a post-promotion blocker and resumes its same finality proof after clear", () =>
   Effect.gen(function* () {
     const promoted = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
@@ -2471,6 +2666,246 @@ it.effect("resumes actions when G2 introduces eligible B", () =>
           )
       )
     ).toBe(true)
+  })
+)
+
+it.effect(
+  "captures every authored delivery frame from production and keeps desired tickets separate from held work",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette)
+      const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
+
+      expect(run.deliveryFrames[0]?.graph).toEqual({ _tag: "NotEstablished" })
+      expect(established.length).toBeGreaterThan(1)
+      const firstEstablished = established[0]
+      if (firstEstablished === undefined || firstEstablished.graph._tag !== "Established") {
+        return expect.fail("expected an established production delivery frame")
+      }
+      const establishedGraph = firstEstablished.graph
+      const graphRecord = run.records.find(({ position }) => position === establishedGraph.observation.recordedAt)
+      expect(graphRecord?.event._tag).toBe("TaskTrackerFactsObserved")
+      if (graphRecord?.event._tag !== "TaskTrackerFactsObserved") {
+        return expect.fail("expected the frame's exact graph observation record")
+      }
+      expect(establishedGraph.observation).toEqual({
+        operationId: graphRecord.event.operationId,
+        contentIdentity: establishedGraph.revision,
+        recordedAt: graphRecord.position
+      })
+      expect(graphRecord.event.observation.operationId).toBe(establishedGraph.observation.operationId)
+      const startingProjection = projectTrackerSnapshot(run.cassette.startingFacts.trackerGraph)
+      if (startingProjection._tag !== "Valid") return expect.fail("expected the declared starting graph to project")
+      const startingA = startingProjection.snapshot.eligibleTasks().find(({ id }) => id === TaskId.make("A"))
+      if (startingA === undefined) return expect.fail("expected eligible task A in the starting graph")
+      const eligibleA = firstEstablished.frontier.find(
+        (standing) => standing.standing === "Eligible" && standing.taskId === TaskId.make("A")
+      )
+      expect(eligibleA?.taskRevision).toBe(taskRevisionFor(startingA))
+      expect(established.some(({ frontier }) => frontier.some(({ taskId }) => taskId === "B"))).toBe(true)
+      expect(
+        established.some(
+          ({ frontier, heldPositions }) =>
+            !heldPositions.some(({ taskId }) => taskId === "A") &&
+            frontier.some(
+              ({ reasons, standing, taskId }) =>
+                taskId === "B" &&
+                standing === "Excluded" &&
+                reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
+            )
+        )
+      ).toBe(true)
+      expect(
+        established.some(({ frontier }) =>
+          frontier.some(({ standing, taskId }) => taskId === "B" && standing === "Eligible")
+        )
+      ).toBe(true)
+      expect(
+        established.some(
+          ({ heldPositions, tickets }) =>
+            tickets.some(({ placement, taskId }) => taskId === "A" && placement.kind === "Selected") &&
+            !heldPositions.some(({ taskId }) => taskId === "A")
+        )
+      ).toBe(true)
+      const trackerRead = run.deliveryFrames
+        .flatMap(({ actionPlanning }) =>
+          actionPlanning._tag === "DeliveryProposalsAvailable" ? actionPlanning.proposals : []
+        )
+        .find(({ exact }) => exact.includes('"_tag": "TrackerGraphReadRoute"'))
+      expect(trackerRead).toMatchObject({
+        attemptId: null,
+        summary:
+          "Read the tracker graph to establish the current graph · needs no executor/Continue-or-Stop serialization · needs no task-work position · needs no integration-target resource · planned by the tracker graph layer",
+        taskId: null
+      })
+      expect(() => JSON.stringify(run.deliveryFrames)).not.toThrow()
+    })
+)
+
+it.effect("notifies the read-only delivery observer before returning the terminal authored result", () =>
+  Effect.gen(function* () {
+    const publications: Array<{ readonly activationOrdinal: number; readonly storyPosition: number }> = []
+    const run = yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette, {
+      onDeliveryPublication: ({ activationOrdinal, storyPosition }) => {
+        publications.push({ activationOrdinal, storyPosition })
+      }
+    })
+
+    expect(publications.length).toBe(run.deliveryFrames.length)
+    expect(publications.length).toBeGreaterThan(1)
+    expect(publications[0]).toEqual({
+      activationOrdinal: run.deliveryFrames[0]?.activationOrdinal,
+      storyPosition: run.deliveryFrames[0]?.storyPosition
+    })
+    expect(publications.at(-1)?.storyPosition).toBe(run.deliveryFrames.at(-1)?.storyPosition)
+  })
+)
+
+it.effect("retains every conflicting production proposal owner in the delivery frame", () =>
+  Effect.gen(function* () {
+    let captured: AuthoredDeliveryPublication | undefined
+    yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette, {
+      onDeliveryPublication: (publication) => {
+        captured ??= publication
+      }
+    })
+    if (captured === undefined) return expect.fail("expected a delivery publication")
+    const trackerProposal = captured.bundle.legacy.trackerGraphProposals[0]
+    if (trackerProposal === undefined) return expect.fail("expected the initial tracker graph proposal")
+
+    const frame = yield* evaluateAuthoredDeliveryPublication({
+      ...captured,
+      bundle: {
+        ...captured.bundle,
+        legacy: {
+          ...captured.bundle.legacy,
+          proposalContributions: {
+            ...captured.bundle.legacy.proposalContributions,
+            ticketDelivery: [{ ...trackerProposal, owner: "TicketDelivery" }]
+          }
+        }
+      }
+    })
+
+    expect(frame.actionPlanning._tag).toBe("DeliveryProposalOwnershipConflict")
+    if (frame.actionPlanning._tag !== "DeliveryProposalOwnershipConflict") {
+      return expect.fail("expected the production proposal ownership conflict")
+    }
+    expect(frame.actionPlanning.conflicts).toHaveLength(1)
+    expect(frame.actionPlanning.conflicts[0]?.summary).toBe(
+      `Proposal ownership conflict for ${trackerProposal.id}: TrackerGraph and TicketDelivery · planning fails closed`
+    )
+    expect(JSON.parse(frame.actionPlanning.conflicts[0]?.exact ?? "null")).toMatchObject({
+      owners: ["TrackerGraph", "TicketDelivery"]
+    })
+  })
+)
+
+it.effect("projects every isolated action-planning issue through its typed maintainer meaning", () =>
+  Effect.gen(function* () {
+    let captured: AuthoredDeliveryPublication | undefined
+    yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette, {
+      onDeliveryPublication: (publication) => {
+        captured ??= publication
+      }
+    })
+    if (captured === undefined) return expect.fail("expected a delivery publication")
+    const frame = yield* evaluateAuthoredDeliveryPublication({
+      ...captured,
+      bundle: {
+        ...captured.bundle,
+        legacy: {
+          ...captured.bundle.legacy,
+          proposalContributions: {
+            ...captured.bundle.legacy.proposalContributions,
+            issues: [
+              {
+                _tag: "AcceptedOperationEvidenceMissing",
+                operationId: OperationId.make("lab-isolated-accepted-evidence"),
+                taskId: TaskId.make("A"),
+                transition: "ReconcileTaskClaim"
+              },
+              {
+                _tag: "FreshRouteProvenanceMissing",
+                taskId: TaskId.make("A"),
+                transition: "ContinueFreshWorkflowOperation"
+              },
+              { _tag: "TypedRoutePolicyContradiction", taskId: TaskId.make("A"), transition: "StartQueuedIntegration" }
+            ]
+          }
+        }
+      }
+    })
+
+    expect(frame.actionPlanning._tag).toBe("DeliveryProposalsAvailable")
+    if (frame.actionPlanning._tag !== "DeliveryProposalsAvailable") {
+      return expect.fail("expected isolated action-planning issues")
+    }
+    expect(frame.actionPlanning.isolatedIssues.map(({ summary }) => summary)).toEqual([
+      "Dalph cannot check the tracker after an ambiguous task-claim request because accepted journal evidence is missing · task A",
+      "Dalph cannot send the already-journaled request to its recorded owning system because fresh route provenance is missing · task A",
+      "Dalph cannot start the exact queued integration responsibility because the typed route policy contradicts this transition · task A"
+    ])
+  })
+)
+
+it.effect("separates delivery frames across authored coordinator activations", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)
+    const initial = run.deliveryFrames.filter(({ activationOrdinal }) => activationOrdinal === 1)
+    const later = run.deliveryFrames.filter(({ activationOrdinal }) => activationOrdinal === 2)
+
+    expect(initial.length).toBeGreaterThan(0)
+    expect(later.length).toBeGreaterThan(0)
+    expect(run.deliveryFrames.findIndex(({ activationOrdinal }) => activationOrdinal === 2)).toBe(initial.length)
+    const lastInitialStoryPosition = initial.at(-1)?.storyPosition
+    if (lastInitialStoryPosition === undefined) return expect.fail("expected an initial-activation delivery frame")
+    expect(later.every(({ storyPosition }) => storyPosition >= lastInitialStoryPosition)).toBe(true)
+    const initialHeld = initial.flatMap(({ heldPositions }) => heldPositions)
+    const laterHeld = later.flatMap(({ heldPositions }) => heldPositions)
+    expect(initialHeld.some(({ attemptId }) => attemptId === "attempt:A:0")).toBe(true)
+    expect(laterHeld.some(({ attemptId }) => attemptId === "attempt:A:0")).toBe(true)
+  })
+)
+
+it.effect("separates every coordinator activation in a multi-restart delivery timeline", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette)
+    const activationOrdinals = [...new Set(run.deliveryFrames.map(({ activationOrdinal }) => activationOrdinal))]
+
+    expect(run.activationOrdinals).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(activationOrdinals).toEqual([1, 2, 3, 4, 5, 6, 7])
+    for (const ordinal of activationOrdinals) {
+      const frames = run.deliveryFrames.filter(({ activationOrdinal }) => activationOrdinal === ordinal)
+      expect(frames.length).toBeGreaterThan(0)
+    }
+    expect(
+      run.deliveryFrames
+        .filter(({ activationOrdinal }) => activationOrdinal > 1)
+        .some(({ heldPositions }) => heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0"))
+    ).toBe(true)
+  })
+)
+
+it.effect("retains the exact paused quiescence disposition in production delivery frames", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runPauseSafelySuspendsAuthoredCassette)
+    const pauseRecord = run.records.find(
+      ({ event }) =>
+        event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
+    )
+    if (pauseRecord === undefined) return expect.fail("expected the accepted Run Pause record")
+
+    const beforePause = run.deliveryFrames.filter(
+      ({ acceptedAt }) => acceptedAt !== null && acceptedAt < pauseRecord.position
+    )
+    const afterPause = run.deliveryFrames.filter(
+      ({ acceptedAt }) => acceptedAt !== null && acceptedAt >= pauseRecord.position
+    )
+    expect(beforePause.some(({ quiescence }) => quiescence._tag === "TrackerReconfirmationAllowed")).toBe(true)
+    expect(afterPause.length).toBeGreaterThan(0)
+    expect(afterPause.every(({ quiescence }) => quiescence._tag === "QuiescencePassive")).toBe(true)
+    expect(afterPause[0]?.quiescence).toEqual({ _tag: "QuiescencePassive", reason: "RunPaused" })
   })
 )
 

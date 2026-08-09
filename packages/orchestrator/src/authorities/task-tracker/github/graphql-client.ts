@@ -55,7 +55,7 @@ const GithubGraphqlOperation = Schema.Literals([
   "ResolveIssue"
 ])
 
-export class GithubGraphqlRequestError extends Schema.TaggedErrorClass<GithubGraphqlRequestError>()(
+export class GithubGraphqlRequestError extends Schema.TaggedError<GithubGraphqlRequestError>()(
   "GithubGraphqlClient.RequestError",
   { detail: Schema.String, operation: GithubGraphqlOperation }
 ) {}

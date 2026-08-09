@@ -18,7 +18,7 @@ const FreshWorkflowRunIdentityPayload = Schema.Struct({ freshness: FreshWorkflow
 type FreshWorkflowRunIdentityPayload = typeof FreshWorkflowRunIdentityPayload.Type
 
 /** Diagnostic decoding could not restore one exact fresh-run identity payload. */
-export class FreshWorkflowRunIdDiagnosticDecodeFailure extends Schema.TaggedErrorClass<FreshWorkflowRunIdDiagnosticDecodeFailure>()(
+export class FreshWorkflowRunIdDiagnosticDecodeFailure extends Schema.TaggedError<FreshWorkflowRunIdDiagnosticDecodeFailure>()(
   "FreshWorkflowRunIdDiagnosticDecodeFailure",
   { detail: Schema.String, runId: RunId }
 ) {}

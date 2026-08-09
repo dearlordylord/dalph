@@ -42,13 +42,13 @@ export const TaskClaimObservation = Schema.Union([ActiveTaskClaim, UnclaimedTask
 export type TaskClaimObservation = typeof TaskClaimObservation.Type
 
 /** Atomic acquisition found a different exact tracker-owned claim. */
-export class TaskClaimConflict extends Schema.TaggedErrorClass<TaskClaimConflict>()(
-  "TrackerMutation.TaskClaimConflict",
-  { attempted: TaskClaimAcquisition, observed: ActiveTaskClaim }
-) {}
+export class TaskClaimConflict extends Schema.TaggedError<TaskClaimConflict>()("TrackerMutation.TaskClaimConflict", {
+  attempted: TaskClaimAcquisition,
+  observed: ActiveTaskClaim
+}) {}
 
 /** Release did not name the exact current owner/token claim capability. */
-export class TaskClaimOwnershipConflict extends Schema.TaggedErrorClass<TaskClaimOwnershipConflict>()(
+export class TaskClaimOwnershipConflict extends Schema.TaggedError<TaskClaimOwnershipConflict>()(
   "TrackerMutation.TaskClaimOwnershipConflict",
   { attempted: ActiveTaskClaim, observed: TaskClaimObservation }
 ) {}
@@ -56,19 +56,19 @@ export class TaskClaimOwnershipConflict extends Schema.TaggedErrorClass<TaskClai
 const TaskClaimRequestOutcome = Schema.Literals(["DefinitelyNotApplied", "Unknown"])
 
 /** A task-tracker request failed with an explicit external-outcome classification. */
-export class TaskClaimRequestFailure extends Schema.TaggedErrorClass<TaskClaimRequestFailure>()(
+export class TaskClaimRequestFailure extends Schema.TaggedError<TaskClaimRequestFailure>()(
   "TrackerMutation.TaskClaimRequestFailure",
   { acquisition: TaskClaimAcquisition, detail: Schema.String, outcome: TaskClaimRequestOutcome }
 ) {}
 
 /** The task tracker could not provide a fresh authoritative claim observation. */
-export class TaskClaimReadFailure extends Schema.TaggedErrorClass<TaskClaimReadFailure>()(
+export class TaskClaimReadFailure extends Schema.TaggedError<TaskClaimReadFailure>()(
   "TrackerMutation.TaskClaimReadFailure",
   { detail: Schema.String, taskId: TaskId }
 ) {}
 
 /** A release request returned without proving whether the exact claim was deleted. */
-export class TaskClaimReleaseFailure extends Schema.TaggedErrorClass<TaskClaimReleaseFailure>()(
+export class TaskClaimReleaseFailure extends Schema.TaggedError<TaskClaimReleaseFailure>()(
   "TrackerMutation.TaskClaimReleaseFailure",
   { release: TaskClaimRelease, detail: Schema.String }
 ) {}

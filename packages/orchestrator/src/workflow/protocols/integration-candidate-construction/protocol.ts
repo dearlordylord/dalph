@@ -59,7 +59,7 @@ export class IntegrationCandidateAgent extends Context.Service<
   IntegrationCandidateAgentService
 >()("@dalph/IntegrationCandidateAgent") {}
 
-export class IntegrationCandidateAgentFailure extends Schema.TaggedErrorClass<IntegrationCandidateAgentFailure>()(
+export class IntegrationCandidateAgentFailure extends Schema.TaggedError<IntegrationCandidateAgentFailure>()(
   "IntegrationCandidateAgentFailure",
   { detail: Schema.String, integrationSessionId: IntegrationSessionId }
 ) {}
@@ -82,12 +82,12 @@ export class IntegrationCandidateGit extends Context.Service<IntegrationCandidat
   "@dalph/IntegrationCandidateGit"
 ) {}
 
-export class IntegrationCandidateGitReadFailure extends Schema.TaggedErrorClass<IntegrationCandidateGitReadFailure>()(
+export class IntegrationCandidateGitReadFailure extends Schema.TaggedError<IntegrationCandidateGitReadFailure>()(
   "IntegrationCandidateGitReadFailure",
   { candidateCommit: GitCommitSha, detail: Schema.String, repository: GitRepositoryLocator }
 ) {}
 
-export class IntegrationCandidateTargetLineageRejected extends Schema.TaggedErrorClass<IntegrationCandidateTargetLineageRejected>()(
+export class IntegrationCandidateTargetLineageRejected extends Schema.TaggedError<IntegrationCandidateTargetLineageRejected>()(
   "IntegrationCandidateTargetLineageRejected",
   { observedTargetHead: GitCommitSha, plannedBaseSha: GitCommitSha }
 ) {}

@@ -161,5 +161,5 @@ to remove obsolete suppressions.
 
 The repository-wide `dalph/effect-class-inheritance-only` Oxlint rule permits class
 inheritance only for Effect `Context.Service` tags and
-`Schema.TaggedErrorClass` failures. Other inheritance remains forbidden; do not
+`Schema.TaggedError` failures. Other inheritance remains forbidden; do not
 replace this policy with per-class suppressions.

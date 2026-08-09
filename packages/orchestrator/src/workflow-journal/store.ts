@@ -36,37 +36,37 @@ const JournalStoreOperation = Schema.Literals([
 ])
 
 /** Journal storage could not perform an operation and may become available later. */
-export class JournalStorageUnavailable extends Schema.TaggedErrorClass<JournalStorageUnavailable>()(
+export class JournalStorageUnavailable extends Schema.TaggedError<JournalStorageUnavailable>()(
   "JournalStorageUnavailable",
   { operation: JournalStoreOperation, detail: Schema.String }
 ) {}
 
 /** Another live writer currently owns the journal; retry requires new ownership. */
-export class JournalStorageLocked extends Schema.TaggedErrorClass<JournalStorageLocked>()("JournalStorageLocked", {
+export class JournalStorageLocked extends Schema.TaggedError<JournalStorageLocked>()("JournalStorageLocked", {
   operation: JournalStoreOperation,
   detail: Schema.String
 }) {}
 
 /** Journal access was denied and requires configuration or operator repair. */
-export class JournalStorageAccessDenied extends Schema.TaggedErrorClass<JournalStorageAccessDenied>()(
+export class JournalStorageAccessDenied extends Schema.TaggedError<JournalStorageAccessDenied>()(
   "JournalStorageAccessDenied",
   { operation: JournalStoreOperation, detail: Schema.String }
 ) {}
 
 /** Journal storage has exhausted capacity and cannot progress by immediate retry. */
-export class JournalStorageCapacityExhausted extends Schema.TaggedErrorClass<JournalStorageCapacityExhausted>()(
+export class JournalStorageCapacityExhausted extends Schema.TaggedError<JournalStorageCapacityExhausted>()(
   "JournalStorageCapacityExhausted",
   { operation: JournalStoreOperation, detail: Schema.String }
 ) {}
 
 /** Persisted journal bytes do not satisfy Dalph's workflow-journal-history schema. */
-export class JournalDataCorruption extends Schema.TaggedErrorClass<JournalDataCorruption>()("JournalDataCorruption", {
+export class JournalDataCorruption extends Schema.TaggedError<JournalDataCorruption>()("JournalDataCorruption", {
   operation: JournalStoreOperation,
   detail: Schema.String
 }) {}
 
 /** The database belongs to a journal schema this Dalph cannot safely open. */
-export class JournalSchemaIncompatible extends Schema.TaggedErrorClass<JournalSchemaIncompatible>()(
+export class JournalSchemaIncompatible extends Schema.TaggedError<JournalSchemaIncompatible>()(
   "JournalSchemaIncompatible",
   { found: JournalSchemaVersion, supported: JournalSchemaVersion }
 ) {}
@@ -80,33 +80,33 @@ export type JournalStoreError =
   | JournalStorageUnavailable
 
 /** The same durable key was presented with unequal workflow-journal-history content. */
-export class JournalStoreContradiction extends Schema.TaggedErrorClass<JournalStoreContradiction>()(
+export class JournalStoreContradiction extends Schema.TaggedError<JournalStoreContradiction>()(
   "JournalStoreContradiction",
   { runId: RunId, key: JournalRecordKey, existingPosition: JournalPosition }
 ) {}
 
 /** An in-Run capability was used for a Run other than the one installed behind it. */
-export class InRunJournalRunMismatch extends Schema.TaggedErrorClass<InRunJournalRunMismatch>()(
-  "InRunJournalRunMismatch",
-  { expectedRunId: RunId, requestedRunId: RunId }
-) {}
+export class InRunJournalRunMismatch extends Schema.TaggedError<InRunJournalRunMismatch>()("InRunJournalRunMismatch", {
+  expectedRunId: RunId,
+  requestedRunId: RunId
+}) {}
 
 /** Journal storage returned a non-successor position while the coordinator held exclusive ownership. */
-export class JournalPositionGap extends Schema.TaggedErrorClass<JournalPositionGap>()("JournalPositionGap", {
+export class JournalPositionGap extends Schema.TaggedError<JournalPositionGap>()("JournalPositionGap", {
   position: JournalPosition,
   expectedPosition: JournalPosition,
   runId: RunId
 }) {}
 
 /** Idempotent append returned a record unequal to the journal record at that position. */
-export class JournalRecordMismatch extends Schema.TaggedErrorClass<JournalRecordMismatch>()("JournalRecordMismatch", {
+export class JournalRecordMismatch extends Schema.TaggedError<JournalRecordMismatch>()("JournalRecordMismatch", {
   position: JournalPosition,
   key: JournalRecordKey,
   runId: RunId
 }) {}
 
 /** A newly appended record made the in-process journal prefix invalid and publication stopped. */
-export class JournalHistoryInvalid extends Schema.TaggedErrorClass<JournalHistoryInvalid>()("JournalHistoryInvalid", {
+export class JournalHistoryInvalid extends Schema.TaggedError<JournalHistoryInvalid>()("JournalHistoryInvalid", {
   position: JournalPosition,
   detail: Schema.String,
   runId: RunId
@@ -116,30 +116,30 @@ export class JournalHistoryInvalid extends Schema.TaggedErrorClass<JournalHistor
 export type JournalError = JournalHistoryInvalid | JournalPositionGap | JournalRecordMismatch
 
 /** Run establishment submitted an identity whose durable beginning already exists. */
-export class WorkflowRunAlreadyBegan extends Schema.TaggedErrorClass<WorkflowRunAlreadyBegan>()(
-  "WorkflowRunAlreadyBegan",
-  { beganAt: JournalPosition, runId: RunId }
-) {}
+export class WorkflowRunAlreadyBegan extends Schema.TaggedError<WorkflowRunAlreadyBegan>()("WorkflowRunAlreadyBegan", {
+  beganAt: JournalPosition,
+  runId: RunId
+}) {}
 
 /** Run establishment received an identity already used by non-lifecycle journal history. */
-export class WorkflowRunIdentityAlreadyUsed extends Schema.TaggedErrorClass<WorkflowRunIdentityAlreadyUsed>()(
+export class WorkflowRunIdentityAlreadyUsed extends Schema.TaggedError<WorkflowRunIdentityAlreadyUsed>()(
   "WorkflowRunIdentityAlreadyUsed",
   { firstRecordAt: JournalPosition, runId: RunId }
 ) {}
 
 /** Run establishment or termination named an identity for which no Run beginning exists. */
-export class WorkflowRunNotBegan extends Schema.TaggedErrorClass<WorkflowRunNotBegan>()("WorkflowRunNotBegan", {
+export class WorkflowRunNotBegan extends Schema.TaggedError<WorkflowRunNotBegan>()("WorkflowRunNotBegan", {
   runId: RunId
 }) {}
 
 /** Run establishment named a tracker target different from the one recorded when the Run began. */
-export class WorkflowRunTargetMismatch extends Schema.TaggedErrorClass<WorkflowRunTargetMismatch>()(
+export class WorkflowRunTargetMismatch extends Schema.TaggedError<WorkflowRunTargetMismatch>()(
   "WorkflowRunTargetMismatch",
   { recordedTarget: TrackerTarget, requestedTarget: TrackerTarget, runId: RunId }
 ) {}
 
 /** The caller attempted to activate a Run after its durable termination. */
-export class WorkflowRunAlreadyTerminated extends Schema.TaggedErrorClass<WorkflowRunAlreadyTerminated>()(
+export class WorkflowRunAlreadyTerminated extends Schema.TaggedError<WorkflowRunAlreadyTerminated>()(
   "WorkflowRunAlreadyTerminated",
   { runId: RunId, terminatedAt: JournalPosition }
 ) {}
