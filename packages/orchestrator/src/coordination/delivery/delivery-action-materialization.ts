@@ -8,6 +8,7 @@ import type {
   FreshIdentityDeliveryProposal,
   IdentityFreeDeliveryProposal
 } from "./delivery-action-proposal.js"
+import { acceptedWorkflowTransitionOperationId } from "./delivery-action-proposal.js"
 import type { MaterializedDeliveryAction } from "./delivery-action-executor.js"
 
 type FreshOperationProposal = Extract<
@@ -58,7 +59,7 @@ export const materializeDeliveryAction = Effect.fn("DeliveryRuntime.materializeA
 
 export const materializedOperationId = (action: MaterializedDeliveryAction): OperationId | null =>
   action._tag === "AcceptedOperationAction"
-    ? action.proposal.actionIdentity.operationId
+    ? acceptedWorkflowTransitionOperationId(action.proposal.route.transition)
     : action._tag === "FreshOperationAction" || action._tag === "FreshAttemptAction"
       ? action.operationId
       : null

@@ -30,7 +30,11 @@ import { DeliveryActionExecutor, type DeliveryActionExecutorService } from "../d
 import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
 import { FreshWorkflowStep } from "../delivery/fresh-workflow-step.js"
 import { frontierOf } from "../delivery/ticket-delivery-projection.js"
-import { DeliveryRuntimeResources, deliveryRuntimeResourcesLayer } from "../delivery/delivery-runtime-resources.js"
+import {
+  DeliveryRuntimeResources,
+  deliveryRuntimeResourcesLayer,
+  deliveryRuntimeResourcesOf
+} from "../delivery/delivery-runtime-resources.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import {
@@ -41,6 +45,7 @@ import {
 } from "../delivery/relations.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { runStabilizedDelivery } from "./run-stabilization.js"
+import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 const runId = RunId.make("run-stabilization")
 const target = FixtureTarget.make("run-stabilization-target")
 const emptyFrontier = { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] }
@@ -118,6 +123,7 @@ const supportWithoutResources = Layer.mergeAll(
     runId,
     worktreeRoot: WorktreeLocator.make("/stabilization")
   }),
+  plannedAttemptProtocolControllerLayer,
   Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
 )
 const support = Layer.merge(supportWithoutResources, deliveryRuntimeResourcesLayer)
@@ -284,12 +290,12 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
       const releases = yield* Ref.make(0)
       const observedAfterG2 = yield* Ref.make(false)
       const getCount = yield* Ref.make(0)
-      const resources = DeliveryRuntimeResources.of({
-        integrationTargets: {
+      const resources = DeliveryRuntimeResources.of(
+        deliveryRuntimeResourcesOf({
           ...controller,
           releaseAll: Ref.update(releases, (count) => count + 1).pipe(Effect.andThen(controller.releaseAll))
-        }
-      })
+        })
+      )
       const signal = {
         changes: SubscriptionRef.changes(state),
         get: Ref.updateAndGet(getCount, (count) => count + 1).pipe(

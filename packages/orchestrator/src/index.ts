@@ -1,5 +1,41 @@
 /* eslint-disable max-lines -- The package barrel intentionally lists the complete public API in one place. */
 export {
+  AttemptChoice,
+  AttemptChoiceAppliedEvent,
+  AttemptChoiceRequestId,
+  AttemptChoiceSubject,
+  AttemptImplementationAbandonedEvent,
+  AttemptQuiescenceProof,
+  AttemptStoppageIntendedEvent,
+  attemptChoiceSubjectKey,
+  sameAttemptChoiceRequestId,
+  sameAttemptChoiceSubject,
+  StoppedAttemptClaimNoReleaseObservedEvent
+} from "./workflow/protocols/attempt-choice/events.js"
+export { ApplyAttemptChoiceRequest } from "./workflow/protocols/attempt-choice/request.js"
+export {
+  AttemptChoiceAlreadyApplied,
+  type AttemptChoiceApplicationResult,
+  AttemptChoiceControl,
+  type AttemptChoiceStopStatus,
+  AttemptChoiceNotAvailable,
+  AttemptChoiceOutsidePreIntegrationPhase,
+  AttemptChoiceResultNotFound,
+  AttemptChoiceRequestIdentityContradiction,
+  AttemptChoiceRequestRunMismatch,
+  attemptChoiceControlLayer
+} from "./workflow/protocols/attempt-choice/control.js"
+export {
+  advanceAttemptStoppage,
+  type AttemptStoppageAdvanceResult,
+  AttemptStopChoiceContradiction,
+  AttemptStopClaimAuthorityMissing,
+  observeAttemptStoppageExecutor,
+  recordStoppedAttemptClaimNoRelease,
+  StoppedAttemptClaimObservationContradiction,
+  StoppedAttemptClaimObservationMissing
+} from "./workflow/protocols/attempt-choice/stop.js"
+export {
   ControlDirection,
   ControlDirectionApplicationOrdinal,
   ControlDirectionAppliedEvent,
@@ -212,11 +248,28 @@ export { nodeCoordinatorLockLayer } from "./authorities/coordinator-ownership/no
 export { nodeGitWorktreeLayer } from "./authorities/git/node-worktree.js"
 export {
   continuePlannedAttemptExecutorWork,
+  observePlannedAttemptExecutorState,
+  requestPlannedAttemptExecutorSuspension
+} from "./workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
+export {
+  beginPlannedAttemptExecutorResponsibility,
   plannedAttemptExecutorContinuationDisposition,
+  PlannedAttemptExecutorCommandReconciliationRequired,
   PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
-  requestPlannedAttemptExecutorSuspension
+  PlannedAttemptExecutorProjectionUnavailable,
+  PlannedAttemptExecutorResponsibilityAbandoned,
+  PlannedAttemptExecutorResponsibilityContradiction,
+  PlannedAttemptExecutorResponsibilityMissing,
+  PlannedAttemptExecutorStateUnavailable,
+  PlannedAttemptExecutorSuspensionLimitReached
 } from "./workflow/protocols/planned-attempt-executor-work/protocol.js"
+export {
+  makePlannedAttemptProtocolController,
+  PlannedAttemptProtocolController,
+  plannedAttemptProtocolControllerLayer,
+  type PlannedAttemptProtocolControllerService
+} from "./workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
 export * from "./workflow/protocols/integration-admission/events.js"
 export * from "./workflow/protocols/integration-admission/protocol.js"
@@ -335,7 +388,10 @@ export {
   type JournaledRunBootstrapError,
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
+  type ControlledDeliveryActionExecutorFactory,
   runRecoveredWorkflow,
+  runRecoveredWorkflowWithControlledDeliveryActionExecutor,
+  runWorkflowWithControlledDeliveryActionExecutor,
   runWorkflow
 } from "./coordination/run/run.js"
 export { runControlledWorkflow } from "./coordination/run/controlled-workflow.js"
@@ -403,7 +459,12 @@ export {
 export { delivery } from "./coordination/delivery/delivery.js"
 export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-planning.js"
 export { deliveryRuntime } from "./coordination/delivery/delivery-runtime-adapter.js"
-export { DeliveryActionExecutor } from "./coordination/delivery/delivery-action-executor.js"
+export {
+  DeliveryActionExecutor,
+  DeliveryActionProtocolAdmissionMissing,
+  type DeliveryActionExecutorService,
+  type MaterializedDeliveryAction
+} from "./coordination/delivery/delivery-action-executor.js"
 export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"
 export { DeliveryAcceptedFactPublication } from "./coordination/delivery/delivery-accepted-fact-publication.js"
 export {
@@ -430,6 +491,7 @@ export {
 } from "./coordination/delivery/run-delivery-runtime.js"
 export { runStabilizedDelivery } from "./coordination/run/run-stabilization.js"
 export {
+  AppliedAttemptChoice,
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,
@@ -480,11 +542,13 @@ export {
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   TaskClaimAcquisitionAuthority,
+  TaskClaimReleaseAuthority,
   WorkflowOperation,
   workflowOperationId
 } from "./workflow/registry/operation.js"

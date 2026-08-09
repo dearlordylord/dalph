@@ -11,6 +11,7 @@ import {
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
+import { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
 import { Journal, journalLayer } from "../delivery/journal.js"
 import {
   RunFinalityDecision,
@@ -46,6 +47,7 @@ export type JournaledRuntimeLayer = Layer.Layer<
 >
 
 interface RuntimeControls {
+  readonly attemptChoice: AttemptChoiceControl["Service"]
   readonly controlDirection: ControlDirectionApplication["Service"]
   readonly operationIdAllocator: OperationIdAllocatorService
   readonly runId: RunId
@@ -164,6 +166,7 @@ export const journaledRunBootstrapLayer = (
               const context = yield* Layer.build(runtime)
               const journal = Context.get(context, Journal)
               const controls: RuntimeControls = {
+                attemptChoice: Context.get(context, AttemptChoiceControl),
                 controlDirection: Context.get(context, ControlDirectionApplication),
                 operationIdAllocator: Context.get(context, OperationIdAllocator),
                 runId,
@@ -231,6 +234,7 @@ export const journaledRunBootstrapLayer = (
         )
 
       const operatorControl: JournaledRunBootstrapService["operatorControl"] = {
+        applyAttemptChoice: (input) => withRuntimeControls(({ attemptChoice }) => attemptChoice.apply(input)),
         applyControlDirection: (input) =>
           withRuntimeControls(
             ({ controlDirection, operationIdAllocator, runId, target, workflowInterpreter, workflowTrace }) =>
@@ -243,6 +247,7 @@ export const journaledRunBootstrapLayer = (
           ),
         applyTaskClaimReacquisition: (input) =>
           withRuntimeControls(({ taskClaimReacquisition }) => taskClaimReacquisition.apply(input)),
+        readAttemptChoice: (input) => withRuntimeControls(({ attemptChoice }) => attemptChoice.read(input)),
         readTaskWorkCapacity: (runId) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.read(runId)),
         setTaskWorkCapacity: (input) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.apply(input))
       }

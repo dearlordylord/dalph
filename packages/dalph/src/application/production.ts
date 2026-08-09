@@ -5,6 +5,7 @@ import {
   type JournaledRunBootstrap,
   type JournaledRuntimeLayerInput,
   type TrackerGraphReader,
+  attemptChoiceControlLayer,
   controlDirectionApplicationLayer,
   coordinatorOwnedGitWorktreeLayer,
   coordinatorOwnedTrackerMutationLayer,
@@ -85,6 +86,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           Layer.succeed(WorkflowInterpreter, interpreter)
         )
         const operatorControlLayer = Layer.mergeAll(
+          attemptChoiceControlLayer,
           controlDirectionApplicationLayer,
           taskClaimReacquisitionControlLayer,
           taskWorkCapacityControlLayer

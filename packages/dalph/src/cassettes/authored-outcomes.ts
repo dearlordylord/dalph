@@ -25,19 +25,31 @@ interface CompleteAuthoredObservedBehavior {
   readonly taskWorkResults: ReadonlyArray<TaskWorkResult>
 }
 
+const authoredExecutorReportKind = (
+  report: PlannedAttemptExecutorReport
+): "Running" | "SafelySuspended" | "TerminalAccepted" | "TerminalCompleted" | "TerminalFailed" =>
+  report._tag === "Terminal"
+    ? report.result._tag === "Accepted"
+      ? "TerminalAccepted"
+      : report.result._tag === "Completed"
+        ? "TerminalCompleted"
+        : "TerminalFailed"
+    : report._tag
+
 const orchestrationReportEvidence = (
   report: PlannedAttemptExecutorReport
 ): Extract<OrchestrationEvidence, { readonly _tag: "PlannedAttemptExecutorWorkReported" }> => ({
   _tag: "PlannedAttemptExecutorWorkReported",
   attemptId: report.correlation.attemptId,
-  report:
-    report._tag === "Terminal"
-      ? report.result._tag === "Accepted"
-        ? "TerminalAccepted"
-        : report.result._tag === "Completed"
-          ? "TerminalCompleted"
-          : "TerminalFailed"
-      : report._tag
+  report: authoredExecutorReportKind(report)
+})
+
+const orchestrationProjectionEvidence = (
+  report: PlannedAttemptExecutorReport
+): Extract<OrchestrationEvidence, { readonly _tag: "PlannedAttemptExecutorCommandProjectionObserved" }> => ({
+  _tag: "PlannedAttemptExecutorCommandProjectionObserved",
+  attemptId: report.correlation.attemptId,
+  report: authoredExecutorReportKind(report)
 })
 
 const targetVerificationEvidenceFor = (
@@ -106,6 +118,35 @@ const protocolEvidenceFor = (
     Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
   >
 ): ReadonlyArray<ProtocolEvidence> => {
+  if (event._tag === "AttemptChoiceApplied") {
+    return [
+      {
+        _tag: "AttemptChoiceApplied",
+        attemptId: event.subject.plannedAttempt.attemptId,
+        choice: event.choice,
+        observedTaskRevision: event.subject.observedTaskRevision,
+        taskId: event.subject.plannedAttempt.taskId
+      }
+    ]
+  }
+  if (event._tag === "AttemptImplementationAbandoned") {
+    return [
+      {
+        _tag: "AttemptImplementationAbandoned",
+        attemptId: event.subject.plannedAttempt.attemptId,
+        taskId: event.subject.plannedAttempt.taskId
+      }
+    ]
+  }
+  if (event._tag === "StoppedAttemptClaimNoReleaseObserved") {
+    return [
+      {
+        _tag: "StoppedAttemptClaimNoReleaseObserved",
+        claimState: event.observation._tag === "UnclaimedTask" ? "Missing" : "Foreign",
+        taskId: event.subject.plannedAttempt.taskId
+      }
+    ]
+  }
   if (event._tag === "ControlDirectionApplied") {
     return [
       {
@@ -161,6 +202,42 @@ const protocolEvidenceFor = (
   return []
 }
 
+type AuthoredExecutorEvidenceEvent = Extract<
+  JournalRecord["event"],
+  {
+    readonly _tag:
+      | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorWorkReported"
+      | "PlannedAttemptExecutorWorkResponsibilityBegan"
+  }
+>
+
+const isAuthoredExecutorEvidenceEvent = (event: JournalRecord["event"]): event is AuthoredExecutorEvidenceEvent =>
+  event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+  event._tag === "PlannedAttemptExecutorWorkReported" ||
+  event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+
+const executorOrchestrationEvidenceFor = (
+  event: AuthoredExecutorEvidenceEvent
+): ReadonlyArray<OrchestrationEvidence> => {
+  switch (event._tag) {
+    case "PlannedAttemptExecutorWorkResponsibilityBegan":
+      return [
+        {
+          _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
+          attemptId: event.plannedAttempt.attemptId,
+          taskId: event.plannedAttempt.taskId
+        }
+      ]
+    case "PlannedAttemptExecutorWorkReported":
+      return [orchestrationReportEvidence(event.report)]
+    case "PlannedAttemptExecutorCommandProjectionObserved":
+      return event.observation._tag === "ExactExecutorReport"
+        ? [orchestrationProjectionEvidence(event.observation.report)]
+        : []
+  }
+}
+
 const orchestrationEvidenceFor = (
   event: JournalRecord["event"],
   taskByAttempt: ReadonlyMap<AttemptId, TaskId>
@@ -183,18 +260,7 @@ const orchestrationEvidenceFor = (
     return targetVerificationEvidenceFor(event, taskByAttempt)
   }
   if (isTargetPromotionEvidenceEvent(event)) return targetPromotionEvidenceFor(event, taskByAttempt)
-  if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-    return [
-      {
-        _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
-        attemptId: event.plannedAttempt.attemptId,
-        taskId: event.plannedAttempt.taskId
-      }
-    ]
-  }
-  if (event._tag === "PlannedAttemptExecutorWorkReported") {
-    return [orchestrationReportEvidence(event.report)]
-  }
+  if (isAuthoredExecutorEvidenceEvent(event)) return executorOrchestrationEvidenceFor(event)
   return []
 }
 

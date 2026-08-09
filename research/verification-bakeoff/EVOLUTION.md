@@ -221,13 +221,23 @@ transition, boundary call, journal event, Git fact, or tracker fact.
 ### Chosen property and assumptions
 
 The owning production model `specs/plannedAttemptExecutor.qnt` now states
-`suspensionRequestEventuallyReleasesPosition`: after Dalph asks the executor
-to safely suspend the exact planned attempt, the task-work position is
-eventually released. Weak fairness is applied only to
-`reportSafelySuspended`. That is faithful because the exact planned report is
-continuously enabled while the request remains pending; a terminal report may
-arrive first and also releases the position. Requiring eventual release avoids
-incorrectly demanding a SafelySuspended report after a Terminal report.
+`releasableEvidenceEventuallyReleasesPosition`: once an exact safe-suspension
+or terminal executor response/projection is durable for the planned attempt,
+the task-work position is eventually released. Weak fairness is applied to the
+focused protocol action `releasableEvidenceStep`; while such evidence is
+pending, its settlement is the enabled step and consumes the evidence.
+Running, unavailable, and contradictory
+observations do not trigger the premise. In particular, the model does not
+invent an environment guarantee that every Suspend command is eventually
+honored.
+
+TLC explores `releasableEvidenceStep`, a focused subgraph made only from the
+owning model's production actions. It reaches direct safe/terminal responses,
+exact command projections, and fresh safe/terminal state projections, then
+their real settlement actions. It excludes unavailable/contradictory recovery
+branches after the premise because those branches cannot be enabled while
+releasable evidence is pending; this keeps the temporal gate finite without
+copying transition semantics into a second model.
 
 The model's one-attempt bound is intentional. This property governs one
 already-planned `(RunId, AttemptId)` and its one owned task-work position; it
@@ -237,16 +247,16 @@ does not claim fairness across all tasks in a Run.
 
 | Accepted scenario | Concrete result | Executable evidence |
 |---|---|---|
-| A developer runs the correct default gate | the visible step names `suspensionRequestEventuallyReleasesPosition` and TLC; only exit 0 plus `[ok] No violation found` is accepted | `pnpm check:quint`; `assertCleanTemporalVerdict` unit tests reject empty and unsupported output; bounded-command tests exercise timeout termination |
-| The temporal behavior is mutated to retain the position forever | TLC finds the ordinary safe-suspension counterexample; a failure without a violation marker is not accepted | `plannedAttemptExecutor_temporal_negative.qnt`; `assertViolatedTemporalVerdict` tests |
+| A developer runs the correct default gate | the visible step names `releasableEvidenceEventuallyReleasesPosition` and TLC; only exit 0 plus `[ok] No violation found` is accepted | `pnpm check:quint`; `assertCleanTemporalVerdict` unit tests reject empty and unsupported output; bounded-command tests exercise timeout termination |
+| The temporal behavior is mutated to retain the position after releasable evidence | TLC finds the ordinary settlement counterexample; a failure without a violation marker is not accepted | `plannedAttemptExecutor_temporal_negative.qnt`; `assertViolatedTemporalVerdict` tests |
 | A fresh runner lacks TLC's Apalache distribution | the default-backend check must create Quint's exact `apalache-dist-0.56.1/apalache/lib/apalache.jar` before TLC starts; absence fails before the temporal call | production `assertTlcArtifactPrepared`; hermetic exact-cache-path test starts absent, prepares it, and requires it; preparation-failure test proves no temporal invocation |
 
 ### Measurement
 
-On Linux aarch64 with Quint 0.32.0, the correct temporal property completed in
-about 0.68 seconds and its mutant in about 0.69 seconds. The complete
-`pnpm check:quint` gate completed in 84.27 seconds, including artifact
+On Linux aarch64 with Quint 0.32.0, the merged production property's TLC run
+completed in 1.23 seconds and its mutant in 0.93 seconds. The complete
+`pnpm check:quint` gate completed in 137.99 seconds, including artifact
 preparation, every existing model check, the real TLC verdict, and the mutant.
-The gate enforces the 150-second budget as a decreasing wall-clock deadline,
+The gate enforces the 300-second budget as a decreasing wall-clock deadline,
 so a hung temporal command cannot consume a fresh per-command allowance and
 then report the overrun only after later work.

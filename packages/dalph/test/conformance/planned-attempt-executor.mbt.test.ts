@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The complete executor protocol action map stays visible in one adapter. */
 import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
@@ -5,7 +6,6 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
-  plannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -16,15 +16,20 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import {
+  beginPlannedAttemptExecutorResponsibility,
   continuePlannedAttemptExecutorWork,
   type JournalRecord,
   JournalStore,
   journalStoreCapabilities,
   legacyUnpublishedInRunJournalLayer,
   JournalPosition,
+  makePlannedAttemptProtocolController,
+  observePlannedAttemptExecutorState,
+  PlannedAttemptProtocolController,
+  type PlannedAttemptProtocolControllerService,
   requestPlannedAttemptExecutorSuspension,
   TaskWorkCapacity
-} from "@dalph/orchestrator"
+} from "../../../orchestrator/src/index.js"
 import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
 import {
   makeDeliveryRuntimeAdmissionController,
@@ -47,7 +52,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   taskRevision: TaskRevision.make("model-revision"),
   worktree: WorktreeLocator.make("/worktrees/model-attempt")
 })
-const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
 const continuationProposal = {
   ...trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(1),
@@ -57,92 +62,102 @@ const continuationProposal = {
   }),
   admission: {
     integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+    plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
     taskWorkPosition: {
       _tag: "TaskWorkPositionRequired" as const,
       mode: "ReserveOrReuse" as const,
-      retainAs: correlation,
       taskId: plannedAttempt.taskId
     }
   },
   id: DeliveryProposalId.make("planned-attempt-executor-model-continuation")
 }
 
+const Variant = Schema.Struct({ tag: Schema.String, value: Schema.Unknown })
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
-    consecutiveRunningReports: ITFBigInt,
+    commandCallCount: ITFBigInt,
+    commandIntentCount: ITFBigInt,
+    commandResponseEvidenceCount: ITFBigInt,
+    commandResponseSettlementCount: ITFBigInt,
+    commandSettlementCount: ITFBigInt,
+    commandState: Variant,
+    evidence: Variant,
+    nextCommandOrdinal: ITFBigInt,
     positionHeld: Schema.Boolean,
-    status: Schema.Struct({ tag: Schema.String, value: Schema.Unknown })
+    reconciliationProjectionsThisActivation: ITFBigInt,
+    recoveryCount: ITFBigInt,
+    responseAmbiguous: Schema.Boolean,
+    startOrContinueIntentsSinceSafeSuspension: ITFBigInt,
+    status: Variant,
+    suspendIntentsSinceRunning: ITFBigInt
   })
 })
 
-/** The claimed correlation the payload of a report variant carries. */
-const SpecCorrelation = Schema.Struct({ attemptId: ITFBigInt, runId: ITFBigInt })
-
-type ObservedCorrelation = { readonly attemptId: bigint; readonly runId: bigint }
-
-/**
- * Only executor reports carry a correlation. The two phases before one arrives
- * are Dalph's own, and the spec gives their variants no payload, so nothing
- * here may invent an identity for them.
- */
-const reportTags: ReadonlySet<string> = new Set(["Running", "SuspensionRequested", "SafelySuspended", "Terminal"])
-
-const claimedOf = (status: { readonly tag: string; readonly value: unknown }) =>
-  reportTags.has(status.tag)
-    ? Schema.decodeUnknownEffect(SpecCorrelation)(status.value).pipe(
-        Effect.map((claimed): ObservedCorrelation | undefined => claimed)
-      )
-    : Effect.succeed(undefined)
+const variantTag = (value: unknown): string =>
+  typeof value === "object" && value !== null && "tag" in value ? String(value.tag) : String(value)
+const pickedTag = (value: unknown): string => variantTag(value)
+const reportFrom = (value: unknown): PlannedAttemptExecutorReport => {
+  switch (pickedTag(value)) {
+    case "ReportSafelySuspended":
+      return PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+    case "ReportTerminal":
+      return PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+    default:
+      return PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+  }
+}
 
 const executorConformanceDriver = defineDriver(
   {
+    acceptFreshStateProjectionProof: {},
     beginResponsibility: {},
-    finishTerminal: {},
+    callStartOrContinue: {},
+    callSuspend: {},
     init: {},
-    reportSafelySuspended: {},
-    requestSafeSuspension: {},
-    startOrContinueRunning: {}
+    loseCommandResponse: {},
+    receiveCommandResponse: { report: Schema.Unknown },
+    recordCommandProjection: { commandProjection: Schema.Unknown },
+    recordFreshStateProjection: { stateObservation: Schema.Unknown },
+    recordStartOrContinueIntent: {},
+    recordSuspendIntent: {},
+    recoverActivation: {},
+    settleCommandProjection: {},
+    settleCommandResponse: {}
   },
   () => {
-    let latestReport: PlannedAttemptExecutorReport | undefined
-    let nextStartReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-    let pendingSuspension: Fiber.Fiber<PlannedAttemptExecutorReport> | undefined
-    let pendingStart: Fiber.Fiber<PlannedAttemptExecutorReport> | undefined
-    let controller: DeliveryRuntimeAdmissionController | undefined
     let records: ReadonlyArray<JournalRecord> = []
-    let status = "ResponsibilityNotBegun"
-    let responsibilityRecorded = Deferred.makeUnsafe<void>()
-    let startResponse: Deferred.Deferred<PlannedAttemptExecutorReport> | undefined
-    let suspensionResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
-    const executor = PlannedAttemptExecutor.of({
-      project: () => Effect.succeed(Option.fromUndefinedOr(latestReport)),
-      requestSuspension: () =>
-        Deferred.await(suspensionResponse).pipe(
-          Effect.tap((report) =>
-            Effect.sync(() => {
-              latestReport = report
-            })
-          )
-        ),
-      startOrContinue: () => {
-        const response = startResponse
-        return response === undefined
-          ? Effect.sync(() => {
-              latestReport = nextStartReport
-              return nextStartReport
-            })
-          : Deferred.await(response).pipe(
-              Effect.tap((report) =>
-                Effect.sync(() => {
-                  latestReport = report
-                })
-              )
-            )
-      }
-    })
+    let controller: DeliveryRuntimeAdmissionController | undefined
+    let protocolController: PlannedAttemptProtocolControllerService | undefined
+    let authorityReport: PlannedAttemptExecutorReport | undefined
+    let commandKind: "StartOrContinue" | "Suspend" = "StartOrContinue"
+    let commandIntentGate = Deferred.makeUnsafe<void>()
+    let commandIntentSignal = Deferred.makeUnsafe<void>()
+    let commandCallSignal = Deferred.makeUnsafe<void>()
+    let commandResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
+    let reportGate = Deferred.makeUnsafe<void>()
+    let reportSignal = Deferred.makeUnsafe<void>()
+    let projectionGate = Deferred.makeUnsafe<void>()
+    let projectionSignal = Deferred.makeUnsafe<void>()
+    let stateGate = Deferred.makeUnsafe<void>()
+    let stateSignal = Deferred.makeUnsafe<void>()
+    let pauseCommandIntent = false
+    let pauseReport = false
+    let pauseProjection = false
+    let pauseState = false
+    let pendingCommand: Fiber.Fiber<PlannedAttemptExecutorReport, unknown> | undefined
+    let pendingProjection: Fiber.Fiber<PlannedAttemptExecutorReport, unknown> | undefined
+    let pendingState: Fiber.Fiber<PlannedAttemptExecutorReport, unknown> | undefined
+    let commandCalls = 0
+    // Recovery count is an activation-local driver fact; command and evidence
+    // state below still comes exclusively from the production journal.
+    let recoveryCount = 0
+    let projectionBaseline = 0
+
     const journal = JournalStore.of({
       append: (eventRunId, key, event) =>
         Effect.gen(function* () {
+          const existing = records.find((record) => record.runId === eventRunId && record.key === key)
+          if (existing !== undefined) return existing
           const record = {
             event,
             key,
@@ -150,204 +165,421 @@ const executorConformanceDriver = defineDriver(
             runId: eventRunId
           } satisfies JournalRecord
           records = [...records, record]
-          if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-            yield* Deferred.succeed(responsibilityRecorded, undefined)
+          if (pauseCommandIntent && event._tag === "PlannedAttemptExecutorCommandIntended") {
+            pauseCommandIntent = false
+            yield* Deferred.succeed(commandIntentSignal, undefined)
+            yield* Deferred.await(commandIntentGate)
+          }
+          if (pauseReport && event._tag === "PlannedAttemptExecutorWorkReported") {
+            pauseReport = false
+            yield* Deferred.succeed(reportSignal, undefined)
+            yield* Deferred.await(reportGate)
+          }
+          if (pauseProjection && event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
+            pauseProjection = false
+            yield* Deferred.succeed(projectionSignal, undefined)
+            yield* Deferred.await(projectionGate)
+          }
+          if (pauseState && event._tag === "PlannedAttemptExecutorStateObserved") {
+            pauseState = false
+            yield* Deferred.succeed(stateSignal, undefined)
+            yield* Deferred.await(stateGate)
           }
           return record
         }),
-      beginRun: () => Effect.die("executor conformance never begins a Run"),
+      beginRun: () => Effect.die("executor model does not own Run lifecycle"),
       read: (requestedRunId) => Effect.succeed(records.filter(({ runId }) => runId === requestedRunId)),
-      readRunForRecovery: () => Effect.die("executor conformance never recovers a Run"),
-      scan: () => Effect.die("executor conformance never scans the journal"),
-      terminateRun: () => Effect.die("executor conformance never terminates a Run")
+      readRunForRecovery: () => Effect.die("executor model reconstructs its exact journal locally"),
+      scan: () => Effect.die("executor model never scans all Runs"),
+      terminateRun: () => Effect.die("executor model never terminates its Run")
     })
-    const legacyJournalLayer = legacyUnpublishedInRunJournalLayer.pipe(
+    const journalLayer = legacyUnpublishedInRunJournalLayer.pipe(
       Layer.provideMerge(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
     )
-    const workflowLayer = Layer.merge(legacyJournalLayer, Layer.succeed(PlannedAttemptExecutor, executor))
-    const continueExecutorWorkflow = () =>
-      continuePlannedAttemptExecutorWork(plannedAttempt).pipe(Effect.provide(workflowLayer), Effect.orDie)
-    const suspendExecutorWorkflow = () =>
-      requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(Effect.provide(workflowLayer), Effect.orDie)
-    const requireController = (): Effect.Effect<DeliveryRuntimeAdmissionController> =>
-      controller === undefined ? Effect.die("admission controller must be initialized") : Effect.succeed(controller)
-    const releasePositionIfHeld = Effect.fn("PlannedAttemptExecutorConformance.releasePositionIfHeld")(function* () {
+    const executor = PlannedAttemptExecutor.of({
+      project: () => Effect.succeed(Option.fromUndefinedOr(authorityReport)),
+      requestSuspension: () =>
+        Effect.gen(function* () {
+          commandCalls += 1
+          yield* Deferred.succeed(commandCallSignal, undefined)
+          return yield* Deferred.await(commandResponse)
+        }),
+      startOrContinue: () =>
+        Effect.gen(function* () {
+          commandCalls += 1
+          yield* Deferred.succeed(commandCallSignal, undefined)
+          return yield* Deferred.await(commandResponse)
+        })
+    })
+    const workflowLayer = Layer.merge(journalLayer, Layer.succeed(PlannedAttemptExecutor, executor))
+    const provideWorkflow = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      protocolController === undefined
+        ? Effect.die("planned-attempt protocol controller not initialized")
+        : effect.pipe(
+            Effect.provide(workflowLayer),
+            Effect.provideService(PlannedAttemptProtocolController, protocolController)
+          )
+    const workflow = () =>
+      commandKind === "Suspend"
+        ? provideWorkflow(requestPlannedAttemptExecutorSuspension(plannedAttempt))
+        : provideWorkflow(continuePlannedAttemptExecutorWork(plannedAttempt))
+    const requireController = () =>
+      controller === undefined ? Effect.die("admission controller not initialized") : Effect.succeed(controller)
+    const reservePosition = Effect.fn("ExecutorModel.reservePosition")(function* () {
       const admission = yield* requireController()
       const snapshot = yield* admission.snapshot
-      if (snapshot.positions.has(plannedAttempt.taskId)) {
-        yield* admission.releasePlannedAttemptPosition(correlation)
+      if (!snapshot.positions.has(plannedAttempt.taskId)) {
+        const decision = yield* admission.tryReserve(continuationProposal)
+        if (decision._tag === "Deferred") return yield* Effect.die("planned attempt must be admitted")
+        yield* admission.bindPlannedAttemptPosition(plannedAttempt.taskId, correlation)
       }
     })
-    const reservePositionIfAvailable = Effect.fn("PlannedAttemptExecutorConformance.reservePositionIfAvailable")(
-      function* () {
-        const admission = yield* requireController()
-        const decision = yield* admission.tryReserve(continuationProposal)
-        if (decision._tag === "Deferred") {
-          return yield* Effect.die("planned attempt must be admitted")
-        }
+    const releasePosition = Effect.fn("ExecutorModel.releasePosition")(function* () {
+      const admission = yield* requireController()
+      const snapshot = yield* admission.snapshot
+      if (snapshot.positions.has(plannedAttempt.taskId)) yield* admission.releasePlannedAttemptPosition(correlation)
+    })
+    const resetCommand = (kind: typeof commandKind) => {
+      commandKind = kind
+      commandIntentGate = Deferred.makeUnsafe<void>()
+      commandIntentSignal = Deferred.makeUnsafe<void>()
+      commandCallSignal = Deferred.makeUnsafe<void>()
+      commandResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
+      reportGate = Deferred.makeUnsafe<void>()
+      reportSignal = Deferred.makeUnsafe<void>()
+      pauseCommandIntent = true
+      pauseReport = false
+    }
+    const recordIntent = (kind: typeof commandKind) =>
+      Effect.gen(function* () {
+        resetCommand(kind)
+        pendingCommand = yield* workflow().pipe(Effect.forkDetach({ startImmediately: true }))
+        yield* Deferred.await(commandIntentSignal)
+      })
+    const call = () =>
+      Deferred.succeed(commandIntentGate, undefined).pipe(
+        Effect.andThen(Deferred.await(commandCallSignal)),
+        Effect.asVoid
+      )
+    const settleAccepted = (fiber: Fiber.Fiber<PlannedAttemptExecutorReport, unknown>) =>
+      Effect.gen(function* () {
+        const report = yield* Fiber.join(fiber)
+        if (report._tag === "SafelySuspended" || report._tag === "Terminal") yield* releasePosition()
+        else yield* reservePosition()
+      })
+    const projectionEventCount = () =>
+      records.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+          event._tag === "PlannedAttemptExecutorStateObserved"
+      ).length
+    const unmatchedCommand = () => {
+      const intended = records.findLast(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+      if (intended?.event._tag !== "PlannedAttemptExecutorCommandIntended") return undefined
+      const intendedOrdinal = intended.event.ordinal
+      const settled = records.some(
+        ({ event, position }, index) =>
+          position > intended.position &&
+          !(
+            index === records.length - 1 &&
+            ((event._tag === "PlannedAttemptExecutorWorkReported" && pendingCommand !== undefined) ||
+              (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" && pendingProjection !== undefined))
+          ) &&
+          (event._tag === "PlannedAttemptExecutorWorkReported" ||
+            (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+              event.commandOrdinal === intendedOrdinal &&
+              event.observation._tag === "ExactExecutorReport"))
+      )
+      return settled ? undefined : intended.event
+    }
+    const evidenceTag = () => {
+      if (pauseReport === false && pendingCommand !== undefined) {
+        const latest = records.at(-1)?.event
+        if (latest?._tag === "PlannedAttemptExecutorWorkReported") return "CommandResponse"
       }
-    )
-    const completePendingSuspension = (report: PlannedAttemptExecutorReport) =>
-      Effect.gen(function* () {
-        yield* Deferred.succeed(suspensionResponse, report)
-        if (pendingSuspension === undefined) {
-          return yield* Effect.die("suspension request must be pending")
+      const latest = records.at(-1)?.event
+      if (pendingProjection !== undefined && latest?._tag === "PlannedAttemptExecutorCommandProjectionObserved")
+        return "CommandProjectionEvidence"
+      if (pendingState !== undefined && latest?._tag === "PlannedAttemptExecutorStateObserved")
+        return "FreshStateProjection"
+      return "NoEvidence"
+    }
+    const exactReport = (event: JournalRecord["event"] | undefined) => {
+      if (event?._tag === "PlannedAttemptExecutorWorkReported") return event.report
+      if (
+        event?._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+        event?._tag === "PlannedAttemptExecutorStateObserved"
+      )
+        return event.observation._tag === "ExactExecutorReport" ? event.observation.report : undefined
+      return undefined
+    }
+    const settledCommands = () => {
+      let activeIntent:
+        | Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorCommandIntended" }>
+        | undefined
+      const settlements: Array<{
+        readonly command: "StartOrContinue" | "Suspend"
+        readonly recordIndex: number
+        readonly report: PlannedAttemptExecutorReport
+        readonly source: "Projection" | "Response"
+      }> = []
+      records.forEach(({ event }, index) => {
+        if (event._tag === "PlannedAttemptExecutorCommandIntended") {
+          activeIntent = event
+          return
         }
-        const observed = yield* Fiber.join(pendingSuspension)
-        pendingSuspension = undefined
-        status = observed._tag
-        if (observed._tag === "SafelySuspended" || observed._tag === "Terminal") {
-          yield* releasePositionIfHeld()
+        const report = exactReport(event)
+        const isPendingEvidence =
+          index === records.length - 1 &&
+          ((event._tag === "PlannedAttemptExecutorWorkReported" && pendingCommand !== undefined) ||
+            (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" && pendingProjection !== undefined))
+        if (isPendingEvidence || activeIntent === undefined || report === undefined) return
+        if (event._tag === "PlannedAttemptExecutorStateObserved") return
+        if (
+          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+          event.commandOrdinal !== activeIntent.ordinal
+        ) {
+          return
         }
+        settlements.push({
+          command: activeIntent.command,
+          recordIndex: index,
+          report,
+          source: event._tag === "PlannedAttemptExecutorWorkReported" ? "Response" : "Projection"
+        })
+        activeIntent = undefined
       })
-    const completePendingStart = (report: PlannedAttemptExecutorReport) =>
-      Effect.gen(function* () {
-        const start = pendingStart
-        const response = startResponse
-        if (start === undefined || response === undefined) {
-          return yield* Effect.die("executor start must be pending after responsibility begins")
-        }
-        yield* Deferred.succeed(response, report)
-        const result = yield* Fiber.join(start)
-        pendingStart = undefined
-        startResponse = undefined
-        return result
-      })
-    const invokeStart = (report: PlannedAttemptExecutorReport) =>
-      Effect.gen(function* () {
-        const admission = yield* requireController()
-        const snapshot = yield* admission.snapshot
-        if (!snapshot.positions.has(plannedAttempt.taskId)) {
-          yield* reservePositionIfAvailable()
-        }
-        const observed =
-          pendingStart === undefined
-            ? yield* Effect.suspend(() => {
-                nextStartReport = report
-                return continueExecutorWorkflow()
-              })
-            : yield* completePendingStart(report)
-        status = observed._tag
-        if (observed._tag === "Terminal") {
-          yield* releasePositionIfHeld()
-        }
-      })
+      return settlements
+    }
+
     return {
-      beginResponsibility: () =>
-        Effect.gen(function* () {
-          yield* reservePositionIfAvailable()
-          responsibilityRecorded = Deferred.makeUnsafe()
-          startResponse = Deferred.makeUnsafe()
-          pendingStart = yield* continueExecutorWorkflow().pipe(Effect.forkDetach({ startImmediately: true }))
-          yield* Deferred.await(responsibilityRecorded)
-          status = "ResponsibilityBegan"
-        }),
-      finishTerminal: () =>
-        pendingSuspension === undefined
-          ? invokeStart(
-              PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-            )
-          : completePendingSuspension(
-              PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-            ),
-      getState: () =>
-        Effect.gen(function* () {
-          const snapshot = yield* (yield* requireController()).snapshot
-          // Read off the report the executor actually made rather than
-          // restating the planned identity, which would compare a constant
-          // against itself.
-          const claimed: ObservedCorrelation | undefined =
-            latestReport === undefined
-              ? undefined
-              : { attemptId: BigInt(latestReport.correlation.attemptId), runId: BigInt(latestReport.correlation.runId) }
-          const acceptedReports = records.filter(
-            ({ event }) =>
-              event._tag === "PlannedAttemptExecutorWorkReported" &&
-              event.report.correlation.runId === correlation.runId &&
-              event.report.correlation.attemptId === correlation.attemptId
-          )
-          const lastSafeSuspension = acceptedReports.findLastIndex(
-            ({ event }) =>
-              event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended"
-          )
-          const consecutiveRunningReports = acceptedReports
-            .slice(lastSafeSuspension + 1)
-            .filter(
-              ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Running"
-            ).length
-          return {
-            claimed,
-            consecutiveRunningReports: BigInt(consecutiveRunningReports),
-            positionHeld: snapshot.positions.has(plannedAttempt.taskId),
-            status
-          }
-        }),
       init: () =>
         Effect.gen(function* () {
-          if (pendingSuspension !== undefined) {
-            yield* Fiber.interrupt(pendingSuspension)
-          }
-          if (pendingStart !== undefined) {
-            yield* Fiber.interrupt(pendingStart)
-          }
+          if (pendingCommand !== undefined) yield* Fiber.interrupt(pendingCommand)
+          if (pendingProjection !== undefined) yield* Fiber.interrupt(pendingProjection)
+          if (pendingState !== undefined) yield* Fiber.interrupt(pendingState)
+          records = []
+          authorityReport = undefined
+          commandCalls = 0
+          recoveryCount = 0
+          projectionBaseline = 0
+          pendingCommand = undefined
+          pendingProjection = undefined
+          pendingState = undefined
+          const freshProtocolController = yield* makePlannedAttemptProtocolController()
+          protocolController = freshProtocolController
           controller = yield* makeDeliveryRuntimeAdmissionController(
             { capacity: TaskWorkCapacity.make(1), held: [] },
             yield* makeIntegrationTargetResourceController()
-          )
-          latestReport = undefined
-          pendingSuspension = undefined
-          pendingStart = undefined
-          records = []
-          status = "ResponsibilityNotBegun"
-          responsibilityRecorded = Deferred.makeUnsafe()
-          startResponse = undefined
-          suspensionResponse = Deferred.makeUnsafe()
+          ).pipe(Effect.provideService(PlannedAttemptProtocolController, freshProtocolController))
         }),
-      requestSafeSuspension: () =>
+      beginResponsibility: () =>
+        reservePosition().pipe(
+          Effect.andThen(provideWorkflow(beginPlannedAttemptExecutorResponsibility(plannedAttempt))),
+          Effect.orDie,
+          Effect.asVoid
+        ),
+      recordStartOrContinueIntent: () =>
+        reservePosition().pipe(Effect.andThen(recordIntent("StartOrContinue")), Effect.orDie),
+      recordSuspendIntent: () => recordIntent("Suspend").pipe(Effect.orDie),
+      callStartOrContinue: () => call().pipe(Effect.orDie),
+      callSuspend: () => call().pipe(Effect.orDie),
+      receiveCommandResponse: ({ report }) =>
         Effect.gen(function* () {
-          suspensionResponse = Deferred.makeUnsafe()
-          pendingSuspension = yield* suspendExecutorWorkflow().pipe(Effect.forkDetach({ startImmediately: true }))
-          status = "SuspensionRequested"
+          pauseReport = true
+          const response = reportFrom(report)
+          authorityReport = response
+          yield* Deferred.succeed(commandResponse, response)
+          yield* Deferred.await(reportSignal)
+        }).pipe(Effect.orDie),
+      settleCommandResponse: () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(reportGate, undefined)
+          if (pendingCommand === undefined) return yield* Effect.die("command response must be pending")
+          yield* settleAccepted(pendingCommand)
+          pendingCommand = undefined
+        }).pipe(Effect.orDie),
+      loseCommandResponse: () =>
+        Effect.gen(function* () {
+          if (pendingCommand === undefined) return yield* Effect.die("command must be pending")
+          yield* Fiber.interrupt(pendingCommand)
+          pendingCommand = undefined
         }),
-      reportSafelySuspended: () =>
-        completePendingSuspension(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })),
-      startOrContinueRunning: () => invokeStart(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+      recordCommandProjection: ({ commandProjection }) =>
+        Effect.gen(function* () {
+          projectionGate = Deferred.makeUnsafe<void>()
+          projectionSignal = Deferred.makeUnsafe<void>()
+          pauseProjection = true
+          authorityReport =
+            pickedTag(commandProjection) === "CommandProjectionUnavailable"
+              ? undefined
+              : pickedTag(commandProjection) === "CommandProjectionContradiction"
+                ? PlannedAttemptExecutorReport.cases.Running.make({
+                    correlation: { attemptId: AttemptId.make("other"), runId: plannedAttempt.runId }
+                  })
+                : pickedTag(commandProjection) === "CommandProjectionExactSafelySuspended"
+                  ? PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+                  : pickedTag(commandProjection) === "CommandProjectionExactTerminal"
+                    ? PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+                    : PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+          pendingProjection = yield* workflow().pipe(Effect.forkDetach({ startImmediately: true }))
+          yield* Deferred.await(projectionSignal)
+        }).pipe(Effect.orDie),
+      settleCommandProjection: () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(projectionGate, undefined)
+          if (pendingProjection === undefined) return yield* Effect.die("command projection must be pending")
+          yield* settleAccepted(pendingProjection)
+          pendingProjection = undefined
+        }).pipe(Effect.orDie),
+      recordFreshStateProjection: ({ stateObservation }) =>
+        Effect.gen(function* () {
+          stateGate = Deferred.makeUnsafe<void>()
+          stateSignal = Deferred.makeUnsafe<void>()
+          pauseState = true
+          authorityReport =
+            pickedTag(stateObservation) === "ExecutorStateUnavailable"
+              ? undefined
+              : pickedTag(stateObservation) === "ExecutorStateSafelySuspended"
+                ? PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+                : pickedTag(stateObservation) === "ExecutorStateTerminal"
+                  ? PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+                  : PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+          pendingState = yield* provideWorkflow(observePlannedAttemptExecutorState(plannedAttempt)).pipe(
+            Effect.forkDetach({ startImmediately: true })
+          )
+          yield* Deferred.await(stateSignal)
+        }).pipe(Effect.orDie),
+      acceptFreshStateProjectionProof: () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(stateGate, undefined)
+          if (pendingState === undefined) return yield* Effect.die("state projection must be pending")
+          yield* Fiber.join(pendingState)
+          pendingState = undefined
+          yield* releasePosition()
+        }).pipe(Effect.orDie),
+      recoverActivation: () =>
+        Effect.gen(function* () {
+          if (pendingProjection !== undefined) {
+            yield* Deferred.succeed(projectionGate, undefined)
+            yield* Fiber.await(pendingProjection)
+            pendingProjection = undefined
+          }
+          if (pendingState !== undefined) {
+            yield* Deferred.succeed(stateGate, undefined)
+            yield* Fiber.await(pendingState)
+            pendingState = undefined
+          }
+          projectionBaseline = projectionEventCount()
+          recoveryCount = Math.min(recoveryCount + 1, 3)
+        }),
+      getState: () =>
+        Effect.gen(function* () {
+          const admission = yield* requireController()
+          const snapshot = yield* admission.snapshot
+          const intents = records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+          const reports = records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")
+          const settlements = settledCommands()
+          const latestSafeSettlement = settlements.findLast(({ report }) => report._tag === "SafelySuspended")
+          const latestAcceptedSafeStateIndex = records.findLastIndex(
+            ({ event }, index) =>
+              !(index === records.length - 1 && pendingState !== undefined) &&
+              event._tag === "PlannedAttemptExecutorStateObserved" &&
+              event.observation._tag === "ExactExecutorReport" &&
+              event.observation.report._tag === "SafelySuspended"
+          )
+          const latestSafeIndex = Math.max(latestSafeSettlement?.recordIndex ?? -1, latestAcceptedSafeStateIndex)
+          const sinceSafe = records.slice(latestSafeIndex + 1)
+          const latestStartRunningSettlement = settlements.findLast(
+            ({ command, report }) => command === "StartOrContinue" && report._tag === "Running"
+          )
+          const sinceRunning = records.slice((latestStartRunningSettlement?.recordIndex ?? -1) + 1)
+          const unmatched = unmatchedCommand()
+          const evidence = evidenceTag()
+          const stateProjectionCount = projectionEventCount() - projectionBaseline
+          const latestSettlement = settlements.at(-1)
+          const latestAcceptedStateIndex = records.findLastIndex(
+            ({ event }, index) =>
+              !(index === records.length - 1 && pendingState !== undefined) &&
+              event._tag === "PlannedAttemptExecutorStateObserved" &&
+              event.observation._tag === "ExactExecutorReport" &&
+              (event.observation.report._tag === "SafelySuspended" || event.observation.report._tag === "Terminal")
+          )
+          const latestAcceptedState = records.at(latestAcceptedStateIndex)?.event
+          const responsibilityBegan = records.some(
+            ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+          )
+          const responseAmbiguous =
+            unmatched !== undefined && commandCalls === intents.length && pendingCommand === undefined
+          return {
+            commandCallCount: BigInt(commandCalls),
+            commandIntentCount: BigInt(intents.length),
+            commandResponseEvidenceCount: BigInt(reports.length),
+            commandResponseSettlementCount: BigInt(settlements.filter(({ source }) => source === "Response").length),
+            commandSettlementCount: BigInt(settlements.length),
+            commandState:
+              unmatched === undefined
+                ? "NoCommand"
+                : commandCalls < intents.length
+                  ? "CommandIntended"
+                  : "CommandCalled",
+            evidence,
+            nextCommandOrdinal: BigInt(intents.length + 1),
+            positionHeld: snapshot.positions.has(plannedAttempt.taskId),
+            reconciliationProjectionsThisActivation: BigInt(stateProjectionCount),
+            recoveryCount: BigInt(recoveryCount),
+            responseAmbiguous,
+            startOrContinueIntentsSinceSafeSuspension: BigInt(
+              sinceSafe.filter(
+                ({ event }) =>
+                  event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "StartOrContinue"
+              ).length
+            ),
+            status:
+              latestAcceptedStateIndex > (latestSettlement?.recordIndex ?? -1) &&
+              latestAcceptedState?._tag === "PlannedAttemptExecutorStateObserved" &&
+              latestAcceptedState.observation._tag === "ExactExecutorReport"
+                ? latestAcceptedState.observation.report._tag
+                : (latestSettlement?.report._tag ??
+                  (responsibilityBegan ? "ResponsibilityBegan" : "ResponsibilityNotBegun")),
+            suspendIntentsSinceRunning: BigInt(
+              sinceRunning.filter(
+                ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+              ).length
+            )
+          }
+        })
     }
   }
 )
 
 quintIt(
   it.effect,
-  "replays the planned-attempt model through the executor boundary",
+  "replays durable executor commands through production protocol and admission seams",
   {
     backend: "typescript",
     driverFactory: executorConformanceDriver,
-    maxSteps: 20,
-    nTraces: 50,
+    maxSamples: 100,
+    maxSteps: 34,
+    nTraces: 100,
     seed: "158",
     spec: "specs/plannedAttemptExecutor.qnt",
+    step: "mbtStep",
     stateCheck: stateCheck(
       (raw) =>
         Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
-          Effect.flatMap(({ state }) =>
-            claimedOf(state.status).pipe(
-              Effect.map((claimed) => ({
-                claimed,
-                consecutiveRunningReports: state.consecutiveRunningReports,
-                positionHeld: state.positionHeld,
-                status: state.status.tag
-              }))
-            )
-          ),
+          Effect.map(({ state }) => ({
+            ...state,
+            commandState: variantTag(state.commandState),
+            evidence: variantTag(state.evidence),
+            status: variantTag(state.status)
+          })),
           Effect.orDie
         ),
       (spec, implementation) =>
-        spec.positionHeld === implementation.positionHeld &&
-        spec.consecutiveRunningReports === implementation.consecutiveRunningReports &&
-        spec.status === implementation.status &&
-        spec.claimed?.runId === implementation.claimed?.runId &&
-        spec.claimed?.attemptId === implementation.claimed?.attemptId
+        JSON.stringify(spec, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
+        JSON.stringify(implementation, (_, value) => (typeof value === "bigint" ? value.toString() : value))
     )
   },
-  30_000
+  180_000
 )

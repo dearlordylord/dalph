@@ -1,9 +1,9 @@
-// Negative control for the accepted suspension liveness property. This
-// deliberately claims a requested position is held forever; TLC must exhibit
-// the ordinary safe-suspension trace that releases it.
+// Negative control for the accepted evidence-settlement liveness property.
+// This deliberately claims releasable evidence retains the position forever;
+// TLC must exhibit the ordinary settlement step that releases it.
 module plannedAttemptExecutorTemporalNegative {
   import plannedAttemptExecutor.* from "./plannedAttemptExecutor"
 
-  temporal suspensionRequestNeverReleasesPosition =
-    always(suspensionRequested(state.status) implies always(state.positionHeld))
+  temporal releasableEvidenceNeverReleasesPosition =
+    always(releasableEvidenceAwaitingSettlement(state) implies always(state.positionHeld))
 }

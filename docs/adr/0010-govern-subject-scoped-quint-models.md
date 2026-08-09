@@ -8,12 +8,12 @@ own executable conformance adapter under
 
 | Model | Owns | Issues |
 |---|---|---|
-| `specs/taskFactReconciliation.qnt` | subject-local decisions after tracker facts change while one exact planned attempt owns unfinished executor work: membership, lifecycle, specification, external success, and the missing, foreign, and unreadable claim cases | 136, 137 |
+| `specs/taskFactReconciliation.qnt` | subject-local decisions after tracker facts change while one exact planned attempt owns unfinished executor work: membership, lifecycle, specification, external success, Continue-or-Stop choice identity and cutoff, fresh Continue authority for the immutable attempt, and exact/absent/foreign/unreadable stopped-claim disposition. Executable seam: `packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts` invokes `AttemptChoiceControl`, recovery/frontier reads, executor continuation/stoppage, and stopped-claim observation/release protocols. | 65, 136, 137 |
 | `specs/gitReconciliation.qnt` | provider-neutral Git decisions: lineage, worktree loss, registration conflict, result-commit eligibility, and the stale and ambiguous target head | 139 |
 | `specs/acceptedResultIntegration.qnt` | accepted-result admission and one fixed integration session accepting only an explicit submitted commit whose ordered direct parents are the current target head and the accepted result | 56, 57 |
 | `specs/integrationFinality.qnt` | post-promotion completion-claim replacement and deletion, fresh tracker success, task-scoped settlement, and retention of unrelated Run responsibility | #141 (`integrationFinality`); executable seam: `packages/dalph/test/conformance/integration-finality.mbt.test.ts` invokes the production completion-claim protocols and Run finality decision |
 | `specs/controlDirectionApplication.qnt` | receiving a Pause or Unpause as ephemeral against applying one exact run-or-task direction as a durable Operator-initiated action | 155, 166 |
-| `specs/plannedAttemptExecutor.qnt` | the coarse same-process executor boundary: responsibility, running, suspension request, safe suspension, terminal, and the task-work position each holds | 158 |
+| `specs/plannedAttemptExecutor.qnt` | the same-process executor boundary: responsibility, durable command intent, exact response versus command/state projection evidence, correlation and ordinal settlement, bounded continuation and Stop suspension commands, recovery reconciliation, and task-work position ownership. Executable seam: `packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts` invokes the production executor protocol and admission controller. | 65, 158 |
 
 ## Why subject scope rather than composition scope
 
@@ -40,6 +40,22 @@ A smaller proof-projection artifact may serve one exhaustive property when it
 retains the same accepted scenario, maintainer, checking lifecycle, and
 executable conformance seam. Such a projection is not another canonical model
 and not another source of runtime behavior.
+
+`specs/taskFactReconciliation_proof.qnt` applies that exception to the issue
+#65 slice of `taskFactReconciliation`: it collapses unrelated #136/#137 facts
+into three finite choice, Stop, and stopped-claim graphs. It is maintained in
+the same gate and retains
+`packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts` as its
+production seam; it is not a seventh model or an implementation input.
+
+`specs/plannedAttemptExecutor_proof.qnt` applies the same exception to the
+canonical executor model's resettable command cycles. Three finite graphs keep
+the exact intent/call/evidence chronology, one-read-per-activation recovery,
+three-command Start and Suspend bounds, and post-limit read-only recovery. The
+canonical model still owns their shared vocabulary and
+`packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts` remains
+the production seam. The projections have collected positive and negative
+tests, sampled witnesses, and complete TLC enumeration without a depth token.
 
 ## Consequences
 

@@ -108,7 +108,10 @@ alone never creates one.
 attempt is in a holding phase. It is released on the correlated safe-suspension
 or terminal report, and on nothing else — not a stopped inner process, not a
 timeout, not process death.
-→ `I7 (weakened: no correlation on the report)`
+→ `plannedAttemptExecutor` states exact-correlated position discipline; its
+finite evidence and Suspend-bound proof projections completely enumerate that
+only safe or terminal evidence releases the position. Benchmark `I7` remains
+weaker because it has no report correlation.
 
 **D13 The ceiling binds admission only.** A new admission respects the current
 capacity. A capacity reduction never evicts, cancels, suspends, or discards an
@@ -175,17 +178,22 @@ cancellation, and unpause is not cancellation.
 outcome may become ambiguous, Dalph records the exact intent and waits for the
 append acknowledgement, then calls the owning system, then records the exact
 observed result.
-→ `integrationFinality` records replacement and deletion intents before their
-bounded requests; the fast-check journal arm also has the intent/outcome split
-for claim, worktree and promotion.
+→ `plannedAttemptExecutor` separates every exact command intent, call, and
+observation; its finite evidence, Start-bound, and Suspend-bound projections
+completely enumerate that ordering. `integrationFinality` records replacement
+and deletion intents before their bounded requests; the fast-check journal arm
+also has the intent/outcome split for claim, worktree and promotion.
 
 **D22 Reconcile before retry.** After an ambiguous outcome, Dalph rereads the
 owning system before acting again. A lost response never proves the effect did
 not happen, and never authorizes a duplicate request, a second override, or a
 second release.
-→ `integrationFinality` models lost replacement/deletion responses and requires
-a fresh claim read before a second request; other encodings still do not model
-ambiguous outcomes.
+→ `plannedAttemptExecutor` distinguishes a direct response, exact command
+projection, and command-free state projection, permits one reconciliation read
+per activation, and keeps post-limit recovery read-only; its finite projections
+completely enumerate those rules. `integrationFinality` separately models lost
+replacement/deletion responses and requires a fresh claim read before a second
+request.
 
 **D23 Incomplete and unreadable never prove absence.** Missing coverage,
 pagination, a timeout, or a partial response cannot prove a task, blocker, or
@@ -414,23 +422,37 @@ conflict resolution never apply edits to the planned task worktree.
 capability — pre-integration cancellation after integration starts — it is not
 offered again, and restart reconstructs the cutoff rather than resurrecting the
 capability.
-→ `—` no model offers a capability that can be withdrawn.
+→ `taskFactReconciliation` states `postCutoffChoiceNeverApplies` and reaches the
+integration-started rejection. The scenario's forbidden Continue-or-Stop result
+is exercised by `rejects Continue and Stop after the exact integration cutoff`.
 
 ## Operator requests
 
-**Partly implemented.** Applying a direction ships; the request-identity and
-race-arbitration rules are accepted specification from issue 65, which is open.
+**Implemented.** Applying a control direction, applying an exact changed-attempt
+Continue-or-Stop choice, exact redelivery, request-identity contradictions,
+first-journaled race arbitration, and the pre-integration cutoff ship. The
+issue 65 cassette scenarios trace the forbidden results named by D46-D49:
+receipt alone is not policy, a stale direction crosses no later boundary, one
+request identity cannot name different contents, a losing raced choice cannot
+act, and a later fingerprint requires a fresh choice.
 
 **D47 Receipt is not application.** Receiving an Operator command is ephemeral;
 applying one exact direction is a durable action. Command receipt is never
 recorded as an applied policy change.
-→ `I17 (weakened: the models apply a direction with no receipt step)`
+→ `controlDirectionApplication` separates `receive` from durable application;
+`applicationClaimsNoLaterEffects` also prevents application from claiming the
+later executor or tracker work. Benchmark `I17` remains weaker because its
+cross-tool projection omits receipt.
 
 **D48 An applied direction authorizes exactly one matching later action.** A
 reacquisition intent requires a prior matching applied direction. A direction
 applied after exact or unreadable evidence cannot authorize a later loss, a
 restoration ends an earlier direction, and a stale identity is rejected.
-→ `—`
+→ `taskFactReconciliation` states the weaker
+`replacementClaimRequiresDirectionAndIntent`; production history additionally
+checks the exact prior direction and its observation episode. The scenario seam
+`does not cross cleanup or integration boundaries for a stale direction` traces
+the forbidden later action.
 
 **D49 Operator request identity is exact.** Exact redelivery of a request returns
 its recorded result rather than acting twice. Reuse of a request identity for a
@@ -438,8 +460,10 @@ different Run, task, attempt, fingerprint pair, or choice is a typed
 contradiction. Where two valid requests race, the first committed to the journal
 wins regardless of arrival order, and a later change of instructions requires a
 fresh choice.
-→ `—` D21 and D22 govern outbound ambiguity; nothing in the study models inbound
-request identity.
+→ `taskFactReconciliation` states `requestIdentityErrorsRemainDistinct`,
+`firstJournaledChoiceWins`, and `changedAgainRequiresNewChoice`. Its collected
+tests reach exact redelivery, conflicting reuse, both race winners, and the new
+fingerprint choice; matching production cassette tests use those same cases.
 
 ## Open questions
 

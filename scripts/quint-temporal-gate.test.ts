@@ -19,16 +19,16 @@ test("accepts only a real TLC success marker", () => {
   expect(() =>
     assertCleanTemporalVerdict(
       { exitCode: 0, output: "[ok] No violation found (42ms)" },
-      "suspensionRequestEventuallyReleasesPosition"
+      "releasableEvidenceEventuallyReleasesPosition"
     )
   ).not.toThrow()
   expect(() =>
-    assertCleanTemporalVerdict({ exitCode: 0, output: "" }, "suspensionRequestEventuallyReleasesPosition")
+    assertCleanTemporalVerdict({ exitCode: 0, output: "" }, "releasableEvidenceEventuallyReleasesPosition")
   ).toThrow("no supported TLC success verdict")
   expect(() =>
     assertCleanTemporalVerdict(
       { exitCode: 0, output: "unsupported fairness operator" },
-      "suspensionRequestEventuallyReleasesPosition"
+      "releasableEvidenceEventuallyReleasesPosition"
     )
   ).toThrow("no supported TLC success verdict")
 })
@@ -37,16 +37,16 @@ test("requires a real nonzero TLC violation for the temporal mutant", () => {
   expect(() =>
     assertViolatedTemporalVerdict(
       { exitCode: 1, output: "[violation] Found an issue" },
-      "suspensionRequestNeverReleasesPosition"
+      "releasableEvidenceNeverReleasesPosition"
     )
   ).not.toThrow()
   expect(() =>
-    assertViolatedTemporalVerdict({ exitCode: 1, output: "backend crashed" }, "suspensionRequestNeverReleasesPosition")
+    assertViolatedTemporalVerdict({ exitCode: 1, output: "backend crashed" }, "releasableEvidenceNeverReleasesPosition")
   ).toThrow("not rejected by a real TLC violation")
   expect(() =>
     assertViolatedTemporalVerdict(
       { exitCode: 1, output: "[ok] No violation found" },
-      "suspensionRequestNeverReleasesPosition"
+      "releasableEvidenceNeverReleasesPosition"
     )
   ).toThrow("not rejected by a real TLC violation")
 })

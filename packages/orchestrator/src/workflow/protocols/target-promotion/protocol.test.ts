@@ -319,7 +319,8 @@ it.effect("reports a typed failure when target-promotion runtime services are un
       bindPlannedAttemptPosition: () => Effect.void,
       integrationTargets: resources,
       recordIntent: () => Effect.void,
-      releasePlannedAttemptPosition: () => Effect.void
+      releasePlannedAttemptPosition: () => Effect.void,
+      withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
     }).pipe(Effect.provideService(InRunJournal, poisonJournal), Effect.flip)
     expect(failure).toBeInstanceOf(TargetPromotionRuntimeUnavailable)
   })
@@ -351,7 +352,8 @@ it.effect("allows a different target while the exact promotion permit is active"
         bindPlannedAttemptPosition: () => Effect.void,
         integrationTargets: resources,
         recordIntent: () => Effect.void,
-        releasePlannedAttemptPosition: () => Effect.void
+        releasePlannedAttemptPosition: () => Effect.void,
+        withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
       }).pipe(
         Effect.provide(makeJournalLayer(records)),
         Effect.provideService(TargetPromotionRuntime, TargetPromotionRuntime.of({ git })),

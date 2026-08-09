@@ -6,6 +6,8 @@ import type { TaskWorkCapacityControl } from "../../control/task-work-capacity.j
 import type { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import type { TaskControlSubjectOutsideRun } from "../../workflow/protocols/control-direction-application/task-subject.js"
 import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
+import type { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
+import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import type {
   JournalError,
@@ -35,11 +37,13 @@ import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 
 export type JournaledRunServices =
   | Journal
+  | AttemptChoiceControl
   | ControlDirectionApplication
   | DeliveryRuntimeResources
   | InRunJournal
   | OperationIdAllocator
   | PlannedAttemptExecutor
+  | PlannedAttemptProtocolController
   | RunRecoveryProjection
   | TaskWorkCapacityControl
   | TaskClaimReacquisitionControl
@@ -87,6 +91,12 @@ export interface JournaledRunBootstrapService {
     program: Effect.Effect<RunFinalityProof, E, R>
   ) => Effect.Effect<RunFinalityDecision, E | JournaledRunBootstrapError, Exclude<R, JournaledRunServices>>
   readonly operatorControl: {
+    readonly applyAttemptChoice: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<AttemptChoiceControl["Service"]["apply"]>>,
+      Effect.Error<ReturnType<AttemptChoiceControl["Service"]["apply"]>> | JournaledRunNotActive
+    >
     readonly applyControlDirection: (
       input: unknown
     ) => Effect.Effect<
@@ -102,6 +112,12 @@ export interface JournaledRunBootstrapService {
     ) => Effect.Effect<
       Effect.Success<ReturnType<TaskClaimReacquisitionControl["Service"]["apply"]>>,
       Effect.Error<ReturnType<TaskClaimReacquisitionControl["Service"]["apply"]>> | JournaledRunNotActive
+    >
+    readonly readAttemptChoice: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<AttemptChoiceControl["Service"]["read"]>>,
+      Effect.Error<ReturnType<AttemptChoiceControl["Service"]["read"]>> | JournaledRunNotActive
     >
     readonly readTaskWorkCapacity: (
       runId: RunId
@@ -166,10 +182,37 @@ const runDeliveryComposition = Effect.fn("Delivery.runComposition")(function* <
   )
 })
 
-const runJournaledDelivery = (runId: RunId, target: TrackerTarget) =>
-  runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () =>
-    makeLiveDeliveryActionExecutor(runId, target)
-  )
+/** Required factory seam for an explicit controlled composition of the ordinary delivery runtime. */
+export type ControlledDeliveryActionExecutorFactory<E = never, R = never> = (
+  runId: RunId,
+  target: TrackerTarget
+) => Effect.Effect<DeliveryActionExecutorService, E, R>
+
+const liveDeliveryActionExecutorFactory = (runId: RunId, target: TrackerTarget) =>
+  makeLiveDeliveryActionExecutor(runId, target)
+
+const runJournaledDelivery = <E, R>(
+  runId: RunId,
+  target: TrackerTarget,
+  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>
+) => runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () => executorFactory(runId, target))
+
+/** Explicit controlled composition; production callers use {@link runWorkflow}. */
+export const runWorkflowWithControlledDeliveryActionExecutor = <E, R>(
+  target: TrackerTarget,
+  initialControlPolicy: InitialControlPolicy,
+  runId: AllocatedFreshWorkflowRunId,
+  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>
+) =>
+  Effect.gen(function* () {
+    const bootstrap = yield* JournaledRunBootstrap
+    return yield* bootstrap.fresh(
+      target,
+      initialControlPolicy,
+      runId,
+      runJournaledDelivery(runId, target, executorFactory)
+    )
+  })
 
 /** Runs a fresh workflow through the ordinary delivery composition. */
 export const runWorkflow = (
@@ -177,13 +220,18 @@ export const runWorkflow = (
   initialControlPolicy: InitialControlPolicy,
   runId: AllocatedFreshWorkflowRunId
 ) =>
-  Effect.gen(function* () {
-    const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.fresh(target, initialControlPolicy, runId, runJournaledDelivery(runId, target))
-  })
+  runWorkflowWithControlledDeliveryActionExecutor(
+    target,
+    initialControlPolicy,
+    runId,
+    liveDeliveryActionExecutorFactory
+  )
 
-/** Runs the exact reconstructed identity through the same ordinary delivery composition. */
-export const runRecoveredWorkflow = (target: TrackerTarget) =>
+/** Explicit controlled recovery composition; production callers use {@link runRecoveredWorkflow}. */
+export const runRecoveredWorkflowWithControlledDeliveryActionExecutor = <E, R>(
+  target: TrackerTarget,
+  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>
+) =>
   Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
     return yield* bootstrap.recovered(
@@ -195,7 +243,11 @@ export const runRecoveredWorkflow = (target: TrackerTarget) =>
           return yield* Effect.die("a recovered workflow requires authoritative recovered activation")
         }
         /* v8 ignore stop */
-        return yield* runJournaledDelivery(recovery.runId, target)
+        return yield* runJournaledDelivery(recovery.runId, target, executorFactory)
       })
     )
   })
+
+/** Runs the exact reconstructed identity through the same ordinary delivery composition. */
+export const runRecoveredWorkflow = (target: TrackerTarget) =>
+  runRecoveredWorkflowWithControlledDeliveryActionExecutor(target, liveDeliveryActionExecutorFactory)

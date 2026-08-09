@@ -1,14 +1,30 @@
 /* eslint-disable max-lines -- The maintained authored story catalog keeps complete chronological cassettes reviewable together. */
+import { TaskId } from "@dalph/contracts"
+import { makeTaskWorkSpecification } from "@dalph/orchestrator"
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette } from "./authored.js"
 import { AuthoredCassetteStoryItem } from "./authored-domain.js"
 
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)
+const terminalStoryItemOffset = -1
 
 const singletonGraph = {
   revision: "singleton-revision",
   tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
 }
+
+const changedAttemptSpecification = {
+  body: "Implement the changed accepted singleton behavior without rewriting prior executor history.",
+  taskId: TaskId.make("A"),
+  title: "Implement changed singleton"
+}
+const changedAttemptRevision = makeTaskWorkSpecification(changedAttemptSpecification).fingerprint
+const changedAgainAttemptSpecification = {
+  body: "Implement the third accepted singleton behavior while preserving the immutable attempt.",
+  taskId: TaskId.make("A"),
+  title: "Implement third singleton revision"
+}
+const changedAgainAttemptRevision = makeTaskWorkSpecification(changedAgainAttemptSpecification).fingerprint
 
 const emptyTaskControlGraph = { revision: "stale-task-control-revision", tasks: [] }
 
@@ -555,6 +571,309 @@ const targetLineageProtocolPrefix = [
   { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" }
 ] as const
 
+const changedAttemptChoiceExposureReads = [
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+  { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification }
+] as const
+
+const changedAttemptContinuationReads = [
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+  ...changedAttemptChoiceExposureReads,
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+  { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } }
+] as const
+
+const attemptChoiceStartingFacts = {
+  ...singletonTaskCompletesAuthoredCassette.startingFacts,
+  targetLineageObservation: {
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: "1111111111111111111111111111111111111111",
+    targetHeadSha: "2222222222222222222222222222222222222222"
+  }
+} as const
+
+const attemptChoiceExpectedBehavior = {
+  _tag: "ExpectedBehavior",
+  orchestration: null,
+  protocol: null,
+  taskWork: { absences: [], results: [] }
+} as const
+
+/** Alice keeps P immutable, then Dalph rereads every continuation authority before resuming it. */
+export const changedAttemptContinuesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "Alice continues the exact changed attempt only after fresh authority reads",
+  startingFacts: attemptChoiceStartingFacts,
+  story: [
+    ...lostWorktreeStoryBeforeAssertions,
+    ...changedAttemptChoiceExposureReads,
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    {
+      _tag: "OperatorContinuesAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Applied" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "continue-changed-attempt-A",
+      taskId: "A"
+    },
+    {
+      _tag: "OperatorContinuesAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Applied" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "continue-changed-attempt-A",
+      taskId: "A"
+    },
+    {
+      _tag: "OperatorStopsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Rejected", reason: "IdentityContradiction" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "continue-changed-attempt-A",
+      taskId: "A"
+    },
+    { _tag: "CoordinatorProcessDies" },
+    ...changedAttemptContinuationReads,
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      ...attemptChoiceExpectedBehavior,
+      taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }] }
+    }
+  ]
+})
+
+const changedAttemptContinueRestartAt = changedAttemptContinuesAuthoredCassette.story.findLastIndex(
+  (item) => item._tag === "CoordinatorProcessDies"
+)
+
+/** A later F3 observation invalidates F2's Continue authority and exposes one new F1/F3 choice. */
+export const changedAgainAttemptRequiresNewChoiceAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...changedAttemptContinuesAuthoredCassette,
+  name: "Alice must choose again when the continued attempt changes from F2 to F3",
+  story: [
+    ...changedAttemptContinuesAuthoredCassette.story.slice(0, changedAttemptContinueRestartAt + 1),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    { _tag: "TaskWorkSpecificationReadReturned", ...changedAgainAttemptSpecification },
+    {
+      _tag: "OperatorStopsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Applied", status: "AwaitingQuiescence" },
+      observedTaskRevision: changedAgainAttemptRevision,
+      requestNonce: "stop-changed-again-attempt-A",
+      taskId: "A"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    attemptChoiceExpectedBehavior
+  ]
+})
+
+/** Alice stops P after its exact safe report and Dalph releases only the freshly reread exact claim. */
+export const changedAttemptStopsAndReleasesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "Alice stops the exact changed attempt and releases only its current exact claim",
+  startingFacts: attemptChoiceStartingFacts,
+  story: [
+    ...lostWorktreeStoryBeforeAssertions,
+    ...changedAttemptChoiceExposureReads,
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    {
+      _tag: "OperatorStopsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Applied", status: "AwaitingQuiescence" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "stop-changed-attempt-A",
+      taskId: "A"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
+    {
+      _tag: "OperatorStopsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Applied", status: "SettledReleased" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "stop-changed-attempt-A",
+      taskId: "A"
+    },
+    {
+      _tag: "OperatorContinuesAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Rejected", reason: "IdentityContradiction" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "stop-changed-attempt-A",
+      taskId: "A"
+    },
+    attemptChoiceExpectedBehavior
+  ]
+})
+
+const changedAttemptStopAppliedAt = changedAttemptStopsAndReleasesAuthoredCassette.story.findIndex(
+  (item) => item._tag === "OperatorStopsAttempt"
+)
+const changedAttemptStopStoryThroughApplication = changedAttemptStopsAndReleasesAuthoredCassette.story.slice(
+  0,
+  changedAttemptStopAppliedAt + 1
+)
+
+/** Concurrent valid Continue and Stop requests cross the public boundary; the first journal append wins. */
+export const changedAttemptChoiceRaceAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...changedAttemptStopsAndReleasesAuthoredCassette,
+  name: "Alice races Continue and Stop for the same exposed F1 and F2 choice",
+  story: [
+    ...changedAttemptStopsAndReleasesAuthoredCassette.story.slice(0, changedAttemptStopAppliedAt),
+    {
+      _tag: "OperatorRacesContinueAndStop",
+      attemptId: "attempt:A:0",
+      continueRequestNonce: "race-continue-changed-attempt-A",
+      observedTaskRevision: changedAttemptRevision,
+      stopRequestNonce: "race-stop-changed-attempt-A",
+      taskId: "A"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    attemptChoiceExpectedBehavior
+  ]
+})
+
+const stoppedAttemptWithoutClaimMutationCassette = (
+  name: string,
+  requestNonce: string,
+  observation:
+    | { readonly _tag: "UnclaimedTask"; readonly taskId: string }
+    | {
+        readonly _tag: "ActiveTaskClaim"
+        readonly operationId: string
+        readonly owner: string
+        readonly taskId: string
+        readonly token: string
+      }
+) =>
+  Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...changedAttemptStopsAndReleasesAuthoredCassette,
+    name,
+    story: [
+      ...changedAttemptStopStoryThroughApplication.map((item) =>
+        item._tag === "OperatorStopsAttempt" ? { ...item, requestNonce } : item
+      ),
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+      { _tag: "TaskClaimReadReturned", observation },
+      {
+        _tag: "OperatorStopsAttempt",
+        attemptId: "attempt:A:0",
+        expected: { _tag: "Applied", status: "SettledNoRelease" },
+        observedTaskRevision: changedAttemptRevision,
+        requestNonce,
+        taskId: "A"
+      },
+      attemptChoiceExpectedBehavior
+    ]
+  })
+
+/** Stop records the missing claim as a distinct terminal no-release disposition. */
+export const changedAttemptStopsWithAbsentClaimAuthoredCassette = stoppedAttemptWithoutClaimMutationCassette(
+  "Alice stops the exact changed attempt while its tracker claim is absent",
+  "stop-changed-attempt-A-absent",
+  { _tag: "UnclaimedTask", taskId: "A" }
+)
+
+/** Stop preserves a replacement claim owned by another actor. */
+export const changedAttemptStopsWithForeignClaimAuthoredCassette = stoppedAttemptWithoutClaimMutationCassette(
+  "Alice stops the exact changed attempt without mutating its replacement claim",
+  "stop-changed-attempt-A-foreign",
+  {
+    _tag: "ActiveTaskClaim",
+    operationId: "replacement-claim-A",
+    owner: "another-owner",
+    taskId: "A",
+    token: "replacement-token-A"
+  }
+)
+
+const stoppedAttemptReleaseSelectedAt = changedAttemptStopsAndReleasesAuthoredCassette.story.findIndex(
+  (item) => item._tag === "DalphSelects" && item.operation._tag === "ReleaseTaskClaim"
+)
+
+/** The tracker applies K1's release, loses the response, survives an unreadable activation, then settles absent. */
+export const changedAttemptStopReleaseResponseLostAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
+  {
+    ...changedAttemptStopsAndReleasesAuthoredCassette,
+    name: "Alice sees Stop settle after Dalph loses the exact claim-release response",
+    story: [
+      ...changedAttemptStopsAndReleasesAuthoredCassette.story.slice(0, stoppedAttemptReleaseSelectedAt + 1),
+      {
+        _tag: "TaskClaimReleaseResponseLost",
+        detail: "tracker removed K1 but the coordinator did not receive the response",
+        taskId: "A"
+      },
+      { _tag: "CoordinatorProcessDies" },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+      { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+      { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+      { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+      {
+        _tag: "OperatorStopsAttempt",
+        attemptId: "attempt:A:0",
+        expected: { _tag: "Applied", status: "ImplementationAbandonedClaimReleasePending" },
+        observedTaskRevision: changedAttemptRevision,
+        requestNonce: "stop-changed-attempt-A",
+        taskId: "A"
+      },
+      { _tag: "CoordinatorProcessDies" },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+      { _tag: "TaskClaimReadReturned", observation: { _tag: "UnclaimedTask", taskId: "A" } },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      {
+        _tag: "OperatorStopsAttempt",
+        attemptId: "attempt:A:0",
+        expected: { _tag: "Applied", status: "SettledNoRelease" },
+        observedTaskRevision: changedAttemptRevision,
+        requestNonce: "stop-changed-attempt-A",
+        taskId: "A"
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      attemptChoiceExpectedBehavior
+    ]
+  }
+)
+
 /** Unpause during suspension finishes that request, then freshly rereads every continuation authority. */
 export const runUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...singletonTaskCompletesAuthoredCassette,
@@ -621,16 +940,192 @@ export const runUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnknow
   ]
 })
 
-/** Recovery preserves an in-flight suspension across an Unpause and process death. */
+const runUnpauseContinuationReportAt = runUnpauseAfterSafeSuspensionAuthoredCassette.story.findIndex(
+  (item) =>
+    item._tag === "PlannedAttemptExecutorWorkReported" &&
+    item.request === "StartOrContinue" &&
+    item.report._tag === "Terminal"
+)
+
+/**
+ * Alice stops after F2 while an already admitted continuation is held before intent;
+ * recovery settles its lost response and the lost third Suspend without a duplicate command.
+ */
+export const changedAttemptStopLostThirdSuspensionAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
+  {
+    ...runUnpauseAfterSafeSuspensionAuthoredCassette,
+    name: "Alice stops an admitted continuation and Dalph reconciles the lost third suspension response",
+    story: [
+      ...runUnpauseAfterSafeSuspensionAuthoredCassette.story.slice(0, runUnpauseContinuationReportAt),
+      { _tag: "DalphHoldsAdmittedContinuationBeforeExecutorIntent", attemptId: "attempt:A:0", taskId: "A" },
+      { _tag: "OperatorAppliesControlDirection", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "OperatorAppliesControlDirection", direction: "Unpause", subject: { _tag: "Task", taskId: "A" } },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+      { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
+      {
+        _tag: "OperatorStopsAttempt",
+        attemptId: "attempt:A:0",
+        expected: { _tag: "Applied", status: "AwaitingQuiescence" },
+        observedTaskRevision: changedAttemptRevision,
+        requestNonce: "stop-admitted-continuation-A",
+        taskId: "A"
+      },
+      {
+        _tag: "PlannedAttemptExecutorResponseLost",
+        detail: "the admitted continuation reached Running after Stop, but its response was lost",
+        report: { _tag: "Running", attemptId: "attempt:A:0" },
+        request: "StartOrContinue"
+      },
+      { _tag: "CoordinatorProcessDies" },
+      { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "Running", attemptId: "attempt:A:0" } },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      {
+        _tag: "PlannedAttemptExecutorWorkReported",
+        report: { _tag: "Running", attemptId: "attempt:A:0" },
+        request: "Suspend"
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      {
+        _tag: "PlannedAttemptExecutorWorkReported",
+        report: { _tag: "Running", attemptId: "attempt:A:0" },
+        request: "Suspend"
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      {
+        _tag: "PlannedAttemptExecutorResponseLost",
+        detail: "the third suspension request reached Running, but its response was lost",
+        report: { _tag: "Running", attemptId: "attempt:A:0" },
+        request: "Suspend"
+      },
+      { _tag: "CoordinatorProcessDies" },
+      { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "Running", attemptId: "attempt:A:0" } },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      {
+        _tag: "PlannedAttemptExecutorProjectionReturned",
+        report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" }
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+      { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+      { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
+      {
+        _tag: "OperatorStopsAttempt",
+        attemptId: "attempt:A:0",
+        expected: { _tag: "Applied", status: "SettledReleased" },
+        observedTaskRevision: changedAttemptRevision,
+        requestNonce: "stop-admitted-continuation-A",
+        taskId: "A"
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      attemptChoiceExpectedBehavior
+    ]
+  }
+)
+
+const admittedContinuationResponseLostAt = changedAttemptStopLostThirdSuspensionAuthoredCassette.story.findIndex(
+  (item) => item._tag === "PlannedAttemptExecutorResponseLost" && item.request === "StartOrContinue"
+)
+const unprovedStoppageActivationReturnAt = changedAttemptStopLostThirdSuspensionAuthoredCassette.story.findIndex(
+  (item, index) => index > admittedContinuationResponseLostAt && item._tag === "CoordinatorActivationReturned"
+)
+
+/** A projected Running writer leaves Stop visibly pending and preserves every exact attempt resource. */
+export const changedAttemptStopRemainsUnprovedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
+  name: "Alice sees exact Stop remain pending while the projected executor writer may still be Running",
+  story: [
+    ...changedAttemptStopLostThirdSuspensionAuthoredCassette.story.slice(0, unprovedStoppageActivationReturnAt),
+    {
+      _tag: "OperatorStopsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Applied", status: "AwaitingQuiescence" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "stop-admitted-continuation-A",
+      taskId: "A"
+    },
+    changedAttemptStopLostThirdSuspensionAuthoredCassette.story[unprovedStoppageActivationReturnAt],
+    attemptChoiceExpectedBehavior
+  ]
+})
+
+const suspensionResponseLostAcrossRestart = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  detail: string
+): ReadonlyArray<AuthoredCassetteStoryItem> =>
+  story.flatMap((item) => {
+    if (
+      item._tag === "PlannedAttemptExecutorWorkReported" &&
+      item.request === "Suspend" &&
+      item.report._tag === "SafelySuspended"
+    ) {
+      return [
+        decodeStoryItem({
+          _tag: "PlannedAttemptExecutorResponseLost",
+          detail,
+          report: item.report,
+          request: "Suspend"
+        }),
+        decodeStoryItem({ _tag: "CoordinatorProcessDies" }),
+        decodeStoryItem({ _tag: "PlannedAttemptExecutorProjectionReturned", report: item.report })
+      ]
+    }
+    if (item._tag !== "ExpectedBehavior" || item.orchestration === null) return [item]
+    return [
+      decodeStoryItem({
+        ...item,
+        orchestration: item.orchestration.map((evidence) =>
+          evidence._tag === "PlannedAttemptExecutorWorkReported" && evidence.report === "SafelySuspended"
+            ? { ...evidence, _tag: "PlannedAttemptExecutorCommandProjectionObserved" }
+            : evidence
+        )
+      })
+    ]
+  })
+
+/** Recovery reconciles the lost suspension response before it resumes after Unpause. */
 export const runUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...runUnpauseAfterSafeSuspensionAuthoredCassette,
-  name: "Alice unpauses during exact suspension before the coordinator restarts",
-  story: runUnpauseAfterSafeSuspensionAuthoredCassette.story.flatMap((item) => [
-    item,
-    ...(item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" && item.direction === "Unpause"
-      ? [{ _tag: "CoordinatorProcessDies" as const }]
-      : [])
-  ])
+  name: "Alice unpauses while exact suspension succeeds but its response is lost before restart",
+  story: suspensionResponseLostAcrossRestart(
+    runUnpauseAfterSafeSuspensionAuthoredCassette.story,
+    "the exact Run suspension succeeded after Unpause, but the coordinator lost its response"
+  )
 })
 
 /** Task Unpause finishes its in-flight suspension, then rereads the preserved attempt's authorities. */
@@ -660,20 +1155,14 @@ export const taskUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnkno
   )
 })
 
-/** Recovery preserves task Unpause while the exact suspension result remains unresolved. */
-const taskUnpauseRequestAt = taskUnpauseAfterSafeSuspensionAuthoredCassette.story.findIndex(
-  (item) => item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" && item.direction === "Unpause"
-)
-const taskUnpauseMembershipReturnedAt = taskUnpauseAfterSafeSuspensionAuthoredCassette.story.findIndex(
-  (item, index) => index > taskUnpauseRequestAt && item._tag === "TrackerGraphReadReturned"
-)
+/** Recovery reconciles the lost task suspension response before it resumes after Unpause. */
 export const taskUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...taskUnpauseAfterSafeSuspensionAuthoredCassette,
-  name: "Alice unpauses task A during exact suspension before the coordinator restarts",
-  story: taskUnpauseAfterSafeSuspensionAuthoredCassette.story.flatMap((item, index) => [
-    item,
-    ...(index === taskUnpauseMembershipReturnedAt ? [{ _tag: "CoordinatorProcessDies" as const }] : [])
-  ])
+  name: "Alice unpauses task A while exact suspension succeeds but its response is lost before restart",
+  story: suspensionResponseLostAcrossRestart(
+    taskUnpauseAfterSafeSuspensionAuthoredCassette.story,
+    "the exact task suspension succeeded after Unpause, but the coordinator lost its response"
+  )
 })
 
 /** A recovered attempt continues when Git proves the target advanced from its immutable Base. */
@@ -979,6 +1468,32 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.deco
     ]
   }
 )
+
+/** Alice cannot apply a stale pre-integration direction after integration has consumed the exact attempt. */
+export const postIntegrationAttemptChoiceRejectedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
+  name: "Alice's stale Continue and Stop directions cannot cross the exact integration cutoff",
+  story: [
+    ...acceptedResultRestartsIntoIntegrationAuthoredCassette.story.slice(0, terminalStoryItemOffset),
+    {
+      _tag: "OperatorContinuesAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Rejected", reason: "OutsidePreIntegrationPhase" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "continue-after-integration-cutoff-A",
+      taskId: "A"
+    },
+    {
+      _tag: "OperatorStopsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Rejected", reason: "OutsidePreIntegrationPhase" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "stop-after-integration-cutoff-A",
+      taskId: "A"
+    },
+    acceptedResultRestartsIntoIntegrationAuthoredCassette.story.at(terminalStoryItemOffset)
+  ]
+})
 
 type CandidateVerificationResult = {
   readonly _tag: "CorrelationContradiction" | "Passed" | "Failed" | "Killed" | "Partial" | "TimedOut"
@@ -1350,8 +1865,13 @@ export const candidateCorrelationContradictionAuthoredCassette = candidateScenar
 )
 
 /** Public catalog consumed by acceptance tests, documentation, and Reducer Lab. */
-export const maintainedAuthoredCassetteCatalog = {
+const defineAuthoredCassetteCatalog = <const Name extends string>(
+  catalog: Readonly<Record<Name, AuthoredScenarioCassette>>
+): Readonly<Record<Name, AuthoredScenarioCassette>> => catalog
+
+export const maintainedAuthoredCassetteCatalog = defineAuthoredCassetteCatalog({
   acceptedResultRestartsIntoIntegration: acceptedResultRestartsIntoIntegrationAuthoredCassette,
+  postIntegrationAttemptChoiceRejected: postIntegrationAttemptChoiceRejectedAuthoredCassette,
   candidateConflictRecovery: candidateConflictRecoveryAuthoredCassette,
   candidateCorrectionAfterUnreadableGit: candidateCorrectionAfterUnreadableGitAuthoredCassette,
   candidateCorrectionExhaustion: candidateCorrectionExhaustionAuthoredCassette,
@@ -1364,6 +1884,15 @@ export const maintainedAuthoredCassetteCatalog = {
   targetPromotionStaleBeforeCompareAndSet: targetPromotionStaleBeforeCompareAndSetAuthoredCassette,
   targetPromotionLostResponseDiscoversCurrentCandidate:
     targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassette,
+  changedAttemptContinues: changedAttemptContinuesAuthoredCassette,
+  changedAttemptChoiceRace: changedAttemptChoiceRaceAuthoredCassette,
+  changedAgainAttemptRequiresNewChoice: changedAgainAttemptRequiresNewChoiceAuthoredCassette,
+  changedAttemptStopLostThirdSuspension: changedAttemptStopLostThirdSuspensionAuthoredCassette,
+  changedAttemptStopRemainsUnproved: changedAttemptStopRemainsUnprovedAuthoredCassette,
+  changedAttemptStopsAndReleases: changedAttemptStopsAndReleasesAuthoredCassette,
+  changedAttemptStopReleaseResponseLost: changedAttemptStopReleaseResponseLostAuthoredCassette,
+  changedAttemptStopsWithAbsentClaim: changedAttemptStopsWithAbsentClaimAuthoredCassette,
+  changedAttemptStopsWithForeignClaim: changedAttemptStopsWithForeignClaimAuthoredCassette,
   compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
   dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
   incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
@@ -1380,4 +1909,4 @@ export const maintainedAuthoredCassetteCatalog = {
   taskUnpauseAfterSafeSuspension: taskUnpauseAfterSafeSuspensionAuthoredCassette,
   taskUnpauseDuringSuspensionRestarts: taskUnpauseDuringSuspensionRestartsAuthoredCassette,
   singletonTaskCompletes: singletonTaskCompletesAuthoredCassette
-} as const
+})

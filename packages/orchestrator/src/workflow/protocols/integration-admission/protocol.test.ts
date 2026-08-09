@@ -35,6 +35,8 @@ import {
 } from "./protocol.js"
 
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
@@ -45,6 +47,7 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
@@ -193,6 +196,19 @@ const recordAcceptedTerminal = (attempt: PlannedTaskAttempt, result: AcceptedRes
       runId,
       plannedAttemptExecutorWorkResponsibilityBeganRecordKey(attempt.attemptId),
       PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt: attempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(attempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: commandOrdinal,
         plannedAttempt: attempt,
         version: workflowJournalEventVersion
       })

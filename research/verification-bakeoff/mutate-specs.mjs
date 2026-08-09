@@ -1,7 +1,8 @@
 /**
  * Mutation analysis of the gated Quint models under specs/.
  *
- *   node mutate-specs.mjs [--spec <name>] [--samples 20000] [--steps 20] [--seed 31337]
+ *   node mutate-specs.mjs [--spec <name>] [--samples 20000] [--steps 20]
+ *     [--seed 31337] [--max-mutants <count>]
  *
  * For each spec it perturbs the *model* -- actions, init, and the derivations
  * they use -- one token at a time, discards mutants that no longer typecheck,
@@ -23,6 +24,11 @@ import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { promisify } from "node:util"
 
+import {
+  plannedAttemptExecutorObligations,
+  taskFactReconciliationObligations
+} from "../../scripts/quint-model-obligations.mjs"
+
 const run = promisify(execFile)
 
 // Run quint through pnpm when invoked from a pnpm context, so the mutation
@@ -39,22 +45,8 @@ const SPECS = [
   {
     name: "plannedAttemptExecutor",
     file: "specs/plannedAttemptExecutor.qnt",
-    invariants: [
-      "everyReportCarriesPlannedAttempt",
-      "continuationCountBounded",
-      "positionHeldUntilSuspensionResult",
-      "safeSuspensionReleasesPosition",
-      "suspensionRequestRetainsPosition",
-      "terminalReleasesPosition"
-    ],
-    witnesses: [
-      "responsibilityBeganReached",
-      "runningReached",
-      "suspensionRequestedReached",
-      "safelySuspendedReached",
-      "terminalReached",
-      "continuationLimitReached"
-    ]
+    invariants: plannedAttemptExecutorObligations.invariants,
+    witnesses: plannedAttemptExecutorObligations.witnesses
   },
   {
     name: "controlDirectionApplication",
@@ -70,20 +62,8 @@ const SPECS = [
   {
     name: "taskFactReconciliation",
     file: "specs/taskFactReconciliation.qnt",
-    invariants: [
-      "positionHeldUntilSafeSuspension",
-      "changedFactsPreserveWip",
-      "specificationOffersEveryExactChoice",
-      "externalSuccessPreventsDuplicateDelivery",
-      "externalSuccessReleasesOnlyAfterSafeSuspension",
-      "externalSuccessSettlesAfterExactClaimRelease",
-      "replacementClaimRequiresDirectionAndIntent",
-      "replacementClaimIdentityIsFresh",
-      "foreignClaimIsNeverChanged",
-      "unreadableClaimCannotAuthorizeReplacement",
-      "claimConstraintPreservesIndependentEligibility"
-    ],
-    witnesses: []
+    invariants: taskFactReconciliationObligations.invariants,
+    witnesses: taskFactReconciliationObligations.witnesses
   },
   {
     name: "gitReconciliation",
@@ -325,6 +305,22 @@ const steps = arg("steps", "20")
 const only = arg("spec", null)
 // Pinned per-invocation seed, so a kill or a survival reproduces exactly.
 const seed = arg("seed", "31337")
+const maxMutants = Number(arg("max-mutants", "0"))
+
+if (!Number.isSafeInteger(maxMutants) || maxMutants < 0) {
+  throw new Error("--max-mutants must be a non-negative integer")
+}
+
+// A deterministic, evenly distributed slice makes focused checks bounded
+// without pretending the result is a full mutation census. Zero retains the
+// historical behavior and checks every generated mutant.
+const selectMutants = (mutants) => {
+  if (maxMutants === 0 || mutants.length <= maxMutants) return mutants
+  return Array.from(
+    { length: maxMutants },
+    (_, index) => mutants[Math.floor(index * mutants.length / maxMutants)]
+  )
+}
 
 /**
  * `--verify` swaps random sampling for Apalache. Sampling is flaky at depth,
@@ -350,7 +346,8 @@ for (const spec of SPECS) {
   const source = await readFile(spec.file, "utf8")
   const lines = source.split("\n")
   const blocked = protectedLines(lines, new Set([...spec.invariants, ...spec.witnesses]))
-  const mutants = generate(lines, blocked)
+  const generatedMutants = generate(lines, blocked)
+  const mutants = selectMutants(generatedMutants)
 
   const kills = Object.fromEntries(spec.invariants.map((name) => [name, 0]))
   const witnessKills = {}
@@ -433,7 +430,8 @@ for (const spec of SPECS) {
 
   const killed = compiled - survivors.length - timedOut - errored
   console.log(`\n## ${basename(spec.file)}${useVerify ? " (Apalache)" : ""} (seed ${seed})`)
-  console.log(`\n${mutants.length} mutants generated, ${compiled} typecheck, ` +
+  console.log(`\n${mutants.length} of ${generatedMutants.length} generated mutants selected, ` +
+              `${compiled} typecheck, ` +
               `${killed} killed (${killed - killedByWitness} by an invariant, ` +
               `${killedByWitness} by a witness only), ${survivors.length} survive` +
               `${timedOut > 0 ? `, ${timedOut} exceeded the ${budgetMilliseconds / 1000}s budget` : ""}` +

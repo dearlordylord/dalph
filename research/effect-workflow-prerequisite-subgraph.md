@@ -6,7 +6,6 @@ flowchart LR
 
   subgraph controls["Pause, drain, and dispositions"]
     i63["#63 Drain to quiescence"]
-    i65["#65 Cancel or continue"]
     i66["#66 Clean restart"]
     i67["#67 Abandon or quarantine"]
   end
@@ -27,12 +26,8 @@ flowchart LR
     effectWorkflow["Effect Workflow evaluation"]
   end
 
-  i65 --> i66
-  i65 --> i67
-
   i61 --> i167
   i63 --> i167
-  i65 --> i167
   i66 --> i167
   i67 --> i167
   i167 --> i127
