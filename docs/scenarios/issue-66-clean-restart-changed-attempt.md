@@ -3,9 +3,10 @@
 Issue:
 [Clean-restart an exact changed attempt](https://github.com/dearlordylord/dalph/issues/66)
 
-Status: proposed on 2026-08-08. The first maintainer decision was accepted on
-2026-08-09. The remaining choices and the full scenario still await maintainer
-acceptance, so this file does not authorize behavior-changing implementation.
+Status: proposed on 2026-08-08. The first two maintainer decisions were
+accepted on 2026-08-09. The remaining choices and the full scenario still
+await maintainer acceptance, so this file does not authorize behavior-changing
+implementation.
 
 Issue #136 already exposes `RestartTaskImplementation` only after a current
 tracker read proves that task instructions changed and the executor reports the
@@ -42,19 +43,36 @@ Dalph must not inspect or reconstruct executor-internal stages. The selected
 executor owns process observations, and the controlled fake shares Dalph's
 process lifetime.
 
-## Next maintainer decision: disposition of P1 resources
+## Settled maintainer decision: preserve every P1 resource
 
-After Dalph records planned task attempt P2, should it keep P1's worktree,
-branch, commits, uncommitted work, and evidence for a separate disposition?
-I recommend this case because issue #67 owns the resource-disposition behavior.
+The maintainer accepted this decision on 2026-08-09: after Dalph records
+planned task attempt P2, it preserves every P1 resource. This includes P1's
+worktree, branch, commits, and uncommitted work. Dalph's append-only journal
+evidence also remains. If a future accepted executor contract exposes session
+history or a separate evidence artifact, issue #66 preserves that resource.
+Issue #66 performs no cleanup or disposal. Issue #67 owns every later resource
+disposition, but workflow-journal history is never a cleanup target.
+
 P2 starts in a different worktree at its exact Base SHA and receives no content
-from P1.
+from P1. Restart sends no cleanup request, so a crash creates no uncertain
+cleanup result to reconcile. No issue #66 path may delete, reset, move, repair,
+or reuse a P1 resource. Dalph keeps its P1 journal evidence. Any session history
+or separate evidence artifact stays with the selected executor. The controlled
+fake and the current generic executor boundary expose neither resource, so
+there is no such fact to inspect and no fake cleanup boundary to call.
 
-Otherwise, issue #66 must name each P1 resource that it can dispose of during
-Restart. It must define a durable and recoverable disposition for each
-resource and amend the preservation invariant. It must record intent before
-each Git effect, reconcile an uncertain result before retry, and preserve every
-resource that has no accepted disposition.
+## Next maintainer decision: record P1 replacement and P2 together
+
+Should one workflow-journal event make P1 no longer unsettled and record
+planned task attempt P2?
+
+I recommend one event. It gives a crash two exact results: P1 is unsettled and
+P2 is absent, or P1 is superseded and exact P2 exists.
+
+Otherwise, issue #66 must use two events and define the intermediate state,
+crash recovery, and actor-visible result. Recording P1 supersession first
+leaves no successor. Recording P2 first conflicts with D3 because P1 and P2
+are both unsettled.
 
 ## Alice restarts P1 from F2 without carrying W1 into P2
 
@@ -113,15 +131,18 @@ W1, its old WIP, and P1's journal evidence remain available for inspection.
 This is not “carrying old WIP”: P2's worktree begins at exact H2 and receives no
 content from W1. Current invariant D16 forbids restart from deleting W1 or its
 WIP, and D17 requires a separate exact disposition before any later cleanup.
-The deleted historical specification's default worktree deletion is not part
-of this proposal. Choosing that outcome would require an explicit amendment to
-the current preservation invariant and a separate cleanup chronology.
+The maintainer rejected the deleted historical specification's default
+worktree deletion as issue #66 behavior. Any session history or evidence
+artifact exposed by a future accepted executor contract also remains at its
+executor locator; generic Dalph does not inspect or copy it. The current
+controlled fake has no such resource.
 
 Issue #66 disposes no Git or tracker resource in this chronology. The exact P1
 replacement event settles its planned-attempt executor-work responsibility,
 while its already released task-work position is process-local and needs no
-cleanup. Issue #67 or another separately accepted disposition must authorize
-any later worktree, branch, or evidence cleanup by exact identity.
+cleanup. Issue #67 must authorize any later worktree, branch, session history,
+or executor-owned evidence-artifact cleanup by exact identity. Append-only
+workflow-journal evidence has no cleanup path.
 
 ### Crash and retry
 
@@ -145,16 +166,21 @@ allocate P3 merely because no executor report for P2 is present.
 
 ### Visible and forbidden result
 
-Alice sees D1 applied, P1 durably superseded, K1 retained, W1 preserved, and P2
-planned from F2 and H2. P2 may visibly wait for capacity; applying Restart is
-not task-work admission. C continues whenever its own facts and capacity allow.
+Alice sees D1 applied, P1 durably superseded, K1 retained, and P2 planned from
+F2 and H2. She sees P1's branch, worktree, commits, uncommitted work, and
+journal evidence preserved. The controlled fake has no session-history UI. A
+future accepted executor contract must define how Alice sees its preserved
+session history. P2 may visibly wait for capacity; applying Restart is not
+task-work admission. C continues whenever its own facts and capacity allow.
 
 Dalph must not run P1 and P2 concurrently; retain a journal prefix in which P1
 is superseded but P2 is absent; change P1's immutable facts; release, reacquire,
 or replace K1 merely because Alice chose Restart; reuse W1, its branch, or its
-WIP for P2; delete or reset W1; treat H2 as current without its Git read; cross
-the integration boundary; complete A in the tracker; or block C behind A's
-local replacement work.
+WIP for P2; delete or reset W1; discard any P1 commit, uncommitted work, or
+journal evidence; ask an executor to discard session history or an evidence
+artifact; treat H2 as current without its Git read; cross the integration
+boundary; complete A in the tracker; or block C behind A's local replacement
+work.
 
 ### Invariant trace required before acceptance
 
@@ -182,7 +208,10 @@ proposal remains incomplete and cannot authorize implementation.
 
 - `Alice restarts F1 and F2 only after P1 is safely suspended and records
   planned task attempt P2 from exact F2 and H2`
-- `keeps W1 and its WIP preserved while P2 starts from a clean W2`
+- `keeps P1's worktree branch commits uncommitted work and journal evidence
+  while P2 starts from a clean W2`
+- `sends no executor cleanup request and treats fake session history and
+  evidence artifacts as not applicable`
 - `retains exact K1 throughout clean restart without another tracker mutation`
 - `coalesces exact Restart redelivery and lets the first of Continue Restart
   and Stop win`
