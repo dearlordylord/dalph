@@ -1836,11 +1836,15 @@ const deliveryStoryBase = (() => {
 /**
  * The executable spine linked from docs/DELIVERY-STORY.md. It exercises the
  * ordinary delivery runtime from a five-task graph through restart, a
- * seven-task graph, promotion, and exact completion-finality settlement.
+ * seven-task graph, A's promotion, and A's exact completion-finality
+ * settlement. The later tracker snapshot reports B through G externally
+ * complete too, but only A crosses the production completion-finality
+ * boundary in this cassette; it does not claim Dalph executed or settled the
+ * other tasks, and it does not fabricate whole-Run termination.
  */
 export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...targetPromotionSuccessAuthoredCassette,
-  name: "the delivery invariant story grows from five to seven tasks across restart and finality",
+  name: "real A-finality spine (partial delivery-invariant story): five-to-seven task graph across restart",
   startingFacts: { ...targetPromotionSuccessAuthoredCassette.startingFacts, trackerGraph: deliveryStoryStartingGraph },
   story: deliveryStoryBase
 })

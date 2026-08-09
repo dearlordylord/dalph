@@ -202,7 +202,10 @@ try {
     })
   })
   assert.ok(linkedFrameTruth.some(({ facts, taskCount }) => taskCount === 7 && /Recovered/u.test(facts)))
-  assert.match(await linkedWorkbench.locator(".delivery-settlement-coverage").textContent() ?? "", /established delivery settlements/u)
+  assert.match(
+    await linkedWorkbench.locator(".delivery-settlement-coverage").textContent() ?? "",
+    /1 distinct established delivery settlement across \d+ production publications/u
+  )
   assert.ok(await linkedFrameSelector.locator("option").count() > 1)
   console.log("✓ drives the linked five-to-seven task delivery story through restart and completion finality")
 

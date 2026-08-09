@@ -202,6 +202,10 @@ const renderFrameFacts = (
         ? `read ${frame.graph.observation.operationId} recorded at journal ${frame.graph.observation.recordedAt} · content ${frame.graph.observation.contentIdentity}`
         : "no established graph observation"
     ],
+    [
+      "Tracker lifecycle authority",
+      "Task lifecycle comes from the tracker observation. A CompletedSuccessfully node does not prove Dalph executed or delivery-settled that task; exact Dalph settlements are counted separately below."
+    ],
     ["Established settlements", String(frame.settlements.length)],
     ["Tracker reflection", `${frame.trackerReflection._tag} derived from ${frame.trackerReflection.settlementCount} settlements; no tracker request is proved`]
   ] as const) {
@@ -525,9 +529,19 @@ const renderTimeline = (
   let running = initiallyRunning
 
   const refreshSettlementCoverage = (): void => {
-    const settlementCount = frames.reduce((total, frame) => total + frame.settlements.length, 0)
-    settlementCoverage.textContent = settlementCount > 0
-      ? `This timeline contains ${settlementCount} established delivery settlements and their tracker-reflection meaning.`
+    const distinctSettlementCount = new Set(
+      frames.flatMap(({ settlements }) =>
+        settlements.map(({ attemptId, taskId }) => JSON.stringify([taskId, attemptId]))
+      )
+    ).size
+    const settlementBearingPublicationCount = frames.filter(({ settlements }) => settlements.length > 0).length
+    const settlementNoun = distinctSettlementCount === 1 ? "settlement" : "settlements"
+    const publicationNoun = settlementBearingPublicationCount === 1 ? "publication" : "publications"
+    const reflectionPossessive = distinctSettlementCount === 1 ? "its" : "their"
+    settlementCoverage.textContent = distinctSettlementCount > 0
+      ? `This timeline contains ${distinctSettlementCount} distinct established delivery ${settlementNoun}`
+        + ` across ${settlementBearingPublicationCount} production ${publicationNoun};`
+        + ` ${reflectionPossessive} tracker-reflection meaning remains visible in every carrying frame.`
       : running
         ? "No established delivery settlement has appeared in this running timeline yet."
         : "This cassette publishes no non-empty graph-level settlement frame. Direct integration-finality cassettes execute that protocol without fabricating graph delivery state here."

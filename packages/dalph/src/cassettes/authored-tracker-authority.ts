@@ -25,6 +25,7 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
           Effect.flatMap((observations) => {
             const observation = observations.get(taskId)
             if (observation === undefined) return tracker.readTaskClaim(taskId)
+            /* v8 ignore start -- @preserve Production planning never routes an active-claim read through a task whose completion-finality protocol owns the current claim. */
             return observation._tag === "CompletionTaskClaim"
               ? Effect.fail(
                   new TaskClaimReadFailure({
@@ -33,6 +34,7 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
                   })
                 )
               : Effect.succeed(observation)
+            /* v8 ignore stop -- @preserve */
           })
         )
       const setObservation = (taskId: TaskId, observation: CompletionClaimObservation) =>
@@ -97,9 +99,11 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
                   .acquireTaskClaim(acquisition)
                   .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim)))
               }
+              /* v8 ignore start -- @preserve A completion claim retains integration-finality ownership and cannot return to fresh task acquisition. */
               if (observed._tag === "CompletionTaskClaim") {
                 return Effect.die(`authored tracker cannot acquire ${acquisition.taskId} over a completion claim`)
               }
+              /* v8 ignore stop -- @preserve */
               return isExactTaskClaim(observed, attempted)
                 ? Effect.succeed(observed)
                 : Effect.fail(new TaskClaimConflict({ attempted: acquisition, observed }))
@@ -167,6 +171,7 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
         readTaskClaim: (taskId) =>
           Effect.gen(function* () {
             const returned = yield* cursor.consumeCompletionClaimReadReturned.pipe(Effect.orDie)
+            /* v8 ignore start -- @preserve The authored finality chronology binds every controlled response to the production-requested task. */
             if (returned.taskId !== taskId) {
               return yield* Effect.die(
                 `authored completion-claim read returned ${returned.taskId} while reading ${taskId}`
@@ -179,12 +184,14 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
                 `authored completion-claim read expected ${returned.claim} for ${taskId}, received ${current._tag}`
               )
             }
+            /* v8 ignore stop -- @preserve */
             return current
           }),
         replaceTaskClaim: (request) =>
           Effect.gen(function* () {
             const applied = yield* cursor.consumeCompletionClaimReplacementApplied.pipe(Effect.orDie)
             const taskId = request.claim.plannedAttempt.taskId
+            /* v8 ignore start -- @preserve The authored finality chronology and production request share one exact task and active claim. */
             if (applied.taskId !== taskId) {
               return yield* Effect.die(
                 `authored completion-claim replacement applied to ${applied.taskId} while replacing ${taskId}`
@@ -194,6 +201,7 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
             if (current._tag !== "ActiveTaskClaim" || !isExactTaskClaim(current, request.claim.originalClaim)) {
               return yield* Effect.die(`authored completion-claim replacement lacked exact active claim ${taskId}`)
             }
+            /* v8 ignore stop -- @preserve */
             yield* setObservation(taskId, request.claim)
             return request.claim
           }),
@@ -201,6 +209,7 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
           Effect.gen(function* () {
             const applied = yield* cursor.consumeCompletionClaimDeletionApplied.pipe(Effect.orDie)
             const taskId = request.claim.plannedAttempt.taskId
+            /* v8 ignore start -- @preserve The authored finality chronology and production request share one exact task and completion claim. */
             if (applied.taskId !== taskId) {
               return yield* Effect.die(
                 `authored completion-claim deletion applied to ${applied.taskId} while deleting ${taskId}`
@@ -210,6 +219,7 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
             if (current._tag !== "CompletionTaskClaim" || !completionTaskClaimEquals(current, request.claim)) {
               return yield* Effect.die(`authored completion-claim deletion lacked exact completion claim ${taskId}`)
             }
+            /* v8 ignore stop -- @preserve */
             yield* setObservation(taskId, UnclaimedTask.make({ taskId }))
           })
       })

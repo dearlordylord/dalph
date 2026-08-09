@@ -776,6 +776,46 @@ await scenario("states when the selected authored cassette has no populated sett
   )
 })
 
+await scenario("counts one delivery settlement once across repeated production publications", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The linked delivery story settlement frames are missing")
+  }
+  const distinctSettlements = new Set(
+    result.deliveryFrames.flatMap(({ settlements }) =>
+      settlements.map(({ attemptId, taskId }) => `${taskId}:${attemptId}`)
+    )
+  ).size
+  const settlementBearingPublications = result.deliveryFrames.filter(({ settlements }) => settlements.length > 0).length
+  assert(
+    distinctSettlements === 1 && settlementBearingPublications > distinctSettlements,
+    "The fixture must republish one exact settlement"
+  )
+
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const coverage = document.querySelector(".delivery-settlement-coverage")?.textContent ?? ""
+  assert(
+    coverage.includes(`${distinctSettlements} distinct established delivery settlement`)
+      && coverage.includes(`across ${settlementBearingPublications} production publications`),
+    "The timeline must distinguish exact settlements from frames that republish them"
+  )
+  assert(
+    (root.textContent ?? "").includes(
+      "A CompletedSuccessfully node does not prove Dalph executed or delivery-settled that task"
+    ),
+    "The workbench must separate tracker lifecycle observations from exact Dalph settlements"
+  )
+  assert(
+    (root.textContent ?? "").includes("the real A-finality spine, not the complete 22-beat one-Run target"),
+    "The linked cassette must visibly state the exact scope it executes"
+  )
+})
+
 await scenario("keeps multi-task chronology landmarks attributable", () => {
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
   if (row === undefined) throw new Error("The dependency delivery row is missing")

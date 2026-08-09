@@ -526,6 +526,47 @@ const lostExecutorResponsesRequireExplicitProjection = Schema.makeFilter(
       : "an authored lost executor response must be followed after process death by an explicit exact-attempt projection"
 )
 
+type CompletionFinalityStoryItem = Extract<
+  AuthoredCassetteStoryItem,
+  {
+    readonly _tag:
+      | "CompletionClaimDeletionApplied"
+      | "CompletionClaimReadReturned"
+      | "CompletionClaimReplacementApplied"
+  }
+>
+
+const completionFinalityStoryItemTags = new Set<AuthoredCassetteStoryItem["_tag"]>([
+  "CompletionClaimDeletionApplied",
+  "CompletionClaimReadReturned",
+  "CompletionClaimReplacementApplied"
+])
+
+const isCompletionFinalityStoryItem = (item: AuthoredCassetteStoryItem): item is CompletionFinalityStoryItem =>
+  completionFinalityStoryItemTags.has(item._tag)
+
+const completionFinalityStoryIsComplete = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+  const finalityItems = cassette.story.filter(isCompletionFinalityStoryItem)
+  if (finalityItems.length === 0) return undefined
+  const taskIds = Array.from(new Set(finalityItems.map(({ taskId }) => taskId)))
+  const expectedSteps = ["Read:Active", "Replace", "Read:Completion", "Delete"]
+  const incompleteTaskId = taskIds.find((taskId) => {
+    const actualSteps = finalityItems
+      .filter((item) => item.taskId === taskId)
+      .map((item) =>
+        item._tag === "CompletionClaimReadReturned"
+          ? `Read:${item.claim}`
+          : item._tag === "CompletionClaimReplacementApplied"
+            ? "Replace"
+            : "Delete"
+      )
+    return JSON.stringify(actualSteps) !== JSON.stringify(expectedSteps)
+  })?.[0]
+  return incompleteTaskId === undefined
+    ? undefined
+    : `authored completion finality for ${incompleteTaskId} must read Active, replace, read Completion, and delete exactly once in order`
+})
+
 const heldPauseOffset = 1
 const heldPauseGraphSelectionOffset = 2
 const heldPauseGraphReturnOffset = 3
@@ -707,5 +748,6 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   .check(coordinatorLifecycleBoundariesHaveFollowingRecoveryWork)
   .check(ambiguousBoundaryLossesImmediatelyCrash)
   .check(lostExecutorResponsesRequireExplicitProjection)
+  .check(completionFinalityStoryIsComplete)
   .check(admittedContinuationHoldHasExactStopClosure)
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type

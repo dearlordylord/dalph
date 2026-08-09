@@ -405,6 +405,11 @@ its descriptive tracker reflection. The Lab does not call the direct protocol
 runner, append a settlement, or infer one from executor completion. The same
 spine begins with five production-observed tasks, crosses a coordinator death
 with A's exact integration obligation intact, and later publishes seven tasks.
+The later controlled tracker graph reports all seven tasks successfully
+complete, but only A crosses Dalph's completion-finality boundary. The Lab
+therefore labels tracker lifecycle as outside authority, counts one distinct A
+settlement even when several publications carry it, and never presents the
+other six tracker lifecycle values as Dalph execution or settlement evidence.
 The prose story's manifest names which other beats are proven only by narrower
 maintained cassettes and which combined beats remain unimplemented.
 
@@ -507,6 +512,15 @@ task whose exact facts are correlated below.
   `IntegrationFinalitySettled` order, plus a non-empty production settlement
   and tracker-reflection frame. It also proves the cassette does not fabricate
   whole-Run termination.
+- `rejects a partial authored completion-finality boundary chronology` checks
+  that once an authored story uses the controlled finality boundary, each task
+  must declare exactly one Active read, replacement, Completion read, and
+  deletion in that order; an incomplete story cannot look executable.
+- `counts one delivery settlement once across repeated production publications`
+  checks repeated publications carrying A's exact settlement report one
+  distinct settlement and separately report their publication count. It also
+  checks the workbench explains that tracker `CompletedSuccessfully` lifecycle
+  values do not prove Dalph executed or settled those tasks.
 - `keeps every delivery-story beat linked to maintained evidence or an explicit implementation gap`
   checks the document's 22 stable beat IDs, exact catalog keys, explicit gap
   reasons, and generated manifest block in both directions.

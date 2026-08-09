@@ -326,6 +326,14 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     const ownership = appendTextElement(article, "p", "Production runner: ", "group-facts")
     appendTextElement(ownership, "code", row.runnerName)
     ownership.append(` · Controlled boundaries: ${row.controlledBoundaries}`)
+    if (row.catalogKey === "authored:deliveryInvariantStory") {
+      appendTextElement(
+        article,
+        "p",
+        "Delivery-story coverage: this is the real A-finality spine, not the complete 22-beat one-Run target. It executes A through production graph, frontier, restart, promotion, completion-claim, settlement, and reflection layers. docs/DELIVERY-STORY.md links the remaining beats to exact maintained slices or explicit implementation gaps; this view does not simulate them.",
+        "delivery-story-scope"
+      )
+    }
     if (row.surface._tag === "DirectProtocolSurface") {
       ownership.append(" · This direct protocol runner does not publish the graph-level delivery relation, so no graph, frontier, or held-position workbench is shown.")
     }
