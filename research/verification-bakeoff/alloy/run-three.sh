@@ -31,8 +31,11 @@ run_command() { # name timeout expected-result-or-empty spec-or-default
     summary=$(grep -E '(SAT|UNSAT)$' <<<"$output" | tail -1 | grep -oE '(UNSAT|SAT)$')
     summary=${summary:-"no verdict: Alloy emitted no result"}
   fi
-  if [[ $summary == no\ verdict* && $ALLOW_NO_VERDICT != 1 ]]; then FAIL=1; fi
-  if [[ -n $expected && $summary != "$expected" ]]; then FAIL=1; fi
+  if [[ $summary == no\ verdict* ]]; then
+    [[ $ALLOW_NO_VERDICT == 1 ]] || FAIL=1
+  elif [[ -n $expected && $summary != "$expected" ]]; then
+    FAIL=1
+  fi
   echo "| $name | $summary | $((SECONDS - start)) |"
 }
 
