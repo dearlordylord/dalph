@@ -115,30 +115,30 @@ export class JournalHistoryInvalid extends Schema.TaggedErrorClass<JournalHistor
 /** A durable append could not be reconciled with the process-local journal prefix. */
 export type JournalError = JournalHistoryInvalid | JournalPositionGap | JournalRecordMismatch
 
-/** The fresh-start boundary submitted an identity whose Run already began. */
+/** Run establishment submitted an identity whose durable beginning already exists. */
 export class WorkflowRunAlreadyBegan extends Schema.TaggedErrorClass<WorkflowRunAlreadyBegan>()(
   "WorkflowRunAlreadyBegan",
   { beganAt: JournalPosition, runId: RunId }
 ) {}
 
-/** The fresh-start boundary received an identity already used by non-lifecycle journal history. */
+/** Run establishment received an identity already used by non-lifecycle journal history. */
 export class WorkflowRunIdentityAlreadyUsed extends Schema.TaggedErrorClass<WorkflowRunIdentityAlreadyUsed>()(
   "WorkflowRunIdentityAlreadyUsed",
   { firstRecordAt: JournalPosition, runId: RunId }
 ) {}
 
-/** Recovery or termination named an identity for which no Run beginning exists. */
+/** Run establishment or termination named an identity for which no Run beginning exists. */
 export class WorkflowRunNotBegan extends Schema.TaggedErrorClass<WorkflowRunNotBegan>()("WorkflowRunNotBegan", {
   runId: RunId
 }) {}
 
-/** Recovery named a tracker target different from the one recorded when the Run began. */
+/** Run establishment named a tracker target different from the one recorded when the Run began. */
 export class WorkflowRunTargetMismatch extends Schema.TaggedErrorClass<WorkflowRunTargetMismatch>()(
   "WorkflowRunTargetMismatch",
   { recordedTarget: TrackerTarget, requestedTarget: TrackerTarget, runId: RunId }
 ) {}
 
-/** The caller attempted to recover or extend a Run after its durable termination. */
+/** The caller attempted to activate a Run after its durable termination. */
 export class WorkflowRunAlreadyTerminated extends Schema.TaggedErrorClass<WorkflowRunAlreadyTerminated>()(
   "WorkflowRunAlreadyTerminated",
   { runId: RunId, terminatedAt: JournalPosition }

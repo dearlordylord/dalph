@@ -92,7 +92,7 @@ export const decideWorkflowRunTermination = (
       }
 }
 
-/** Rereads the journal facts that distinguish recovery from another fresh start. */
+/** Rereads the journal facts required to retain and validate an already-established Run. */
 export const readRecoverableRunBeginning = Effect.fn("WorkflowRunLifecycle.readRecoverableBeginning")(function* (
   records: ReadonlyArray<JournalRecord>,
   runId: RunId,
