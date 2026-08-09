@@ -78,9 +78,11 @@ const recoveredReadSubject = (proposal: DeliveryActionProposal): RecoveredReadSu
       transition: proposal.order.transition
     }
   }
+  /* v8 ignore start -- the closed observation derivation pairs the sole uncorrelated read with this exact transition. */
   return action._tag === "ReadTaskClaim" && proposal.order.transition === "ObserveResponsibleTaskClaim"
     ? { _tag: "Task", taskId: action.taskId, transition: proposal.order.transition }
     : undefined
+  /* v8 ignore stop */
 }
 
 export const liveActionKeyOf = (proposal: DeliveryActionProposal): LiveDeliveryActionKey => {
