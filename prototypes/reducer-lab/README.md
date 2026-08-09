@@ -13,16 +13,19 @@ protocol runners, but do not receive a fabricated task graph: those direct
 protocol fixtures never execute the graph-level delivery composition. The Lab
 does not contain a second workflow reducer or scheduler.
 
-The browser groups rows by production runner and supports word-by-word search
-across human story names, exact catalog keys, runner names, categories,
-controlled boundaries, and complete declared inputs. Category and status
-filters can define a **Run shown** subset; the explicitly counted **Run all**
-command always runs the complete catalog. A maintainer can run one story or
-retry every cassette failure and Lab defect. Each row settles independently and
-presents the graph-first delivery timeline for authored runs, a compact terminal
-execution summary, journal evidence ordered within each Run, and secondary raw
-diagnostics. Each
-run receives fresh in-memory runtime state and a deterministic test clock.
+The browser offers the maintained catalog as one selector and projects only the
+selected cassette into one shared surface. Choosing a new cassette replaces the
+older graph, chronology, action, status, and evidence instead of appending
+another complete UI. Word-by-word search covers human story names, exact
+catalog keys, runner names, categories, controlled boundaries, complete
+declared inputs, and returned production evidence. Category and status filters
+narrow the choices and can define a **Run shown** subset; the explicitly
+counted **Run all** command always runs the complete catalog. Batch results stay
+retained behind the selector, while the shared surface presents only the chosen
+cassette's graph-first delivery timeline, compact terminal execution summary,
+journal evidence ordered within each Run, and secondary raw diagnostics. A
+maintainer can run one selected story or retry every cassette failure and Lab
+defect. Each run receives fresh in-memory runtime state and a deterministic test clock.
 Authored runs additionally receive browser cryptography and a fresh production
 Run identity; protocol fixtures retain their declared identities.
 

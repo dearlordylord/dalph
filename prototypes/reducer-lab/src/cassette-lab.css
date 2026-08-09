@@ -121,24 +121,16 @@ button:disabled {
   color: #7f1919;
 }
 
-.results,
-.catalog-group {
-  display: grid;
-  gap: 0.85rem;
+.cassette-selection {
+  flex-basis: 100%;
 }
 
-.results {
+.cassette-selection select {
+  width: 100%;
+}
+
+.selected-cassette-surface {
   margin-top: 1.5rem;
-}
-
-.catalog-group {
-  scroll-margin-top: 6rem;
-}
-
-.catalog-group > h2 {
-  border-bottom: 2px solid #146b55;
-  margin: 1.2rem 0 0;
-  padding-bottom: 0.4rem;
 }
 
 .group-facts,
@@ -178,7 +170,7 @@ article[data-state="LabDefect"] {
   border-style: dashed;
 }
 
-article h3 {
+article h2 {
   margin: 0 0 0.8rem;
 }
 
@@ -317,7 +309,7 @@ dd {
   padding-left: 0.4rem;
 }
 
-.row-controls {
+.selected-cassette-controls {
   align-items: center;
   display: flex;
   flex-wrap: wrap;

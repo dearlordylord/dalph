@@ -6,18 +6,18 @@ import {
 } from "./cassette-lab.ts"
 import {
   catalogSummaryText,
-  type CassetteRowState,
+  type CassetteState,
   executionSummaryItems,
   journalEvidenceRows,
   protocolDiagnosticItems,
   resultEvidenceText,
-  rowStateStatusText
+  cassetteStateStatusText
 } from "./cassette-lab-view.ts"
 import { renderCassetteDeliveryWorkbench } from "./cassette-lab-workbench.ts"
 
 export const singleCassetteSettledEvent = "dalph-cassette-lab:single-settled"
 export const everyCassetteSettledEvent = "dalph-cassette-lab:every-settled"
-export const cassetteRowSettledEvent = "dalph-cassette-lab:row-settled"
+export const cassetteSettledEvent = "dalph-cassette-lab:cassette-settled"
 export const shownCassettesSettledEvent = "dalph-cassette-lab:shown-settled"
 
 type CassetteRow = (typeof maintainedCassetteRows)[number]
@@ -29,25 +29,6 @@ export interface CassetteLabBrowserInput {
   readonly root: HTMLElement
   readonly rows: ReadonlyArray<CassetteRow>
   readonly runCassette: (catalogKey: MaintainedCassetteKey) => Promise<CassetteLabResult>
-}
-
-interface RowElements {
-  readonly article: HTMLElement
-  readonly deliveryWorkbenchHost: HTMLElement
-  readonly evidenceHost: HTMLElement
-  readonly heading: HTMLHeadingElement
-  readonly matchReason: HTMLElement
-  readonly runButton: HTMLButtonElement
-  readonly searchableText: ReadonlyArray<{ readonly element: HTMLElement; readonly text: string }>
-  readonly status: HTMLOutputElement
-  readonly storyItems: ReadonlyArray<HTMLLIElement>
-}
-
-interface GroupElements {
-  readonly group: HTMLElement
-  readonly heading: HTMLHeadingElement
-  readonly label: string
-  readonly total: number
 }
 
 const categoryOrder: ReadonlyArray<CassetteCategory> = ["Authored", "TargetPromotion", "IntegrationFinality"]
@@ -138,12 +119,15 @@ const renderRawEvidence = (parent: HTMLElement, result: CassetteLabResult): void
 }
 
 const renderResultEvidence = (host: HTMLElement, result: CassetteLabResult, open: boolean): void => {
-  host.replaceChildren()
   const evidence = document.createElement("details")
   evidence.className = "execution-evidence"
   evidence.dataset.role = "execution-evidence"
   evidence.open = open || result._tag === "Failed"
-  appendTextElement(evidence, "summary", result._tag === "Completed" ? "Terminal execution proof and journal" : "Cassette failure diagnostic")
+  appendTextElement(
+    evidence,
+    "summary",
+    result._tag === "Completed" ? "Terminal execution proof and journal" : "Cassette failure diagnostic"
+  )
   renderDefinitionList(evidence, executionSummaryItems(result))
   const protocolDiagnostics = protocolDiagnosticItems(result)
   if (protocolDiagnostics.length > 0) {
@@ -159,7 +143,6 @@ const renderResultEvidence = (host: HTMLElement, result: CassetteLabResult, open
 }
 
 const renderDefectEvidence = (host: HTMLElement, row: CassetteRow, detail: string): void => {
-  host.replaceChildren()
   const evidence = document.createElement("section")
   evidence.className = "execution-evidence defect-evidence"
   evidence.dataset.role = "execution-evidence"
@@ -180,7 +163,7 @@ const renderDefectEvidence = (host: HTMLElement, row: CassetteRow, detail: strin
 
 const defectDetail = (error: unknown): string => error instanceof Error ? error.stack ?? error.message : String(error)
 
-const stateFilterValue = (state: CassetteRowState): StatusFilter => {
+const stateFilterValue = (state: CassetteState): StatusFilter => {
   if (state._tag !== "Settled") return state._tag
   return state.result._tag
 }
@@ -201,28 +184,35 @@ const markSearchTokens = (element: HTMLElement, text: string, tokens: ReadonlyAr
   }
 }
 
-/** Mounts the maintainer-facing catalog without changing which production runners own cassette execution. */
+const selectOption = (select: HTMLSelectElement, value: string): void => {
+  for (const option of select.options) {
+    if (option.value === value) option.setAttribute("selected", "")
+    else option.removeAttribute("selected")
+  }
+}
+
+/** Mounts one shared maintainer workbench over the production-owned cassette catalogs. */
 export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const { revision, root, rows, runCassette } = input
   const reloadLab = input.reloadLab ?? (() => globalThis.location.reload())
   document.title = "Dalph reducer lab"
-  const states = new Map<MaintainedCassetteKey, CassetteRowState>(
+  const rowByKey = new Map(rows.map((row) => [row.catalogKey, row]))
+  const states = new Map<MaintainedCassetteKey, CassetteState>(
     rows.map(({ catalogKey }) => [catalogKey, { _tag: "NotRun" }])
   )
-  const rowElements = new Map<MaintainedCassetteKey, RowElements>()
-  const groupElements = new Map<CassetteCategory, GroupElements>()
-  const openWorkbenches = new Set<MaintainedCassetteKey>()
-  const openEvidence = new Set<MaintainedCassetteKey>()
+  let selectedKey: MaintainedCassetteKey | undefined = rows[0]?.catalogKey
+  let visibleKeys: ReadonlyArray<MaintainedCassetteKey> = rows.map(({ catalogKey }) => catalogKey)
+  let workbenchOpen = false
+  let evidenceOpen = false
   let busy = false
   let runShownActive = false
-  let visibleKeys: ReadonlyArray<MaintainedCassetteKey> = rows.map(({ catalogKey }) => catalogKey)
 
   const header = document.createElement("header")
   appendTextElement(header, "h1", "Dalph reducer lab")
   appendTextElement(
     header,
     "p",
-    "Choose a maintained cassette, run the real production workflow, and inspect how delivery consumes the observed task graph.",
+    "Select one maintained cassette, run the real production workflow, and inspect how delivery consumes the observed task graph in the shared workbench.",
     "lab-purpose"
   )
   const safety = appendTextElement(
@@ -238,7 +228,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
 
   const controls = document.createElement("section")
   controls.className = "catalog-controls"
-  controls.setAttribute("aria-label", "Cassette catalog controls and live results")
+  controls.setAttribute("aria-label", "Cassette selection, catalog commands, and live results")
   const searchLabel = appendTextElement(controls, "label", "Search declared behavior and returned evidence")
   const search = document.createElement("input")
   search.type = "search"
@@ -247,17 +237,12 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
 
   const categoryLabel = appendTextElement(controls, "label", "Catalog")
   const categoryFilter = document.createElement("select")
-  const allCatalogs = document.createElement("option")
-  allCatalogs.value = "All"
-  allCatalogs.textContent = "All maintained catalogs"
-  categoryFilter.append(allCatalogs)
+  appendTextElement(categoryFilter, "option", "All maintained catalogs").value = "All"
   for (const category of categoryOrder) {
     const row = rows.find((candidate) => candidate.category === category)
     if (row === undefined) continue
-    const option = document.createElement("option")
+    const option = appendTextElement(categoryFilter, "option", row.categoryLabel)
     option.value = category
-    option.textContent = row.categoryLabel
-    categoryFilter.append(option)
   }
   categoryLabel.append(categoryFilter)
 
@@ -271,31 +256,29 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     ["Failed", "Cassette failed"],
     ["LabDefect", "Lab defect"]
   ] as const) {
-    const option = document.createElement("option")
+    const option = appendTextElement(statusFilter, "option", label)
     option.value = value
-    option.textContent = label
-    statusFilter.append(option)
   }
   statusLabel.append(statusFilter)
+
+  const selectionLabel = appendTextElement(controls, "label", "Selected cassette")
+  selectionLabel.className = "cassette-selection"
+  const cassetteSelector = document.createElement("select")
+  cassetteSelector.dataset.role = "cassette-selector"
+  selectionLabel.append(cassetteSelector)
 
   const runAllButton = appendTextElement(controls, "button", `Run all ${rows.length} cassettes`)
   runAllButton.type = "button"
   runAllButton.title = "Runs every maintained cassette, regardless of the current filters"
   const runShownButton = appendTextElement(controls, "button", `Run shown (${rows.length})`, "secondary-action")
   runShownButton.type = "button"
-  const retryProblemsButton = appendTextElement(controls, "button", "Retry problem rows", "secondary-action")
+  const retryProblemsButton = appendTextElement(controls, "button", "Retry problem cassettes", "secondary-action")
   retryProblemsButton.type = "button"
   retryProblemsButton.hidden = true
-  const reloadButton = appendTextElement(
-    controls,
-    "button",
-    "Reload Lab and discard displayed results",
-    "danger-action"
-  )
+  const reloadButton = appendTextElement(controls, "button", "Reload Lab and discard displayed results", "danger-action")
   reloadButton.type = "button"
   reloadButton.title = "Stops waiting by reloading this local harness; all displayed results and filters are discarded"
   reloadButton.hidden = true
-
   const completionLegend = appendTextElement(
     controls,
     "p",
@@ -318,14 +301,17 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   problemLinks.dataset.role = "problem-links"
   problemLinks.setAttribute("aria-label", "Cassette failures and Lab defects")
   problemLinks.hidden = true
+  controls.append(completionLegend, visibility, summary, runAnnouncement, problemLinks)
 
-  const resultsElement = document.createElement("div")
-  resultsElement.className = "results"
+  const sharedSurface = document.createElement("main")
+  sharedSurface.className = "selected-cassette-surface"
+  sharedSurface.dataset.role = "selected-cassette-surface"
 
-  const currentStates = (): ReadonlyArray<CassetteRowState> =>
+  const currentStates = (): ReadonlyArray<CassetteState> =>
     rows.map(({ catalogKey }) => states.get(catalogKey) ?? { _tag: "NotRun" })
 
   let applyFilters = (_announceVisibility?: boolean): void => undefined
+  let renderSelected = (): void => undefined
 
   const updateAggregate = (): void => {
     summary.textContent = catalogSummaryText(currentStates())
@@ -341,61 +327,150 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     for (const [index, row] of problems.entries()) {
       const state = states.get(row.catalogKey)
       const link = document.createElement("a")
-      link.href = `#cassette-${row.catalogKey.replaceAll(":", "-")}`
+      link.href = "#selected-cassette"
       const kind = state?._tag === "LabDefect" ? "Lab defect" : "cassette failure"
       link.textContent = `${row.storyName} (${row.catalogKey}; ${kind})`
       link.addEventListener("click", (event) => {
         event.preventDefault()
         search.value = ""
-        for (const option of categoryFilter.options) option.selected = option.value === "All"
-        for (const option of statusFilter.options) option.selected = option.value === "All"
-        applyFilters(true)
-        rowElements.get(row.catalogKey)?.heading.focus()
+        selectOption(categoryFilter, "All")
+        selectOption(statusFilter, "All")
+        applyFilters()
+        selectedKey = row.catalogKey
+        selectOption(cassetteSelector, row.catalogKey)
+        workbenchOpen = false
+        evidenceOpen = true
+        renderSelected()
+        sharedSurface.querySelector<HTMLElement>("h2")?.focus()
       })
       problemLinks.append(link)
       if (index < problems.length - 1) problemLinks.append(document.createTextNode("; "))
     }
   }
 
-  const renderState = (catalogKey: MaintainedCassetteKey): void => {
-    const state = states.get(catalogKey)
-    const elements = rowElements.get(catalogKey)
-    if (state === undefined || elements === undefined) return
-    elements.article.dataset.state = state._tag === "Settled" ? state.result._tag : state._tag
-    elements.article.setAttribute("aria-busy", String(state._tag === "Running"))
-    elements.status.dataset.status = elements.article.dataset.state
-    elements.status.textContent = rowStateStatusText(state)
-    const row = rows.find((candidate) => candidate.catalogKey === catalogKey)
-    if (row !== undefined) {
-      renderCassetteDeliveryWorkbench(
-        elements.deliveryWorkbenchHost,
-        row,
-        state,
-        openWorkbenches.has(catalogKey)
-      )
-      const workbench = elements.deliveryWorkbenchHost.querySelector<HTMLDetailsElement>(
-        '[data-role="delivery-workbench"]'
-      )
-      workbench?.addEventListener("toggle", () => {
-        if (workbench.open) openWorkbenches.add(catalogKey)
-        else openWorkbenches.delete(catalogKey)
-        renderState(catalogKey)
-      })
+  const searchableParts = (row: CassetteRow, state: CassetteState) => {
+    const visible = [
+      row.storyName,
+      row.catalogKey,
+      row.categoryLabel,
+      row.runnerName,
+      row.controlledBoundaries,
+      ...row.storyItemSummaries
+    ].join(" ").toLocaleLowerCase()
+    const declared = row.declaredInputText.toLocaleLowerCase()
+    const resultText = state._tag === "Settled"
+      ? resultEvidenceText(state.result)
+      : state._tag === "LabDefect" ? state.detail : ""
+    return { declared, result: resultText.toLocaleLowerCase(), resultText, visible }
+  }
+
+  const matchExplanation = (
+    row: CassetteRow,
+    state: CassetteState,
+    tokens: ReadonlyArray<string>
+  ): string | undefined => {
+    if (tokens.length === 0) return undefined
+    const searchable = searchableParts(row, state)
+    if (tokens.every((token) => searchable.visible.includes(token))) return undefined
+    const declaredTokens = tokens.filter((token) => searchable.declared.includes(token))
+    const resultTokens = tokens.filter((token) => searchable.result.includes(token))
+    const excerpt = (text: string, token: string): string => {
+      const firstPosition = Math.max(0, text.toLocaleLowerCase().indexOf(token))
+      const start = Math.max(0, firstPosition - 50)
+      const end = Math.min(text.length, firstPosition + 130)
+      return `${start > 0 ? "…" : ""}${text.slice(start, end).replace(/\s+/gu, " ")}${end < text.length ? "…" : ""}`
     }
-    for (const storyItem of elements.storyItems) {
-      storyItem.classList.remove("failed-story-item")
-      storyItem.removeAttribute("aria-current")
+    if (declaredTokens.length === tokens.length) {
+      return `Match in exact declared input: ${excerpt(row.declaredInputText, declaredTokens[0] ?? "")}`
     }
+    if (resultTokens.length === tokens.length) {
+      return `Match in returned production delivery evidence: ${excerpt(searchable.resultText, resultTokens[0] ?? "")}`
+    }
+    return `Match spans exact declared input and returned production evidence. Declared: ${excerpt(row.declaredInputText, declaredTokens[0] ?? "")} Returned: ${excerpt(searchable.resultText, resultTokens[0] ?? "")}`
+  }
+
+  renderSelected = (): void => {
+    sharedSurface.replaceChildren()
+    const row = selectedKey === undefined ? undefined : rowByKey.get(selectedKey)
+    if (row === undefined) {
+      appendTextElement(sharedSurface, "p", "No maintained cassette matches the current filters.", "empty-selection")
+      return
+    }
+    const state = states.get(row.catalogKey) ?? { _tag: "NotRun" }
+    const article = document.createElement("article")
+    article.id = "selected-cassette"
+    article.dataset.catalogKey = row.catalogKey
+    article.dataset.state = state._tag === "Settled" ? state.result._tag : state._tag
+    article.setAttribute("aria-busy", String(state._tag === "Running"))
+    const heading = appendTextElement(article, "h2", row.storyName)
+    heading.tabIndex = -1
+    const identity = appendTextElement(article, "p", `${row.categoryLabel} · Catalog key: `, "catalog-key")
+    appendTextElement(identity, "code", row.catalogKey)
+    const ownership = appendTextElement(article, "p", "Production runner: ", "group-facts")
+    appendTextElement(ownership, "code", row.runnerName)
+    ownership.append(` · Controlled boundaries: ${row.controlledBoundaries}`)
+    if (row.surface._tag === "DirectProtocolSurface") {
+      ownership.append(" · This direct protocol runner does not publish the graph-level delivery relation, so no graph, frontier, or held-position workbench is shown.")
+    }
+    const tokens = search.value.trim().toLocaleLowerCase().split(/\s+/u).filter((token) => token.length > 0)
+    markSearchTokens(heading, row.storyName, tokens)
+    const explanation = matchExplanation(row, state, tokens)
+    if (explanation !== undefined) {
+      const matchReason = appendTextElement(article, "p", "", "search-match-reason")
+      markSearchTokens(matchReason, explanation, tokens)
+    }
+
+    const deliveryWorkbenchHost = document.createElement("div")
+    renderCassetteDeliveryWorkbench(deliveryWorkbenchHost, row, state, workbenchOpen)
+    const workbench = deliveryWorkbenchHost.querySelector<HTMLDetailsElement>('[data-role="delivery-workbench"]')
+    workbench?.addEventListener("toggle", () => {
+      workbenchOpen = workbench.open
+      renderSelected()
+    })
+
+    const chronology = document.createElement("details")
+    chronology.className = "declared-chronology"
+    chronology.dataset.role = "declared-chronology"
+    appendTextElement(chronology, "summary", `Declared cassette input · ${row.totalItemCount} ${row.itemName}`)
+    appendTextElement(chronology, "p", "Readable ordered inputs and expectations; this is not observed execution evidence.")
+    const story = document.createElement("ol")
+    const storyItems = row.storyItemSummaries.map((itemSummary) => appendTextElement(story, "li", itemSummary))
+    chronology.append(story)
+    const exactInput = document.createElement("details")
+    exactInput.dataset.role = "exact-declared-input"
+    appendTextElement(exactInput, "summary", "Exact declared cassette input")
+    appendTextElement(exactInput, "pre", row.declaredInputText)
+    chronology.append(exactInput)
+
+    const rowControls = document.createElement("div")
+    rowControls.className = "selected-cassette-controls"
+    const runButton = appendTextElement(rowControls, "button", state._tag === "NotRun" ? "Run selected cassette" : "Rerun selected cassette")
+    runButton.type = "button"
+    runButton.disabled = busy
+    runButton.setAttribute("aria-label", `Run selected cassette: ${row.storyName} (${row.catalogKey})`)
+    const status = document.createElement("output")
+    status.dataset.status = article.dataset.state
+    status.setAttribute("aria-live", "polite")
+    status.textContent = cassetteStateStatusText(state)
+    rowControls.append(status)
+    runButton.addEventListener("click", () => {
+      void runKeys([row.catalogKey], true).then(() => root.dispatchEvent(new Event(singleCassetteSettledEvent)))
+    })
+
+    const evidenceHost = document.createElement("div")
+    evidenceHost.className = "evidence-host"
     if (state._tag === "Settled") {
-      renderResultEvidence(elements.evidenceHost, state.result, openEvidence.has(catalogKey))
+      renderResultEvidence(evidenceHost, state.result, evidenceOpen)
       if (state.result._tag === "Failed" && state.result.location._tag === "Known") {
-        const stopped = elements.storyItems[state.result.location.storyPosition]
+        const stopped = storyItems[state.result.location.storyPosition]
         stopped?.classList.add("failed-story-item")
         stopped?.setAttribute("aria-current", "true")
       }
     } else if (state._tag === "LabDefect") {
-      if (row !== undefined) renderDefectEvidence(elements.evidenceHost, row, state.detail)
-    } else elements.evidenceHost.replaceChildren()
+      renderDefectEvidence(evidenceHost, row, state.detail)
+    }
+    article.append(identity, ownership, deliveryWorkbenchHost, chronology, rowControls, evidenceHost)
+    sharedSurface.append(article)
   }
 
   const setBusy = (nextBusy: boolean): void => {
@@ -404,28 +479,21 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     runShownButton.disabled = nextBusy || visibleKeys.length === 0
     retryProblemsButton.disabled = nextBusy
     reloadButton.hidden = !nextBusy
-    for (const { runButton } of rowElements.values()) runButton.disabled = nextBusy
+    renderSelected()
   }
 
-  const runKeys = async (keys: ReadonlyArray<MaintainedCassetteKey>, announceRows: boolean): Promise<void> => {
-    const onlyKey = keys[0]
-    if (onlyKey === undefined) return
+  const runKeys = async (keys: ReadonlyArray<MaintainedCassetteKey>, single: boolean): Promise<void> => {
+    if (keys.length === 0) return
     setBusy(true)
-    if (!announceRows) {
+    if (single) {
+      workbenchOpen = true
+      evidenceOpen = true
+    } else {
+      evidenceOpen = false
       runAnnouncement.textContent = `Running ${keys.length} ${keys.length === 1 ? "cassette" : "cassettes"}; progress is visible in the catalog summary`
     }
-    for (const key of keys) {
-      if (announceRows) {
-        openWorkbenches.add(key)
-        openEvidence.add(key)
-      } else {
-        openEvidence.delete(key)
-      }
-      const elements = rowElements.get(key)
-      elements?.status.setAttribute("aria-live", announceRows ? "polite" : "off")
-      states.set(key, { _tag: "Running" })
-      renderState(key)
-    }
+    for (const key of keys) states.set(key, { _tag: "Running" })
+    renderSelected()
     applyFilters()
     updateAggregate()
     await Promise.all(keys.map(async (catalogKey) => {
@@ -434,185 +502,77 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       } catch (error) {
         states.set(catalogKey, { _tag: "LabDefect", catalogKey, detail: defectDetail(error) })
       }
-      renderState(catalogKey)
+      if (selectedKey === catalogKey) renderSelected()
       applyFilters()
       updateAggregate()
-      root.dispatchEvent(new Event(cassetteRowSettledEvent))
+      root.dispatchEvent(new Event(cassetteSettledEvent))
     }))
     setBusy(false)
     applyFilters()
-    if (!announceRows) runAnnouncement.textContent = `Batch finished. ${catalogSummaryText(currentStates())}`
-  }
-
-  for (const category of categoryOrder) {
-    const categoryRows = rows.filter((row) => row.category === category)
-    if (categoryRows.length === 0) continue
-    const representative = categoryRows[0]
-    if (representative === undefined) continue
-    const group = document.createElement("section")
-    group.className = "catalog-group"
-    group.dataset.category = category
-    group.dataset.role = "catalog-group"
-    const groupHeading = appendTextElement(group, "h2", `${representative.categoryLabel} (${categoryRows.length} cassettes)`)
-    const groupFacts = document.createElement("p")
-    groupFacts.className = "group-facts"
-    groupFacts.append("Production runner: ")
-    appendTextElement(groupFacts, "code", representative.runnerName)
-    groupFacts.append(` · Controlled boundaries: ${representative.controlledBoundaries}`)
-    if (representative.surface._tag === "DirectProtocolSurface") {
-      groupFacts.append(" · This direct protocol runner does not publish the graph-level delivery relation, so no graph, frontier, or held-position workbench is shown.")
-    }
-    group.append(groupFacts)
-
-    for (const row of categoryRows) {
-      const article = document.createElement("article")
-      article.id = `cassette-${row.catalogKey.replaceAll(":", "-")}`
-      article.dataset.catalogKey = row.catalogKey
-      const heading = appendTextElement(article, "h3", row.storyName)
-      heading.id = `${article.id}-heading`
-      heading.tabIndex = -1
-      article.setAttribute("aria-labelledby", heading.id)
-      const keyLine = appendTextElement(article, "p", "Catalog key: ", "catalog-key")
-      const keyValue = appendTextElement(keyLine, "code", row.catalogKey)
-      const matchReason = appendTextElement(article, "p", "", "search-match-reason")
-      matchReason.hidden = true
-
-      const chronology = document.createElement("details")
-      chronology.className = "declared-chronology"
-      chronology.dataset.role = "declared-chronology"
-      appendTextElement(chronology, "summary", `Declared cassette input · ${row.totalItemCount} ${row.itemName}`)
-      appendTextElement(
-        chronology,
-        "p",
-        "Readable index of declared inputs and expectations, in order; this is not observed execution evidence."
-      )
-      const story = document.createElement("ol")
-      const storyItems = row.storyItemSummaries.map((summary) => appendTextElement(story, "li", summary))
-      chronology.append(story)
-      const exactInput = document.createElement("details")
-      exactInput.dataset.role = "exact-declared-input"
-      appendTextElement(exactInput, "summary", "Exact declared cassette input")
-      appendTextElement(exactInput, "pre", row.declaredInputText)
-      chronology.append(exactInput)
-
-      const rowControls = document.createElement("div")
-      rowControls.className = "row-controls"
-      const runButton = appendTextElement(rowControls, "button", "Run cassette")
-      runButton.type = "button"
-      runButton.setAttribute("aria-label", `Run cassette: ${row.storyName} (${row.catalogKey})`)
-      const status = document.createElement("output")
-      status.setAttribute("aria-live", "polite")
-      rowControls.append(status)
-      const evidenceHost = document.createElement("div")
-      evidenceHost.className = "evidence-host"
-      const deliveryWorkbenchHost = document.createElement("div")
-      article.append(keyLine, matchReason, deliveryWorkbenchHost, chronology, rowControls, evidenceHost)
-      rowElements.set(row.catalogKey, {
-        article,
-        deliveryWorkbenchHost,
-        evidenceHost,
-        heading,
-        matchReason,
-        runButton,
-        searchableText: [
-          { element: heading, text: row.storyName },
-          { element: keyValue, text: row.catalogKey },
-          ...storyItems.map((element, index) => ({ element, text: row.storyItemSummaries[index] ?? "" }))
-        ],
-        status,
-        storyItems
-      })
-      runButton.addEventListener("click", () => {
-        void runKeys([row.catalogKey], true).then(() => root.dispatchEvent(new Event(singleCassetteSettledEvent)))
-      })
-      group.append(article)
-      renderState(row.catalogKey)
-    }
-    groupElements.set(category, {
-      group,
-      heading: groupHeading,
-      label: representative.categoryLabel,
-      total: categoryRows.length
-    })
-    resultsElement.append(group)
+    if (!single) runAnnouncement.textContent = `Batch finished. ${catalogSummaryText(currentStates())}`
   }
 
   applyFilters = (announceVisibility = false): void => {
     const tokens = search.value.trim().toLocaleLowerCase().split(/\s+/u).filter((token) => token.length > 0)
     const category = categoryFilter.value || "All"
     const status = (statusFilter.value || "All") as StatusFilter
-    const nextVisibleKeys: Array<MaintainedCassetteKey> = []
-    const visibleByCategory = new Map<CassetteCategory, number>()
-    for (const row of rows) {
+    visibleKeys = rows.flatMap((row) => {
       const state = states.get(row.catalogKey) ?? { _tag: "NotRun" }
-      const visibleSearchable = [
-        row.storyName,
-        row.catalogKey,
-        row.categoryLabel,
-        row.runnerName,
-        row.controlledBoundaries,
-        ...row.storyItemSummaries
-      ].join(" ").toLocaleLowerCase()
-      const declaredSearchable = row.declaredInputText.toLocaleLowerCase()
-      const resultSearchText = state._tag === "Settled"
-        ? resultEvidenceText(state.result)
-        : state._tag === "LabDefect" ? state.detail : ""
-      const resultSearchable = resultSearchText.toLocaleLowerCase()
-      const searchable = `${visibleSearchable} ${declaredSearchable} ${resultSearchable}`
-      const visible = (category === "All" || row.category === category)
+      const searchable = searchableParts(row, state)
+      const matches = (category === "All" || row.category === category)
         && (status === "All" || stateFilterValue(state) === status)
-        && tokens.every((token) => searchable.includes(token))
-      const elements = rowElements.get(row.catalogKey)
-      if (elements !== undefined) {
-        elements.article.hidden = !visible
-        for (const item of elements.searchableText) markSearchTokens(item.element, item.text, tokens)
-        const hiddenOnlyMatch = tokens.length > 0
-          && tokens.every((token) => searchable.includes(token))
-          && !tokens.every((token) => visibleSearchable.includes(token))
-        elements.matchReason.hidden = !visible || !hiddenOnlyMatch
-        if (visible && hiddenOnlyMatch) {
-          const declaredTokens = tokens.filter((token) => declaredSearchable.includes(token))
-          const resultTokens = tokens.filter((token) => resultSearchable.includes(token))
-          const excerpt = (matchedText: string, token: string): string => {
-            const firstPosition = Math.max(0, matchedText.toLocaleLowerCase().indexOf(token))
-            const start = Math.max(0, firstPosition - 50)
-            const end = Math.min(matchedText.length, firstPosition + 130)
-            return `${start > 0 ? "…" : ""}${matchedText.slice(start, end).replace(/\s+/gu, " ")}${end < matchedText.length ? "…" : ""}`
-          }
-          const explanation = declaredTokens.length === tokens.length
-            ? `Match in exact declared input: ${excerpt(row.declaredInputText, declaredTokens[0] ?? "")}`
-            : resultTokens.length === tokens.length
-              ? `Match in returned production delivery evidence: ${excerpt(resultSearchText, resultTokens[0] ?? "")}`
-              : `Match spans exact declared input and returned production evidence. Declared: ${excerpt(row.declaredInputText, declaredTokens[0] ?? "")} Returned: ${excerpt(resultSearchText, resultTokens[0] ?? "")}`
-          markSearchTokens(elements.matchReason, explanation, tokens)
-        }
-      }
-      if (visible) {
-        nextVisibleKeys.push(row.catalogKey)
-        visibleByCategory.set(row.category, (visibleByCategory.get(row.category) ?? 0) + 1)
-      }
+        && tokens.every((token) => `${searchable.visible} ${searchable.declared} ${searchable.result}`.includes(token))
+      return matches ? [row.catalogKey] : []
+    })
+    if (selectedKey === undefined || !visibleKeys.includes(selectedKey)) {
+      selectedKey = visibleKeys[0]
+      workbenchOpen = false
+      evidenceOpen = false
     }
-    visibleKeys = nextVisibleKeys
-    for (const [groupCategory, groupElementsForCategory] of groupElements) {
-      const visibleCount = visibleByCategory.get(groupCategory) ?? 0
-      groupElementsForCategory.group.hidden = visibleCount === 0
-      groupElementsForCategory.heading.textContent = visibleCount === groupElementsForCategory.total
-        ? `${groupElementsForCategory.label} (${groupElementsForCategory.total} cassettes)`
-        : `${groupElementsForCategory.label} (${visibleCount} of ${groupElementsForCategory.total} cassettes shown)`
+    cassetteSelector.replaceChildren()
+    for (const categoryName of categoryOrder) {
+      const categoryKeys = visibleKeys.filter((key) => rowByKey.get(key)?.category === categoryName)
+      if (categoryKeys.length === 0) continue
+      const firstKey = categoryKeys[0]
+      if (firstKey === undefined) continue
+      const representative = rowByKey.get(firstKey)
+      const group = document.createElement("optgroup")
+      group.label = representative?.categoryLabel ?? categoryName
+      for (const key of categoryKeys) {
+        const row = rowByKey.get(key)
+        if (row === undefined) continue
+        const state = states.get(key) ?? { _tag: "NotRun" }
+        const option = appendTextElement(
+          group,
+          "option",
+          `${row.storyName} · ${row.catalogKey} · ${cassetteStateStatusText(state)}`
+        )
+        option.value = key
+        option.selected = key === selectedKey
+      }
+      cassetteSelector.append(group)
     }
+    cassetteSelector.disabled = visibleKeys.length === 0
     const narrowed = tokens.length > 0 || category !== "All" || status !== "All"
     visibility.hidden = !narrowed
-    visibility.textContent = narrowed ? `Showing ${visibleKeys.length} of ${rows.length} maintained cassettes` : ""
+    visibility.textContent = narrowed ? `${visibleKeys.length} of ${rows.length} maintained cassettes available to select` : ""
     runShownButton.textContent = `Run shown (${visibleKeys.length})`
     runShownButton.hidden = !runShownActive && (visibleKeys.length === 0 || visibleKeys.length === rows.length)
     runShownButton.disabled = busy || visibleKeys.length === 0
+    renderSelected()
     if (announceVisibility) {
-      runAnnouncement.textContent = narrowed
-        ? visibility.textContent
-        : `Showing all ${rows.length} maintained cassettes`
+      runAnnouncement.textContent = narrowed ? visibility.textContent : `All ${rows.length} maintained cassettes are selectable`
     }
   }
 
+  cassetteSelector.addEventListener("change", () => {
+    const next = cassetteSelector.value as MaintainedCassetteKey
+    if (!visibleKeys.includes(next)) return
+    selectedKey = next
+    workbenchOpen = false
+    evidenceOpen = false
+    renderSelected()
+  })
   search.addEventListener("input", () => applyFilters(true))
   categoryFilter.addEventListener("change", () => applyFilters(true))
   statusFilter.addEventListener("change", () => applyFilters(true))
@@ -623,7 +583,8 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   })
   runShownButton.addEventListener("click", () => {
     runShownActive = true
-    void runKeys(visibleKeys, false).finally(() => {
+    const keys = [...visibleKeys]
+    void runKeys(keys, false).finally(() => {
       summary.tabIndex = -1
       summary.focus()
       runShownActive = false
@@ -642,8 +603,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   })
   reloadButton.addEventListener("click", reloadLab)
 
-  controls.append(completionLegend, visibility, summary, runAnnouncement, problemLinks)
-  root.replaceChildren(header, controls, resultsElement)
+  root.replaceChildren(header, controls, sharedSurface)
   applyFilters()
   updateAggregate()
 }

@@ -1,6 +1,6 @@
 import type { CassetteLabResult, MaintainedCassetteKey } from "./cassette-lab.ts"
 
-export type CassetteRowState =
+export type CassetteState =
   | { readonly _tag: "NotRun" }
   | { readonly _tag: "Running" }
   | { readonly _tag: "Settled"; readonly result: CassetteLabResult }
@@ -41,7 +41,7 @@ export const resultStatusText = (result: CassetteLabResult): string => {
   return `failed · ${result.location.consumedItemCount}/${result.totalItemCount} · stopped at item ${result.location.storyPosition + 1} (${result.location.failedItemTag}, index ${result.location.storyPosition})`
 }
 
-export const rowStateStatusText = (state: CassetteRowState): string => {
+export const cassetteStateStatusText = (state: CassetteState): string => {
   switch (state._tag) {
     case "LabDefect":
       return "Lab defect · the browser runner rejected unexpectedly"
@@ -169,7 +169,7 @@ export const journalEvidenceRows = (result: CassetteLabResult): ReadonlyArray<Jo
         }
       })
 
-export const catalogSummaryText = (states: ReadonlyArray<CassetteRowState>): string => {
+export const catalogSummaryText = (states: ReadonlyArray<CassetteState>): string => {
   const counts = { completed: 0, defects: 0, failed: 0, notRun: 0, running: 0 }
   for (const state of states) {
     if (state._tag === "NotRun") counts.notRun += 1

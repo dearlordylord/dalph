@@ -5,7 +5,7 @@ import {
   type DeliveryGraphProjection
 } from "./delivery-graph-element.ts"
 import type { maintainedCassetteRows } from "./cassette-lab.ts"
-import type { CassetteRowState } from "./cassette-lab-view.ts"
+import type { CassetteState } from "./cassette-lab-view.ts"
 
 type CassetteRow = (typeof maintainedCassetteRows)[number]
 type AuthoredRow = CassetteRow & {
@@ -121,7 +121,7 @@ const frameProjection = (row: AuthoredRow, frame: AuthoredDeliveryFrame, index: 
   }
 }
 
-const renderNotObserved = (parent: HTMLElement, row: AuthoredRow, state: CassetteRowState): void => {
+const renderNotObserved = (parent: HTMLElement, row: AuthoredRow, state: CassetteState): void => {
   appendText(
     parent,
     "p",
@@ -388,7 +388,7 @@ const renderTimeline = (
 export const renderCassetteDeliveryWorkbench = (
   host: HTMLElement,
   row: CassetteRow,
-  state: CassetteRowState,
+  state: CassetteState,
   open: boolean
 ): void => {
   host.replaceChildren()
