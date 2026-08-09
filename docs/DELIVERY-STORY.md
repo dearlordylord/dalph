@@ -4,11 +4,12 @@ One Run, told twice: as beats a person can follow, and as a state table that
 makes each beat's arithmetic checkable. The story is chosen to touch as many of
 `docs/DELIVERY-INVARIANTS.md` as one chronology can.
 
-Both registers are prose. The executable register is a cassette — one long
-recorded Run covering this whole chronology — and the beats and the table are
-written to become its script. A model run over the same chronology is the
-cheaper intermediate, useful for proving each beat is reachable before the
-cassette is recorded.
+Both registers are prose. The executable register is the maintained cassette
+`authored:deliveryInvariantStory` — one long recorded Run covering this whole
+chronology. The checked-in delivery-story manifest maps every numbered beat to
+one non-empty, ordered range of authored interactions and back to this exact
+document. Repository tests fail when the document, manifest, catalog key, or
+cassette chronology changes without the others.
 
 Alice is the Operator. `Gₙ` is a tracker graph revision. Capacity is the
 configured bound on concurrent task work. A task is **held** while it occupies a
@@ -76,24 +77,35 @@ expected head. The head has moved. The offer does not apply, and the stale head
 selects reconciliation rather than a force update.
 
 **17.** Dalph re-reads the target head, rebuilds the candidate against it, and
-promotes. A settles, and its integration target is released.
+promotes. The physical integration-target position is released, but promotion
+does not settle A. Dalph replaces A's exact active claim with a
+promotion-correlated completion claim. A later complete tracker read reports A
+successfully completed in `G₃` with that exact completion claim. Dalph deletes
+only that claim, records A's delivery settlement, and removes A's retained
+integration-completion responsibility.
 
-**18.** Alice reopens C. `G₃`. Only the lifecycle wait clears; every other fact
+**18.** Alice reopens C. `G₄`. Only the lifecycle wait clears; every other fact
 must independently authorize resumption. C needs a position and none is free.
 
 **19.** Alice raises capacity back to three. C is admitted and resumes its
 original attempt.
 
 **20.** Alice adds two tasks, F and G, to the tracker, both inside the target
-closure. `G₄`. Dalph's next complete read finds them eligible, and they wait for
+closure. `G₅`. Dalph's next complete read finds them eligible, and they wait for
 capacity behind the three tasks already running.
 
-**21.** B, C and D settle in turn. Each released position admits one of E, F, G
-in graph order.
+**21.** B, C and D report accepted results in turn. Each task releases its
+task-work position, passes through the same exact candidate, verification,
+promotion, completion-claim replacement, fresh tracker-success, claim-deletion,
+and delivery-settlement protocol as A, and then admits one of E, F, G in graph
+order.
 
-**22.** The last executor reports, its result is integrated and promoted, and
-every task in the closure is successfully complete. No action is executable and
-no obligation is outstanding, so the Run may terminate.
+**22.** E, F and G report accepted results and each passes through that same
+production integration and completion-finality protocol. A later complete
+tracker read reports all seven tasks in `G₅` successfully complete with no
+claim left to clean up. No action is executable and no obligation is
+outstanding, so the coordinator returns `RunMayTerminate` and the Run may
+record normal termination.
 
 ## The state table
 
@@ -115,12 +127,12 @@ no obligation is outstanding, so the Run may terminate.
 | 14 | A queued for integration | G₂ | 2 | B D | A C | — | D10 |
 | 15 | candidate built | G₂ | 2 | B D | A C | — | **D26** |
 | 16 | promotion finds a stale head | G₂ | 2 | B D | A C | — | **D27** |
-| 17 | reconciled and promoted; A settles | G₂ | 2 | B D | C | — | D27 D28 D33 |
-| 18 | C reopened | G₃ | 2 | B D | C | — | D9 D19 |
-| 19 | capacity 2 → 3; C admitted | G₃ | 3 | B C D | — | — | D6 D13 |
-| 20 | F and G added | G₄ | 3 | B C D | — | — | D7 D9 |
-| 21 | B C D settle; E F G admitted | G₄ | 3 | E F G | B C D | — | D6 D33 |
-| 22 | all complete | G₄ | 3 | — | — | — | **D34 D35** |
+| 17 | A promoted; exact completion claim deleted after fresh tracker success; A settles | G₃ | 2 | B D | C | — | D24 D27 D28 D33 |
+| 18 | C reopened | G₄ | 2 | B D | C | — | D9 D19 |
+| 19 | capacity 2 → 3; C admitted | G₄ | 3 | B C D | — | — | D6 D13 |
+| 20 | F and G added | G₅ | 3 | B C D | — | — | D7 D9 |
+| 21 | B C D settle through completion finality; E F G admitted | G₅ | 3 | E F G | — | — | D6 D24 D33 |
+| 22 | all complete and all exact completion claims removed | G₅ | 3 | — | — | — | **D34 D35** |
 
 Held plus retained is the whole of what Dalph owes at any row, and the rule is
 load-bearing: an accepted result is an obligation before it is integrated, so a
@@ -162,3 +174,35 @@ Every executor report here is matched to the attempt that asked for it, and
 every claim named in a release is the one Dalph currently holds. Those are I9
 and I11. The story depends on both and demonstrates neither, which is
 consistent with `INVARIANTS.md`: I9 is modelled by no tool in the study.
+
+## Executable linkage and acceptance tests
+
+The maintained catalog key is `authored:deliveryInvariantStory`. Its source
+manifest names this document and all 22 beat numbers; this document names the
+same key. `runs the linked delivery invariant story through all twenty-two
+beats` checks that both directions agree, every beat owns a non-empty ordered
+interaction range, and the complete cassette reaches its declared end through
+`runAuthoredScenarioCassette`.
+
+- `shows the linked delivery story evolving from five to seven production-observed tasks`
+  checks the literal production delivery frames begin with established `G₀`
+  tasks A–E, later establish `G₅` tasks A–G, and retain the exhaustive frontier
+  plus bounded desired-ticket placement at each graph publication.
+- `applies the delivery-story capacity contraction without evicting A C or D`
+  checks the Operator's 3 → 2 change leaves all three exact task-work positions
+  held and blocks another admission until one is released.
+- `preserves A C and D held responsibilities across the delivery-story restart`
+  checks the first Recovered publication retains the same Run and Attempt IDs
+  and exact workflow responsibilities while graph authority is re-established
+  from a new tracker read.
+- `settles every promoted delivery-story task through the production completion-claim boundary`
+  checks promotion alone settles nothing, each exact completion claim is
+  replaced and deleted only after the declared fresh successful tracker read,
+  and all seven task-scoped delivery settlements are established before normal
+  Run termination.
+- `drives the linked delivery story live through the graph-first Reducer Lab`
+  is the real-browser acceptance path. It selects the ordinary catalog option,
+  watches frames arrive while production is running, sees five nodes grow to
+  seven, sees frontier, desired tickets, actual held positions, and exact
+  responsibilities on the graph, and crosses the restart without losing the
+  before-crash correlations.
