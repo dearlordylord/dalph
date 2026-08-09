@@ -84,9 +84,7 @@ const integrationReadSubject = (
   const route = proposal.route
   if (route._tag !== "RecoveredNewActionRoute") return undefined
   const action = route.action
-  /* v8 ignore start -- a started IntegrationOrder derives only its target-lineage read as a new recovered action. */
   if (action._tag !== "ReadTargetLineage") return undefined
-  /* v8 ignore stop */
   return {
     _tag: "Integration",
     attemptId: action.plannedAttempt.attemptId,
@@ -105,9 +103,7 @@ const recoveredWorkflowReadSubject = (proposal: DeliveryActionProposal): Recover
   if (route._tag !== "RecoveredNewActionRoute") return undefined
   const action = route.action
   if (!isRecoveredReadAction(action)) return undefined
-  /* v8 ignore start -- outside integration, the closed route derivation pairs every recovered read with this order. */
   if (proposal.order._tag !== "RecoveredWorkflowOrder") return undefined
-  /* v8 ignore stop */
   if (action.plannedAttempt !== null && isAttemptBoundRecoveredReadTransition(proposal.order.transition)) {
     return {
       _tag: "Attempt",
@@ -116,11 +112,9 @@ const recoveredWorkflowReadSubject = (proposal: DeliveryActionProposal): Recover
       transition: proposal.order.transition
     }
   }
-  /* v8 ignore start -- the closed observation derivation pairs the sole uncorrelated read with this exact transition. */
   return action._tag === "ReadTaskClaim" && proposal.order.transition === "ObserveResponsibleTaskClaim"
     ? { _tag: "Task", taskId: action.taskId, transition: proposal.order.transition }
     : undefined
-  /* v8 ignore stop */
 }
 
 const recoveredReadSubject = (proposal: DeliveryActionProposal): RecoveredReadSubject | undefined =>
