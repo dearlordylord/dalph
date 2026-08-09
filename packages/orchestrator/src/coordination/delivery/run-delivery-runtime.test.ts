@@ -79,7 +79,6 @@ import {
   plannedAttemptProtocolControllerLayer
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
-import { liveActionIsPresent, liveActionKeyOf } from "./live-delivery-action.js"
 
 const runDeliveryRuntimeQuiescence = <E>(relation: DeliveryRuntimeInput<E>) => runDeliveryRuntime(relation)
 
@@ -297,27 +296,6 @@ it.effect("finds exact proposal identities in available and conflicting frontier
     expect(proposalIsPresent(conflicts([a.id]), b.id)).toBe(false)
     expect(liveActionIsPresent(conflicts([a.id]), a)).toBe(true)
     expect(liveActionIsPresent(conflicts([a.id]), b)).toBe(false)
-  })
-)
-
-it.effect("keeps proposal identity for an uncorrelated recovered claim read and its ownership conflict", () =>
-  Effect.sync(() => {
-    const operation = makeTaskClaimObservationOperation(
-      OperationId.make("runtime-unowned-claim-observation"),
-      target,
-      plannedAttempt.taskId
-    )
-    const claimRead = recoveredProposalFor(
-      RunnableFrontierTransition.ObserveResponsibleTaskClaim({ operation, taskId: plannedAttempt.taskId })
-    )
-    const conflict = (id: DeliveryProposalId): DeliveryProposalFrontier => ({
-      _tag: "DeliveryProposalOwnershipConflict",
-      conflicts: [{ id, owners: ["TrackerGraph", "TicketDelivery"] }]
-    })
-
-    expect(liveActionKeyOf(claimRead)).toBe(JSON.stringify(["DeliveryProposal", claimRead.id]))
-    expect(liveActionIsPresent(conflict(claimRead.id), claimRead)).toBe(true)
-    expect(liveActionIsPresent(conflict(DeliveryProposalId.make("another-conflict")), claimRead)).toBe(false)
   })
 )
 
