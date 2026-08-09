@@ -13,10 +13,11 @@ export const EncodedJournalEvent = Schema.Struct({
 export type EncodedJournalEvent = Schema.Schema.Type<typeof EncodedJournalEvent>
 
 /** A current-version payload cannot be decoded into Dalph's event vocabulary. */
-export class JournalEventDecodeIssue extends Schema.TaggedErrorClass<JournalEventDecodeIssue>()(
-  "JournalEventDecodeIssue",
-  { detail: Schema.String, kind: JournalEventKind, version: JournalEventVersion }
-) {}
+export class JournalEventDecodeIssue extends Schema.TaggedError<JournalEventDecodeIssue>()("JournalEventDecodeIssue", {
+  detail: Schema.String,
+  kind: JournalEventKind,
+  version: JournalEventVersion
+}) {}
 
 const decodePayload = (
   payloadJson: string,

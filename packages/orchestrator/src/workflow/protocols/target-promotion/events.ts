@@ -89,13 +89,13 @@ export const TargetPromotionCompareAndSetResult = Schema.TaggedUnion({
 export type TargetPromotionCompareAndSetResult = typeof TargetPromotionCompareAndSetResult.Type
 
 /** Git returned a complete current head and candidate ancestry fact. */
-export class TargetPromotionGitReadFailure extends Schema.TaggedErrorClass<TargetPromotionGitReadFailure>()(
+export class TargetPromotionGitReadFailure extends Schema.TaggedError<TargetPromotionGitReadFailure>()(
   "TargetPromotionGitReadFailure",
   { candidateCommit: GitCommitSha, detail: Schema.String, target: IntegrationTarget }
 ) {}
 
 /** Git could not return an unambiguous compare-and-set response. */
-export class TargetPromotionCompareAndSetFailure extends Schema.TaggedErrorClass<TargetPromotionCompareAndSetFailure>()(
+export class TargetPromotionCompareAndSetFailure extends Schema.TaggedError<TargetPromotionCompareAndSetFailure>()(
   "TargetPromotionCompareAndSetFailure",
   { candidateCommit: GitCommitSha, detail: Schema.String, expectedHead: GitCommitSha, target: IntegrationTarget }
 ) {}

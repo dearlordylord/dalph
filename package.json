@@ -48,7 +48,10 @@
       "msgpackr-extract",
       "unrs-resolver",
       "dprint"
-    ]
+    ],
+    "patchedDependencies": {
+      "@firfi/quint-connect@2.0.2-effect4.1": "patches/@firfi__quint-connect@2.0.2-effect4.1.patch"
+    }
   },
   "devDependencies": {
     "@dalph/contracts": "workspace:*",
@@ -56,22 +59,22 @@
     "@dalph/executor": "workspace:*",
     "@dalph/orchestrator": "workspace:*",
     "@effect/tsgo": "0.24.3",
-    "@effect/vitest": "4.0.0-beta.99",
+    "@effect/vitest": "4.0.0-beta.106",
     "@firfi/quint-connect": "2.0.2-effect4.1",
     "@informalsystems/quint": "0.32.0",
     "@types/node": "26.1.1",
     "@typescript/native": "npm:typescript@7.0.2",
-    "@vitest/coverage-v8": "4.0.18",
+    "@vitest/coverage-v8": "4.1.10",
     "dpdm": "4.2.0",
     "dprint": "0.55.2",
-    "effect": "4.0.0-beta.99",
+    "effect": "4.0.0-beta.106",
     "fast-check": "4.9.0",
     "husky": "9.1.7",
     "jscpd": "4.0.8",
     "lint-staged": "16.2.7",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",
-    "vitest": "4.0.18",
+    "vitest": "4.1.10",
     "zod": "4.1.12"
   }
 }

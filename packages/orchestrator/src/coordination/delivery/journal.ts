@@ -74,7 +74,7 @@ export interface JournalService {
 export class Journal extends Context.Service<Journal, JournalService>()("@dalph/Journal") {}
 
 /** Bootstrap supplied no matching begun Run prefix from which journal state can start. */
-export class JournalInitialHistoryInvalid extends Schema.TaggedErrorClass<JournalInitialHistoryInvalid>()(
+export class JournalInitialHistoryInvalid extends Schema.TaggedError<JournalInitialHistoryInvalid>()(
   "JournalInitialHistoryInvalid",
   {
     historyRunId: RunId,

@@ -440,19 +440,19 @@ const noOccurrence = (event: NonProjectedJournalEvent): ReadonlyArray<WorkflowOc
 }
 
 /** A tracker result cannot prove which same-run read action observed it. */
-export class TrackerOutcomeWithoutReadIntent extends Schema.TaggedErrorClass<TrackerOutcomeWithoutReadIntent>()(
+export class TrackerOutcomeWithoutReadIntent extends Schema.TaggedError<TrackerOutcomeWithoutReadIntent>()(
   "TrackerOutcomeWithoutReadIntent",
   { operationId: OperationId, position: JournalPosition, runId: RunId }
 ) {}
 
 /** A Git result cannot prove which same-run read action observed it. */
-export class GitOutcomeWithoutReadIntent extends Schema.TaggedErrorClass<GitOutcomeWithoutReadIntent>()(
+export class GitOutcomeWithoutReadIntent extends Schema.TaggedError<GitOutcomeWithoutReadIntent>()(
   "GitOutcomeWithoutReadIntent",
   { operationId: OperationId, position: JournalPosition, runId: RunId }
 ) {}
 
 /** An executor report cannot prove which Dalph responsibility preceded it. */
-export class ExecutorReportWithoutResponsibilityBegan extends Schema.TaggedErrorClass<ExecutorReportWithoutResponsibilityBegan>()(
+export class ExecutorReportWithoutResponsibilityBegan extends Schema.TaggedError<ExecutorReportWithoutResponsibilityBegan>()(
   "ExecutorReportWithoutResponsibilityBegan",
   { attemptId: AttemptId, position: JournalPosition, runId: RunId }
 ) {}

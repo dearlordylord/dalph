@@ -25,10 +25,9 @@ export const ProjectionIssue = Schema.TaggedUnion({
 })
 export type ProjectionIssue = typeof ProjectionIssue.Type
 
-export class GraphProjectionError extends Schema.TaggedErrorClass<GraphProjectionError>()(
-  "TaskDag.GraphProjectionError",
-  { issues: Schema.Array(ProjectionIssue) }
-) {}
+export class GraphProjectionError extends Schema.TaggedError<GraphProjectionError>()("TaskDag.GraphProjectionError", {
+  issues: Schema.Array(ProjectionIssue)
+}) {}
 
 const taskDagSchemaVersion = 1 as const
 

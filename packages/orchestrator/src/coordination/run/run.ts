@@ -64,16 +64,13 @@ export type JournaledRunBootstrapError =
   | WorkflowRunTargetMismatch
 
 /** A fixed production composition was asked to begin a different Run identity. */
-export class JournaledRunIdentityMismatch extends Schema.TaggedErrorClass<JournaledRunIdentityMismatch>()(
+export class JournaledRunIdentityMismatch extends Schema.TaggedError<JournaledRunIdentityMismatch>()(
   "JournaledRunIdentityMismatch",
   { expectedRunId: RunId, requestedRunId: RunId }
 ) {}
 
 /** An Operator request arrived while no fresh or recovered Run runtime was installed. */
-export class JournaledRunNotActive extends Schema.TaggedErrorClass<JournaledRunNotActive>()(
-  "JournaledRunNotActive",
-  {}
-) {}
+export class JournaledRunNotActive extends Schema.TaggedError<JournaledRunNotActive>()("JournaledRunNotActive", {}) {}
 
 export interface JournaledRunBootstrapService {
   readonly activate: <EInitial, RInitial, E, R>(

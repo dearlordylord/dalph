@@ -6,13 +6,13 @@ import { WorkflowOperation } from "../../registry/operation.js"
 export { samePlannedTaskAttempt } from "@dalph/contracts"
 
 /** The planned task attempt belongs to a different durable workflow run. */
-export class TaskAttemptPlanRunContradiction extends Schema.TaggedErrorClass<TaskAttemptPlanRunContradiction>()(
+export class TaskAttemptPlanRunContradiction extends Schema.TaggedError<TaskAttemptPlanRunContradiction>()(
   "TaskAttemptPlanRunContradiction",
   { journalRunId: RunId, operationId: OperationId, plannedAttemptRunId: RunId }
 ) {}
 
 /** Journal history cannot prove the exact plan required by executor work. */
-export class TaskAttemptPlanHistoryContradiction extends Schema.TaggedErrorClass<TaskAttemptPlanHistoryContradiction>()(
+export class TaskAttemptPlanHistoryContradiction extends Schema.TaggedError<TaskAttemptPlanHistoryContradiction>()(
   "TaskAttemptPlanHistoryContradiction",
   {
     attemptId: AttemptId,

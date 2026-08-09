@@ -8,7 +8,7 @@ import {
   runControlledWorkflow
 } from "@dalph/orchestrator"
 
-export class CliUsageError extends Schema.TaggedErrorClass<CliUsageError>()("Cli.CliUsageError", {
+export class CliUsageError extends Schema.TaggedError<CliUsageError>()("Cli.CliUsageError", {
   usage: Schema.String,
   detail: Schema.String
 }) {}

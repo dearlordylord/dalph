@@ -10,15 +10,15 @@ import { makeTaskWorkSpecification, type TaskWorkSpecification } from "./task-wo
 const TrackerReadOperation = Schema.Literals(["TrackerGraphReader.parse", "TrackerGraphReader.decode"])
 
 /** Failure to acquire serialized tracker-fixture content from its read capability. */
-export class FixtureReadError extends Schema.TaggedErrorClass<FixtureReadError>()("FixtureReader.FixtureReadError", {
+export class FixtureReadError extends Schema.TaggedError<FixtureReadError>()("FixtureReader.FixtureReadError", {
   target: FixtureTarget,
   detail: Schema.String
 }) {}
 
-export class TrackerReadError extends Schema.TaggedErrorClass<TrackerReadError>()(
-  "TrackerGraphReader.TrackerReadError",
-  { operation: TrackerReadOperation, detail: Schema.String }
-) {}
+export class TrackerReadError extends Schema.TaggedError<TrackerReadError>()("TrackerGraphReader.TrackerReadError", {
+  operation: TrackerReadOperation,
+  detail: Schema.String
+}) {}
 
 export const TrackerAdapterReadFailureReason = Schema.TaggedUnion({
   BoundaryDecode: {},
@@ -46,7 +46,7 @@ export const TrackerAdapterReadContext = Schema.TaggedUnion({
 export type TrackerAdapterReadContext = typeof TrackerAdapterReadContext.Type
 
 /** A provider adapter could not produce one complete, decoded tracker observation. */
-export class TrackerAdapterReadError extends Schema.TaggedErrorClass<TrackerAdapterReadError>()(
+export class TrackerAdapterReadError extends Schema.TaggedError<TrackerAdapterReadError>()(
   "TrackerGraphReader.AdapterReadError",
   { context: TrackerAdapterReadContext, detail: Schema.String, reason: TrackerAdapterReadFailureReason }
 ) {}

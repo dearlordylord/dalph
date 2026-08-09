@@ -98,7 +98,7 @@ export interface DeliveryActionExecutionLease {
 }
 
 /** A route attempted exact-attempt protocol work without declaring its admission requirement. */
-export class DeliveryActionProtocolAdmissionMissing extends Schema.TaggedErrorClass<DeliveryActionProtocolAdmissionMissing>()(
+export class DeliveryActionProtocolAdmissionMissing extends Schema.TaggedError<DeliveryActionProtocolAdmissionMissing>()(
   "DeliveryActionProtocolAdmissionMissing",
   { correlation: PlannedAttemptExecutorCorrelation, proposalId: DeliveryProposalId }
 ) {}

@@ -81,25 +81,25 @@ const CompletionClaimRequestOutcome = Schema.Literals(["DefinitelyNotApplied", "
 export type CompletionClaimRequestOutcome = typeof CompletionClaimRequestOutcome.Type
 
 /** The task tracker could not return a complete current claim record. */
-export class CompletionClaimReadFailure extends Schema.TaggedErrorClass<CompletionClaimReadFailure>()(
+export class CompletionClaimReadFailure extends Schema.TaggedError<CompletionClaimReadFailure>()(
   "IntegrationFinality.CompletionClaimReadFailure",
   { detail: Schema.String, taskId: TaskId }
 ) {}
 
 /** A replacement request failed; Unknown requires a fresh claim read before retry. */
-export class CompletionClaimReplacementFailure extends Schema.TaggedErrorClass<CompletionClaimReplacementFailure>()(
+export class CompletionClaimReplacementFailure extends Schema.TaggedError<CompletionClaimReplacementFailure>()(
   "IntegrationFinality.CompletionClaimReplacementFailure",
   { detail: Schema.String, outcome: CompletionClaimRequestOutcome, request: CompletionClaimReplacementRequest }
 ) {}
 
 /** A deletion request failed; Unknown requires a fresh claim read before retry. */
-export class CompletionClaimDeletionFailure extends Schema.TaggedErrorClass<CompletionClaimDeletionFailure>()(
+export class CompletionClaimDeletionFailure extends Schema.TaggedError<CompletionClaimDeletionFailure>()(
   "IntegrationFinality.CompletionClaimDeletionFailure",
   { detail: Schema.String, outcome: CompletionClaimRequestOutcome, request: CompletionClaimDeletionRequest }
 ) {}
 
 /** A fresh read found a claim other than the exact claim Dalph is authorized to change. */
-export class CompletionClaimOwnershipConflict extends Schema.TaggedErrorClass<CompletionClaimOwnershipConflict>()(
+export class CompletionClaimOwnershipConflict extends Schema.TaggedError<CompletionClaimOwnershipConflict>()(
   "IntegrationFinality.CompletionClaimOwnershipConflict",
   { attempted: CompletionTaskClaim, observed: CompletionClaimObservation }
 ) {}

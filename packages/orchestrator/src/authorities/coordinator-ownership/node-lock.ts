@@ -17,17 +17,16 @@ import {
 const ownershipObservationSchedule = Schedule.spaced("1 second")
 const lockHeldCodes = new Set(["EACCES", "EAGAIN", "EWOULDBLOCK"])
 const NativeLockCause = Schema.Struct({ code: Schema.String })
+const NativeNodeFile = Schema.Struct({ fd: Schema.Int })
 
 /** The host file-lock primitive rejected one descriptor lock request. */
-export class NativeCoordinatorLockFailure extends Schema.TaggedErrorClass<NativeCoordinatorLockFailure>()(
+export class NativeCoordinatorLockFailure extends Schema.TaggedError<NativeCoordinatorLockFailure>()(
   "NativeCoordinatorLockFailure",
   { cause: Schema.Defect() }
 ) {}
 
 interface NativeCoordinatorFileLockService {
-  readonly acquireExclusive: (
-    descriptor: FileSystem.File.Descriptor
-  ) => Effect.Effect<void, NativeCoordinatorLockFailure>
+  readonly acquireExclusive: (file: FileSystem.File) => Effect.Effect<void, NativeCoordinatorLockFailure>
 }
 
 export class NativeCoordinatorFileLock extends Context.Service<
@@ -38,7 +37,10 @@ export class NativeCoordinatorFileLock extends Context.Service<
 const nativeCoordinatorFileLockLayer = Layer.succeed(
   NativeCoordinatorFileLock,
   NativeCoordinatorFileLock.of({
-    acquireExclusive: Effect.fn("CoordinatorLock.NativeFileLock.acquireExclusive")(function* (descriptor) {
+    acquireExclusive: Effect.fn("CoordinatorLock.NativeFileLock.acquireExclusive")(function* (file) {
+      const { fd: descriptor } = yield* Schema.decodeUnknownEffect(NativeNodeFile)(file).pipe(
+        Effect.mapError((cause) => new NativeCoordinatorLockFailure({ cause }))
+      )
       yield* Effect.tryPromise({
         try: () =>
           new Promise<void>((resolve, reject) => {
@@ -107,7 +109,7 @@ export const nodeCoordinatorLockAdapterLayer = Layer.effect(
             target
           })
         }
-        yield* nativeFileLock.acquireExclusive(openedDirectory.fd).pipe(
+        yield* nativeFileLock.acquireExclusive(openedDirectory).pipe(
           Effect.mapError((failure) => {
             const code = errorCode(failure)
             return code !== undefined && lockHeldCodes.has(code)

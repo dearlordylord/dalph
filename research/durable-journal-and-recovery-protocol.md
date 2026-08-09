@@ -101,7 +101,7 @@ tests:
 - production, dry-run, and test implementations are supplied as `Layer`s;
 - internal workflow decisions use an exhaustive `Data.TaggedEnum`;
 - persisted and boundary-crossing records use `Schema.Struct`, constrained
-  brands, `Schema.TaggedUnion`, and `Schema.TaggedErrorClass`;
+  brands, `Schema.TaggedUnion`, and `Schema.TaggedError`;
 - unknown tracker, Git, process, SQL, and artifact data is decoded once at its
   boundary;
 - retry and polling policies use `Schedule`;

@@ -39,13 +39,13 @@ import {
 import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
 
 /** Two lower relations claim the same proposal identity, so no action is authorized. */
-export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedErrorClass<DeliveryRuntimeProposalOwnershipConflict>()(
+export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedError<DeliveryRuntimeProposalOwnershipConflict>()(
   "DeliveryRuntimeProposalOwnershipConflict",
   { proposalIds: Schema.Array(DeliveryProposalId) }
 ) {}
 
 /** Reconfirmation was allowed without one exact accepted established graph, so G2 cannot be ordered after G1. */
-export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedErrorClass<DeliveryRuntimeReconfirmationStateInvalid>()(
+export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedError<DeliveryRuntimeReconfirmationStateInvalid>()(
   "DeliveryRuntimeReconfirmationStateInvalid",
   {
     acceptedAt: Schema.NullOr(JournalPosition),

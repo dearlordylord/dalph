@@ -357,32 +357,30 @@ export const makeDeliveryConsequences = (trackerConsequences: DeliveryReflection
   }
 }
 
-export class TrackerGraphRelationError extends Schema.TaggedErrorClass<TrackerGraphRelationError>()(
+export class TrackerGraphRelationError extends Schema.TaggedError<TrackerGraphRelationError>()(
   "TrackerGraphRelationError",
   { cause: Schema.Cause(Schema.Unknown, Schema.Unknown), summary: Schema.String }
 ) {}
 
 /** Shared delivery reconciliation failed before one coherent relation revision could be published. */
-export class DeliveryRelationReconciliationError extends Schema.TaggedErrorClass<DeliveryRelationReconciliationError>()(
+export class DeliveryRelationReconciliationError extends Schema.TaggedError<DeliveryRelationReconciliationError>()(
   "DeliveryRelationReconciliationError",
   { cause: Schema.Cause(Schema.Unknown, Schema.Unknown) }
 ) {}
 
 export type DeliveryRelationSourceError = TrackerGraphRelationError | DeliveryRelationReconciliationError
 
-export class TicketDeliveryError extends Schema.TaggedErrorClass<TicketDeliveryError>()("TicketDeliveryError", {
+export class TicketDeliveryError extends Schema.TaggedError<TicketDeliveryError>()("TicketDeliveryError", {
   summary: Schema.String
 }) {}
 
-export class DeliverySettlementError extends Schema.TaggedErrorClass<DeliverySettlementError>()(
-  "DeliverySettlementError",
-  { summary: Schema.String }
-) {}
+export class DeliverySettlementError extends Schema.TaggedError<DeliverySettlementError>()("DeliverySettlementError", {
+  summary: Schema.String
+}) {}
 
-export class DeliveryReflectionError extends Schema.TaggedErrorClass<DeliveryReflectionError>()(
-  "DeliveryReflectionError",
-  { summary: Schema.String }
-) {}
+export class DeliveryReflectionError extends Schema.TaggedError<DeliveryReflectionError>()("DeliveryReflectionError", {
+  summary: Schema.String
+}) {}
 
 export interface TrackerGraphRelationService {
   readonly proposedActions: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, DeliveryRelationSourceError>

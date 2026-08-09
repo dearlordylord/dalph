@@ -409,7 +409,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   TerminalAssertion: ["ExpectedBehavior"]
 })
 
-export class AuthoredCassetteStoryItemOwnerContradiction extends Schema.TaggedErrorClass<AuthoredCassetteStoryItemOwnerContradiction>()(
+export class AuthoredCassetteStoryItemOwnerContradiction extends Schema.TaggedError<AuthoredCassetteStoryItemOwnerContradiction>()(
   "AuthoredCassetteStoryItemOwnerContradiction",
   { registrations: Schema.Array(Schema.String), tag: Schema.String }
 ) {}

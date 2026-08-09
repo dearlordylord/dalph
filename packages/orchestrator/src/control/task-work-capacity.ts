@@ -21,7 +21,7 @@ export const SetTaskWorkCapacityRequest = Schema.Struct({
 export type SetTaskWorkCapacityRequest = typeof SetTaskWorkCapacityRequest.Type
 
 /** The Operator named an older durable Run policy than the journal currently contains. */
-export class TaskWorkCapacityPolicyRevisionConflict extends Schema.TaggedErrorClass<TaskWorkCapacityPolicyRevisionConflict>()(
+export class TaskWorkCapacityPolicyRevisionConflict extends Schema.TaggedError<TaskWorkCapacityPolicyRevisionConflict>()(
   "TaskWorkCapacityPolicyRevisionConflict",
   { current: RunControlPolicy, expectedRevision: RunPolicyRevision, runId: RunId }
 ) {}

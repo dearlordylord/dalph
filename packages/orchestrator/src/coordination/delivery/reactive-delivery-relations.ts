@@ -32,7 +32,7 @@ import {
 import type { JournalService } from "./journal.js"
 
 /** Journal history cannot drive delivery until its initial control policy exists. */
-export class DeliveryControlPolicyMissing extends Schema.TaggedErrorClass<DeliveryControlPolicyMissing>()(
+export class DeliveryControlPolicyMissing extends Schema.TaggedError<DeliveryControlPolicyMissing>()(
   "DeliveryControlPolicyMissing",
   {}
 ) {}

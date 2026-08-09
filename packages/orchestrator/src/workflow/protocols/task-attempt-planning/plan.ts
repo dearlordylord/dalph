@@ -40,10 +40,9 @@ export const deterministicOperationIdAllocatorLayer = (prefix: string) =>
   )
 
 /** Planning failed before any task-work start intent or request existed. */
-export class PlannedTaskAttemptError extends Schema.TaggedErrorClass<PlannedTaskAttemptError>()(
-  "PlannedTaskAttemptError",
-  { detail: Schema.String }
-) {}
+export class PlannedTaskAttemptError extends Schema.TaggedError<PlannedTaskAttemptError>()("PlannedTaskAttemptError", {
+  detail: Schema.String
+}) {}
 
 export interface PlannedTaskAttemptPlannerService {
   readonly plan: (specification: TaskWorkSpecification) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>

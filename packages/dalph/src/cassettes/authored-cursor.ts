@@ -15,22 +15,22 @@ import {
   type AuthoredAttemptChoiceItem as AttemptChoiceItem
 } from "./authored-cursor-items.js"
 
-export class AuthoredCassetteInteractionMismatch extends Schema.TaggedErrorClass<AuthoredCassetteInteractionMismatch>()(
+export class AuthoredCassetteInteractionMismatch extends Schema.TaggedError<AuthoredCassetteInteractionMismatch>()(
   "AuthoredCassetteInteractionMismatch",
   { actual: Schema.String, expected: Schema.String, storyPosition: Schema.Int }
 ) {}
 
-export class AuthoredIntegrationCandidateGitValidationFailure extends Schema.TaggedErrorClass<AuthoredIntegrationCandidateGitValidationFailure>()(
+export class AuthoredIntegrationCandidateGitValidationFailure extends Schema.TaggedError<AuthoredIntegrationCandidateGitValidationFailure>()(
   "AuthoredIntegrationCandidateGitValidationFailure",
   { detail: Schema.String, storyPosition: Schema.Int }
 ) {}
 
-export class AuthoredTargetPromotionCompareAndSetFailure extends Schema.TaggedErrorClass<AuthoredTargetPromotionCompareAndSetFailure>()(
+export class AuthoredTargetPromotionCompareAndSetFailure extends Schema.TaggedError<AuthoredTargetPromotionCompareAndSetFailure>()(
   "AuthoredTargetPromotionCompareAndSetFailure",
   { detail: Schema.String, storyPosition: Schema.Int }
 ) {}
 
-export class AuthoredTargetPromotionGitReadFailure extends Schema.TaggedErrorClass<AuthoredTargetPromotionGitReadFailure>()(
+export class AuthoredTargetPromotionGitReadFailure extends Schema.TaggedError<AuthoredTargetPromotionGitReadFailure>()(
   "AuthoredTargetPromotionGitReadFailure",
   { detail: Schema.String, storyPosition: Schema.Int }
 ) {}

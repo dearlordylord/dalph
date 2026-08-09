@@ -47,19 +47,19 @@ export { deriveTargetPromotionState, TargetPromotionPendingRetry, TargetPromotio
 export type { JournalOccurrence } from "./state.js"
 
 /** The caller offered a candidate whose target or constructed occurrence differs from Passed evidence. */
-export class TargetPromotionPremiseContradiction extends Schema.TaggedErrorClass<TargetPromotionPremiseContradiction>()(
+export class TargetPromotionPremiseContradiction extends Schema.TaggedError<TargetPromotionPremiseContradiction>()(
   "TargetPromotionPremiseContradiction",
   { candidateId: IntegrationCandidateId, detail: Schema.String }
 ) {}
 
 /** Promotion requires the terminal Passed verification state and its exact sealed manifest. */
-export class TargetPromotionVerificationRequired extends Schema.TaggedErrorClass<TargetPromotionVerificationRequired>()(
+export class TargetPromotionVerificationRequired extends Schema.TaggedError<TargetPromotionVerificationRequired>()(
   "TargetPromotionVerificationRequired",
   { candidateId: IntegrationCandidateId }
 ) {}
 
 /** A provider returned a successful mutation for a commit other than the requested M. */
-export class TargetPromotionResultContradiction extends Schema.TaggedErrorClass<TargetPromotionResultContradiction>()(
+export class TargetPromotionResultContradiction extends Schema.TaggedError<TargetPromotionResultContradiction>()(
   "TargetPromotionResultContradiction",
   { candidateCommit: GitCommitSha, detail: Schema.String }
 ) {}

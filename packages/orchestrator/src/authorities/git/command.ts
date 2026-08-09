@@ -4,7 +4,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 export const GitCommandResult = Schema.Struct({ exitCode: Schema.Int, stderr: Schema.String, stdout: Schema.String })
 export type GitCommandResult = typeof GitCommandResult.Type
 
-export class GitCommandInvocationFailure extends Schema.TaggedErrorClass<GitCommandInvocationFailure>()(
+export class GitCommandInvocationFailure extends Schema.TaggedError<GitCommandInvocationFailure>()(
   "GitCommandInvocationFailure",
   { detail: Schema.String }
 ) {}

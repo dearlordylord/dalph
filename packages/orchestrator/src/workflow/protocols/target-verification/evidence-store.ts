@@ -22,7 +22,7 @@ export const EvidenceStoreOperation = Schema.Literals(["EvidenceStore.put", "Evi
 export type EvidenceStoreOperation = typeof EvidenceStoreOperation.Type
 
 /** Evidence storage could not atomically accept or read one complete object. */
-export class EvidenceStoreFailure extends Schema.TaggedErrorClass<EvidenceStoreFailure>()("EvidenceStoreFailure", {
+export class EvidenceStoreFailure extends Schema.TaggedError<EvidenceStoreFailure>()("EvidenceStoreFailure", {
   detail: Schema.String,
   operation: EvidenceStoreOperation
 }) {}

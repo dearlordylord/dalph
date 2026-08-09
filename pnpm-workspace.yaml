@@ -4,3 +4,5 @@ packages:
   - "prototypes/reducer-lab"
 
 minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - foldkit

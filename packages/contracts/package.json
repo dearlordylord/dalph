@@ -16,6 +16,6 @@
     "build": "node ../../scripts/clean-package-build-output.mjs . && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-import-extensions.mjs ."
   },
   "dependencies": {
-    "effect": "4.0.0-beta.99"
+    "effect": "4.0.0-beta.106"
   }
 }

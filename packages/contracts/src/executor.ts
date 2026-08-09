@@ -48,7 +48,7 @@ export const plannedAttemptExecutorCorrelationKey = (correlation: PlannedAttempt
   JSON.stringify({ attemptId: correlation.attemptId, runId: correlation.runId })
 
 /** The controlled milestone executor received a request that did not match its next expected step. */
-export class ControlledFakeExecutorMismatch extends Schema.TaggedErrorClass<ControlledFakeExecutorMismatch>()(
+export class ControlledFakeExecutorMismatch extends Schema.TaggedError<ControlledFakeExecutorMismatch>()(
   "ControlledFakeExecutorMismatch",
   { detail: Schema.String }
 ) {}

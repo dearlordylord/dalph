@@ -6,6 +6,7 @@
     "moduleResolution": "NodeNext",
     "noEmit": true,
     "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
     "exactOptionalPropertyTypes": true,
     "types": ["node", "vitest/globals"]
   },

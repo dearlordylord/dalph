@@ -144,7 +144,7 @@ export const deliveryStoryManifest = {
     slice(
       "DS-14",
       ["authored:acceptedResultRestartsIntoIntegration"],
-      scenarioTest("recovers an accepted result in journal order and crosses its integration cutoff once")
+      scenarioTest("continues an accepted result after process death and crosses its integration cutoff once")
     ),
     missing(
       "DS-15",

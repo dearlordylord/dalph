@@ -56,10 +56,9 @@ export const StartupRecoveryIssue = Schema.Union([
 export type StartupRecoveryIssue = typeof StartupRecoveryIssue.Type
 
 /** Startup found preserved history that cannot be reconstructed safely. */
-export class StartupRecoveryBlocked extends Schema.TaggedErrorClass<StartupRecoveryBlocked>()(
-  "StartupRecoveryBlocked",
-  { issues: Schema.Array(StartupRecoveryIssue) }
-) {}
+export class StartupRecoveryBlocked extends Schema.TaggedError<StartupRecoveryBlocked>()("StartupRecoveryBlocked", {
+  issues: Schema.Array(StartupRecoveryIssue)
+}) {}
 
 const runBeganWithoutTermination = (
   reduction: Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { readonly _tag: "ValidWorkflowJournalHistory" }>

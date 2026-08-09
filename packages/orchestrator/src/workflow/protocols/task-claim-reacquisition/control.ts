@@ -23,7 +23,7 @@ const ApplyTaskClaimReacquisitionRequest = Schema.Struct({
 })
 
 /** One transport request identity was already applied to different direction content. */
-export class TaskClaimReacquisitionRequestIdentityContradiction extends Schema.TaggedErrorClass<TaskClaimReacquisitionRequestIdentityContradiction>()(
+export class TaskClaimReacquisitionRequestIdentityContradiction extends Schema.TaggedError<TaskClaimReacquisitionRequestIdentityContradiction>()(
   "TaskClaimReacquisitionRequestIdentityContradiction",
   { existingPosition: JournalPosition, requestId: TaskClaimReacquisitionRequestId, runId: RunId }
 ) {}

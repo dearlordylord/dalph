@@ -13,7 +13,7 @@ import {
   type AuthoredTaskWorkResult as TaskWorkResult
 } from "./authored-domain.js"
 
-export class AuthoredCassetteBehaviorMismatch extends Schema.TaggedErrorClass<AuthoredCassetteBehaviorMismatch>()(
+export class AuthoredCassetteBehaviorMismatch extends Schema.TaggedError<AuthoredCassetteBehaviorMismatch>()(
   "AuthoredCassetteBehaviorMismatch",
   { actual: AuthoredObservedBehavior, expected: AuthoredExpectedBehavior }
 ) {}

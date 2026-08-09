@@ -37,7 +37,7 @@ const isGraphFactsObservation = (observation: TaskTrackerFactsObservation): obse
   observation._tag === "CompleteTaskTrackerFacts" || observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
 
 /** Journaled tracker facts cannot reconstruct the knowledge promised by one completed read. */
-export class TaskTrackerKnowledgeUnavailable extends Schema.TaggedErrorClass<TaskTrackerKnowledgeUnavailable>()(
+export class TaskTrackerKnowledgeUnavailable extends Schema.TaggedError<TaskTrackerKnowledgeUnavailable>()(
   "TaskTrackerKnowledgeUnavailable",
   { knowledge: Schema.Literals(["TaskGraph", "TaskWorkSpecification"]), operationId: OperationId }
 ) {}

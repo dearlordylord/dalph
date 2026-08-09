@@ -17,6 +17,6 @@
   },
   "dependencies": {
     "@dalph/contracts": "workspace:*",
-    "effect": "4.0.0-beta.99"
+    "effect": "4.0.0-beta.106"
   }
 }

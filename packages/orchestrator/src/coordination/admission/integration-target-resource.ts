@@ -13,7 +13,7 @@ export interface IntegrationTargetResourceSnapshot {
 }
 
 /** A different responsibility already holds the exact process-local integration target. */
-export class IntegrationTargetResourceUnavailable extends Schema.TaggedErrorClass<IntegrationTargetResourceUnavailable>()(
+export class IntegrationTargetResourceUnavailable extends Schema.TaggedError<IntegrationTargetResourceUnavailable>()(
   "IntegrationTargetResourceUnavailable",
   { heldBy: JournalPosition, requestedBy: JournalPosition, target: IntegrationTarget }
 ) {}

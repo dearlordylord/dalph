@@ -1,4 +1,6 @@
 import { Schema } from "effect"
+import { m } from "foldkit/message"
+import { ts } from "foldkit/schema"
 import { TaskId, type TaskId as TaskIdType } from "../../../packages/contracts/src/task-identity.ts"
 import {
   AuthoredRunActivationOrdinal,
@@ -30,10 +32,10 @@ export type DeliveryFrameIndex = typeof DeliveryFrameIndex.Type
 
 /** Why one production publication is useful as a semantic playback stop. */
 export const DeliveryLandmark = Schema.Union([
-  Schema.TaggedStruct("InitialPublication", {}),
-  Schema.TaggedStruct("CoordinatorRestart", { activationOrdinal: AuthoredRunActivationOrdinal }),
-  Schema.TaggedStruct("EligibleFrontierWave", { taskIds: Schema.NonEmptyArray(TaskId) }),
-  Schema.TaggedStruct("TerminalPublication", {})
+  ts("InitialPublication"),
+  ts("CoordinatorRestart", { activationOrdinal: AuthoredRunActivationOrdinal }),
+  ts("EligibleFrontierWave", { taskIds: Schema.NonEmptyArray(TaskId) }),
+  ts("TerminalPublication")
 ])
 export type DeliveryLandmark = typeof DeliveryLandmark.Type
 
@@ -92,22 +94,22 @@ export const deliveryPlaybackFramesFrom = (
 }
 
 /** The Lab either follows the newest publication or inspects one exact historical publication. */
-const FollowingLive = Schema.TaggedStruct("FollowingLive", {})
-const InspectingFrame = Schema.TaggedStruct("InspectingFrame", { frameIndex: DeliveryFrameIndex })
+const FollowingLive = ts("FollowingLive")
+const InspectingFrame = ts("InspectingFrame", { frameIndex: DeliveryFrameIndex })
 export const DeliveryPlaybackPosition = Schema.Union([FollowingLive, InspectingFrame])
 export type DeliveryPlaybackPosition = typeof DeliveryPlaybackPosition.Type
 
 /** The task whose graph node and exact delivery facts the maintainer is correlating. */
-const NoTaskSelected = Schema.TaggedStruct("NoTaskSelected", {})
-const TaskSelected = Schema.TaggedStruct("TaskSelected", { taskId: TaskId })
+const NoTaskSelected = ts("NoTaskSelected")
+const TaskSelected = ts("TaskSelected", { taskId: TaskId })
 export const DeliveryTaskSelection = Schema.Union([NoTaskSelected, TaskSelected])
 export type DeliveryTaskSelection = typeof DeliveryTaskSelection.Type
 
-const EmptyDeliveryPlayback = Schema.TaggedStruct("EmptyDeliveryPlayback", {
+const EmptyDeliveryPlayback = ts("EmptyDeliveryPlayback", {
   running: Schema.Boolean,
   taskSelection: DeliveryTaskSelection
 })
-const PopulatedDeliveryPlaybackShape = Schema.TaggedStruct("PopulatedDeliveryPlayback", {
+const PopulatedDeliveryPlaybackShape = ts("PopulatedDeliveryPlayback", {
   frames: Schema.NonEmptyArray(DeliveryPlaybackFrame),
   position: DeliveryPlaybackPosition,
   running: Schema.Boolean,
@@ -130,22 +132,22 @@ export type DeliveryPlaybackModel = typeof DeliveryPlaybackModel.Type
 export const PlaybackNavigationSource = Schema.Literals(["PlaybackControl", "WorkbenchShortcut"])
 export type PlaybackNavigationSource = typeof PlaybackNavigationSource.Type
 
-export const PreviousFrameRequested = Schema.TaggedStruct("PreviousFrameRequested", {
+export const PreviousFrameRequested = m("PreviousFrameRequested", {
   source: PlaybackNavigationSource
 })
-export const NextFrameRequested = Schema.TaggedStruct("NextFrameRequested", {
+export const NextFrameRequested = m("NextFrameRequested", {
   source: PlaybackNavigationSource
 })
-export const PreviousLandmarkRequested = Schema.TaggedStruct("PreviousLandmarkRequested", {
+export const PreviousLandmarkRequested = m("PreviousLandmarkRequested", {
   source: PlaybackNavigationSource
 })
-export const NextLandmarkRequested = Schema.TaggedStruct("NextLandmarkRequested", {
+export const NextLandmarkRequested = m("NextLandmarkRequested", {
   source: PlaybackNavigationSource
 })
-export const ExactFrameSelected = Schema.TaggedStruct("ExactFrameSelected", { frameIndex: DeliveryFrameIndex })
-export const FollowLiveRequested = Schema.TaggedStruct("FollowLiveRequested", {})
-export const TaskSelectedRequested = Schema.TaggedStruct("TaskSelectedRequested", { taskId: TaskId })
-export const FramesUpdated = Schema.TaggedStruct("FramesUpdated", {
+export const ExactFrameSelected = m("ExactFrameSelected", { frameIndex: DeliveryFrameIndex })
+export const FollowLiveRequested = m("FollowLiveRequested")
+export const TaskSelectedRequested = m("TaskSelectedRequested", { taskId: TaskId })
+export const FramesUpdated = m("FramesUpdated", {
   frames: Schema.Array(DeliveryPlaybackFrame),
   running: Schema.Boolean
 })
@@ -165,20 +167,20 @@ export type DeliveryPlaybackMessage = typeof DeliveryPlaybackMessage.Type
 export const deliveryPlaybackShortcutMessage = (key: string): DeliveryPlaybackMessage | null => {
   switch (key) {
     case deliveryPlaybackViewContract.previousFrame.shortcut:
-      return PreviousFrameRequested.make({ source: "WorkbenchShortcut" })
+      return PreviousFrameRequested({ source: "WorkbenchShortcut" })
     case deliveryPlaybackViewContract.nextFrame.shortcut:
-      return NextFrameRequested.make({ source: "WorkbenchShortcut" })
+      return NextFrameRequested({ source: "WorkbenchShortcut" })
     case deliveryPlaybackViewContract.previousLandmark.shortcut:
-      return PreviousLandmarkRequested.make({ source: "WorkbenchShortcut" })
+      return PreviousLandmarkRequested({ source: "WorkbenchShortcut" })
     case deliveryPlaybackViewContract.nextLandmark.shortcut:
-      return NextLandmarkRequested.make({ source: "WorkbenchShortcut" })
+      return NextLandmarkRequested({ source: "WorkbenchShortcut" })
     default:
       return null
   }
 }
 
 /** Browser adapters interpret this command by focusing the persistent playback group. */
-export const FocusDeliveryPlaybackControls = Schema.TaggedStruct("FocusDeliveryPlaybackControls", {})
+export const FocusDeliveryPlaybackControls = ts("FocusDeliveryPlaybackControls")
 export type DeliveryPlaybackCommand = typeof FocusDeliveryPlaybackControls.Type
 
 export const makeDeliveryPlaybackModel = (
@@ -187,12 +189,12 @@ export const makeDeliveryPlaybackModel = (
 ): DeliveryPlaybackModel => {
   const firstFrame = frames[0]
   return firstFrame === undefined
-    ? EmptyDeliveryPlayback.make({ running, taskSelection: NoTaskSelected.make({}) })
+    ? EmptyDeliveryPlayback({ running, taskSelection: NoTaskSelected() })
     : PopulatedDeliveryPlayback.make({
       frames: [firstFrame, ...frames.slice(1)],
-      position: FollowingLive.make({}),
+      position: FollowingLive(),
       running,
-      taskSelection: NoTaskSelected.make({})
+      taskSelection: NoTaskSelected()
   })
 }
 
@@ -284,14 +286,14 @@ const inspect = (
   frameIndex: DeliveryFrameIndex
 ): DeliveryPlaybackModel => ({
   ...model,
-  position: InspectingFrame.make({ frameIndex })
+  position: InspectingFrame({ frameIndex })
 })
 
 const focusWhenControlBecameUnavailable = (
   source: PlaybackNavigationSource,
   available: boolean
 ): ReadonlyArray<DeliveryPlaybackCommand> =>
-  source === "PlaybackControl" && !available ? [FocusDeliveryPlaybackControls.make({})] : []
+  source === "PlaybackControl" && !available ? [FocusDeliveryPlaybackControls()] : []
 
 const moveTo = (
   model: DeliveryPlaybackModel,
@@ -339,20 +341,20 @@ export const updateDeliveryPlayback = (
     case "FollowLiveRequested":
       return model._tag === "EmptyDeliveryPlayback"
         ? [model, []]
-        : [{ ...model, position: FollowingLive.make({}) }, []]
+        : [{ ...model, position: FollowingLive() }, []]
     case "TaskSelectedRequested":
-      return [{ ...model, taskSelection: TaskSelected.make({ taskId: message.taskId }) }, []]
+      return [{ ...model, taskSelection: TaskSelected({ taskId: message.taskId }) }, []]
     case "FramesUpdated": {
       const firstFrame = message.frames[0]
       if (firstFrame === undefined) {
-        return [EmptyDeliveryPlayback.make({
+        return [EmptyDeliveryPlayback({
           running: message.running,
           taskSelection: model.taskSelection
         }), []]
       }
       const position = model._tag === "EmptyDeliveryPlayback" || model.position._tag === "FollowingLive"
-        ? FollowingLive.make({})
-        : InspectingFrame.make({
+        ? FollowingLive()
+        : InspectingFrame({
           frameIndex: DeliveryFrameIndex.make(Math.min(model.position.frameIndex, message.frames.length - 1))
         })
       return [PopulatedDeliveryPlayback.make({

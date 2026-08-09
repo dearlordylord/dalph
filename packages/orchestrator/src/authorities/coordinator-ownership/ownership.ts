@@ -12,24 +12,24 @@ export type GitCommonDirectoryLocator = typeof GitCommonDirectoryLocator.Type
 const CoordinatorLockOperation = Schema.Literal("CoordinatorLock.acquire")
 
 /** Another live coordinator already owns this Git common directory. */
-export class CoordinatorLockHeld extends Schema.TaggedErrorClass<CoordinatorLockHeld>()("CoordinatorLockHeld", {
+export class CoordinatorLockHeld extends Schema.TaggedError<CoordinatorLockHeld>()("CoordinatorLockHeld", {
   gitCommonDirectory: GitCommonDirectoryLocator
 }) {}
 
 /** The operating system could not acquire coordinator ownership. */
-export class CoordinatorLockUnavailable extends Schema.TaggedErrorClass<CoordinatorLockUnavailable>()(
+export class CoordinatorLockUnavailable extends Schema.TaggedError<CoordinatorLockUnavailable>()(
   "CoordinatorLockUnavailable",
   { operation: CoordinatorLockOperation, target: GitCommonDirectoryTarget, detail: Schema.String }
 ) {}
 
 /** Scoped coordinator ownership ended before a mutation could remain valid. */
-export class CoordinatorOwnershipLost extends Schema.TaggedErrorClass<CoordinatorOwnershipLost>()(
+export class CoordinatorOwnershipLost extends Schema.TaggedError<CoordinatorOwnershipLost>()(
   "CoordinatorOwnershipLost",
   { gitCommonDirectory: GitCommonDirectoryLocator }
 ) {}
 
 /** The canonical directory path no longer names this coordinator's locked inode. */
-export class CoordinatorLockObservationContradiction extends Schema.TaggedErrorClass<CoordinatorLockObservationContradiction>()(
+export class CoordinatorLockObservationContradiction extends Schema.TaggedError<CoordinatorLockObservationContradiction>()(
   "CoordinatorLockObservationContradiction",
   { gitCommonDirectory: GitCommonDirectoryLocator }
 ) {}

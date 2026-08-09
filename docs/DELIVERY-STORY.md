@@ -229,7 +229,7 @@ DS-10|NotImplemented|No maintained run closes C without success and then asks it
 DS-11|NotImplemented|No maintained run releases closed C's position while retaining its reversible lifecycle wait.
 DS-12|NotImplemented|No maintained run applies Continue to retained B while two other tasks consume all current capacity.
 DS-13|NotImplemented|No maintained run releases A's position after its accepted result and then admits already-owned B.
-DS-14|DemonstratedByMaintainedSlice|authored:acceptedResultRestartsIntoIntegration|packages/dalph/test/cassettes/scenario.test.ts#it.effect#recovers an accepted result in journal order and crosses its integration cutoff once
+DS-14|DemonstratedByMaintainedSlice|authored:acceptedResultRestartsIntoIntegration|packages/dalph/test/cassettes/scenario.test.ts#it.effect#continues an accepted result after process death and crosses its integration cutoff once
 DS-15|NotImplemented|No named acceptance test proves the candidate's exact ordered expected-head and accepted-result parents for this beat.
 DS-16|NotImplemented|The maintained stale-head cassette detects H2 before compare-and-set; it does not send the beat's rejected exact-head offer.
 DS-17|NotImplemented|The separate A-finality spine settles A, but does not first reconcile a stale head and rebuild its successor candidate.

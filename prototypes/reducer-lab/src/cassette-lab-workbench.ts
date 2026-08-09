@@ -728,17 +728,17 @@ const renderTimeline = (
     renderPlayback(commands)
   }
 
-  follow.addEventListener("click", () => dispatchPlayback(FollowLiveRequested.make({})))
+  follow.addEventListener("click", () => dispatchPlayback(FollowLiveRequested()))
   previous.addEventListener("click", () =>
-    dispatchPlayback(PreviousFrameRequested.make({ source: "PlaybackControl" })))
+    dispatchPlayback(PreviousFrameRequested({ source: "PlaybackControl" })))
   next.addEventListener("click", () =>
-    dispatchPlayback(NextFrameRequested.make({ source: "PlaybackControl" })))
+    dispatchPlayback(NextFrameRequested({ source: "PlaybackControl" })))
   previousLandmark.addEventListener("click", () =>
-    dispatchPlayback(PreviousLandmarkRequested.make({ source: "PlaybackControl" })))
+    dispatchPlayback(PreviousLandmarkRequested({ source: "PlaybackControl" })))
   nextLandmark.addEventListener("click", () =>
-    dispatchPlayback(NextLandmarkRequested.make({ source: "PlaybackControl" })))
+    dispatchPlayback(NextLandmarkRequested({ source: "PlaybackControl" })))
   select.addEventListener("change", () =>
-    dispatchPlayback(ExactFrameSelected.make({ frameIndex: DeliveryFrameIndex.make(Number(select.value)) })))
+    dispatchPlayback(ExactFrameSelected({ frameIndex: DeliveryFrameIndex.make(Number(select.value)) })))
   const keyboardSurface = parent.closest<HTMLElement>("[data-role='delivery-workbench']") ?? parent
   const handleKeyboard = (event: KeyboardEvent): void => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
@@ -751,7 +751,7 @@ const renderTimeline = (
   keyboardSurface.addEventListener("keydown", handleKeyboard)
   graph.addEventListener("task-selected", (event) => {
     const taskId = TaskId.make((event as CustomEvent<{ readonly taskId: string }>).detail.taskId)
-    dispatchPlayback(TaskSelectedRequested.make({ taskId }))
+    dispatchPlayback(TaskSelectedRequested({ taskId }))
     const selectedFrameIndex = projectDeliveryPlayback(playback.model).currentFrameIndex
     const frame = selectedFrameIndex === null ? undefined : frames[selectedFrameIndex]
     if (frame === undefined) return
@@ -764,7 +764,7 @@ const renderTimeline = (
     frames = nextFrames
     running = nextRunning
     refreshSettlementCoverage()
-    dispatchPlayback(FramesUpdated.make({ frames: playbackFrames(), running }))
+    dispatchPlayback(FramesUpdated({ frames: playbackFrames(), running }))
   }
   update(initialFrames, initiallyRunning)
   return {

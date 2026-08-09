@@ -12,6 +12,7 @@ export default defineConfig({
     __DALPH_SOURCE_REVISION__: JSON.stringify(sourceRevision)
   },
   resolve: {
+    dedupe: ["effect", "foldkit"],
     alias: [{
       find: /^effect\/testing\/TestClock$/,
       replacement: fileURLToPath(new URL("../../node_modules/effect/dist/testing/TestClock.js", import.meta.url))
@@ -37,6 +38,9 @@ export default defineConfig({
       find: /^@effect\/platform-node$/,
       replacement: fileURLToPath(new URL("./src/platform-node-shim.ts", import.meta.url))
     }]
+  },
+  ssr: {
+    noExternal: ["foldkit"]
   },
   server: {
     allowedHosts: ["determined_johnson.orb.local"],

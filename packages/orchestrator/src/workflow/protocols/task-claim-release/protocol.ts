@@ -12,7 +12,7 @@ import type { CoordinatorOwnershipError } from "../../../authorities/coordinator
 const taskClaimReleaseRequestBound = 3
 
 /** Three exact release requests completed without authoritative absence. */
-export class TaskClaimReleaseDidNotConverge extends Schema.TaggedErrorClass<TaskClaimReleaseDidNotConverge>()(
+export class TaskClaimReleaseDidNotConverge extends Schema.TaggedError<TaskClaimReleaseDidNotConverge>()(
   "TaskClaimReleaseDidNotConverge",
   { attempts: Schema.Int, release: TaskClaimRelease }
 ) {}

@@ -72,7 +72,7 @@ export interface JournalPort {
   >;
 }
 
-export class JournalFailure extends Schema.TaggedErrorClass<JournalFailure>()(
+export class JournalFailure extends Schema.TaggedError<JournalFailure>()(
   "JournalFailure",
   { operation: Schema.NonEmptyString, detail: Schema.String },
 ) {}
@@ -120,7 +120,7 @@ export interface ExecutionPort {
   >;
 }
 
-export class ExecutionFailure extends Schema.TaggedErrorClass<ExecutionFailure>()(
+export class ExecutionFailure extends Schema.TaggedError<ExecutionFailure>()(
   "ExecutionFailure",
   { operation: Schema.NonEmptyString, detail: Schema.String },
 ) {}
@@ -131,7 +131,7 @@ export interface IntegrationPort {
   ) => Effect.Effect<GitSha, IntegrationFailure>;
 }
 
-export class IntegrationFailure extends Schema.TaggedErrorClass<IntegrationFailure>()(
+export class IntegrationFailure extends Schema.TaggedError<IntegrationFailure>()(
   "IntegrationFailure",
   { operation: Schema.NonEmptyString, detail: Schema.String },
 ) {}
@@ -143,12 +143,12 @@ export interface TrackerTransitionPort {
   ) => Effect.Effect<void, TrackerTransitionFailure>;
 }
 
-export class TrackerTransitionFailure extends Schema.TaggedErrorClass<TrackerTransitionFailure>()(
+export class TrackerTransitionFailure extends Schema.TaggedError<TrackerTransitionFailure>()(
   "TrackerTransitionFailure",
   { operation: Schema.NonEmptyString, detail: Schema.String },
 ) {}
 
-export class TrackerReadFailure extends Schema.TaggedErrorClass<TrackerReadFailure>()(
+export class TrackerReadFailure extends Schema.TaggedError<TrackerReadFailure>()(
   "TrackerReadFailure",
   { operation: Schema.NonEmptyString, detail: Schema.String },
 ) {}

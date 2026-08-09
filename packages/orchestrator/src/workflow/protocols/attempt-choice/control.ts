@@ -27,19 +27,19 @@ import {
 import { ApplyAttemptChoiceRequest } from "./request.js"
 
 /** One request identity was already applied with different exact contents. */
-export class AttemptChoiceRequestIdentityContradiction extends Schema.TaggedErrorClass<AttemptChoiceRequestIdentityContradiction>()(
+export class AttemptChoiceRequestIdentityContradiction extends Schema.TaggedError<AttemptChoiceRequestIdentityContradiction>()(
   "AttemptChoiceRequestIdentityContradiction",
   { existingPosition: JournalPosition, requestId: AttemptChoiceRequestId, runId: RunId }
 ) {}
 
 /** A self-bound request identity names a different Run than its requested attempt. */
-export class AttemptChoiceRequestRunMismatch extends Schema.TaggedErrorClass<AttemptChoiceRequestRunMismatch>()(
+export class AttemptChoiceRequestRunMismatch extends Schema.TaggedError<AttemptChoiceRequestRunMismatch>()(
   "AttemptChoiceRequestRunMismatch",
   { boundRunId: RunId, requestId: AttemptChoiceRequestId, subjectRunId: RunId }
 ) {}
 
 /** Another valid Continue-or-Stop request already won this exact changed-task choice. */
-export class AttemptChoiceAlreadyApplied extends Schema.TaggedErrorClass<AttemptChoiceAlreadyApplied>()(
+export class AttemptChoiceAlreadyApplied extends Schema.TaggedError<AttemptChoiceAlreadyApplied>()(
   "AttemptChoiceAlreadyApplied",
   {
     existingPosition: JournalPosition,
@@ -50,7 +50,7 @@ export class AttemptChoiceAlreadyApplied extends Schema.TaggedErrorClass<Attempt
 ) {}
 
 /** Current durable history does not expose the requested changed-task choice. */
-export class AttemptChoiceNotAvailable extends Schema.TaggedErrorClass<AttemptChoiceNotAvailable>()(
+export class AttemptChoiceNotAvailable extends Schema.TaggedError<AttemptChoiceNotAvailable>()(
   "AttemptChoiceNotAvailable",
   {
     reason: Schema.Literals(["AttemptNotPlanned", "ExecutorNotSafelySuspended", "ObservedFingerprintNotCurrent"]),
@@ -60,13 +60,13 @@ export class AttemptChoiceNotAvailable extends Schema.TaggedErrorClass<AttemptCh
 ) {}
 
 /** Integration already consumed this exact attempt's pre-integration choice capability. */
-export class AttemptChoiceOutsidePreIntegrationPhase extends Schema.TaggedErrorClass<AttemptChoiceOutsidePreIntegrationPhase>()(
+export class AttemptChoiceOutsidePreIntegrationPhase extends Schema.TaggedError<AttemptChoiceOutsidePreIntegrationPhase>()(
   "AttemptChoiceOutsidePreIntegrationPhase",
   { requestId: AttemptChoiceRequestId, runId: RunId }
 ) {}
 
 /** No applied direction exists for this self-bound request identity. */
-export class AttemptChoiceResultNotFound extends Schema.TaggedErrorClass<AttemptChoiceResultNotFound>()(
+export class AttemptChoiceResultNotFound extends Schema.TaggedError<AttemptChoiceResultNotFound>()(
   "AttemptChoiceResultNotFound",
   { requestId: AttemptChoiceRequestId }
 ) {}
