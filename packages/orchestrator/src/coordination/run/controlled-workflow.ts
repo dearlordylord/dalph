@@ -12,9 +12,9 @@ import { taskClaimReacquisitionControlLayer } from "../../workflow/protocols/tas
 import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { journaledRunBootstrapLayer, type JournaledRuntimeLayerInput } from "./journaled-run-bootstrap.js"
-import { AllocatedFreshWorkflowRunId } from "./fresh-run-identity.js"
+import { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { runWorkflow } from "./run.js"
-import { validatedStartupRecoveryLayer } from "./startup-recovery.js"
+import { validatedRunActivationLayer } from "./startup-recovery.js"
 
 const controlledOwnershipLayer = Layer.succeed(
   CoordinatorOwnership,
@@ -30,14 +30,14 @@ const controlledJournaledRunLayer = (runId: RunId) =>
       const operationIdAllocator = yield* OperationIdAllocator
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
-      const runtimeLayer = ({ runId: activeRunId, startup }: JournaledRuntimeLayerInput) => {
+      const runtimeLayer = ({ runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const controls = Layer.mergeAll(
           attemptChoiceControlLayer,
           controlDirectionApplicationLayer,
           taskClaimReacquisitionControlLayer,
           taskWorkCapacityControlLayer
         )
-        return validatedStartupRecoveryLayer(activeRunId, undefined, startup).pipe(
+        return validatedRunActivationLayer(activeRunId, undefined).pipe(
           Layer.provide(
             journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
           ),
@@ -60,6 +60,6 @@ export const runControlledWorkflow = (
   initialControlPolicy: InitialControlPolicy,
   runId: RunId
 ) =>
-  runWorkflow(target, initialControlPolicy, AllocatedFreshWorkflowRunId.make(runId)).pipe(
+  runWorkflow(target, Effect.succeed(initialControlPolicy), AllocatedWorkflowRunId.make(runId)).pipe(
     Effect.provide(controlledJournaledRunLayer(runId))
   )

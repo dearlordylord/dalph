@@ -22,6 +22,7 @@ import { RunFinalityDecision } from "../frontier/frontier.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
   InRunJournal,
+  JournalStorageUnavailable,
   JournalStore,
   journalStoreCapabilities,
   RunLifecycleJournal
@@ -71,7 +72,7 @@ const runtimeLayer = (runId: RunId, trackerGraphReader: TrackerGraphReader["Serv
     controlDirectionApplicationLayer,
     Layer.mock(PlannedAttemptExecutor, {}),
     Layer.mock(RunRecoveryProjection, {
-      _tag: "JournaledFreshRunProjection",
+      _tag: "AuthoritativeRunRecoveryProjection",
       runId: RunId.make("bootstrap-fixture"),
       readDeliveryProjection: Effect.succeed({
         evidence: { _tag: "UnavailableDeliveryProjectionEvidence" as const },
@@ -108,7 +109,7 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   return Context.get(yield* Layer.build(application), JournaledRunBootstrap)
 })
 
-it.effect("begins a fresh Run before exposing only its journal-backed runtime capabilities", () =>
+it.effect("establishes an absent Run before activating its journal-backed runtime once", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = FixtureTarget.make("journaled-bootstrap-fresh")
@@ -118,9 +119,9 @@ it.effect("begins a fresh Run before exposing only its journal-backed runtime ca
       const bootstrap = yield* buildBootstrap(runId, storage)
       const observed = yield* Ref.make<Option.Option<Record<string, unknown>>>(Option.none())
 
-      yield* bootstrap.fresh(
+      yield* bootstrap.activate(
         target,
-        initialPolicy,
+        Effect.succeed(initialPolicy),
         runId,
         Effect.gen(function* () {
           const context = yield* Effect.context<never>()
@@ -149,7 +150,48 @@ it.effect("begins a fresh Run before exposing only its journal-backed runtime ca
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("accepts recovered bootstrap after an active finality proof", () =>
+it.effect("retries an unacknowledged Run beginning through the same entry without appending it twice", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-lost-begin-response")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      const storage = JournalStore.of({
+        ...delegate,
+        beginRun: (requestedRunId, requestedTarget, policy) =>
+          delegate
+            .beginRun(requestedRunId, requestedTarget, policy)
+            .pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new JournalStorageUnavailable({
+                    detail: "the beginning committed before its response was lost",
+                    operation: "JournalStore.beginRun"
+                  })
+                )
+              )
+            )
+      })
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const activations = yield* Ref.make(0)
+      const active = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+
+      expect(
+        yield* bootstrap.activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Ref.update(activations, (count) => count + 1).pipe(Effect.as(finalityProof(active)))
+        )
+      ).toEqual(active)
+      expect(yield* Ref.get(activations)).toBe(1)
+      expect((yield* delegate.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("re-enters an unfinished Run without evaluating the initial policy source", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = FixtureTarget.make("journaled-bootstrap-incomplete-recovery")
@@ -157,25 +199,29 @@ it.effect("accepts recovered bootstrap after an active finality proof", () =>
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
       const bootstrap = yield* buildBootstrap(runId, storage)
-      const activations = yield* Ref.make<ReadonlyArray<"Fresh" | "Recovered">>([])
+      const activations = yield* Ref.make(0)
+      const initialPolicyEvaluations = yield* Ref.make(0)
       const active = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
 
       expect(
-        yield* bootstrap.fresh(
+        yield* bootstrap.activate(
           target,
-          initialPolicy,
+          Ref.update(initialPolicyEvaluations, (count) => count + 1).pipe(Effect.as(initialPolicy)),
           runId,
-          Ref.update(activations, (seen) => [...seen, "Fresh" as const]).pipe(Effect.as(finalityProof(active)))
+          Ref.update(activations, (count) => count + 1).pipe(Effect.as(finalityProof(active)))
         )
       ).toEqual(active)
       expect(
-        yield* bootstrap.recovered(
+        yield* bootstrap.activate(
           target,
-          Ref.update(activations, (seen) => [...seen, "Recovered" as const]).pipe(Effect.as(finalityProof(active)))
+          Effect.die("an established Run must not evaluate a replacement initial policy"),
+          runId,
+          Ref.update(activations, (count) => count + 1).pipe(Effect.as(finalityProof(active)))
         )
       ).toEqual(active)
 
-      expect(yield* Ref.get(activations)).toEqual(["Fresh", "Recovered"])
+      expect(yield* Ref.get(activations)).toBe(2)
+      expect(yield* Ref.get(initialPolicyEvaluations)).toBe(1)
       expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
@@ -193,9 +239,9 @@ it.effect("rejects a different fresh Run identity before recording its beginning
       const bootstrap = yield* buildBootstrap(expectedRunId, storage)
 
       const mismatch = yield* bootstrap
-        .fresh(
+        .activate(
           requestedTarget,
-          initialPolicy,
+          Effect.succeed(initialPolicy),
           requestedRunId,
           Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
         )
@@ -207,6 +253,104 @@ it.effect("rejects a different fresh Run identity before recording its beginning
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("rejects an established Run whose target differs before activation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const recordedTarget = FixtureTarget.make("journaled-bootstrap-recorded-target")
+      const requestedTarget = FixtureTarget.make("journaled-bootstrap-mismatched-target")
+      const runId = yield* freshWorkflowRunId(recordedTarget)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      yield* storage.beginRun(runId, recordedTarget, initialPolicy)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const runtimeEntered = yield* Ref.make(false)
+
+      const failure = yield* bootstrap
+        .activate(
+          requestedTarget,
+          Effect.die("existing history must supply the initial policy"),
+          runId,
+          Ref.set(runtimeEntered, true).pipe(
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
+          )
+        )
+        .pipe(Effect.flip)
+
+      expect(failure).toMatchObject({ _tag: "WorkflowRunTargetMismatch", recordedTarget, requestedTarget, runId })
+      expect(yield* Ref.get(runtimeEntered)).toBe(false)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("names every unfinished Run and activates none when startup discovery finds several", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const firstTarget = FixtureTarget.make("journaled-bootstrap-first-unfinished-target")
+      const secondTarget = FixtureTarget.make("journaled-bootstrap-second-unfinished-target")
+      const requestedTarget = FixtureTarget.make("journaled-bootstrap-requested-after-several")
+      const firstRunId = yield* freshWorkflowRunId(firstTarget)
+      const secondRunId = yield* freshWorkflowRunId(secondTarget)
+      const requestedRunId = yield* freshWorkflowRunId(requestedTarget)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      yield* storage.beginRun(firstRunId, firstTarget, initialPolicy)
+      yield* storage.beginRun(secondRunId, secondTarget, initialPolicy)
+      const bootstrap = yield* buildBootstrap(requestedRunId, storage)
+      const runtimeEntered = yield* Ref.make(false)
+
+      const failure = yield* bootstrap
+        .activate(
+          requestedTarget,
+          Effect.die("several unfinished Runs must block initial policy evaluation"),
+          requestedRunId,
+          Ref.set(runtimeEntered, true).pipe(
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
+          )
+        )
+        .pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "StartupRecoveryBlocked",
+        issues: [
+          { _tag: "OtherUnfinishedRunIssue", requestedRunId, unfinishedRunId: firstRunId },
+          { _tag: "OtherUnfinishedRunIssue", requestedRunId, unfinishedRunId: secondRunId }
+        ]
+      })
+      expect(yield* Ref.get(runtimeEntered)).toBe(false)
+      expect(yield* storage.read(requestedRunId)).toEqual([])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("rejects a terminated Run before constructing activation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-terminated")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy)
+      yield* storage.terminateRun(runId)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const runtimeEntered = yield* Ref.make(false)
+
+      const failure = yield* bootstrap
+        .activate(
+          target,
+          Effect.die("terminated history must not evaluate the initial policy"),
+          runId,
+          Ref.set(runtimeEntered, true).pipe(
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
+          )
+        )
+        .pipe(Effect.flip)
+
+      expect(failure).toMatchObject({ _tag: "WorkflowRunAlreadyTerminated", runId })
+      expect(yield* Ref.get(runtimeEntered)).toBe(false)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("blocks runtime construction when the freshly read journal prefix is invalid", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -214,6 +358,7 @@ it.effect("blocks runtime construction when the freshly read journal prefix is i
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const delegate = Context.get(journalContext, JournalStore)
+      yield* delegate.beginRun(runId, target, initialPolicy)
       const storage = JournalStore.of({
         ...delegate,
         read: (requestedRunId) =>
@@ -232,9 +377,9 @@ it.effect("blocks runtime construction when the freshly read journal prefix is i
       const runtimeEntered = yield* Ref.make(false)
 
       const failure = yield* bootstrap
-        .fresh(
+        .activate(
           target,
-          initialPolicy,
+          Effect.die("invalid existing history must not evaluate the initial policy"),
           runId,
           Ref.set(runtimeEntered, true).pipe(
             Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
@@ -249,7 +394,7 @@ it.effect("blocks runtime construction when the freshly read journal prefix is i
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("uses the configured Run identity when recovery finds no unfinished Run", () =>
+it.effect("uses the configured Run identity when establishment finds no unfinished Run", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = FixtureTarget.make("journaled-bootstrap-empty-recovery")
@@ -259,13 +404,15 @@ it.effect("uses the configured Run identity when recovery finds no unfinished Ru
       const bootstrap = yield* buildBootstrap(runId, storage)
 
       const failure = yield* bootstrap
-        .recovered(
+        .activate(
           target,
+          Effect.fail("initial-policy-failure"),
+          runId,
           Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
         )
         .pipe(Effect.flip)
 
-      expect(failure).toMatchObject({ _tag: "WorkflowRunNotBegan", runId })
+      expect(failure).toBe("initial-policy-failure")
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -283,9 +430,9 @@ it.effect("publishes an Operator Pause through the active journal without exposi
       const observedPause = yield* Deferred.make<string>()
       const finish = yield* Deferred.make<void>()
       const running = yield* bootstrap
-        .fresh(
+        .activate(
           target,
-          initialPolicy,
+          Effect.succeed(initialPolicy),
           runId,
           Effect.gen(function* () {
             const journal = yield* Journal
@@ -344,8 +491,10 @@ it.effect(
         const secondOperation = makeTrackerGraphObservationOperation(OperationId.make("recovery-second-prefix"), target)
 
         const first = yield* bootstrap
-          .recovered(
+          .activate(
             target,
+            Effect.die("existing history must supply the initial policy"),
+            runId,
             Effect.gen(function* () {
               const journal = yield* InRunJournal
               yield* Deferred.succeed(firstActive, undefined)
@@ -363,8 +512,10 @@ it.effect(
           .pipe(Effect.forkChild)
         yield* Deferred.await(firstActive)
         const second = yield* bootstrap
-          .recovered(
+          .activate(
             target,
+            Effect.die("existing history must supply the initial policy"),
+            runId,
             Effect.gen(function* () {
               const journal = yield* InRunJournal
               yield* Deferred.succeed(secondActive, undefined)
@@ -425,9 +576,9 @@ it.effect("drains accepted Operator calls and records termination before another
       })
       const bootstrap = yield* buildBootstrap(runId, storage)
       const running = yield* bootstrap
-        .fresh(
+        .activate(
           target,
-          initialPolicy,
+          Effect.succeed(initialPolicy),
           runId,
           Effect.gen(function* () {
             yield* Deferred.succeed(runtimeActive, undefined)
@@ -460,8 +611,10 @@ it.effect("drains accepted Operator calls and records termination before another
       yield* Fiber.join(capacityChange)
       yield* Deferred.await(terminationStarted)
       const queuedRecovery = yield* bootstrap
-        .recovered(
+        .activate(
           target,
+          Effect.die("terminated history must not evaluate the initial policy"),
+          runId,
           Deferred.succeed(recoveryActive, undefined).pipe(
             Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
           )
@@ -505,9 +658,9 @@ it.effect("rechecks a terminal decision after an already-accepted Operator Pause
       })
       const bootstrap = yield* buildBootstrap(runId, storage)
       const running = yield* bootstrap
-        .fresh(
+        .activate(
           target,
-          initialPolicy,
+          Effect.succeed(initialPolicy),
           runId,
           Deferred.succeed(runtimeActive, undefined).pipe(
             Effect.andThen(Deferred.await(finishRuntime)),
@@ -565,9 +718,9 @@ it.effect("reads the current Run target before applying Alice's task Pause", () 
       const active = yield* Deferred.make<void>()
       const finish = yield* Deferred.make<void>()
       const running = yield* bootstrap
-        .fresh(
+        .activate(
           target,
-          initialPolicy,
+          Effect.succeed(initialPolicy),
           runId,
           Deferred.succeed(active, undefined).pipe(
             Effect.andThen(Deferred.await(finish)),
@@ -612,9 +765,9 @@ it.effect("rejects Alice's stale task Pause and Unpause visibly without applying
       const active = yield* Deferred.make<void>()
       const finish = yield* Deferred.make<void>()
       const running = yield* bootstrap
-        .fresh(
+        .activate(
           target,
-          initialPolicy,
+          Effect.succeed(initialPolicy),
           runId,
           Deferred.succeed(active, undefined).pipe(
             Effect.andThen(Deferred.await(finish)),
@@ -671,9 +824,9 @@ it.effect("keeps an unreadable task membership distinct from stale rejection and
       const active = yield* Deferred.make<void>()
       const finish = yield* Deferred.make<void>()
       const running = yield* bootstrap
-        .fresh(
+        .activate(
           target,
-          initialPolicy,
+          Effect.succeed(initialPolicy),
           runId,
           Deferred.succeed(active, undefined).pipe(
             Effect.andThen(Deferred.await(finish)),
@@ -715,9 +868,9 @@ it.effect("rejects another Run's task subject before reading this Run's target",
       const active = yield* Deferred.make<void>()
       const finish = yield* Deferred.make<void>()
       const running = yield* bootstrap
-        .fresh(
+        .activate(
           target,
-          initialPolicy,
+          Effect.succeed(initialPolicy),
           runId,
           Deferred.succeed(active, undefined).pipe(
             Effect.andThen(Deferred.await(finish)),
@@ -758,9 +911,9 @@ it.effect("applies Alice's Run Pause without a task-membership read", () =>
       const active = yield* Deferred.make<void>()
       const finish = yield* Deferred.make<void>()
       const running = yield* bootstrap
-        .fresh(
+        .activate(
           target,
-          initialPolicy,
+          Effect.succeed(initialPolicy),
           runId,
           Deferred.succeed(active, undefined).pipe(
             Effect.andThen(Deferred.await(finish)),

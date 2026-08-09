@@ -31,7 +31,7 @@ import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources
 import type { RunFinalityDecision, RunFinalityProof } from "../frontier/frontier.js"
 import { runStabilizedDelivery } from "./run-stabilization.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
-import type { AllocatedFreshWorkflowRunId } from "./fresh-run-identity.js"
+import type { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 
@@ -76,20 +76,16 @@ export class JournaledRunNotActive extends Schema.TaggedErrorClass<JournaledRunN
 ) {}
 
 export interface JournaledRunBootstrapService {
-  readonly fresh: <E, R>(
+  readonly activate: <EInitial, RInitial, E, R>(
     target: TrackerTarget,
-    initialControlPolicy: InitialControlPolicy,
-    runId: AllocatedFreshWorkflowRunId,
+    initialControlPolicySource: Effect.Effect<InitialControlPolicy, EInitial, RInitial>,
+    runId: AllocatedWorkflowRunId,
     program: Effect.Effect<RunFinalityProof, E, R>
   ) => Effect.Effect<
     RunFinalityDecision,
-    E | JournaledRunBootstrapError | JournaledRunIdentityMismatch,
-    Exclude<R, JournaledRunServices>
+    E | EInitial | JournaledRunBootstrapError | JournaledRunIdentityMismatch,
+    RInitial | Exclude<R, JournaledRunServices>
   >
-  readonly recovered: <E, R>(
-    target: TrackerTarget,
-    program: Effect.Effect<RunFinalityProof, E, R>
-  ) => Effect.Effect<RunFinalityDecision, E | JournaledRunBootstrapError, Exclude<R, JournaledRunServices>>
   readonly operatorControl: {
     readonly applyAttemptChoice: (
       input: unknown
@@ -134,7 +130,7 @@ export interface JournaledRunBootstrapService {
   }
 }
 
-/** Owns fresh/recovered sequencing and constructs every in-Run service only after journal installation. */
+/** Establishes one exact Run and constructs every in-Run service only after journal installation. */
 export class JournaledRunBootstrap extends Context.Service<JournaledRunBootstrap, JournaledRunBootstrapService>()(
   "@dalph/JournaledRunBootstrap"
 ) {}
@@ -188,6 +184,9 @@ export type ControlledDeliveryActionExecutorFactory<E = never, R = never> = (
   target: TrackerTarget
 ) => Effect.Effect<DeliveryActionExecutorService, E, R>
 
+/** Evaluated and decoded by Run establishment only when the exact Run has no history. */
+export type InitialControlPolicySource<E = never, R = never> = Effect.Effect<InitialControlPolicy, E, R>
+
 const liveDeliveryActionExecutorFactory = (runId: RunId, target: TrackerTarget) =>
   makeLiveDeliveryActionExecutor(runId, target)
 
@@ -198,56 +197,31 @@ const runJournaledDelivery = <E, R>(
 ) => runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () => executorFactory(runId, target))
 
 /** Explicit controlled composition; production callers use {@link runWorkflow}. */
-export const runWorkflowWithControlledDeliveryActionExecutor = <E, R>(
+export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RInitial, E, R>(
   target: TrackerTarget,
-  initialControlPolicy: InitialControlPolicy,
-  runId: AllocatedFreshWorkflowRunId,
+  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+  runId: AllocatedWorkflowRunId,
   executorFactory: ControlledDeliveryActionExecutorFactory<E, R>
 ) =>
   Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.fresh(
+    return yield* bootstrap.activate(
       target,
-      initialControlPolicy,
+      initialControlPolicySource,
       runId,
       runJournaledDelivery(runId, target, executorFactory)
     )
   })
 
-/** Runs a fresh workflow through the ordinary delivery composition. */
-export const runWorkflow = (
+/** Establishes one exact Run and performs one bounded ordinary delivery activation. */
+export const runWorkflow = <EInitial, RInitial>(
   target: TrackerTarget,
-  initialControlPolicy: InitialControlPolicy,
-  runId: AllocatedFreshWorkflowRunId
+  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+  runId: AllocatedWorkflowRunId
 ) =>
   runWorkflowWithControlledDeliveryActionExecutor(
     target,
-    initialControlPolicy,
+    initialControlPolicySource,
     runId,
     liveDeliveryActionExecutorFactory
   )
-
-/** Explicit controlled recovery composition; production callers use {@link runRecoveredWorkflow}. */
-export const runRecoveredWorkflowWithControlledDeliveryActionExecutor = <E, R>(
-  target: TrackerTarget,
-  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>
-) =>
-  Effect.gen(function* () {
-    const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.recovered(
-      target,
-      Effect.gen(function* () {
-        const recovery = yield* RunRecoveryProjection
-        /* v8 ignore start -- recovered bootstrap installs only its authoritative projection variant. */
-        if (recovery._tag !== "AuthoritativeRunRecoveryProjection") {
-          return yield* Effect.die("a recovered workflow requires authoritative recovered activation")
-        }
-        /* v8 ignore stop */
-        return yield* runJournaledDelivery(recovery.runId, target, executorFactory)
-      })
-    )
-  })
-
-/** Runs the exact reconstructed identity through the same ordinary delivery composition. */
-export const runRecoveredWorkflow = (target: TrackerTarget) =>
-  runRecoveredWorkflowWithControlledDeliveryActionExecutor(target, liveDeliveryActionExecutorFactory)

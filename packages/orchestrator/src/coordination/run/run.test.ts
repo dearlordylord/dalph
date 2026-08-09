@@ -33,7 +33,7 @@ import { RunFinalityDecision } from "../frontier/frontier.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { freshWorkflowRunId } from "./fresh-run-identity.js"
-import { JournaledRunBootstrap, runRecoveredWorkflow, runWorkflow } from "./run.js"
+import { JournaledRunBootstrap, runWorkflow } from "./run.js"
 import { runControlledWorkflow } from "./controlled-workflow.js"
 
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
@@ -43,14 +43,14 @@ const programDependencies = Layer.mergeAll(
   Layer.mock(TaskClaimAcquisitionPlanner, {})
 )
 
-it.effect("hands a fresh Run to the journal bootstrap with the exact identity and ordinary delivery program", () =>
+it.effect("hands every Run activation to one journal establishment boundary", () =>
   Effect.gen(function* () {
     const target = FixtureTarget.make("ordinary-delivery-fresh")
     const runId = yield* freshWorkflowRunId(target)
     const seen: Array<unknown> = []
     const finality = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
     const bootstrap = JournaledRunBootstrap.of({
-      fresh: (receivedTarget, receivedPolicy, receivedRunId, program) => {
+      activate: (receivedTarget, receivedPolicy, receivedRunId, program) => {
         seen.push(receivedTarget, receivedPolicy, receivedRunId, program)
         return Effect.succeed(finality)
       },
@@ -61,52 +61,19 @@ it.effect("hands a fresh Run to the journal bootstrap with the exact identity an
         readAttemptChoice: () => Effect.die("unused"),
         readTaskWorkCapacity: () => Effect.die("unused"),
         setTaskWorkCapacity: () => Effect.die("unused")
-      },
-      recovered: () => Effect.die("unused")
-    })
-
-    expect(
-      yield* runWorkflow(target, policy, runId).pipe(
-        Effect.provideService(JournaledRunBootstrap, bootstrap),
-        Effect.provide(programDependencies)
-      )
-    ).toBe(finality)
-    expect(seen.slice(0, 3)).toEqual([target, policy, runId])
-    expect(seen[3]).toBeDefined()
-  }).pipe(Effect.provide(NodeCrypto.layer))
-)
-
-it.effect("hands recovered execution to the same journal bootstrap boundary", () =>
-  Effect.gen(function* () {
-    const target = FixtureTarget.make("ordinary-delivery-recovered")
-    const finality = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
-    let calls = 0
-    const bootstrap = JournaledRunBootstrap.of({
-      fresh: () => Effect.die("unused"),
-      operatorControl: {
-        applyAttemptChoice: () => Effect.die("unused"),
-        applyControlDirection: () => Effect.die("unused"),
-        applyTaskClaimReacquisition: () => Effect.die("unused"),
-        readAttemptChoice: () => Effect.die("unused"),
-        readTaskWorkCapacity: () => Effect.die("unused"),
-        setTaskWorkCapacity: () => Effect.die("unused")
-      },
-      recovered: (receivedTarget, program) => {
-        calls += 1
-        expect(receivedTarget).toBe(target)
-        expect(program).toBeDefined()
-        return Effect.succeed(finality)
       }
     })
 
     expect(
-      yield* runRecoveredWorkflow(target).pipe(
+      yield* runWorkflow(target, Effect.succeed(policy), runId).pipe(
         Effect.provideService(JournaledRunBootstrap, bootstrap),
         Effect.provide(programDependencies)
       )
     ).toBe(finality)
-    expect(calls).toBe(1)
-  })
+    expect(seen.slice(0, 3)).toEqual([target, expect.anything(), runId])
+    expect(Effect.isEffect(seen[1])).toBe(true)
+    expect(seen[3]).toBeDefined()
+  }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("lets the public controlled workflow terminate from its settled current graph", () =>
@@ -237,7 +204,15 @@ it("contains one ordinary delivery runtime connection and no former scheduler", 
 
   expect(source.match(/\byield\* delivery\b/g)).toHaveLength(1)
   expect(source.match(/\brunStabilizedDelivery\(/g)).toHaveLength(1)
+  expect(source).not.toMatch(/runRecoveredWorkflow|bootstrap\.(?:fresh|recovered)/)
   expect(source).not.toMatch(
     /runDeliveryActivation|readDeliveryActivationTurn|checkedTurn|makeActivationCoordinator|runFreshWorkflowStep|deriveFreshWorkflowDecisions/
   )
+})
+
+it("uses one exact-history projection for newly begun and reconstructed finality", () => {
+  const source = readFileSync(fileURLToPath(new URL("./recovery-activation.ts", import.meta.url)), "utf8")
+
+  expect(source).toContain('_tag: "AuthoritativeRunRecoveryProjection"')
+  expect(source).not.toMatch(/JournaledFreshRunProjection|journaledFreshFrontier|makeJournaledFresh/)
 })

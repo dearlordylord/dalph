@@ -380,17 +380,16 @@ export {
 export {
   decodeFreshWorkflowRunIdForDiagnostics,
   FreshWorkflowRunIdDiagnosticDecodeFailure,
-  type AllocatedFreshWorkflowRunId,
+  AllocatedWorkflowRunId,
   freshWorkflowRunId
 } from "./coordination/run/fresh-run-identity.js"
 export {
   JournaledRunBootstrap,
   type JournaledRunBootstrapError,
+  type InitialControlPolicySource,
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
   type ControlledDeliveryActionExecutorFactory,
-  runRecoveredWorkflow,
-  runRecoveredWorkflowWithControlledDeliveryActionExecutor,
   runWorkflowWithControlledDeliveryActionExecutor,
   runWorkflow
 } from "./coordination/run/run.js"
@@ -447,7 +446,7 @@ export { authorizedClaimForAttempt, causalClaimForAttempt } from "./workflow/cla
 export {
   StartupRecoveryBlocked,
   StartupRecoveryIssue,
-  validatedStartupRecoveryLayer
+  validatedRunActivationLayer
 } from "./coordination/run/startup-recovery.js"
 export {
   JournalInitialHistoryInvalid,

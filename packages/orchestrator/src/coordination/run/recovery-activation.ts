@@ -1,5 +1,5 @@
-/* eslint-disable max-lines -- Fresh and authoritative activation must share one recovery authority boundary. */
-import { Context, Effect, Layer, Option } from "effect"
+/* eslint-disable max-lines -- Exact history reconstruction spans every delivery authority boundary. */
+import { Context, Effect, Option } from "effect"
 import {
   type AttemptId,
   type IntegrationTarget,
@@ -1562,54 +1562,6 @@ const continuationDecisionFor = (
   return decisionWithoutCurrentSpecification(plannedAttempt, planOperationId, currentGraphObservation)
 }
 
-const journaledFreshExplanationTags = new Set<FrontierExplanation["_tag"]>([
-  "AttemptStoppageWait",
-  "IntegrationDependencyWait",
-  "IntegrationConfigurationWait",
-  "IntegrationInProgress",
-  "IntegrationTrackerFactsWait",
-  "IntegrationTargetWait",
-  "TargetPromotionConfigurationWait",
-  "TargetVerificationConfigurationWait",
-  "PlannedAttemptTaskLifecycleConstraint",
-  "PlannedAttemptGitConstraint",
-  "PlannedAttemptTaskClaimConstraint",
-  "PlannedAttemptTaskExternalSuccessConstraint",
-  "PlannedAttemptTaskMembershipConstraint",
-  "PlannedAttemptTaskSpecificationChangeConstraint",
-  "StoppedAttemptClaimPlanningWait",
-  "StoppedAttemptClaimReleasePending",
-  "StoppedAttemptClaimWait",
-  "StoppedAttemptSettled",
-  "WorkflowOperationTaskMembershipConstraint"
-])
-
-const journaledFreshTransitionTags = new Set<RunnableFrontierTransition["_tag"]>([
-  "AcquireStartedIntegrationTarget",
-  "AdvanceAttemptStoppage",
-  "CommitTaskClaimReacquisitionIntent",
-  "ContinueStartedIntegrationCandidate",
-  "RunTargetVerification",
-  "RunTargetPromotion",
-  "ObservePlannedAttemptContinuationGraph",
-  "ObserveAttemptStoppageExecutor",
-  "ObservePlannedAttemptContinuationClaim",
-  "ObservePlannedAttemptContinuationExecutor",
-  "ObservePlannedAttemptContinuationSpecification",
-  "ObservePlannedAttemptContinuationTargetLineage",
-  "ObservePlannedAttemptContinuationWorktree",
-  "ObserveResponsibleTaskClaim",
-  "ObserveStoppedAttemptClaim",
-  "QueueAcceptedResultIntegrationResponsibility",
-  "ReleaseExternallyCompletedTaskClaim",
-  "RecordStoppedAttemptClaimNoRelease",
-  "ReleaseStoppedAttemptClaim",
-  "RetryStoppedAttemptClaimRelease",
-  "ReleaseStartedIntegrationTarget",
-  "SuspendPlannedAttemptExecutorWork",
-  "StartQueuedIntegration"
-])
-
 const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredProjection")(function* (
   runId: RunId,
   integrationResources: IntegrationTargetResourceController,
@@ -1852,19 +1804,6 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
   }
 })
 
-const journaledFreshFrontierOf = (
-  frontier: RunnableFrontier,
-  recoveredContinuationAttemptIds: ReadonlySet<AttemptId>
-): RunnableFrontier => ({
-  explanations: frontier.explanations.filter(({ _tag }) => journaledFreshExplanationTags.has(_tag)),
-  transitions: frontier.transitions.filter(
-    (transition) =>
-      journaledFreshTransitionTags.has(transition._tag) ||
-      (transition._tag === "ContinuePlannedAttemptExecutorWork" &&
-        recoveredContinuationAttemptIds.has(transition.plannedAttempt.attemptId))
-  )
-})
-
 /** One reconstruction turn; process-local integration state is sampled exactly once. */
 export interface RunRecoveryProjectionSnapshot {
   readonly evidence: DeliveryProjectionEvidence
@@ -1884,10 +1823,10 @@ export interface RunRecoveryProjectionSource {
   }>
 }
 
-/** A non-journaled composition has no recovered-transition capability. */
-type RunRecoveryProjectionService =
-  | (RunRecoveryProjectionSource & { readonly _tag: "AuthoritativeRunRecoveryProjection"; readonly runId: RunId })
-  | (RunRecoveryProjectionSource & { readonly _tag: "JournaledFreshRunProjection"; readonly runId: RunId })
+type RunRecoveryProjectionService = RunRecoveryProjectionSource & {
+  readonly _tag: "AuthoritativeRunRecoveryProjection"
+  readonly runId: RunId
+}
 
 /**
  * Read-only current-run recovery evidence for the descriptive delivery relation.
@@ -1908,68 +1847,6 @@ const recoveryProjectionSnapshot = (
   },
   frontier
 })
-
-const makeJournaledFreshRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeJournaledFresh")(function* (
-  runId: RunId,
-  integrationTarget: Option.Option<IntegrationTarget>,
-  candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
-  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
-  targetVerificationPlan: Option.Option<TargetVerificationPlan>,
-  integrationResourcesOverride: IntegrationTargetResourceController | undefined,
-  targetPromotionConfigured: boolean,
-  integrationFinalityConfigured: boolean
-) {
-  const journal = yield* InRunJournal
-  const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
-  const activationBaselinePosition = latestJournalPosition(yield* journal.read(runId))
-  const projection = readRecoveredProjection(
-    runId,
-    integrationResources,
-    integrationTarget,
-    activationBaselinePosition,
-    candidateCorrectionLimit,
-    candidateContinuationLimit,
-    targetVerificationPlan,
-    targetPromotionConfigured,
-    integrationFinalityConfigured
-  ).pipe(
-    Effect.map((current) =>
-      recoveryProjectionSnapshot(
-        current,
-        journaledFreshFrontierOf(current.frontier, current.recoveredContinuationAttemptIds)
-      )
-    ),
-    Effect.provideService(InRunJournal, journal)
-  )
-  return RunRecoveryProjection.of({
-    _tag: "JournaledFreshRunProjection",
-    readDeliveryProjection: projection,
-    reconstructedPlannedAttemptPositions: [],
-    runId
-  })
-})
-
-/** Read-only projection for a live Run begun by this process. */
-export const makeJournaledFreshRunRecoveryProjection = (
-  runId: RunId,
-  configuredIntegrationTarget?: IntegrationTarget,
-  candidateCorrectionLimit?: CandidateCorrectionLimit,
-  candidateContinuationLimit?: CandidateContinuationLimit,
-  integrationResources?: IntegrationTargetResourceController,
-  targetVerification?: TargetVerificationRuntimeInput,
-  targetPromotion?: TargetPromotionRuntimeInput,
-  integrationFinalityConfigured = false
-) =>
-  makeJournaledFreshRunRecoveryProjectionEffect(
-    runId,
-    Option.fromUndefinedOr(configuredIntegrationTarget),
-    Option.fromUndefinedOr(candidateCorrectionLimit),
-    Option.fromUndefinedOr(candidateContinuationLimit),
-    Option.fromUndefinedOr(targetVerification?.plan),
-    integrationResources,
-    targetPromotion !== undefined,
-    integrationFinalityConfigured
-  )
 
 const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAuthoritative")(function* (
   runId: RunId,
@@ -2058,27 +1935,4 @@ export const makeRunRecoveryProjection = (
     integrationResources,
     targetPromotion !== undefined,
     integrationFinalityConfigured
-  )
-
-export const journaledFreshRunRecoveryProjectionLayer = (
-  runId: RunId,
-  configuredIntegrationTarget?: IntegrationTarget,
-  candidateCorrectionLimit?: CandidateCorrectionLimit,
-  candidateContinuationLimit?: CandidateContinuationLimit,
-  targetVerification?: TargetVerificationRuntimeInput,
-  targetPromotion?: TargetPromotionRuntimeInput,
-  integrationFinalityConfigured = false
-) =>
-  Layer.effect(
-    RunRecoveryProjection,
-    makeJournaledFreshRunRecoveryProjection(
-      runId,
-      configuredIntegrationTarget,
-      candidateCorrectionLimit,
-      candidateContinuationLimit,
-      undefined,
-      targetVerification,
-      targetPromotion,
-      integrationFinalityConfigured
-    )
   )

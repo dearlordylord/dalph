@@ -14,7 +14,6 @@ import {
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import {
   hasUnfinishedRunResponsibility,
-  makeJournaledFreshRunRecoveryProjection,
   makeRunRecoveryProjection,
   RunRecoveryProjection
 } from "./recovery-activation.js"
@@ -80,15 +79,19 @@ export const inspectStartupRecovery = Effect.fn("StartupRecovery.inspect")(funct
     ...reductions.flatMap((reduction) => (reduction._tag === "InvalidWorkflowJournalHistory" ? reduction.issues : []))
   ]
   if (issues.length > 0) return yield* new StartupRecoveryBlocked({ issues })
-  const otherUnfinishedRun = reductions.find(
+  const otherUnfinishedRuns = reductions.filter(
     (reduction) =>
       reduction._tag === "ValidWorkflowJournalHistory" &&
       reduction.runId !== runId &&
       (runBeganWithoutTermination(reduction) || hasUnfinishedRunResponsibility(reduction.runState))
   )
-  if (otherUnfinishedRun?._tag === "ValidWorkflowJournalHistory") {
+  if (otherUnfinishedRuns.length > 0) {
     return yield* new StartupRecoveryBlocked({
-      issues: [{ _tag: "OtherUnfinishedRunIssue", requestedRunId: runId, unfinishedRunId: otherUnfinishedRun.runId }]
+      issues: otherUnfinishedRuns.map((unfinished) => ({
+        _tag: "OtherUnfinishedRunIssue" as const,
+        requestedRunId: runId,
+        unfinishedRunId: unfinished.runId
+      }))
     })
   }
   return reductions.find((reduction) => reduction._tag === "ValidWorkflowJournalHistory" && reduction.runId === runId)
@@ -101,8 +104,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   candidateContinuationLimit: CandidateContinuationLimit | undefined,
   targetVerification: TargetVerificationRuntimeInput | undefined,
   targetPromotion: TargetPromotionRuntimeInput | undefined,
-  integrationFinality: CompletionClaimBoundaryService | undefined,
-  startup: "Fresh" | "Recovered"
+  integrationFinality: CompletionClaimBoundaryService | undefined
 ) {
   yield* CoordinatorOwnership
   const inRunJournal = yield* InRunJournal
@@ -123,7 +125,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
     ? deliveryRuntimeResources.value
     : DeliveryRuntimeResources.of(deliveryRuntimeResourcesOf(yield* makeIntegrationTargetResourceController()))
   const integrationResources = runtimeResources.integrationTargets
-  const recovery = yield* makeRecoveryProjection(
+  const recovery = yield* makeRunRecoveryProjection(
     runId,
     integrationTarget,
     candidateCorrectionLimit,
@@ -131,8 +133,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
     integrationResources,
     targetVerification,
     targetPromotion,
-    integrationFinality !== undefined,
-    startup
+    integrationFinality !== undefined
   )
   let context = Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
@@ -164,45 +165,10 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   return integrationTarget === undefined ? context : Context.add(context, IntegrationTargetSelection, integrationTarget)
 })
 
-const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(function* (
-  runId: RunId,
-  integrationTarget: IntegrationTarget | undefined,
-  candidateCorrectionLimit: CandidateCorrectionLimit | undefined,
-  candidateContinuationLimit: CandidateContinuationLimit | undefined,
-  integrationResources: ReturnType<typeof DeliveryRuntimeResources.of>["integrationTargets"],
-  targetVerification: TargetVerificationRuntimeInput | undefined,
-  targetPromotion: TargetPromotionRuntimeInput | undefined,
-  integrationFinalityConfigured: boolean,
-  startup: "Fresh" | "Recovered"
-) {
-  return startup === "Fresh"
-    ? yield* makeJournaledFreshRunRecoveryProjection(
-        runId,
-        integrationTarget,
-        candidateCorrectionLimit,
-        candidateContinuationLimit,
-        integrationResources,
-        targetVerification,
-        targetPromotion,
-        integrationFinalityConfigured
-      )
-    : yield* makeRunRecoveryProjection(
-        runId,
-        integrationTarget,
-        candidateCorrectionLimit,
-        candidateContinuationLimit,
-        integrationResources,
-        targetVerification,
-        targetPromotion,
-        integrationFinalityConfigured
-      )
-})
-
 /** Builds ordinary in-Run services after bootstrap has already validated the complete accepted prefix. */
-export const validatedStartupRecoveryLayer = (
+export const validatedRunActivationLayer = (
   runId: RunId,
   integrationTarget: IntegrationTarget | undefined,
-  startup: "Fresh" | "Recovered",
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
   targetVerification?: TargetVerificationRuntimeInput,
@@ -217,7 +183,6 @@ export const validatedStartupRecoveryLayer = (
       candidateContinuationLimit,
       targetVerification,
       targetPromotion,
-      integrationFinality,
-      startup
+      integrationFinality
     )
   )
