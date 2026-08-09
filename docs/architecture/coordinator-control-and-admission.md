@@ -29,27 +29,50 @@ A durable row, stale-file timeout, TTL lease, in-process semaphore, or task
 claim is not a substitute. Dry-run is read-only and does not acquire the
 production lock.
 
-## Run lifecycle and initialization
+## Run establishment and activation
 
-A fresh Run accepts only an `AllocatedFreshWorkflowRunId` minted by the
-cryptographic fresh-Run allocator. It records that exact identity, tracker
-target, and initial control policy before the first tracker read. A second
-fresh start for that identity fails. Recovery derives the Run identity, target, and
-latest control policy from valid Journal history and never records another Run
-beginning.
+One production entry accepts an exact `AllocatedFreshWorkflowRunId`, tracker
+target, and lazy source of initial control policy. The cryptographic allocator
+may mint the identity in a separate Run-creation step; allocation itself does
+not begin a Run. The entry first scans Journal startup facts while coordinator
+ownership is held. More than one unfinished Run fails closed naming every
+identity and constructs no activation.
 
-Fresh and recovered initialization are different because one establishes a
-new durable Run and the other validates an existing one. After that work, both
-provide the same ordinary delivery, planning, runtime, and stabilization
-interfaces. Controlled and external implementations are selected by Layers at
-program initialization, not by a mode tag in shared domain code.
+For absent exact history, Run establishment evaluates and schema-decodes the
+initial policy and atomically records that identity, target, and policy before
+the first tracker read. For existing history, it does not evaluate or accept a
+replacement initial policy. It validates every row, requires the exact Run and
+target, and reconstructs the latest durable policy and exact unfinished
+responsibilities. Invalid or mismatched history fails before any tracker, Git,
+or executor action.
+
+This application behavior is idempotent across a lost beginning-append
+response: the later call reads and reconstructs the accepted beginning. The
+lower Journal boundary still rejects a direct second `WorkflowRunBegan`, so a
+duplicate append remains visible as a lifecycle defect rather than silently
+merging payloads.
+
+Successful establishment feeds one bounded Run activation. New and existing
+history receive the same delivery, planning, runtime, stabilization, and
+finality interfaces; no caller selects a restoration mode. Before new
+admission, activation recreates task-work positions from exact unfinished
+responsibilities under the reconstructed policy. It never restores a
+process-local owner, semaphore, fiber, or position map as authority. Controlled
+and external implementations are selected by Layers at program initialization,
+not by a mode tag in shared domain code.
 
 A normally completed Run records one final termination fact. It is the last
 record for that Run, and the Journal rejects every later append. A crash leaves
 an unterminated Run recoverable. A quiescent but incomplete invocation may
-return without recording termination, leaving the Run recoverable.
+return without recording termination, leaving the same Run available to a
+later establishment and activation. A terminated history validates as closed
+and never constructs another activation; a new Run for the target requires a
+separately allocated identity.
 
-See [fresh-run-single-start.md](../scenarios/fresh-run-single-start.md).
+See
+[run-establishment-and-activation.md](../scenarios/run-establishment-and-activation.md)
+and
+[ADR 0011](../adr/0011-establish-runs-idempotently-before-activation.md).
 
 ## Pause and Unpause
 
@@ -126,8 +149,8 @@ suspension permits release.
 Capacity contraction is non-preemptive. Existing holders continue even when
 usage temporarily exceeds the new ceiling; later admission waits. Expansion
 preserves holders and permits later proposals to be admitted. Positions are
-recreated from unfinished exact obligations after recovery, not restored from a
-persisted semaphore.
+recreated from unfinished exact obligations after the next Run establishment,
+not restored from a persisted semaphore.
 
 Integration-resource ownership is separate from task-work capacity and is
 serialized by repository/ref target according to the integration protocol.

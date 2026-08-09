@@ -275,10 +275,14 @@ four propositions in `journal-run.mjs` and negative controls in
 
 **D32a Journal record admission.** Records are scoped to their Run: none
 precedes the Run's beginning fact, none follows its termination fact, there is
-exactly one of each, and no record for another target is placed under a Run.
+exactly one beginning in every nonempty valid history, at most one termination,
+and no record for another target is placed under a Run. The lifecycle Journal
+rejects a direct second beginning even though application-level establishment
+is idempotent.
 → `checked` in `fastcheck/journal.mjs`, as fold guards rather than as a stated
-property. This is a property of which records may be admitted, not of the
-reduction function, which is why it is separate from D32.
+property. Future `runEstablishment.oneBeginningPerRun` checks that same guard
+through application entry. This is a property of which records may be admitted,
+not of the reduction function, which is why it is separate from D32.
 
 ## Progress
 
@@ -311,9 +315,12 @@ retained task responsibility; whole-Run termination remains owned by issue
 post-quiescence tracker reconfirmation. It runs any actions introduced by that
 observation to quiescence and then returns; unchanged observations do not
 produce repeated work or continuous polling. A later activation may perform
-its own one-shot reconfirmation.
-→ `—` every model's actions are enabled by state rather than by observation, so
-a repeated identical observation is not a distinguishable event.
+its own one-shot reconfirmation. This bound and finality path are identical
+whether establishment just appended the Run beginning or reconstructed an
+existing unfinished history.
+→ future `runEstablishment.establishmentSourceDoesNotChangeActivationBounds`;
+existing models enable actions by state rather than by observation, so they do
+not otherwise distinguish this parity.
 
 **D37 Every Run is convergeable.** *Not implemented: no Operator resolution
 exists for a task closed without success or removed from the target closure, so
@@ -364,22 +371,36 @@ which is a statement about tractability rather than about expressiveness.
 
 ## Run boundaries
 
-**D38 One Run is activated, and a foreign Run is neither ignored nor resumed.**
-When durable history holds more than one unterminated Run, startup fails closed
-naming every Run identity it found, and mutates no tracker, Git, or executor
-state for any of them. Historical responsibility entries belonging to another
-Run neither block the activated Run nor cause completed work to repeat.
-→ `—` every model has exactly one Run.
+**D38 Exactly one discovered unfinished Run may receive one activation.** One
+successful establishment feeds exactly one bounded activation for that
+invocation. When durable history holds more than one unfinished Run, startup
+fails closed naming every Run identity it found and mutates no tracker, Git, or
+executor state for any of them. Historical responsibility entries belonging to
+another Run are neither folded into the selected Run nor silently ignored.
+→ future
+`runEstablishment.atMostOneDiscoveredUnfinishedRunMayActivate`; every current
+model has exactly one Run.
 
-**D39 A fresh-start request is not recovery.** A repeated request to start a Run
-fresh is never classified as recovery of an existing Run, and actions from two
-fresh starts are never merged into one workflow-journal history.
-→ `—` no model distinguishes an inbound start request from process restart.
+**D39 Run establishment is idempotent and not caller-classified.** For one exact
+Run identity and target, absent history evaluates the lazy initial policy and
+appends one beginning. Existing history is decoded and reduced in full and
+reconstructs that exact Run without evaluating a replacement initial value or
+appending another beginning. A caller never selects a separate restoration
+start. Invalid, mismatched, or terminated history never reaches activation.
+→ future `runEstablishment.oneBeginningPerRun`,
+`runEstablishment.onlyExactEstablishedRunActivates`, and
+`runEstablishment.terminatedRunIsFinal`.
 
-**D40 The capacity ceiling is durable and reconstructed.** After process loss the
-ceiling comes from journaled applied policy. It is neither a process default nor
-a caller argument, and recovery requires no initial-policy input.
-→ `—` capacity is a free variable in every model, with no provenance.
+**D40 Initial and current capacity policy come from durable Run history.** The
+initial policy source is evaluated only when exact history is absent and is
+recorded in the one beginning. For existing history, the activation ceiling
+comes from that beginning plus later applied changes. It is neither a process
+default nor a replacement caller argument. Before new admission, held positions
+are derived from exact unfinished responsibilities under that reconstructed
+policy; a process-local position map is never restored as authority.
+→ future `runEstablishment.existingHistorySkipsInitialPolicy` and
+`runEstablishment.activationRestoresHeldAdmission`; current models treat
+capacity as a free variable with no provenance.
 
 ## Serialized integration
 

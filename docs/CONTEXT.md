@@ -135,11 +135,12 @@ executor to continue task A, while a tracker-only read requires none.
 _Avoid_: Executor-declared capacity, review capacity, operation-name capacity
 
 **Initial control policy**:
-The schema-decoded values Dalph records with a fresh Run beginning. The current
-production slice contains task-execution capacity only. Recovery accepts no
-replacement initial value and reconstructs the latest durable Run control
-policy.
-_Avoid_: Process default during recovery, mutable coordinator settings
+The schema-decoded values Dalph evaluates and records only when Run
+establishment finds no history for the exact Run. The current production slice
+contains task-execution capacity only; existing history supplies its own
+initial and latest policy, so establishment neither evaluates nor accepts a
+replacement initial value.
+_Avoid_: Eager startup default, restoration input, mutable coordinator settings
 
 **Run control policy**:
 The latest schema-decoded task-execution capacity and monotonic revision that
@@ -200,15 +201,32 @@ fresh read from a configured task tracker.
 _Avoid_: Tracker fixture, tracker state file, GitHub Issues API fixture
 
 **Run**:
-One durable Dalph coordination instance for one task-tracker target. It begins
-when Dalph records a fresh `RunId` and ends with one run termination record.
+One durable Dalph coordination instance for one task-tracker target. Its
+history begins with one Run-beginning fact, may receive several bounded
+activations, and closes with at most one Run-termination fact.
 _Avoid_: Process, task, historical harness run
 
 **Workflow Run beginning**:
 The first durable workflow-journal fact for one Run. It associates a freshly
-allocated Run identity with one exact task-tracker target and distinguishes a
-fresh start from recovery.
-_Avoid_: UUID allocation, process start, recovery start
+allocated Run identity with one exact task-tracker target and its initial
+control policy. The Journal rejects a second beginning for that identity even
+though application-level Run establishment is idempotent.
+_Avoid_: UUID allocation, process start, restoration start
+
+**Run establishment**:
+The idempotent application decision that appends a Run beginning when the exact
+Run has no history, or otherwise validates its complete history and
+reconstructs the exact target, latest policy, and responsibilities. It is the
+one entry to activation and is not selected by a fresh-versus-recovered caller
+mode.
+_Avoid_: Run creation, fresh initialization, recovery start
+
+**Run activation**:
+One bounded process-local invocation over an established Run. It reconstructs
+admission from exact unfinished responsibilities, runs ordinary delivery and
+reconciliation, and reaches at most one post-quiescence tracker
+reconfirmation before returning or recording termination.
+_Avoid_: Process lifetime, recovery activation, continuous coordinator loop
 
 **Workflow Run termination**:
 The final durable workflow-journal fact for one normally completed Run. It
@@ -230,9 +248,10 @@ _Avoid_: History validation alone, journal decoding, coordinator rehydration
 
 **Reconstructed run state**:
 The process-local composition of graph knowledge, outstanding workflow
-responsibilities, applied pause directions, and workflow-journal records for
-one `RunId`. Dalph derives it from workflow-journal history; it is neither
-persisted authority nor a runnable frontier.
+responsibilities, latest control policy, applied pause directions, and
+workflow-journal records for one `RunId`. Dalph derives it from
+workflow-journal history; it is neither persisted authority nor a runnable
+frontier.
 _Avoid_: Managed run state, serialized coordinator, current external state
 
 **Run recovery frontier**:
@@ -240,12 +259,6 @@ The process-local projection naming the next durable boundary, unresolved
 boundary, or terminal attempt for every task represented by one reduced
 workflow-journal history. Dalph does not persist this projection.
 _Avoid_: Recovery stage, runnable frontier, persisted recovery state
-
-**Run recovery activation**:
-The application capability that reads a reconstructed run's current runnable
-frontier and executes its recovered transitions through the ordinary
-activation and capacity path.
-_Avoid_: Managed activation, process restart, separate recovery scheduler
 
 **Task-tracker target**:
 The grouping root or query that tells a task-tracker adapter where to begin

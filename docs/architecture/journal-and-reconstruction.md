@@ -47,12 +47,37 @@ itself establish task lifecycle, dependency release, or Run completion.
 See [ADR 0007](../adr/0007-fold-normalized-mutation-results-into-graph-knowledge.md)
 and [issue 145](https://github.com/dearlordylord/dalph/issues/145).
 
+## Idempotent Run establishment
+
+The production Run entry does not accept a fresh-versus-restored mode. While
+holding coordinator ownership, it reads startup facts and the exact requested
+Run history. Discovery of more than one unfinished Run fails closed naming all
+of them before any Run is activated.
+
+When the exact history is absent, establishment evaluates a lazy initial-policy
+source, decodes it, and asks the lifecycle Journal to append one beginning. A
+lost append response is reconciled by entering the same establishment path and
+rereading history. If the beginning exists, establishment validates and reduces
+it instead of evaluating the fallback or appending again. The lifecycle Journal
+continues to reject a direct second beginning; application idempotence does not
+weaken record admission.
+
+When history exists, establishment validates its exact Run identity and target,
+reduces the complete chronology, and reconstructs the latest control policy and
+unfinished responsibilities. Mismatched, invalid, or terminated history never
+enters activation. Successful absent-history and existing-history cases produce
+the same established Run value for one bounded activation.
+
+See
+[ADR 0011](../adr/0011-establish-runs-idempotently-before-activation.md) and
+[the accepted chronology](../scenarios/run-establishment-and-activation.md).
+
 ## Complete-history reconstruction
 
-After restart and while holding coordinator ownership, Dalph scans every
-physical journal row and discovers every recoverable Run without an age cutoff.
-It validates each Run's complete record history in canonical position order
-before it allows that Run to continue.
+On every entry and while holding coordinator ownership, Dalph scans every
+physical journal row and discovers every unfinished Run without an age cutoff.
+It validates the selected exact Run's complete record history in canonical
+position order before it allows one activation to continue.
 
 Journal storage, decoding, and reduction are separate seams:
 
@@ -68,9 +93,9 @@ Journal storage, decoding, and reduction are separate seams:
 
 The reducers do not read the Journal or call the tracker, Git, or executor.
 One event may update several component reducers without merging their state
-models. The live process may incrementally fold later records after its last
+models. The live activation may incrementally fold later records after its last
 applied position, but that cache is discarded after process loss and never
-replaces complete-history validation.
+replaces complete-history validation on the next establishment.
 
 See [ADR 0004](../adr/0004-compose-pure-run-reducers.md).
 
@@ -119,12 +144,13 @@ durable relinquishment supported by current authority evidence.
 See [ADR 0005](../adr/0005-track-workflow-responsibility-per-subject.md) and
 [issue-55-localize-task-conflicts.md](../scenarios/issue-55-localize-task-conflicts.md).
 
-## Restart summary
+## Later-activation summary
 
-| Fact | Restart treatment |
+| Fact | Treatment after process loss |
 | --- | --- |
-| Workflow intents and recorded results | decode and reduce the complete Journal history; reconcile every unresolved intent through its owning protocol |
+| Run beginning, policy changes, workflow intents, and recorded results | enter the same idempotent establishment path, decode and reduce the complete Journal history, and reconcile every unresolved intent through its owning protocol |
 | Tracker tasks, lifecycle, graph, grouping, and claims | use journaled observations for history, then reread the tracker whenever the next decision requires current evidence |
 | Git commits, refs, worktrees, and integration state | reread the exact planned locators and compare them with journaled intents and observations |
 | Executor work | reconstruct the exact planned-attempt obligation; consult the Dalph executor according to its accepted protocol; substrate inspection remains executor-internal |
-| Frontiers, bounded tickets, proposals, runtime owners, positions, timers, and wakeups | discard and rebuild from ordinary services and current signals |
+| Frontiers, bounded tickets, proposals, runtime owners, timers, and wakeups | discard and rebuild from ordinary services and current signals |
+| Task-work positions | derive held positions from exact unfinished responsibilities and the reconstructed policy before admitting new work; never restore the old process-local map |

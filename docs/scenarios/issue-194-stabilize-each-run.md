@@ -4,6 +4,9 @@ These scenarios govern the Run-level composition above descriptive delivery,
 delivery-action planning, and the live action runtime. Dalph is the only actor:
 no person is waiting at a boundary during one activation. Git, task claims,
 worktrees, and the executor are stated explicitly where they do not participate.
+The activation receives one idempotently established Run; whether establishment
+just appended its beginning or reconstructed existing history does not change
+the stabilization or finality path.
 
 ## G2 is requested only after G1 is quiescent and reveals B
 
@@ -63,26 +66,29 @@ G2 with a different read operation identity and a later journal position while
 retaining the same graph content identity. Delivery still has no executable
 action and still exposes `PrerequisitesIncomplete(A)`.
 
-The core Run Effect returns `RunMustRemainActive` successfully. The bootstrap
+The core Run Effect returns `RunMustRemainActive` successfully. The Run entry
 does not append `WorkflowRunTerminated`; it closes process-local runtime
-resources. A later recovered invocation reads the same unfinished journal and
-is accepted. That invocation may perform its own one-shot reconfirmation.
+resources. A later invocation enters the same Run-establishment path, reads the
+same unfinished Journal, and is accepted without a caller-selected recovery
+mode. That invocation may perform its own one-shot reconfirmation.
 
 If the process crashes after the G2 outcome append but before the first Effect
-returns, recovery reconstructs accepted G2 from the journal. It does not retry
-the completed read operation and does not treat an unjournaled tracker response
-as G2. The next activation still receives its own one-shot stabilization read
-after reaching quiescence; this is not continuous polling by the prior
-activation.
+returns, the later Run entry reconstructs accepted G2 from the Journal. It does
+not retry the completed read operation and does not treat an unjournaled
+tracker response as G2. The next activation still receives its own one-shot
+stabilization read after reaching quiescence; this is not continuous polling by
+the prior activation.
 
 Forbidden results are waiting forever after equal G2, appending Run
-termination, losing the non-progress explanation, accepting a second fresh
-start as recovery, or treating a failed/incomplete/uncorrelated read as G2.
+termination, losing the non-progress explanation, requiring or accepting a
+caller-selected recovery start, or treating a failed, incomplete, or
+uncorrelated read as G2.
 
 Acceptance tests:
 
 - `returns without terminating after equal G2 leaves the Run incomplete`
-- `accepts a later recovered invocation after quiescent incomplete return`
+- Future Run-establishment test
+  `re-enters the same Run and activates it after quiescent incomplete return`
 - `a crash before append authorizes no work; restart after append reconstructs facts and only a later observed completion releases B`
 
 Invariant mapping: D34 distinguishes quiescence from completion, D35 forbids
@@ -102,14 +108,15 @@ Run stabilization performs one ordinary complete tracker read. Accepted G2 has
 a later read identity and journal position and reconfirms A completed
 successfully. Delivery confirms both the completed target and the empty set of
 unsettled responsibilities. With no executable proposal or live owner,
-stabilization returns the existing `RunMayTerminate` proof. The bootstrap
+stabilization returns the existing `RunMayTerminate` proof. The Run entry
 appends exactly one `WorkflowRunTerminated` event.
 
 If the process dies after G2 is appended but before termination is appended,
-restart reconstructs G2, reaches quiescence, performs that activation's one
-later reconfirmation, and may append the one termination record. If the
-termination append succeeded before the response was lost, bootstrap recovery
-observes the terminated Run and never appends a second record.
+the same Run entry reconstructs G2, reaches quiescence, performs that
+activation's one later reconfirmation, and may append the one termination
+record. If the termination append succeeded before the response was lost, Run
+establishment observes the terminated history and constructs no activation or
+second record.
 
 Forbidden results are termination from G1, termination while any responsibility
 or resource remains unsettled, a second G2 read in the activation, or a second
@@ -152,8 +159,9 @@ without calling the tracker for G2. Unpause must obtain its own fresh reads
 before forward progress.
 
 If the process dies while the Run is paused, restart reconstructs `RunPaused`,
-starts no new forward boundary call, and still performs no G2. A later accepted
-Unpause direction is the event that permits fresh reads again.
+and the same Run entry starts no new forward boundary call and still performs
+no G2. A later accepted Unpause direction is the event that permits fresh reads
+again.
 
 Forbidden results are a tracker read caused by paused quiescence, termination
 of the paused Run, or admitting new forward work.
