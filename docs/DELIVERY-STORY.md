@@ -214,6 +214,8 @@ end.
 
 <!-- DELIVERY-STORY-MANIFEST:START -->
 cassette|authored:deliveryInvariantStory
+cassette-test|packages/dalph/test/cassettes/scenario.test.ts#it.effect#consumes the double-diamond frontier through production delivery waves
+cassette-test|packages/dalph/test/cassettes/scenario.test.ts#it.effect#preserves the double-diamond middle wave across coordinator restart
 DS-01|NotImplemented|The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks.
 DS-02|NotImplemented|No maintained run admits A, B, and C together yet.
 DS-03|NotImplemented|No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change.

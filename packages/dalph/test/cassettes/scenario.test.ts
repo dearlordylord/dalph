@@ -1942,11 +1942,18 @@ it.effect("consumes the double-diamond frontier through production delivery wave
       previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
       return previousWave
     })
+    const taskByAttempt = new Map(
+      run.records.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+          ? [[event.plannedAttempt.attemptId, event.plannedAttempt.taskId] as const]
+          : []
+      )
+    )
     const taskWork = run.records.flatMap(({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
         ? [`began:${event.plannedAttempt.taskId}`]
         : event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
-          ? [`terminal:${event.report.correlation.attemptId.split(":")[1]}`]
+          ? [`terminal:${taskByAttempt.get(event.report.correlation.attemptId)}`]
           : []
     )
 

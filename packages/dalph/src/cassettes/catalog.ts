@@ -1893,7 +1893,7 @@ const doubleDiamondSpecification = (taskId: (typeof doubleDiamondTaskIds)[number
   title: `Complete ${taskId}`
 })
 
-const doubleDiamondPrepareBatch = (
+const doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems = (
   graph: (typeof doubleDiamondGraphs)[number],
   tasks: ReadonlyArray<{ readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] }>
 ) => [
@@ -1996,10 +1996,13 @@ export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(A
       verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/double-diamond"
     },
-    ...doubleDiamondPrepareBatch(doubleDiamondGraphs[0], [doubleDiamondAttempts[0]]),
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[0], [doubleDiamondAttempts[0]]),
     doubleDiamondExecutorReport(doubleDiamondAttempts[0], "Running"),
     doubleDiamondExecutorReport(doubleDiamondAttempts[0], "Terminal"),
-    ...doubleDiamondPrepareBatch(doubleDiamondGraphs[1], [doubleDiamondAttempts[1], doubleDiamondAttempts[2]]),
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[1], [
+      doubleDiamondAttempts[1],
+      doubleDiamondAttempts[2]
+    ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts[1], "Running"),
     doubleDiamondExecutorReport(doubleDiamondAttempts[2], "Running"),
     { _tag: "CoordinatorProcessDies" },
@@ -2008,19 +2011,22 @@ export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(A
     ...doubleDiamondRecoveryReads([doubleDiamondAttempts[1], doubleDiamondAttempts[2]]),
     doubleDiamondExecutorReport(doubleDiamondAttempts[1], "Terminal"),
     doubleDiamondExecutorReport(doubleDiamondAttempts[2], "Terminal"),
-    ...doubleDiamondPrepareBatch(doubleDiamondGraphs[2], [doubleDiamondAttempts[3]]),
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[2], [doubleDiamondAttempts[3]]),
     doubleDiamondExecutorReport(doubleDiamondAttempts[3], "Running"),
     doubleDiamondExecutorReport(doubleDiamondAttempts[3], "Terminal"),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
     },
-    ...doubleDiamondPrepareBatch(doubleDiamondGraphs[3], [doubleDiamondAttempts[4], doubleDiamondAttempts[5]]),
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[3], [
+      doubleDiamondAttempts[4],
+      doubleDiamondAttempts[5]
+    ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts[4], "Running"),
     doubleDiamondExecutorReport(doubleDiamondAttempts[5], "Running"),
     doubleDiamondExecutorReport(doubleDiamondAttempts[4], "Terminal"),
     doubleDiamondExecutorReport(doubleDiamondAttempts[5], "Terminal"),
-    ...doubleDiamondPrepareBatch(doubleDiamondGraphs[4], [doubleDiamondAttempts[6]]),
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[4], [doubleDiamondAttempts[6]]),
     doubleDiamondExecutorReport(doubleDiamondAttempts[6], "Running"),
     doubleDiamondExecutorReport(doubleDiamondAttempts[6], "Terminal"),
     {

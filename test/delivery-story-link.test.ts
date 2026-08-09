@@ -38,6 +38,8 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
   expect(documentedBeatIds).toEqual(deliveryStoryManifest.beats.map(({ beatId }) => beatId))
   expect(manifestBlock).toBe(renderDeliveryStoryManifest())
   expect(document).toContain(`maintained catalog key is \`${deliveryStoryManifest.cassetteKey}\``)
+  expect(deliveryStoryManifest.cassetteAcceptanceTests.length).toBeGreaterThan(0)
+  expect(deliveryStoryManifest.cassetteAcceptanceTests.every(acceptanceTestExists)).toBe(true)
   for (const { coverage } of deliveryStoryManifest.beats) {
     if (coverage._tag === "NotImplemented") {
       expect(coverage.reason.length).toBeGreaterThan(0)

@@ -66,7 +66,8 @@ const scenarioTest = (name: string): DeliveryStoryAcceptanceTest => ({
   sourceFile: "packages/dalph/test/cassettes/scenario.test.ts"
 })
 
-const spineTest = scenarioTest("preserves the double-diamond middle wave across coordinator restart")
+const topologyTest = scenarioTest("consumes the double-diamond frontier through production delivery waves")
+const restartTest = scenarioTest("preserves the double-diamond middle wave across coordinator restart")
 
 const spine = (
   beatId: DeliveryStoryBeatId,
@@ -100,6 +101,7 @@ const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeat
  */
 export const deliveryStoryManifest = {
   cassetteKey: "authored:deliveryInvariantStory" as const,
+  cassetteAcceptanceTests: [topologyTest, restartTest],
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
     missing(
@@ -127,7 +129,7 @@ export const deliveryStoryManifest = {
       "DS-07",
       "No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held."
     ),
-    spine("DS-08", spineTest),
+    spine("DS-08", restartTest),
     missing("DS-09", "The maintained double diamond recovers held B and C, not held A, C, and D plus retained B."),
     missing("DS-10", "No maintained run closes C without success and then asks its exact executor to suspend."),
     missing("DS-11", "No maintained run releases closed C's position while retaining its reversible lifecycle wait."),
@@ -182,6 +184,9 @@ export const renderDeliveryStoryManifest = (): string =>
   [
     "<!-- DELIVERY-STORY-MANIFEST:START -->",
     `cassette|${deliveryStoryManifest.cassetteKey}`,
+    ...deliveryStoryManifest.cassetteAcceptanceTests.map(
+      ({ declaration, name, sourceFile }) => `cassette-test|${sourceFile}#${declaration}#${name}`
+    ),
     ...deliveryStoryManifest.beats.map(({ beatId, coverage }) => `${beatId}|${coverageLabel(coverage)}`),
     "<!-- DELIVERY-STORY-MANIFEST:END -->"
   ].join("\n")
