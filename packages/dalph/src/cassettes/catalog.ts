@@ -36,6 +36,15 @@ const twoEligibleTasksGraph = {
   ]
 }
 
+const threeEligibleTasksGraph = {
+  revision: "three-eligible-tasks-revision",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "C", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+  ]
+}
+
 const groupingChildTasksGraph = {
   revision: "grouping-child-tasks-revision",
   tasks: [
@@ -1378,6 +1387,119 @@ export const dependentTasksCompleteInOneRunAuthoredCassette = Schema.decodeUnkno
   ]
 })
 
+/**
+ * A capacity contraction retains two already-running attempts across process
+ * death and admits C only after both exact responsibilities settle.
+ */
+export const contractedCapacityRetainsTwoAttemptsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "capacity contraction retains A and B across process death before C starts",
+  startingFacts: {
+    ...singletonTaskCompletesAuthoredCassette.startingFacts,
+    taskWorkSpecifications: [
+      ...singletonTaskCompletesAuthoredCassette.startingFacts.taskWorkSpecifications,
+      { body: "Implement the second eligible behavior.", taskId: "B", title: "Implement second task" },
+      { body: "Implement the third eligible behavior.", taskId: "C", title: "Implement third task" }
+    ],
+    trackerGraph: twoEligibleTasksGraph
+  },
+  story: [
+    ...twoEligiblePlannedStoryBeforeRunningExecutorReport.map((item) =>
+      item._tag === "InitialControlPolicy" ? { ...item, policy: { taskExecutionCapacity: 2 } } : item
+    ),
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "StartOrContinue"
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:B:1" },
+      request: "StartOrContinue"
+    },
+    { _tag: "SetTaskExecutionCapacity", capacity: 1 },
+    { _tag: "CoordinatorProcessDies" },
+    ...taskControlMembershipRead(threeEligibleTasksGraph),
+    ...taskControlMembershipRead(threeEligibleTasksGraph),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the accepted singleton behavior.",
+      taskId: "A",
+      title: "Implement singleton"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the second eligible behavior.",
+      taskId: "B",
+      title: "Implement second task"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "B" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:B:1", taskId: "B" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    ...taskControlMembershipRead(threeEligibleTasksGraph),
+    ...taskControlMembershipRead(threeEligibleTasksGraph),
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "C" } },
+    ...taskControlMembershipRead(threeEligibleTasksGraph),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the third eligible behavior.",
+      taskId: "C",
+      title: "Implement third task"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:2", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:2", taskId: "C" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:C:2", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "RunActivationFinalTrackerGraphReadReturned", graph: threeEligibleTasksGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
+    },
+    ...taskControlMembershipRead(threeEligibleTasksGraph),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "RunActivationFinalTrackerGraphReadReturned", graph: threeEligibleTasksGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
+    },
+    {
+      _tag: "ExpectedBehavior",
+      orchestration: null,
+      protocol: null,
+      taskWork: {
+        absences: [],
+        results: [
+          { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
+          { _tag: "PlannedWorkForTaskCompleted", taskId: "B" },
+          { _tag: "PlannedWorkForTaskCompleted", taskId: "C" }
+        ]
+      }
+    }
+  ]
+})
+
 /** Accepted executor output remains ordered by journal position and starts integration in the next activation. */
 export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
   {
@@ -1894,6 +2016,7 @@ export const maintainedAuthoredCassetteCatalog = defineAuthoredCassetteCatalog({
   changedAttemptStopsWithAbsentClaim: changedAttemptStopsWithAbsentClaimAuthoredCassette,
   changedAttemptStopsWithForeignClaim: changedAttemptStopsWithForeignClaimAuthoredCassette,
   compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
+  contractedCapacityRetainsTwoAttempts: contractedCapacityRetainsTwoAttemptsAuthoredCassette,
   dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
   incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
   lostPlannedWorktreeSafelySuspends: lostPlannedWorktreeSafelySuspendsAuthoredCassette,

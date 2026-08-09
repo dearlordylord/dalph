@@ -328,6 +328,8 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
     taskId: TaskId
   },
   RunCoordinator: RunCoordinatorFields,
+  /** The task tracker returns this activation's one post-quiescence complete target-closure read. */
+  RunActivationFinalTrackerGraphReadReturned: { graph: AuthoredTrackerGraph },
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
   TaskClaimReadFailed: { reason: Schema.Literal("Unreadable"), taskId: TaskId },
@@ -342,7 +344,8 @@ export type AuthoredCassetteStoryItem = typeof AuthoredCassetteStoryItem.Type
 
 export const AuthoredTrackerGraphReadResult = Schema.Union([
   AuthoredCassetteStoryItem.cases.TrackerGraphReadFailed,
-  AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned
+  AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned,
+  AuthoredCassetteStoryItem.cases.RunActivationFinalTrackerGraphReadReturned
 ])
 export type AuthoredTrackerGraphReadResult = typeof AuthoredTrackerGraphReadResult.Type
 
@@ -395,7 +398,8 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "TaskClaimReleaseResponseLost",
     "TaskWorkSpecificationReadReturned",
     "TrackerGraphReadFailed",
-    "TrackerGraphReadReturned"
+    "TrackerGraphReadReturned",
+    "RunActivationFinalTrackerGraphReadReturned"
   ],
   TerminalAssertion: ["ExpectedBehavior"]
 })
@@ -495,6 +499,17 @@ const coordinatorLifecycleBoundariesHaveFollowingActivationWork = Schema.makeFil
     )
       ? undefined
       : "each authored coordinator process death must leave a later activation interaction before terminal assertions"
+)
+
+const finalTrackerReadClosesCurrentActivation = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+    cassette.story.every(
+      (item, index) =>
+        item._tag !== "RunActivationFinalTrackerGraphReadReturned" ||
+        cassette.story[index + 1]?._tag === "CoordinatorActivationReturned"
+    )
+      ? undefined
+      : "each authored activation-final tracker result must be followed by that activation's public return"
 )
 
 const ambiguousBoundaryLossesImmediatelyCrash = Schema.makeFilter(
@@ -702,6 +717,7 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   .check(startingFactsAreConsistent)
   .check(behaviorAssertionsAreConsistent)
   .check(coordinatorLifecycleBoundariesHaveFollowingActivationWork)
+  .check(finalTrackerReadClosesCurrentActivation)
   .check(ambiguousBoundaryLossesImmediatelyCrash)
   .check(lostExecutorResponsesRequireExplicitProjection)
   .check(admittedContinuationHoldHasExactStopClosure)
