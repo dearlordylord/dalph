@@ -11,14 +11,24 @@ invariants in `../DELIVERY-INVARIANTS.md`, because a recording can prove an
 occurrence happened and never that one cannot.
 
 A chronology spanning many issues belongs in `../DELIVERY-STORY.md` rather than
-here. Files here are scoped to one accepted issue and carry its
-acceptance-test mapping.
+here. Accepted files here are scoped to one issue and carry its acceptance-test
+mapping. A file explicitly listed as proposed is review material only and does
+not satisfy the operational-scenario gate until its status is changed after
+maintainer acceptance.
 
 ## Currency
 
-Every file here corresponds to an accepted issue that is either open or closed
-as completed. No issue is abandoned, closed as not planned, or superseded, and
-no issue declares any file here outdated.
+Every file outside the proposed section corresponds to an accepted issue that
+is either open or closed as completed. No accepted issue represented here is
+abandoned, closed as not planned, or superseded, and no accepted issue declares
+its file outdated.
+
+**Proposed, awaiting acceptance** — these files do not describe required or
+shipped behavior and do not authorize implementation.
+
+| File | Issue |
+|---|---|
+| `issue-67-abandon-or-quarantine-attempt.md` | 67 |
 
 **Describes shipped behavior** — the owning issue is closed as completed.
 
