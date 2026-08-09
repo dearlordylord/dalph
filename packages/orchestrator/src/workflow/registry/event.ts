@@ -54,7 +54,7 @@ const ResponsibilityJournalEvent = Schema.Union([
 
 /**
  * Dalph durably began one Run for the exact tracker target. This must be the
- * first record for the Run and is created only by the fresh-start boundary.
+ * first record for the Run and is created only by Run establishment.
  */
 export const WorkflowRunBeganEvent = Schema.TaggedStruct("WorkflowRunBegan", {
   initialControlPolicy: InitialControlPolicy,

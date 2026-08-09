@@ -2,10 +2,11 @@ import { Schema } from "effect"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 
 /**
- * Values Dalph captures when it creates a fresh coordinator.
+ * Values Dalph captures when Run establishment creates a new Run.
  *
- * This startup boundary records revision one. Later Operator changes use the
- * revision-checked task-work-capacity protocol; recovery accepts no new copy.
+ * Establishment records revision one. Later Operator changes use the
+ * revision-checked task-work-capacity protocol; an already-established Run
+ * accepts no replacement initial copy.
  */
 export const InitialControlPolicy = Schema.Struct({ taskExecutionCapacity: TaskWorkCapacity })
 export type InitialControlPolicy = typeof InitialControlPolicy.Type

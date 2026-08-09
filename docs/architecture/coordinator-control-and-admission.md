@@ -31,7 +31,7 @@ production lock.
 
 ## Run establishment and activation
 
-One production entry accepts an exact `AllocatedFreshWorkflowRunId`, tracker
+One production entry accepts an exact `AllocatedWorkflowRunId`, tracker
 target, and lazy source of initial control policy. The cryptographic allocator
 may mint the identity in a separate Run-creation step; allocation itself does
 not begin a Run. The entry first scans Journal startup facts while coordinator
