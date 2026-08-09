@@ -41,6 +41,13 @@ retains the same accepted scenario, maintainer, checking lifecycle, and
 executable conformance seam. Such a projection is not another canonical model
 and not another source of runtime behavior.
 
+`specs/taskFactReconciliation_proof.qnt` applies that exception to the issue
+#65 slice of `taskFactReconciliation`: it collapses unrelated #136/#137 facts
+into three finite choice, Stop, and stopped-claim graphs. It is maintained in
+the same gate and retains
+`packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts` as its
+production seam; it is not a seventh model or an implementation input.
+
 ## Consequences
 
 Every model exports a closed action and state projection. A test-only executable

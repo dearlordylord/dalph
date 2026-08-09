@@ -1,5 +1,9 @@
 import { performance } from "node:perf_hooks"
 
+import {
+  plannedAttemptExecutorObligations,
+  taskFactReconciliationObligations
+} from "./quint-model-obligations.mjs"
 import { quintGateRegressionBudgetMilliseconds } from "./quint-gate-policy.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
@@ -37,43 +41,8 @@ await run("planned-attempt executor negative mutation profile", [
   "--main",
   "plannedAttemptExecutorNegativeTest"
 ])
-const plannedAttemptExecutorInvariants = [
-  "everyCallHasOneDurableIntent",
-  "unmatchedIntentBlocksAnotherCommand",
-  "projectionsAreNotCommandResponses",
-  "settlementsUseExactCommandOrdinal",
-  "commandOrdinalsAreAllocatedExactly",
-  "stateProjectionNeverSettlesCommand",
-  "freshStateProjectionHasNoUnmatchedCommand",
-  "commandProjectionBelongsToCalledCommand",
-  "commandBudgetsAreBounded",
-  "oneReconciliationProjectionPerActivation",
-  "suspendLimitPreservesReadOnlyRecovery",
-  "unsafeOrUnavailableNeverReleasesPosition",
-  "runningAndUnsettledWorkRetainsPosition",
-  "safeSuspensionReleasesPosition",
-  "terminalReleasesPosition"
-]
-const plannedAttemptExecutorWitnesses = [
-  "responsibilityBeganReached",
-  "startIntentRecordedReached",
-  "suspendIntentRecordedReached",
-  "startCalledReached",
-  "suspendCalledReached",
-  "responseReceivedReached",
-  "responseLostReached",
-  "commandProjectedReached",
-  "freshStateProjectedReached",
-  "freshSafeProofAcceptedReached",
-  "responseSettledReached",
-  "projectionSettledReached",
-  "recoveryActivatedReached",
-  "continuationLimitReached",
-  "suspendCommandLimitReached",
-  "runningReached",
-  "safelySuspendedReached",
-  "terminalReached"
-]
+const plannedAttemptExecutorInvariants = plannedAttemptExecutorObligations.invariants
+const plannedAttemptExecutorWitnesses = plannedAttemptExecutorObligations.witnesses
 await run("planned-attempt executor sampled model", [
   "run",
   "specs/plannedAttemptExecutor.qnt",
@@ -157,37 +126,8 @@ await run("control-direction application exhaustive model", [
   "1"
 ])
 
-const taskFactReconciliationInvariants = [
-  "requestIdentityErrorsRemainDistinct",
-  "firstJournaledChoiceWins",
-  "postCutoffChoiceNeverApplies",
-  "terminalObservationAloneExposesNoChoice",
-  "continueRequiresEveryFreshExactAuthority",
-  "continueResumesOnlyImmutableAttemptP",
-  "changedAgainRequiresNewChoice",
-  "projectedRunningSettlesOnlyItsIntent",
-  "stoppageCallsHaveExactDurableIntents",
-  "stoppageIsBounded",
-  "stoppageLimitPreservesReadOnlyRecovery",
-  "abandonmentRequiresExactUnbrokenQuiescence",
-  "stopPreservesEveryArtifact",
-  "stopNeverSelectsIntegration",
-  "quiescentStopNeedNotHoldPosition",
-  "unprovedWriterRetainsPositionAndClaim",
-  "claimChangesOnlyAfterAbandonmentAndExactRead",
-  "absentForeignUnreadableClaimsAreNeverMutated",
-  "claimReleaseIsBoundedAndReconciled",
-  "unreadableClaimRemainsSeparateResponsibility",
-  "unrelatedTaskBRemainsEligible",
-  "changedFactsPreserveWip",
-  "specificationOffersEveryExactChoice",
-  "externalSuccessPreventsDuplicateDelivery",
-  "externalSuccessSettlesAfterExactClaimRelease",
-  "replacementClaimRequiresDirectionAndIntent",
-  "replacementClaimIdentityIsFresh",
-  "foreignClaimIsNeverChanged",
-  "unreadableClaimCannotAuthorizeReplacement"
-]
+const taskFactReconciliationInvariants = taskFactReconciliationObligations.invariants
+const taskFactReconciliationWitnesses = taskFactReconciliationObligations.witnesses
 
 await run("task-fact reconciliation model typecheck", [
   "typecheck",
@@ -211,53 +151,7 @@ await run("task-fact reconciliation sampled model", [
   "--invariants",
   ...taskFactReconciliationInvariants,
   "--witnesses",
-  "continueF2AppliedReached",
-  "f2ObservedReached",
-  "stopF2AppliedReached",
-  "exactRedeliveredReached",
-  "runMismatchRejectedReached",
-  "contentReuseRejectedReached",
-  "losingChoiceRejectedReached",
-  "postCutoffStopRejectedReached",
-  "terminalObservedReached",
-  "integrationStartedReached",
-  "freshGraphReadReached",
-  "freshSpecificationReadReached",
-  "freshClaimReadReached",
-  "freshWorktreeReadReached",
-  "freshLineageReadReached",
-  "freshExecutorReadReached",
-  "continueAdmittedReached",
-  "f3ObservedReached",
-  "continueF3AppliedReached",
-  "stoppageReconciliationRequiredReached",
-  "stoppageIntentRecordedReached",
-  "stoppageCalledReached",
-  "stoppageResponseLostReached",
-  "stoppageRunningProjectedReached",
-  "stoppageSafeProjectedReached",
-  "stoppageReadOnlySafeProjectedReached",
-  "stopRecoveryActivatedReached",
-  "implementationAbandonedReached",
-  "exactClaimObservedReached",
-  "absentClaimObservedReached",
-  "foreignClaimObservedReached",
-  "unreadableClaimObservedReached",
-  "claimReleaseIntentRecordedReached",
-  "claimReleasedReached",
-  "claimReleaseResponseLostReached",
-  "claimReleaseReleasedProjectedReached",
-  "claimReleaseStillExactProjectedReached",
-  "claimRecoveryActivatedReached",
-  "independentTaskSelectedReached",
-  "membershipWaitReached",
-  "lifecycleWaitReached",
-  "specificationChoicesReached",
-  "externalSuccessSettledReached",
-  "foreignClaimWaitReached",
-  "missingClaimWaitReached",
-  "unreadableClaimWaitReached",
-  "replacementClaimObserved",
+  ...taskFactReconciliationWitnesses,
   "--max-steps",
   "55",
   "--max-samples",
@@ -265,11 +159,138 @@ await run("task-fact reconciliation sampled model", [
   "--verbosity",
   "1"
 ])
-// This combined subject model deliberately keeps task-fact, exact-choice,
-// stoppage, claim-disposition, and independent-task sentinels together. Even
-// a two-step exhaustive prefix does not complete inside the bounded gate.
-// Collected scenarios, mutation-killing negatives, the depth-55 sampled run,
-// and the production-backed MBT therefore own its executable verification.
+
+// The canonical subject model deliberately keeps #136/#137 task facts and the
+// #65 choice, stoppage, claim-disposition, and independent-task sentinels
+// together. Its production-backed MBT and sampled run stay canonical. ADR 0010
+// permits the following smaller projection of the same accepted #65 chronology
+// to own exhaustive proof without becoming another runtime behavior source.
+const taskFactProofs = [
+  {
+    main: "taskFactChoiceProof",
+    testMain: "taskFactChoiceProofTest",
+    negativeTestMain: "taskFactChoiceProofNegativeTest",
+    title: "task-fact choice proof",
+    maxSteps: "18",
+    seed: "6501",
+    invariants: [
+      "firstChoiceAndExactRedeliveryAreIdempotent",
+      "requestIdentityErrorsStayDistinct",
+      "continueUsesSixFreshReadsForImmutableP",
+      "laterF3RequiresItsOwnChoiceAndFreshReads",
+      "postCutoffChoiceHasNoDownstreamEffect",
+      "choiceProofTypeOk"
+    ],
+    witnesses: [
+      "exactRedeliveryReached",
+      "bothIdentityErrorsReached",
+      "stopWinnerReached",
+      "immutableAttemptPResumedReached",
+      "continueF3Reached",
+      "postCutoffContinueRejectionReached",
+      "postCutoffStopRejectionReached"
+    ]
+  },
+  {
+    main: "taskFactStopProof",
+    testMain: "taskFactStopProofTest",
+    negativeTestMain: "taskFactStopProofNegativeTest",
+    title: "task-fact Stop proof",
+    maxSteps: "22",
+    seed: "6502",
+    invariants: [
+      "stopCallsFollowExactDurableIntents",
+      "stoppageAndRecoveryAreBounded",
+      "thirdRunningResultLeavesOnlyReadOnlyRecovery",
+      "abandonmentRequiresExactUnbrokenQuiescence",
+      "unprovedWriterRetainsPositionAndClaim",
+      "stopPreservesArtifactsAndNeverIntegrates",
+      "readOnlyRecoveryIssuesNoFourthCommand"
+    ],
+    witnesses: [
+      "retainedSafeProofAbandonedReached",
+      "ambiguousSafeProjectionReached",
+      "thirdRunningProjectionReached",
+      "readOnlySafeRecoveryReached"
+    ]
+  },
+  {
+    main: "taskFactClaimProof",
+    testMain: "taskFactClaimProofTest",
+    negativeTestMain: "taskFactClaimProofNegativeTest",
+    title: "task-fact stopped-claim proof",
+    maxSteps: "18",
+    seed: "6503",
+    invariants: [
+      "claimChangesOnlyAfterAbandonmentExactReadAndIntent",
+      "absentForeignUnreadableClaimsAreNeverMutated",
+      "unreadableClaimRetainsSeparateResponsibility",
+      "claimReleaseIsBoundedAndReconciled",
+      "unrelatedTaskRemainsEligible"
+    ],
+    witnesses: [
+      "exactReleaseReached",
+      "absentDispositionReached",
+      "foreignDispositionReached",
+      "unreadableDispositionReached",
+      "ambiguousReleaseSettledReached",
+      "laterReadAfterAmbiguityReached",
+      "unrelatedTaskSelectedReached"
+    ]
+  }
+]
+
+await run("task-fact proof projection typecheck", [
+  "typecheck",
+  "specs/taskFactReconciliation_proof.qnt"
+])
+for (const proof of taskFactProofs) {
+  await run(`${proof.title} deterministic tests`, [
+    "test",
+    "specs/taskFactReconciliation_proof_test.qnt",
+    "--main",
+    proof.testMain
+  ])
+  await run(`${proof.title} negative mutation profile`, [
+    "test",
+    "specs/taskFactReconciliation_proof_negative_test.qnt",
+    "--main",
+    proof.negativeTestMain
+  ])
+  await run(`${proof.title} sampled model`, [
+    "run",
+    "specs/taskFactReconciliation_proof.qnt",
+    "--main",
+    proof.main,
+    "--invariants",
+    ...proof.invariants,
+    "--witnesses",
+    ...proof.witnesses,
+    "--max-steps",
+    proof.maxSteps,
+    "--max-samples",
+    "5000",
+    "--seed",
+    proof.seed,
+    "--verbosity",
+    "1"
+  ])
+  // TLC enumerates the complete finite projection graph with no depth token:
+  // choice 261 generated / 152 distinct / depth 14; Stop 42 / 36 / depth 20;
+  // claim 440 / 279 / depth 16 (Quint 0.32.0, linux-aarch64).
+  await run(`${proof.title} exhaustive model`, [
+    "verify",
+    "specs/taskFactReconciliation_proof.qnt",
+    "--main",
+    proof.main,
+    "--backend",
+    "tlc",
+    "--invariants",
+    ...proof.invariants,
+    "--verbosity",
+    "1"
+  ])
+}
 
 const gitReconciliationInvariants = [
   "compatibleTargetAdvanceDoesNotConstrainAttempt",

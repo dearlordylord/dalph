@@ -1,7 +1,7 @@
 # Mutation analysis of the gated Quint specs
 
-Applies the bake-off's detection protocol to this repository's own models —
-the five specs under `specs/` that `pnpm check:quint` gates.
+Applies the bake-off's detection protocol to this repository's six canonical
+models under `specs/` that `pnpm check:quint` gates.
 
 The question is not "do the invariants hold". The gate already answers that.
 The question is **which invariants constrain the model at all**, which only
@@ -10,6 +10,11 @@ mutation testing answers.
 ```sh
 node research/verification-bakeoff/mutate-specs.mjs
 node research/verification-bakeoff/mutate-specs.mjs --spec gitReconciliation
+
+# Deterministic, evenly distributed diagnostic slice; this is bounded evidence,
+# not a replacement for the full mutation census.
+node research/verification-bakeoff/mutate-specs.mjs \
+  --spec taskFactReconciliation --max-mutants 12
 
 # Apalache instead of sampling: exact within its step bound, far slower, and
 # bounded by a mandatory per-invocation budget. One process at a time.
