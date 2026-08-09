@@ -1,0 +1,1192 @@
+/* eslint-disable max-lines -- One driver keeps the Run-entry action-to-production-seam map auditable. */
+import { it } from "@effect/vitest"
+import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
+import { quintIt } from "@firfi/quint-connect/vitest"
+import {
+  AttemptId,
+  GitCommitSha,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorReport,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
+import { Context, Deferred, Effect, Fiber, Layer, Option, Queue, Schema, Scope } from "effect"
+import {
+  InitialControlPolicy,
+  JournalPosition,
+  JournalRecordKey,
+  type JournalRecord,
+  JournalStore,
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  RunPolicyRevision,
+  TaskAttemptPlannedEvent,
+  TaskWorkCapacity,
+  TaskWorkCapacityChangedEvent,
+  WorkflowResponsibilityState,
+  workflowJournalEventVersion
+} from "@dalph/orchestrator"
+import { CoordinatorOwnership } from "../../../orchestrator/src/authorities/coordinator-ownership/ownership.js"
+import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
+import type { TrackerTarget } from "../../../orchestrator/src/authorities/task-tracker/target.js"
+import { makeIntegrationTargetResourceController } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
+import { makeDeliveryRuntimeAdmissionController } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-admission.js"
+import {
+  DeliveryProposalId,
+  trackerGraphReadProposalOf
+} from "../../../orchestrator/src/coordination/delivery/delivery-proposal.js"
+import { deriveRunFinalityDecision } from "../../../orchestrator/src/coordination/frontier/run-finality.js"
+import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
+import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
+import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
+import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
+import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
+import { validatedRunActivationLayer } from "../../../orchestrator/src/coordination/run/startup-recovery.js"
+import { WorkflowInterpreter, WorkflowTrace } from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
+import {
+  decideWorkflowRunBeginning,
+  decideWorkflowRunTermination,
+  readRecoverableRunBeginning
+} from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import {
+  attemptPlanRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+} from "../../../orchestrator/src/workflow-journal/record-key.js"
+import {
+  type JournalStoreService,
+  journalStoreCapabilities,
+  RunLifecycleJournal
+} from "../../../orchestrator/src/workflow-journal/store.js"
+import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
+import { deterministicOperationIdAllocatorLayer } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/plan.js"
+import { makeTaskAttemptPlanOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
+import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
+import { attemptChoiceControlLayer } from "../../../orchestrator/src/workflow/protocols/attempt-choice/control.js"
+import { controlDirectionApplicationLayer } from "../../../orchestrator/src/workflow/protocols/control-direction-application/protocol.js"
+import { taskClaimReacquisitionControlLayer } from "../../../orchestrator/src/workflow/protocols/task-claim-reacquisition/control.js"
+import { taskWorkCapacityControlLayer } from "../../../orchestrator/src/control/task-work-capacity.js"
+import { PlannedAttemptProtocolController } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import { RunFinalityDecision } from "../../../orchestrator/src/coordination/frontier/frontier.js"
+
+const HistoryVariant = Schema.Struct({
+  tag: Schema.Literals([
+    "EmptyHistory",
+    "InvalidHistory",
+    "MultipleUnfinishedHistories",
+    "OneUnfinishedHistory",
+    "TerminatedHistory"
+  ]),
+  value: Schema.Unknown
+})
+const PhaseVariant = Schema.Struct({
+  tag: Schema.Literals(["ActivatingRun", "ActivationReturned", "EntryFailed", "EntryIdle", "EstablishingRun"]),
+  value: Schema.Unknown
+})
+const SourceVariant = Schema.Struct({
+  tag: Schema.Literals(["BeginningAppended", "ExistingHistoryReduced", "NoEstablishmentSource"]),
+  value: Schema.Unknown
+})
+const EntryFailureVariant = Schema.Struct({
+  tag: Schema.Literals([
+    "DuplicateBeginningFailure",
+    "ForeignRunRecordFailure",
+    "InvalidChronologyFailure",
+    "MultipleUnfinishedRunsFailure",
+    "NoEntryFailure",
+    "OtherUnfinishedRunFailure",
+    "TargetMismatchFailure",
+    "TerminatedRunFailure"
+  ]),
+  value: Schema.Unknown
+})
+const RunIdVariant = Schema.Struct({ tag: Schema.Literals(["R1", "R2"]), value: Schema.Unknown })
+const TargetVariant = Schema.Struct({ tag: Schema.Literals(["Target1", "Target2"]), value: Schema.Unknown })
+const CapacityVariant = Schema.Struct({ tag: Schema.Literals(["Capacity1", "Capacity2"]), value: Schema.Unknown })
+const AttemptIdVariant = Schema.Struct({ tag: Schema.Literals(["AttemptA", "AttemptB"]), value: Schema.Unknown })
+const EstablishedRunVariant = Schema.Union([
+  Schema.Struct({ tag: Schema.Literal("NoEstablishedRun"), value: Schema.Unknown }),
+  Schema.Struct({
+    tag: Schema.Literal("ExactEstablishedRun"),
+    value: Schema.Struct({
+      initialPolicy: Schema.Struct({ taskCapacity: CapacityVariant }),
+      latestPolicy: Schema.Struct({ taskCapacity: CapacityVariant }),
+      runId: RunIdVariant,
+      target: TargetVariant
+    })
+  })
+])
+const PositionVariant = Schema.Union([
+  Schema.Struct({ tag: Schema.Literal("NoTaskPosition"), value: Schema.Unknown }),
+  Schema.Struct({
+    tag: Schema.Literal("ExactTaskPosition"),
+    value: Schema.Struct({ attemptId: AttemptIdVariant, runId: RunIdVariant })
+  })
+])
+const SpecProjection = Schema.Struct({
+  state: Schema.Struct({
+    durable: Schema.Struct({ history: HistoryVariant, independentTaskSettled: Schema.Boolean }),
+    requestedRunId: RunIdVariant,
+    requestedTarget: TargetVariant,
+    trackerFinality: Schema.Struct({ targetSettled: Schema.Boolean }),
+    process: Schema.Struct({
+      establishedRun: EstablishedRunVariant,
+      entryFailure: EntryFailureVariant,
+      establishmentSource: SourceVariant,
+      heldPosition: PositionVariant,
+      otherHeldPosition: PositionVariant,
+      independentTaskAdmitted: Schema.Boolean,
+      initialPolicyEvaluated: Schema.Boolean,
+      initialTrackerObserved: Schema.Boolean,
+      phase: PhaseVariant,
+      postQuiescenceReads: ITFBigInt,
+      quiescent: Schema.Boolean
+    }),
+    trace: Schema.Struct({
+      activationsStarted: ITFBigInt,
+      beginningAppends: ITFBigInt,
+      executorCalls: ITFBigInt,
+      initialPolicyEvaluations: ITFBigInt,
+      processLosses: ITFBigInt,
+      terminationAppends: ITFBigInt,
+      trackerCalls: ITFBigInt
+    })
+  })
+})
+
+const runId = RunId.make("run-activation-R1")
+const otherRunId = RunId.make("run-activation-R2")
+const target = FixtureTarget.make("run-activation-T1")
+const otherTarget = FixtureTarget.make("run-activation-T2")
+const taskA = TaskId.make("run-activation-A")
+const taskB = TaskId.make("run-activation-B")
+const taskC = TaskId.make("run-activation-capacity-sentinel")
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+const earlierPolicy = initialPolicy
+const ownershipLayer = Layer.succeed(
+  CoordinatorOwnership,
+  CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
+)
+
+const attemptFor = (taskId: TaskId, suffix: string) =>
+  PlannedTaskAttempt.make({
+    attemptId: AttemptId.make(`run-activation-${suffix}`),
+    baseSha: GitCommitSha.make("1".repeat(40)),
+    branch: TaskBranchRef.make(`refs/heads/dalph/run-activation-${suffix}`),
+    executor: TaskExecutorLocator.make("executor:run-activation"),
+    runId,
+    taskId,
+    taskRevision: TaskRevision.make(`run-activation-revision-${suffix}`),
+    worktree: WorktreeLocator.make(`/worktrees/run-activation-${suffix}`)
+  })
+
+const attemptA = attemptFor(taskA, "A")
+const attemptB = attemptFor(taskB, "B")
+
+type HistoryTag =
+  | "EmptyHistory"
+  | "InvalidHistory"
+  | "MultipleUnfinishedHistories"
+  | "OneUnfinishedHistory"
+  | "TerminatedHistory"
+type Phase = "ActivatingRun" | "ActivationReturned" | "EntryFailed" | "EntryIdle" | "EstablishingRun"
+type Source = "BeginningAppended" | "ExistingHistoryReduced" | "NoEstablishmentSource"
+type Position = "AttemptA" | "AttemptB" | "NoTaskPosition"
+type RunTag = "R1" | "R2"
+type TargetTag = "Target1" | "Target2"
+type CapacityTag = "Capacity1" | "Capacity2"
+type EntryFailureTag =
+  | "DuplicateBeginningFailure"
+  | "ForeignRunRecordFailure"
+  | "InvalidChronologyFailure"
+  | "MultipleUnfinishedRunsFailure"
+  | "NoEntryFailure"
+  | "OtherUnfinishedRunFailure"
+  | "TargetMismatchFailure"
+  | "TerminatedRunFailure"
+type ActivationCommandTag =
+  | "ActivateEstablishedRun"
+  | "AdmitIndependentTask"
+  | "ReadInitialTrackerGraph"
+  | "ReadPostQuiescenceTrackerGraph"
+  | "ReachQuiescence"
+  | "ReturnIncomplete"
+  | "SettleIndependentTask"
+  | "SettleRetainedAttempt"
+  | "TerminateRun"
+  | "TrackerFactsBecomeSettled"
+
+interface ActivationCommand {
+  readonly acknowledged: Deferred.Deferred<void>
+  readonly tag: ActivationCommandTag
+}
+
+let runActivationMbtScope: Scope.Scope | undefined
+
+interface DriverProjection {
+  readonly activationsStarted: number
+  readonly beginningAppends: number
+  readonly establishmentSource: Source
+  readonly entryFailure: EntryFailureTag
+  readonly establishedCapacity: CapacityTag | "NoEstablishedCapacity"
+  readonly establishedInitialCapacity: CapacityTag | "NoEstablishedCapacity"
+  readonly establishedRunId: RunTag | "NoEstablishedRun"
+  readonly establishedTarget: TargetTag | "NoEstablishedTarget"
+  readonly executorCalls: number
+  readonly heldPosition: Position
+  readonly history: HistoryTag
+  readonly independentTaskAdmitted: boolean
+  readonly independentTaskSettled: boolean
+  readonly initialPolicyEvaluated: boolean
+  readonly initialPolicyEvaluations: number
+  readonly initialTrackerObserved: boolean
+  readonly otherHeldPositions: number
+  readonly phase: Phase
+  readonly postQuiescenceReads: number
+  readonly processLosses: number
+  readonly quiescent: boolean
+  readonly requestedRunId: RunTag
+  readonly requestedTarget: TargetTag
+  readonly terminationAppends: number
+  readonly trackerCalls: number
+  readonly trackerSettled: boolean
+}
+
+const runActivationDriver = defineDriver(
+  {
+    activateEstablishedRun: {},
+    admitIndependentTask: {},
+    crash: {},
+    establishAbsentHistory: {},
+    establishExistingHistory: {},
+    init: {},
+    invokeSameEntryAgain: {},
+    reachQuiescence: {},
+    readInitialTrackerGraph: {},
+    readPostQuiescenceTrackerGraph: {},
+    rejectInvalidHistory: {},
+    rejectMismatchedHistory: {},
+    rejectMultipleUnfinishedHistories: {},
+    rejectTerminatedHistory: {},
+    returnIncomplete: {},
+    selectContractedExactExistingHistory: {},
+    selectDuplicateBeginningHistory: {},
+    selectExactExistingHistory: {},
+    selectExactExistingHistoryWithoutResponsibility: {},
+    selectForeignRunRecordHistory: {},
+    selectInvalidHistory: {},
+    selectMismatchedExistingHistory: {},
+    selectMultipleUnfinishedHistories: {},
+    selectOtherUnfinishedRun: {},
+    selectTerminatedHistory: {},
+    settleIndependentTask: {},
+    settleRetainedAttempt: {},
+    terminateRun: {},
+    trackerFactsBecomeSettled: {}
+  },
+  () => {
+    let records: ReadonlyArray<JournalRecord> = []
+    let otherRecords: ReadonlyArray<JournalRecord> = []
+    let activationCommands: Queue.Queue<ActivationCommand> | undefined
+    let awaitActivation: Effect.Effect<void, unknown> | undefined
+    let interruptActivation: Effect.Effect<void> | undefined
+    let requestedRunId = runId
+    let history: HistoryTag = "EmptyHistory"
+    let phase: Phase = "EntryIdle"
+    let establishmentSource: Source = "NoEstablishmentSource"
+    let entryFailure: EntryFailureTag = "NoEntryFailure"
+    let establishedRunId: DriverProjection["establishedRunId"] = "NoEstablishedRun"
+    let establishedTarget: DriverProjection["establishedTarget"] = "NoEstablishedTarget"
+    let establishedCapacity: DriverProjection["establishedCapacity"] = "NoEstablishedCapacity"
+    let establishedInitialCapacity: DriverProjection["establishedInitialCapacity"] = "NoEstablishedCapacity"
+    let heldPosition: Position = "NoTaskPosition"
+    let otherHeldPositions = 0
+    let initialPolicyEvaluated = false
+    let initialTrackerObserved = false
+    let independentTaskAdmitted = false
+    let independentTaskSettled = false
+    let quiescent = false
+    let postQuiescenceReads = 0
+    let initialPolicyEvaluations = 0
+    let beginningAppends = 0
+    let terminationAppends = 0
+    let activationsStarted = 0
+    let trackerCalls = 0
+    let executorCalls = 0
+    let processLosses = 0
+    let trackerSettled = false
+    let latestCapacity = 1
+    let contractedHistory = false
+
+    const append = (eventRunId: RunId, key: JournalRecordKey, event: JournalRecord["event"]): JournalRecord => {
+      const selected = eventRunId === runId ? records : otherRecords
+      const record = {
+        event,
+        key,
+        position: JournalPosition.make(selected.length + 1),
+        runId: eventRunId
+      } satisfies JournalRecord
+      if (eventRunId === runId) records = [...records, record]
+      else otherRecords = [...otherRecords, record]
+      return record
+    }
+
+    const begin = (eventRunId: RunId, eventTarget: TrackerTarget, policy: InitialControlPolicy): JournalRecord => {
+      const selected = eventRunId === runId ? records : otherRecords
+      const decision = decideWorkflowRunBeginning(selected, eventRunId, eventTarget, policy)
+      if (decision._tag !== "LifecycleTransitionAccepted") throw new Error("Run activation fixture failed to begin")
+      if (eventRunId === runId) records = [...records, decision.record]
+      else otherRecords = [...otherRecords, decision.record]
+      return decision.record
+    }
+
+    const capacityChangeEvent = (capacity: number) =>
+      TaskWorkCapacityChangedEvent.make({
+        capacity: TaskWorkCapacity.make(capacity),
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        previousRevision: RunPolicyRevision.make(1),
+        revision: RunPolicyRevision.make(2),
+        version: workflowJournalEventVersion
+      })
+
+    const appendCapacityChange = (capacity = 1): void => {
+      append(runId, JournalRecordKey.make("run-policy:2:task-work-capacity"), capacityChangeEvent(capacity))
+    }
+
+    const appendResponsibility = (plannedAttempt: PlannedTaskAttempt): void => {
+      const operation = makeTaskAttemptPlanOperation({
+        operationId: OperationId.make(`plan-${plannedAttempt.attemptId}`),
+        plannedAttempt,
+        predecessorOperationIds: []
+      })
+      append(
+        runId,
+        attemptPlanRecordKey(plannedAttempt.attemptId),
+        TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion })
+      )
+      append(
+        runId,
+        plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+        PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+    }
+
+    const appendTerminalReport = (plannedAttempt: PlannedTaskAttempt): void => {
+      const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+      append(
+        runId,
+        plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "StartOrContinue",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: commandOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
+      append(
+        runId,
+        plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal,
+          report: PlannedAttemptExecutorReport.cases.Terminal.make({
+            correlation: { attemptId: plannedAttempt.attemptId, runId },
+            result: { _tag: "Completed" }
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+    }
+
+    const journal = JournalStore.of({
+      append: (eventRunId, key, event) => Effect.sync(() => append(eventRunId, key, event)),
+      beginRun: (eventRunId, eventTarget, policy) => Effect.sync(() => begin(eventRunId, eventTarget, policy)),
+      read: (eventRunId) => Effect.succeed(eventRunId === runId ? records : otherRecords),
+      readRunForRecovery: (eventRunId, eventTarget) =>
+        readRecoverableRunBeginning(eventRunId === runId ? records : otherRecords, eventRunId, eventTarget),
+      scan: () =>
+        Effect.succeed({
+          issues: [],
+          runs: [
+            ...(records.length === 0 ? [] : [{ records, runId }]),
+            ...(otherRecords.length === 0 ? [] : [{ records: otherRecords, runId: otherRunId }])
+          ]
+        }),
+      terminateRun: (eventRunId) =>
+        Effect.sync(() => {
+          const decision = decideWorkflowRunTermination(eventRunId === runId ? records : otherRecords, eventRunId)
+          if (decision._tag !== "LifecycleTransitionAccepted") throw decision.failure
+          if (eventRunId === runId) records = [...records, decision.record]
+          else otherRecords = [...otherRecords, decision.record]
+          return decision.record
+        })
+    }) satisfies JournalStoreService
+
+    const executor = PlannedAttemptExecutor.of({
+      project: () => Effect.succeed(Option.none()),
+      requestSuspension: () => Effect.die("Run activation reconstruction does not suspend executor work"),
+      startOrContinue: () => Effect.die("Run activation reconstruction does not start executor work")
+    })
+    const interpreter = WorkflowInterpreter.of({
+      acquireTaskClaim: () => Effect.die("Run activation model does not acquire a tracker claim"),
+      readTaskClaim: () => Effect.die("Run activation model does not read a tracker claim"),
+      readTaskWorktree: () => Effect.die("Run activation model does not read Git"),
+      readTargetLineage: () => Effect.die("Run activation model does not read Git lineage"),
+      readTrackerGraph: () => Effect.die("tracker reads are activation-level facts in this subject model"),
+      readTaskWorkSpecification: () => Effect.die("Run activation model does not read task specifications"),
+      reconcileTaskWorktree: () => Effect.die("Run activation model does not reconcile Git"),
+      recordTaskAttemptPlan: () => Effect.die("Run activation model does not plan a fresh attempt"),
+      releaseTaskClaim: () => Effect.die("Run activation model does not release tracker claims")
+    })
+
+    const withBootstrap = <A, E, R>(
+      expectedRunId: RunId,
+      use: (service: JournaledRunBootstrap["Service"]) => Effect.Effect<A, E, R>
+    ) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
+          const dependencies = Layer.mergeAll(
+            Layer.succeed(JournalStore, journal),
+            Layer.succeed(RunLifecycleJournal, Context.get(journalContext, RunLifecycleJournal)),
+            ownershipLayer
+          )
+          const runtimeLayer = ({ runId: activeRunId }: { readonly runId: RunId }) => {
+            const controls = Layer.mergeAll(
+              attemptChoiceControlLayer,
+              controlDirectionApplicationLayer,
+              taskClaimReacquisitionControlLayer,
+              taskWorkCapacityControlLayer
+            )
+            return validatedRunActivationLayer(activeRunId, undefined).pipe(
+              Layer.provide(
+                journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
+              ),
+              Layer.provide(controls),
+              Layer.provide(deterministicOperationIdAllocatorLayer(`run-activation:${activeRunId}`)),
+              Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),
+              Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+            )
+          }
+          const context = yield* Layer.build(
+            journaledRunBootstrapLayer(expectedRunId, runtimeLayer).pipe(Layer.provide(dependencies))
+          )
+          return yield* use(Context.get(context, JournaledRunBootstrap))
+        })
+      )
+
+    const selectExisting = (withResponsibility: boolean, contracted = false): void => {
+      records = []
+      begin(runId, target, earlierPolicy)
+      if (contracted) {
+        appendResponsibility(attemptA)
+        appendResponsibility(attemptB)
+        appendCapacityChange()
+      } else {
+        appendCapacityChange()
+        if (withResponsibility) appendResponsibility(attemptA)
+      }
+      history = "OneUnfinishedHistory"
+      latestCapacity = 1
+      contractedHistory = contracted
+    }
+
+    const setProcessIdle = (): void => {
+      phase = "EntryIdle"
+      establishmentSource = "NoEstablishmentSource"
+      entryFailure = "NoEntryFailure"
+      establishedRunId = "NoEstablishedRun"
+      establishedTarget = "NoEstablishedTarget"
+      establishedCapacity = "NoEstablishedCapacity"
+      establishedInitialCapacity = "NoEstablishedCapacity"
+      heldPosition = "NoTaskPosition"
+      otherHeldPositions = 0
+      initialPolicyEvaluated = false
+      initialTrackerObserved = false
+      independentTaskAdmitted = false
+      quiescent = false
+      postQuiescenceReads = 0
+    }
+
+    const sendActivationCommand = (tag: ActivationCommandTag): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const commands = activationCommands
+        if (commands === undefined) return yield* Effect.die("Run activation callback is not active")
+        const completion = awaitActivation
+        if (completion === undefined) return yield* Effect.die("Run activation completion was not installed")
+        const acknowledged = yield* Deferred.make<void>()
+        const accepted = yield* Queue.offer(commands, { acknowledged, tag })
+        if (!accepted) return yield* Effect.die("Run activation callback rejected a command while modeled active")
+        yield* Effect.raceFirst(
+          Deferred.await(acknowledged),
+          completion.pipe(
+            Effect.andThen(Deferred.poll(acknowledged)),
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.die("Run activation callback exited before acknowledging its command"),
+                onSome: () => Effect.void
+              })
+            )
+          )
+        ).pipe(Effect.orDie)
+      })
+
+    const proposalForB = trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(1),
+      purpose: "EstablishCurrentGraph",
+      runId,
+      target
+    })
+    const admissionProposalB = {
+      ...proposalForB,
+      admission: {
+        integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+        taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId: taskB }
+      },
+      id: DeliveryProposalId.make("run-activation-admit-B")
+    }
+    const admissionProposalC = {
+      ...proposalForB,
+      admission: {
+        integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+        taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId: taskC }
+      },
+      id: DeliveryProposalId.make("run-activation-capacity-sentinel")
+    }
+
+    const startEntry = (source: Source) =>
+      Effect.gen(function* () {
+        const commands = yield* Queue.unbounded<ActivationCommand>()
+        const ready = yield* Deferred.make<void>()
+        activationCommands = commands
+        const activation = withBootstrap(requestedRunId, (service) =>
+          service.activate(
+            target,
+            source === "BeginningAppended"
+              ? Effect.succeed(initialPolicy)
+              : Effect.die("an established Run must not evaluate a replacement initial policy"),
+            AllocatedWorkflowRunId.make(requestedRunId),
+            Effect.gen(function* () {
+              const recovery = yield* RunRecoveryProjection
+              const protocolController = yield* PlannedAttemptProtocolController
+              const current = reduceWorkflowJournalHistory(runId, records)
+              if (current._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die("activation history invalid")
+              if (current.runState.responsibility.entries.length > 0) {
+                const retainedFinality = deriveRunFinalityDecision(
+                  { explanations: [], transitions: [] },
+                  current.runState.responsibility,
+                  true
+                )
+                if (
+                  retainedFinality._tag !== "RunMustRemainActive" ||
+                  retainedFinality.reason !== "UnsettledResponsibility"
+                ) {
+                  return yield* Effect.die("production finality terminated a Run with retained responsibility")
+                }
+              }
+              const policy = Option.getOrThrow(current.runState.controlPolicy)
+              const activeController = yield* makeDeliveryRuntimeAdmissionController(
+                {
+                  capacity: policy.taskExecutionCapacity,
+                  held: recovery.reconstructedPlannedAttemptPositions.map(({ attemptId, runId, taskId }) => ({
+                    correlation: { attemptId, runId },
+                    taskId
+                  }))
+                },
+                yield* makeIntegrationTargetResourceController()
+              ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
+              yield* Deferred.succeed(ready, undefined)
+
+              // oxlint-disable-next-line typescript/no-unnecessary-condition -- a final command returns the proof.
+              while (true) {
+                const command = yield* Queue.take(commands)
+                switch (command.tag) {
+                  case "ActivateEstablishedRun":
+                    heldPosition = recovery.reconstructedPlannedAttemptPositions.some(({ taskId }) => taskId === taskA)
+                      ? "AttemptA"
+                      : !contractedHistory &&
+                          recovery.reconstructedPlannedAttemptPositions.some(({ taskId }) => taskId === taskB)
+                        ? "AttemptB"
+                        : "NoTaskPosition"
+                    otherHeldPositions = contractedHistory
+                      ? recovery.reconstructedPlannedAttemptPositions.filter(({ taskId }) => taskId !== taskA).length
+                      : 0
+                    if (otherHeldPositions > 0) {
+                      const blocked = yield* activeController.tryReserve(admissionProposalC)
+                      if (blocked._tag !== "Deferred") {
+                        return yield* Effect.die("contracted capacity admitted new work over reconstructed holders")
+                      }
+                    }
+                    phase = "ActivatingRun"
+                    activationsStarted += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    break
+                  case "ReadInitialTrackerGraph":
+                    initialTrackerObserved = true
+                    trackerCalls += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    break
+                  case "SettleRetainedAttempt": {
+                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptA.attemptId, runId })
+                    appendTerminalReport(attemptA)
+                    heldPosition = "NoTaskPosition"
+                    executorCalls += 1
+                    if (contractedHistory) {
+                      const blocked = yield* activeController.tryReserve(admissionProposalC)
+                      if (blocked._tag !== "Deferred") {
+                        return yield* Effect.die("capacity-one admission ignored the remaining retained holder")
+                      }
+                    }
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    break
+                  }
+                  case "AdmitIndependentTask": {
+                    const decision = yield* activeController.tryReserve(admissionProposalB)
+                    if (decision._tag === "Deferred") {
+                      return yield* Effect.die("independent task must fit released capacity")
+                    }
+                    yield* activeController.bindPlannedAttemptPosition(taskB, { attemptId: attemptB.attemptId, runId })
+                    appendResponsibility(attemptB)
+                    heldPosition = "AttemptB"
+                    independentTaskAdmitted = true
+                    executorCalls += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    break
+                  }
+                  case "SettleIndependentTask":
+                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptB.attemptId, runId })
+                    appendTerminalReport(attemptB)
+                    heldPosition = "NoTaskPosition"
+                    independentTaskAdmitted = false
+                    independentTaskSettled = true
+                    executorCalls += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    break
+                  case "TrackerFactsBecomeSettled":
+                    trackerSettled = true
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    break
+                  case "ReachQuiescence":
+                    quiescent = true
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    break
+                  case "ReadPostQuiescenceTrackerGraph":
+                    postQuiescenceReads = 1
+                    trackerCalls += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    break
+                  case "ReturnIncomplete":
+                    phase = "ActivationReturned"
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return {
+                      acceptedAt: records.at(-1)?.position ?? null,
+                      decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+                    }
+                  case "TerminateRun": {
+                    const decision = deriveRunFinalityDecision(
+                      { explanations: [], transitions: [] },
+                      WorkflowResponsibilityState.make({ entries: [] }),
+                      trackerSettled
+                    )
+                    if (decision._tag !== "RunMayTerminate") {
+                      return yield* Effect.die(
+                        `production finality rejected settled model Run: ${JSON.stringify(decision)}`
+                      )
+                    }
+                    phase = "ActivationReturned"
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return { acceptedAt: records.at(-1)?.position ?? null, decision }
+                  }
+                }
+              }
+            })
+          )
+        )
+        const scope = runActivationMbtScope
+        if (scope === undefined) return yield* Effect.die("Run activation MBT scope was not installed")
+        const fiber = yield* Effect.forkScoped(activation).pipe(Effect.provideService(Scope.Scope, scope))
+        interruptActivation = Fiber.interrupt(fiber).pipe(Effect.asVoid)
+        awaitActivation = Fiber.join(fiber).pipe(Effect.asVoid)
+        yield* Effect.raceFirst(
+          Deferred.await(ready),
+          awaitActivation.pipe(Effect.andThen(Effect.die("Run activation callback exited before becoming ready")))
+        ).pipe(Effect.orDie)
+      }).pipe(Effect.orDie)
+
+    return {
+      init: () =>
+        Effect.gen(function* () {
+          const priorInterrupt = interruptActivation
+          if (priorInterrupt !== undefined) yield* priorInterrupt
+          const priorCommands = activationCommands
+          if (priorCommands !== undefined) yield* Queue.shutdown(priorCommands)
+          records = []
+          otherRecords = []
+          activationCommands = undefined
+          awaitActivation = undefined
+          interruptActivation = undefined
+          requestedRunId = runId
+          history = "EmptyHistory"
+          independentTaskSettled = false
+          initialPolicyEvaluations = 0
+          beginningAppends = 0
+          terminationAppends = 0
+          activationsStarted = 0
+          trackerCalls = 0
+          executorCalls = 0
+          processLosses = 0
+          trackerSettled = false
+          latestCapacity = 1
+          contractedHistory = false
+          setProcessIdle()
+        }),
+      selectExactExistingHistory: () => Effect.sync(() => selectExisting(true)),
+      selectContractedExactExistingHistory: () => Effect.sync(() => selectExisting(true, true)),
+      selectExactExistingHistoryWithoutResponsibility: () => Effect.sync(() => selectExisting(false)),
+      selectOtherUnfinishedRun: () =>
+        Effect.sync(() => {
+          records = []
+          otherRecords = []
+          begin(runId, target, earlierPolicy)
+          appendCapacityChange()
+          history = "OneUnfinishedHistory"
+          requestedRunId = otherRunId
+        }),
+      selectMismatchedExistingHistory: () =>
+        Effect.sync(() => {
+          records = []
+          begin(runId, otherTarget, earlierPolicy)
+          history = "OneUnfinishedHistory"
+        }),
+      selectInvalidHistory: () =>
+        Effect.sync(() => {
+          records = []
+          const began = decideWorkflowRunBeginning([], runId, target, initialPolicy)
+          if (began._tag !== "LifecycleTransitionAccepted") throw began.failure
+          records = [
+            {
+              event: capacityChangeEvent(1),
+              key: JournalRecordKey.make("run-policy:2:task-work-capacity"),
+              position: JournalPosition.make(1),
+              runId
+            },
+            { ...began.record, position: JournalPosition.make(2) }
+          ]
+          history = "InvalidHistory"
+        }),
+      selectDuplicateBeginningHistory: () =>
+        Effect.sync(() => {
+          records = []
+          const began = begin(runId, target, initialPolicy)
+          records = [...records, { ...began, position: JournalPosition.make(2) }]
+          history = "InvalidHistory"
+        }),
+      selectForeignRunRecordHistory: () =>
+        Effect.sync(() => {
+          records = []
+          begin(runId, target, initialPolicy)
+          records = [
+            ...records,
+            {
+              event: capacityChangeEvent(1),
+              key: JournalRecordKey.make("run-policy:2:task-work-capacity"),
+              position: JournalPosition.make(2),
+              runId: otherRunId
+            }
+          ]
+          history = "InvalidHistory"
+        }),
+      selectMultipleUnfinishedHistories: () =>
+        Effect.sync(() => {
+          records = []
+          otherRecords = []
+          begin(runId, target, initialPolicy)
+          begin(otherRunId, otherTarget, initialPolicy)
+          history = "MultipleUnfinishedHistories"
+        }),
+      selectTerminatedHistory: () =>
+        Effect.sync(() => {
+          records = []
+          begin(runId, target, earlierPolicy)
+          appendCapacityChange()
+          const decision = decideWorkflowRunTermination(records, runId)
+          if (decision._tag !== "LifecycleTransitionAccepted") throw decision.failure
+          records = [...records, decision.record]
+          history = "TerminatedHistory"
+        }),
+      establishAbsentHistory: () =>
+        Effect.gen(function* () {
+          yield* Effect.sync(() => {
+            history = "OneUnfinishedHistory"
+            phase = "EstablishingRun"
+            establishmentSource = "BeginningAppended"
+            establishedRunId = "R1"
+            establishedTarget = "Target1"
+            establishedCapacity = "Capacity2"
+            establishedInitialCapacity = "Capacity2"
+            initialPolicyEvaluated = true
+            initialPolicyEvaluations += 1
+            beginningAppends += 1
+            latestCapacity = 2
+          })
+          yield* startEntry("BeginningAppended")
+        }),
+      establishExistingHistory: () =>
+        Effect.gen(function* () {
+          yield* Effect.sync(() => {
+            const reduced = reduceWorkflowJournalHistory(runId, records)
+            if (reduced._tag !== "ValidWorkflowJournalHistory") {
+              throw new Error(`existing Run did not reduce: ${JSON.stringify(reduced.issues)}`)
+            }
+            const policy = Option.getOrThrow(reduced.runState.controlPolicy)
+            if (policy.taskExecutionCapacity !== latestCapacity) {
+              throw new Error("activation did not reconstruct latest capacity")
+            }
+            phase = "EstablishingRun"
+            establishmentSource = "ExistingHistoryReduced"
+            establishedRunId = "R1"
+            establishedTarget = "Target1"
+            establishedCapacity = policy.taskExecutionCapacity === 2 ? "Capacity2" : "Capacity1"
+            establishedInitialCapacity = "Capacity2"
+          })
+          yield* startEntry("ExistingHistoryReduced")
+        }),
+      rejectMismatchedHistory: () =>
+        withBootstrap(requestedRunId, (service) =>
+          service.activate(
+            target,
+            Effect.die("existing history must not evaluate the initial policy"),
+            AllocatedWorkflowRunId.make(requestedRunId),
+            Effect.die("mismatched history must not enter activation")
+          )
+        ).pipe(
+          Effect.flip,
+          Effect.flatMap((failure) => {
+            if (requestedRunId === otherRunId) {
+              return failure._tag === "StartupRecoveryBlocked" &&
+                failure.issues.length === 1 &&
+                failure.issues[0]?._tag === "OtherUnfinishedRunIssue" &&
+                failure.issues[0].requestedRunId === otherRunId &&
+                failure.issues[0].unfinishedRunId === runId
+                ? Effect.sync(() => (entryFailure = "OtherUnfinishedRunFailure"))
+                : Effect.die("production did not preserve the requested and unfinished Run identities")
+            }
+            return failure._tag === "WorkflowRunTargetMismatch" &&
+              failure.runId === runId &&
+              failure.recordedTarget === otherTarget &&
+              failure.requestedTarget === target
+              ? Effect.sync(() => (entryFailure = "TargetMismatchFailure"))
+              : Effect.die("production accepted mismatched Run target")
+          }),
+          Effect.tap(() => Effect.sync(() => (phase = "EntryFailed"))),
+          Effect.asVoid
+        ),
+      rejectInvalidHistory: () =>
+        withBootstrap(requestedRunId, (service) =>
+          service.activate(
+            target,
+            Effect.die("invalid history must not evaluate the initial policy"),
+            AllocatedWorkflowRunId.make(requestedRunId),
+            Effect.die("invalid history must not enter activation")
+          )
+        ).pipe(
+          Effect.flip,
+          Effect.flatMap((failure) => {
+            if (failure._tag !== "StartupRecoveryBlocked" || failure.issues.length === 0) {
+              return Effect.die("production accepted invalid Run history")
+            }
+            const duplicateBeginning = failure.issues.some(
+              (issue) =>
+                issue._tag === "WorkflowJournalHistorySemanticIssue" &&
+                issue.runId === runId &&
+                issue.position === 2 &&
+                issue.detail === "duplicate journal record key run:began"
+            )
+            if (duplicateBeginning) return Effect.sync(() => (entryFailure = "DuplicateBeginningFailure"))
+            const invalidChronology = failure.issues.some(
+              (issue) =>
+                issue._tag === "WorkflowJournalHistorySemanticIssue" &&
+                issue.runId === runId &&
+                issue.position === 2 &&
+                issue.detail === "WorkflowRunBegan must be the first record"
+            )
+            if (invalidChronology) return Effect.sync(() => (entryFailure = "InvalidChronologyFailure"))
+            const foreignRecord = failure.issues.some(
+              (issue) =>
+                issue._tag === "WorkflowJournalHistoryIdentityIssue" &&
+                issue.runId === runId &&
+                issue.position === 2 &&
+                issue.detail === "record belongs to run run-activation-R2"
+            )
+            return foreignRecord
+              ? Effect.sync(() => (entryFailure = "ForeignRunRecordFailure"))
+              : Effect.die("invalid history did not preserve its exact typed issue payload")
+          }),
+          Effect.tap(() => Effect.sync(() => (phase = "EntryFailed"))),
+          Effect.asVoid
+        ),
+      rejectMultipleUnfinishedHistories: () =>
+        withBootstrap(requestedRunId, (service) =>
+          service.activate(
+            target,
+            Effect.die("ambiguous history must not evaluate the initial policy"),
+            AllocatedWorkflowRunId.make(requestedRunId),
+            Effect.die("ambiguous history must not enter activation")
+          )
+        ).pipe(
+          Effect.flip,
+          Effect.flatMap((failure) =>
+            failure._tag === "StartupRecoveryBlocked" &&
+            failure.issues.length === 1 &&
+            failure.issues[0]?._tag === "OtherUnfinishedRunIssue" &&
+            failure.issues[0].requestedRunId === runId &&
+            failure.issues[0].unfinishedRunId === otherRunId
+              ? Effect.sync(() => (entryFailure = "MultipleUnfinishedRunsFailure"))
+              : Effect.die("production did not name the unfinished Run ambiguity")
+          ),
+          Effect.tap(() => Effect.sync(() => (phase = "EntryFailed"))),
+          Effect.asVoid
+        ),
+      rejectTerminatedHistory: () =>
+        withBootstrap(requestedRunId, (service) =>
+          service.activate(
+            target,
+            Effect.die("terminated history must not evaluate the initial policy"),
+            AllocatedWorkflowRunId.make(requestedRunId),
+            Effect.die("terminated history must not enter activation")
+          )
+        ).pipe(
+          Effect.flip,
+          Effect.flatMap((failure) =>
+            failure._tag === "WorkflowRunAlreadyTerminated"
+              ? Effect.sync(() => (entryFailure = "TerminatedRunFailure"))
+              : Effect.die("production accepted a terminated Run")
+          ),
+          Effect.tap(() => Effect.sync(() => (phase = "EntryFailed"))),
+          Effect.asVoid
+        ),
+      activateEstablishedRun: () => sendActivationCommand("ActivateEstablishedRun"),
+      readInitialTrackerGraph: () => sendActivationCommand("ReadInitialTrackerGraph"),
+      settleRetainedAttempt: () => sendActivationCommand("SettleRetainedAttempt"),
+      admitIndependentTask: () => sendActivationCommand("AdmitIndependentTask"),
+      settleIndependentTask: () => sendActivationCommand("SettleIndependentTask"),
+      trackerFactsBecomeSettled: () =>
+        Effect.suspend(() =>
+          activationCommands === undefined
+            ? Effect.sync(() => (trackerSettled = true))
+            : sendActivationCommand("TrackerFactsBecomeSettled")
+        ),
+      reachQuiescence: () => sendActivationCommand("ReachQuiescence"),
+      readPostQuiescenceTrackerGraph: () => sendActivationCommand("ReadPostQuiescenceTrackerGraph"),
+      returnIncomplete: () =>
+        Effect.gen(function* () {
+          yield* sendActivationCommand("ReturnIncomplete")
+          const completion = awaitActivation
+          if (completion === undefined) return yield* Effect.die("Run activation completion was not installed")
+          yield* completion
+          const commands = activationCommands
+          if (commands !== undefined) {
+            yield* Queue.shutdown(commands)
+            const staleReply = yield* Deferred.make<void>()
+            const staleAccepted = yield* Queue.offer(commands, {
+              acknowledged: staleReply,
+              tag: "ReadInitialTrackerGraph"
+            })
+            if (staleAccepted) return yield* Effect.die("closed activation callback accepted a later command")
+          }
+          activationCommands = undefined
+          awaitActivation = undefined
+          interruptActivation = undefined
+        }).pipe(Effect.orDie),
+      terminateRun: () =>
+        Effect.gen(function* () {
+          yield* sendActivationCommand("TerminateRun")
+          const completion = awaitActivation
+          if (completion === undefined) return yield* Effect.die("Run activation completion was not installed")
+          yield* completion
+          history = "TerminatedHistory"
+          terminationAppends += 1
+          const commands = activationCommands
+          if (commands !== undefined) yield* Queue.shutdown(commands)
+          activationCommands = undefined
+          awaitActivation = undefined
+          interruptActivation = undefined
+        }).pipe(Effect.orDie),
+      crash: () =>
+        Effect.gen(function* () {
+          const before = records
+          const interrupt = interruptActivation
+          if (interrupt !== undefined) yield* interrupt
+          const commands = activationCommands
+          if (commands !== undefined) {
+            yield* Queue.shutdown(commands)
+            const staleReply = yield* Deferred.make<void>()
+            const staleAccepted = yield* Queue.offer(commands, {
+              acknowledged: staleReply,
+              tag: "ReadInitialTrackerGraph"
+            })
+            if (staleAccepted) return yield* Effect.die("crashed activation callback accepted a later command")
+          }
+          activationCommands = undefined
+          awaitActivation = undefined
+          interruptActivation = undefined
+          processLosses += 1
+          setProcessIdle()
+          if (records !== before) return yield* Effect.die("process loss changed durable journal history")
+        }),
+      invokeSameEntryAgain: () => Effect.sync(setProcessIdle),
+      getState: () =>
+        Effect.succeed({
+          activationsStarted,
+          beginningAppends,
+          establishedCapacity,
+          establishedInitialCapacity,
+          establishedRunId,
+          establishedTarget,
+          establishmentSource,
+          entryFailure,
+          executorCalls,
+          heldPosition,
+          history,
+          independentTaskAdmitted,
+          independentTaskSettled,
+          initialPolicyEvaluated,
+          initialPolicyEvaluations,
+          initialTrackerObserved,
+          otherHeldPositions,
+          phase,
+          postQuiescenceReads,
+          processLosses,
+          quiescent,
+          requestedRunId: requestedRunId === otherRunId ? "R2" : "R1",
+          requestedTarget: "Target1",
+          terminationAppends,
+          trackerCalls,
+          trackerSettled
+        } satisfies DriverProjection)
+    }
+  }
+)
+
+quintIt(
+  (name, test, options) =>
+    it.effect(
+      name,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            runActivationMbtScope = yield* Effect.scope
+            yield* Effect.addFinalizer(() => Effect.sync(() => (runActivationMbtScope = undefined)))
+            return yield* test()
+          })
+        ),
+      options
+    ),
+  "replays idempotent Run establishment and bounded activation through production seams",
+  {
+    backend: "typescript",
+    driverFactory: runActivationDriver,
+    maxSteps: 20,
+    nTraces: 100,
+    seed: "195",
+    spec: "specs/runActivation.qnt",
+    stateCheck: stateCheck(
+      (raw) =>
+        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
+          Effect.map(
+            ({ state }): DriverProjection => ({
+              activationsStarted: Number(state.trace.activationsStarted),
+              beginningAppends: Number(state.trace.beginningAppends),
+              establishedCapacity:
+                state.process.establishedRun.tag === "ExactEstablishedRun"
+                  ? state.process.establishedRun.value.latestPolicy.taskCapacity.tag
+                  : "NoEstablishedCapacity",
+              establishedInitialCapacity:
+                state.process.establishedRun.tag === "ExactEstablishedRun"
+                  ? state.process.establishedRun.value.initialPolicy.taskCapacity.tag
+                  : "NoEstablishedCapacity",
+              establishedRunId:
+                state.process.establishedRun.tag === "ExactEstablishedRun"
+                  ? state.process.establishedRun.value.runId.tag
+                  : "NoEstablishedRun",
+              establishedTarget:
+                state.process.establishedRun.tag === "ExactEstablishedRun"
+                  ? state.process.establishedRun.value.target.tag
+                  : "NoEstablishedTarget",
+              establishmentSource: state.process.establishmentSource.tag,
+              entryFailure: state.process.entryFailure.tag,
+              executorCalls: Number(state.trace.executorCalls),
+              heldPosition:
+                state.process.heldPosition.tag === "ExactTaskPosition"
+                  ? state.process.heldPosition.value.attemptId.tag === "AttemptB"
+                    ? "AttemptB"
+                    : "AttemptA"
+                  : "NoTaskPosition",
+              history: state.durable.history.tag,
+              independentTaskAdmitted: state.process.independentTaskAdmitted,
+              independentTaskSettled: state.durable.independentTaskSettled,
+              initialPolicyEvaluated: state.process.initialPolicyEvaluated,
+              initialPolicyEvaluations: Number(state.trace.initialPolicyEvaluations),
+              initialTrackerObserved: state.process.initialTrackerObserved,
+              otherHeldPositions: state.process.otherHeldPosition.tag === "ExactTaskPosition" ? 1 : 0,
+              phase: state.process.phase.tag,
+              postQuiescenceReads: Number(state.process.postQuiescenceReads),
+              processLosses: Number(state.trace.processLosses),
+              quiescent: state.process.quiescent,
+              requestedRunId: state.requestedRunId.tag,
+              requestedTarget: state.requestedTarget.tag,
+              terminationAppends: Number(state.trace.terminationAppends),
+              trackerCalls: Number(state.trace.trackerCalls),
+              trackerSettled: state.trackerFinality.targetSettled
+            })
+          ),
+          Effect.orDie
+        ),
+      (spec, implementation) =>
+        spec.activationsStarted === implementation.activationsStarted &&
+        spec.beginningAppends === implementation.beginningAppends &&
+        spec.establishedCapacity === implementation.establishedCapacity &&
+        spec.establishedInitialCapacity === implementation.establishedInitialCapacity &&
+        spec.establishedRunId === implementation.establishedRunId &&
+        spec.establishedTarget === implementation.establishedTarget &&
+        spec.establishmentSource === implementation.establishmentSource &&
+        spec.entryFailure === implementation.entryFailure &&
+        spec.executorCalls === implementation.executorCalls &&
+        spec.heldPosition === implementation.heldPosition &&
+        spec.history === implementation.history &&
+        spec.independentTaskAdmitted === implementation.independentTaskAdmitted &&
+        spec.independentTaskSettled === implementation.independentTaskSettled &&
+        spec.initialPolicyEvaluated === implementation.initialPolicyEvaluated &&
+        spec.initialPolicyEvaluations === implementation.initialPolicyEvaluations &&
+        spec.initialTrackerObserved === implementation.initialTrackerObserved &&
+        spec.otherHeldPositions === implementation.otherHeldPositions &&
+        spec.phase === implementation.phase &&
+        spec.postQuiescenceReads === implementation.postQuiescenceReads &&
+        spec.processLosses === implementation.processLosses &&
+        spec.quiescent === implementation.quiescent &&
+        spec.requestedRunId === implementation.requestedRunId &&
+        spec.requestedTarget === implementation.requestedTarget &&
+        spec.terminationAppends === implementation.terminationAppends &&
+        spec.trackerCalls === implementation.trackerCalls &&
+        spec.trackerSettled === implementation.trackerSettled
+    )
+  },
+  30_000
+)

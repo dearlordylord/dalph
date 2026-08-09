@@ -25,7 +25,9 @@ import {
   JournalStorageUnavailable,
   JournalStore,
   journalStoreCapabilities,
-  RunLifecycleJournal
+  RunLifecycleJournal,
+  WorkflowRunAlreadyTerminated,
+  WorkflowRunTargetMismatch
 } from "../../workflow-journal/store.js"
 import { OperationId } from "../../workflow/identity.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
@@ -187,6 +189,56 @@ it.effect("retries an unacknowledged Run beginning through the same entry withou
       ).toEqual(active)
       expect(yield* Ref.get(activations)).toBe(1)
       expect((yield* delegate.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("classifies a failed beginning from the immediately reconciled durable Run fact", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const recordedTarget = FixtureTarget.make("journaled-bootstrap-racing-recorded-target")
+      const requestedTarget = FixtureTarget.make("journaled-bootstrap-racing-requested-target")
+      const runId = yield* freshWorkflowRunId(requestedTarget)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      const beginFailure = new JournalStorageUnavailable({
+        detail: "the beginning append failed before its outcome was known",
+        operation: "JournalStore.beginRun"
+      })
+      const targetMismatch = new WorkflowRunTargetMismatch({ recordedTarget, requestedTarget, runId })
+      const alreadyTerminated = new WorkflowRunAlreadyTerminated({ runId, terminatedAt: JournalPosition.make(2) })
+      const reconciliationUnavailable = new JournalStorageUnavailable({
+        detail: "the reconciliation read was unavailable",
+        operation: "JournalStore.readRunForRecovery"
+      })
+      const cases = [
+        { expected: targetMismatch, reconciliationFailure: targetMismatch },
+        { expected: alreadyTerminated, reconciliationFailure: alreadyTerminated },
+        { expected: beginFailure, reconciliationFailure: reconciliationUnavailable }
+      ] as const
+
+      for (const { expected, reconciliationFailure } of cases) {
+        const storage = JournalStore.of({
+          ...delegate,
+          beginRun: () => Effect.fail(beginFailure),
+          readRunForRecovery: () => Effect.fail(reconciliationFailure)
+        })
+        const bootstrap = yield* buildBootstrap(runId, storage)
+        const runtimeEntered = yield* Ref.make(false)
+        const failure = yield* bootstrap
+          .activate(
+            requestedTarget,
+            Effect.succeed(initialPolicy),
+            runId,
+            Ref.set(runtimeEntered, true).pipe(
+              Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
+            )
+          )
+          .pipe(Effect.flip)
+
+        expect(failure).toBe(expected)
+        expect(yield* Ref.get(runtimeEntered)).toBe(false)
+      }
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks"
 
 import {
   plannedAttemptExecutorObligations,
+  runActivationObligations,
   taskFactReconciliationObligations
 } from "./quint-model-obligations.mjs"
 import { quintGateRegressionBudgetMilliseconds } from "./quint-gate-policy.mjs"
@@ -324,6 +325,53 @@ await run("control-direction application exhaustive model", [
   "tlc",
   "--invariants",
   ...controlDirectionApplicationInvariants,
+  "--verbosity",
+  "1"
+])
+
+const runActivationInvariants = runActivationObligations.invariants
+const runActivationWitnesses = runActivationObligations.witnesses
+
+await run("Run activation model typecheck", [
+  "typecheck",
+  "specs/runActivation.qnt"
+])
+await run("Run activation deterministic tests", [
+  "test",
+  "specs/runActivation_test.qnt",
+  "--main",
+  "runActivationTest"
+])
+await run("Run activation negative mutation profile", [
+  "test",
+  "specs/runActivation_negative_test.qnt",
+  "--main",
+  "runActivationNegativeTest"
+])
+await run("Run activation sampled model", [
+  "run",
+  "specs/runActivation.qnt",
+  "--invariants",
+  ...runActivationInvariants,
+  "--witnesses",
+  ...runActivationWitnesses,
+  "--max-steps",
+  "24",
+  "--max-samples",
+  "10000",
+  "--verbosity",
+  "1"
+])
+// TLC checks the complete finite state graph without a depth token. The model
+// bounds process loss and activation cycles explicitly, so a future diameter
+// increase remains visible instead of being truncated by the gate.
+await run("Run activation exhaustive model", [
+  "verify",
+  "specs/runActivation.qnt",
+  "--backend",
+  "tlc",
+  "--invariants",
+  ...runActivationInvariants,
   "--verbosity",
   "1"
 ])

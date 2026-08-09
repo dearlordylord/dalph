@@ -64,10 +64,7 @@ import { PlannedWorktreeReady } from "../../../orchestrator/src/authorities/git/
 import { TargetLineageObservation } from "../../../orchestrator/src/authorities/git/target-lineage.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { makeTaskWorkSpecification } from "../../../orchestrator/src/authorities/task-tracker/task-work-specification.js"
-import {
-  makeJournaledFreshRunRecoveryProjection,
-  makeRunRecoveryProjection
-} from "../../../orchestrator/src/coordination/run/recovery-activation.js"
+import { makeRunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { deriveFreshWorkflowDecisions } from "../../../orchestrator/src/coordination/run/fresh-workflow.js"
 import { latestReconstructedTaskGraph } from "../../../orchestrator/src/coordination/reconstruction/graph-knowledge.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
@@ -323,7 +320,7 @@ const taskFactReconciliationDriver = defineDriver(
   },
   () => {
     let records: ReadonlyArray<JournalRecord> = []
-    let activeRecovery: Effect.Success<ReturnType<typeof makeJournaledFreshRunRecoveryProjection>> | undefined
+    let activeRecovery: Effect.Success<ReturnType<typeof makeRunRecoveryProjection>> | undefined
     let currentSpecification = plannedSpecification
     let currentClaim: "Exact" | "Absent" | "Foreign" | "Unreadable" = "Exact"
     let executorAuthority: PlannedAttemptExecutorReport | undefined =
@@ -491,7 +488,7 @@ const taskFactReconciliationDriver = defineDriver(
       provideJournal(effect.pipe(Effect.provide(interpreterLayer)))
     const recovery = () =>
       activeRecovery === undefined
-        ? provideJournal(makeJournaledFreshRunRecoveryProjection(runId, integrationTarget)).pipe(
+        ? provideJournal(makeRunRecoveryProjection(runId, integrationTarget)).pipe(
             Effect.tap((created) =>
               Effect.sync(() => {
                 activeRecovery = created

@@ -77,16 +77,18 @@ turn identity allocation into proof that the Run began.
 
 ### Acceptance-test and model mapping
 
-- Future application test
-  `establishes an absent Run before its first tracker read and activates it once`
-  proves the boundary order and single activation.
-- Future application test
+- Application test
+  `establishes an absent Run before activating its journal-backed runtime once`
+  and conformance test
+  `one idempotent Run entry installs the delivery service contracts` prove the
+  boundary order, single entry, and single activation service surface.
+- Application test
   `retries an unacknowledged Run beginning through the same entry without appending it twice`
   proves the two crash prefixes.
 - Existing Journal test
   `atomically rejects a second beginning for one Run identity`
   remains the lower-boundary negative control.
-- Future `specs/runEstablishment.qnt` tests
+- `specs/runActivation.qnt` tests
   `absentHistoryEstablishesOneBeginningTest` and
   `ambiguousBeginningAppendReconstructsSameRunTest` must collect the
   corresponding traces; invariant `oneBeginningPerRun` must reject a mutant
@@ -163,13 +165,14 @@ termination rules because R existed before this invocation.
 
 ### Acceptance-test and model mapping
 
-- Future application test
-  `re-enters an unfinished Run through establishment and reconstructs policy without evaluating the initial fallback`
+- Application test
+  `re-enters an unfinished Run without evaluating the initial policy source`
   proves same-entry reconstruction and lazy-on-missing policy.
-- Future application test
-  `reconstructs held task-work admission before selecting new work`
-  proves A occupies P1 before B is considered.
-- Future `specs/runEstablishment.qnt` tests
+- Production-backed conformance test
+  `replays idempotent Run establishment and bounded activation through production seams`
+  proves reconstructed admission crosses the unified public bootstrap before
+  new work is considered.
+- `specs/runActivation.qnt` tests
   `existingHistorySkipsInitialPolicyTest` and
   `heldAdmissionReconstructedBeforeNewWorkTest` collect those two traces;
   invariants `existingHistorySkipsInitialPolicy` and
@@ -178,16 +181,65 @@ termination rules because R existed before this invocation.
 - Existing planned-attempt model invariant
   `oneReconciliationProjectionPerActivation` and production protocol test
   `requires exact command reconciliation before a generic executor-state observation`
-  prove the executor ambiguity boundary. Future application test
+  prove the executor ambiguity boundary. A later application test
   `reconstructs an ambiguous executor command before activating its continuation`
   must prove the Run-establishment composition rather than restating that
   protocol.
-- Future application test
-  `gives newly begun and reconstructed Runs the same one-shot finality path`
-  and future `specs/runEstablishment.qnt` test
+- The production-backed conformance test above and `specs/runActivation.qnt` test
   `newAndReconstructedActivationHaveFinalityParityTest` prove uninterrupted
   finality parity. The model invariant is
   `establishmentSourceDoesNotChangeActivationBounds`.
+
+## A capacity contraction preserves both retained holders and blocks new work
+
+### Starting situation
+
+The Journal says R began for T with capacity two. It contains exact unfinished
+responsibilities for attempts A and B, followed by an
+accepted policy change that reduces the current capacity to one. The process
+that admitted both attempts has exited, so its derived task-work positions no
+longer exist, but neither durable responsibility has settled. Task C is
+otherwise eligible. The tracker, Git, and executor do not
+gain any new authority from the policy change; the Journal remains the source
+of R's workflow history.
+
+### Trigger and ordered boundary calls
+
+The maintainer invokes the same production entry for R and T. Dalph validates
+the capacity-two beginning and later capacity-one revision, reconstructs both
+exact retained positions inside that entry's activation callback, and only
+then asks the ordinary admission controller whether C may reserve a position.
+The controller defers C because existing holders may exceed the new ceiling
+but new admission may not. After exact executor evidence settles A and its
+position is released, Dalph asks the same controller about C again; B still
+fills capacity one, so C remains deferred.
+
+### Crash, visible result, and forbidden result
+
+If Dalph exits before or after reconstructing the positions, only the
+process-local callback, owner, and controller disappear. The next invocation
+runs the same establishment and activation entry and derives both holders from
+the unchanged Journal. The maintainer sees R retain A and B while C waits.
+Dalph must not evict either retained holder, treat the latest ceiling as proof
+that old history is invalid, admit C after only A settles, or terminate R while
+B's responsibility or position remains.
+
+### Acceptance-test and model mapping
+
+- Production-backed conformance test
+  `replays idempotent Run establishment and bounded activation through production seams`
+  checks capacity two to one, both reconstructed holders, and C's deferral both
+  before and after A releases its position.
+- `specs/runActivation.qnt` tests
+  `contractedRetainedHolderIsRestoredDespiteCapacityTest` and
+  `contractedCapacityBlocksNewAdmissionAfterRetainedHolderSettlesTest` collect
+  the chronology. Invariants `activationRestoresHeldAdmission`,
+  `latestPolicyControlsAdmission`, and
+  `terminationRequiresEveryRetainedPositionSettled` reject eviction, admission
+  above the latest ceiling, and termination with a retained holder. Negative
+  tests `admissionBeyondContractedCapacityIsDetectedTest` and
+  `terminationWithOtherRetainedPositionIsDetectedTest` prove those families
+  can turn red.
 
 ## Existing startup history must match the exact Run and target
 
@@ -220,19 +272,23 @@ choose one of two beginnings, or reinterpret invalid history as absence.
 
 ### Acceptance-test and model mapping
 
-- Future application tests
-  `rejects an established Run whose target differs before any tracker read`
+- Application tests
+  `rejects an established Run whose target differs before activation`
   and
-  `rejects invalid existing Run history instead of treating it as absent`
-  prove two visible failures. Future application test
-  `rejects a requested new Run while a different unfinished Run exists`
-  proves the single-foreign-Run case.
-- Future `specs/runEstablishment.qnt` test
-  `mismatchedExistingHistoryNeverActivatesTest` collects the mismatch and
-  invalid-history variants, and
-  `singleForeignUnfinishedRunBlocksRequestedRunTest` collects the R1/R2 case;
-  invariant `onlyExactEstablishedRunActivates` must reject adoption of any of
-  them.
+  `blocks runtime construction when the freshly read journal prefix is invalid`
+  prove two visible failures. The production-backed Run-activation conformance
+  test exercises the same public entry for the single-foreign-Run case.
+- `specs/runActivation.qnt` tests
+  `mismatchedExistingHistoryNeverActivatesTest`,
+  `otherUnfinishedRunDoesNotStandInForRequestedRunTest`,
+  `invalidExistingHistoryNeverActivatesTest`,
+  `duplicateBeginningHistoryNeverActivatesTest`, and
+  `foreignRunRecordHistoryNeverActivatesTest` collect the distinct mismatch,
+  R1/R2, chronology, duplicate-beginning, and foreign-record cases;
+  invariant `onlyExactEstablishedRunActivates` rejects an exact Run or target
+  mismatch, while `activationStartsAfterDurableBeginning` rejects activation
+  from invalid history. Negative test `invalidHistoryActivationIsDetectedTest`
+  proves the latter family can turn red.
 
 ## Multiple unfinished Runs block every activation
 
@@ -263,10 +319,10 @@ and one Run's responsibilities must not be folded into the other.
 
 ### Acceptance-test and model mapping
 
-- Future application test
+- Application test
   `names every unfinished Run and activates none when startup discovery finds several`
   proves the scan and no-boundary result.
-- Future `specs/runEstablishment.qnt` test
+- `specs/runActivation.qnt` test
   `multipleUnfinishedRunsBlockEveryActivationTest` collects this trace;
   invariant `atMostOneDiscoveredUnfinishedRunMayActivate` must reject a mutant
   that chooses either identity.
@@ -299,13 +355,13 @@ newly allocated identity as a continuation of R.
 
 ### Acceptance-test and model mapping
 
-- Future application test
+- Application test
   `rejects a terminated Run before constructing activation`
   proves the application boundary.
 - Existing Journal test
   `rejects every workflow record after Run termination` remains the durable
   negative control.
-- Future `specs/runEstablishment.qnt` test
+- `specs/runActivation.qnt` test
   `terminatedHistoryNeverActivatesTest` collects the trace; invariant
   `terminatedRunIsFinal` must reject a mutant that appends or activates after
   termination.
@@ -313,8 +369,7 @@ newly allocated identity as a continuation of R.
 ## Scenario-to-test handoff contract
 
 The implementation handoff must report every scenario above against its named
-application test, the named `runEstablishment` model test and invariant, and
-the existing Journal or planned-attempt model seam where one is cited. Those
-future artifacts do not exist yet and this documentation-only change does not
-claim they pass. Repository-wide typechecking, coverage, or model-checking
-totals cannot replace the mapping.
+application or production-backed conformance test, the named `runActivation`
+model test and invariant, and the existing Journal or planned-attempt model
+seam where one is cited. Repository-wide typechecking, coverage, or
+model-checking totals cannot replace the mapping.

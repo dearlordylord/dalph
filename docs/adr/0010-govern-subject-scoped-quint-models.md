@@ -4,7 +4,7 @@ Status: accepted
 
 Dalph keeps one Quint model per subject-scoped decision boundary, each with its
 own executable conformance adapter under
-`packages/dalph/test/conformance/*.mbt.test.ts`. Six exist:
+`packages/dalph/test/conformance/*.mbt.test.ts`. Seven exist:
 
 | Model | Owns | Issues |
 |---|---|---|
@@ -14,6 +14,7 @@ own executable conformance adapter under
 | `specs/integrationFinality.qnt` | post-promotion completion-claim replacement and deletion, fresh tracker success, task-scoped settlement, and retention of unrelated Run responsibility | #141 (`integrationFinality`); executable seam: `packages/dalph/test/conformance/integration-finality.mbt.test.ts` invokes the production completion-claim protocols and Run finality decision |
 | `specs/controlDirectionApplication.qnt` | receiving a Pause or Unpause as ephemeral against applying one exact run-or-task direction as a durable Operator-initiated action | 155, 166 |
 | `specs/plannedAttemptExecutor.qnt` | the same-process executor boundary: responsibility, durable command intent, exact response versus command/state projection evidence, correlation and ordinal settlement, bounded continuation and Stop suspension commands, recovery reconciliation, and task-work position ownership. Executable seam: `packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts` invokes the production executor protocol and admission controller. | 65, 158 |
+| `specs/runActivation.qnt` | one idempotent Run-entry boundary: exact target and Run identity, lazy first policy versus the latest durable policy, reduction of exactly one unfinished history, reconstruction of retained task-work positions before new admission, and identical quiescence/finality handling after a new or reconstructed beginning. Process loss clears only process-local activation state; the same ordinary entry establishes the Run again from durable history. Executable seam: `packages/dalph/test/conformance/run-activation.mbt.test.ts` invokes production lifecycle, startup inspection, history reduction, recovery projection, admission, and finality seams. | 195 |
 
 ## Why subject scope rather than composition scope
 
@@ -31,7 +32,7 @@ is deliberate under this decision and is recorded as a TODO on that function.
 
 ## Adding a model
 
-A seventh model is justified by a materially different subject boundary,
+An eighth model is justified by a materially different subject boundary,
 abstraction, checking profile, executable adapter, lifecycle, or implementation
 consumer. Reaching for one because an existing model has grown is a signal to
 narrow that model's subject instead.
@@ -46,7 +47,7 @@ and not another source of runtime behavior.
 into three finite choice, Stop, and stopped-claim graphs. It is maintained in
 the same gate and retains
 `packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts` as its
-production seam; it is not a seventh model or an implementation input.
+production seam; it is not an eighth model or an implementation input.
 
 `specs/plannedAttemptExecutor_proof.qnt` applies the same exception to the
 canonical executor model's resettable command cycles. Three finite graphs keep

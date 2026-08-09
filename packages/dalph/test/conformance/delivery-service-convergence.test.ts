@@ -17,16 +17,17 @@ const sourceFilesUnder = (root: string): ReadonlyArray<string> =>
     return extname(path) === ".ts" && !path.endsWith(".test.ts") ? [path] : []
   })
 
-it("fresh and recovered initialization install the same delivery service contracts", () => {
+it("one idempotent Run entry installs the delivery service contracts", () => {
   const runSource = readFileSync(runSourcePath, "utf8")
   const stabilizationSource = readFileSync(stabilizationSourcePath, "utf8")
 
   expect(runSource.match(/\bconst consequences = yield\* delivery\b/g)).toHaveLength(1)
   expect(runSource.match(/\brunStabilizedDelivery\(/g)).toHaveLength(1)
   expect(stabilizationSource.match(/\brunDeliveryRuntimePhase\(/g)).toHaveLength(2)
-  expect(runSource.match(/\brunJournaledDelivery\(/g)).toHaveLength(2)
-  expect(runSource).toContain("bootstrap.fresh")
-  expect(runSource).toContain("bootstrap.recovered")
+  expect(runSource.match(/\brunJournaledDelivery\(/g)).toHaveLength(1)
+  expect(runSource).toContain("bootstrap.activate")
+  expect(runSource).not.toContain("bootstrap.fresh")
+  expect(runSource).not.toContain("bootstrap.recovered")
   expect(runSource).not.toContain("bootstrap.controlled")
 })
 
