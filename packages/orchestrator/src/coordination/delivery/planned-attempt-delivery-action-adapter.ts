@@ -1,13 +1,13 @@
 import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import { Effect } from "effect"
 import {
-  continuePlannedAttemptExecutorWork,
-  observePlannedAttemptExecutorState,
-  requestPlannedAttemptExecutorSuspension
+  continuePlannedAttemptExecutorWorkWithPermit,
+  observePlannedAttemptExecutorStateWithPermit,
+  requestPlannedAttemptExecutorSuspensionWithPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import {
-  advanceAttemptStoppage,
-  observeAttemptStoppageExecutor,
+  advanceAttemptStoppageWithPermit,
+  observeAttemptStoppageExecutorWithPermit,
   recordStoppedAttemptClaimNoRelease
 } from "../../workflow/protocols/attempt-choice/stop.js"
 import { deliveryActionCompleted } from "./delivery-action-adapter-common.js"
@@ -37,9 +37,14 @@ const executeAttemptStoppageTransition = Effect.fn("DeliveryAction.executeAttemp
   transition: AttemptStoppageTransition,
   lease: DeliveryActionExecutionLease
 ) {
+  const correlation = plannedAttemptExecutorCorrelation(transition.subject.plannedAttempt)
   const result = yield* transition._tag === "AdvanceAttemptStoppage"
-    ? advanceAttemptStoppage(transition.requestId, transition.subject)
-    : observeAttemptStoppageExecutor(transition.requestId, transition.subject)
+    ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
+        advanceAttemptStoppageWithPermit(permit, transition.requestId, transition.subject)
+      )
+    : lease.withPlannedAttemptProtocol(correlation, (permit) =>
+        observeAttemptStoppageExecutorWithPermit(permit, transition.requestId, transition.subject)
+      )
   const taskWorkPositionWasRequired =
     transition._tag === "ObserveAttemptStoppageExecutor" || transition.taskWorkPosition === "ReserveOrReuse"
   if (taskWorkPositionWasRequired && result._tag === "AttemptImplementationAbandoned") {
@@ -61,10 +66,16 @@ const executeExecutorTransition = Effect.fn("DeliveryAction.executeExecutorTrans
     yield* lease.bindPlannedAttemptPosition(correlation)
   }
   const report = yield* transition._tag === "ContinuePlannedAttemptExecutorWork"
-    ? continuePlannedAttemptExecutorWork(transition.plannedAttempt)
+    ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
+        continuePlannedAttemptExecutorWorkWithPermit(permit, transition.plannedAttempt)
+      )
     : transition._tag === "ObservePlannedAttemptContinuationExecutor"
-      ? observePlannedAttemptExecutorState(transition.plannedAttempt)
-      : requestPlannedAttemptExecutorSuspension(transition.plannedAttempt)
+      ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
+          observePlannedAttemptExecutorStateWithPermit(permit, transition.plannedAttempt)
+        )
+      : lease.withPlannedAttemptProtocol(correlation, (permit) =>
+          requestPlannedAttemptExecutorSuspensionWithPermit(permit, transition.plannedAttempt)
+        )
   if (
     transition._tag !== "ObservePlannedAttemptContinuationExecutor" &&
     (report._tag === "SafelySuspended" || report._tag === "Terminal")
@@ -82,7 +93,9 @@ export const executeFreshPlannedAttempt = Effect.fn("DeliveryAction.executeFresh
   const plannedAttempt = route.step.plannedAttempt
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   yield* lease.bindPlannedAttemptPosition(correlation)
-  const report = yield* continuePlannedAttemptExecutorWork(plannedAttempt)
+  const report = yield* lease.withPlannedAttemptProtocol(correlation, (permit) =>
+    continuePlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt)
+  )
   if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
     yield* lease.releasePlannedAttemptPosition(correlation)
   }

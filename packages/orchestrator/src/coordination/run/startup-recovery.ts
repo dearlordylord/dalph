@@ -7,6 +7,10 @@ import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretatio
 import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
+import {
+  makePlannedAttemptProtocolController,
+  PlannedAttemptProtocolController
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import {
   hasUnfinishedRunResponsibility,
@@ -110,6 +114,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   const controlDirectionApplication = yield* ControlDirectionApplication
   const taskClaimReacquisitionControl = yield* TaskClaimReacquisitionControl
   const attemptChoiceControl = yield* AttemptChoiceControl
+  const plannedAttemptProtocolController = yield* makePlannedAttemptProtocolController()
   const ambient = yield* Effect.context<never>()
   const candidateAgent = Context.getOption(ambient, IntegrationCandidateAgent)
   const candidateGit = Context.getOption(ambient, IntegrationCandidateGit)
@@ -136,6 +141,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
     Context.add(PlannedAttemptExecutor, executor),
     Context.add(InRunJournal, inRunJournal),
     Context.add(AttemptChoiceControl, attemptChoiceControl),
+    Context.add(PlannedAttemptProtocolController, plannedAttemptProtocolController),
     Context.add(ControlDirectionApplication, controlDirectionApplication),
     Context.add(TaskWorkCapacityControl, taskWorkCapacityControl),
     Context.add(TaskClaimReacquisitionControl, taskClaimReacquisitionControl),

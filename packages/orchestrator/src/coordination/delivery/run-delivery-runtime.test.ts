@@ -62,6 +62,7 @@ import {
   type DeliveryRuntimeInput
 } from "./run-delivery-runtime.js"
 import { DeliveryRuntimeResources, deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
+import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 
 const runDeliveryRuntimeQuiescence = <E>(relation: DeliveryRuntimeInput<E>) => runDeliveryRuntime(relation)
 
@@ -86,7 +87,8 @@ const plannerLayer = deterministicPlannedTaskAttemptLayer({
 const identityLayers = Layer.mergeAll(
   deterministicOperationIdAllocatorLayer("runtime-operation"),
   plannerLayer,
-  deliveryRuntimeResourcesLayer
+  deliveryRuntimeResourcesLayer,
+  plannedAttemptProtocolControllerLayer
 )
 
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -322,6 +324,7 @@ it.effect("does not start a causal successor before its live operation owner is 
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(plannerLayer),
       Effect.provide(deliveryRuntimeResourcesLayer),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
       Effect.provideService(OperationIdAllocator, allocator),
       Effect.provideService(DeliveryActionExecutor, executor),
       Effect.forkChild
@@ -556,6 +559,7 @@ it.effect("does not allocate an operation or attempt identity before admission",
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(plannerLayer),
       Effect.provide(deliveryRuntimeResourcesLayer),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
       Effect.provideService(OperationIdAllocator, allocator),
       Effect.provideService(DeliveryActionExecutor, executor),
       Effect.forkChild
@@ -689,6 +693,7 @@ it.effect("releases acquired integration ownership and its relation subscriber o
     const fiber = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(plannerLayer),
       Effect.provide(deterministicOperationIdAllocatorLayer("interrupt-cleanup")),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
       Effect.provideService(DeliveryRuntimeResources, DeliveryRuntimeResources.of({ integrationTargets })),
       Effect.provideService(DeliveryActionExecutor, executor),
       Effect.forkChild
@@ -735,6 +740,7 @@ it.effect("rolls back acquired integration ownership when the action fails", () 
       yield* runDeliveryRuntimeDecision(relation).pipe(
         Effect.provide(plannerLayer),
         Effect.provide(deterministicOperationIdAllocatorLayer("failed-integration-action")),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
         Effect.provideService(DeliveryRuntimeResources, DeliveryRuntimeResources.of({ integrationTargets })),
         Effect.provideService(
           DeliveryActionExecutor,

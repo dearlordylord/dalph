@@ -41,6 +41,7 @@ import {
 } from "../delivery/relations.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { runStabilizedDelivery } from "./run-stabilization.js"
+import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 const runId = RunId.make("run-stabilization")
 const target = FixtureTarget.make("run-stabilization-target")
 const emptyFrontier = { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] }
@@ -118,6 +119,7 @@ const supportWithoutResources = Layer.mergeAll(
     runId,
     worktreeRoot: WorktreeLocator.make("/stabilization")
   }),
+  plannedAttemptProtocolControllerLayer,
   Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
 )
 const support = Layer.merge(supportWithoutResources, deliveryRuntimeResourcesLayer)

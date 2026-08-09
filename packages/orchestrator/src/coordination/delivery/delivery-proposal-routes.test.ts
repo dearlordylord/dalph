@@ -57,6 +57,7 @@ import { deliveryProposalsOf } from "./delivery-proposal.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { executeAcceptedWorkflowAction, executeNewRecoveredAction } from "./recovered-delivery-action-adapter.js"
 import { DeliveryActionExecutor, type DeliveryActionExecutionLease } from "./delivery-action-executor.js"
+import { makePlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type {
   AcceptedIdentityDeliveryProposal,
   DeliveryActionProposal,
@@ -170,7 +171,8 @@ const inertLease: DeliveryActionExecutionLease = {
     withPermit: (_responsibility, effect) => effect
   },
   recordIntent: () => Effect.void,
-  releasePlannedAttemptPosition: () => Effect.void
+  releasePlannedAttemptPosition: () => Effect.void,
+  withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol lease")
 }
 
 const appendableJournalFor = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
@@ -803,9 +805,11 @@ describe("delivery proposal route matrix", () => {
         return yield* Effect.die("missing continued executor proposal")
       }
       const releases = yield* Ref.make(0)
+      const protocolController = yield* makePlannedAttemptProtocolController()
       const lease: DeliveryActionExecutionLease = {
         ...inertLease,
-        releasePlannedAttemptPosition: () => Ref.update(releases, (count) => count + 1)
+        releasePlannedAttemptPosition: () => Ref.update(releases, (count) => count + 1),
+        withPlannedAttemptProtocol: (correlation, effect) => protocolController.withPermit(correlation, effect)
       }
       const correlation = { attemptId: plannedAttempt.attemptId, runId }
       const report = PlannedAttemptExecutorReport.cases.Running.make({ correlation })

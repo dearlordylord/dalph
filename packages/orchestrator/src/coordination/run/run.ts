@@ -7,6 +7,7 @@ import type { ControlDirectionApplication } from "../../workflow/protocols/contr
 import type { TaskControlSubjectOutsideRun } from "../../workflow/protocols/control-direction-application/task-subject.js"
 import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import type { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
+import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import type {
   JournalError,
@@ -42,6 +43,7 @@ export type JournaledRunServices =
   | InRunJournal
   | OperationIdAllocator
   | PlannedAttemptExecutor
+  | PlannedAttemptProtocolController
   | RunRecoveryProjection
   | TaskWorkCapacityControl
   | TaskClaimReacquisitionControl

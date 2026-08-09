@@ -37,6 +37,7 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "./events.js"
 import { latestUnsettledPlannedAttemptExecutorCommand, plannedAttemptExecutorEvidence } from "./evidence.js"
+import { type PlannedAttemptProtocolPermit, withPlannedAttemptProtocolPermit } from "./protocol-controller.js"
 
 /** An executor response named a different planned attempt than Dalph requested. */
 export class PlannedAttemptExecutorCorrelationMismatch extends Schema.TaggedErrorClass<PlannedAttemptExecutorCorrelationMismatch>()(
@@ -48,6 +49,12 @@ export class PlannedAttemptExecutorCorrelationMismatch extends Schema.TaggedErro
 export class PlannedAttemptExecutorContinuationLimitReached extends Schema.TaggedErrorClass<PlannedAttemptExecutorContinuationLimitReached>()(
   "PlannedAttemptExecutorContinuationLimitReached",
   { correlation: PlannedAttemptExecutorCorrelation, limit: PlannedAttemptExecutorContinuationLimit }
+) {}
+
+/** Executor work cannot restart after Dalph durably abandoned the exact planned attempt. */
+export class PlannedAttemptExecutorResponsibilityAbandoned extends Schema.TaggedErrorClass<PlannedAttemptExecutorResponsibilityAbandoned>()(
+  "PlannedAttemptExecutorResponsibilityAbandoned",
+  { correlation: PlannedAttemptExecutorCorrelation }
 ) {}
 
 /** The exact attempt consumed its durable suspension-command budget without proving quiescence. */
@@ -94,7 +101,18 @@ export const beginPlannedAttemptExecutorResponsibility = Effect.fn(
   "PlannedAttemptExecutorWorkflow.beginResponsibility"
 )(function* (plannedAttempt: PlannedTaskAttempt) {
   const journal = yield* InRunJournal
+  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   const records = yield* journal.read(plannedAttempt.runId)
+  if (
+    records.some(
+      ({ event }) =>
+        event._tag === "AttemptImplementationAbandoned" &&
+        event.subject.plannedAttempt.runId === plannedAttempt.runId &&
+        event.subject.plannedAttempt.attemptId === plannedAttempt.attemptId
+    )
+  ) {
+    return yield* new PlannedAttemptExecutorResponsibilityAbandoned({ correlation })
+  }
   const responsibilityBegan = records.find(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
@@ -304,9 +322,9 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
 })
 
 /** Reads current executor authority without issuing another start, continuation, or suspension command. */
-export const observePlannedAttemptExecutorState = Effect.fn("PlannedAttemptExecutorWorkflow.observeState")(function* (
-  plannedAttempt: PlannedTaskAttempt
-) {
+const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
+  "PlannedAttemptExecutorWorkflow.observeStateUnserialized"
+)(function* (plannedAttempt: PlannedTaskAttempt) {
   const journal = yield* InRunJournal
   const executor = yield* PlannedAttemptExecutor
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
@@ -385,14 +403,36 @@ export const observePlannedAttemptExecutorState = Effect.fn("PlannedAttemptExecu
   return report
 })
 
+export const observePlannedAttemptExecutorStateWithPermit = (
+  permit: PlannedAttemptProtocolPermit,
+  plannedAttempt: PlannedTaskAttempt
+) =>
+  withPlannedAttemptProtocolPermit(
+    permit,
+    plannedAttemptExecutorCorrelation(plannedAttempt),
+    observePlannedAttemptExecutorStateUnserialized(plannedAttempt)
+  )
+
 /** Starts or resumes all executor work for the exact planned attempt. */
-export const continuePlannedAttemptExecutorWork = (
+export const continuePlannedAttemptExecutorWorkWithPermit = (
+  permit: PlannedAttemptProtocolPermit,
   plannedAttempt: PlannedTaskAttempt,
   continuationLimit = defaultPlannedAttemptExecutorContinuationLimit
-) => runCommand(plannedAttempt, "StartOrContinue", continuationLimit, defaultPlannedAttemptExecutorSuspensionLimit)
+) =>
+  withPlannedAttemptProtocolPermit(
+    permit,
+    plannedAttemptExecutorCorrelation(plannedAttempt),
+    runCommand(plannedAttempt, "StartOrContinue", continuationLimit, defaultPlannedAttemptExecutorSuspensionLimit)
+  )
 
 /** Asks the executor to stop all work while preserving the exact attempt for resume. */
-export const requestPlannedAttemptExecutorSuspension = (
+export const requestPlannedAttemptExecutorSuspensionWithPermit = (
+  permit: PlannedAttemptProtocolPermit,
   plannedAttempt: PlannedTaskAttempt,
   suspensionLimit = defaultPlannedAttemptExecutorSuspensionLimit
-) => runCommand(plannedAttempt, "Suspend", defaultPlannedAttemptExecutorContinuationLimit, suspensionLimit)
+) =>
+  withPlannedAttemptProtocolPermit(
+    permit,
+    plannedAttemptExecutorCorrelation(plannedAttempt),
+    runCommand(plannedAttempt, "Suspend", defaultPlannedAttemptExecutorContinuationLimit, suspensionLimit)
+  )

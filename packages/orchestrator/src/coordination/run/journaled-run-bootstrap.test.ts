@@ -27,6 +27,7 @@ import {
   RunLifecycleJournal
 } from "../../workflow-journal/store.js"
 import { OperationId } from "../../workflow/identity.js"
+import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { intentRecordKey } from "../../workflow-journal/record-key.js"
@@ -82,6 +83,7 @@ const runtimeLayer = (runId: RunId, trackerGraphReader: TrackerGraphReader["Serv
     taskClaimReacquisitionControlLayer,
     deterministicOperationIdAllocatorLayer(`bootstrap-control:${runId}`),
     deliveryRuntimeResourcesLayer,
+    plannedAttemptProtocolControllerLayer,
     journaledWorkflowInterpreterLayer(
       runId,
       Layer.mock(WorkflowInterpreter, { readTrackerGraph: (operation) => trackerGraphReader.read(operation.target) })

@@ -210,7 +210,8 @@ it.effect("keeps another target usable while exact M verifies and releases only 
                 bindPlannedAttemptPosition: () => Effect.void,
                 integrationTargets: resources,
                 recordIntent: () => Effect.void,
-                releasePlannedAttemptPosition: () => Effect.void
+                releasePlannedAttemptPosition: () => Effect.void,
+                withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
               }).pipe(Effect.flip))._tag
             ).toBe("TargetVerificationRuntimeUnavailable")
             const running = yield* executeIntegrationAction(action, transition, {
@@ -218,7 +219,8 @@ it.effect("keeps another target usable while exact M verifies and releases only 
               bindPlannedAttemptPosition: () => Effect.void,
               integrationTargets: resources,
               recordIntent: () => Effect.void,
-              releasePlannedAttemptPosition: () => Effect.void
+              releasePlannedAttemptPosition: () => Effect.void,
+              withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
             }).pipe(
               Effect.provideService(
                 TargetVerificationRuntime,
@@ -433,7 +435,8 @@ it.effect("fails closed when referenced evidence cannot be reread", () => {
           bindPlannedAttemptPosition: () => Effect.void,
           integrationTargets: resources,
           recordIntent: () => Effect.void,
-          releasePlannedAttemptPosition: () => Effect.void
+          releasePlannedAttemptPosition: () => Effect.void,
+          withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
         }).pipe(
           Effect.provideService(
             TargetVerificationRuntime,

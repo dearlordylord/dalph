@@ -12,7 +12,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Deferred, Effect, Layer, Option, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import {
@@ -93,6 +93,12 @@ import {
 import { AuthoritativeTaskClaimObserved, WorkflowInterpreter, WorkflowTrace } from "../../interpretation/interpreter.js"
 import { AuthoritativeTaskClaimReleased } from "../task-claim-release/protocol.js"
 import { advanceAttemptStoppage, observeAttemptStoppageExecutor, recordStoppedAttemptClaimNoRelease } from "./stop.js"
+import {
+  advanceAttemptStoppage as advanceAttemptStoppageAtPublicSeam,
+  continuePlannedAttemptExecutorWork as continuePlannedAttemptExecutorWorkAtPublicSeam,
+  PlannedAttemptProtocolController,
+  plannedAttemptProtocolControllerLayer
+} from "../../../index.js"
 
 const runId = RunId.make("attempt-stop-run")
 const taskId = TaskId.make("attempt-stop-task")
@@ -262,7 +268,98 @@ it.effect("proves the exact executor stopped before abandoning implementation re
     expect(records.filter(({ event }) => event._tag === "AttemptStoppageIntended")).toHaveLength(0)
     expect(records.filter(({ event }) => event._tag === "AttemptImplementationAbandoned")).toHaveLength(1)
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
+
+it.effect("serializes a public Continue against exact Stop abandonment without poisoning the journal", () =>
+  Effect.gen(function* () {
+    yield* appendExposedStop()
+    const journal = yield* InRunJournal
+    const protocolController = yield* PlannedAttemptProtocolController
+    const protocolEntries = yield* Ref.make(0)
+    const continueEnteredPublicGuard = yield* Deferred.make<void>()
+    const controlledProtocolController = PlannedAttemptProtocolController.of({
+      reserve: protocolController.reserve,
+      withPermit: (exactCorrelation, use) =>
+        Ref.updateAndGet(protocolEntries, (count) => count + 1).pipe(
+          Effect.flatMap((count) =>
+            (count === 2 ? Deferred.succeed(continueEnteredPublicGuard, undefined) : Effect.void).pipe(
+              Effect.andThen(protocolController.withPermit(exactCorrelation, use))
+            )
+          )
+        )
+    })
+    const stopReadEntered = yield* Deferred.make<void>()
+    const allowStopRead = yield* Deferred.make<void>()
+    const interceptNextRead = yield* Ref.make(true)
+    const controlledJournal = InRunJournal.of({
+      append: journal.append,
+      read: (requestedRunId) =>
+        Ref.getAndSet(interceptNextRead, false).pipe(
+          Effect.flatMap((intercept) =>
+            intercept
+              ? Deferred.succeed(stopReadEntered, undefined).pipe(
+                  Effect.andThen(Deferred.await(allowStopRead)),
+                  Effect.andThen(journal.read(requestedRunId))
+                )
+              : journal.read(requestedRunId)
+          )
+        )
+    })
+    const executor = PlannedAttemptExecutor.of({
+      project: () => Effect.die("retained proof and abandoned continuation must not inspect the executor"),
+      requestSuspension: () => Effect.die("retained proof must not request suspension"),
+      startOrContinue: () => Effect.die("an abandoned continuation must not reach the executor")
+    })
+    const provideProtocol = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(
+        Effect.provideService(InRunJournal, controlledJournal),
+        Effect.provideService(PlannedAttemptExecutor, executor),
+        Effect.provideService(PlannedAttemptProtocolController, controlledProtocolController)
+      )
+
+    const stopFiber = yield* provideProtocol(advanceAttemptStoppageAtPublicSeam(requestId, subject)).pipe(
+      Effect.forkScoped
+    )
+    yield* Deferred.await(stopReadEntered)
+    const continueFiber = yield* provideProtocol(
+      continuePlannedAttemptExecutorWorkAtPublicSeam(plannedAttempt).pipe(Effect.result)
+    ).pipe(Effect.forkScoped)
+    yield* Deferred.await(continueEnteredPublicGuard)
+    expect(continueFiber.pollUnsafe()).toBeUndefined()
+    yield* Deferred.succeed(allowStopRead, undefined)
+
+    expect(yield* Fiber.join(stopFiber)).toEqual({ _tag: "AttemptImplementationAbandoned" })
+    expect(yield* Fiber.join(continueFiber)).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "PlannedAttemptExecutorResponsibilityAbandoned" }
+    })
+    const records = yield* (yield* JournalStore).read(runId)
+    expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(1)
+    expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
+
+it.effect("restarts without treating a prior process protocol permit as durable ownership", () =>
+  Effect.gen(function* () {
+    const reserveFromFreshProcess = Effect.flatMap(PlannedAttemptProtocolController, (controller) =>
+      controller.reserve(correlation)
+    ).pipe(Effect.provide(Layer.fresh(plannedAttemptProtocolControllerLayer)))
+
+    const priorProcessPermit = yield* reserveFromFreshProcess
+    const restartedProcessPermit = yield* reserveFromFreshProcess
+
+    expect(Option.isSome(priorProcessPermit)).toBe(true)
+    expect(Option.isSome(restartedProcessPermit)).toBe(true)
+  })
 )
 
 it.effect("rejects Stop advancement and observation without Alice's exact applied choice", () =>
@@ -282,6 +379,7 @@ it.effect("rejects Stop advancement and observation without Alice's exact applie
     ).toMatchObject({ _tag: "AttemptStopChoiceContradiction" })
   }).pipe(
     Effect.provideService(PlannedAttemptExecutor, unusedPlannedAttemptExecutor),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
     Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
@@ -295,6 +393,7 @@ it.effect("requires the exact claim that authorized the attempt before abandonin
   }).pipe(
     Effect.provideService(PlannedAttemptExecutor, unusedPlannedAttemptExecutor),
     Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
     Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
@@ -317,7 +416,11 @@ it.effect("keeps an abandoned attempt waiting when no tracker target can authori
     expect((yield* recovery.readDeliveryProjection).frontier.explanations).toContainEqual(
       expect.objectContaining({ _tag: "StoppedAttemptClaimPlanningWait", reason: "TrackerTargetUnavailable" })
     )
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("rejects attempt choices that are not exposed by the exact Run plan safe report and latest fingerprint", () =>
@@ -404,27 +507,16 @@ it.effect("rejects attempt choices that are not exposed by the exact Run plan sa
         expect.arrayContaining([expect.stringContaining(scenario.detail)])
       )
     }
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("coalesces concurrent abandonment and treats later Stop observation as already complete", () =>
   Effect.gen(function* () {
     yield* appendExposedStop()
-    const journal = yield* InRunJournal
-    const initialReadCount = yield* Ref.make(0)
-    const bothInitialReadsCompleted = yield* Deferred.make<void>()
-    const synchronizedJournal = InRunJournal.of({
-      append: journal.append,
-      read: (readRunId) =>
-        Effect.gen(function* () {
-          const snapshot = yield* journal.read(readRunId)
-          const count = yield* Ref.updateAndGet(initialReadCount, (current) => current + 1)
-          if (count > 2) return snapshot
-          if (count === 2) yield* Deferred.succeed(bothInitialReadsCompleted, undefined)
-          yield* Deferred.await(bothInitialReadsCompleted)
-          return snapshot
-        })
-    })
     const executor = PlannedAttemptExecutor.of({
       project: () => Effect.die("retained proof needs no projection"),
       requestSuspension: () => Effect.die("retained proof needs no suspension"),
@@ -433,10 +525,7 @@ it.effect("coalesces concurrent abandonment and treats later Stop observation as
     const outcomes = yield* Effect.all(
       [advanceAttemptStoppage(requestId, subject), advanceAttemptStoppage(requestId, subject)],
       { concurrency: "unbounded" }
-    ).pipe(
-      Effect.provideService(InRunJournal, synchronizedJournal),
-      Effect.provideService(PlannedAttemptExecutor, executor)
-    )
+    ).pipe(Effect.provideService(PlannedAttemptExecutor, executor))
 
     expect(outcomes).toEqual([{ _tag: "AttemptImplementationAbandoned" }, { _tag: "AttemptImplementationAbandoned" }])
     expect(
@@ -450,7 +539,11 @@ it.effect("coalesces concurrent abandonment and treats later Stop observation as
     expect(
       (yield* (yield* JournalStore).read(runId)).filter(({ event }) => event._tag === "AttemptImplementationAbandoned")
     ).toHaveLength(1)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("rejects stopped-attempt events without their exact choice quiescence proof and claim", () =>
@@ -575,7 +668,11 @@ it.effect("rejects stopped-attempt events without their exact choice quiescence 
     expect(invalidHistoryDetails(terminalProofHistory)).not.toEqual(
       expect.arrayContaining([expect.stringContaining("requires its exact safe or terminal executor proof")])
     )
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("keeps Stop pending when a read-only executor projection still reports Running", () =>
@@ -619,7 +716,11 @@ it.effect("keeps Stop pending when a read-only executor projection still reports
         )
       )
     ).toEqual({ _tag: "AttemptStoppagePending", executorState: "Running" })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("shows a contradictory executor projection as an explicit Stop wait", () =>
@@ -665,7 +766,11 @@ it.effect("shows a contradictory executor projection as an explicit Stop wait", 
     expect((yield* recovery.readDeliveryProjection).frontier.explanations).toContainEqual(
       expect.objectContaining({ _tag: "AttemptStoppageWait", reason: "ExecutorContradictory" })
     )
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("rejects executor work that reopens an abandoned attempt", () =>
@@ -703,7 +808,11 @@ it.effect("rejects executor work that reopens an abandoned attempt", () =>
         expect.objectContaining({ detail: expect.stringContaining("follows abandonment") })
       ])
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("rechecks the executor after restart before repeating Stop", () =>
@@ -748,7 +857,11 @@ it.effect("rechecks the executor after restart before repeating Stop", () =>
     expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(2)
     expect(records.filter(({ event }) => event._tag === "AttemptImplementationAbandoned")).toHaveLength(1)
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("issues three suspension commands, never a fourth, then abandons after a later safe projection", () =>
@@ -826,7 +939,11 @@ it.effect("issues three suspension commands, never a fourth, then abandons after
     ).toHaveLength(3)
     expect(records.filter(({ event }) => event._tag === "AttemptImplementationAbandoned")).toHaveLength(1)
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("reconciles a lost third suspension response before the bounded read-only Stop observation", () =>
@@ -932,7 +1049,11 @@ it.effect("reconciles a lost third suspension response before the bounded read-o
     expect(stateProjection?.position).toBeGreaterThan(commandProjection?.position ?? 0)
     expect(records.filter(({ event }) => event._tag === "AttemptImplementationAbandoned")).toHaveLength(1)
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("derives a no-release result only from the exact journaled focused claim observation", () =>
@@ -1013,7 +1134,11 @@ it.effect("derives a no-release result only from the exact journaled focused cla
     expect(invalidHistoryDetails(duplicateNoRelease)).toEqual(
       expect.arrayContaining([expect.stringContaining("claim disposition is already terminal")])
     )
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("rejects a stale no-release observation after a newer exact claim read", () =>
@@ -1101,7 +1226,11 @@ it.effect("rejects a stale no-release observation after a newer exact claim read
     expect(invalidHistoryDetails(forgedExactClaimNoRelease)).toEqual(
       expect.arrayContaining([expect.stringContaining("cannot preserve the exact owned claim")])
     )
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("requires one exact stopped-claim release operation after its current claim read", () =>
@@ -1362,7 +1491,11 @@ it.effect("requires one exact stopped-claim release operation after its current 
         expect.objectContaining({ detail: expect.stringContaining("latest exact post-abandonment claim read") })
       ])
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("makes released and no-release stopped-claim dispositions mutually exclusive", () =>
@@ -1450,7 +1583,11 @@ it.effect("makes released and no-release stopped-claim dispositions mutually exc
         ])
       })
     }
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("releases only the freshly confirmed exact claim after Stop", () =>
@@ -1517,7 +1654,11 @@ it.effect("releases only the freshly confirmed exact claim after Stop", () =>
       expect.objectContaining({ _tag: "StoppedAttemptSettled", claimDisposition: "Released" })
     )
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("retries the same stopped-claim release after reconstruction confirms the exact claim remains", () =>
@@ -1621,7 +1762,11 @@ it.effect("retries the same stopped-claim release after reconstruction confirms 
     expect((yield* recovery.readDeliveryProjection).frontier.explanations).toContainEqual(
       expect.objectContaining({ _tag: "StoppedAttemptSettled", claimDisposition: "Released" })
     )
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )
 
 it.effect("stops implementation without mutating an absent or foreign claim", () =>
@@ -1735,5 +1880,9 @@ it.effect("stops implementation without mutating an absent or foreign claim", ()
       { observation: foreignClaim }
     )
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
 )

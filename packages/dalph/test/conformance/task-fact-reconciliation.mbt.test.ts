@@ -33,9 +33,13 @@ import {
   JournalPosition,
   JournalStore,
   legacyMemoryJournalStoreLayer,
+  makePlannedAttemptProtocolController,
   OperationId,
   observePlannedAttemptExecutorState,
   observeAttemptStoppageExecutor,
+  PlannedAttemptProtocolController,
+  type PlannedAttemptProtocolControllerService,
+  plannedAttemptProtocolControllerLayer,
   recordStoppedAttemptClaimNoRelease,
   requestPlannedAttemptExecutorSuspension,
   TaskClaimReleaseFailure,
@@ -44,7 +48,7 @@ import {
   TaskWorkCapacity,
   TrackerRevision,
   workflowJournalEventVersion
-} from "@dalph/orchestrator"
+} from "../../../orchestrator/src/index.js"
 import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
 import { expect } from "vitest"
 import {
@@ -340,6 +344,7 @@ const taskFactReconciliationDriver = defineDriver(
     // mirrored decision: any later production boundary call changes the
     // compared count while this baseline remains fixed.
     let releaseCallCountAtNonExactObservation = 0
+    let protocolController: PlannedAttemptProtocolControllerService | undefined
     let claimRecoveryCount = 0
     // Recovery starts a new activation. The journal remains authoritative;
     // this baseline only classifies whether that activation has performed its
@@ -473,7 +478,13 @@ const taskFactReconciliationDriver = defineDriver(
       Layer.succeed(WorkflowInterpreter, baseInterpreter)
     )
     const provideJournal = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      effect.pipe(Effect.provide(journalLayer), Effect.provideService(PlannedAttemptExecutor, executor))
+      protocolController === undefined
+        ? Effect.die("planned-attempt protocol controller not initialized")
+        : effect.pipe(
+            Effect.provide(journalLayer),
+            Effect.provideService(PlannedAttemptProtocolController, protocolController),
+            Effect.provideService(PlannedAttemptExecutor, executor)
+          )
     const provideControl = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       provideJournal(effect.pipe(Effect.provide(attemptChoiceControlLayer)))
     const provideInterpreter = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -854,10 +865,12 @@ const taskFactReconciliationDriver = defineDriver(
           pendingReleaseCallBaseline = 0
           claimRecoveryCount = 0
           claimObservationBaseline = 0
+          const freshProtocolController = yield* makePlannedAttemptProtocolController()
+          protocolController = freshProtocolController
           controller = yield* makeDeliveryRuntimeAdmissionController(
             { capacity: TaskWorkCapacity.make(1), held: [] },
             yield* makeIntegrationTargetResourceController()
-          )
+          ).pipe(Effect.provideService(PlannedAttemptProtocolController, freshProtocolController))
           yield* journal.beginRun(
             runId,
             target,
@@ -1673,7 +1686,7 @@ it.effect("requires command reconciliation before a generic executor-state proje
     expect(failure._tag).toBe("PlannedAttemptExecutorCommandReconciliationRequired")
     expect(projectionCalls).toBe(0)
     expect(records.some(({ event }) => event._tag === "PlannedAttemptExecutorStateObserved")).toBe(false)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer), Effect.provide(plannedAttemptProtocolControllerLayer))
 )
 
 it("rejects a work report whose exact command intent is absent", () => {

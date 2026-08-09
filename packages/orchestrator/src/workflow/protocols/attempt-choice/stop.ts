@@ -1,4 +1,4 @@
-import { type PlannedTaskAttempt } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, type PlannedTaskAttempt } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 import { isExactTaskClaim, TaskClaimObservation } from "../../../authorities/task-tracker/claim-mutation.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
@@ -15,9 +15,14 @@ import {
   type PlannedAttemptExecutorEvidence
 } from "../planned-attempt-executor-work/evidence.js"
 import {
-  observePlannedAttemptExecutorState,
-  requestPlannedAttemptExecutorSuspension
+  observePlannedAttemptExecutorStateWithPermit,
+  requestPlannedAttemptExecutorSuspensionWithPermit
 } from "../planned-attempt-executor-work/protocol.js"
+import {
+  PlannedAttemptProtocolController,
+  type PlannedAttemptProtocolPermit,
+  withPlannedAttemptProtocolPermit
+} from "../planned-attempt-executor-work/protocol-controller.js"
 import {
   AttemptChoiceRequestId,
   AttemptChoiceSubject,
@@ -149,9 +154,10 @@ const recordAbandonment = Effect.fn("AttemptStop.recordAbandonment")(function* (
 })
 
 /** Advances at most one executor suspension or reconciliation call for one applied Stop. */
-export const advanceAttemptStoppage = Effect.fn("AttemptStop.advanceStoppage")(function* (
+const advanceAttemptStoppageUnserialized = Effect.fn("AttemptStop.advanceStoppageUnserialized")(function* (
   requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject
+  subject: AttemptChoiceSubject,
+  permit: PlannedAttemptProtocolPermit
 ) {
   const journal = yield* InRunJournal
   const records = yield* journal.read(subject.plannedAttempt.runId)
@@ -186,7 +192,7 @@ export const advanceAttemptStoppage = Effect.fn("AttemptStop.advanceStoppage")(f
       })
     )
   }
-  const report = yield* requestPlannedAttemptExecutorSuspension(subject.plannedAttempt)
+  const report = yield* requestPlannedAttemptExecutorSuspensionWithPermit(permit, subject.plannedAttempt)
   if (report._tag === "Running") return { _tag: "AttemptStoppagePending", executorState: "Running" }
   const currentRecords = yield* journal.read(subject.plannedAttempt.runId)
   const proof = unbrokenQuiescenceEvidence(currentRecords, subject.plannedAttempt)
@@ -197,10 +203,32 @@ export const advanceAttemptStoppage = Effect.fn("AttemptStop.advanceStoppage")(f
   return { _tag: "AttemptImplementationAbandoned" }
 })
 
-/** Rechecks executor authority without issuing a fourth or duplicate suspension command. */
-export const observeAttemptStoppageExecutor = Effect.fn("AttemptStop.observeExecutor")(function* (
+export const advanceAttemptStoppageWithPermit = (
+  permit: PlannedAttemptProtocolPermit,
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject
+) =>
+  withPlannedAttemptProtocolPermit(
+    permit,
+    plannedAttemptExecutorCorrelation(subject.plannedAttempt),
+    advanceAttemptStoppageUnserialized(requestId, subject, permit)
+  )
+
+export const advanceAttemptStoppage = Effect.fn("AttemptStop.advanceStoppage")(function* (
+  requestId: AttemptChoiceRequestId,
+  subject: AttemptChoiceSubject
+) {
+  const controller = yield* PlannedAttemptProtocolController
+  return yield* controller.withPermit(plannedAttemptExecutorCorrelation(subject.plannedAttempt), (permit) =>
+    advanceAttemptStoppageUnserialized(requestId, subject, permit)
+  )
+})
+
+/** Rechecks executor authority without issuing a fourth or duplicate suspension command. */
+const observeAttemptStoppageExecutorUnserialized = Effect.fn("AttemptStop.observeExecutorUnserialized")(function* (
+  requestId: AttemptChoiceRequestId,
+  subject: AttemptChoiceSubject,
+  permit: PlannedAttemptProtocolPermit
 ) {
   const journal = yield* InRunJournal
   const records = yield* journal.read(subject.plannedAttempt.runId)
@@ -210,7 +238,7 @@ export const observeAttemptStoppageExecutor = Effect.fn("AttemptStop.observeExec
   if (exactAbandonment(records, requestId, subject) !== undefined) {
     return { _tag: "AttemptImplementationAbandoned" } as const
   }
-  const report = yield* observePlannedAttemptExecutorState(subject.plannedAttempt)
+  const report = yield* observePlannedAttemptExecutorStateWithPermit(permit, subject.plannedAttempt)
   if (report._tag === "Running") {
     return { _tag: "AttemptStoppagePending", executorState: "Running" } as const
   }
@@ -221,6 +249,27 @@ export const observeAttemptStoppageExecutor = Effect.fn("AttemptStop.observeExec
   /* v8 ignore stop */
   yield* recordAbandonment(requestId, subject, proof)
   return { _tag: "AttemptImplementationAbandoned" } as const
+})
+
+export const observeAttemptStoppageExecutorWithPermit = (
+  permit: PlannedAttemptProtocolPermit,
+  requestId: AttemptChoiceRequestId,
+  subject: AttemptChoiceSubject
+) =>
+  withPlannedAttemptProtocolPermit(
+    permit,
+    plannedAttemptExecutorCorrelation(subject.plannedAttempt),
+    observeAttemptStoppageExecutorUnserialized(requestId, subject, permit)
+  )
+
+export const observeAttemptStoppageExecutor = Effect.fn("AttemptStop.observeExecutor")(function* (
+  requestId: AttemptChoiceRequestId,
+  subject: AttemptChoiceSubject
+) {
+  const controller = yield* PlannedAttemptProtocolController
+  return yield* controller.withPermit(plannedAttemptExecutorCorrelation(subject.plannedAttempt), (permit) =>
+    observeAttemptStoppageExecutorUnserialized(requestId, subject, permit)
+  )
 })
 
 type FocusedClaimObservationRecord = Omit<JournalRecord, "event"> & {

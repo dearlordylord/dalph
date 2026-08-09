@@ -25,7 +25,16 @@ export {
   AttemptChoiceRequestRunMismatch,
   attemptChoiceControlLayer
 } from "./workflow/protocols/attempt-choice/control.js"
-export * from "./workflow/protocols/attempt-choice/stop.js"
+export {
+  advanceAttemptStoppage,
+  type AttemptStoppageAdvanceResult,
+  AttemptStopChoiceContradiction,
+  AttemptStopClaimAuthorityMissing,
+  observeAttemptStoppageExecutor,
+  recordStoppedAttemptClaimNoRelease,
+  StoppedAttemptClaimObservationContradiction,
+  StoppedAttemptClaimObservationMissing
+} from "./workflow/protocols/attempt-choice/stop.js"
 export {
   ControlDirection,
   ControlDirectionApplicationOrdinal,
@@ -238,20 +247,29 @@ export {
 export { nodeCoordinatorLockLayer } from "./authorities/coordinator-ownership/node-lock.js"
 export { nodeGitWorktreeLayer } from "./authorities/git/node-worktree.js"
 export {
-  beginPlannedAttemptExecutorResponsibility,
   continuePlannedAttemptExecutorWork,
   observePlannedAttemptExecutorState,
+  requestPlannedAttemptExecutorSuspension
+} from "./workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
+export {
+  beginPlannedAttemptExecutorResponsibility,
   plannedAttemptExecutorContinuationDisposition,
   PlannedAttemptExecutorCommandReconciliationRequired,
   PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
   PlannedAttemptExecutorProjectionUnavailable,
+  PlannedAttemptExecutorResponsibilityAbandoned,
   PlannedAttemptExecutorResponsibilityContradiction,
   PlannedAttemptExecutorResponsibilityMissing,
   PlannedAttemptExecutorStateUnavailable,
-  PlannedAttemptExecutorSuspensionLimitReached,
-  requestPlannedAttemptExecutorSuspension
+  PlannedAttemptExecutorSuspensionLimitReached
 } from "./workflow/protocols/planned-attempt-executor-work/protocol.js"
+export {
+  makePlannedAttemptProtocolController,
+  PlannedAttemptProtocolController,
+  plannedAttemptProtocolControllerLayer,
+  type PlannedAttemptProtocolControllerService
+} from "./workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
 export * from "./workflow/protocols/integration-admission/events.js"
 export * from "./workflow/protocols/integration-admission/protocol.js"
@@ -443,6 +461,7 @@ export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-
 export { deliveryRuntime } from "./coordination/delivery/delivery-runtime-adapter.js"
 export {
   DeliveryActionExecutor,
+  DeliveryActionProtocolAdmissionMissing,
   type DeliveryActionExecutorService,
   type MaterializedDeliveryAction
 } from "./coordination/delivery/delivery-action-executor.js"

@@ -1,11 +1,15 @@
 import type { PlannedAttemptExecutorCorrelation, TaskId } from "@dalph/contracts"
-import { Effect, Ref, Schema } from "effect"
+import { Effect, Option, Ref } from "effect"
 import type { DeliveryProposalId, DeliveryTaskWorkAdmissionBasis } from "./relations.js"
 import type { DeliveryActionProposal, TaskWorkPositionRequirement } from "./delivery-action-proposal.js"
 import type {
   IntegrationTargetResourceController,
   IntegrationTargetResourceResponsibility
 } from "../admission/integration-target-resource.js"
+import {
+  PlannedAttemptProtocolController,
+  type PlannedAttemptProtocolPermit
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 
 type TaskWorkPosition =
   | { readonly _tag: "AcceptedAttemptPosition"; readonly correlation: PlannedAttemptExecutorCorrelation }
@@ -19,14 +23,27 @@ type TaskWorkPosition =
 interface AdmissionState {
   readonly capacity: DeliveryTaskWorkAdmissionBasis["capacity"]
   readonly positions: ReadonlyMap<TaskId, TaskWorkPosition>
-  readonly protocolOwners: ReadonlyMap<PlannedAttemptProtocolGuardKey, DeliveryProposalId>
 }
 
-export interface DeliveryAdmissionReservation {
+const DeliveryAdmissionReservationTypeId: unique symbol = Symbol.for("@dalph/DeliveryAdmissionReservation")
+
+interface DeliveryAdmissionReservationBase {
+  readonly [DeliveryAdmissionReservationTypeId]: typeof DeliveryAdmissionReservationTypeId
   readonly acquiredIntegrationResponsibility: IntegrationTargetResourceResponsibility | null
   readonly createdTaskPositionFor: TaskId | null
-  readonly proposal: DeliveryActionProposal
 }
+
+/** Opaque admission ownership is either exact-attempt guarded or carries no protocol resource. */
+export type DeliveryAdmissionReservation =
+  | (DeliveryAdmissionReservationBase & {
+      readonly _tag: "PlannedAttemptProtocolAdmission"
+      readonly permit: PlannedAttemptProtocolPermit
+      readonly proposal: DeliveryActionProposal
+    })
+  | (DeliveryAdmissionReservationBase & {
+      readonly _tag: "NoPlannedAttemptProtocolAdmission"
+      readonly proposal: DeliveryActionProposal
+    })
 
 export interface DeliveryRuntimeAdmissionController {
   readonly bindPlannedAttemptPosition: (
@@ -60,21 +77,19 @@ const sameCorrelation = (
   right: PlannedAttemptExecutorCorrelation
 ): boolean => left?.attemptId === right.attemptId && left.runId === right.runId
 
-/** Process-local structural identity of the guard for one exact Run and planned attempt. */
-const PlannedAttemptProtocolGuardKey = Schema.NonEmptyString.pipe(Schema.brand("PlannedAttemptProtocolGuardKey"))
-type PlannedAttemptProtocolGuardKey = typeof PlannedAttemptProtocolGuardKey.Type
-
-const plannedAttemptProtocolKey = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptProtocolGuardKey =>
-  PlannedAttemptProtocolGuardKey.make(JSON.stringify({ attemptId: correlation.attemptId, runId: correlation.runId }))
-
 interface TaskPositionReservation {
   readonly admitted: boolean
   readonly createdFor: TaskId | null
 }
 
-interface PlannedAttemptProtocolReservation {
-  readonly admitted: boolean
-}
+type PlannedAttemptProtocolReservation =
+  | { readonly _tag: "NoPlannedAttemptProtocolAdmission"; readonly proposal: DeliveryActionProposal }
+  | {
+      readonly _tag: "PlannedAttemptProtocolAdmitted"
+      readonly permit: PlannedAttemptProtocolPermit
+      readonly proposal: DeliveryActionProposal
+    }
+  | { readonly _tag: "PlannedAttemptProtocolUnavailable" }
 
 type ExistingTaskPositionRequirement = Extract<TaskWorkPositionRequirement, { readonly mode: "Existing" }>
 type ReusableTaskPositionRequirement = Extract<TaskWorkPositionRequirement, { readonly mode: "ReserveOrReuse" }>
@@ -172,7 +187,8 @@ const reserveTaskPositionState = (
 export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntimeAdmission.make")(function* (
   initial: DeliveryTaskWorkAdmissionBasis,
   integrationTargets: IntegrationTargetResourceController
-): Effect.fn.Return<DeliveryRuntimeAdmissionController> {
+): Effect.fn.Return<DeliveryRuntimeAdmissionController, never, PlannedAttemptProtocolController> {
+  const plannedAttemptProtocol = yield* PlannedAttemptProtocolController
   const state = yield* Ref.make<AdmissionState>({
     capacity: initial.capacity,
     positions: new Map(
@@ -180,8 +196,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
         taskId,
         { _tag: "AcceptedAttemptPosition" as const, correlation } satisfies TaskWorkPosition
       ])
-    ),
-    protocolOwners: new Map()
+    )
   })
 
   const synchronize = Effect.fn("DeliveryRuntimeAdmission.synchronize")((basis: DeliveryTaskWorkAdmissionBasis) =>
@@ -204,33 +219,18 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
     })
   )
 
-  const reservePlannedAttemptProtocol = (
+  const reservePlannedAttemptProtocol = Effect.fn("DeliveryRuntimeAdmission.reservePlannedAttemptProtocol")(function* (
     proposal: DeliveryActionProposal
-  ): Effect.Effect<PlannedAttemptProtocolReservation> =>
-    Ref.modify(state, (current): readonly [PlannedAttemptProtocolReservation, AdmissionState] => {
-      const requirement = proposal.admission.plannedAttemptProtocol
-      if (requirement._tag === "NoPlannedAttemptProtocol") {
-        return [{ admitted: true }, current] as const
-      }
-      const key = plannedAttemptProtocolKey(requirement.correlation)
-      if (current.protocolOwners.has(key)) return [{ admitted: false }, current] as const
-      return [
-        { admitted: true },
-        { ...current, protocolOwners: new Map(current.protocolOwners).set(key, proposal.id) }
-      ] as const
-    })
-
-  const releasePlannedAttemptProtocol = (proposal: DeliveryActionProposal) => {
+  ): Effect.fn.Return<PlannedAttemptProtocolReservation> {
     const requirement = proposal.admission.plannedAttemptProtocol
-    if (requirement._tag === "NoPlannedAttemptProtocol") return Effect.void
-    const key = plannedAttemptProtocolKey(requirement.correlation)
-    return Ref.update(state, (current) => {
-      if (current.protocolOwners.get(key) !== proposal.id) return current
-      const protocolOwners = new Map(current.protocolOwners)
-      protocolOwners.delete(key)
-      return { ...current, protocolOwners }
-    })
-  }
+    if (requirement._tag === "NoPlannedAttemptProtocol") {
+      return { _tag: "NoPlannedAttemptProtocolAdmission", proposal }
+    }
+    const permit = yield* plannedAttemptProtocol.reserve(requirement.correlation)
+    return Option.isSome(permit)
+      ? { _tag: "PlannedAttemptProtocolAdmitted", permit: permit.value, proposal }
+      : { _tag: "PlannedAttemptProtocolUnavailable" }
+  })
 
   const reserveTaskPosition = (proposal: DeliveryActionProposal) =>
     Ref.modify(state, (current) => reserveTaskPositionState(proposal, current))
@@ -263,31 +263,44 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
     return { admitted: snapshot.heldResponsibilityPositions.has(requirement.queuedAt), acquired: null }
   })
 
-  const tryReserve = Effect.fn("DeliveryRuntimeAdmission.tryReserve")(function* (proposal: DeliveryActionProposal) {
-    const protocol = yield* reservePlannedAttemptProtocol(proposal)
-    if (!protocol.admitted) {
-      return { _tag: "Deferred" as const, reason: "PlannedAttemptProtocolUnavailable" as const }
-    }
-    const task = yield* reserveTaskPosition(proposal)
-    if (!task.admitted) {
-      yield* releasePlannedAttemptProtocol(proposal)
-      return { _tag: "Deferred" as const, reason: "TaskWorkPositionUnavailable" as const }
-    }
-    const integration = yield* reserveIntegration(proposal)
-    if (!integration.admitted) {
-      if (task.createdFor !== null) yield* releaseTaskReservation(task.createdFor, proposal.id)
-      yield* releasePlannedAttemptProtocol(proposal)
-      return { _tag: "Deferred" as const, reason: "IntegrationTargetUnavailable" as const }
-    }
-    return {
-      _tag: "Admitted" as const,
-      reservation: {
-        acquiredIntegrationResponsibility: integration.acquired,
-        createdTaskPositionFor: task.createdFor,
-        proposal
-      }
-    }
-  })
+  const tryReserve = Effect.fn("DeliveryRuntimeAdmission.tryReserve")((proposal: DeliveryActionProposal) =>
+    Effect.uninterruptible(
+      Effect.gen(function* () {
+        const protocol = yield* reservePlannedAttemptProtocol(proposal)
+        if (protocol._tag === "PlannedAttemptProtocolUnavailable") {
+          return { _tag: "Deferred" as const, reason: "PlannedAttemptProtocolUnavailable" as const }
+        }
+        const task = yield* reserveTaskPosition(proposal)
+        if (!task.admitted) {
+          if (protocol._tag === "PlannedAttemptProtocolAdmitted") yield* protocol.permit.release
+          return { _tag: "Deferred" as const, reason: "TaskWorkPositionUnavailable" as const }
+        }
+        const integration = yield* reserveIntegration(proposal)
+        if (!integration.admitted) {
+          if (task.createdFor !== null) yield* releaseTaskReservation(task.createdFor, proposal.id)
+          if (protocol._tag === "PlannedAttemptProtocolAdmitted") yield* protocol.permit.release
+          return { _tag: "Deferred" as const, reason: "IntegrationTargetUnavailable" as const }
+        }
+        const base = {
+          [DeliveryAdmissionReservationTypeId]: DeliveryAdmissionReservationTypeId,
+          acquiredIntegrationResponsibility: integration.acquired,
+          createdTaskPositionFor: task.createdFor
+        } satisfies DeliveryAdmissionReservationBase
+        return {
+          _tag: "Admitted" as const,
+          reservation:
+            protocol._tag === "NoPlannedAttemptProtocolAdmission"
+              ? ({ ...base, _tag: "NoPlannedAttemptProtocolAdmission", proposal: protocol.proposal } as const)
+              : ({
+                  ...base,
+                  _tag: "PlannedAttemptProtocolAdmission",
+                  permit: protocol.permit,
+                  proposal: protocol.proposal
+                } as const)
+        }
+      })
+    )
+  )
 
   const rollback = Effect.fn("DeliveryRuntimeAdmission.rollback")(function* (
     reservation: DeliveryAdmissionReservation,
@@ -299,7 +312,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
     if (reservation.acquiredIntegrationResponsibility !== null) {
       yield* integrationTargets.release(reservation.acquiredIntegrationResponsibility)
     }
-    yield* releasePlannedAttemptProtocol(reservation.proposal)
+    if (reservation._tag === "PlannedAttemptProtocolAdmission") yield* reservation.permit.release
   })
 
   const complete = Effect.fn("DeliveryRuntimeAdmission.complete")(function* (
@@ -311,7 +324,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
     ) {
       yield* releaseTaskReservation(reservation.createdTaskPositionFor, reservation.proposal.id)
     }
-    yield* releasePlannedAttemptProtocol(reservation.proposal)
+    if (reservation._tag === "PlannedAttemptProtocolAdmission") yield* reservation.permit.release
   })
 
   return {

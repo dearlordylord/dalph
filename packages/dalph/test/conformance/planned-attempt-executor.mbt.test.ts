@@ -23,10 +23,13 @@ import {
   journalStoreCapabilities,
   legacyUnpublishedInRunJournalLayer,
   JournalPosition,
+  makePlannedAttemptProtocolController,
   observePlannedAttemptExecutorState,
+  PlannedAttemptProtocolController,
+  type PlannedAttemptProtocolControllerService,
   requestPlannedAttemptExecutorSuspension,
   TaskWorkCapacity
-} from "@dalph/orchestrator"
+} from "../../../orchestrator/src/index.js"
 import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
 import {
   makeDeliveryRuntimeAdmissionController,
@@ -124,6 +127,7 @@ const executorConformanceDriver = defineDriver(
   () => {
     let records: ReadonlyArray<JournalRecord> = []
     let controller: DeliveryRuntimeAdmissionController | undefined
+    let protocolController: PlannedAttemptProtocolControllerService | undefined
     let authorityReport: PlannedAttemptExecutorReport | undefined
     let commandKind: "StartOrContinue" | "Suspend" = "StartOrContinue"
     let commandIntentGate = Deferred.makeUnsafe<void>()
@@ -208,7 +212,13 @@ const executorConformanceDriver = defineDriver(
         })
     })
     const workflowLayer = Layer.merge(journalLayer, Layer.succeed(PlannedAttemptExecutor, executor))
-    const provideWorkflow = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.provide(workflowLayer))
+    const provideWorkflow = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      protocolController === undefined
+        ? Effect.die("planned-attempt protocol controller not initialized")
+        : effect.pipe(
+            Effect.provide(workflowLayer),
+            Effect.provideService(PlannedAttemptProtocolController, protocolController)
+          )
     const workflow = () =>
       commandKind === "Suspend"
         ? provideWorkflow(requestPlannedAttemptExecutorSuspension(plannedAttempt))
@@ -356,10 +366,12 @@ const executorConformanceDriver = defineDriver(
           pendingCommand = undefined
           pendingProjection = undefined
           pendingState = undefined
+          const freshProtocolController = yield* makePlannedAttemptProtocolController()
+          protocolController = freshProtocolController
           controller = yield* makeDeliveryRuntimeAdmissionController(
             { capacity: TaskWorkCapacity.make(1), held: [] },
             yield* makeIntegrationTargetResourceController()
-          )
+          ).pipe(Effect.provideService(PlannedAttemptProtocolController, freshProtocolController))
         }),
       beginResponsibility: () =>
         reservePosition().pipe(

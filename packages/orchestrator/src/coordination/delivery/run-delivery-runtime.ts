@@ -9,6 +9,7 @@ import type { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   DeliveryActionExecutor,
+  DeliveryActionProtocolAdmissionMissing,
   type DeliveryActionExecutionError,
   DeliverySemanticTrace,
   type DeliveryActionExecutionLease,
@@ -32,6 +33,10 @@ import {
   type TrackerGraphState
 } from "./relations.js"
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
+import {
+  type PlannedAttemptProtocolController,
+  withPlannedAttemptProtocolPermit
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 
 /** Two lower relations claim the same proposal identity, so no action is authorized. */
 export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedErrorClass<DeliveryRuntimeProposalOwnershipConflict>()(
@@ -92,7 +97,13 @@ const makeLease = (
   },
   integrationTargets,
   recordIntent: () => Ref.set(owner.intentRecorded, true),
-  releasePlannedAttemptPosition: admission.releasePlannedAttemptPosition
+  releasePlannedAttemptPosition: admission.releasePlannedAttemptPosition,
+  withPlannedAttemptProtocol: (correlation, effect) => {
+    const reservation = owner.reservation
+    return reservation._tag === "NoPlannedAttemptProtocolAdmission"
+      ? Effect.fail(new DeliveryActionProtocolAdmissionMissing({ correlation, proposalId: reservation.proposal.id }))
+      : withPlannedAttemptProtocolPermit(reservation.permit, correlation, effect(reservation.permit))
+  }
 })
 
 /**
@@ -150,7 +161,11 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
   | DeliveryRuntimeProposalOwnershipConflict
   | DeliveryRuntimeReconfirmationStateInvalid
   | PlannedTaskAttemptError,
-  DeliveryActionExecutor | DeliveryRuntimeResources | OperationIdAllocator | PlannedTaskAttemptPlanner
+  | DeliveryActionExecutor
+  | DeliveryRuntimeResources
+  | OperationIdAllocator
+  | PlannedAttemptProtocolController
+  | PlannedTaskAttemptPlanner
 > {
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -187,10 +202,8 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       yield* Ref.set(latest, Option.some(subscribedCurrent))
       yield* admission.synchronize(subscribedCurrent.taskWork)
 
-      const start = Effect.fn("DeliveryRuntime.startProposal")(function* (
-        proposal: DeliveryActionProposal,
-        reservation: DeliveryAdmissionReservation
-      ) {
+      const start = Effect.fn("DeliveryRuntime.startProposal")(function* (reservation: DeliveryAdmissionReservation) {
+        const proposal = reservation.proposal
         const intentRecorded = yield* Ref.make(false)
         const operationId = yield* Ref.make<OperationId | null>(null)
         const settled = yield* Ref.make(false)
@@ -257,7 +270,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           if (!proposalIsAvailable(independent, live, liveOperationIds, deferred, acceptedAt)) continue
           const laterReservation = yield* admission.tryReserve(independent)
           if (laterReservation._tag === "Admitted") {
-            return yield* start(independent, laterReservation.reservation)
+            return yield* start(laterReservation.reservation)
           }
           yield* emit({ _tag: "ProposalDeferred", proposalId: independent.id, reason: laterReservation.reason })
         }
@@ -298,7 +311,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                 current.acceptedAt
               )
             }
-            return yield* start(proposal, reservation.reservation)
+            return yield* start(reservation.reservation)
           })
         )
       })

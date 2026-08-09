@@ -20,6 +20,7 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
@@ -77,7 +78,7 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import { requestPlannedAttemptExecutorSuspension } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
+import { requestPlannedAttemptExecutorSuspension } from "../../workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
@@ -681,7 +682,7 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
         operation: expect.objectContaining({ _tag: "ReadTaskClaim", taskId })
       })
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer), Effect.provide(plannedAttemptProtocolControllerLayer))
 )
 
 it.effect("a task leaving complete membership safely suspends its executor work before the local constraint", () =>
