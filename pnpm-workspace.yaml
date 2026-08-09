@@ -4,5 +4,7 @@ packages:
   - "prototypes/reducer-lab"
 
 minimumReleaseAge: 1440
+# FoldKit 0.141.2 is the explicitly selected Effect beta.106-compatible UI state package;
+# keep the repository-wide age gate for every other dependency.
 minimumReleaseAgeExclude:
   - foldkit

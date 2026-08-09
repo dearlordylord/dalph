@@ -1,5 +1,7 @@
+/* eslint-disable import/no-nodejs-modules -- This adapter intentionally owns the Node-native flock descriptor. */
 import { Context, Deferred, Effect, Exit, FileSystem, Layer, Option, Schedule, Schema, Scope } from "effect"
 import { flock } from "fs-ext-extra-prebuilt"
+import { open } from "node:fs/promises"
 import {
   CoordinatorLock,
   CoordinatorLockHeld,
@@ -17,7 +19,6 @@ import {
 const ownershipObservationSchedule = Schedule.spaced("1 second")
 const lockHeldCodes = new Set(["EACCES", "EAGAIN", "EWOULDBLOCK"])
 const NativeLockCause = Schema.Struct({ code: Schema.String })
-const NativeNodeFile = Schema.Struct({ fd: Schema.Int })
 
 /** The host file-lock primitive rejected one descriptor lock request. */
 export class NativeCoordinatorLockFailure extends Schema.TaggedError<NativeCoordinatorLockFailure>()(
@@ -26,7 +27,9 @@ export class NativeCoordinatorLockFailure extends Schema.TaggedError<NativeCoord
 ) {}
 
 interface NativeCoordinatorFileLockService {
-  readonly acquireExclusive: (file: FileSystem.File) => Effect.Effect<void, NativeCoordinatorLockFailure>
+  readonly acquireExclusive: (
+    gitCommonDirectory: GitCommonDirectoryLocator
+  ) => Effect.Effect<void, NativeCoordinatorLockFailure, Scope.Scope>
 }
 
 export class NativeCoordinatorFileLock extends Context.Service<
@@ -37,14 +40,18 @@ export class NativeCoordinatorFileLock extends Context.Service<
 const nativeCoordinatorFileLockLayer = Layer.succeed(
   NativeCoordinatorFileLock,
   NativeCoordinatorFileLock.of({
-    acquireExclusive: Effect.fn("CoordinatorLock.NativeFileLock.acquireExclusive")(function* (file) {
-      const { fd: descriptor } = yield* Schema.decodeUnknownEffect(NativeNodeFile)(file).pipe(
-        Effect.mapError((cause) => new NativeCoordinatorLockFailure({ cause }))
+    acquireExclusive: Effect.fn("CoordinatorLock.NativeFileLock.acquireExclusive")(function* (gitCommonDirectory) {
+      const file = yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () => open(gitCommonDirectory, "r"),
+          catch: (cause) => new NativeCoordinatorLockFailure({ cause })
+        }),
+        (opened) => Effect.tryPromise(() => opened.close()).pipe(Effect.ignore)
       )
       yield* Effect.tryPromise({
         try: () =>
           new Promise<void>((resolve, reject) => {
-            flock(descriptor, "exnb", (failure) => {
+            flock(file.fd, "exnb", (failure) => {
               if (failure === null) resolve()
               else reject(failure)
             })
@@ -109,7 +116,8 @@ export const nodeCoordinatorLockAdapterLayer = Layer.effect(
             target
           })
         }
-        yield* nativeFileLock.acquireExclusive(openedDirectory).pipe(
+        yield* nativeFileLock.acquireExclusive(gitCommonDirectory).pipe(
+          Scope.provide(directoryScope),
           Effect.mapError((failure) => {
             const code = errorCode(failure)
             return code !== undefined && lockHeldCodes.has(code)

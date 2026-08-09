@@ -76,14 +76,16 @@ it("uses the ambient journal when a fresh accepted result is queued", async () =
   )
   const failure = await Effect.runPromise(
     Effect.flip(
-      context.queueAcceptedResult(
-        plannedAttempt,
-        AcceptedResult.make({ commit: GitCommitSha.make("a".repeat(40)) }),
-        IntegrationTarget.make({
-          repository: GitRepositoryLocator.make("/repo/.git"),
-          ref: IntegrationTargetRef.make("refs/heads/master")
-        })
-      ) as Effect.Effect<void, AcceptedResultNotDurable>
+      Effect.gen(function* () {
+        yield* context.queueAcceptedResult(
+          plannedAttempt,
+          AcceptedResult.make({ commit: GitCommitSha.make("a".repeat(40)) }),
+          IntegrationTarget.make({
+            repository: GitRepositoryLocator.make("/repo/.git"),
+            ref: IntegrationTargetRef.make("refs/heads/master")
+          })
+        )
+      })
     )
   )
 
