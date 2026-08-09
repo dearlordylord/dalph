@@ -46,7 +46,7 @@ const nativeCoordinatorFileLockLayer = Layer.succeed(
           try: () => open(gitCommonDirectory, "r"),
           catch: (cause) => new NativeCoordinatorLockFailure({ cause })
         }),
-        (opened) => Effect.tryPromise(() => opened.close()).pipe(Effect.ignore)
+        (opened) => Effect.tryPromise(() => opened.close()).pipe(Effect.orDie)
       )
       yield* Effect.tryPromise({
         try: () =>
