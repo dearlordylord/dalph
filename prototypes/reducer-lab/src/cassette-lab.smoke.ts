@@ -1,4 +1,6 @@
 import { maintainedAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/catalog.ts"
+import { AuthoredCassetteStoryItem } from "../../../packages/dalph/src/cassettes/authored-domain.ts"
+import { renderAuthoredStoryItemLandmark } from "../../../packages/dalph/src/cassettes/authored-presentation.ts"
 import "./delivery-playback.test.ts"
 import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts"
 import { maintainedTargetPromotionProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/target-promotion-protocol-cassette-domain.ts"
@@ -596,7 +598,10 @@ await scenario("shows graph observation provenance quiescence and planned action
   assert(facts.includes("passive because RunPaused"), "The exact quiescence reason must explain why desired tickets cannot start")
   assert(facts.includes("planned action proposals") || facts.includes("planning fails closed"), "The downstream action plan must be summarized without implying execution")
   assert(facts.includes("Operator paused the Run"), "A batched publication must retain the concrete operator Pause landmark")
-  assert(facts.includes("Task A reported Running"), "A batched publication must retain the executor report landmark after Pause")
+  assert(
+    facts.includes("Attempt attempt:A:0 reported Running"),
+    "A batched publication must retain the exact executor-attempt landmark after Pause"
+  )
   assert(document.querySelector("[data-role='delivery-action-planning']") !== null, "Exact action proposals and isolated planning issues must remain inspectable")
 })
 
@@ -817,6 +822,15 @@ await scenario("uses production authored prose for current story items", () => {
     projection.includes("A read-only executor projection returns")
       && !projection.includes("PlannedAttemptExecutorProjectionReturned"),
     "Executor projection input must be described as a readable boundary event rather than a raw tag"
+  )
+  const activationFinalRead = renderAuthoredStoryItemLandmark(
+    AuthoredCassetteStoryItem.cases.RunActivationFinalTrackerGraphReadReturned.make({
+      graph: maintainedAuthoredCassetteCatalog.contractedCapacityRetainsTwoAttempts.startingFacts.trackerGraph
+    })
+  )
+  assert(
+    activationFinalRead?.startsWith("Activation-final tracker read returned graph") === true,
+    "The Lab must consume the production-authored landmark for an activation-final tracker read"
   )
 })
 

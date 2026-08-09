@@ -10,7 +10,10 @@ import {
   runAuthoredScenarioCassette
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import { maintainedAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/catalog.ts"
-import { renderAuthoredStoryItemLyric } from "../../../packages/dalph/src/cassettes/authored-presentation.ts"
+import {
+  renderAuthoredStoryItemLandmark,
+  renderAuthoredStoryItemLyric
+} from "../../../packages/dalph/src/cassettes/authored-presentation.ts"
 import {
   maintainedIntegrationFinalityProtocolCassetteCatalog
 } from "../../../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts"
@@ -80,6 +83,7 @@ interface MaintainedCassetteDescriptor {
   readonly input: unknown
   readonly surface: CassetteDeliverySurface
   readonly story: ReadonlyArray<{ readonly _tag: string }>
+  readonly storyItemLandmarks: ReadonlyArray<string | null>
   readonly storyItemSummaries: ReadonlyArray<string>
   readonly storyName: string
 }
@@ -210,6 +214,7 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
     }
   },
   story: cassette.story,
+  storyItemLandmarks: cassette.story.map(renderAuthoredStoryItemLandmark),
   storyItemSummaries: cassette.story.map(renderAuthoredStoryItemLyric),
   storyName: cassette.name
 }))
@@ -234,6 +239,7 @@ const targetPromotionDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
   input: cassette,
   surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story,
+  storyItemLandmarks: cassette.story.map(() => null),
   storyItemSummaries: cassette.story.map((item) => storyItemSummary(item)),
   storyName: cassette.name
 }))
@@ -258,6 +264,7 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
   input: cassette,
   surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story,
+  storyItemLandmarks: cassette.story.map(() => null),
   storyItemSummaries: cassette.story.map((item) => storyItemSummary(item)),
   storyName: cassette.name
 }))
@@ -297,49 +304,12 @@ function storyItemSummary(item: Readonly<Record<string, unknown>>): string {
   return fragments.join(" · ")
 }
 
-const storyItemLandmark = (item: Readonly<Record<string, unknown>>): string | null => {
-  if (item._tag === "TrackerGraphReadReturned") {
-    const graph = typeof item.graph === "object" && item.graph !== null
-      ? item.graph as Readonly<Record<string, unknown>>
-      : undefined
-    const tasks = Array.isArray(graph?.tasks) ? graph.tasks : []
-    const taskStates = tasks.flatMap((task) => {
-      if (typeof task !== "object" || task === null) return []
-      const record = task as Readonly<Record<string, unknown>>
-      const lifecycle = typeof record.lifecycle === "object" && record.lifecycle !== null
-        ? (record.lifecycle as Readonly<Record<string, unknown>>)._tag
-        : undefined
-      return [`task ${String(record.id ?? "unknown")} ${String(lifecycle ?? "unknown lifecycle")}`]
-    })
-    return `Tracker returned graph ${String(graph?.revision ?? "without a revision")}${taskStates.length === 0 ? " with no tasks" : `: ${taskStates.join("; ")}`}`
-  }
-  if (
-    item._tag === "OperatorAppliesControlDirection"
-    || item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
-  ) {
-    const subject = typeof item.subject === "object" && item.subject !== null
-      ? item.subject as Readonly<Record<string, unknown>>
-      : undefined
-    const target = subject?._tag === "Run" ? "the Run" : `task ${String(subject?.taskId ?? "unknown")}`
-    return `Operator ${String(item.direction).toLowerCase()}d ${target}${item._tag.endsWith("WhileExecutorRequestInFlight") ? " while its executor request was in flight" : ""}`
-  }
-  if (item._tag === "PlannedAttemptExecutorWorkReported") {
-    const report = typeof item.report === "object" && item.report !== null
-      ? item.report as Readonly<Record<string, unknown>>
-      : undefined
-    const attemptId = String(report?.attemptId ?? "unknown attempt")
-    const taskId = /attempt:(?<task>[^:]+):/u.exec(attemptId)?.groups?.task
-    return `${taskId === undefined ? attemptId : `Task ${taskId}`} reported ${String(report?._tag ?? "executor state")}${report?._tag === "SafelySuspended" ? "; its held position can now be released" : ""}`
-  }
-  if (item._tag === "CoordinatorProcessDies") return "The coordinator process died; the next activation reconstructs accepted journal history"
-  return null
-}
-
 export const maintainedCassetteRows = descriptors.map(({
   catalogKey,
   category,
   input,
   story,
+  storyItemLandmarks,
   storyItemSummaries,
   storyName,
   surface
@@ -355,7 +325,7 @@ export const maintainedCassetteRows = descriptors.map(({
     runnerName: metadata.runnerName,
     surface,
     storyItemTags: story.map(({ _tag }) => _tag),
-    storyItemLandmarks: story.map((item) => storyItemLandmark(item)),
+    storyItemLandmarks,
     storyItemSummaries,
     storyName,
     totalItemCount: story.length

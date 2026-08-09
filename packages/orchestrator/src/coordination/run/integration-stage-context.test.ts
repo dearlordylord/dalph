@@ -36,14 +36,16 @@ it("fails with a typed error when a fresh accepted result has no ambient journal
   const context = await Effect.runPromise(makeIntegrationStageContext())
   const failure = await Effect.runPromise(
     Effect.flip(
-      context.queueAcceptedResult(
-        plannedAttempt,
-        AcceptedResult.make({ commit: GitCommitSha.make("a".repeat(40)) }),
-        IntegrationTarget.make({
-          repository: GitRepositoryLocator.make("/repo/.git"),
-          ref: IntegrationTargetRef.make("refs/heads/master")
-        })
-      ) as Effect.Effect<void, IntegrationJournalUnavailable>
+      Effect.gen(function* () {
+        yield* context.queueAcceptedResult(
+          plannedAttempt,
+          AcceptedResult.make({ commit: GitCommitSha.make("a".repeat(40)) }),
+          IntegrationTarget.make({
+            repository: GitRepositoryLocator.make("/repo/.git"),
+            ref: IntegrationTargetRef.make("refs/heads/master")
+          })
+        )
+      })
     )
   )
 

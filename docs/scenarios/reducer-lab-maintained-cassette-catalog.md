@@ -435,6 +435,12 @@ to show only the controlled declared graph and says production has not yet
 published delivery state. Direct protocol runners do not gain a fabricated
 timeline.
 
+The frame chronology obtains its landmark wording from the typed authored
+presenter used by the production cassette package. An ordinary tracker graph
+return and the one activation-final complete tracker read remain distinct
+landmarks; the Lab does not reinterpret raw story tags or infer a task from an
+encoded attempt identity.
+
 At the production projection boundary a focused test checks the complete
 identity chain in the one `DeliveryConsequences` value. The runner then derives
 one serializable browser frame from that same value: observed graph, exhaustive
@@ -563,7 +569,9 @@ task whose exact facts are correlated below.
   task table exposes exact obligations and current settlement state.
 - `uses production authored prose for current story items` checks the defining
   Continue/Stop race and a read-only executor projection use the exhaustive
-  typed production presenter rather than the Lab's generic tag formatter.
+  typed production presenter rather than the Lab's generic tag formatter. It
+  also checks the production-authored activation-final tracker-read landmark
+  remains distinct from an ordinary tracker graph return.
 - `keeps a dependant blocked after executor completion until a later tracker observation`
   checks the maintained dependent-task timeline rather than inferring release
   from the declared story.
