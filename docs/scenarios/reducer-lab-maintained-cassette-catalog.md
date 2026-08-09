@@ -252,7 +252,11 @@ filter, status filter, or **Run shown** command appears.
 An authored cassette's Delivery workbench is a permanent section of the one
 selected cassette surface, not a disclosure. Before execution it shows the
 controlled declared graph with an explicit statement that production has not
-observed it. As production publishes frames, the same mounted section gains
+observed it. Its **Run selected cassette** or **Rerun selected cassette** action
+and current cassette status live inside that workbench beside the playback
+controls, because they act on the visualization the maintainer is inspecting.
+Direct protocol cassettes retain the same action in their selected surface
+because they intentionally have no delivery workbench. As production publishes frames, the same mounted section gains
 one timeline control strip and one current-frame surface. The maintainer does
 not open, close, or rediscover the primary visualization.
 
@@ -262,6 +266,14 @@ positions; variable change summaries and task facts appear after the graph so
 their changing height cannot push the graph away from the maintainer. Choosing
 **Previous frame**, **Next frame**, or an exact frame stops auto-follow and
 keeps the chosen frame until the maintainer explicitly resumes **Follow live**.
+With focus in the workbench, the keyboard's Left and Right Arrow keys move one
+exact frame backward or forward, while `[` and `]` move to the previous or next
+delivery landmark. The visible shortcut hint names this behavior.
+Rerunning the selected cassette replaces the old timeline handler, so one key
+press still moves exactly once rather than replaying handlers from prior runs.
+Repeated bracket input reuses the already-derived landmark index and remains
+responsive at either end of the timeline; it does not repeatedly rescan every
+production frame or enqueue redundant graph renders.
 The exact selector retains every production publication. **Previous delivery
 landmark** and **Next delivery landmark** skip repeated and transient
 publications to the stable eligible-frontier waves, coordinator restart, and
@@ -270,6 +282,18 @@ D, the later activation boundaries, E+F, G, and the empty frontier without
 scanning more than nine landmarks. The complete
 per-task matrix is a secondary **All task delivery facts** disclosure; the
 graph and selected-task summary remain primary.
+
+The maintainer may drag the graph as one canvas and zoom with ordinary pointer
+or trackpad gestures; a compact visible hint names both gestures. **Reset graph view**
+reruns the deterministic graph layout and restores its fitted pan and zoom
+without changing the selected cassette, delivery frame, or task correlation.
+The reset remains in place but disabled when the current frame has no
+established graph, rather than offering a no-op action.
+
+Disabled controls use ordinary unavailable-control styling and a not-allowed
+cursor. They do not show a wait/loading cursor merely because navigation has
+reached the first or last frame; running state remains explicit in the cassette
+status text.
 
 Opening a raw journal event names its journal position, event tag, and
 available task/attempt context instead of repeating an indistinguishable
@@ -312,7 +336,8 @@ production frame replaced another.
   selected key replaces its identity, chronology, workbench applicability,
   action, status, and retained result without leaving the old UI visible.
 - `keeps one permanent delivery workbench stable while frames and selections change`
-  checks the complete ordinary selector labels, runs an authored cassette,
+  checks the complete ordinary selector labels, checks its Run/Rerun action is
+  inside the authored workbench, runs an authored cassette,
   proves the permanent section supports Next and Previous navigation, and
   restores the retained frame after selecting away and back.
 - `shows production delivery frames before the authored cassette settles`
@@ -325,7 +350,14 @@ production frame replaced another.
   pixels, traverses the six frontier waves and every activation boundary
   through at most nine landmark
   actions, preserves the graph summary and selected task across a frame change,
-  and requires unique position/tag/context labels for raw journal events.
+  and requires unique position/tag/context labels for raw journal events. It
+  also pans and zooms the graph, checks that its rendered pixels change, and
+  uses **Reset graph view** to restore the deterministic fitted layout. With
+  graph focus it drives Left/Right Arrow for exact frames and `[`/`]` for
+  delivery landmarks, then reruns the cassette and proves one Arrow press still
+  advances exactly one frame. A repeated-bracket stress check remains bounded
+  and leaves the page responsive, and disabled navigation buttons expose a
+  not-allowed rather than wait cursor.
 
 ## A maintainer watches an authored cassette move through delivery
 
@@ -414,11 +446,12 @@ and recorded position, graph and task revisions, capacity, and quiescence
 disposition. The cassette chronology and raw journal remain available as the
 control/evidence record rather than replacing the graph.
 
-When a recovery publication has not yet established a graph, the Lab replaces
-the large empty canvas with a compact explanation that there are no observed
-tasks to select. Reconstructed held positions and ticket-delivery obligations
-remain visible below; the Lab does not invite the maintainer to use an empty
-graph summary.
+When a later-activation publication has not yet established a graph, the Lab
+keeps the populated graph viewport dimensions and replaces its canvas contents
+with an explanation that there are no observed tasks to select. Reconstructed
+held positions and ticket-delivery obligations remain visible below; the Lab
+does not invite the maintainer to use an empty graph summary or collapse and
+expand the page while graph authority is temporarily absent.
 
 The typed cassette-evidence projection derives the concise action-plan facts
 while the exact production proposal union is still available. The browser does
@@ -545,9 +578,10 @@ task whose exact facts are correlated below.
 - `explains restart continuity at the first later activation boundary` selects the
   first frame of activation 2 and checks the visible restart marker plus held-position
   and obligation continuity.
-- `keeps graph-not-established recovery frames compact and truthful` checks an
-  empty recovery projection has no large canvas and explains that there is no
-  observed task to select while recovered delivery facts remain available.
+- `keeps graph-not-established frames dimensionally stable and truthful`
+  checks an empty later-activation projection retains the populated graph
+  viewport height and explains that there is no observed task to select while
+  journal-recovered delivery facts remain available.
 - `names concrete planned transitions and their admission requirements` checks
   Pause and accepted-result frames name the exact human action, task/attempt,
   task-work or integration-target resource requirement, and live-operation

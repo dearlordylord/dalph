@@ -383,6 +383,10 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
     "Every collapsed cassette option label must identify one unique maintained scenario"
   )
   chooseOption(selector, row.catalogKey)
+  assert(
+    document.querySelector("[data-role='delivery-workbench'] > .selected-cassette-controls button") !== null,
+    "An authored cassette Run/Rerun action must live inside its delivery workbench"
+  )
   const completed = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await completed
@@ -630,7 +634,7 @@ await scenario("separates every coordinator activation in a multi-restart delive
   }
 })
 
-await scenario("keeps graph-not-established recovery frames compact and truthful", async () => {
+await scenario("keeps graph-not-established frames dimensionally stable and truthful", async () => {
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) =>
     catalogKey === "authored:acceptedResultRestartsIntoIntegration"
@@ -661,11 +665,25 @@ await scenario("keeps graph-not-established recovery frames compact and truthful
     document.querySelector("[data-role='selected-task-facts']")?.textContent?.includes("No production-observed task is selectable") === true,
     "An empty recovery graph must not invite impossible task selection"
   )
+  assert(
+    document.querySelector("[data-role='delivery-workbench'] .delivery-graph-view-controls button")?.textContent
+      === "Reset graph view",
+    "The graph reset action must be visible beside the graph"
+  )
+  const reset = document.querySelector<HTMLButtonElement>(".delivery-graph-view-controls button")
+  assert(reset?.disabled === true, "An absent production graph must not offer a no-op reset")
+  assert(
+    document.querySelector(".delivery-graph-view-controls")?.textContent?.includes("Drag to pan · wheel or trackpad to zoom")
+      === true,
+    "The graph must visibly explain its pointer gestures"
+  )
   chooseOption(timeline, String(establishedIndex))
   const establishedGraph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
     projection?: { readonly tasks: ReadonlyArray<unknown> }
   }) | null
+  assert(establishedGraph === emptyGraph, "Graph authority changes must keep one dimensionally stable graph element")
   assert((establishedGraph?.projection?.tasks.length ?? 0) > 0, "A later observed graph must restore its useful task projection")
+  assert(reset?.disabled === false, "An established production graph must enable deterministic reset")
 })
 
 await scenario("names concrete planned transitions and their admission requirements", async () => {

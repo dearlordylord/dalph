@@ -356,11 +356,6 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       ownership.append(" · This direct protocol runner does not publish the graph-level delivery relation, so no graph, frontier, or held-position workbench is shown.")
     }
 
-    const deliveryWorkbenchHost = document.createElement("div")
-    const playback = playbackByKey.get(row.catalogKey) ?? makeDeliveryWorkbenchPlaybackState()
-    playbackByKey.set(row.catalogKey, playback)
-    const workbench = renderCassetteDeliveryWorkbench(deliveryWorkbenchHost, row, state, playback)
-
     const chronology = document.createElement("details")
     chronology.className = "declared-chronology"
     chronology.dataset.role = "declared-chronology"
@@ -387,10 +382,25 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       void runKeys([row.catalogKey], true).then(() => root.dispatchEvent(new Event(singleCassetteSettledEvent)))
     })
 
+    const deliveryWorkbenchHost = document.createElement("div")
+    const playback = playbackByKey.get(row.catalogKey) ?? makeDeliveryWorkbenchPlaybackState()
+    playbackByKey.set(row.catalogKey, playback)
+    const workbench = renderCassetteDeliveryWorkbench(
+      deliveryWorkbenchHost,
+      row,
+      state,
+      playback,
+      row.surface._tag === "AuthoredDeliverySurface" ? rowControls : undefined
+    )
+
     const evidenceHost = document.createElement("div")
     evidenceHost.className = "evidence-host"
-    article.append(identity, ownership, rowControls)
-    if (row.surface._tag === "AuthoredDeliverySurface") article.append(deliveryWorkbenchHost)
+    article.append(identity, ownership)
+    if (row.surface._tag === "AuthoredDeliverySurface") {
+      article.append(deliveryWorkbenchHost)
+    } else {
+      article.append(rowControls)
+    }
     article.append(chronology, evidenceHost)
     let renderedState: CassetteState | undefined
     const update = (nextState: CassetteState): void => {

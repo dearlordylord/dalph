@@ -437,6 +437,7 @@ export const makeDeliveryWorkbenchPlaybackState = (): DeliveryWorkbenchPlaybackS
 })
 
 interface DeliveryTimelineController {
+  readonly destroy: () => void
   readonly update: (frames: ReadonlyArray<AuthoredDeliveryFrame>, running: boolean) => void
 }
 
@@ -541,9 +542,17 @@ const renderTimeline = (
   nextLandmark.setAttribute("aria-label", "Next delivery landmark")
   const status = document.createElement("output")
   controls.append(status)
+  const shortcuts = appendText(parent, "p", "Keyboard: ←/→ exact frame · [/] delivery landmark", "delivery-playback-shortcuts")
   const frameHost = document.createElement("div")
   frameHost.dataset.role = "delivery-frame"
+  const graphViewControls = document.createElement("div")
+  graphViewControls.className = "delivery-graph-view-controls"
+  appendText(graphViewControls, "span", "Drag to pan · wheel or trackpad to zoom")
+  const resetGraphView = appendText(graphViewControls, "button", "Reset graph view")
+  resetGraphView.type = "button"
   const graph = document.createElement(deliveryGraphTag) as DeliveryGraphElement
+  graph.tabIndex = 0
+  graph.setAttribute("aria-label", "Interactive delivery graph; drag to pan, scroll to zoom")
   const change = appendText(frameHost, "p", "", "delivery-frame-change")
   const restart = appendText(frameHost, "p", "", "delivery-restart-boundary")
   restart.hidden = true
@@ -556,7 +565,7 @@ const renderTimeline = (
   const taskFactsSummary = appendText(taskFactsDisclosure, "summary", "All task delivery facts")
   const taskFactsHost = document.createElement("div")
   taskFactsDisclosure.append(taskFactsHost)
-  frameHost.prepend(graph, settlementCoverage)
+  frameHost.prepend(graphViewControls, graph, settlementCoverage)
   frameHost.append(factsHost, taskFactsDisclosure)
   let frames = initialFrames
   let running = initiallyRunning
@@ -595,7 +604,7 @@ const renderTimeline = (
     return eligible.length === 0 ? undefined : JSON.stringify(eligible)
   }
 
-  const landmarkIndexes = (): ReadonlyArray<number> => {
+  const computeLandmarkIndexes = (): ReadonlyArray<number> => {
     const landmarks = [0]
     const firstFrame = frames[0]
     let lastEligibleFrontier = firstFrame === undefined ? undefined : eligibleFrontierSignature(firstFrame)
@@ -623,6 +632,7 @@ const renderTimeline = (
     if (!running && terminalIndex >= 0 && landmarks.at(-1) !== terminalIndex) landmarks.push(terminalIndex)
     return landmarks
   }
+  let deliveryLandmarkIndexes: ReadonlyArray<number> = []
 
   const refreshNavigation = (index: number): void => {
     const newerCount = Math.max(0, frames.length - index - 1)
@@ -630,9 +640,8 @@ const renderTimeline = (
       + `${playback.followLive ? " · live" : ` · history · ${newerCount} newer`}`
     previous.disabled = index === 0
     next.disabled = index === frames.length - 1
-    const landmarks = landmarkIndexes()
-    previousLandmark.disabled = !landmarks.some((landmark) => landmark < index)
-    nextLandmark.disabled = !landmarks.some((landmark) => landmark > index)
+    previousLandmark.disabled = !deliveryLandmarkIndexes.some((landmark) => landmark < index)
+    nextLandmark.disabled = !deliveryLandmarkIndexes.some((landmark) => landmark > index)
   }
 
   const applyTaskSelection = (): void => {
@@ -650,6 +659,7 @@ const renderTimeline = (
     if (frame === undefined) return
     playback.selectedFrameIndex = index
     graph.projection = frameProjection(row, frame, index)
+    resetGraphView.disabled = frame.graph._tag !== "Established"
     change.textContent = frameChangeSummary(frames[index - 1], frame, row)
     const restartSummary = restartContinuity(frames[index - 1], frame)
     restart.hidden = restartSummary === undefined
@@ -693,15 +703,40 @@ const renderTimeline = (
   })
   previous.addEventListener("click", () => inspectFrame(Math.max(0, playback.selectedFrameIndex - 1)))
   next.addEventListener("click", () => inspectFrame(Math.min(frames.length - 1, playback.selectedFrameIndex + 1)))
-  previousLandmark.addEventListener("click", () => {
-    const target = landmarkIndexes().filter((index) => index < playback.selectedFrameIndex).at(-1)
+  const inspectPreviousLandmark = (): void => {
+    const target = deliveryLandmarkIndexes.filter((index) => index < playback.selectedFrameIndex).at(-1)
     if (target !== undefined) inspectFrame(target)
-  })
-  nextLandmark.addEventListener("click", () => {
-    const target = landmarkIndexes().find((index) => index > playback.selectedFrameIndex)
+  }
+  const inspectNextLandmark = (): void => {
+    const target = deliveryLandmarkIndexes.find((index) => index > playback.selectedFrameIndex)
     if (target !== undefined) inspectFrame(target)
-  })
+  }
+  previousLandmark.addEventListener("click", inspectPreviousLandmark)
+  nextLandmark.addEventListener("click", inspectNextLandmark)
   select.addEventListener("change", () => inspectFrame(Number(select.value)))
+  const keyboardSurface = parent.closest<HTMLElement>("[data-role='delivery-workbench']") ?? parent
+  const handleKeyboard = (event: KeyboardEvent): void => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    if (event.target instanceof HTMLSelectElement || event.target instanceof HTMLInputElement) return
+    switch (event.key) {
+      case "ArrowLeft":
+        inspectFrame(Math.max(0, playback.selectedFrameIndex - 1))
+        break
+      case "ArrowRight":
+        inspectFrame(Math.min(frames.length - 1, playback.selectedFrameIndex + 1))
+        break
+      case "[":
+        inspectPreviousLandmark()
+        break
+      case "]":
+        inspectNextLandmark()
+        break
+      default:
+        return
+    }
+    event.preventDefault()
+  }
+  keyboardSurface.addEventListener("keydown", handleKeyboard)
   graph.addEventListener("task-selected", (event) => {
     playback.selectedTaskId = (event as CustomEvent<{ readonly taskId: string }>).detail.taskId
     const frame = frames[playback.selectedFrameIndex]
@@ -709,10 +744,12 @@ const renderTimeline = (
     selectedTask.textContent = selectedTaskSummary(frame, playback.selectedTaskId)
     applyTaskSelection()
   })
-  parent.append(controls, frameHost)
+  resetGraphView.addEventListener("click", () => graph.resetView())
+  parent.append(controls, shortcuts, frameHost)
   const update = (nextFrames: ReadonlyArray<AuthoredDeliveryFrame>, nextRunning: boolean): void => {
     frames = nextFrames
     running = nextRunning
+    deliveryLandmarkIndexes = computeLandmarkIndexes()
     refreshSettlementCoverage()
     for (let index = select.options.length; index < frames.length; index += 1) {
       const frame = frames[index]
@@ -731,7 +768,10 @@ const renderTimeline = (
     else refreshNavigation(nextIndex)
   }
   update(initialFrames, initiallyRunning)
-  return { update }
+  return {
+    destroy: () => keyboardSurface.removeEventListener("keydown", handleKeyboard),
+    update
+  }
 }
 
 const deliveryFramesFrom = (state: CassetteState): ReadonlyArray<AuthoredDeliveryFrame> | null => {
@@ -743,7 +783,8 @@ export const renderCassetteDeliveryWorkbench = (
   host: HTMLElement,
   row: CassetteRow,
   state: CassetteState,
-  playback: DeliveryWorkbenchPlaybackState = makeDeliveryWorkbenchPlaybackState()
+  playback: DeliveryWorkbenchPlaybackState = makeDeliveryWorkbenchPlaybackState(),
+  cassetteControls?: HTMLElement
 ): DeliveryWorkbenchController => {
   host.replaceChildren()
   if (row.surface._tag !== "AuthoredDeliverySurface") return { update: () => undefined }
@@ -762,6 +803,7 @@ export const renderCassetteDeliveryWorkbench = (
     "Production graph, frontier, desired tickets, held task-work positions, obligations, and settlements for the selected cassette.",
     "delivery-workbench-purpose"
   )
+  if (cassetteControls !== undefined) section.append(cassetteControls)
   host.append(section)
   const content = document.createElement("div")
   content.className = "delivery-workbench-content"
@@ -772,6 +814,7 @@ export const renderCassetteDeliveryWorkbench = (
       timeline.update(frames, currentState._tag === "Running")
       return
     }
+    timeline?.destroy()
     content.replaceChildren()
     timeline = undefined
     const heading = appendText(content, "h4", "Production delivery timeline")

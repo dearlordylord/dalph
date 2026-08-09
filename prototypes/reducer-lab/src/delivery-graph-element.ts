@@ -46,6 +46,7 @@ export const deliveryGraphTag = "dalph-delivery-graph"
 
 export interface DeliveryGraphElement extends HTMLElement {
   projection: DeliveryGraphProjection | null
+  resetView: () => void
   selectedTaskId: string | null
 }
 

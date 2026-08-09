@@ -118,9 +118,50 @@ try {
   })
   assert.ok(graphRendered.canvasChildren > 0)
   assert.deepEqual(graphRendered.taskIds, ["A", "B"])
+  const graphLocator = page.locator("dalph-delivery-graph")
+  const graphCanvas = graphLocator.locator("#canvas")
+  const resetGraphView = workbench.getByRole("button", { name: "Reset graph view" })
+  await resetGraphView.click()
+  const fittedGraph = await graphCanvas.screenshot()
+  const canvasBounds = await graphCanvas.boundingBox()
+  if (canvasBounds === null) throw new Error("The delivery graph canvas is not visible")
+  await page.mouse.move(canvasBounds.x + canvasBounds.width / 2, canvasBounds.y + canvasBounds.height / 2)
+  await page.mouse.wheel(0, 420)
+  await page.waitForTimeout(100)
+  const zoomedGraph = await graphCanvas.screenshot()
+  assert.equal(zoomedGraph.equals(fittedGraph), false, "Pointer zoom must change the rendered graph")
+  await resetGraphView.click()
+  await page.waitForTimeout(100)
+  assert.equal((await graphCanvas.screenshot()).equals(fittedGraph), true, "Reset must restore fitted zoom and pan")
+  const panBounds = await graphCanvas.boundingBox()
+  if (panBounds === null) throw new Error("The delivery graph canvas disappeared before panning")
+  await page.mouse.move(panBounds.x + panBounds.width - 18, panBounds.y + panBounds.height - 18)
+  await page.mouse.down()
+  await page.mouse.move(panBounds.x + panBounds.width - 78, panBounds.y + panBounds.height - 48, { steps: 4 })
+  await page.mouse.up()
+  await page.waitForTimeout(100)
+  assert.equal((await graphCanvas.screenshot()).equals(fittedGraph), false, "Pointer drag must pan the rendered graph")
+  await resetGraphView.click()
+  await page.waitForTimeout(100)
+  assert.equal((await graphCanvas.screenshot()).equals(fittedGraph), true, "Reset must restore the deterministic graph layout")
+  console.log("✓ supports graph pan zoom and deterministic reset")
+  await frameSelector.selectOption("0")
+  await graphLocator.focus()
+  await page.keyboard.press("ArrowRight")
+  assert.equal(await frameSelector.inputValue(), "1")
+  await page.keyboard.press("ArrowLeft")
+  assert.equal(await frameSelector.inputValue(), "0")
+  await page.keyboard.press("]")
+  assert.ok(Number(await frameSelector.inputValue()) > 0)
+  await page.keyboard.press("[")
+  assert.equal(await frameSelector.inputValue(), "0")
+  await workbench.getByRole("button", { name: /Run selected cassette:/u }).focus()
+  await page.keyboard.press("ArrowRight")
+  assert.equal(await frameSelector.inputValue(), "1")
+  await frameSelector.selectOption(String(frameCount - 2))
+  console.log("✓ navigates exact frames with arrows and landmarks with brackets")
   assert.match(graphRendered.relationships, /Graph summary · 2 tasks · 1 relationship/u)
   assert.match(graphRendered.relationships, /A blocks B/u)
-  const graphLocator = page.locator("dalph-delivery-graph")
   await graphLocator.locator("#summary > summary").click()
   const beforeSelection = await graphLocator.screenshot()
   await graphLocator.locator('button[data-task-id="A"]').click()
@@ -162,24 +203,36 @@ try {
   assert.equal(combinedEncoding, true)
   console.log("✓ composes simultaneous graph ticket held and delivery encodings")
 
+  if (await graphLocator.locator("#summary").getAttribute("open") !== null) {
+    await graphLocator.locator("#summary > summary").click()
+  }
+  const populatedGraphHeight = await page.locator("dalph-delivery-graph").evaluate((element) =>
+    element.getBoundingClientRect().height
+  )
   await frameSelector.selectOption("0")
   const emptyGraphTruth = await page.locator("dalph-delivery-graph").evaluate((element) => {
     const summary = element.shadowRoot?.querySelector("#summary")
     return {
-      compactHeight: element.getBoundingClientRect().height,
+      height: element.getBoundingClientRect().height,
       empty: element.hasAttribute("data-empty"),
       summaryHidden: summary?.hasAttribute("hidden") ?? false
     }
   })
   assert.equal(emptyGraphTruth.empty, true)
   assert.equal(emptyGraphTruth.summaryHidden, true)
-  assert.ok(emptyGraphTruth.compactHeight < 200)
+  assert.ok(
+    Math.abs(emptyGraphTruth.height - populatedGraphHeight) <= 2,
+    `graph viewport changed from ${populatedGraphHeight}px to ${emptyGraphTruth.height}px`
+  )
   assert.doesNotMatch(
     await workbench.locator('[data-role="selected-task-facts"]').textContent() ?? "",
     /Select a task in the graph summary/u
   )
-  console.log("✓ keeps graph-not-established recovery frames compact and truthful")
+  assert.equal(await resetGraphView.isDisabled(), true)
+  assert.match(await workbench.locator(".delivery-graph-view-controls").textContent() ?? "", /Drag to pan · wheel or trackpad to zoom/u)
+  console.log("✓ keeps graph-not-established frames dimensionally stable and truthful")
   await frameSelector.selectOption(String(frameCount - 2))
+  assert.equal(await resetGraphView.isEnabled(), true)
 
   await workbench.getByRole("button", { name: "Follow live" }).click()
   assert.equal(await frameSelector.inputValue(), String(frameCount - 1))
@@ -188,6 +241,40 @@ try {
   assert.equal(new Set(journalLabels).size, journalLabels.length)
   assert.ok(journalLabels.every((label) => /^Position \d+ · [A-Za-z]/u.test(label)))
   assert.ok(journalLabels.some((label) => label.includes("taskId=A") && label.includes("attemptId=attempt:A:0")))
+
+  await page.evaluate(() => {
+    globalThis.__singleRerunSettled = new Promise((resolve) => {
+      document.querySelector("#root")?.addEventListener("dalph-cassette-lab:single-settled", resolve, { once: true })
+    })
+  })
+  await workbench.getByRole("button", { name: /Run selected cassette:/u }).click()
+  await page.evaluate(() => globalThis.__singleRerunSettled)
+  const rerunFrameSelector = workbench.getByLabel("Delivery frame")
+  await rerunFrameSelector.selectOption("0")
+  await workbench.getByRole("button", { name: /Run selected cassette:/u }).focus()
+  await page.keyboard.press("ArrowRight")
+  assert.equal(await rerunFrameSelector.inputValue(), "1")
+  await rerunFrameSelector.selectOption(String(await rerunFrameSelector.locator("option").count() - 1))
+  await workbench.locator("dalph-delivery-graph").focus()
+  const repeatedBracketDuration = await page.evaluate(() => {
+    const started = performance.now()
+    for (let index = 0; index < 5_000; index += 1) {
+      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "["
+      }))
+    }
+    return performance.now() - started
+  })
+  await page.evaluate(() => new Promise(requestAnimationFrame))
+  assert.equal(await rerunFrameSelector.inputValue(), "0")
+  assert.ok(repeatedBracketDuration < 1_000, `repeated landmark input took ${repeatedBracketDuration}ms`)
+  const disabledCursor = await workbench.getByRole("button", { name: "Previous frame" }).evaluate((button) =>
+    getComputedStyle(button).cursor
+  )
+  assert.equal(disabledCursor, "not-allowed")
+  console.log("✓ keeps exactly one keyboard playback handler after rerun")
 
   await page.reload({ waitUntil: "networkidle" })
   await selector.selectOption(linkedDeliveryStoryCassette)

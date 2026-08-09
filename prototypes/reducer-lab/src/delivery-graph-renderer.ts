@@ -121,6 +121,14 @@ const topologyIdentity = (projection: DeliveryGraphProjection | null): string | 
     tasks: renderedTasks(projection).map(({ id }) => id)
   })
 
+const deliveryGraphLayout = (): cytoscape.LayoutOptions => ({
+  name: "dagre",
+  nodeSep: 44,
+  padding: 28,
+  rankDir: "LR",
+  rankSep: 92
+} as unknown as cytoscape.LayoutOptions)
+
 const shadowCss = `
   :host {
     display: block;
@@ -133,30 +141,29 @@ const shadowCss = `
     background-size: 24px 24px;
   }
   :host([data-empty]) {
-    min-height: 0;
     background: #fbf8f1;
   }
-  #canvas { position: relative; width: 100%; height: 430px; }
+  #canvas { position: relative; width: 100%; height: 430px; touch-action: none; cursor: grab; }
+  #canvas:active { cursor: grabbing; }
   #empty {
+    box-sizing: border-box;
+    height: 430px;
     min-height: 430px;
     display: grid;
     place-items: center;
     color: #726b60;
     font: italic 14px system-ui, sans-serif;
   }
-  :host([data-empty]) #empty {
-    min-height: 0;
-    padding: 1rem;
-    text-align: center;
-  }
+  :host([data-empty]) #empty { padding: 1rem; text-align: center; }
   [hidden] { display: none !important; }
-  #summary {
+  #summary, #empty-footer {
     border-top: 1px solid #bdb5a8;
     padding: .65rem .8rem;
     color: #39352e;
     background: rgba(251, 248, 241, .94);
     font: 13px/1.45 system-ui, sans-serif;
   }
+  #empty-footer { font-weight: 650; }
   #summary summary { cursor: pointer; font-weight: 650; }
   #summary p { margin: .45rem 0; overflow-wrap: anywhere; }
   #summary h4 { margin: .65rem 0 .2rem; }
@@ -178,8 +185,7 @@ const shadowCss = `
   @media (max-width: 42rem) {
     :host { min-height: 340px; }
     #canvas { height: 340px; }
-    #empty { min-height: 340px; }
-    :host([data-empty]) #empty { min-height: 0; }
+    #empty { height: 340px; min-height: 340px; }
   }
 `
 
@@ -282,7 +288,9 @@ class DalphDeliveryGraphElement extends HTMLElement {
   #canvas: HTMLDivElement
   #core: Core | null = null
   #empty: HTMLDivElement
+  #emptyFooter: HTMLDivElement
   #projection: DeliveryGraphProjection | null = null
+  #panGesture: { readonly pointerId: number; readonly startX: number; readonly startY: number; readonly pan: cytoscape.Position } | null = null
   #preserveViewport = false
   #resizeObserver: ResizeObserver | null = null
   #selectedTaskId: string | null = null
@@ -296,12 +304,40 @@ class DalphDeliveryGraphElement extends HTMLElement {
     this.#canvas = document.createElement("div")
     this.#canvas.id = "canvas"
     this.#canvas.setAttribute("aria-hidden", "true")
+    this.#canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || this.#core === null) return
+      this.#panGesture = {
+        pan: this.#core.pan(),
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY
+      }
+      this.#canvas.setPointerCapture(event.pointerId)
+    })
+    this.#canvas.addEventListener("pointermove", (event) => {
+      const gesture = this.#panGesture
+      if (this.#core === null || gesture === null || gesture.pointerId !== event.pointerId) return
+      this.#core.pan({
+        x: gesture.pan.x + event.clientX - gesture.startX,
+        y: gesture.pan.y + event.clientY - gesture.startY
+      })
+    })
+    const finishPan = (event: PointerEvent): void => {
+      if (this.#panGesture?.pointerId !== event.pointerId) return
+      this.#panGesture = null
+      if (this.#canvas.hasPointerCapture(event.pointerId)) this.#canvas.releasePointerCapture(event.pointerId)
+    }
+    this.#canvas.addEventListener("pointercancel", finishPan)
+    this.#canvas.addEventListener("pointerup", finishPan)
     this.#empty = document.createElement("div")
     this.#empty.id = "empty"
     this.#empty.textContent = "No tasks or relationships in this projection."
+    this.#emptyFooter = document.createElement("div")
+    this.#emptyFooter.id = "empty-footer"
+    this.#emptyFooter.textContent = "Task selection is unavailable until production establishes the graph."
     this.#summary = document.createElement("details")
     this.#summary.id = "summary"
-    shadow.append(style, this.#canvas, this.#empty, this.#summary)
+    shadow.append(style, this.#canvas, this.#empty, this.#emptyFooter, this.#summary)
   }
 
   set projection(value: DeliveryGraphProjection | null) {
@@ -328,6 +364,12 @@ class DalphDeliveryGraphElement extends HTMLElement {
 
   get selectedTaskId(): string | null {
     return this.#selectedTaskId
+  }
+
+  resetView(): void {
+    if (this.#core === null) return
+    this.#core.layout(deliveryGraphLayout()).run()
+    this.#core.fit(this.#core.elements(), 28)
   }
 
   connectedCallback(): void {
@@ -423,6 +465,7 @@ class DalphDeliveryGraphElement extends HTMLElement {
     if (empty) this.setAttribute("data-empty", "")
     else this.removeAttribute("data-empty")
     this.#summary.hidden = empty
+    this.#emptyFooter.hidden = !empty
     if (empty) {
       this.#summary.replaceChildren()
       this.#canvas.hidden = true
@@ -439,18 +482,18 @@ class DalphDeliveryGraphElement extends HTMLElement {
     this.#canvas.hidden = false
     this.#empty.hidden = true
     this.#core = cytoscape({
+      autoungrabify: true,
+      boxSelectionEnabled: false,
       container: this.#canvas,
       elements: [...graphElements(projection, this.#selectedTaskId)],
-      layout: ({
-        name: "dagre",
-        nodeSep: 44,
-        padding: 28,
-        rankDir: "LR",
-        rankSep: 92
-      } as unknown as cytoscape.LayoutOptions),
+      layout: deliveryGraphLayout(),
       maxZoom: 2.4,
       minZoom: 0.28,
-      style: cytoscapeStyle
+      panningEnabled: true,
+      style: cytoscapeStyle,
+      userPanningEnabled: true,
+      userZoomingEnabled: true,
+      zoomingEnabled: true
     })
     if (previousViewport !== undefined) {
       this.#core.zoom(previousViewport.zoom)
