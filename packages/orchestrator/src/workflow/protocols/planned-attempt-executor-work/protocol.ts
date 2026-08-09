@@ -12,6 +12,7 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorCommandProjectionObservedRecordKey,
+  plannedAttemptExecutorCommandResponseContradictedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
@@ -23,6 +24,7 @@ import {
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandProjectionObservation,
   PlannedAttemptExecutorCommandProjectionOrdinal,
+  PlannedAttemptExecutorCommandResponseContradictedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorStateObservation,
@@ -278,6 +280,17 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
       ? yield* executor.startOrContinue(plannedAttempt)
       : yield* executor.requestSuspension(plannedAttempt)
   if (!sameCorrelation(correlation, report.correlation)) {
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorCommandResponseContradictedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandResponseContradictedEvent.make({
+        commandOrdinal,
+        observed: report,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
     return yield* new PlannedAttemptExecutorCorrelationMismatch({ expected: correlation, observed: report.correlation })
   }
 

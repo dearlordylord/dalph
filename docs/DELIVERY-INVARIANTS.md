@@ -414,23 +414,37 @@ conflict resolution never apply edits to the planned task worktree.
 capability — pre-integration cancellation after integration starts — it is not
 offered again, and restart reconstructs the cutoff rather than resurrecting the
 capability.
-→ `—` no model offers a capability that can be withdrawn.
+→ `taskFactReconciliation` states `postCutoffChoiceNeverApplies` and reaches the
+integration-started rejection. The scenario's forbidden Continue-or-Stop result
+is exercised by `rejects Continue and Stop after the exact integration cutoff`.
 
 ## Operator requests
 
-**Partly implemented.** Applying a direction ships; the request-identity and
-race-arbitration rules are accepted specification from issue 65, which is open.
+**Implemented.** Applying a control direction, applying an exact changed-attempt
+Continue-or-Stop choice, exact redelivery, request-identity contradictions,
+first-journaled race arbitration, and the pre-integration cutoff ship. The
+issue 65 cassette scenarios trace the forbidden results named by D46-D49:
+receipt alone is not policy, a stale direction crosses no later boundary, one
+request identity cannot name different contents, a losing raced choice cannot
+act, and a later fingerprint requires a fresh choice.
 
 **D47 Receipt is not application.** Receiving an Operator command is ephemeral;
 applying one exact direction is a durable action. Command receipt is never
 recorded as an applied policy change.
-→ `I17 (weakened: the models apply a direction with no receipt step)`
+→ `controlDirectionApplication` separates `receive` from durable application;
+`applicationClaimsNoLaterEffects` also prevents application from claiming the
+later executor or tracker work. Benchmark `I17` remains weaker because its
+cross-tool projection omits receipt.
 
 **D48 An applied direction authorizes exactly one matching later action.** A
 reacquisition intent requires a prior matching applied direction. A direction
 applied after exact or unreadable evidence cannot authorize a later loss, a
 restoration ends an earlier direction, and a stale identity is rejected.
-→ `—`
+→ `taskFactReconciliation` states the weaker
+`replacementClaimRequiresDirectionAndIntent`; production history additionally
+checks the exact prior direction and its observation episode. The scenario seam
+`does not cross cleanup or integration boundaries for a stale direction` traces
+the forbidden later action.
 
 **D49 Operator request identity is exact.** Exact redelivery of a request returns
 its recorded result rather than acting twice. Reuse of a request identity for a
@@ -438,8 +452,10 @@ different Run, task, attempt, fingerprint pair, or choice is a typed
 contradiction. Where two valid requests race, the first committed to the journal
 wins regardless of arrival order, and a later change of instructions requires a
 fresh choice.
-→ `—` D21 and D22 govern outbound ambiguity; nothing in the study models inbound
-request identity.
+→ `taskFactReconciliation` states `requestIdentityErrorsRemainDistinct`,
+`firstJournaledChoiceWins`, and `changedAgainRequiresNewChoice`. Its collected
+tests reach exact redelivery, conflicting reuse, both race winners, and the new
+fingerprint choice; matching production cassette tests use those same cases.
 
 ## Open questions
 

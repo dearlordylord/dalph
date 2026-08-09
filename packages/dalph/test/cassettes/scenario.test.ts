@@ -4576,6 +4576,7 @@ it.effect(
         PlannedAttemptExecutorWorkReported: true,
         PlannedAttemptExecutorCommandIntended: true,
         PlannedAttemptExecutorCommandProjectionObserved: true,
+        PlannedAttemptExecutorCommandResponseContradicted: true,
         PlannedAttemptExecutorStateObserved: true,
         PlannedAttemptExecutorWorkResponsibilityBegan: true,
         PlannedAttemptWorktreeObserved: true,
@@ -4659,6 +4660,18 @@ it.effect(
       ) {
         return yield* Effect.die("Stop recording must contain exact command and state projections")
       }
+      const responseContradictionEntry = {
+        _tag: "PlannedAttemptExecutorCommandResponseContradicted" as const,
+        commandOrdinal: projectionEntry.commandOrdinal,
+        observed: PlannedAttemptExecutorReport.cases.Running.make({
+          correlation: {
+            attemptId: AttemptId.make("foreign-response-attempt"),
+            runId: projectionEntry.plannedAttempt.runId
+          }
+        }),
+        occurrenceClassification: "NonActionOccurrence" as const,
+        plannedAttempt: projectionEntry.plannedAttempt
+      }
       const executorObservationVariants = RecordedCassette.make({
         _tag: "RecordedCassette",
         entries: [
@@ -4671,7 +4684,8 @@ it.effect(
             ...stateEntry,
             observation: { _tag: "ExecutorReportContradiction", observed: stateEntry.observation.report }
           },
-          { ...stateEntry, observation: { _tag: "ExecutorStateUnavailable" } }
+          { ...stateEntry, observation: { _tag: "ExecutorStateUnavailable" } },
+          responseContradictionEntry
         ],
         runId: stoppageRecorded.runId,
         schemaVersion: recordedCassetteVersion
@@ -4688,15 +4702,34 @@ it.effect(
         "ExecutorReportContradiction",
         "ExecutorStateUnavailable",
         "ExecutorReportContradiction",
-        "ExecutorStateUnavailable"
+        "ExecutorStateUnavailable",
+        undefined
       ])
+      expect(renamedExecutorObservationVariants.entries.at(-1)?._tag).toBe(
+        "PlannedAttemptExecutorCommandResponseContradicted"
+      )
+      const projectionIndex = stoppageRecorded.entries.indexOf(projectionEntry)
+      const contradictoryResponseCassette = RecordedCassette.make({
+        ...stoppageRecorded,
+        entries: [
+          ...stoppageRecorded.entries.slice(0, projectionIndex),
+          responseContradictionEntry,
+          ...stoppageRecorded.entries.slice(projectionIndex)
+        ]
+      })
+      const contradictoryResponseHistory = foldRecordedCassette(contradictoryResponseCassette)
+      if (contradictoryResponseHistory._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die("a contradictory response must remain unsettled for the following exact projection")
+      }
+      expectRecordedRoundTrip(contradictoryResponseHistory.records, contradictoryResponseCassette)
       expect(
         new Set(
           [
             ...recorded.entries,
             ...stoppageRecorded.entries,
             ...noReleaseRecorded.entries,
-            ...foreignNoReleaseRecorded.entries
+            ...foreignNoReleaseRecorded.entries,
+            ...executorObservationVariants.entries
           ].map(({ _tag }) => _tag)
         )
       ).toEqual(

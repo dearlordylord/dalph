@@ -821,6 +821,14 @@ const renameRecordedCassetteEntry = (
           plannedAttempt: renamePlannedAttempt(observationEntry.plannedAttempt, maps),
           projectionOrdinal: preserveCassetteValue(observationEntry.projectionOrdinal)
         }),
+      PlannedAttemptExecutorCommandResponseContradicted: (observationEntry) =>
+        completeFields<typeof observationEntry>({
+          _tag: "PlannedAttemptExecutorCommandResponseContradicted",
+          commandOrdinal: preserveCassetteValue(observationEntry.commandOrdinal),
+          observed: renameExecutorReport(observationEntry.observed, maps),
+          occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
+          plannedAttempt: renamePlannedAttempt(observationEntry.plannedAttempt, maps)
+        }),
       PlannedAttemptExecutorStateObserved: (observationEntry) =>
         completeFields<typeof observationEntry>({
           _tag: "PlannedAttemptExecutorStateObserved",

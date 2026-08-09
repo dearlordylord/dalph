@@ -51,6 +51,20 @@ export const PlannedAttemptExecutorCommandProjectionObservedEvent = Schema.Tagge
 export type PlannedAttemptExecutorCommandProjectionObservedEvent =
   typeof PlannedAttemptExecutorCommandProjectionObservedEvent.Type
 
+/** The direct response to one exact executor command named another Run or attempt. */
+export const PlannedAttemptExecutorCommandResponseContradictedEvent = Schema.TaggedStruct(
+  "PlannedAttemptExecutorCommandResponseContradicted",
+  {
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+    observed: PlannedAttemptExecutorReport,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    plannedAttempt: PlannedTaskAttempt,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+export type PlannedAttemptExecutorCommandResponseContradictedEvent =
+  typeof PlannedAttemptExecutorCommandResponseContradictedEvent.Type
+
 /** Orders durable executor reports for one planned attempt without identifying executor work. */
 export const PlannedAttemptExecutorReportOrdinal = Schema.Int.pipe(
   Schema.check(Schema.isGreaterThan(0)),
@@ -124,6 +138,7 @@ export const PlannedAttemptExecutorWorkReportedEvent = Schema.TaggedStruct("Plan
 export const PlannedAttemptExecutorJournalEvent = Schema.Union([
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandResponseContradictedEvent,
   PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   PlannedAttemptExecutorWorkReportedEvent

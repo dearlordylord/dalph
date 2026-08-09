@@ -1077,6 +1077,7 @@ const validateExecutorEvent = (
       : event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
           event._tag === "PlannedAttemptExecutorCommandIntended" ||
           event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+          event._tag === "PlannedAttemptExecutorCommandResponseContradicted" ||
           event._tag === "PlannedAttemptExecutorStateObserved"
         ? event.plannedAttempt.attemptId
         : undefined
@@ -1237,6 +1238,42 @@ const validateExecutorEvent = (
       }
     }
   }
+  const validateCommandResponseContradiction = () => {
+    if (event._tag === "PlannedAttemptExecutorCommandResponseContradicted") {
+      const attemptId = event.plannedAttempt.attemptId
+      const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+      if (
+        responsibility === undefined ||
+        !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
+      ) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `contradictory executor response for attempt ${attemptId} has no prior matching executor-work responsibility`
+        )
+      }
+      if (indexes.unsettledExecutorCommands.get(attemptId) !== event.commandOrdinal) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `contradictory executor response for attempt ${attemptId} does not name its unmatched command intent`
+        )
+      }
+      if (
+        event.observed.correlation.runId === event.plannedAttempt.runId &&
+        event.observed.correlation.attemptId === attemptId
+      ) {
+        identityIssue(
+          issues,
+          runId,
+          record.position,
+          `contradictory executor response for attempt ${attemptId} contains the expected correlation`
+        )
+      }
+    }
+  }
   const validateStateObservation = () => {
     if (event._tag === "PlannedAttemptExecutorStateObserved") {
       const attemptId = event.plannedAttempt.attemptId
@@ -1345,6 +1382,7 @@ const validateExecutorEvent = (
   validateResponsibilityBegan()
   validateCommandIntent()
   validateCommandProjection()
+  validateCommandResponseContradiction()
   validateStateObservation()
   validateWorkReport()
 }

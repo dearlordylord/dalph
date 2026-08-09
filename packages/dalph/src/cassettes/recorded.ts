@@ -35,6 +35,7 @@ import {
   type JournalRecord,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandResponseContradictedEvent,
   PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
@@ -119,6 +120,7 @@ const recordExecutorEntry = (
       readonly _tag:
         | "PlannedAttemptExecutorCommandIntended"
         | "PlannedAttemptExecutorCommandProjectionObserved"
+        | "PlannedAttemptExecutorCommandResponseContradicted"
         | "PlannedAttemptExecutorStateObserved"
         | "PlannedAttemptExecutorWorkReported"
         | "PlannedAttemptExecutorWorkResponsibilityBegan"
@@ -157,6 +159,14 @@ const recordExecutorEntry = (
         occurrenceClassification: event.occurrenceClassification,
         plannedAttempt: event.plannedAttempt,
         projectionOrdinal: event.projectionOrdinal
+      }
+    case "PlannedAttemptExecutorCommandResponseContradicted":
+      return {
+        _tag: "PlannedAttemptExecutorCommandResponseContradicted",
+        commandOrdinal: event.commandOrdinal,
+        observed: event.observed,
+        occurrenceClassification: event.occurrenceClassification,
+        plannedAttempt: event.plannedAttempt
       }
     case "PlannedAttemptExecutorStateObserved":
       return {
@@ -557,6 +567,7 @@ const recordTaskBoundaryEntry = (
         | "TargetLineageObserved"
         | "PlannedAttemptExecutorCommandIntended"
         | "PlannedAttemptExecutorCommandProjectionObserved"
+        | "PlannedAttemptExecutorCommandResponseContradicted"
         | "PlannedAttemptExecutorStateObserved"
         | "PlannedAttemptExecutorWorkReported"
         | "PlannedAttemptExecutorWorkResponsibilityBegan"
@@ -711,6 +722,7 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
   if (
     event._tag === "PlannedAttemptExecutorCommandIntended" ||
     event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+    event._tag === "PlannedAttemptExecutorCommandResponseContradicted" ||
     event._tag === "PlannedAttemptExecutorStateObserved" ||
     event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
     event._tag === "PlannedAttemptExecutorWorkReported"
@@ -789,6 +801,7 @@ type RecordedExecutorEntry = Extract<
     readonly _tag:
       | "PlannedAttemptExecutorCommandIntended"
       | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorCommandResponseContradicted"
       | "PlannedAttemptExecutorStateObserved"
       | "PlannedAttemptExecutorWorkReported"
       | "PlannedAttemptExecutorWorkResponsibilityBegan"
@@ -798,6 +811,7 @@ const isRecordedExecutorEntry = (entry: RecordedCassetteEntry): entry is Recorde
   new Set([
     "PlannedAttemptExecutorCommandIntended",
     "PlannedAttemptExecutorCommandProjectionObserved",
+    "PlannedAttemptExecutorCommandResponseContradicted",
     "PlannedAttemptExecutorStateObserved",
     "PlannedAttemptExecutorWorkReported",
     "PlannedAttemptExecutorWorkResponsibilityBegan"
@@ -832,6 +846,14 @@ const eventForExecutorEntry = (entry: RecordedExecutorEntry): WorkflowJournalEve
         occurrenceClassification: entry.occurrenceClassification,
         plannedAttempt: entry.plannedAttempt,
         projectionOrdinal: entry.projectionOrdinal,
+        version: workflowJournalEventVersion
+      })
+    case "PlannedAttemptExecutorCommandResponseContradicted":
+      return PlannedAttemptExecutorCommandResponseContradictedEvent.make({
+        commandOrdinal: entry.commandOrdinal,
+        observed: entry.observed,
+        occurrenceClassification: entry.occurrenceClassification,
+        plannedAttempt: entry.plannedAttempt,
         version: workflowJournalEventVersion
       })
     case "PlannedAttemptExecutorStateObserved":
@@ -1290,6 +1312,8 @@ const lyricForExecutorEntry = (entry: RecordedExecutorEntry): string => {
       return `Dalph coordinator intended executor command ${entry.command} for attempt ${entry.plannedAttempt.attemptId}.`
     case "PlannedAttemptExecutorCommandProjectionObserved":
       return `Dalph observed ${entry.observation._tag} while reconciling executor command ${entry.commandOrdinal} for attempt ${entry.plannedAttempt.attemptId}.`
+    case "PlannedAttemptExecutorCommandResponseContradicted":
+      return `The executor returned a response for attempt ${entry.observed.correlation.attemptId} to command ${entry.commandOrdinal} for expected attempt ${entry.plannedAttempt.attemptId}; Dalph kept the command unresolved.`
     case "PlannedAttemptExecutorStateObserved":
       return `Dalph observed ${entry.observation._tag} from a read-only executor projection for attempt ${entry.plannedAttempt.attemptId}.`
   }

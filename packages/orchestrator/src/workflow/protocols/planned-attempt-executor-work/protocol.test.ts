@@ -49,6 +49,7 @@ import {
   PlannedAttemptExecutorCommandProjectionObservation,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandProjectionOrdinal,
+  PlannedAttemptExecutorCommandResponseContradictedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
@@ -251,25 +252,57 @@ it.effect("rejects a cassette response for a different planned attempt", () =>
   })
 )
 
-it.effect("rejects an executor report correlated to another attempt", () =>
+it.effect("journals a contradictory executor response and reconciles its exact command before retry", () =>
   Effect.gen(function* () {
+    const wrongReport = PlannedAttemptExecutorReport.cases.Running.make({
+      correlation: { attemptId: AttemptId.make("wrong-attempt"), runId: plannedAttempt.runId }
+    })
     const mismatch = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
       Effect.provideService(
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
           project: () => Effect.succeed(Option.none()),
           requestSuspension: () => Effect.die("unused"),
-          startOrContinue: () =>
-            Effect.succeed(
-              PlannedAttemptExecutorReport.cases.Running.make({
-                correlation: { attemptId: AttemptId.make("wrong-attempt"), runId: plannedAttempt.runId }
-              })
-            )
+          startOrContinue: () => Effect.succeed(wrongReport)
         })
       ),
       Effect.flip
     )
     expect(mismatch._tag).toBe("PlannedAttemptExecutorCorrelationMismatch")
+    const journal = yield* JournalStore
+    const afterContradiction = yield* journal.read(plannedAttempt.runId)
+    expect(afterContradiction.map(({ event }) => event._tag)).toEqual([
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseContradicted"
+    ])
+    expect(afterContradiction.at(-1)?.event).toMatchObject({
+      _tag: "PlannedAttemptExecutorCommandResponseContradicted",
+      commandOrdinal: 1,
+      observed: wrongReport,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt
+    })
+
+    const projectedReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    expect(
+      yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(
+          PlannedAttemptExecutor,
+          PlannedAttemptExecutor.of({
+            project: () => Effect.succeed(Option.some(projectedReport)),
+            requestSuspension: () => Effect.die("unused"),
+            startOrContinue: () => Effect.die("must reconcile before another command")
+          })
+        )
+      )
+    ).toEqual(projectedReport)
+    expect((yield* journal.read(plannedAttempt.runId)).map(({ event }) => event._tag)).toEqual([
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseContradicted",
+      "PlannedAttemptExecutorCommandProjectionObserved"
+    ])
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
@@ -604,6 +637,14 @@ it("rejects malformed executor command and projection chronology through the pub
       plannedAttempt,
       version: workflowJournalEventVersion
     })
+  const responseContradiction = (commandOrdinal = 1, observed: PlannedAttemptExecutorReport = foreignRunning) =>
+    PlannedAttemptExecutorCommandResponseContradictedEvent.make({
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(commandOrdinal),
+      observed,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
   const recordsFromEvents = (events: ReadonlyArray<JournalRecord["event"]>): ReadonlyArray<JournalRecord> =>
     events.map((event, index) => ({
       event,
@@ -621,6 +662,15 @@ it("rejects malformed executor command and projection chronology through the pub
     {
       detail: "returned a contradictory correlation",
       events: [responsibility, command(1), projection(1, foreignRunning)]
+    },
+    { detail: "has no prior matching executor-work responsibility", events: [responseContradiction()] },
+    {
+      detail: "does not name its unmatched command intent",
+      events: [responsibility, command(1), responseContradiction(2)]
+    },
+    {
+      detail: "contains the expected correlation",
+      events: [responsibility, command(1), responseContradiction(1, running)]
     },
     { detail: "has no prior matching executor-work responsibility", events: [state()] },
     { detail: "expected ordinal 1, found 2", events: [responsibility, state(2)] },

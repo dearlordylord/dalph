@@ -74,6 +74,12 @@ export const plannedAttemptExecutorCommandProjectionObservedRecordKey = (
     `attempt:${attemptId}:executor-command:${commandOrdinal}:projection:${projectionOrdinal}:observation`
   )
 
+export const plannedAttemptExecutorCommandResponseContradictedRecordKey = (
+  attemptId: AttemptId,
+  commandOrdinal: PlannedAttemptExecutorCommandOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:executor-command:${commandOrdinal}:response-contradiction`)
+
 export const plannedAttemptExecutorWorkReportedRecordKey = (
   attemptId: AttemptId,
   ordinal: PlannedAttemptExecutorReportOrdinal

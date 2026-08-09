@@ -419,6 +419,7 @@ const nonProjectedJournalEventKinds = {
   IntegrationFinalitySettled: true,
   PlannedAttemptExecutorCommandIntended: true,
   PlannedAttemptExecutorCommandProjectionObserved: true,
+  PlannedAttemptExecutorCommandResponseContradicted: true,
   PlannedAttemptExecutorStateObserved: true,
   TaskAttemptPlanned: true,
   TaskClaimAcquired: true,

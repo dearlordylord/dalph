@@ -32,6 +32,7 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorCommandProjectionObservedRecordKey,
+  plannedAttemptExecutorCommandResponseContradictedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
   stoppedAttemptClaimNoReleaseRecordKey,
   workflowRunBeganRecordKey,
@@ -253,6 +254,16 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
           event.plannedAttempt.attemptId,
           event.commandOrdinal,
           event.projectionOrdinal
+        ),
+        event.plannedAttempt,
+        event.commandOrdinal
+      )
+    case "PlannedAttemptExecutorCommandResponseContradicted":
+      return plannedAttemptExecutorEvent(
+        { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
+        plannedAttemptExecutorCommandResponseContradictedRecordKey(
+          event.plannedAttempt.attemptId,
+          event.commandOrdinal
         ),
         event.plannedAttempt,
         event.commandOrdinal

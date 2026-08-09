@@ -266,6 +266,12 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     plannedAttempt: PlannedTaskAttempt,
     projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
   },
+  PlannedAttemptExecutorCommandResponseContradicted: {
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+    ...nonActionOccurrence,
+    observed: PlannedAttemptExecutorReport,
+    plannedAttempt: PlannedTaskAttempt
+  },
   PlannedAttemptExecutorStateObserved: {
     ...nonActionOccurrence,
     observation: PlannedAttemptExecutorStateObservation,
