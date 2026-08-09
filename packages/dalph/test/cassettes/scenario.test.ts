@@ -2654,6 +2654,54 @@ it.effect("retains every conflicting production proposal owner in the delivery f
   })
 )
 
+it.effect("projects every isolated action-planning issue through its typed maintainer meaning", () =>
+  Effect.gen(function* () {
+    let captured: AuthoredDeliveryPublication | undefined
+    yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette, {
+      onDeliveryPublication: (publication) => {
+        captured ??= publication
+      }
+    })
+    if (captured === undefined) return expect.fail("expected a delivery publication")
+    const frame = yield* evaluateAuthoredDeliveryPublication({
+      ...captured,
+      bundle: {
+        ...captured.bundle,
+        legacy: {
+          ...captured.bundle.legacy,
+          proposalContributions: {
+            ...captured.bundle.legacy.proposalContributions,
+            issues: [
+              {
+                _tag: "AcceptedOperationEvidenceMissing",
+                operationId: OperationId.make("lab-isolated-accepted-evidence"),
+                taskId: TaskId.make("A"),
+                transition: "ReconcileTaskClaim"
+              },
+              {
+                _tag: "FreshRouteProvenanceMissing",
+                taskId: TaskId.make("A"),
+                transition: "ContinueFreshWorkflowOperation"
+              },
+              { _tag: "TypedRoutePolicyContradiction", taskId: TaskId.make("A"), transition: "StartQueuedIntegration" }
+            ]
+          }
+        }
+      }
+    })
+
+    expect(frame.actionPlanning._tag).toBe("DeliveryProposalsAvailable")
+    if (frame.actionPlanning._tag !== "DeliveryProposalsAvailable") {
+      return expect.fail("expected isolated action-planning issues")
+    }
+    expect(frame.actionPlanning.isolatedIssues.map(({ summary }) => summary)).toEqual([
+      "Dalph cannot check the tracker after an ambiguous task-claim request because accepted journal evidence is missing · task A",
+      "Dalph cannot send the already-journaled request to its recorded owning system because fresh route provenance is missing · task A",
+      "Dalph cannot start the exact queued integration responsibility because the typed route policy contradicts this transition · task A"
+    ])
+  })
+)
+
 it.effect("separates Fresh and Recovered delivery frames across authored coordinator death", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)

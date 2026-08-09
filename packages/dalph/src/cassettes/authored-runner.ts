@@ -313,7 +313,7 @@ const proposalActionLabels = {
   CheckTaskClaim: "Check the tracker result for the accepted task-claim request",
   CommitFreshTaskClaimIntent: "Record intent to create the task claim",
   CommitTaskClaimReacquisitionIntent: "Record intent to reacquire the task claim",
-  ContinueFreshWorkflowOperation: "Dalph sends the already-journaled request to its recorded owning system",
+  ContinueFreshWorkflowOperation: "Send the already-journaled request to its recorded owning system",
   ContinuePlannedAttemptExecutorWork: "Tell the executor to continue the exact planned attempt",
   ContinueStartedIntegrationCandidate: "Ask the candidate agent to continue the exact started integration",
   DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
@@ -460,11 +460,11 @@ const authoredActionIssueFactOf = (issue: DeliveryProposalIssue): AuthoredAction
   const summary = (() => {
     switch (issue._tag) {
       case "AcceptedOperationEvidenceMissing":
-        return `Cannot ${action.toLowerCase()} because accepted journal evidence is missing`
+        return `Dalph cannot ${action.toLowerCase()} because accepted journal evidence is missing`
       case "FreshRouteProvenanceMissing":
-        return `Cannot ${action.toLowerCase()} because fresh route provenance is missing`
+        return `Dalph cannot ${action.toLowerCase()} because fresh route provenance is missing`
       case "TypedRoutePolicyContradiction":
-        return `Cannot ${action.toLowerCase()} because the typed route policy contradicts this transition`
+        return `Dalph cannot ${action.toLowerCase()} because the typed route policy contradicts this transition`
     }
   })()
   return {
