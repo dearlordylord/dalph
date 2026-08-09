@@ -2,7 +2,7 @@ import { Schema } from "effect"
 import { expect, it } from "vitest"
 import { InitialControlPolicy } from "./policy.js"
 
-it("decodes the task-work capacity used when Dalph creates a fresh coordinator", () => {
+it("decodes the initial task-work capacity when Run establishment creates a new Run", () => {
   expect(Schema.decodeUnknownSync(InitialControlPolicy)({ taskExecutionCapacity: 1 })).toEqual({
     taskExecutionCapacity: 1
   })
