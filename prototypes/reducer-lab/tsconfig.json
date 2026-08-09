@@ -21,6 +21,7 @@
   },
   "include": [
     "src/cassette-lab.ts",
+    "src/cassette-lab-browser.ts",
     "src/cassette-lab-view.ts",
     "src/cassette-lab.smoke.ts",
     "src/entry.ts",

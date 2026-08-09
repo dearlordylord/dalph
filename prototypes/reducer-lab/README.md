@@ -5,11 +5,17 @@ the corresponding production cassette runner. That includes the authored
 coordinator stories, target-promotion protocol stories, and integration-finality
 protocol stories. It does not contain a second workflow reducer.
 
-The browser shows one row per maintained cassette. A maintainer can run one
-story or the complete catalog and inspect the returned production journal
-records. Each run receives fresh in-memory runtime state and a deterministic
-test clock. Authored runs additionally receive browser cryptography and a fresh
-production Run identity; protocol fixtures retain their declared identities.
+The browser groups rows by production runner and supports word-by-word search
+across human story names, exact catalog keys, runner names, categories,
+controlled boundaries, and complete declared inputs. Category and status
+filters can define a **Run shown** subset; the explicitly counted **Run all**
+command always runs the complete catalog. A maintainer can run one story or
+retry every cassette failure and Lab defect. Each row settles independently and
+presents a compact execution summary, journal evidence ordered within each Run,
+and secondary raw diagnostics. Each
+run receives fresh in-memory runtime state and a deterministic test clock.
+Authored runs additionally receive browser cryptography and a fresh production
+Run identity; protocol fixtures retain their declared identities.
 
 An authored cassette controls tracker, claim, Git, executor, integration,
 verification, promotion, trace, and journal boundary results. Implemented

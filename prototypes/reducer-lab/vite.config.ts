@@ -1,7 +1,16 @@
 import { defineConfig } from "vite"
+import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
+const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url))
+const git = (...args: ReadonlyArray<string>): string =>
+  execFileSync("git", args, { cwd: repositoryRoot, encoding: "utf8" }).trim()
+const sourceRevision = `${git("rev-parse", "--short=12", "HEAD")}${git("status", "--porcelain").length > 0 ? "+dirty" : ""}`
+
 export default defineConfig({
+  define: {
+    __DALPH_SOURCE_REVISION__: JSON.stringify(sourceRevision)
+  },
   resolve: {
     alias: [{
       find: /^effect\/testing\/TestClock$/,

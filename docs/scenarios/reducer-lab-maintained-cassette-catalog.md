@@ -108,3 +108,103 @@ discards all displayed results.
   is the command-independent execution proof for the whole catalog.
 - `the Run all command retains one terminal result for every catalog entry`
   checks the browser update path and the exact completed/failed summary.
+
+## A maintainer finds, follows, and diagnoses the cassette that matters
+
+### Starting situation and trigger
+
+A Dalph maintainer opens the Lab against one exact source revision. Forty or
+more maintained cassettes may be present across authored coordinator,
+target-promotion, and integration-finality catalogs. No cassette is running.
+The maintainer may not already know a catalog key or which production runner
+owns the behavior they need to inspect.
+
+### Ordered behavior and visible result
+
+The Lab first states that this is a local deterministic harness, identifies the
+source revision, and says that no GitHub issue, Git repository, executor
+process, or durable journal will be changed. It groups cassettes by the
+production runner that owns them. A search narrows rows by human story name,
+exact catalog key, category, runner, controlled-boundary description, or any
+declared input value. Search words may occur separately and all must match. A
+category filter and a terminal-status filter independently narrow the view.
+When a match exists only inside the exact input, the row shows the matching
+snippet instead of appearing without an explanation.
+
+Each visible row makes the human story name primary and retains the exact
+catalog key. The production runner and controlled boundaries appear once for
+their catalog rather than repeating in every row. A collapsed declared input
+shows a readable one-column sequence and retains the exact JSON under a second
+disclosure; both are labelled as input, not execution proof. An evidence
+disclosure is absent until a run produces a result.
+
+When the maintainer runs one row, that row immediately stops displaying its
+previous result, says that production code is running with controlled
+boundaries, and disables overlapping commands. When the maintainer runs the
+whole catalog, every row immediately becomes running and each row receives its
+terminal result as soon as its own production runner settles; **Run shown** is
+offered only for a narrowed view and runs only the rows admitted by the current
+filters. Status-filtered visibility updates at each state change. The Lab does not
+keep old green evidence visible and does not wait for the slowest cassette
+before showing faster results. The catalog summary distinguishes not-run,
+running, cassette-completed, cassette-failed, and Lab-defect counts. It explains
+that cassette completion means reaching the declared end, which may include an
+expected protocol failure. After a single run it no longer claims that the
+whole catalog is merely ready.
+
+A completed row shows a compact execution summary: the runner, coordinator
+activations and Run identity when those concepts apply, and interpreted
+journal or terminal facts. Protocol-specific counters remain under a secondary
+diagnostic disclosure. Journal records appear separately, grouped by Run
+identity and described as chronological only within each Run.
+The complete returned object remains available only under **Raw execution
+result**.
+
+A failed cassette leads with its exact consumed count and failed item when
+known, followed by a concise error. Raw cause and stack detail remain under
+**Raw diagnostic**. When the typed failed result cannot return partial journal
+records, the concise evidence explicitly says they are unavailable. The
+aggregate result links both failed cassettes and Lab defects by human story and
+exact key, clears concealing filters before focusing a linked problem, and
+offers **Retry problem rows**. If the browser composition itself unexpectedly
+rejects instead of returning a cassette result, the affected row and aggregate
+summary show a distinct Lab defect and controls become usable again. While any
+runner is still waiting, **Reload Lab and discard displayed results** provides
+an explicit escape and names the local diagnostic state that it discards.
+
+### Visible and forbidden results
+
+Every visible label or value helps the maintainer select a cassette, understand
+the safety boundary, follow current execution, verify completion, or diagnose
+a stop. Category is not repeated in a prefixed title, empty evidence panels do
+not appear, a journal count is not presented as correctness proof, declared
+input is not presented as observed output, and an earlier result never appears
+current during a rerun. Filtering changes **Run shown** but never changes which
+catalog entries the explicitly counted **Run all** command executes.
+
+Browser loss discards this local presentation state and cannot ambiguously
+change an outside system. Retrying repeats the selected deterministic
+cassette through fresh controlled runtime state as described above.
+
+### Acceptance-test mapping
+
+- `shows only information that selects, explains, or diagnoses a maintained cassette`
+  checks the source/safety context, grouped hierarchy, non-repeated runner and
+  boundary facts, completion meaning, hidden pre-run evidence, and readable and
+  exact declared input.
+- `searches declared behavior without changing the maintained run-all catalog`
+  checks token-AND declared-behavior search, independent category filtering,
+  and the filter-independent full-catalog command.
+- `replaces stale evidence with live per-row progress and settles rows independently`
+  holds two controlled UI promises, observes both rows become running, and
+  observes the first terminal result before releasing the second.
+- `presents concise execution proof before chronological journal and raw output`
+  runs one real cassette and checks its runner, activation or protocol facts,
+  journal ordering scope, exact event detail, and secondary raw result.
+- `links, reveals, and retries cassette failures and Lab defects`
+  injects one returned cassette failure and one unexpected rejected promise,
+  then checks distinct visible states, filter-safe navigation, retry of both
+  problem kinds, and recovered controls.
+- `offers an explicit reload escape while a runner is still waiting` holds one
+  runner promise open and checks that the isolated Lab exposes its reload
+  recovery action.

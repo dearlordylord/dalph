@@ -1,5 +1,5 @@
 :root {
-  color: #1b2520;
+  color: #17231e;
   font-family: ui-sans-serif, system-ui, sans-serif;
   background: #f3f0e8;
 }
@@ -10,45 +10,61 @@ body {
 
 #root {
   margin: 0 auto;
-  max-width: 76rem;
+  max-width: 82rem;
   padding: 2rem;
 }
 
-.provenance {
+h1,
+h2,
+h3,
+h4,
+h5 {
+  line-height: 1.25;
+}
+
+.safety-context {
+  background: #e7f2ed;
   border-left: 0.3rem solid #146b55;
-  max-width: 70rem;
-  padding: 0.75rem 1rem;
-}
-
-.controls,
-article {
-  align-items: center;
-  display: flex;
-  gap: 1rem;
-}
-
-.controls {
-  margin: 2rem 0;
-}
-
-.results {
-  display: grid;
-  gap: 0.75rem;
-}
-
-article {
-  background: #fffdf7;
-  border: 1px solid #c8c3b8;
-  border-radius: 0.4rem;
-  flex-wrap: wrap;
+  max-width: 72rem;
   padding: 0.8rem 1rem;
 }
 
-article h2 {
-  flex: 1 1 28rem;
-  font-family: ui-monospace, monospace;
-  font-size: 1rem;
-  margin: 0;
+.revision {
+  color: #46534d;
+  font-size: 0.9rem;
+}
+
+.catalog-controls {
+  align-items: end;
+  background: #fffdf7;
+  border: 1px solid #c8c3b8;
+  border-radius: 0.45rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  margin: 1.5rem 0 0.8rem;
+  padding: 1rem;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.catalog-controls label {
+  display: grid;
+  flex: 1 1 17rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  gap: 0.25rem;
+}
+
+input,
+select {
+  background: white;
+  border: 1px solid #88938e;
+  border-radius: 0.25rem;
+  color: inherit;
+  font: inherit;
+  padding: 0.5rem;
 }
 
 button {
@@ -57,7 +73,16 @@ button {
   border-radius: 0.25rem;
   color: white;
   cursor: pointer;
-  padding: 0.55rem 0.8rem;
+  font-weight: 700;
+  padding: 0.58rem 0.85rem;
+}
+
+button.secondary-action {
+  background: #40534b;
+}
+
+button.danger-action {
+  background: #8f2525;
 }
 
 button:disabled {
@@ -65,16 +90,193 @@ button:disabled {
   opacity: 0.55;
 }
 
+.catalog-summary,
+[data-role="visibility-summary"] {
+  display: block;
+  margin: 0.45rem 0;
+}
+
+.completion-legend {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.catalog-summary {
+  font-weight: 700;
+}
+
+.problem-links {
+  background: #fbe9e7;
+  border-left: 0.3rem solid #a32727;
+  margin: 0.8rem 0;
+  padding: 0.7rem 1rem;
+}
+
+.problem-links a {
+  color: #7f1919;
+}
+
+.results,
+.catalog-group {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.results {
+  margin-top: 1.5rem;
+}
+
+.catalog-group {
+  scroll-margin-top: 6rem;
+}
+
+.catalog-group > h2 {
+  border-bottom: 2px solid #146b55;
+  margin: 1.2rem 0 0;
+  padding-bottom: 0.4rem;
+}
+
+.group-facts,
+.catalog-key {
+  color: #46534d;
+  margin: 0;
+}
+
+.search-match-reason {
+  background: #fff2b8;
+  border-left: 0.25rem solid #9b7410;
+  font-family: ui-monospace, monospace;
+  overflow-wrap: anywhere;
+  padding: 0.45rem 0.65rem;
+}
+
+article {
+  background: #fffdf7;
+  border: 1px solid #c8c3b8;
+  border-radius: 0.4rem;
+  padding: 1rem;
+  scroll-margin-top: 7rem;
+}
+
+article[data-state="Running"] {
+  border-color: #2b6fa8;
+  box-shadow: inset 0.25rem 0 #2b6fa8;
+}
+
+article[data-state="Failed"],
+article[data-state="LabDefect"] {
+  border-color: #a32727;
+  box-shadow: inset 0.25rem 0 #a32727;
+}
+
+article[data-state="LabDefect"] {
+  border-style: dashed;
+}
+
+article h3 {
+  margin: 0 0 0.8rem;
+}
+
+.execution-facts {
+  display: grid;
+  gap: 0.25rem 0.8rem;
+  grid-template-columns: minmax(9rem, max-content) 1fr;
+  margin: 0.6rem 0;
+}
+
+dt {
+  color: #53615b;
+  font-weight: 700;
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.declared-chronology {
+  margin: 0.8rem 0;
+}
+
+.declared-chronology p {
+  color: #53615b;
+  margin-bottom: 0.4rem;
+}
+
+.declared-chronology ol {
+  font-family: ui-monospace, monospace;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.failed-story-item {
+  background: #fbe9e7;
+  border-left: 0.25rem solid #a32727;
+  font-weight: 700;
+  padding-left: 0.4rem;
+}
+
+.row-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
 output[data-status="Completed"] {
   color: #146b55;
+  font-weight: 700;
 }
 
-output[data-status="Failed"] {
+output[data-status="Failed"],
+output[data-status="LabDefect"] {
   color: #a32727;
+  font-weight: 700;
 }
 
-details {
-  flex-basis: 100%;
+output[data-status="Running"] {
+  color: #205f92;
+  font-weight: 700;
+}
+
+.execution-evidence {
+  border-top: 1px solid #d6d1c7;
+  margin-top: 1rem;
+  padding-top: 0.2rem;
+}
+
+table {
+  border-collapse: collapse;
+  display: block;
+  max-height: 28rem;
+  overflow: auto;
+  width: 100%;
+}
+
+caption {
+  font-weight: 700;
+  padding: 0.5rem 0;
+  text-align: left;
+}
+
+th,
+td {
+  border-bottom: 1px solid #d6d1c7;
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+td:last-child details {
+  margin: 0;
+}
+
+td pre {
+  max-width: 40rem;
+}
+
+.execution-evidence details {
+  margin-top: 1rem;
 }
 
 pre {
@@ -83,4 +285,37 @@ pre {
   max-height: 28rem;
   overflow: auto;
   padding: 1rem;
+  white-space: pre-wrap;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.visually-hidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+@media (max-width: 42rem) {
+  #root {
+    padding: 1rem;
+  }
+
+  .catalog-controls {
+    position: static;
+  }
+
+  .execution-facts {
+    grid-template-columns: 1fr;
+  }
+
+  dd {
+    margin-bottom: 0.35rem;
+  }
 }

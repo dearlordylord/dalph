@@ -27,7 +27,35 @@ export type MaintainedCassetteKey =
   | IntegrationFinalityCassetteKey
   | TargetPromotionCassetteKey
 
-type CassetteCategory = "Authored" | "IntegrationFinality" | "TargetPromotion"
+export type CassetteCategory = "Authored" | "IntegrationFinality" | "TargetPromotion"
+
+interface CassetteCategoryMetadata {
+  readonly controlledBoundaries: string
+  readonly itemName: "interactions" | "steps"
+  readonly label: string
+  readonly runnerName: string
+}
+
+const cassetteCategoryMetadata = {
+  Authored: {
+    controlledBoundaries: "tracker, claims, Git, executor, journal, verification, and promotion",
+    itemName: "interactions",
+    label: "Authored coordinator stories",
+    runnerName: "runAuthoredScenarioCassette"
+  },
+  IntegrationFinality: {
+    controlledBoundaries: "completion-claim tracker boundary and journal",
+    itemName: "steps",
+    label: "Integration finality protocol",
+    runnerName: "runIntegrationFinalityProtocolCassette"
+  },
+  TargetPromotion: {
+    controlledBoundaries: "target Git boundary, exact target leases, and journal",
+    itemName: "steps",
+    label: "Target promotion protocol",
+    runnerName: "runTargetPromotionProtocolCassette"
+  }
+} as const satisfies Record<CassetteCategory, CassetteCategoryMetadata>
 
 interface CassetteExecution {
   readonly activations: ReadonlyArray<"Fresh" | "Recovered">
@@ -40,6 +68,7 @@ interface MaintainedCassetteDescriptor {
   readonly catalogKey: MaintainedCassetteKey
   readonly category: CassetteCategory
   readonly execute: () => Promise<Exit.Exit<CassetteExecution, unknown>>
+  readonly input: unknown
   readonly story: ReadonlyArray<{ readonly _tag: string }>
   readonly storyName: string
 }
@@ -63,6 +92,7 @@ export type CassetteLabResult =
       readonly executionEvidence: unknown
       readonly journalRecordCount: number
       readonly journalRecords: ReadonlyArray<unknown>
+      readonly runnerName: string
       readonly runId: string | null
       readonly storyName: string
       readonly totalItemCount: number
@@ -73,12 +103,10 @@ export type CassetteLabResult =
       readonly category: CassetteCategory
       readonly detail: string
       readonly location: CassetteFailureLocation
+      readonly runnerName: string
       readonly storyName: string
       readonly totalItemCount: number
     }
-
-export const controlledBoundaryProvenance =
-  "Tracker, Git, executor, and journal boundaries are controlled in memory; implemented Dalph coordinator and protocol code runs through the production cassette runners."
 
 const browserCryptoLayer = Layer.succeed(
   Crypto.Crypto,
@@ -109,6 +137,7 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
       runId: run.runId
     }))
   },
+  input: cassette,
   story: cassette.story,
   storyName: cassette.name
 }))
@@ -129,6 +158,7 @@ const targetPromotionDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
       runId: null
     }))
   },
+  input: cassette,
   story: cassette.story,
   storyName: cassette.name
 }))
@@ -149,6 +179,7 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
       runId: null
     }))
   },
+  input: cassette,
   story: cassette.story,
   storyName: cassette.name
 }))
@@ -163,12 +194,47 @@ const descriptorByKey = new Map(descriptors.map((descriptor) => [descriptor.cata
 
 export const maintainedCassetteKeys = descriptors.map(({ catalogKey }) => catalogKey)
 
-export const maintainedCassetteRows = descriptors.map(({ catalogKey, category, story, storyName }) => ({
-  catalogKey,
-  category,
-  storyName,
-  totalItemCount: story.length
-}))
+const storyItemSummary = (item: Readonly<Record<string, unknown>>): string => {
+  const fragments: Array<string> = [String(item._tag)]
+  const visit = (value: unknown, path: string, depth: number): void => {
+    if (depth > 4 || fragments.length >= 8 || typeof value !== "object" || value === null) return
+    if (Array.isArray(value)) {
+      for (const nested of value) visit(nested, path, depth + 1)
+      return
+    }
+    for (const [key, nested] of Object.entries(value)) {
+      const nestedPath = path.length === 0 ? key : `${path}.${key}`
+      if (key === "_tag" && typeof nested === "string" && nested !== item._tag) {
+        fragments.push(`${path || "value"}=${nested}`)
+      } else if (
+        /(attemptId|candidateId|detail|failureTag|operationId|owner|reason|requestId|sessionId|taskId)$/u.test(key)
+        && (typeof nested === "string" || typeof nested === "number" || typeof nested === "boolean")
+      ) {
+        fragments.push(`${nestedPath}=${nested}`)
+      } else visit(nested, nestedPath, depth + 1)
+      if (fragments.length >= 8) return
+    }
+  }
+  visit(item, "", 0)
+  return fragments.join(" · ")
+}
+
+export const maintainedCassetteRows = descriptors.map(({ catalogKey, category, input, story, storyName }) => {
+  const metadata = cassetteCategoryMetadata[category]
+  return {
+    catalogKey,
+    category,
+    categoryLabel: metadata.label,
+    controlledBoundaries: metadata.controlledBoundaries,
+    declaredInputText: JSON.stringify(input, null, 2),
+    itemName: metadata.itemName,
+    runnerName: metadata.runnerName,
+    storyItemTags: story.map(({ _tag }) => _tag),
+    storyItemSummaries: story.map((item) => storyItemSummary(item)),
+    storyName,
+    totalItemCount: story.length
+  }
+})
 
 const failurePosition = (cause: Cause.Cause<unknown>): number | null => {
   const error = Option.getOrUndefined(Cause.findErrorOption(cause))
@@ -203,6 +269,7 @@ const failedResult = (
     category: descriptor.category,
     detail: typeof errorDetail === "string" ? `${Cause.pretty(cause)}\n${errorDetail}` : Cause.pretty(cause),
     location,
+    runnerName: cassetteCategoryMetadata[descriptor.category].runnerName,
     storyName: descriptor.storyName,
     totalItemCount: descriptor.story.length
   }
@@ -220,6 +287,7 @@ const completedResult = (
   executionEvidence: execution.evidence,
   journalRecordCount: execution.journalRecords.length,
   journalRecords: execution.journalRecords,
+  runnerName: cassetteCategoryMetadata[descriptor.category].runnerName,
   runId: execution.runId,
   storyName: descriptor.storyName,
   totalItemCount: descriptor.story.length
