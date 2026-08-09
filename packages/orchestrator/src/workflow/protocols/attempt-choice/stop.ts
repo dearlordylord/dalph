@@ -75,16 +75,20 @@ const exactAppliedStop = (
       sameAttemptChoiceSubject(event.subject, subject)
   )
 
+type AttemptAbandonmentRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>
+}
+
 const exactAbandonment = (
   records: ReadonlyArray<JournalRecord>,
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject
 ) =>
   records.find(
-    ({ event }) =>
-      event._tag === "AttemptImplementationAbandoned" &&
-      sameAttemptChoiceRequestId(event.requestId, requestId) &&
-      sameAttemptChoiceSubject(event.subject, subject)
+    (record): record is AttemptAbandonmentRecord =>
+      record.event._tag === "AttemptImplementationAbandoned" &&
+      sameAttemptChoiceRequestId(record.event.requestId, requestId) &&
+      sameAttemptChoiceSubject(record.event.subject, subject)
   )
 
 const evidenceProof = (evidence: PlannedAttemptExecutorEvidence): AttemptQuiescenceProof => {
@@ -215,6 +219,73 @@ export const observeAttemptStoppageExecutor = Effect.fn("AttemptStop.observeExec
   return { _tag: "AttemptImplementationAbandoned" } as const
 })
 
+type FocusedClaimObservationRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }> & {
+    readonly observation: Extract<
+      Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
+      { readonly _tag: "FocusedTaskClaimFacts" }
+    >
+  }
+}
+
+const latestStoppedReleaseIntent = (
+  records: ReadonlyArray<JournalRecord>,
+  abandonmentPosition: JournalRecord["position"],
+  requestId: AttemptChoiceRequestId
+) =>
+  records.findLast(
+    ({ event, position }) =>
+      position > abandonmentPosition &&
+      event._tag === "TaskClaimReleaseIntended" &&
+      event.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&
+      sameAttemptChoiceRequestId(event.operation.authority.requestId, requestId)
+  )
+
+const latestFocusedClaimObservation = (
+  records: ReadonlyArray<JournalRecord>,
+  observationBaseline: JournalRecord["position"],
+  subject: AttemptChoiceSubject
+) =>
+  records.findLast(
+    (record): record is FocusedClaimObservationRecord =>
+      record.position > observationBaseline &&
+      record.event._tag === "TaskTrackerFactsObserved" &&
+      record.event.observation._tag === "FocusedTaskClaimFacts" &&
+      record.event.observation.coverage.taskId === subject.plannedAttempt.taskId
+  )
+
+const focusedClaimReadIntent = (
+  records: ReadonlyArray<JournalRecord>,
+  observationBaseline: JournalRecord["position"],
+  observationRecord: FocusedClaimObservationRecord,
+  subject: AttemptChoiceSubject
+) =>
+  records.find(
+    ({ event, position }) =>
+      position > observationBaseline &&
+      position < observationRecord.position &&
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTaskClaim" &&
+      event.operation.operationId === observationRecord.event.operationId &&
+      event.operation.taskId === subject.plannedAttempt.taskId
+  )
+
+const noReleaseObservationContradicts = (
+  observationRecord: FocusedClaimObservationRecord,
+  observationIntent: JournalRecord | undefined,
+  observationOperationId: OperationId,
+  subject: AttemptChoiceSubject,
+  expectedClaim: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>["expectedClaim"]
+): boolean => {
+  const observation = observationRecord.event.observation.observation
+  return (
+    observationRecord.event.operationId !== observationOperationId ||
+    observationIntent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
+    observation.taskId !== subject.plannedAttempt.taskId ||
+    (observation._tag === "ActiveTaskClaim" && isExactTaskClaim(observation, expectedClaim))
+  )
+}
+
 /** Records why a stopped attempt left an absent or foreign current tracker claim unchanged. */
 export const recordStoppedAttemptClaimNoRelease = Effect.fn("AttemptStop.recordClaimNoRelease")(function* (
   requestId: AttemptChoiceRequestId,
@@ -224,49 +295,28 @@ export const recordStoppedAttemptClaimNoRelease = Effect.fn("AttemptStop.recordC
   const journal = yield* InRunJournal
   const records = yield* journal.read(subject.plannedAttempt.runId)
   const abandonmentRecord = exactAbandonment(records, requestId, subject)
-  const abandonment = abandonmentRecord?.event
-  if (abandonmentRecord === undefined || abandonment?._tag !== "AttemptImplementationAbandoned") {
+  if (abandonmentRecord === undefined) {
     return yield* new AttemptStopChoiceContradiction({ requestId, subject })
   }
+  const abandonment = abandonmentRecord.event
   const abandonmentPosition = abandonmentRecord.position
-  const latestReleaseIntent = records.findLast(
-    ({ event, position }) =>
-      position > abandonmentPosition &&
-      event._tag === "TaskClaimReleaseIntended" &&
-      event.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&
-      sameAttemptChoiceRequestId(event.operation.authority.requestId, requestId)
-  )
+  const latestReleaseIntent = latestStoppedReleaseIntent(records, abandonmentPosition, requestId)
   const observationBaseline = latestReleaseIntent?.position ?? abandonmentPosition
-  const observationRecord = records.findLast(
-    ({ event, position }) =>
-      position > observationBaseline &&
-      event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag === "FocusedTaskClaimFacts" &&
-      event.observation.coverage.taskId === subject.plannedAttempt.taskId
-  )
-  if (observationRecord?.event._tag !== "TaskTrackerFactsObserved") {
+  const observationRecord = latestFocusedClaimObservation(records, observationBaseline, subject)
+  if (observationRecord === undefined) {
     return yield* new StoppedAttemptClaimObservationMissing({ observationOperationId, requestId, subject })
   }
   const observationEvent = observationRecord.event
-  if (observationEvent.observation._tag !== "FocusedTaskClaimFacts") {
-    return yield* new StoppedAttemptClaimObservationMissing({ observationOperationId, requestId, subject })
-  }
   const observation = observationEvent.observation.observation
-  const observationIntent = records.find(
-    ({ event, position }) =>
-      position > observationBaseline &&
-      position < observationRecord.position &&
-      event._tag === "TaskTrackerReadIntentRecorded" &&
-      event.operation._tag === "ReadTaskClaim" &&
-      event.operation.operationId === observationEvent.operationId &&
-      event.operation.taskId === subject.plannedAttempt.taskId
-  )
-  const observationIsForTask = observation.taskId === subject.plannedAttempt.taskId
+  const observationIntent = focusedClaimReadIntent(records, observationBaseline, observationRecord, subject)
   if (
-    observationEvent.operationId !== observationOperationId ||
-    observationIntent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
-    !observationIsForTask ||
-    (observation._tag === "ActiveTaskClaim" && isExactTaskClaim(observation, abandonment.expectedClaim))
+    noReleaseObservationContradicts(
+      observationRecord,
+      observationIntent,
+      observationOperationId,
+      subject,
+      abandonment.expectedClaim
+    )
   ) {
     return yield* new StoppedAttemptClaimObservationContradiction({
       observation,

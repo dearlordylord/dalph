@@ -155,22 +155,37 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
 
 export const RunnableFrontierTransition = Data.taggedEnum<RunnableFrontierTransition>()
 
-export const runnableTransitionTaskId = (transition: RunnableFrontierTransition): TaskId =>
+type AttemptStopTransition = Extract<
+  RunnableFrontierTransition,
+  {
+    readonly _tag:
+      | "AdvanceAttemptStoppage"
+      | "ObserveAttemptStoppageExecutor"
+      | "ObserveStoppedAttemptClaim"
+      | "RecordStoppedAttemptClaimNoRelease"
+      | "ReleaseStoppedAttemptClaim"
+  }
+>
+
+const isAttemptStopTransition = (transition: RunnableFrontierTransition): transition is AttemptStopTransition =>
   transition._tag === "AdvanceAttemptStoppage" ||
   transition._tag === "ObserveAttemptStoppageExecutor" ||
   transition._tag === "ObserveStoppedAttemptClaim" ||
   transition._tag === "RecordStoppedAttemptClaimNoRelease" ||
   transition._tag === "ReleaseStoppedAttemptClaim"
-    ? transition.subject.plannedAttempt.taskId
-    : transition._tag === "QueueAcceptedResultIntegrationResponsibility"
-      ? transition.accepted.plannedAttempt.taskId
-      : transition._tag === "ReleaseExternallyCompletedTaskClaim"
-        ? transition.operation.release.claim.taskId
-        : "responsibility" in transition
-          ? transition.responsibility.plannedAttempt.taskId
-          : "plannedAttempt" in transition
-            ? transition.plannedAttempt.taskId
-            : transition.taskId
+
+export const runnableTransitionTaskId = (transition: RunnableFrontierTransition): TaskId => {
+  if (isAttemptStopTransition(transition)) return transition.subject.plannedAttempt.taskId
+  return transition._tag === "QueueAcceptedResultIntegrationResponsibility"
+    ? transition.accepted.plannedAttempt.taskId
+    : transition._tag === "ReleaseExternallyCompletedTaskClaim"
+      ? transition.operation.release.claim.taskId
+      : "responsibility" in transition
+        ? transition.responsibility.plannedAttempt.taskId
+        : "plannedAttempt" in transition
+          ? transition.plannedAttempt.taskId
+          : transition.taskId
+}
 
 export const runnableTransitionOperationId = (transition: RunnableFrontierTransition): OperationId | undefined =>
   "operationId" in transition ? transition.operationId : undefined

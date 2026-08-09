@@ -35,6 +35,7 @@ import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracke
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import {
   latestPlannedAttemptExecutorEvidence,
+  latestUnsettledPlannedAttemptExecutorCommand,
   plannedAttemptExecutorEvidence
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import {
@@ -214,17 +215,19 @@ const validateTaskClaimReacquisitionDirection = (
   }
 }
 
-/** Rejects a direction that was not exposed by the exact prior plan, changed specification, and safe report. */
-const validateAttemptChoice = (
-  record: JournalRecord,
+type AttemptChoiceRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptChoiceApplied" }>
+}
+
+const validateAttemptChoiceAuthority = (
+  record: AttemptChoiceRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
-  indexes: FoldIndexes,
+  prior: ReadonlyArray<JournalRecord>,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
-  if (record.event._tag !== "AttemptChoiceApplied") return
   const { subject } = record.event
-  if (record.event.requestId.runId !== runId || subject.plannedAttempt.runId !== runId) {
+  const bindsRun = () => record.event.requestId.runId === runId && subject.plannedAttempt.runId === runId
+  if (!bindsRun()) {
     identityIssue(
       issues,
       runId,
@@ -232,16 +235,15 @@ const validateAttemptChoice = (
       `attempt-choice request ${record.event.requestId.nonce} binds run ${subject.plannedAttempt.runId}`
     )
   }
-  const prior = records.filter(({ position }) => position < record.position)
   const plan = prior.find(
     ({ event }) =>
       event._tag === "TaskAttemptPlanned" &&
       event.operation.plannedAttempt.attemptId === subject.plannedAttempt.attemptId
   )?.event
-  if (
-    plan?._tag !== "TaskAttemptPlanned" ||
-    !plannedTaskAttemptEquivalence(plan.operation.plannedAttempt, subject.plannedAttempt)
-  ) {
+  const planMatches = () =>
+    plan?._tag === "TaskAttemptPlanned" &&
+    plannedTaskAttemptEquivalence(plan.operation.plannedAttempt, subject.plannedAttempt)
+  if (!planMatches()) {
     semanticIssue(
       issues,
       runId,
@@ -250,27 +252,10 @@ const validateAttemptChoice = (
     )
   }
   const latestReport = latestPlannedAttemptExecutorEvidence(prior, subject.plannedAttempt)
-  const latestCommand = prior.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.plannedAttempt.runId === subject.plannedAttempt.runId &&
-      event.plannedAttempt.attemptId === subject.plannedAttempt.attemptId
-  )
-  const latestCommandOrdinal =
-    latestCommand?.event._tag === "PlannedAttemptExecutorCommandIntended" ? latestCommand.event.ordinal : undefined
-  const latestCommandWasSettled =
-    latestCommand === undefined ||
-    prior.some(
-      ({ event, position }) =>
-        position > latestCommand.position &&
-        ((event._tag === "PlannedAttemptExecutorWorkReported" &&
-          event.report.correlation.runId === subject.plannedAttempt.runId &&
-          event.report.correlation.attemptId === subject.plannedAttempt.attemptId) ||
-          (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-            event.commandOrdinal === latestCommandOrdinal &&
-            event.observation._tag === "ExactExecutorReport"))
-    )
-  if (latestReport?.report._tag !== "SafelySuspended" || !latestCommandWasSettled) {
+  const executorIsSafelySuspended = () =>
+    latestReport?.report._tag === "SafelySuspended" &&
+    latestUnsettledPlannedAttemptExecutorCommand(prior, subject.plannedAttempt) === undefined
+  if (!executorIsSafelySuspended()) {
     semanticIssue(
       issues,
       runId,
@@ -284,11 +269,11 @@ const validateAttemptChoice = (
       event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
       event.observation.factFamily.taskId === subject.plannedAttempt.taskId
   )?.event
-  if (
-    latestSpecification?._tag !== "TaskTrackerFactsObserved" ||
-    latestSpecification.observation._tag !== "FocusedTaskWorkSpecificationFacts" ||
-    latestSpecification.observation.factFamily.fingerprint !== subject.observedTaskRevision
-  ) {
+  const specificationMatches = () =>
+    latestSpecification?._tag === "TaskTrackerFactsObserved" &&
+    latestSpecification.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+    latestSpecification.observation.factFamily.fingerprint === subject.observedTaskRevision
+  if (!specificationMatches()) {
     semanticIssue(
       issues,
       runId,
@@ -296,6 +281,20 @@ const validateAttemptChoice = (
       `attempt-choice request ${record.event.requestId.nonce} does not name the latest observed task fingerprint`
     )
   }
+}
+
+/** Rejects a direction that was not exposed by the exact prior plan, changed specification, and safe report. */
+const validateAttemptChoice = (
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (record.event._tag !== "AttemptChoiceApplied") return
+  const { subject } = record.event
+  const prior = records.filter(({ position }) => position < record.position)
+  validateAttemptChoiceAuthority({ ...record, event: record.event }, runId, prior, issues)
   if (
     prior.some(
       ({ event }) =>
@@ -362,7 +361,7 @@ const matchingAbandonment = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "StoppedAttemptClaimNoReleaseObserved" }>
 ) =>
   prior.findLast(
-    (candidate) =>
+    (candidate): candidate is AbandonmentJournalRecord =>
       candidate.event._tag === "AttemptImplementationAbandoned" &&
       sameAttemptChoiceRequestId(candidate.event.requestId, event.requestId) &&
       sameAttemptChoiceSubject(candidate.event.subject, event.subject)
@@ -373,21 +372,25 @@ const matchingAppliedStopByRequest = (
   requestId: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptChoiceApplied" }>["requestId"]
 ) =>
   prior.find(
-    ({ event }) =>
-      event._tag === "AttemptChoiceApplied" &&
-      event.choice === "StopTaskImplementation" &&
-      sameAttemptChoiceRequestId(event.requestId, requestId)
+    (record): record is AttemptChoiceRecord =>
+      record.event._tag === "AttemptChoiceApplied" &&
+      record.event.choice === "StopTaskImplementation" &&
+      sameAttemptChoiceRequestId(record.event.requestId, requestId)
   )
+
+type AbandonmentJournalRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptImplementationAbandoned" }>
+}
 
 const matchingAbandonmentForAppliedStop = (
   prior: ReadonlyArray<JournalRecord>,
   appliedStop: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptChoiceApplied" }>
 ) =>
   prior.findLast(
-    ({ event }) =>
-      event._tag === "AttemptImplementationAbandoned" &&
-      sameAttemptChoiceRequestId(event.requestId, appliedStop.requestId) &&
-      sameAttemptChoiceSubject(event.subject, appliedStop.subject)
+    (record): record is AbandonmentJournalRecord =>
+      record.event._tag === "AttemptImplementationAbandoned" &&
+      sameAttemptChoiceRequestId(record.event.requestId, appliedStop.requestId) &&
+      sameAttemptChoiceSubject(record.event.subject, appliedStop.subject)
   )
 
 const latestFocusedClaimObservationAfter = (
@@ -486,157 +489,272 @@ const validateAttemptStop = (
 ): void => {
   const event = record.event
   const prior = records.filter(({ position }) => position < record.position)
-  if (
-    event._tag === "AttemptStoppageIntended" ||
-    event._tag === "AttemptImplementationAbandoned" ||
-    event._tag === "StoppedAttemptClaimNoReleaseObserved"
-  ) {
-    if (event.requestId.runId !== runId || event.subject.plannedAttempt.runId !== runId) {
-      identityIssue(issues, runId, record.position, `attempt Stop request ${event.requestId.nonce} binds another Run`)
-    }
-    if (matchingAppliedStop(prior, event) === undefined) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `attempt Stop event ${event._tag} requires its exact prior applied Stop choice`
-      )
-    }
-  }
-  if (event._tag === "AttemptImplementationAbandoned") {
-    const evidence = proofEvidenceFor(prior, event)
-    if (evidence === undefined || (evidence.report._tag !== "SafelySuspended" && evidence.report._tag !== "Terminal")) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `attempt abandonment for ${event.subject.plannedAttempt.attemptId} requires its exact safe or terminal executor proof`
-      )
-    } else if (
-      prior.some(
-        ({ event: priorEvent, position }) =>
-          position > evidence.observedAt &&
-          priorEvent._tag === "PlannedAttemptExecutorCommandIntended" &&
-          priorEvent.plannedAttempt.runId === event.subject.plannedAttempt.runId &&
-          priorEvent.plannedAttempt.attemptId === event.subject.plannedAttempt.attemptId
-      )
-    ) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `attempt abandonment for ${event.subject.plannedAttempt.attemptId} follows a later executor command`
-      )
-    }
-    const authorizedClaim = authorizedClaimForAttempt(prior, event.subject.plannedAttempt)?.claim
-    if (authorizedClaim === undefined || !isExactTaskClaim(authorizedClaim, event.expectedClaim)) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `attempt abandonment for ${event.subject.plannedAttempt.attemptId} requires its exact authorized claim`
-      )
-    }
-    indexes.abandonedExecutorAttempts.add(event.subject.plannedAttempt.attemptId)
-  }
-  if (event._tag === "StoppedAttemptClaimNoReleaseObserved") {
-    const abandonment = matchingAbandonment(prior, event)
+  const validateStopEventAuthority = () => {
     if (
-      abandonment?.event._tag !== "AttemptImplementationAbandoned" ||
-      !isExactTaskClaim(abandonment.event.expectedClaim, event.expectedClaim)
+      event._tag === "AttemptStoppageIntended" ||
+      event._tag === "AttemptImplementationAbandoned" ||
+      event._tag === "StoppedAttemptClaimNoReleaseObserved"
     ) {
-      semanticIssue(issues, runId, record.position, "stopped-attempt no-release requires its exact prior abandonment")
-      return
-    }
-    const latestReleaseIntent = prior.findLast(
-      ({ event: priorEvent, position }) =>
-        position > abandonment.position &&
-        priorEvent._tag === "TaskClaimReleaseIntended" &&
-        priorEvent.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&
-        sameAttemptChoiceRequestId(priorEvent.operation.authority.requestId, event.requestId)
-    )
-    const baselinePosition = latestReleaseIntent?.position ?? abandonment.position
-    const observationRecord = latestFocusedClaimObservationAfter(
-      prior,
-      baselinePosition,
-      event.subject.plannedAttempt.taskId
-    )
-    const observation = observationRecord?.event
-    const observationIntent =
-      observationRecord === undefined || observationRecord.event._tag !== "TaskTrackerFactsObserved"
-        ? undefined
-        : matchingFocusedClaimReadIntentAfter(
-            prior,
-            baselinePosition,
-            observationRecord.event.operationId,
-            observationRecord.position,
-            event.subject.plannedAttempt.taskId
-          )
-    if (
-      observation?._tag !== "TaskTrackerFactsObserved" ||
-      observation.observation._tag !== "FocusedTaskClaimFacts" ||
-      observation.operationId !== event.observationOperationId ||
-      observationIntent?._tag !== "TaskTrackerReadIntentRecorded" ||
-      !sameClaimObservation(observation.observation.observation, event.observation)
-    ) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        "stopped-attempt no-release requires the latest exact post-baseline claim read"
-      )
-    }
-    if (event.observation._tag === "ActiveTaskClaim" && isExactTaskClaim(event.observation, event.expectedClaim)) {
-      semanticIssue(issues, runId, record.position, "stopped-attempt no-release cannot preserve the exact owned claim")
-    }
-    const priorTerminalDisposition = prior.find(
-      ({ event: priorEvent, position }) =>
-        position > abandonment.position &&
-        ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
-          sameAttemptChoiceRequestId(priorEvent.requestId, event.requestId) &&
-          sameAttemptChoiceSubject(priorEvent.subject, event.subject)) ||
-          (priorEvent._tag === "TaskClaimReleased" &&
-            stoppedReleaseOutcomeMatchesRequest(prior, priorEvent, event.requestId)))
-    )
-    if (priorTerminalDisposition !== undefined) {
-      semanticIssue(issues, runId, record.position, "stopped-attempt claim disposition is already terminal")
-    }
-  }
-  if (event._tag === "TaskClaimReleaseIntended") {
-    const authority = event.operation.authority
-    if (authority._tag === "StoppedAttemptClaimReleaseAuthority") {
-      const appliedStop = matchingAppliedStopByRequest(prior, authority.requestId)
-      const appliedStopEvent = appliedStop?.event
-      if (appliedStopEvent?._tag !== "AttemptChoiceApplied") {
-        semanticIssue(issues, runId, record.position, "stopped-attempt claim release requires its exact applied Stop")
-        return
+      if (event.requestId.runId !== runId || event.subject.plannedAttempt.runId !== runId) {
+        identityIssue(issues, runId, record.position, `attempt Stop request ${event.requestId.nonce} binds another Run`)
       }
-      const abandonment = matchingAbandonmentForAppliedStop(prior, appliedStopEvent)
-      if (abandonment?.event._tag !== "AttemptImplementationAbandoned") {
+      if (matchingAppliedStop(prior, event) === undefined) {
         semanticIssue(
           issues,
           runId,
           record.position,
-          "stopped-attempt claim release precedes implementation abandonment"
+          `attempt Stop event ${event._tag} requires its exact prior applied Stop choice`
         )
+      }
+    }
+  }
+  const validateAbandonment = () => {
+    if (event._tag === "AttemptImplementationAbandoned") {
+      const evidence = proofEvidenceFor(prior, event)
+      const evidenceProvesQuiescence = () =>
+        evidence !== undefined && (evidence.report._tag === "SafelySuspended" || evidence.report._tag === "Terminal")
+      if (!evidenceProvesQuiescence()) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `attempt abandonment for ${event.subject.plannedAttempt.attemptId} requires its exact safe or terminal executor proof`
+        )
+      } else if (
+        evidence !== undefined &&
+        prior.some(
+          ({ event: priorEvent, position }) =>
+            position > evidence.observedAt &&
+            priorEvent._tag === "PlannedAttemptExecutorCommandIntended" &&
+            priorEvent.plannedAttempt.runId === event.subject.plannedAttempt.runId &&
+            priorEvent.plannedAttempt.attemptId === event.subject.plannedAttempt.attemptId
+        )
+      ) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `attempt abandonment for ${event.subject.plannedAttempt.attemptId} follows a later executor command`
+        )
+      }
+      const authorizedClaim = authorizedClaimForAttempt(prior, event.subject.plannedAttempt)?.claim
+      const claimMatches = () => authorizedClaim !== undefined && isExactTaskClaim(authorizedClaim, event.expectedClaim)
+      if (!claimMatches()) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `attempt abandonment for ${event.subject.plannedAttempt.attemptId} requires its exact authorized claim`
+        )
+      }
+      indexes.abandonedExecutorAttempts.add(event.subject.plannedAttempt.attemptId)
+    }
+  }
+  const validateNoRelease = () => {
+    if (event._tag === "StoppedAttemptClaimNoReleaseObserved") {
+      const abandonment = matchingAbandonment(prior, event)
+      const abandonmentMatches = () =>
+        abandonment?.event._tag === "AttemptImplementationAbandoned" &&
+        isExactTaskClaim(abandonment.event.expectedClaim, event.expectedClaim)
+      if (!abandonmentMatches() || abandonment === undefined) {
+        semanticIssue(issues, runId, record.position, "stopped-attempt no-release requires its exact prior abandonment")
         return
       }
-      if (!isExactTaskClaim(event.operation.release.claim, abandonment.event.expectedClaim)) {
-        semanticIssue(issues, runId, record.position, "stopped-attempt claim release contradicts its authorized claim")
-      }
-      if (
-        prior.some(
+      const validateNoReleaseObservation = () => {
+        const latestReleaseIntent = prior.findLast(
           ({ event: priorEvent, position }) =>
             position > abandonment.position &&
             priorEvent._tag === "TaskClaimReleaseIntended" &&
             priorEvent.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&
-            sameAttemptChoiceRequestId(priorEvent.operation.authority.requestId, authority.requestId)
+            sameAttemptChoiceRequestId(priorEvent.operation.authority.requestId, event.requestId)
         )
-      ) {
-        semanticIssue(issues, runId, record.position, "stopped-attempt claim release already has one durable intent")
+        const baselinePosition = latestReleaseIntent?.position ?? abandonment.position
+        const observationRecord = latestFocusedClaimObservationAfter(
+          prior,
+          baselinePosition,
+          event.subject.plannedAttempt.taskId
+        )
+        const observation = observationRecord?.event
+        const findObservationIntent = () =>
+          observationRecord?.event._tag === "TaskTrackerFactsObserved"
+            ? matchingFocusedClaimReadIntentAfter(
+                prior,
+                baselinePosition,
+                observationRecord.event.operationId,
+                observationRecord.position,
+                event.subject.plannedAttempt.taskId
+              )
+            : undefined
+        const observationIntent = findObservationIntent()
+        const observationMatches = () =>
+          observation?._tag !== "TaskTrackerFactsObserved" ||
+          observation.observation._tag !== "FocusedTaskClaimFacts" ||
+          observation.operationId !== event.observationOperationId ||
+          observationIntent?._tag !== "TaskTrackerReadIntentRecorded" ||
+          !sameClaimObservation(observation.observation.observation, event.observation)
+        if (observationMatches()) {
+          semanticIssue(
+            issues,
+            runId,
+            record.position,
+            "stopped-attempt no-release requires the latest exact post-baseline claim read"
+          )
+        }
+        const preservesExactClaim = () =>
+          event.observation._tag === "ActiveTaskClaim" && isExactTaskClaim(event.observation, event.expectedClaim)
+        if (preservesExactClaim()) {
+          semanticIssue(
+            issues,
+            runId,
+            record.position,
+            "stopped-attempt no-release cannot preserve the exact owned claim"
+          )
+        }
       }
-      if (
-        prior.some(
+      validateNoReleaseObservation()
+      const priorTerminalDisposition = prior.find(
+        ({ event: priorEvent, position }) =>
+          position > abandonment.position &&
+          ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
+            sameAttemptChoiceRequestId(priorEvent.requestId, event.requestId) &&
+            sameAttemptChoiceSubject(priorEvent.subject, event.subject)) ||
+            (priorEvent._tag === "TaskClaimReleased" &&
+              stoppedReleaseOutcomeMatchesRequest(prior, priorEvent, event.requestId)))
+      )
+      if (priorTerminalDisposition !== undefined) {
+        semanticIssue(issues, runId, record.position, "stopped-attempt claim disposition is already terminal")
+      }
+    }
+  }
+  const validateReleaseIntent = () => {
+    if (event._tag === "TaskClaimReleaseIntended") {
+      const authority = event.operation.authority
+      if (authority._tag === "StoppedAttemptClaimReleaseAuthority") {
+        const appliedStop = matchingAppliedStopByRequest(prior, authority.requestId)
+        if (appliedStop === undefined) {
+          semanticIssue(issues, runId, record.position, "stopped-attempt claim release requires its exact applied Stop")
+          return
+        }
+        const abandonment = matchingAbandonmentForAppliedStop(prior, appliedStop.event)
+        if (abandonment === undefined) {
+          semanticIssue(
+            issues,
+            runId,
+            record.position,
+            "stopped-attempt claim release precedes implementation abandonment"
+          )
+          return
+        }
+        if (!isExactTaskClaim(event.operation.release.claim, abandonment.event.expectedClaim)) {
+          semanticIssue(
+            issues,
+            runId,
+            record.position,
+            "stopped-attempt claim release contradicts its authorized claim"
+          )
+        }
+        const validateReleaseUniqueness = () => {
+          if (
+            prior.some(
+              ({ event: priorEvent, position }) =>
+                position > abandonment.position &&
+                priorEvent._tag === "TaskClaimReleaseIntended" &&
+                priorEvent.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&
+                sameAttemptChoiceRequestId(priorEvent.operation.authority.requestId, authority.requestId)
+            )
+          ) {
+            semanticIssue(
+              issues,
+              runId,
+              record.position,
+              "stopped-attempt claim release already has one durable intent"
+            )
+          }
+          if (
+            prior.some(
+              ({ event: priorEvent, position }) =>
+                position > abandonment.position &&
+                ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
+                  sameAttemptChoiceRequestId(priorEvent.requestId, authority.requestId)) ||
+                  (priorEvent._tag === "TaskClaimReleased" &&
+                    stoppedReleaseOutcomeMatchesRequest(prior, priorEvent, authority.requestId)))
+            )
+          ) {
+            semanticIssue(issues, runId, record.position, "stopped-attempt claim disposition is already terminal")
+          }
+        }
+        validateReleaseUniqueness()
+        const validateReleaseObservation = () => {
+          const observationRecord = latestFocusedClaimObservationAfter(
+            prior,
+            abandonment.position,
+            appliedStop.event.subject.plannedAttempt.taskId
+          )
+          const observation = observationRecord?.event
+          const findObservationIntent = () =>
+            observationRecord?.event._tag === "TaskTrackerFactsObserved"
+              ? matchingFocusedClaimReadIntentAfter(
+                  prior,
+                  abandonment.position,
+                  observationRecord.event.operationId,
+                  observationRecord.position,
+                  appliedStop.event.subject.plannedAttempt.taskId
+                )
+              : undefined
+          const observationIntent = findObservationIntent()
+          const observationContradicts = () =>
+            observation?._tag !== "TaskTrackerFactsObserved" ||
+            observation.observation._tag !== "FocusedTaskClaimFacts" ||
+            observation.operationId !== authority.observationOperationId ||
+            observationIntent?._tag !== "TaskTrackerReadIntentRecorded" ||
+            observation.observation.observation._tag !== "ActiveTaskClaim" ||
+            !isExactTaskClaim(observation.observation.observation, abandonment.event.expectedClaim)
+          if (observationContradicts()) {
+            semanticIssue(
+              issues,
+              runId,
+              record.position,
+              "stopped-attempt claim release requires its latest exact post-abandonment claim read"
+            )
+          }
+        }
+        validateReleaseObservation()
+      } else {
+        const abandonedClaim = prior.findLast(
+          ({ event: priorEvent }) =>
+            priorEvent._tag === "AttemptImplementationAbandoned" &&
+            isExactTaskClaim(priorEvent.expectedClaim, event.operation.release.claim)
+        )
+        if (abandonedClaim !== undefined) {
+          semanticIssue(
+            issues,
+            runId,
+            record.position,
+            "an abandoned attempt claim release requires explicit stopped-attempt authority"
+          )
+        }
+      }
+    }
+  }
+  const validateReleaseOutcome = () => {
+    if (event._tag === "TaskClaimReleased") {
+      const releaseIntent = releaseIntentForOutcome(prior, event)
+      const releaseAuthority = () =>
+        releaseIntent?.event._tag === "TaskClaimReleaseIntended" ? releaseIntent.event.operation.authority : undefined
+      const authority = releaseAuthority()
+      if (authority?._tag === "StoppedAttemptClaimReleaseAuthority") {
+        const appliedStop = matchingAppliedStopByRequest(prior, authority.requestId)
+        const appliedStopEvent = appliedStop?.event
+        const findAbandonment = () =>
+          appliedStopEvent?._tag === "AttemptChoiceApplied"
+            ? matchingAbandonmentForAppliedStop(prior, appliedStopEvent)
+            : undefined
+        const abandonment = findAbandonment()
+        if (abandonment === undefined) {
+          semanticIssue(issues, runId, record.position, "stopped-attempt claim release has no exact prior abandonment")
+          return
+        }
+        const priorTerminalDisposition = prior.find(
           ({ event: priorEvent, position }) =>
             position > abandonment.position &&
             ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
@@ -644,87 +762,30 @@ const validateAttemptStop = (
               (priorEvent._tag === "TaskClaimReleased" &&
                 stoppedReleaseOutcomeMatchesRequest(prior, priorEvent, authority.requestId)))
         )
-      ) {
-        semanticIssue(issues, runId, record.position, "stopped-attempt claim disposition is already terminal")
-      }
-      const observationRecord = latestFocusedClaimObservationAfter(
-        prior,
-        abandonment.position,
-        appliedStopEvent.subject.plannedAttempt.taskId
-      )
-      const observation = observationRecord?.event
-      const observationIntent =
-        observationRecord === undefined || observationRecord.event._tag !== "TaskTrackerFactsObserved"
-          ? undefined
-          : matchingFocusedClaimReadIntentAfter(
-              prior,
-              abandonment.position,
-              observationRecord.event.operationId,
-              observationRecord.position,
-              appliedStopEvent.subject.plannedAttempt.taskId
-            )
-      if (
-        observation?._tag !== "TaskTrackerFactsObserved" ||
-        observation.observation._tag !== "FocusedTaskClaimFacts" ||
-        observation.operationId !== authority.observationOperationId ||
-        observationIntent?._tag !== "TaskTrackerReadIntentRecorded" ||
-        observation.observation.observation._tag !== "ActiveTaskClaim" ||
-        !isExactTaskClaim(observation.observation.observation, abandonment.event.expectedClaim)
-      ) {
-        semanticIssue(
-          issues,
-          runId,
-          record.position,
-          "stopped-attempt claim release requires its latest exact post-abandonment claim read"
-        )
-      }
-    } else {
-      const abandonedClaim = prior.findLast(
-        ({ event: priorEvent }) =>
-          priorEvent._tag === "AttemptImplementationAbandoned" &&
-          isExactTaskClaim(priorEvent.expectedClaim, event.operation.release.claim)
-      )
-      if (abandonedClaim !== undefined) {
-        semanticIssue(
-          issues,
-          runId,
-          record.position,
-          "an abandoned attempt claim release requires explicit stopped-attempt authority"
-        )
+        if (priorTerminalDisposition !== undefined) {
+          semanticIssue(issues, runId, record.position, "stopped-attempt claim disposition is already terminal")
+        }
       }
     }
   }
-  if (event._tag === "TaskClaimReleased") {
-    const releaseIntent = releaseIntentForOutcome(prior, event)
-    const authority =
-      releaseIntent?.event._tag === "TaskClaimReleaseIntended" ? releaseIntent.event.operation.authority : undefined
-    if (authority?._tag === "StoppedAttemptClaimReleaseAuthority") {
-      const appliedStop = matchingAppliedStopByRequest(prior, authority.requestId)
-      const appliedStopEvent = appliedStop?.event
-      const abandonment =
-        appliedStopEvent?._tag === "AttemptChoiceApplied"
-          ? matchingAbandonmentForAppliedStop(prior, appliedStopEvent)
-          : undefined
-      if (abandonment?.event._tag !== "AttemptImplementationAbandoned") {
-        semanticIssue(issues, runId, record.position, "stopped-attempt claim release has no exact prior abandonment")
-        return
-      }
-      const priorTerminalDisposition = prior.find(
-        ({ event: priorEvent, position }) =>
-          position > abandonment.position &&
-          ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
-            sameAttemptChoiceRequestId(priorEvent.requestId, authority.requestId)) ||
-            (priorEvent._tag === "TaskClaimReleased" &&
-              stoppedReleaseOutcomeMatchesRequest(prior, priorEvent, authority.requestId)))
-      )
-      if (priorTerminalDisposition !== undefined) {
-        semanticIssue(issues, runId, record.position, "stopped-attempt claim disposition is already terminal")
-      }
-    }
-  }
+  validateStopEventAuthority()
+  validateAbandonment()
+  validateNoRelease()
+  validateReleaseIntent()
+  validateReleaseOutcome()
 }
 
 const validateOperationEvent = (
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  validateGitReadEvent(record, runId, indexes, issues)
+  validateOperationDescriptor(record, runId, indexes, issues)
+}
+
+const validateGitReadEvent = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
@@ -761,8 +822,38 @@ const validateOperationEvent = (
       )
     }
   }
+}
+
+const validateOperationDescriptor = (
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
   const descriptor = describeJournalEvent(record.event)
   if (descriptor._tag !== "OperationEventDescriptor") return
+  validateRequiredOperationIds(record, runId, indexes, issues, descriptor)
+  validateRequiredPredecessorKinds(record, runId, indexes, issues, descriptor)
+  validateRequiredRecordPredecessor(record, runId, indexes, issues, descriptor)
+  indexes.seenOperationIds.add(descriptor.operationId)
+  indexes.seenEventKindsByOperation.set(
+    descriptor.operationId,
+    new Set([...(indexes.seenEventKindsByOperation.get(descriptor.operationId) ?? []), record.event._tag])
+  )
+}
+
+type OperationEventDescriptor = Extract<
+  ReturnType<typeof describeJournalEvent>,
+  { readonly _tag: "OperationEventDescriptor" }
+>
+
+const validateRequiredOperationIds = (
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>,
+  descriptor: OperationEventDescriptor
+): void => {
   for (const requiredOperationId of descriptor.requiredOperationIds) {
     if (!indexes.seenOperationIds.has(requiredOperationId)) {
       semanticIssue(
@@ -773,6 +864,15 @@ const validateOperationEvent = (
       )
     }
   }
+}
+
+const validateRequiredPredecessorKinds = (
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>,
+  descriptor: OperationEventDescriptor
+): void => {
   for (const requiredKind of descriptor.requiredPredecessorKinds) {
     const kinds = indexes.seenEventKindsByOperation.get(descriptor.operationId)
     if (!kinds?.has(requiredKind)) {
@@ -784,6 +884,15 @@ const validateOperationEvent = (
       )
     }
   }
+}
+
+const validateRequiredRecordPredecessor = (
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>,
+  descriptor: OperationEventDescriptor
+): void => {
   if (
     descriptor.recordPredecessor._tag === "RequiredRecordPredecessor" &&
     !indexes.seenKeys.has(descriptor.recordPredecessor.key)
@@ -795,11 +904,6 @@ const validateOperationEvent = (
       `event ${record.event._tag} has no prior record ${descriptor.recordPredecessor.key}`
     )
   }
-  indexes.seenOperationIds.add(descriptor.operationId)
-  indexes.seenEventKindsByOperation.set(
-    descriptor.operationId,
-    new Set([...(indexes.seenEventKindsByOperation.get(descriptor.operationId) ?? []), record.event._tag])
-  )
 }
 
 const validatePlan = (
@@ -984,245 +1088,265 @@ const validateExecutorEvent = (
       `executor event ${event._tag} follows abandonment of attempt ${executorAttemptId}`
     )
   }
-  if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-    const attemptId = event.plannedAttempt.attemptId
-    const plan = indexes.plans.get(attemptId)
-    if (plan === undefined || !plannedTaskAttemptEquivalence(plan, event.plannedAttempt)) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor work for attempt ${attemptId} has no prior matching planned task attempt`
-      )
-    }
-    const priorResponsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
-    if (priorResponsibility !== undefined) {
-      issues.push(
-        duplicateUnfinishedTaskAttemptIssue(
+  const validateResponsibilityBegan = () => {
+    if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+      const attemptId = event.plannedAttempt.attemptId
+      const plan = indexes.plans.get(attemptId)
+      if (plan === undefined || !plannedTaskAttemptEquivalence(plan, event.plannedAttempt)) {
+        semanticIssue(
+          issues,
           runId,
-          priorResponsibility.plannedAttempt,
-          priorResponsibility.position,
-          event.plannedAttempt,
-          record.position
+          record.position,
+          `executor work for attempt ${attemptId} has no prior matching planned task attempt`
         )
-      )
-    } else {
-      indexes.executorResponsibilitiesBegan.set(attemptId, {
-        plannedAttempt: event.plannedAttempt,
-        position: record.position
-      })
+      }
+      const priorResponsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+      if (priorResponsibility !== undefined) {
+        issues.push(
+          duplicateUnfinishedTaskAttemptIssue(
+            runId,
+            priorResponsibility.plannedAttempt,
+            priorResponsibility.position,
+            event.plannedAttempt,
+            record.position
+          )
+        )
+      } else {
+        indexes.executorResponsibilitiesBegan.set(attemptId, {
+          plannedAttempt: event.plannedAttempt,
+          position: record.position
+        })
+      }
     }
-    return
   }
-  if (event._tag === "PlannedAttemptExecutorCommandIntended") {
-    const attemptId = event.plannedAttempt.attemptId
+  const validateCommandIntent = () => {
+    if (event._tag === "PlannedAttemptExecutorCommandIntended") {
+      const attemptId = event.plannedAttempt.attemptId
+      const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+      const responsibilityMatches = () =>
+        responsibility !== undefined &&
+        plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
+      if (!responsibilityMatches()) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor command for attempt ${attemptId} has no prior matching executor-work responsibility`
+        )
+      }
+      const expectedCommandOrdinal = () => (indexes.executorCommandOrdinals.get(attemptId) ?? 0) + 1
+      const expectedOrdinal = expectedCommandOrdinal()
+      if (event.ordinal !== expectedOrdinal) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor command for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
+        )
+      }
+      indexes.executorCommandOrdinals.set(attemptId, event.ordinal)
+      const commandCountKey = `${attemptId}:${event.command}`
+      const nextCommandCount = () => (indexes.executorCommandCountsSinceSafeSuspension.get(commandCountKey) ?? 0) + 1
+      const commandCount = nextCommandCount()
+      indexes.executorCommandCountsSinceSafeSuspension.set(commandCountKey, commandCount)
+      const commandLimitFor = () =>
+        event.command === "StartOrContinue"
+          ? defaultPlannedAttemptExecutorContinuationLimit
+          : defaultPlannedAttemptExecutorSuspensionLimit
+      const commandLimit = commandLimitFor()
+      if (commandCount > commandLimit) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor ${event.command} command for attempt ${attemptId} exceeds durable limit ${commandLimit}`
+        )
+      }
+      if (indexes.unsettledExecutorCommands.has(attemptId)) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor command for attempt ${attemptId} follows an unmatched prior command intent`
+        )
+      }
+      indexes.unsettledExecutorCommands.set(attemptId, event.ordinal)
+      if (indexes.terminalExecutorAttempts.has(attemptId)) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor command follows the terminal result for attempt ${attemptId}`
+        )
+      }
+    }
+  }
+  const validateCommandProjection = () => {
+    if (event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
+      const attemptId = event.plannedAttempt.attemptId
+      const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+      const responsibilityMatches = () =>
+        responsibility !== undefined &&
+        plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
+      if (!responsibilityMatches()) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor command projection for attempt ${attemptId} has no prior matching executor-work responsibility`
+        )
+      }
+      if (indexes.unsettledExecutorCommands.get(attemptId) !== event.commandOrdinal) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor projection for attempt ${attemptId} does not name its unmatched command intent`
+        )
+      }
+      const projectionKey = `${attemptId}:${event.commandOrdinal}`
+      const expectedProjectionOrdinal = () => (indexes.executorCommandProjectionOrdinals.get(projectionKey) ?? 0) + 1
+      const expectedOrdinal = expectedProjectionOrdinal()
+      if (event.projectionOrdinal !== expectedOrdinal) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor projection for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.projectionOrdinal}`
+        )
+      }
+      indexes.executorCommandProjectionOrdinals.set(projectionKey, event.projectionOrdinal)
+      if (event.observation._tag === "ExactExecutorReport") {
+        const correlation = event.observation.report.correlation
+        const correlationMatches = () =>
+          correlation.runId === event.plannedAttempt.runId && correlation.attemptId === attemptId
+        if (!correlationMatches()) {
+          identityIssue(
+            issues,
+            runId,
+            record.position,
+            `executor command projection for attempt ${attemptId} returned a contradictory correlation`
+          )
+        } else {
+          indexes.unsettledExecutorCommands.delete(attemptId)
+          if (event.observation.report._tag === "SafelySuspended") {
+            indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
+            indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
+          }
+        }
+      }
+    }
+  }
+  const validateStateObservation = () => {
+    if (event._tag === "PlannedAttemptExecutorStateObserved") {
+      const attemptId = event.plannedAttempt.attemptId
+      const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+      const responsibilityMatches = () =>
+        responsibility !== undefined &&
+        plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
+      if (!responsibilityMatches()) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor state observation for attempt ${attemptId} has no prior matching executor-work responsibility`
+        )
+      }
+      if (indexes.unsettledExecutorCommands.has(attemptId)) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor state observation for attempt ${attemptId} bypasses its unmatched command intent`
+        )
+      }
+      const expectedStateOrdinal = () => (indexes.executorStateObservationOrdinals.get(attemptId) ?? 0) + 1
+      const expectedOrdinal = expectedStateOrdinal()
+      if (event.ordinal !== expectedOrdinal) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor state observation for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
+        )
+      }
+      indexes.executorStateObservationOrdinals.set(attemptId, event.ordinal)
+      const correlationContradicts = () =>
+        event.observation._tag === "ExactExecutorReport" &&
+        (event.observation.report.correlation.runId !== event.plannedAttempt.runId ||
+          event.observation.report.correlation.attemptId !== attemptId)
+      if (correlationContradicts()) {
+        identityIssue(
+          issues,
+          runId,
+          record.position,
+          `executor state observation for attempt ${attemptId} returned a contradictory correlation`
+        )
+      }
+      const observedSafeSuspension = () =>
+        event.observation._tag === "ExactExecutorReport" && event.observation.report._tag === "SafelySuspended"
+      if (observedSafeSuspension()) {
+        indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
+        indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
+      }
+    }
+  }
+  const validateWorkReport = () => {
+    if (event._tag !== "PlannedAttemptExecutorWorkReported") return
+    const attemptId = event.report.correlation.attemptId
     const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
-    if (
-      responsibility === undefined ||
-      !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
-    ) {
+    if (responsibility === undefined || event.report.correlation.runId !== responsibility.plannedAttempt.runId) {
       semanticIssue(
         issues,
         runId,
         record.position,
-        `executor command for attempt ${attemptId} has no prior matching executor-work responsibility`
+        `executor report for attempt ${attemptId} has no prior matching executor-work responsibility`
       )
     }
-    const expectedOrdinal = (indexes.executorCommandOrdinals.get(attemptId) ?? 0) + 1
+    const expectedOrdinal = (indexes.executorReportOrdinals.get(attemptId) ?? 0) + 1
     if (event.ordinal !== expectedOrdinal) {
       semanticIssue(
         issues,
         runId,
         record.position,
-        `executor command for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
+        `executor report for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
       )
     }
-    indexes.executorCommandOrdinals.set(attemptId, event.ordinal)
-    const commandCountKey = `${attemptId}:${event.command}`
-    const commandCount = (indexes.executorCommandCountsSinceSafeSuspension.get(commandCountKey) ?? 0) + 1
-    indexes.executorCommandCountsSinceSafeSuspension.set(commandCountKey, commandCount)
-    const commandLimit =
-      event.command === "StartOrContinue"
-        ? defaultPlannedAttemptExecutorContinuationLimit
-        : defaultPlannedAttemptExecutorSuspensionLimit
-    if (commandCount > commandLimit) {
+    indexes.executorReportOrdinals.set(attemptId, event.ordinal)
+    if (!indexes.unsettledExecutorCommands.has(attemptId)) {
       semanticIssue(
         issues,
         runId,
         record.position,
-        `executor ${event.command} command for attempt ${attemptId} exceeds durable limit ${commandLimit}`
+        `executor report for attempt ${attemptId} has no outstanding command intent`
       )
+    } else {
+      indexes.unsettledExecutorCommands.delete(attemptId)
     }
-    if (indexes.unsettledExecutorCommands.has(attemptId)) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor command for attempt ${attemptId} follows an unmatched prior command intent`
-      )
-    }
-    indexes.unsettledExecutorCommands.set(attemptId, event.ordinal)
     if (indexes.terminalExecutorAttempts.has(attemptId)) {
       semanticIssue(
         issues,
         runId,
         record.position,
-        `executor command follows the terminal result for attempt ${attemptId}`
+        `executor report follows the terminal result for attempt ${attemptId}`
       )
     }
-    return
-  }
-  if (event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
-    const attemptId = event.plannedAttempt.attemptId
-    const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
-    if (
-      responsibility === undefined ||
-      !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
-    ) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor command projection for attempt ${attemptId} has no prior matching executor-work responsibility`
-      )
-    }
-    if (indexes.unsettledExecutorCommands.get(attemptId) !== event.commandOrdinal) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor projection for attempt ${attemptId} does not name its unmatched command intent`
-      )
-    }
-    const projectionKey = `${attemptId}:${event.commandOrdinal}`
-    const expectedOrdinal = (indexes.executorCommandProjectionOrdinals.get(projectionKey) ?? 0) + 1
-    if (event.projectionOrdinal !== expectedOrdinal) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor projection for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.projectionOrdinal}`
-      )
-    }
-    indexes.executorCommandProjectionOrdinals.set(projectionKey, event.projectionOrdinal)
-    if (event.observation._tag === "ExactExecutorReport") {
-      const correlation = event.observation.report.correlation
-      if (correlation.runId !== event.plannedAttempt.runId || correlation.attemptId !== attemptId) {
-        identityIssue(
-          issues,
-          runId,
-          record.position,
-          `executor command projection for attempt ${attemptId} returned a contradictory correlation`
-        )
-      } else {
-        indexes.unsettledExecutorCommands.delete(attemptId)
-        if (event.observation.report._tag === "SafelySuspended") {
-          indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
-          indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
-        }
+    if (event.report._tag === "Terminal") {
+      indexes.terminalExecutorAttempts.add(attemptId)
+      if (event.report.result._tag === "Accepted") {
+        indexes.acceptedExecutorResults.set(attemptId, event.report.result.acceptedResult)
       }
     }
-    return
-  }
-  if (event._tag === "PlannedAttemptExecutorStateObserved") {
-    const attemptId = event.plannedAttempt.attemptId
-    const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
-    if (
-      responsibility === undefined ||
-      !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
-    ) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor state observation for attempt ${attemptId} has no prior matching executor-work responsibility`
-      )
-    }
-    if (indexes.unsettledExecutorCommands.has(attemptId)) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor state observation for attempt ${attemptId} bypasses its unmatched command intent`
-      )
-    }
-    const expectedOrdinal = (indexes.executorStateObservationOrdinals.get(attemptId) ?? 0) + 1
-    if (event.ordinal !== expectedOrdinal) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor state observation for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
-      )
-    }
-    indexes.executorStateObservationOrdinals.set(attemptId, event.ordinal)
-    if (
-      event.observation._tag === "ExactExecutorReport" &&
-      (event.observation.report.correlation.runId !== event.plannedAttempt.runId ||
-        event.observation.report.correlation.attemptId !== attemptId)
-    ) {
-      identityIssue(
-        issues,
-        runId,
-        record.position,
-        `executor state observation for attempt ${attemptId} returned a contradictory correlation`
-      )
-    }
-    if (event.observation._tag === "ExactExecutorReport" && event.observation.report._tag === "SafelySuspended") {
+    if (event.report._tag === "SafelySuspended") {
       indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
       indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
     }
-    return
   }
-  if (event._tag !== "PlannedAttemptExecutorWorkReported") return
-  const attemptId = event.report.correlation.attemptId
-  const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
-  if (responsibility === undefined || event.report.correlation.runId !== responsibility.plannedAttempt.runId) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      `executor report for attempt ${attemptId} has no prior matching executor-work responsibility`
-    )
-  }
-  const expectedOrdinal = (indexes.executorReportOrdinals.get(attemptId) ?? 0) + 1
-  if (event.ordinal !== expectedOrdinal) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      `executor report for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
-    )
-  }
-  indexes.executorReportOrdinals.set(attemptId, event.ordinal)
-  if (!indexes.unsettledExecutorCommands.has(attemptId)) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      `executor report for attempt ${attemptId} has no outstanding command intent`
-    )
-  } else {
-    indexes.unsettledExecutorCommands.delete(attemptId)
-  }
-  if (indexes.terminalExecutorAttempts.has(attemptId)) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      `executor report follows the terminal result for attempt ${attemptId}`
-    )
-  }
-  if (event.report._tag === "Terminal") {
-    indexes.terminalExecutorAttempts.add(attemptId)
-    if (event.report.result._tag === "Accepted") {
-      indexes.acceptedExecutorResults.set(attemptId, event.report.result.acceptedResult)
-    }
-  }
-  if (event.report._tag === "SafelySuspended") {
-    indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
-    indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
-  }
+  validateResponsibilityBegan()
+  validateCommandIntent()
+  validateCommandProjection()
+  validateStateObservation()
+  validateWorkReport()
 }
 
 const validateOneUnfinishedAttemptPerTask = (

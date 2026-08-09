@@ -16,7 +16,7 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { InRunJournal } from "../../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -135,6 +135,78 @@ export const plannedAttemptExecutorContinuationDisposition = (
     : { _tag: "ExecutorContinuationAvailable" }
 }
 
+const reconcileUnsettledCommand = Effect.fn("PlannedAttemptExecutorWorkflow.reconcileUnsettledCommand")(function* (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  intent: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorCommandIntended" }>
+) {
+  const journal = yield* InRunJournal
+  const executor = yield* PlannedAttemptExecutor
+  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+  const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(
+    records.filter(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+        event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
+        event.commandOrdinal === intent.ordinal
+    ).length + 1
+  )
+  const projected = yield* executor.project(correlation)
+  const recordProjection = (observation: PlannedAttemptExecutorCommandProjectionObservation) =>
+    journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorCommandProjectionObservedRecordKey(
+        plannedAttempt.attemptId,
+        intent.ordinal,
+        projectionOrdinal
+      ),
+      PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+        commandOrdinal: intent.ordinal,
+        observation,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        projectionOrdinal,
+        version: workflowJournalEventVersion
+      })
+    )
+  if (Option.isNone(projected)) {
+    yield* recordProjection(PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateUnavailable.make({}))
+    return yield* new PlannedAttemptExecutorProjectionUnavailable({ commandOrdinal: intent.ordinal, correlation })
+  }
+  const projectedReport = projected.value
+  if (!sameCorrelation(correlation, projectedReport.correlation)) {
+    yield* recordProjection(
+      PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorReportContradiction.make({
+        observed: projectedReport
+      })
+    )
+    return yield* new PlannedAttemptExecutorCorrelationMismatch({
+      expected: correlation,
+      observed: projectedReport.correlation
+    })
+  }
+  yield* recordProjection(
+    PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({ report: projectedReport })
+  )
+  return projectedReport
+})
+
+const commandLimitError = (
+  command: "StartOrContinue" | "Suspend",
+  correlation: PlannedAttemptExecutorCorrelation,
+  continuation: PlannedAttemptExecutorContinuationDisposition,
+  suspensionCommandCount: number,
+  suspensionLimit: PlannedAttemptExecutorSuspensionLimit
+): PlannedAttemptExecutorContinuationLimitReached | PlannedAttemptExecutorSuspensionLimitReached | undefined => {
+  if (command === "StartOrContinue" && continuation._tag === "ExecutorContinuationLimitReached") {
+    return new PlannedAttemptExecutorContinuationLimitReached({ correlation, limit: continuation.limit })
+  }
+  if (command === "Suspend" && suspensionCommandCount >= suspensionLimit) {
+    return new PlannedAttemptExecutorSuspensionLimitReached({ correlation, limit: suspensionLimit })
+  }
+  return undefined
+}
+
 const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(function* (
   plannedAttempt: PlannedTaskAttempt,
   command: "StartOrContinue" | "Suspend",
@@ -169,79 +241,7 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
     ).length
   const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
   if (unsettledCommand !== undefined) {
-    const intent = unsettledCommand
-    const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(
-      records.filter(
-        ({ event }) =>
-          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-          event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-          event.commandOrdinal === intent.ordinal
-      ).length + 1
-    )
-    const projected = yield* executor.project(correlation)
-    if (Option.isNone(projected)) {
-      yield* journal.append(
-        plannedAttempt.runId,
-        plannedAttemptExecutorCommandProjectionObservedRecordKey(
-          plannedAttempt.attemptId,
-          intent.ordinal,
-          projectionOrdinal
-        ),
-        PlannedAttemptExecutorCommandProjectionObservedEvent.make({
-          commandOrdinal: intent.ordinal,
-          observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateUnavailable.make({}),
-          occurrenceClassification: "NonActionOccurrence",
-          plannedAttempt,
-          projectionOrdinal,
-          version: workflowJournalEventVersion
-        })
-      )
-      return yield* new PlannedAttemptExecutorProjectionUnavailable({ commandOrdinal: intent.ordinal, correlation })
-    }
-    const projectedReport = projected.value
-    if (!sameCorrelation(correlation, projectedReport.correlation)) {
-      yield* journal.append(
-        plannedAttempt.runId,
-        plannedAttemptExecutorCommandProjectionObservedRecordKey(
-          plannedAttempt.attemptId,
-          intent.ordinal,
-          projectionOrdinal
-        ),
-        PlannedAttemptExecutorCommandProjectionObservedEvent.make({
-          commandOrdinal: intent.ordinal,
-          observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorReportContradiction.make({
-            observed: projectedReport
-          }),
-          occurrenceClassification: "NonActionOccurrence",
-          plannedAttempt,
-          projectionOrdinal,
-          version: workflowJournalEventVersion
-        })
-      )
-      return yield* new PlannedAttemptExecutorCorrelationMismatch({
-        expected: correlation,
-        observed: projectedReport.correlation
-      })
-    }
-    yield* journal.append(
-      plannedAttempt.runId,
-      plannedAttemptExecutorCommandProjectionObservedRecordKey(
-        plannedAttempt.attemptId,
-        intent.ordinal,
-        projectionOrdinal
-      ),
-      PlannedAttemptExecutorCommandProjectionObservedEvent.make({
-        commandOrdinal: intent.ordinal,
-        observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
-          report: projectedReport
-        }),
-        occurrenceClassification: "NonActionOccurrence",
-        plannedAttempt,
-        projectionOrdinal,
-        version: workflowJournalEventVersion
-      })
-    )
-    return projectedReport
+    return yield* reconcileUnsettledCommand(records, plannedAttempt, unsettledCommand)
   }
   const continuation = plannedAttemptExecutorContinuationDisposition(
     correlation,
@@ -249,13 +249,9 @@ const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(functi
     continuationLimit,
     commandCountSinceSafeSuspension("StartOrContinue")
   )
-  if (command === "StartOrContinue" && continuation._tag === "ExecutorContinuationLimitReached") {
-    return yield* new PlannedAttemptExecutorContinuationLimitReached({ correlation, limit: continuation.limit })
-  }
   const suspensionCommandCount = commandCountSinceSafeSuspension("Suspend")
-  if (command === "Suspend" && suspensionCommandCount >= suspensionLimit) {
-    return yield* new PlannedAttemptExecutorSuspensionLimitReached({ correlation, limit: suspensionLimit })
-  }
+  const limitError = commandLimitError(command, correlation, continuation, suspensionCommandCount, suspensionLimit)
+  if (limitError !== undefined) return yield* limitError
   const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(
     records.filter(
       ({ event }) =>

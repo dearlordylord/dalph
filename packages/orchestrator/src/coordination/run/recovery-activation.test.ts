@@ -28,6 +28,11 @@ import {
   ControlDirectionAppliedEvent
 } from "../../workflow/protocols/control-direction-application/events.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
@@ -182,6 +187,38 @@ it("suspends a running grouping descendant and reopens it after current facts mo
       [
         ...activePauseWithoutGraph,
         { position: JournalPosition.make(9), event: lateGroupingRecords.at(-1)?.event ?? taskPaused.event }
+      ],
+      plannedAttempt,
+      JournalPosition.make(2),
+      graph
+    )
+  ).toBe(false)
+  const lostSuspensionCommand = PlannedAttemptExecutorCommandIntendedEvent.make({
+    command: "Suspend",
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const exactSafeProjection = PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+    observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
+      report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+        correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+      })
+    }),
+    occurrenceClassification: "NonActionOccurrence",
+    plannedAttempt,
+    projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+    version: workflowJournalEventVersion
+  })
+  expect(
+    taskPauseSuspensionIsOwed(
+      [
+        ...records,
+        { position: JournalPosition.make(5), event: lostSuspensionCommand },
+        { position: JournalPosition.make(6), event: exactSafeProjection }
       ],
       plannedAttempt,
       JournalPosition.make(2),
