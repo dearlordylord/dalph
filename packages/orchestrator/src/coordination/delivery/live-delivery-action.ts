@@ -13,7 +13,7 @@ import type { DeliveryProposalFrontier } from "./relations.js"
 export const LiveDeliveryActionKey = Schema.NonEmptyString.pipe(Schema.brand("LiveDeliveryActionKey"))
 export type LiveDeliveryActionKey = typeof LiveDeliveryActionKey.Type
 
-const liveActionKey = (parts: ReadonlyArray<string>): LiveDeliveryActionKey =>
+const liveActionKey = (parts: ReadonlyArray<string | number>): LiveDeliveryActionKey =>
   LiveDeliveryActionKey.make(JSON.stringify(parts))
 
 type RecoveredTransition = Extract<
@@ -43,8 +43,9 @@ type RecoveredReadAction = Extract<
       | "ReadTrackerGraph"
   }
 >
+type RecoveredTargetLineageReadAction = Extract<RecoveredReadAction, { readonly _tag: "ReadTargetLineage" }>
 
-/** Stable subject of one recovered task-tracker read across changes to its causal route. */
+/** Stable subject of one recovered task-tracker or Git read across changes to its causal route. */
 type RecoveredReadSubject =
   | {
       readonly _tag: "Attempt"
@@ -53,6 +54,17 @@ type RecoveredReadSubject =
       readonly transition: AttemptBoundRecoveredReadTransition
     }
   | { readonly _tag: "Task"; readonly taskId: TaskId; readonly transition: "ObserveResponsibleTaskClaim" }
+  | {
+      readonly _tag: "Integration"
+      readonly attemptId: AttemptId
+      readonly purpose: "PlannedAttemptContinuationTargetLineage"
+      readonly queuedAt: JournalPosition
+      readonly repository: RecoveredTargetLineageReadAction["operation"]["integrationTarget"]["repository"]
+      readonly ref: RecoveredTargetLineageReadAction["operation"]["integrationTarget"]["ref"]
+      readonly runId: RunId
+      readonly startedAt: JournalPosition
+      readonly transition: "ObservePlannedAttemptContinuationTargetLineage"
+    }
 
 const attemptBoundRecoveredReadTransitionSet: ReadonlySet<RecoveredTransition> = new Set(
   attemptBoundRecoveredReadTransitions
@@ -65,11 +77,33 @@ const isAttemptBoundRecoveredReadTransition = (
 const isRecoveredReadAction = (action: RecoveredAction): action is RecoveredReadAction =>
   "operation" in action && action.operation._tag !== "ReleaseTaskClaim"
 
-const recoveredReadSubject = (proposal: DeliveryActionProposal): RecoveredReadSubject | undefined => {
+const integrationReadSubject = (
+  proposal: DeliveryActionProposal
+): Extract<RecoveredReadSubject, { readonly _tag: "Integration" }> | undefined => {
+  if (proposal.order._tag !== "IntegrationOrder" || proposal.order.startedAt === null) return undefined
   const route = proposal.route
-  if (route._tag !== "RecoveredNewActionRoute" || proposal.order._tag !== "RecoveredWorkflowOrder") return undefined
+  if (route._tag !== "RecoveredNewActionRoute") return undefined
+  const action = route.action
+  if (action._tag !== "ReadTargetLineage") return undefined
+  return {
+    _tag: "Integration",
+    attemptId: action.plannedAttempt.attemptId,
+    purpose: "PlannedAttemptContinuationTargetLineage",
+    queuedAt: proposal.order.queuedAt,
+    repository: action.operation.integrationTarget.repository,
+    ref: action.operation.integrationTarget.ref,
+    runId: action.plannedAttempt.runId,
+    startedAt: proposal.order.startedAt,
+    transition: "ObservePlannedAttemptContinuationTargetLineage"
+  }
+}
+
+const recoveredWorkflowReadSubject = (proposal: DeliveryActionProposal): RecoveredReadSubject | undefined => {
+  const route = proposal.route
+  if (route._tag !== "RecoveredNewActionRoute") return undefined
   const action = route.action
   if (!isRecoveredReadAction(action)) return undefined
+  if (proposal.order._tag !== "RecoveredWorkflowOrder") return undefined
   if (action.plannedAttempt !== null && isAttemptBoundRecoveredReadTransition(proposal.order.transition)) {
     return {
       _tag: "Attempt",
@@ -85,13 +119,29 @@ const recoveredReadSubject = (proposal: DeliveryActionProposal): RecoveredReadSu
   /* v8 ignore stop */
 }
 
+const recoveredReadSubject = (proposal: DeliveryActionProposal): RecoveredReadSubject | undefined =>
+  integrationReadSubject(proposal) ?? recoveredWorkflowReadSubject(proposal)
+
 export const liveActionKeyOf = (proposal: DeliveryActionProposal): LiveDeliveryActionKey => {
   const subject = recoveredReadSubject(proposal)
   return subject === undefined
     ? liveActionKey(["DeliveryProposal", proposal.id])
     : subject._tag === "Attempt"
       ? liveActionKey(["RecoveredRead", subject.transition, subject._tag, subject.runId, subject.attemptId])
-      : liveActionKey(["RecoveredRead", subject.transition, subject._tag, subject.taskId])
+      : subject._tag === "Task"
+        ? liveActionKey(["RecoveredRead", subject.transition, subject._tag, subject.taskId])
+        : liveActionKey([
+            "RecoveredRead",
+            subject.transition,
+            subject._tag,
+            subject.purpose,
+            subject.runId,
+            subject.attemptId,
+            subject.repository,
+            subject.ref,
+            subject.queuedAt,
+            subject.startedAt
+          ])
 }
 
 export const proposalIsAvailable = (

@@ -43,7 +43,7 @@ position. These prohibitions preserve D1, D12, D15, and D41.
 - `does not allocate an operation or attempt identity before admission`
 - `passes a deferred proposal without reordering the later proposals`
 
-## A newer causal route does not repeat the same recovered tracker read
+## A newer causal route does not repeat the same recovered boundary read
 
 ### Starting situation
 
@@ -56,6 +56,13 @@ occur when Dalph asks the task tracker to read the current claim record of a
 responsible task that has no planned attempt; in that case the exact subject is
 its TaskId.
 
+After integration responsibility for A has started, Dalph can instead be
+waiting for Git to read A's target lineage. The journal identifies that exact
+responsibility by its queued and started positions; it also retains A's exact
+RunId and AttemptId and the integration target's repository and ref. A newer
+predecessor operation can change the lineage-read proposal identity without
+changing any of those facts.
+
 ### Trigger and ordered boundary calls
 
 The ordinary relation publishes the G2-derived proposal while the G1-derived
@@ -65,25 +72,35 @@ continues admitting unrelated work. After the first read settles, its accepted
 observation removes that recovered read from the ordinary relation, and the
 settled owner is pruned normally.
 
+For the started integration responsibility, Dalph likewise keeps one owner
+while the first `read target lineage` Git call is pending. Its identity includes
+the planned-attempt-continuation purpose, exact RunId and AttemptId, exact
+repository and ref, and exact queued and started journal positions. It excludes
+the newly allocated read operation identity and causal predecessor identities.
+The changed proposal therefore cannot start a second Git call, while unrelated
+work can still proceed.
+
 The recovered transition kind is part of this process-local identity. A
 continuation claim read and a later stopped-attempt claim read for the same
 RunId and AttemptId ask the task tracker different questions about the current
 claim. Once the continuation read settles and the stopped-attempt transition is
 published, Dalph admits the stopped-attempt claim read. Release and
 claim-reacquisition actions keep their exact proposal identities; they are not
-read-coalesced. Git and executor calls do not apply because these proposals
-select only task-tracker reads.
+read-coalesced. Executor calls do not apply because these proposals select only
+task-tracker or Git reads.
 
 There is no person or crash in this same-process race. The maintainer sees one
 task-tracker call for each exact recovered question and ordinary independent
-progress. Dalph must not overlap or replay a read merely because its causal
-route changed, coalesce two different recovered transition kinds, or reorder
-queued proposals globally.
+progress; for the integration case, the maintainer likewise sees one Git read.
+Dalph must not overlap or replay a read merely because its causal route changed,
+coalesce two different recovered transition kinds or integration purposes, or
+reorder queued proposals globally.
 
 ### Acceptance-test mapping
 
 - `does not repeat one recovered observation after only its causal route changes while it is live`
 - `does not repeat one responsible-task claim read after only its causal route changes while live`
+- `does not repeat one started-integration lineage read after only its causal route changes while live`
 - `runs a stopped-attempt claim read after the distinct continuation-claim read settles`
 
 ## A journaled integration-agent report selects the next exact continuation
