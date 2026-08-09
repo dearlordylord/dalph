@@ -44,16 +44,16 @@ const groupingChildTasksGraph = {
   ]
 }
 
-const independentRecoveryGraph = {
-  revision: "independent-recovery-revision",
+const independentPostDeathGraph = {
+  revision: "independent-post-death-revision",
   tasks: [
     { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
     { id: "C", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
   ]
 }
 
-const independentRecoveryStartingGraph = {
-  revision: "independent-recovery-starting-revision",
+const independentPostDeathStartingGraph = {
+  revision: "independent-post-death-starting-revision",
   tasks: [
     { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
     { id: "C", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] }
@@ -507,10 +507,10 @@ const lostWorktreeStoryBeforeAssertions = singletonTaskCompletesAuthoredCassette
     : [item]
 })
 
-/** A recovered running attempt records its disappeared worktree and suspends without repairing it. */
+/** After process death, the same running attempt records its disappeared worktree and suspends without repair. */
 export const lostPlannedWorktreeSafelySuspendsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...singletonTaskCompletesAuthoredCassette,
-  name: "a disappeared planned worktree safely suspends only its recovered attempt",
+  name: "a disappeared planned worktree safely suspends only the same attempt after process death",
   story: [
     ...lostWorktreeStoryBeforeAssertions,
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
@@ -550,7 +550,7 @@ export const lostPlannedWorktreeSafelySuspendsAuthoredCassette = Schema.decodeUn
   ]
 })
 
-const targetLineageRecoveryReads = [
+const targetLineagePostDeathReads = [
   { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
   {
     _tag: "TaskWorkSpecificationReadReturned",
@@ -906,7 +906,7 @@ export const runUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnknow
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    ...targetLineageRecoveryReads,
+    ...targetLineagePostDeathReads,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
@@ -949,7 +949,7 @@ const runUnpauseContinuationReportAt = runUnpauseAfterSafeSuspensionAuthoredCass
 
 /**
  * Alice stops after F2 while an already admitted continuation is held before intent;
- * recovery settles its lost response and the lost third Suspend without a duplicate command.
+ * later activations settle its lost response and the lost third Suspend without a duplicate command.
  */
 export const changedAttemptStopLostThirdSuspensionAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
   {
@@ -1118,7 +1118,7 @@ const suspensionResponseLostAcrossRestart = (
     ]
   })
 
-/** Recovery reconciles the lost suspension response before it resumes after Unpause. */
+/** The next activation reconciles the lost suspension response before ordinary work resumes after Unpause. */
 export const runUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...runUnpauseAfterSafeSuspensionAuthoredCassette,
   name: "Alice unpauses while exact suspension succeeds but its response is lost before restart",
@@ -1155,7 +1155,7 @@ export const taskUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnkno
   )
 })
 
-/** Recovery reconciles the lost task suspension response before it resumes after Unpause. */
+/** The next activation reconciles the lost task suspension response before ordinary work resumes after Unpause. */
 export const taskUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...taskUnpauseAfterSafeSuspensionAuthoredCassette,
   name: "Alice unpauses task A while exact suspension succeeds but its response is lost before restart",
@@ -1165,10 +1165,10 @@ export const taskUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decode
   )
 })
 
-/** A recovered attempt continues when Git proves the target advanced from its immutable Base. */
+/** After process death, the same attempt continues when Git proves the target advanced from its immutable Base. */
 export const compatibleTargetAdvanceContinuesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...singletonTaskCompletesAuthoredCassette,
-  name: "a compatible target advance keeps the recovered attempt eligible",
+  name: "a compatible target advance keeps the same attempt eligible after process death",
   startingFacts: {
     ...singletonTaskCompletesAuthoredCassette.startingFacts,
     targetLineageObservation: {
@@ -1179,7 +1179,7 @@ export const compatibleTargetAdvanceContinuesAuthoredCassette = Schema.decodeUnk
   },
   story: [
     ...lostWorktreeStoryBeforeAssertions,
-    ...targetLineageRecoveryReads,
+    ...targetLineagePostDeathReads,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
@@ -1207,12 +1207,12 @@ export const compatibleTargetAdvanceContinuesAuthoredCassette = Schema.decodeUnk
   ]
 })
 
-/** A recovered attempt safely suspends when Git proves the target left its immutable Base lineage. */
+/** After process death, the same attempt safely suspends when Git proves the target left its immutable Base lineage. */
 export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...singletonTaskCompletesAuthoredCassette,
-  name: "an incompatible target rewrite safely suspends only its recovered attempt",
+  name: "an incompatible target rewrite safely suspends only the same attempt after process death",
   startingFacts: {
     ...singletonTaskCompletesAuthoredCassette.startingFacts,
     taskWorkSpecifications: [
@@ -1224,25 +1224,25 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette = Schema.de
       plannedBaseSha: "1111111111111111111111111111111111111111",
       targetHeadSha: "3333333333333333333333333333333333333333"
     },
-    trackerGraph: independentRecoveryStartingGraph
+    trackerGraph: independentPostDeathStartingGraph
   },
   story: [
     ...lostWorktreeStoryBeforeAssertions.map((item) =>
-      item._tag === "TrackerGraphReadReturned" ? { ...item, graph: independentRecoveryStartingGraph } : item
+      item._tag === "TrackerGraphReadReturned" ? { ...item, graph: independentPostDeathStartingGraph } : item
     ),
-    ...targetLineageRecoveryReads,
+    ...targetLineagePostDeathReads,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
       request: "Suspend"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: independentRecoveryGraph },
+    { _tag: "TrackerGraphReadReturned", graph: independentPostDeathGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: independentRecoveryGraph },
+    { _tag: "TrackerGraphReadReturned", graph: independentPostDeathGraph },
     { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "C" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: independentRecoveryGraph },
+    { _tag: "TrackerGraphReadReturned", graph: independentPostDeathGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
     {
       _tag: "TaskWorkSpecificationReadReturned",
@@ -1378,7 +1378,7 @@ export const dependentTasksCompleteInOneRunAuthoredCassette = Schema.decodeUnkno
   ]
 })
 
-/** Accepted executor output remains ordered by journal position and starts integration after process recovery. */
+/** Accepted executor output remains ordered by journal position and starts integration in the next activation. */
 export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
   {
     _tag: "AuthoredScenarioCassette",

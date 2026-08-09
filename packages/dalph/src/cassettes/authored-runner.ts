@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- One chronological adapter owns fresh, pause, crash, recovery, candidate, and terminal story boundaries. */
+/* eslint-disable max-lines -- One chronological adapter owns activation, pause, crash, candidate, and terminal story boundaries. */
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, type Result, Schema, Stream } from "effect"
 import {
   GitCommitSha,
@@ -46,9 +46,8 @@ import {
   observeTargetLineageThrough,
   reduceWorkflowJournalHistory,
   runGitWorktreeReconciliation,
-  runRecoveredWorkflowWithControlledDeliveryActionExecutor,
   runWorkflowWithControlledDeliveryActionExecutor,
-  validatedStartupRecoveryLayer,
+  validatedRunActivationLayer,
   taskWorkCapacityControlLayer,
   TargetLineageObservation,
   TargetVerificationArtifact,
@@ -74,6 +73,8 @@ import {
 } from "@dalph/orchestrator"
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
+  AuthoredRunActivationOrdinal,
+  type AuthoredRunActivationOrdinal as AuthoredRunActivationOrdinalType,
   AuthoredScenarioCassette,
   type AuthoredCassetteStoryItem,
   type AuthoredObservedBehavior,
@@ -90,8 +91,8 @@ import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 
 export interface AuthoredScenarioCassetteRun {
+  readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
   readonly cassette: ScenarioCassette
-  readonly coordinatorActivations: ReadonlyArray<"Fresh" | "Recovered">
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
   readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
@@ -194,7 +195,7 @@ const coordinatorFinalityMatches = (
   actual: CoordinatorFinalityDecision
 ): boolean => {
   if (expected._tag !== actual._tag) return false
-  /* v8 ignore start -- @preserve Authored activation boundaries separate recoveries that must remain active; terminal runs have no following activation boundary. */
+  /* v8 ignore start -- @preserve Authored activation boundaries separate incomplete returns that must remain active; terminal runs have no following activation boundary. */
   if (expected._tag === "RunMayTerminate") return true
   /* v8 ignore stop -- @preserve */
   return actual._tag === "RunMustRemainActive" && expected.reason === actual.reason
@@ -272,7 +273,7 @@ const targetVerificationTerminalFrom = (
 /** Decodes and drives one story through the ordinary production delivery program. */
 const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(function* (input: unknown) {
   return yield* Effect.scoped(
-    // eslint-disable-next-line complexity -- One chronological adapter owns the fresh, crash, recovery, candidate, and terminal story boundaries.
+    // eslint-disable-next-line complexity -- One chronological adapter owns activation, crash, candidate, and terminal story boundaries.
     Effect.gen(function* () {
       const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette, { onExcessProperty: "error" })(input)
       yield* Effect.forEach(cassette.story, (item) => assertExactlyOneAuthoredCassetteStoryItemOwner(item._tag), {
@@ -476,15 +477,9 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       )
       const controlPolicyLayer = Layer.merge(baseControlPolicyLayer, operatorControlLayer)
       const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer)
-      const planningLayer = (phase: "fresh" | "recovery", recoveryOrdinal = 1) =>
+      const planningLayer = (activationOrdinal: AuthoredRunActivationOrdinalType) =>
         Layer.mergeAll(
-          deterministicOperationIdAllocatorLayer(
-            phase === "fresh"
-              ? `cassette:${runId}:operation`
-              : recoveryOrdinal === 1
-                ? `cassette:${runId}:recovery:operation`
-                : `cassette:${runId}:recovery:${recoveryOrdinal}:operation`
-          ),
+          deterministicOperationIdAllocatorLayer(`cassette:${runId}:activation:${activationOrdinal}:operation`),
           deterministicTaskClaimAcquisitionPlannerLayer({
             owner: command.claimOwner,
             tokenPrefix: command.claimTokenPrefix
@@ -572,14 +567,14 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       )
       const coordinatorOwnershipLayer = Layer.succeed(
         CoordinatorOwnership,
-        /* v8 ignore next -- startup only requires capability presence; cassette mutations use controlled authorities. */
+        /* v8 ignore next -- Activation construction requires capability presence; cassette mutations use controlled authorities. */
         CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
       )
-      const recoveredRuntimeOrdinal = yield* Ref.make(0)
+      const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
       const unresolvedLostExecutorResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
-      const runtimeLayerFor = ({ startup }: JournaledRuntimeLayerInput, recoveryOrdinal: number) => {
-        const planning = planningLayer(startup === "Fresh" ? "fresh" : "recovery", recoveryOrdinal)
+      const runtimeLayerFor = (activationOrdinal: AuthoredRunActivationOrdinalType) => {
+        const planning = planningLayer(activationOrdinal)
         const executorLayer = controlledExecutorLayer(
           cursor,
           runId,
@@ -587,10 +582,9 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           survivingExecutorReports,
           unresolvedLostExecutorResponses
         ).pipe(Layer.provide(controlPolicyLayer))
-        const startupLayer = validatedStartupRecoveryLayer(
+        const activationLayer = validatedRunActivationLayer(
           runId,
           command.integrationTarget,
-          startup,
           CandidateCorrectionLimit.make(1),
           CandidateContinuationLimit.make(authoredCandidateContinuationLimit),
           verificationPlan === undefined
@@ -605,16 +599,14 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           Layer.provide(Layer.succeed(WorkflowTrace, trace)),
           Layer.provide(planning)
         )
-        return startupLayer
+        return activationLayer
       }
-      const runtimeLayer = (input: JournaledRuntimeLayerInput) =>
-        input.startup === "Fresh"
-          ? runtimeLayerFor(input, 0)
-          : Layer.unwrap(
-              Ref.updateAndGet(recoveredRuntimeOrdinal, (ordinal) => ordinal + 1).pipe(
-                Effect.map((ordinal) => runtimeLayerFor(input, ordinal))
-              )
-            )
+      const runtimeLayer = (_input: JournaledRuntimeLayerInput) =>
+        Layer.unwrap(
+          Ref.updateAndGet(latestRuntimeActivationOrdinal, (ordinal) => ordinal + 1).pipe(
+            Effect.map((ordinal) => runtimeLayerFor(AuthoredRunActivationOrdinal.make(ordinal)))
+          )
+        )
       const application = journaledRunBootstrapLayer(runId, runtimeLayer).pipe(
         Layer.provide(journalLayer),
         Layer.provide(coordinatorOwnershipLayer)
@@ -853,19 +845,29 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           } satisfies DeliveryActionExecutorService
         })
 
-      const freshRun = withAuthoredOperatorDriver(
-        runWorkflowWithControlledDeliveryActionExecutor(
-          command.target,
-          initial.policy,
-          runId,
-          controlledExecutorFactory
-        ).pipe(Effect.provide(planningLayer("fresh")))
+      const initialControlPolicyEvaluations = yield* Ref.make(0)
+      const initialControlPolicySource = Ref.updateAndGet(initialControlPolicyEvaluations, (count) => count + 1).pipe(
+        Effect.flatMap((evaluationCount) =>
+          evaluationCount === 1
+            ? Effect.succeed(initial.policy)
+            : Effect.die("an authored Run must not reevaluate its initial control-policy source")
+        )
       )
-      const runAcrossCoordinatorLifecycles = Effect.gen(function* () {
-        let coordinator = yield* Effect.forkScoped(freshRun)
-        const coordinatorActivations: Array<"Fresh" | "Recovered"> = ["Fresh"]
+      const activateRun = (activationOrdinal: AuthoredRunActivationOrdinalType) =>
+        withAuthoredOperatorDriver(
+          runWorkflowWithControlledDeliveryActionExecutor(
+            command.target,
+            initialControlPolicySource,
+            runId,
+            controlledExecutorFactory
+          ).pipe(Effect.provide(planningLayer(activationOrdinal)))
+        )
+      const runAcrossActivations = Effect.gen(function* () {
+        const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
+        let coordinator = yield* Effect.forkScoped(activateRun(firstActivationOrdinal))
+        const activationOrdinals: Array<AuthoredRunActivationOrdinalType> = [firstActivationOrdinal]
         let consumedLifecycleBoundaries = 0
-        let recoveryOrdinal = 0
+        let activationOrdinal = firstActivationOrdinal
         while (consumedLifecycleBoundaries < coordinatorLifecycleBoundaryCount) {
           const boundary = yield* Effect.raceFirst(
             cursor.awaitCoordinatorProcessDeath.pipe(Effect.as({ _tag: "CoordinatorProcessDied" as const })),
@@ -880,45 +882,37 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
             yield* Fiber.interrupt(coordinator)
           }
           if (yield* cursor.atTerminalAssertions) break
-          recoveryOrdinal += 1
-          const recoveredRun = withAuthoredOperatorDriver(
-            runRecoveredWorkflowWithControlledDeliveryActionExecutor(command.target, controlledExecutorFactory).pipe(
-              Effect.provide(planningLayer("recovery", recoveryOrdinal))
-            )
-          )
-          coordinator = yield* recoveredRun.pipe(Effect.forkScoped({ startImmediately: true }))
-          coordinatorActivations.push("Recovered")
+          activationOrdinal = AuthoredRunActivationOrdinal.make(activationOrdinal + 1)
+          coordinator = yield* activateRun(activationOrdinal).pipe(Effect.forkScoped({ startImmediately: true }))
+          activationOrdinals.push(activationOrdinal)
         }
         yield* Effect.raceFirst(
           cursor.awaitTerminalAssertions,
           Fiber.join(coordinator).pipe(
-            Effect.andThen(Effect.die("recovered coordinator stopped before the authored terminal assertions"))
+            Effect.andThen(Effect.die("coordinator activation stopped before the authored terminal assertions"))
           )
         )
         if (candidateTerminalEventTag !== undefined) yield* Deferred.await(candidateOutcomeRecorded)
         for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
-        const recoveredCoordinatorExit = coordinator.pollUnsafe()
+        const coordinatorExitAtAssertions = coordinator.pollUnsafe()
         yield* Fiber.interrupt(coordinator)
-        return { coordinatorActivations, records: yield* sharedJournal.read(runId), recoveredCoordinatorExit }
+        return { activationOrdinals, coordinatorExitAtAssertions, records: yield* sharedJournal.read(runId) }
       })
-      const runFreshCoordinator = Effect.gen(function* () {
-        const coordinatorActivations: ReadonlyArray<"Fresh" | "Recovered"> = ["Fresh"]
-        yield* freshRun
-        return {
-          coordinatorActivations,
-          records: yield* sharedJournal.read(runId),
-          recoveredCoordinatorExit: undefined
-        }
+      const runSingleActivation = Effect.gen(function* () {
+        const activationOrdinal = AuthoredRunActivationOrdinal.make(1)
+        const activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType> = [activationOrdinal]
+        yield* activateRun(activationOrdinal)
+        return { activationOrdinals, coordinatorExitAtAssertions: undefined, records: yield* sharedJournal.read(runId) }
       })
       const coordinatorExecution = Effect.gen(function* () {
-        if (coordinatorLifecycleBoundaryCount > 0) return yield* runAcrossCoordinatorLifecycles
-        return yield* runFreshCoordinator
+        if (coordinatorLifecycleBoundaryCount > 0) return yield* runAcrossActivations
+        return yield* runSingleActivation
       })
       const execution = yield* Effect.scoped(coordinatorExecution.pipe(Effect.provide(application)))
-      const { coordinatorActivations, records, recoveredCoordinatorExit } = execution
-      /* v8 ignore next -- @preserve Recovered authored runs return success after their declared final read; action failures are asserted by the direct protocol cassette. */
-      if (recoveredCoordinatorExit !== undefined && Exit.isFailure(recoveredCoordinatorExit)) {
-        return yield* Effect.failCause(recoveredCoordinatorExit.cause)
+      const { activationOrdinals, coordinatorExitAtAssertions, records } = execution
+      /* v8 ignore next -- @preserve Later authored activations return after their declared final read; action failures are asserted by the direct protocol cassette. */
+      if (coordinatorExitAtAssertions !== undefined && Exit.isFailure(coordinatorExitAtAssertions)) {
+        return yield* Effect.failCause(coordinatorExitAtAssertions.cause)
       }
       const assertions = yield* cursor.consumeTerminalAssertions
       const behaviorExit = yield* Effect.exit(assertAuthoredExpectedBehavior(records, assertions))
@@ -927,8 +921,8 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       }
       const observedBehavior = behaviorExit.value
       return {
+        activationOrdinals,
         cassette,
-        coordinatorActivations,
         history: reduceWorkflowJournalHistory(runId, records),
         observedBehavior,
         records,

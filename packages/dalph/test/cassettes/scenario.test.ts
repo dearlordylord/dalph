@@ -453,7 +453,7 @@ it.effect("reopens Continue and performs fresh reads before admitting the same a
     const choice = run.records[choiceAt]?.event
 
     expect(choiceAt).toBeGreaterThan(0)
-    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered", "Recovered"])
+    expect(run.activationOrdinals).toEqual([1, 2, 3])
     expect(continuedAt).toBeGreaterThan(choiceAt)
     expect(between).toEqual([
       "TaskTrackerReadIntentRecorded",
@@ -622,14 +622,14 @@ it.effect("preserves worktree WIP session history and evidence after Stop", () =
   })
 )
 
-it.effect("recovers ambiguous stoppage and claim release without duplicate effects", () =>
+it.effect("reconciles ambiguous stoppage and claim release across later activations without duplicates", () =>
   Effect.gen(function* () {
     const [stoppage, run] = yield* Effect.all([
       runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette),
       runAuthoredScenarioCassette(changedAttemptStopReleaseResponseLostAuthoredCassette)
     ])
 
-    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered", "Recovered", "Recovered", "Recovered"])
+    expect(run.activationOrdinals).toEqual([1, 2, 3, 4, 5])
     expect(run.records.filter(({ event }) => event._tag === "TaskClaimReleaseIntended")).toHaveLength(1)
     expect(run.records.filter(({ event }) => event._tag === "TaskClaimReleased")).toHaveLength(0)
     expect(run.records.filter(({ event }) => event._tag === "StoppedAttemptClaimNoReleaseObserved")).toHaveLength(1)
@@ -728,7 +728,7 @@ it.effect("rechecks the executor after restart before repeating Stop", () =>
         index > stopAt && event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
     )
 
-    expect(run.coordinatorActivations.filter((activation) => activation === "Recovered").length).toBeGreaterThan(1)
+    expect(run.activationOrdinals.filter((ordinal) => ordinal > 1).length).toBeGreaterThan(1)
     expect(startIntents).toHaveLength(1)
     expect(projectionAt).toBeGreaterThan(start.index)
     expect(firstSuspendAt).toBeGreaterThan(projectionAt)
@@ -984,7 +984,7 @@ it.effect("reopens after task Unpause and finishes suspension before executor wo
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(taskUnpauseDuringSuspensionRestartsAuthoredCassette)
 
-    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.activationOrdinals).toEqual([1, 2])
     expect(exactExecutorReportTags(run.records)).toEqual(["Running", "SafelySuspended", "Terminal"])
   })
 )
@@ -1043,7 +1043,7 @@ it.effect("restarts a confirmed paused Run without selecting new forward progres
     )
     const afterPause = run.records.slice(pauseAt + 1)
 
-    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.activationOrdinals).toEqual([1, 2])
     expect(pauseAt).toBeGreaterThan(0)
     expect(afterPause.some(({ event }) => event._tag === "TaskTrackerFactsObserved")).toBe(false)
     expect(
@@ -1114,10 +1114,10 @@ it.effect("finishes the exact safe suspension before fresh reads after Unpause",
   })
 )
 
-it.effect("recovers Unpause during safe suspension without competing executor work", () =>
+it.effect("continues Unpause in the next activation without competing executor work", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)
-    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.activationOrdinals).toEqual([1, 2])
     expect(exactExecutorReportTags(run.records)).toEqual(["Running", "SafelySuspended", "Terminal"])
   })
 )
@@ -1193,7 +1193,7 @@ it.effect("applies an authored operator direction through the production control
   })
 )
 
-it.effect("recovers an accepted result in journal order and crosses its integration cutoff once", () =>
+it.effect("continues an accepted result after process death and crosses its integration cutoff once", () =>
   Effect.gen(function* () {
     const lyrics = renderAuthoredCassetteLyrics(acceptedResultRestartsIntoIntegrationAuthoredCassette)
     expect(lyrics).toContain(
@@ -1210,7 +1210,7 @@ it.effect("recovers an accepted result in journal order and crosses its integrat
       ({ event }) => event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted"
     )
 
-    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.activationOrdinals).toEqual([1, 2])
     expect(integrationRecords.map(({ event }) => event._tag)).toEqual([
       "IntegrationResponsibilityBegan",
       "IntegrationStarted"
@@ -2443,7 +2443,7 @@ it.effect("starts a queued accepted result in the same live coordinator process"
 
     const run = yield* runAuthoredScenarioCassette(uninterrupted)
 
-    expect(run.coordinatorActivations).toEqual(["Fresh"])
+    expect(run.activationOrdinals).toEqual([1])
     expect(run.records.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
   })
 )
@@ -2487,7 +2487,7 @@ it.effect("returns control after one unchanged refresh without terminating the u
   })
 )
 
-it.effect("restart before first intent recomputes delivery without recovering a proposal", () =>
+it.effect("gives newly begun and reconstructed Runs the same one-shot finality path", () =>
   Effect.gen(function* () {
     const firstGraphResult = singleton.story.findIndex((item) => item._tag === "TrackerGraphReadReturned")
     const cassette = {
@@ -2507,9 +2507,24 @@ it.effect("restart before first intent recomputes delivery without recovering a 
           : [item]
       )
     }
-    const run = yield* runAuthoredScenarioCassette(cassette)
+    const [uninterrupted, run] = yield* Effect.all([
+      runAuthoredScenarioCassette(singleton),
+      runAuthoredScenarioCassette(cassette)
+    ])
 
-    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(uninterrupted.activationOrdinals).toEqual([1])
+    expect(run.activationOrdinals).toEqual([1, 2])
+    expect(run.observedBehavior).toEqual(uninterrupted.observedBehavior)
+    expect(
+      [uninterrupted, run].map(({ records }) => records.filter(({ event }) => event._tag === "WorkflowRunBegan").length)
+    ).toEqual([1, 1])
+    expect(
+      [uninterrupted, run].map(({ records }) => records.some(({ event }) => event._tag === "WorkflowRunTerminated"))
+    ).toEqual([false, false])
+    expect([uninterrupted, run].map(({ records }) => records.at(-1)?.event._tag)).toEqual([
+      "TaskTrackerFactsObserved",
+      "TaskTrackerFactsObserved"
+    ])
     expect(run.records.filter(({ event }) => event._tag === "TaskClaimAcquisitionIntended")).toHaveLength(1)
     expect(run.records.filter(({ event }) => event._tag === "TaskClaimAcquired")).toHaveLength(1)
     expect(run.records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
@@ -2842,22 +2857,22 @@ it.effect("requires one terminal assertion group and one owner for every decoded
     }
     expect((yield* runAuthoredScenarioCassette(duplicateCoordinatorDeath).pipe(Effect.flip))._tag).toBe("SchemaError")
 
-    const graphRecovery = [
+    const laterActivationGraphRead = [
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
       { _tag: "TrackerGraphReadReturned", graph: singleton.startingFacts.trackerGraph }
     ] as const
-    const repeatedDeathsWithRecovery = {
+    const repeatedDeathsWithLaterActivations = {
       ...singleton,
       story: [
         ...singleton.story.slice(0, -1),
         { _tag: "CoordinatorProcessDies" as const },
-        ...graphRecovery,
+        ...laterActivationGraphRead,
         { _tag: "CoordinatorProcessDies" as const },
-        ...graphRecovery,
+        ...laterActivationGraphRead,
         singleton.story.at(-1)
       ]
     }
-    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(repeatedDeathsWithRecovery)).not.toThrow()
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(repeatedDeathsWithLaterActivations)).not.toThrow()
 
     const executorLossWithoutDeath = {
       ...singleton,
@@ -2880,7 +2895,7 @@ it.effect("requires one terminal assertion group and one owner for every decoded
         ...singleton.story.slice(0, -1),
         {
           _tag: "PlannedAttemptExecutorResponseLost",
-          detail: "the response is lost and recovery never projects executor authority",
+          detail: "the response is lost and the next activation never projects executor authority",
           report: { _tag: "Running", attemptId: "attempt:A:0" },
           request: "Suspend"
         },
@@ -3055,15 +3070,15 @@ it.effect("lowers capacity while A holds a position and admits B only after A re
   })
 )
 
-it.effect("restarts after a live capacity decrease and admits B only after recovered A releases its position", () =>
+it.effect("reconstructs held task-work admission before selecting new work", () =>
   Effect.gen(function* () {
     const command = dependentTasksCompleteInOneRunAuthoredCassette.story[1]
     if (command?._tag !== "RunCoordinator") return yield* Effect.die("maintained pipeline has no coordinator")
     const target = command.target
     const initialGraph = dependentTasksCompleteInOneRunAuthoredCassette.startingFacts.trackerGraph
-    const recoveryGraph = {
+    const postDeathGraph = {
       ...initialGraph,
-      revision: TrackerRevision.make("pipeline-B-becomes-independent-during-recovery"),
+      revision: TrackerRevision.make("pipeline-B-becomes-independent-after-process-death"),
       tasks: initialGraph.tasks.map((task) => (task.id === TaskId.make("B") ? { ...task, prerequisiteIds: [] } : task))
     }
     const firstRunning = dependentTasksCompleteInOneRunAuthoredCassette.story.findIndex(
@@ -3079,17 +3094,17 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
       (item) =>
         item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim" && item.operation.taskId === "B"
     )
-    const recoveryAttemptId = AttemptId.make("attempt:B:0")
+    const postDeathAttemptId = AttemptId.make("attempt:B:0")
     const restartItem = (item: (typeof dependentTasksCompleteInOneRunAuthoredCassette.story)[number]) => {
       if (
         item._tag === "DalphSelects" &&
         (item.operation._tag === "RecordTaskAttemptPlan" || item.operation._tag === "ReconcileTaskWorktree") &&
         item.operation.attemptId === "attempt:B:1"
       ) {
-        return { ...item, operation: { ...item.operation, attemptId: recoveryAttemptId } }
+        return { ...item, operation: { ...item.operation, attemptId: postDeathAttemptId } }
       }
       if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report.attemptId === "attempt:B:1") {
-        return { ...item, report: { ...item.report, attemptId: recoveryAttemptId } }
+        return { ...item, report: { ...item.report, attemptId: postDeathAttemptId } }
       }
       return item
     }
@@ -3104,7 +3119,7 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
           item.operation.taskId === TaskId.make("B")
             ? [
                 { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } } as const,
-                { _tag: "TrackerGraphReadReturned", graph: recoveryGraph } as const
+                { _tag: "TrackerGraphReadReturned", graph: postDeathGraph } as const
               ]
             : []),
           ...(index === 0 && item._tag === "InitialControlPolicy"
@@ -3116,7 +3131,7 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
                 { _tag: "OperatorAppliesControlDirection", direction: "Unpause", subject: { _tag: "Run" } } as const,
                 { _tag: "CoordinatorProcessDies" } as const,
                 { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } } as const,
-                { _tag: "TrackerGraphReadReturned", graph: recoveryGraph } as const,
+                { _tag: "TrackerGraphReadReturned", graph: postDeathGraph } as const,
                 {
                   _tag: "DalphSelects",
                   operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("A") }
@@ -3189,8 +3204,14 @@ it.effect("restarts after a live capacity decrease and admits B only after recov
     expect(reopened._tag).toBe("ValidWorkflowJournalHistory")
     if (reopened._tag === "ValidWorkflowJournalHistory") {
       expect(reopened.runState.pause.run).toEqual({ _tag: "RunUnpaused" })
+      expect(Option.getOrThrow(reopened.runState.controlPolicy)).toEqual({
+        revision: RunPolicyRevision.make(2),
+        taskExecutionCapacity: TaskWorkCapacity.make(1)
+      })
     }
-    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.activationOrdinals).toEqual([1, 2])
+    expect(run.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+    expect(new Set(run.records.map(({ runId }) => runId))).toEqual(new Set([run.runId]))
     expect(
       run.records.filter(
         ({ event }) =>
@@ -3378,7 +3399,7 @@ it.effect(
           event.plannedAttempt.taskId === TaskId.make("B")
       )
 
-      expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+      expect(run.activationOrdinals).toEqual([1, 2])
       expect(
         run.records.flatMap(({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
@@ -3754,7 +3775,7 @@ it.effect("derives failed task-work results and safely suspended orchestration e
   })
 )
 
-it.effect("records a foreign claim from an authored recovery story and safely suspends only its attempt", () =>
+it.effect("records a foreign claim after process death and safely suspends only its exact attempt", () =>
   Effect.gen(function* () {
     const foreignClaim = {
       _tag: "ActiveTaskClaim",
@@ -3791,7 +3812,7 @@ it.effect("records a foreign claim from an authored recovery story and safely su
   })
 )
 
-it.effect("drives a public operator claim-reacquisition request through recovered delivery", () =>
+it.effect("drives a public operator claim-reacquisition request through a later activation", () =>
   Effect.gen(function* () {
     const expected = singleton.story.at(-1)
     if (expected?._tag !== "ExpectedBehavior") return yield* Effect.die("singleton has no terminal assertions")
@@ -3864,11 +3885,11 @@ it.effect("drives a public operator claim-reacquisition request through recovere
   })
 )
 
-it.effect("records a lost planned worktree in the authored and recorded recovery cassette", () =>
+it.effect("records a lost planned worktree in the authored and recorded post-death cassette", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(lostPlannedWorktreeSafelySuspendsAuthoredCassette)
 
-    expect(run.coordinatorActivations).toEqual(["Fresh", "Recovered"])
+    expect(run.activationOrdinals).toEqual([1, 2])
     expect(run.observedBehavior.protocolEvidence).toContainEqual({
       _tag: "AttemptWorktreeLost",
       attemptId: "attempt:A:0",
@@ -4224,6 +4245,24 @@ it.effect(
         }
       ]
       const projected = yield* projectRecordedCassette(records)
+      const projectedOperationIds = Array.from(
+        new Set(
+          projected.entries.flatMap((entry) => {
+            if (entry._tag === "TaskClaimAcquisitionIntended") {
+              return [entry.operation.acquisition.operationId]
+            }
+            if (
+              entry._tag === "GitReadInitiated" ||
+              entry._tag === "TaskAttemptPlanned" ||
+              entry._tag === "TaskTrackerReadInitiated" ||
+              entry._tag === "TaskWorktreeReconciliationIntended"
+            ) {
+              return [entry.operation.operationId]
+            }
+            return []
+          })
+        )
+      )
       const executorReportEntry = projected.entries.find((entry) => entry._tag === "PlannedAttemptExecutorWorkReported")
       if (executorReportEntry?._tag !== "PlannedAttemptExecutorWorkReported") {
         return yield* Effect.die("missing executor report entry")
@@ -4500,13 +4539,13 @@ it.effect(
       const encodedBefore = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(recorded))
       const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
         attemptIds: [{ from: "attempt:A:0", to: "renamed-attempt-A" }],
-        claimTokens: [{ from: `cassette-claim:A:cassette:${run.runId}:operation:2`, to: "renamed-claim-token-A" }],
+        claimTokens: [{ from: acquiredClaimEntry.claim.token, to: "renamed-claim-token-A" }],
         integrationCandidateIds: [],
         integrationCandidateResourceLocators: [],
         integrationSessionIds: [],
         operationIds: [
-          ...Array.from({ length: 7 }, (_unused, ordinal) => ({
-            from: `cassette:${run.runId}:operation:${ordinal}`,
+          ...projectedOperationIds.map((operationId, ordinal) => ({
+            from: operationId,
             to: `renamed-operation:${ordinal}`
           })),
           { from: `cassette-release:${run.runId}`, to: "renamed-operation:claim-release" },
