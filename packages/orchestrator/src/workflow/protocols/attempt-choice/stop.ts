@@ -190,7 +190,9 @@ export const advanceAttemptStoppage = Effect.fn("AttemptStop.advanceStoppage")(f
   if (report._tag === "Running") return { _tag: "AttemptStoppagePending", executorState: "Running" }
   const currentRecords = yield* journal.read(subject.plannedAttempt.runId)
   const proof = unbrokenQuiescenceEvidence(currentRecords, subject.plannedAttempt)
+  /* v8 ignore start -- a non-Running command result is returned only after the same protocol appends its exact safe or terminal report. */
   if (proof === undefined) return yield* new AttemptStopChoiceContradiction({ requestId, subject })
+  /* v8 ignore stop */
   yield* recordAbandonment(requestId, subject, proof)
   return { _tag: "AttemptImplementationAbandoned" }
 })
@@ -214,7 +216,9 @@ export const observeAttemptStoppageExecutor = Effect.fn("AttemptStop.observeExec
   }
   const currentRecords = yield* journal.read(subject.plannedAttempt.runId)
   const proof = unbrokenQuiescenceEvidence(currentRecords, subject.plannedAttempt)
+  /* v8 ignore start -- a non-Running state observation is returned only after the same protocol appends its exact safe or terminal projection. */
   if (proof === undefined) return yield* new AttemptStopChoiceContradiction({ requestId, subject })
+  /* v8 ignore stop */
   yield* recordAbandonment(requestId, subject, proof)
   return { _tag: "AttemptImplementationAbandoned" } as const
 })

@@ -24,7 +24,7 @@ import {
   ControlDirectionApplication,
   controlDirectionApplicationLayer
 } from "../control-direction-application/protocol.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -35,7 +35,7 @@ import {
   intentRecordKey,
   outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { type JournalRecord, JournalStore } from "../../../workflow-journal/store.js"
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
@@ -46,11 +46,20 @@ import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-ac
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
+  PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "./events.js"
 import {
   continuePlannedAttemptExecutorWork,
   observePlannedAttemptExecutorState,
+  plannedAttemptExecutorContinuationDisposition,
   requestPlannedAttemptExecutorSuspension
 } from "./protocol.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
@@ -71,6 +80,7 @@ import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/tas
 import { projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.js"
 import { journaledWorkflowInterpreterLayer } from "../../../workflow-journal/journaled-interpreter.js"
 import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
+import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 
 const currentSpecification = makeTaskWorkSpecification({
   body: "Complete task A.",
@@ -435,6 +445,222 @@ it.effect("requires exact command reconciliation before a generic executor-state
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
+it.effect("records unavailable and contradictory projections while reconciling one ambiguous command", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: commandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const unavailable = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.succeed(Option.none()),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("reconciliation must not start work")
+        })
+      ),
+      Effect.flip
+    )
+    expect(unavailable).toMatchObject({ _tag: "PlannedAttemptExecutorProjectionUnavailable", commandOrdinal })
+
+    const foreignCorrelation = { attemptId: AttemptId.make("foreign-projection"), runId: plannedAttempt.runId }
+    const contradiction = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () =>
+            Effect.succeed(
+              Option.some(PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation }))
+            ),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("reconciliation must not start work")
+        })
+      ),
+      Effect.flip
+    )
+    expect(contradiction).toMatchObject({
+      _tag: "PlannedAttemptExecutorCorrelationMismatch",
+      expected: correlation,
+      observed: foreignCorrelation
+    })
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("records unavailable and contradictory read-only executor state", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    )
+
+    const unavailable = yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.succeed(Option.none()),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      ),
+      Effect.flip
+    )
+    expect(unavailable).toMatchObject({ _tag: "PlannedAttemptExecutorStateUnavailable", correlation })
+
+    const foreignCorrelation = { attemptId: AttemptId.make("foreign-state"), runId: plannedAttempt.runId }
+    const contradiction = yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () =>
+            Effect.succeed(
+              Option.some(PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation }))
+            ),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      ),
+      Effect.flip
+    )
+    expect(contradiction).toMatchObject({
+      _tag: "PlannedAttemptExecutorCorrelationMismatch",
+      expected: correlation,
+      observed: foreignCorrelation
+    })
+
+    const divergent = PlannedTaskAttempt.make({ ...plannedAttempt, baseSha: GitCommitSha.make("3".repeat(40)) })
+    const divergentResponsibility = yield* observePlannedAttemptExecutorState(divergent).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.die("contradictory responsibility must fail before projection"),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      ),
+      Effect.flip
+    )
+    expect(divergentResponsibility).toMatchObject({ _tag: "PlannedAttemptExecutorResponsibilityContradiction" })
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it("rejects malformed executor command and projection chronology through the public history reducer", () => {
+  const responsibility = PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const command = (ordinal: number) =>
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "StartOrContinue",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: PlannedAttemptExecutorCommandOrdinal.make(ordinal),
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  const running = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+  const foreignRunning = PlannedAttemptExecutorReport.cases.Running.make({
+    correlation: { attemptId: AttemptId.make("history-foreign-executor"), runId: plannedAttempt.runId }
+  })
+  const report = PlannedAttemptExecutorWorkReportedEvent.make({
+    ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+    report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } }),
+    version: workflowJournalEventVersion
+  })
+  const projection = (projectionOrdinal = 1, projectedReport: PlannedAttemptExecutorReport = running) =>
+    PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
+        report: projectedReport
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(projectionOrdinal),
+      version: workflowJournalEventVersion
+    })
+  const state = (ordinal = 1, projectedReport: PlannedAttemptExecutorReport = running) =>
+    PlannedAttemptExecutorStateObservedEvent.make({
+      observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: projectedReport }),
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(ordinal),
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  const recordsFromEvents = (events: ReadonlyArray<JournalRecord["event"]>): ReadonlyArray<JournalRecord> =>
+    events.map((event, index) => ({
+      event,
+      key: JournalRecordKey.make(`executor-history-forged:${index}`),
+      position: JournalPosition.make(index + 1),
+      runId: plannedAttempt.runId
+    }))
+  const malformed = [
+    { detail: "expected ordinal 1, found 2", events: [responsibility, command(2)] },
+    { detail: "follows an unmatched prior command", events: [responsibility, command(1), command(2)] },
+    { detail: "follows the terminal result", events: [responsibility, command(1), report, command(2)] },
+    { detail: "has no prior matching executor-work responsibility", events: [projection()] },
+    { detail: "does not name its unmatched command intent", events: [responsibility, projection()] },
+    { detail: "expected ordinal 1, found 2", events: [responsibility, command(1), projection(2)] },
+    {
+      detail: "returned a contradictory correlation",
+      events: [responsibility, command(1), projection(1, foreignRunning)]
+    },
+    { detail: "has no prior matching executor-work responsibility", events: [state()] },
+    { detail: "expected ordinal 1, found 2", events: [responsibility, state(2)] },
+    { detail: "returned a contradictory correlation", events: [responsibility, state(1, foreignRunning)] }
+  ] as const
+
+  for (const scenario of malformed) {
+    const reduction = reduceWorkflowJournalHistory(plannedAttempt.runId, recordsFromEvents(scenario.events))
+    expect(reduction).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining(scenario.detail) })])
+    })
+  }
+
+  const unavailableProjection = PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+    observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateUnavailable.make({}),
+    occurrenceClassification: "NonActionOccurrence",
+    plannedAttempt,
+    projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+    version: workflowJournalEventVersion
+  })
+  const unavailableState = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnavailable.make({}),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  expect(
+    reduceWorkflowJournalHistory(
+      plannedAttempt.runId,
+      recordsFromEvents([responsibility, command(1), unavailableProjection])
+    )._tag
+  ).toBe("InvalidWorkflowJournalHistory")
+  expect(
+    reduceWorkflowJournalHistory(plannedAttempt.runId, recordsFromEvents([responsibility, unavailableState]))._tag
+  ).toBe("InvalidWorkflowJournalHistory")
+})
+
 it.effect("rejects a divergent immutable plan before recording another executor command", () =>
   Effect.gen(function* () {
     const firstReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
@@ -577,6 +803,18 @@ it.effect("never issues a fourth durable suspension command without quiescence",
 it("generic executor correlation contains exactly RunId and AttemptId", () => {
   expect(correlation).toEqual({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
   expect(Object.keys(correlation).toSorted()).toEqual(["attemptId", "runId"])
+})
+
+it("derives the continuation budget from exact reports when no durable command count is supplied", () => {
+  const running = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+  const suspended = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+
+  expect(plannedAttemptExecutorContinuationDisposition(correlation, [running, running, running])).toMatchObject({
+    _tag: "ExecutorContinuationLimitReached"
+  })
+  expect(plannedAttemptExecutorContinuationDisposition(correlation, [running, suspended, running])).toMatchObject({
+    _tag: "ExecutorContinuationAvailable"
+  })
 })
 
 it("coalesces start, continuation, and suspension ownership by the same pair", () => {

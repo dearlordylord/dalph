@@ -164,7 +164,9 @@ const stopWaitReasonFor = (
 
 const stopQuiescenceIsProved = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt): boolean => {
   const evidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
+  /* v8 ignore start -- valid history admits an applied Stop only after an exact safe executor report, so its retained attempt always has evidence. */
   if (evidence === undefined) return false
+  /* v8 ignore stop */
   const laterCommandExists = records.some(
     ({ event, position }) =>
       position > evidence.observedAt &&
@@ -327,9 +329,11 @@ const observedStoppedClaimDisposition = (
     })
   }
   if (releaseIntent !== undefined) {
+    /* v8 ignore start -- history rejects an abandoned-attempt release intent unless it carries this exact stopped-attempt authority. */
     if (releaseIntent.event.operation.authority._tag !== "StoppedAttemptClaimReleaseAuthority") {
       return ResponsibilityDisposition.StoppedAttemptClaimPlanningWait({ reason: "FocusedObservationContradiction" })
     }
+    /* v8 ignore stop */
     return ResponsibilityDisposition.StoppedAttemptClaimReleaseRequired({
       operation: { ...releaseIntent.event.operation, authority: releaseIntent.event.operation.authority },
       requestId,
@@ -790,7 +794,9 @@ const deriveJournalResponsibilityFacts = (
       if (currentClaimFacts.observation._tag === "FocusedTaskClaimFactsUnreadable") {
         return ResponsibilityDisposition.TaskClaimUnreadableWait()
       }
+      /* v8 ignore start -- currentClaimRecord selects only focused-readable or focused-unreadable facts, and unreadable returned above. */
       if (currentClaimFacts.observation._tag !== "FocusedTaskClaimFacts") return undefined
+      /* v8 ignore stop */
       if (acquiredClaim?._tag !== "TaskClaimAcquired") return undefined
       if (currentClaimFacts.observation.observation._tag === "UnclaimedTask") {
         return ResponsibilityDisposition.TaskClaimMissingConstraint()
