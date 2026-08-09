@@ -308,6 +308,7 @@ const taskFactReconciliationDriver = defineDriver(
     recoverClaimActivation: {},
     recoverStopActivation: {},
     redeliverExactF2Choice: {},
+    rejectContinuePastIntegrationCutoff: {},
     rejectLosingF2Choice: {},
     rejectPersistedRequestContentReuse: {},
     rejectRunMismatchedRequest: {},
@@ -1097,6 +1098,8 @@ const taskFactReconciliationDriver = defineDriver(
             return yield* Effect.die("missing integration-start transition")
           yield* provideJournal(startQueuedIntegration(start.responsibility))
         }).pipe(Effect.orDie),
+      rejectContinuePastIntegrationCutoff: () =>
+        expectChoiceFailure(applyChoice("ContinueExistingAttempt", continueD1, subjectF2)).pipe(Effect.orDie),
       rejectStopPastIntegrationCutoff: () =>
         expectChoiceFailure(applyChoice("StopTaskImplementation", stopD2, subjectF2)).pipe(Effect.orDie),
       readFreshExactGraph: () => readThrough("ObservePlannedAttemptContinuationGraph").pipe(Effect.orDie),

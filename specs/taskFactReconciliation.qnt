@@ -97,6 +97,7 @@ module taskFactReconciliation {
     | LosingChoiceRejectedAction
     | TerminalObservedAction
     | IntegrationStartedAction
+    | PostCutoffContinueRejectedAction
     | PostCutoffStopRejectedAction
     | FreshGraphReadAction
     | FreshSpecificationReadAction
@@ -283,9 +284,13 @@ module taskFactReconciliation {
   }
 
   val postCutoffChoiceNeverApplies: bool =
-    state.lastAction != PostCutoffStopRejectedAction
+    not(
+      state.lastAction == PostCutoffContinueRejectedAction
+        or state.lastAction == PostCutoffStopRejectedAction
+    )
       or and {
         state.f2WinningChoice == NoChoice,
+        state.continueStage == NotContinuing,
         state.stopStage == NotStopping,
       }
 
@@ -450,6 +455,7 @@ module taskFactReconciliation {
   val runMismatchRejectedReached: bool = state.lastAction == RunMismatchRejectedAction
   val contentReuseRejectedReached: bool = state.lastAction == ContentReuseRejectedAction
   val losingChoiceRejectedReached: bool = state.lastAction == LosingChoiceRejectedAction
+  val postCutoffContinueRejectedReached: bool = state.lastAction == PostCutoffContinueRejectedAction
   val postCutoffStopRejectedReached: bool = state.lastAction == PostCutoffStopRejectedAction
   val terminalObservedReached: bool = state.lastAction == TerminalObservedAction
   val integrationStartedReached: bool = state.lastAction == IntegrationStartedAction
@@ -698,6 +704,18 @@ module taskFactReconciliation {
       phase: IntegrationStarted,
       integrationSelected: true,
       lastAction: IntegrationStartedAction,
+    },
+  }
+
+  action rejectContinuePastIntegrationCutoff: bool = all {
+    state.phase == IntegrationStarted,
+    state.currentFingerprint == F2,
+    state.f2WinningChoice == NoChoice,
+    state.lastControlResult != ChoiceOutsidePreIntegration,
+    state' = {
+      ...state,
+      lastControlResult: ChoiceOutsidePreIntegration,
+      lastAction: PostCutoffContinueRejectedAction,
     },
   }
 
@@ -1389,6 +1407,7 @@ module taskFactReconciliation {
     rejectLosingF2Choice,
     observeExactTerminal,
     beginIntegration,
+    rejectContinuePastIntegrationCutoff,
     rejectStopPastIntegrationCutoff,
     readFreshExactGraph,
     readFreshExactSpecification,
@@ -1449,7 +1468,8 @@ module taskFactReconciliation {
   action mbtStep: bool = any {
     all {
       state.f2WinningChoice == NoChoice,
-      if (state.phase == IntegrationStarted) any { observeF2Change, rejectStopPastIntegrationCutoff }
+      if (state.phase == IntegrationStarted)
+        any { observeF2Change, rejectContinuePastIntegrationCutoff, rejectStopPastIntegrationCutoff }
       else if (state.currentFingerprint == F1)
         any { observeF2Change, rejectRunMismatchedRequest, observeExactTerminal, beginIntegration }
       else any { applyContinueF2, applyStopF2, rejectRunMismatchedRequest, observeExactTerminal },

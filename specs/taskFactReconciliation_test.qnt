@@ -206,6 +206,20 @@ module taskFactReconciliationTest {
       })
   }
 
+  run terminalAcceptedPastIntegrationCutoffCannotAuthorizeContinueTest = {
+    init
+      .then(observeExactTerminal)
+      .then(beginIntegration)
+      .then(observeF2Change)
+      .then(rejectContinuePastIntegrationCutoff)
+      .expect(and {
+        state.lastControlResult == ChoiceOutsidePreIntegration,
+        state.f2WinningChoice == NoChoice,
+        state.continueStage == NotContinuing,
+        postCutoffChoiceNeverApplies,
+      })
+  }
+
   run retainedSafeProofStopsWithoutHoldingPositionTest = {
     init
       .expect(not(state.positionHeld))

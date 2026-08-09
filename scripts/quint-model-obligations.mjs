@@ -85,6 +85,7 @@ export const taskFactReconciliationObligations = Object.freeze({
     "runMismatchRejectedReached",
     "contentReuseRejectedReached",
     "losingChoiceRejectedReached",
+    "postCutoffContinueRejectedReached",
     "postCutoffStopRejectedReached",
     "terminalObservedReached",
     "integrationStartedReached",

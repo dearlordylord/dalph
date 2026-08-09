@@ -26,6 +26,19 @@ module taskFactReconciliationNegativeTest {
     },
   }
 
+  action applyContinueAfterCutoff: bool = all {
+    state.phase == IntegrationStarted,
+    state' = {
+      ...state,
+      firstF2Choice: ContinueChoice,
+      f2WinningChoice: ContinueChoice,
+      appliedChoiceCount: 1,
+      continueStage: NeedFreshGraph,
+      lastControlResult: ChoiceApplied,
+      lastAction: PostCutoffContinueRejectedAction,
+    },
+  }
+
   action applyContinueAfterTerminalAlone: bool = all {
     state.executorEvidence == ExactTerminal,
     state.f2WinningChoice == NoChoice,
@@ -179,6 +192,15 @@ module taskFactReconciliationNegativeTest {
       .then(beginIntegration)
       .then(observeF2Change)
       .then(applyStopAfterCutoff)
+      .expect(not(postCutoffChoiceNeverApplies))
+  }
+
+  run terminalPastCutoffCannotApplyContinueTest = {
+    init
+      .then(observeExactTerminal)
+      .then(beginIntegration)
+      .then(observeF2Change)
+      .then(applyContinueAfterCutoff)
       .expect(not(postCutoffChoiceNeverApplies))
   }
 
