@@ -151,7 +151,7 @@ D7, D8, and D19.
 ### Acceptance-test mapping
 
 - `rereads tracker authority after an ambiguously applied acquisition`
-- `restart before first intent recomputes delivery without recovering a proposal`
+- `gives newly begun and reconstructed Runs the same one-shot finality path`
 - `replays the exact durable claim and worktree intents`
 
 ## Empty work asks the tracker for one final graph

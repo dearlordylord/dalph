@@ -180,7 +180,7 @@ executor state for either run.
 
 ### Acceptance-test mapping
 
-- `blocks startup instead of ignoring another run's unfinished responsibility`
+- `blocks Run establishment before activation instead of ignoring another Run's unfinished responsibility`
   proves the fail-closed single-run milestone boundary.
 
 ## Startup discovers only completed work from another run
@@ -202,5 +202,5 @@ the completed run because startup only reconstructs its journaled disposition.
 
 ### Acceptance-test mapping
 
-- `does not block startup for another run's completed responsibility` proves
+- `establishes a Run when another Run's responsibility is completed` proves
   startup distinguishes retained history from unfinished work.

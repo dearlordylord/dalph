@@ -194,7 +194,7 @@ evidence, start #66 clean restart, or start #67 disposition.
 - `releases only the freshly confirmed exact claim after Stop`
 - `stops implementation without mutating an absent or foreign claim`
 - `preserves worktree WIP session history and evidence after Stop`
-- `recovers ambiguous stoppage and claim release without duplicate effects`
+- `reconciles ambiguous stoppage and claim release across later activations without duplicates`
 - `durably reconciles an unresolved claim release through bounded later activations`
 - `coalesces exact Stop redelivery and rejects request identity reuse`
 
@@ -231,7 +231,7 @@ resources as though stoppage were proved.
 
 - `preserves every exact resource when executor stoppage is unproved`
 - `does not release the claim while an exact writer may remain`
-- `rechecks the executor after restart before repeating Stop`
+- `reconstructs an ambiguous executor command before activating its continuation`
 
 ## A new Continue or Stop request arrives after integration has begun
 
