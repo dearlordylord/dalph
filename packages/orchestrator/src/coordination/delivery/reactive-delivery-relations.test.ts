@@ -50,12 +50,17 @@ import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-re
 import { type JournalState, makeJournal } from "./journal.js"
 import { delivery } from "./delivery.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import {
+  DeliveryRelationPublicationObserver,
+  evaluateDeliveryRelationInputBundle
+} from "./delivery-publication-observer.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
   DeliveryControlPolicyMissing,
   makeReactiveDeliveryRelationsLayer as makeProductionReactiveDeliveryRelationsLayer
 } from "./reactive-delivery-relations.js"
 import { DeliveryRelationReconciliationError } from "./relations.js"
+import type { DeliveryRelationInputBundle } from "./relations.js"
 
 const runId = RunId.make("reactive-delivery-coherent-reconstruction")
 const target = FixtureTarget.make("reactive-delivery-coherent-reconstruction-target")
@@ -112,6 +117,66 @@ const makeReactiveDeliveryRelationsLayer = (
     const integrationTargets = yield* makeIntegrationTargetResourceController()
     return yield* makeProductionReactiveDeliveryRelationsLayer(runId, target, journal, recovery, integrationTargets)
   })
+
+it.effect("records the initial and later exact production bundles without changing their delivery source chain", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const observed = yield* Ref.make<ReadonlyArray<DeliveryRelationInputBundle>>([])
+      const establishedSeen = yield* Deferred.make<void>()
+      const observer = DeliveryRelationPublicationObserver.of({
+        observe: (bundle) =>
+          Ref.update(observed, (bundles) => [...bundles, bundle]).pipe(
+            Effect.andThen(
+              bundle.publication.graph._tag === "GraphEstablished"
+                ? Deferred.succeed(establishedSeen, undefined)
+                : Effect.void
+            )
+          )
+      })
+      const layer = yield* makeReactiveDeliveryRelationsLayer(
+        runId,
+        target,
+        journal,
+        currentProjection(journal.state.get.pipe(Effect.orDie))
+      ).pipe(Effect.provideService(DeliveryRelationPublicationObserver, observer))
+      const operation = makeTrackerGraphObservationOperation(OperationId.make("observed-production-bundle"), target)
+      const projected = projectTrackerSnapshot({
+        revision: "observed-production-revision",
+        tasks: [{ id: TaskId.make("A"), lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [] }]
+      })
+      if (projected._tag === "Invalid") return yield* Effect.die(projected)
+
+      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(operation.operationId),
+        taskTrackerFactsObservedEvent(
+          operation.operationId,
+          makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
+        )
+      )
+      yield* Deferred.await(establishedSeen)
+
+      const bundles = yield* Ref.get(observed)
+      expect(bundles[0]?.publication.graph._tag).toBe("GraphNotEstablished")
+      const established = bundles.find(({ publication }) => publication.graph._tag === "GraphEstablished")
+      if (established === undefined) return expect.fail("expected established production bundle")
+      const consequences = yield* evaluateDeliveryRelationInputBundle(established)
+      expect(consequences.graph).toBe(established.publication.graph)
+      expect(consequences.frontier.source).toBe(consequences.graph)
+      expect(consequences.tickets.source).toBe(consequences.frontier)
+      expect(consequences.ticketDeliveries.source).toBe(consequences.tickets)
+      expect(consequences.settlements.source).toBe(consequences.ticketDeliveries)
+      expect(consequences.trackerConsequences.source).toBe(consequences.settlements)
+      const current = yield* delivery.pipe(
+        Effect.provide(layer),
+        Effect.flatMap((signal) => signal.get)
+      )
+      expect(current.graph._tag).toBe("GraphEstablished")
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
 
 it.effect("publishes journaled G1 and equal-content G2 through one reactive delivery", () =>
   Effect.scoped(

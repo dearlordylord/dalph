@@ -128,10 +128,19 @@ importers:
 
   prototypes/reducer-lab:
     dependencies:
+      cytoscape:
+        specifier: 3.34.0
+        version: 3.34.0
+      cytoscape-dagre:
+        specifier: 4.0.0
+        version: 4.0.0(cytoscape@3.34.0)
       effect:
         specifier: 4.0.0-beta.99
         version: 4.0.0-beta.99
     devDependencies:
+      '@types/cytoscape-dagre':
+        specifier: 2.3.4
+        version: 2.3.4
       linkedom:
         specifier: 0.18.12
         version: 0.18.12
@@ -945,6 +954,9 @@ packages:
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
+  '@types/cytoscape-dagre@2.3.4':
+    resolution: {integrity: sha512-uOGXuPfPLFoKZaegjHl9oj4tqONNJuhUl180FiJgRZ35rVijBs6J4UP1Ah6mA6S46h+7pv4ICqpgfdC3EADZlw==}
+
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
@@ -1305,6 +1317,15 @@ packages:
 
   cssom@0.5.0:
     resolution: {integrity: sha512-iKuQcq+NdHqlAcwUY0o/HL69XQrUaQdMjmStJ8JFmUaiiQErlhrmuigkg/CU4E2J0IyUKUrMAgl36TvN67MqTw==}
+
+  cytoscape-dagre@4.0.0:
+    resolution: {integrity: sha512-wsDgi1hHpWfslQxe/Gd/xCCeg2YUDrzwulhHOSI7fMfll92FFVY2AWhSRulLiOVcyDE4zz0rRd/+1TBTw+ew5Q==}
+    peerDependencies:
+      cytoscape: ^3.2.22
+
+  cytoscape@3.34.0:
+    resolution: {integrity: sha512-62rNSrioXw93uliKFBwjukeQyeWwH2PqDrTac31r2P6464u3AUvTk0xS4LVvT251g7IgkFunrI48ZEZGjywSOg==}
+    engines: {node: '>=0.10'}
 
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
@@ -2808,6 +2829,10 @@ snapshots:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
 
+  '@types/cytoscape-dagre@2.3.4':
+    dependencies:
+      cytoscape: 3.34.0
+
   '@types/deep-eql@4.0.2': {}
 
   '@types/estree@1.0.9': {}
@@ -3100,6 +3125,12 @@ snapshots:
   css-what@6.2.2: {}
 
   cssom@0.5.0: {}
+
+  cytoscape-dagre@4.0.0(cytoscape@3.34.0):
+    dependencies:
+      cytoscape: 3.34.0
+
+  cytoscape@3.34.0: {}
 
   debug@4.4.3:
     dependencies:

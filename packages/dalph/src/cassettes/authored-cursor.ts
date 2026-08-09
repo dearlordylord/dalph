@@ -46,6 +46,8 @@ const isTaskClaimReadItem = (item: StoryItem | undefined): item is AuthoredTaskC
   item?._tag === "TaskClaimReadReturned"
 
 export interface StoryCursor {
+  /** Current zero-based position after all successfully consumed authored items. */
+  readonly storyPosition: Effect.Effect<number>
   readonly atTerminalAssertions: Effect.Effect<boolean>
   readonly awaitTerminalAssertions: Effect.Effect<void>
   readonly awaitCoordinatorProcessDeath: Effect.Effect<
@@ -408,6 +410,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(claimed.item).pipe(Effect.orDie)
   })
   return {
+    storyPosition: SubscriptionRef.get(position),
     atTerminalAssertions,
     awaitTerminalAssertions: Deferred.await(terminalAssertionsReached),
     awaitCoordinatorProcessDeath: Deferred.await(coordinatorProcessDeath),

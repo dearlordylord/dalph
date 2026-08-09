@@ -78,9 +78,9 @@ in-memory adapters; recovery inside a cassette occurs only at an authored
 - `accepts successful recovered completion at the terminal assertion boundary`
   runs a maintained recovery story and requires its recovered coordinator and
   terminal assertions both to complete without hiding failures.
-- `renders every maintained cassette and its production execution evidence`
-  checks that the browser view contains each catalog key and exposes status,
-  consumed-item count, controlled-boundary provenance, and journal evidence.
+- `shows only information that selects, explains, or diagnoses a maintained cassette`
+  checks that the browser view contains every catalog row and exposes the
+  safety boundary, declared input, production ownership, and completion meaning.
 
 ## A maintainer runs the whole catalog
 
@@ -106,7 +106,7 @@ discards all displayed results.
 
 - `runs every maintained cassette through production to its declared end`
   is the command-independent execution proof for the whole catalog.
-- `the Run all command retains one terminal result for every catalog entry`
+- `the real browser entry runs every maintained cassette and retains every terminal result`
   checks the browser update path and the exact completed/failed summary.
 
 ## A maintainer finds, follows, and diagnoses the cassette that matters
@@ -208,3 +208,106 @@ cassette through fresh controlled runtime state as described above.
 - `offers an explicit reload escape while a runner is still waiting` holds one
   runner promise open and checks that the isolated Lab exposes its reload
   recovery action.
+
+## A maintainer watches an authored cassette move through delivery
+
+### Starting situation
+
+A Dalph maintainer opens the local Lab and selects one maintained authored
+coordinator cassette. The cassette declares controlled tracker graphs, an
+initial task-work capacity, and the ordered tracker, Git, executor, control,
+and terminal interactions that its production runner will receive. No outside
+GitHub issue, Git repository, executor process, or durable journal is changed.
+
+Before execution, the Lab may show the cassette's declared task graph as
+**controlled input**. Production has not observed that graph yet, so the Lab
+shows no production frontier, bounded placements, held positions,
+responsibilities, or settlements. Direct target-promotion and
+integration-finality protocol cassettes do not run the graph-level delivery
+composition, so their rows retain protocol evidence and do not receive an
+empty or fabricated graph workbench.
+
+### Production execution and captured delivery publications
+
+The maintainer chooses **Run cassette**. The ordinary authored cassette runner
+starts the production coordinator. Production asks the controlled tracker for
+the graph, records accepted graph observations and later workflow facts, and
+the production reactive delivery layer publishes each coherent input revision
+that the ordinary runtime consumes. A read-only cassette observer records
+those exact immutable publications, the current Fresh or Recovered activation,
+and the authored story position reached at publication time. It does not alter
+the publication, select an action, append a journal event, or call a boundary.
+
+After the production runner reaches the cassette's declared end, the Lab sends
+each recorded publication through the literal production `delivery`
+composition. At that production boundary a focused test checks the complete
+identity chain in the one `DeliveryConsequences` value. The runner then derives
+one serializable browser frame from that same value: observed graph, exhaustive
+delivery frontier, bounded ticket placements, ticket deliveries and exact
+obligations, settlements, and tracker-reflection meaning. It does not claim
+that the browser DTO retains Effect services, private graph brands, or relation
+object identities. The recorded runtime facts separately retain the actual
+task-work capacity and exact held
+`(RunId, AttemptId)` positions; the Lab does not call desired tickets or a
+frontier an allocation.
+
+For a dependent-task cassette, the maintainer can select consecutive frames
+and see the tracker-observed A-to-B prerequisite graph, A selected while B is
+excluded, A's terminal executor report releasing its task-work position while
+B remains graph-blocked, and only a later tracker observation of A's successful
+lifecycle making B eligible. For a pause cassette, a Pause direction alone
+does not release A's held position; the frame after the exact safely-suspended
+report does. For a recovery cassette, Fresh and Recovered frames are visibly
+separated and retain the same exact planned attempt where the cassette does.
+
+### Visible and forbidden results
+
+The graph is the primary authored-cassette result, with prerequisite and
+grouping edges, task lifecycle, frontier standing, bounded placement, ticket
+delivery standing, exact obligations, settlement state, and held-position
+correlation available per task. A frame identifies its production activation,
+authored story position, accepted journal position, graph revision, and
+capacity. The cassette chronology and raw journal remain available as the
+control/evidence record rather than replacing the graph.
+
+The Lab must not project a frontier from declared input, fabricate a privately
+branded journaled graph observation, infer missing topology from durable task
+membership, call a selected bounded ticket an admitted or held position,
+equate executor completion with tracker completion or delivery settlement,
+combine Fresh and Recovered publications into one activation, or restore the
+deleted Lab-owned scheduler and synthetic selector facts. Browser loss discards
+only this presentation. A retry reruns the cassette through fresh controlled
+runtime state.
+
+### Acceptance-test mapping
+
+- `shows an authored cassette declared graph only as input before production observes it`
+  checks that the graph is labelled controlled input and that delivery output
+  is absent before execution.
+- `captures every authored delivery frame from the real production publication and delivery composition`
+  checks every authored run returns current-first and established delivery
+  frames; `records the initial and later exact production bundles without
+  changing their delivery source chain` checks the observer's exact publication
+  and the complete `DeliveryConsequences` identity chain before the browser DTO
+  is derived.
+- `shows the production-observed graph frontier bounded tickets and held positions`
+  runs a maintained authored cassette and checks the browser workbench against
+  its returned delivery frames.
+- `shows grouping relationships exact obligations and settlement state` checks
+  a production-observed parent relation becomes a grouping edge and that the
+  task table exposes exact obligations and current settlement state.
+- `keeps a dependant blocked after executor completion until a later tracker observation`
+  checks the maintained dependent-task timeline rather than inferring release
+  from the declared story.
+- `separates desired tickets from exact held task-work positions`
+  checks that bounded placements and runtime position holders are distinct
+  visible fields.
+- `keeps a paused task held until the exact safe-suspension report` checks the
+  Pause direction and Running report leave A's exact attempt in the held map,
+  and only the declared `SafelySuspended` report releases it.
+- `separates Fresh and Recovered delivery frames across authored coordinator death`
+  checks activation boundaries and exact attempt correlation in a maintained
+  recovery cassette.
+- `does not fabricate a graph workbench for direct protocol cassettes` checks
+  that target-promotion and integration-finality rows retain only their real
+  protocol evidence.

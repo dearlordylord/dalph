@@ -1,7 +1,10 @@
 import { Cause, Crypto, Effect, Exit, Layer, Option } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import * as TestConsole from "effect/testing/TestConsole"
-import { runAuthoredScenarioCassette } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
+import {
+  type AuthoredDeliveryFrame,
+  runAuthoredScenarioCassette
+} from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import { maintainedAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/catalog.ts"
 import {
   maintainedIntegrationFinalityProtocolCassetteCatalog
@@ -59,6 +62,7 @@ const cassetteCategoryMetadata = {
 
 interface CassetteExecution {
   readonly activations: ReadonlyArray<"Fresh" | "Recovered">
+  readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null
   readonly evidence: unknown
   readonly journalRecords: ReadonlyArray<unknown>
   readonly runId: string | null
@@ -69,9 +73,25 @@ interface MaintainedCassetteDescriptor {
   readonly category: CassetteCategory
   readonly execute: () => Promise<Exit.Exit<CassetteExecution, unknown>>
   readonly input: unknown
+  readonly surface: CassetteDeliverySurface
   readonly story: ReadonlyArray<{ readonly _tag: string }>
   readonly storyName: string
 }
+
+interface DeclaredTaskGraph {
+  readonly revision: string
+  readonly tasks: ReadonlyArray<{
+    readonly id: string
+    readonly lifecycle: string
+    readonly parentTaskId: string | null
+    readonly prerequisiteIds: ReadonlyArray<string>
+    readonly title: string
+  }>
+}
+
+type CassetteDeliverySurface =
+  | { readonly _tag: "AuthoredDeliverySurface"; readonly declaredGraph: DeclaredTaskGraph }
+  | { readonly _tag: "DirectProtocolSurface" }
 
 export type CassetteFailureLocation =
   | {
@@ -89,6 +109,7 @@ export type CassetteLabResult =
       readonly catalogKey: MaintainedCassetteKey
       readonly category: CassetteCategory
       readonly consumedItemCount: number
+      readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null
       readonly executionEvidence: unknown
       readonly journalRecordCount: number
       readonly journalRecords: ReadonlyArray<unknown>
@@ -132,12 +153,27 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
     )
     return Exit.map(exit, (run) => ({
       activations: run.coordinatorActivations,
+      deliveryFrames: run.deliveryFrames,
       evidence: run,
       journalRecords: run.records,
       runId: run.runId
     }))
   },
   input: cassette,
+  surface: {
+    _tag: "AuthoredDeliverySurface",
+    declaredGraph: {
+      revision: cassette.startingFacts.trackerGraph.revision,
+      tasks: cassette.startingFacts.trackerGraph.tasks.map((task) => ({
+        id: task.id,
+        lifecycle: task.lifecycle._tag,
+        parentTaskId: task.parentTaskId,
+        prerequisiteIds: task.prerequisiteIds,
+        title: cassette.startingFacts.taskWorkSpecifications.find(({ taskId }) => taskId === task.id)?.title
+          ?? task.id
+      }))
+    }
+  },
   story: cassette.story,
   storyName: cassette.name
 }))
@@ -153,12 +189,14 @@ const targetPromotionDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
     )
     return Exit.map(exit, (run) => ({
       activations: [],
+      deliveryFrames: null,
       evidence: run,
       journalRecords: run.records,
       runId: null
     }))
   },
   input: cassette,
+  surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story,
   storyName: cassette.name
 }))
@@ -174,12 +212,14 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
     )
     return Exit.map(exit, (run) => ({
       activations: [],
+      deliveryFrames: null,
       evidence: run,
       journalRecords: run.records,
       runId: null
     }))
   },
   input: cassette,
+  surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story,
   storyName: cassette.name
 }))
@@ -219,7 +259,7 @@ const storyItemSummary = (item: Readonly<Record<string, unknown>>): string => {
   return fragments.join(" · ")
 }
 
-export const maintainedCassetteRows = descriptors.map(({ catalogKey, category, input, story, storyName }) => {
+export const maintainedCassetteRows = descriptors.map(({ catalogKey, category, input, story, storyName, surface }) => {
   const metadata = cassetteCategoryMetadata[category]
   return {
     catalogKey,
@@ -229,6 +269,7 @@ export const maintainedCassetteRows = descriptors.map(({ catalogKey, category, i
     declaredInputText: JSON.stringify(input, null, 2),
     itemName: metadata.itemName,
     runnerName: metadata.runnerName,
+    surface,
     storyItemTags: story.map(({ _tag }) => _tag),
     storyItemSummaries: story.map((item) => storyItemSummary(item)),
     storyName,
@@ -283,7 +324,8 @@ const completedResult = (
   activations: execution.activations,
   catalogKey: descriptor.catalogKey,
   category: descriptor.category,
-  consumedItemCount: descriptor.story.length,
+    consumedItemCount: descriptor.story.length,
+    deliveryFrames: execution.deliveryFrames,
   executionEvidence: execution.evidence,
   journalRecordCount: execution.journalRecords.length,
   journalRecords: execution.journalRecords,
@@ -321,6 +363,7 @@ export const runAuthoredCassetteInput = async (
     ? failedResult(inputDescriptor, exit.cause)
     : completedResult(inputDescriptor, {
         activations: exit.value.coordinatorActivations,
+        deliveryFrames: exit.value.deliveryFrames,
         evidence: exit.value,
         journalRecords: exit.value.records,
         runId: exit.value.runId

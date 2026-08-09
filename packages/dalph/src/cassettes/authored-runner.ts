@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- One chronological adapter owns fresh, pause, crash, recovery, candidate, and terminal story boundaries. */
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
-import { GitCommitSha, type RunId } from "@dalph/contracts"
+import { type AttemptId, GitCommitSha, type RunId, type TaskId } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
   controlDirectionApplicationLayer,
@@ -13,6 +13,11 @@ import {
   deterministicTaskClaimAcquisitionPlannerLayer,
   CandidateCorrectionLimit,
   CandidateContinuationLimit,
+  type BoundedTicketRank,
+  DeliveryRelationPublicationObserver,
+  evaluateDeliveryRelationInputBundle,
+  type DeliveryConsequences,
+  type DeliveryRelationInputBundle,
   freshWorkflowRunId,
   GitTargetLineage,
   IntegrationCandidateAgent,
@@ -24,6 +29,7 @@ import {
   gitTargetLineageTestLayer,
   gitWorktreeTestLayer,
   type JournalRecord,
+  type JournalPosition,
   JournalStore,
   journalStoreCapabilities,
   JournaledRunBootstrap,
@@ -40,6 +46,7 @@ import {
   runWorkflow,
   validatedStartupRecoveryLayer,
   taskWorkCapacityControlLayer,
+  type TaskWorkCapacity,
   TargetLineageObservation,
   TargetVerificationArtifact,
   TargetVerificationBoundary,
@@ -57,6 +64,8 @@ import {
   EvidenceStore,
   TestGitWorktree,
   TrackerMutation,
+  type TrackerRevision,
+  type TrackerTask,
   TrackerAdapterReadError,
   WorkflowInterpreter,
   WorkflowTrace
@@ -80,11 +89,131 @@ import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 export interface AuthoredScenarioCassetteRun {
   readonly cassette: ScenarioCassette
   readonly coordinatorActivations: ReadonlyArray<"Fresh" | "Recovered">
+  readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame>
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
   readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
   readonly runId: RunId
 }
+
+interface AuthoredDeliveryFact {
+  readonly kind: string
+  readonly exact: string
+}
+
+const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("AuthoredStoryPosition")
+)
+type AuthoredStoryPosition = typeof AuthoredStoryPosition.Type
+
+export interface AuthoredDeliveryFrame {
+  readonly activation: "Fresh" | "Recovered"
+  readonly storyPosition: AuthoredStoryPosition
+  readonly acceptedAt: JournalPosition | null
+  readonly graph:
+    | { readonly _tag: "NotEstablished" }
+    | {
+        readonly _tag: "Established"
+        readonly revision: TrackerRevision
+        readonly tasks: ReadonlyArray<{
+          readonly id: TaskId
+          readonly lifecycle: TrackerTask["lifecycle"]["_tag"]
+          readonly parentTaskId: TaskId | null
+          readonly prerequisiteIds: ReadonlyArray<TaskId>
+        }>
+      }
+  readonly capacity: TaskWorkCapacity
+  readonly heldPositions: ReadonlyArray<{
+    readonly taskId: TaskId
+    readonly runId: RunId
+    readonly attemptId: AttemptId
+  }>
+  readonly frontier: ReadonlyArray<{
+    readonly taskId: TaskId
+    readonly standing: "Eligible" | "Excluded"
+    readonly reasons: ReadonlyArray<AuthoredDeliveryFact>
+  }>
+  readonly tickets: ReadonlyArray<{
+    readonly taskId: TaskId
+    readonly placement: AuthoredDeliveryFact
+    readonly rank: BoundedTicketRank | null
+    readonly reasons: ReadonlyArray<AuthoredDeliveryFact>
+  }>
+  readonly deliveries: ReadonlyArray<{
+    readonly taskId: TaskId
+    readonly placement: AuthoredDeliveryFact
+    readonly evidence: ReadonlyArray<AuthoredDeliveryFact>
+    readonly standings: ReadonlyArray<AuthoredDeliveryFact>
+    readonly obligations: ReadonlyArray<AuthoredDeliveryFact>
+  }>
+  readonly settlements: ReadonlyArray<{ readonly taskId: TaskId; readonly attemptId: AttemptId }>
+  readonly trackerReflection: { readonly _tag: "DeliveryReflection"; readonly settlementCount: number }
+}
+
+interface CapturedDeliveryPublication {
+  readonly activation: "Fresh" | "Recovered"
+  readonly storyPosition: AuthoredStoryPosition
+  readonly bundle: DeliveryRelationInputBundle
+}
+
+const diagnosticJsonIndent = 2
+const authoredDeliveryFactOf = (value: { readonly _tag: string }): AuthoredDeliveryFact => ({
+  kind: value._tag,
+  exact: JSON.stringify(value, null, diagnosticJsonIndent)
+})
+
+const authoredDeliveryFrameOf = (
+  captured: CapturedDeliveryPublication,
+  consequences: DeliveryConsequences
+): AuthoredDeliveryFrame => ({
+  activation: captured.activation,
+  storyPosition: captured.storyPosition,
+  acceptedAt: captured.bundle.legacy.runtimeFacts.acceptedAt,
+  graph:
+    consequences.graph._tag === "GraphNotEstablished"
+      ? { _tag: "NotEstablished" }
+      : {
+          _tag: "Established",
+          revision: consequences.graph.observation.snapshot.revision,
+          tasks: consequences.graph.observation.snapshot
+            .toWire()
+            .tasks.map((task) => ({
+              id: task.id,
+              lifecycle: task.lifecycle._tag,
+              parentTaskId: task.parentTaskId,
+              prerequisiteIds: task.prerequisiteIds
+            }))
+        },
+  capacity: captured.bundle.legacy.runtimeFacts.taskWork.capacity,
+  heldPositions: captured.bundle.legacy.runtimeFacts.taskWork.held.map(({ correlation, taskId }) => ({
+    taskId,
+    runId: correlation.runId,
+    attemptId: correlation.attemptId
+  })),
+  frontier: consequences.frontier.standings.map((standing) => ({
+    taskId: standing.taskId,
+    standing: standing._tag,
+    reasons: standing._tag === "Excluded" ? standing.reasons.map(authoredDeliveryFactOf) : []
+  })),
+  tickets: consequences.tickets.placements.map(({ placement, taskId }) => ({
+    taskId,
+    placement: authoredDeliveryFactOf(placement),
+    rank: "rank" in placement ? placement.rank : null,
+    reasons: placement._tag === "GraphExcluded" ? placement.reasons.map(authoredDeliveryFactOf) : []
+  })),
+  deliveries: consequences.ticketDeliveries.deliveries.map((ticket) => ({
+    taskId: ticket.taskId,
+    placement: authoredDeliveryFactOf(ticket.placement),
+    evidence: ticket.evidence.map(authoredDeliveryFactOf),
+    standings: ticket.standings.map(authoredDeliveryFactOf),
+    obligations: ticket.obligations.map(authoredDeliveryFactOf)
+  })),
+  settlements: consequences.settlements.settlements.map(({ attemptId, taskId }) => ({ attemptId, taskId })),
+  trackerReflection: {
+    _tag: consequences.trackerConsequences._tag,
+    settlementCount: consequences.trackerConsequences.source.settlements.length
+  }
+})
 
 const minimumCorrectionExhaustionValidationCount = 2
 const authoredCandidateContinuationLimit = 2
@@ -172,6 +301,19 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         discard: true
       })
       const cursor = yield* makeStoryCursor(cassette.story)
+      const activeDeliveryActivation = yield* Ref.make<"Fresh" | "Recovered">("Fresh")
+      const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<CapturedDeliveryPublication>>([])
+      const publicationObserver = DeliveryRelationPublicationObserver.of({
+        observe: (bundle) =>
+          Effect.all({ activation: Ref.get(activeDeliveryActivation), storyPosition: cursor.storyPosition }).pipe(
+            Effect.flatMap(({ activation, storyPosition }) =>
+              Ref.update(capturedDeliveryPublications, (captured) => [
+                ...captured,
+                { activation, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
+              ])
+            )
+          )
+      })
       const candidateOutcomeRecorded = yield* Deferred.make<void>()
       const targetVerificationStory = cassette.story.some((item) => item._tag === "TargetVerificationReturned")
       const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
@@ -579,6 +721,7 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
               )
             )
             yield* Fiber.interrupt(coordinator)
+            yield* Ref.set(activeDeliveryActivation, "Recovered")
             const recoveredRun = withAuthoredOperatorDriver(
               runRecoveredWorkflow(command.target).pipe(Effect.provide(planningLayer("recovery")))
             )
@@ -592,7 +735,10 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
           }
           yield* freshRun
           return { records: yield* sharedJournal.read(runId), recoveredCoordinatorExit: undefined }
-        }).pipe(Effect.provide(application))
+        }).pipe(
+          Effect.provide(application),
+          Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver)
+        )
       )
       const { records, recoveredCoordinatorExit } = execution
       /* v8 ignore next -- @preserve Recovered authored runs return success after their declared final read; action failures are asserted by the direct protocol cassette. */
@@ -605,9 +751,15 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         return yield* Effect.failCause(behaviorExit.cause)
       }
       const observedBehavior = behaviorExit.value
+      const deliveryFrames = yield* Effect.forEach(yield* Ref.get(capturedDeliveryPublications), (captured) =>
+        evaluateDeliveryRelationInputBundle(captured.bundle).pipe(
+          Effect.map((consequences) => authoredDeliveryFrameOf(captured, consequences))
+        )
+      )
       return {
         cassette,
         coordinatorActivations: coordinatorDies ? ["Fresh", "Recovered"] : ["Fresh"],
+        deliveryFrames,
         history: reduceWorkflowJournalHistory(runId, records),
         observedBehavior,
         records,

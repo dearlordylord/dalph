@@ -407,6 +407,10 @@ export { DeliveryActionExecutor } from "./coordination/delivery/delivery-action-
 export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"
 export { DeliveryAcceptedFactPublication } from "./coordination/delivery/delivery-accepted-fact-publication.js"
 export {
+  DeliveryRelationPublicationObserver,
+  evaluateDeliveryRelationInputBundle
+} from "./coordination/delivery/delivery-publication-observer.js"
+export {
   DeliveryControlPolicyMissing,
   makeReactiveDeliveryRelationsLayer
 } from "./coordination/delivery/reactive-delivery-relations.js"
@@ -419,6 +423,7 @@ export {
   TrackerGraphRelationError,
   type JournaledTrackerGraphObservation,
   type DeliveryConsequences,
+  type BoundedTicketRank,
   type DeliveryGraphPublication,
   type DeliveryLegacyInputs,
   type DeliveryRelationInputBundle

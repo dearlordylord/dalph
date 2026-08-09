@@ -51,8 +51,106 @@ await scenario("runs every maintained cassette through production to its declare
     assert(result.journalRecordCount > 0, `${result.catalogKey} must return production journal evidence`)
     if (result.category === "Authored") {
       assert(result.activations.length > 0, `${result.catalogKey} must invoke the production coordinator`)
+      assert(
+        result.deliveryFrames !== null && result.deliveryFrames.length > 0,
+        `${result.catalogKey} must retain production delivery publications`
+      )
+    } else {
+      assert(result.deliveryFrames === null, `${result.catalogKey} must not fabricate graph-level delivery frames`)
     }
   }
+})
+
+await scenario("captures every authored delivery frame from the real production publication and delivery composition", () => {
+  const authored = everyResult.filter((result) => result._tag === "Completed" && result.category === "Authored")
+  assert(authored.length === Object.keys(maintainedAuthoredCassetteCatalog).length, "Every authored catalog entry must complete")
+  for (const result of authored) {
+    if (result._tag !== "Completed" || result.deliveryFrames === null) continue
+    assert(result.deliveryFrames[0]?.graph._tag === "NotEstablished", `${result.catalogKey} must retain the current-first production publication`)
+    assert(
+      result.deliveryFrames.some(({ graph }) => graph._tag === "Established"),
+      `${result.catalogKey} must retain a production-established graph publication`
+    )
+    assert(
+      result.deliveryFrames.every(({ settlements, trackerReflection }) =>
+        trackerReflection._tag === "DeliveryReflection"
+        && trackerReflection.settlementCount === settlements.length
+      ),
+      `${result.catalogKey} must retain the final tracker-reflection layer`
+    )
+  }
+})
+
+await scenario("keeps a dependant blocked after executor completion until a later tracker observation", () => {
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The dependant story must return delivery frames")
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) return
+  const heldA = result.deliveryFrames.findIndex(({ heldPositions }) => heldPositions.some(({ taskId }) => taskId === "A"))
+  const releasedButBlocked = result.deliveryFrames.findIndex((frame, index) =>
+    index > heldA
+    && !frame.heldPositions.some(({ taskId }) => taskId === "A")
+    && frame.frontier.some(({ reasons, standing, taskId }) =>
+      taskId === "B" && standing === "Excluded" && reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
+    )
+  )
+  const dependantEligible = result.deliveryFrames.findIndex((frame, index) =>
+    index > releasedButBlocked
+    && frame.frontier.some(({ standing, taskId }) => taskId === "B" && standing === "Eligible")
+  )
+  assert(heldA >= 0, "A must visibly hold the exact task-work position")
+  assert(releasedButBlocked > heldA, "B must remain blocked after A releases its process-local position")
+  assert(dependantEligible > releasedButBlocked, "Only the later completed tracker graph may release B")
+})
+
+await scenario("separates desired tickets from exact held task-work positions", () => {
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The bounded story must return delivery frames")
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) return
+  assert(
+    result.deliveryFrames.some((frame) =>
+      frame.tickets.some(({ placement, taskId }) => taskId === "A" && placement.kind === "Selected")
+      && !frame.heldPositions.some(({ taskId }) => taskId === "A")
+    ),
+    "A desired ticket must be visible before a process-local position is held"
+  )
+  assert(
+    result.deliveryFrames.some((frame) => frame.heldPositions.some(({ taskId }) => taskId === "A")),
+    "The later exact A position must remain a separate runtime fact"
+  )
+})
+
+await scenario("separates Fresh and Recovered delivery frames across authored coordinator death", () => {
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:runPauseRestartsPassively")
+  assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The recovery story must return delivery frames")
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) return
+  const firstRecovered = result.deliveryFrames.findIndex(({ activation }) => activation === "Recovered")
+  assert(firstRecovered > 0, "Recovered publications must follow Fresh publications")
+  assert(result.deliveryFrames.slice(0, firstRecovered).every(({ activation }) => activation === "Fresh"), "Activation frames must retain their boundary")
+})
+
+await scenario("keeps a paused task held until the exact safe-suspension report", () => {
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:taskPauseLetsIndependentTaskContinue")
+  assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The task-pause story must return delivery frames")
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) return
+  const safeSuspensionPosition = maintainedAuthoredCassetteCatalog.taskPauseLetsIndependentTaskContinue.story
+    .findIndex((item) =>
+      item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "SafelySuspended"
+    )
+  assert(safeSuspensionPosition >= 0, "The maintained pause story must declare safe suspension")
+  const beforeSafeSuspension = result.deliveryFrames.find(({ storyPosition }) =>
+    storyPosition === safeSuspensionPosition
+  )
+  const afterSafeSuspension = result.deliveryFrames.find(({ storyPosition }) =>
+    storyPosition === safeSuspensionPosition + 1
+  )
+  assert(
+    beforeSafeSuspension?.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0") === true,
+    "Pause direction and a Running report must leave A holding its exact position"
+  )
+  assert(
+    afterSafeSuspension?.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0") === false,
+    "Only the exact SafelySuspended report may release A's position"
+  )
 })
 
 await scenario("reports the exact authored item when production cannot complete a cassette", async () => {
@@ -116,6 +214,8 @@ await scenario("formats maintained cassette rows and summaries", () => {
 const installDom = () => {
   const { document, window } = parseHTML('<!doctype html><html><body><main id="root"></main></body></html>')
   Object.assign(globalThis, {
+    customElements: window.customElements,
+    CustomEvent: window.CustomEvent,
     document,
     Event: window.Event,
     HTMLButtonElement: window.HTMLButtonElement,
@@ -141,7 +241,7 @@ const cannedRunner = async (catalogKey: (typeof maintainedCassetteKeys)[number])
 await scenario("shows only information that selects, explains, or diagnoses a maintained cassette", () => {
   const { document, root } = installDom()
   mountCassetteLab({ revision: "acceptance-revision+dirty", root, rows: maintainedCassetteRows, runCassette: cannedRunner })
-  assert(document.title === "Dalph cassette lab", "The tab title must name the cassette Lab")
+  assert(document.title === "Dalph reducer lab", "The tab title must name the reducer Lab")
   assert(
     document.querySelector("[data-role='safety-context']")?.textContent?.includes("no GitHub issue, Git repository, executor process, or durable journal is changed") === true,
     "The Lab must state the concrete safety boundary"
@@ -166,6 +266,117 @@ await scenario("shows only information that selects, explains, or diagnoses a ma
   assert(document.querySelectorAll("[data-role='exact-declared-input'] pre").length === expectedCatalogSize, "Exact declared input must be available for every cassette")
   assert(document.querySelector("[data-role='completion-legend']")?.textContent?.includes("matched the declared end") === true, "Completion must not imply that the modeled operation succeeded")
   assert(document.querySelector("input[type='search']") !== null && document.querySelectorAll("select").length === 2, "Selection controls must include catalog and status")
+})
+
+await scenario("shows an authored cassette declared graph only as input before production observes it", () => {
+  const { document, root } = installDom()
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: maintainedCassetteRows, runCassette: cannedRunner })
+  const authoredCount = maintainedCassetteRows.filter(({ category }) => category === "Authored").length
+  assert(document.querySelectorAll("[data-role='delivery-workbench']").length === authoredCount, "Every authored row must expose the delivery workbench")
+  assert(document.querySelector("[data-role='delivery-frame']") === null, "Declared input must not become an observed delivery frame")
+  const closed = document.querySelector<HTMLDetailsElement>("[data-role='delivery-workbench']")
+  assert(closed?.querySelector("dalph-delivery-graph") === null, "A closed workbench must not eagerly construct a graph")
+  if (closed === null) throw new Error("The authored workbench is missing")
+  closed.open = true
+  closed.dispatchEvent(new Event("toggle"))
+  const first = document.querySelector("[data-role='delivery-workbench']")
+  assert(first?.textContent?.includes("not yet observed") === true, "Derived delivery facts must remain explicitly unobserved")
+  const graph = first?.querySelector("dalph-delivery-graph") as (HTMLElement & { projection?: { readonly key: string } }) | null
+  assert(graph?.projection?.key.startsWith("declared:") === true, "The pre-run graph must identify itself as controlled declared input")
+})
+
+await scenario("shows the production-observed graph frontier bounded tickets and held positions", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  if (row === undefined) throw new Error("The dependant delivery row is missing")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .row-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const workbench = document.querySelector("[data-role='delivery-workbench']")
+  const result = resultByKey.get(row.catalogKey)
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) throw new Error("The real delivery frames are missing")
+  const establishedIndex = result.deliveryFrames.findIndex((frame) =>
+    frame.graph._tag === "Established"
+    && frame.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0")
+  )
+  const timeline = workbench?.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
+  if (timeline === null || establishedIndex < 0) throw new Error("The production delivery timeline is missing")
+  for (const option of timeline.options) {
+    if (option.value === String(establishedIndex)) option.setAttribute("selected", "")
+    else option.removeAttribute("selected")
+  }
+  timeline.dispatchEvent(new Event("change"))
+  const graph = workbench?.querySelector("dalph-delivery-graph") as (HTMLElement & {
+    projection?: { readonly key: string; readonly tasks: ReadonlyArray<{ readonly id: string }> }
+  }) | null
+  assert(graph?.projection?.key.startsWith("observed:") === true, "The selected graph must come from a production delivery frame")
+  assert(graph?.projection?.tasks.some(({ id }) => id === "A") === true, "The observed graph must render its production tasks")
+  assert(graph?.projection?.tasks.every((task) => !("title" in task)) === true, "Observed graph nodes must not borrow declared task text")
+  const stateTable = workbench?.querySelector("[data-role='delivery-task-state']")
+  assert(stateTable?.textContent?.includes("PrerequisitesIncomplete") === true, "The exhaustive frontier must explain B's exclusion")
+  assert(stateTable?.textContent?.includes("prerequisiteTaskIds") === true, "The exact frontier exclusion must retain its prerequisite payload")
+  assert(stateTable?.textContent?.includes("Selected #0") === true, "The bounded ticket placement must be visible")
+  assert(workbench?.textContent?.includes("tracker reflection") === true, "The workbench must expose the complete production layer chain")
+  const headers = [...stateTable?.querySelectorAll("th") ?? []].map(({ textContent }) => textContent)
+  assert(headers.includes("Desired bounded ticket") && headers.includes("Actual held position"), "Desired tickets and exact held positions must have distinct columns")
+  assert(headers.includes("Ticket-delivery evidence / standing / obligation"), "Every ticket-delivery layer must remain visible")
+  assert(
+    [...workbench?.querySelectorAll("[data-role='delivery-frame'] pre") ?? []].some(({ textContent }) =>
+      textContent?.includes("attempt:A:0")
+    ),
+    "Exact responsibility evidence must retain its attempt correlation"
+  )
+  assert(workbench?.querySelector(".delivery-frame-change")?.textContent?.includes("held positions changed for A") === true, "The selected frame must explain its change from the prior publication")
+  graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: "A" } }))
+  assert(workbench?.querySelector("tr[data-task-id='A']")?.classList.contains("selected-task-row") === true, "Graph task selection must highlight the matching exact task row")
+  ;([...workbench?.querySelectorAll("button") ?? []].find(({ textContent }) => textContent === "Next frame") as HTMLButtonElement | undefined)?.click()
+  assert(workbench?.querySelector("tr[data-task-id='A']")?.getAttribute("aria-current") === "true", "Task selection must remain synchronized across frame navigation")
+
+  const search = document.querySelector("input[type='search']") as HTMLInputElement | null
+  if (search === null) throw new Error("The delivery search control is missing")
+  search.value = "PrerequisitesIncomplete"
+  search.dispatchEvent(new Event("input"))
+  assert(document.querySelector(".search-match-reason")?.textContent?.includes("returned production delivery evidence") === true, "Search must explain matches in returned delivery evidence")
+})
+
+await scenario("does not fabricate a graph workbench for direct protocol cassettes", () => {
+  const { document, root } = installDom()
+  const protocolRows = maintainedCassetteRows.filter(({ category }) => category !== "Authored")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: protocolRows, runCassette: cannedRunner })
+  assert(document.querySelector("[data-role='delivery-workbench']") === null, "Direct protocol runners must not display invented graph-level delivery state")
+  assert(document.querySelector(".group-facts")?.textContent?.includes("does not publish the graph-level delivery relation") === true, "The direct protocol group must explain why no graph workbench applies")
+})
+
+await scenario("shows grouping relationships exact obligations and settlement state", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:taskPauseCoversGroupingChild")
+  if (row === undefined) throw new Error("The grouping delivery row is missing")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .row-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const result = resultByKey.get(row.catalogKey)
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) throw new Error("Grouping frames are missing")
+  const groupingIndex = result.deliveryFrames.findIndex((frame) =>
+    frame.graph._tag === "Established"
+    && frame.graph.tasks.some(({ parentTaskId }) => parentTaskId !== null)
+    && frame.deliveries.some(({ obligations }) => obligations.length > 0)
+  )
+  const workbench = document.querySelector("[data-role='delivery-workbench']")
+  const select = workbench?.querySelector("select") as HTMLSelectElement | null
+  if (select === null || groupingIndex < 0) throw new Error("Grouping timeline controls are missing")
+  for (const option of select.options) {
+    if (option.value === String(groupingIndex)) option.setAttribute("selected", "")
+    else option.removeAttribute("selected")
+  }
+  select.dispatchEvent(new Event("change"))
+  const graph = workbench?.querySelector("dalph-delivery-graph") as (HTMLElement & {
+    projection?: { readonly edges: ReadonlyArray<{ readonly kind: string }> }
+  }) | null
+  assert(graph?.projection?.edges.some(({ kind }) => kind === "Grouping") === true, "The production-observed parent relation must render as a grouping edge")
+  assert(workbench?.textContent?.includes("Exact obligations") === true, "Ticket-delivery obligations must be explicitly inspectable")
+  assert(workbench?.textContent?.includes("Settlement") === true, "Every task must expose its current delivery-settlement state")
 })
 
 await scenario("searches declared behavior without changing the maintained run-all catalog", async () => {
@@ -229,6 +440,26 @@ await scenario("searches declared behavior without changing the maintained run-a
   await shownSettled
   assert(calls.length === finalityCount, "Run shown must execute exactly the currently visible catalog subset")
   assert(aggregateFocused, "Run shown must move focus to its terminal aggregate before it can disappear")
+  const finalityRow = maintainedCassetteRows.find(({ category }) => category === "IntegrationFinality")
+  const finalityResult = finalityRow === undefined ? undefined : resultByKey.get(finalityRow.catalogKey)
+  if (finalityRow === undefined || finalityResult?._tag !== "Completed") {
+    throw new Error("A completed direct-protocol result is required")
+  }
+  const visibleFinalityText = `${finalityRow.storyName} ${finalityRow.catalogKey} ${finalityRow.declaredInputText}`
+    .toLocaleLowerCase()
+  const returnedOnlyToken = resultEvidenceText(finalityResult).match(/[A-Za-z][A-Za-z0-9_-]{8,}/gu)
+    ?.find((token) => !visibleFinalityText.includes(token.toLocaleLowerCase()))
+  if (returnedOnlyToken === undefined) throw new Error("The direct-protocol search fixture needs a returned-only fact")
+  search.value = returnedOnlyToken
+  search.dispatchEvent(new Event("input"))
+  assert(
+    [...document.querySelectorAll(".search-match-reason")].some((reason) =>
+      !reason.hasAttribute("hidden") && reason.textContent?.includes("returned production delivery evidence")
+    ),
+    "Returned direct-protocol facts must be searchable and explain their source"
+  )
+  search.value = ""
+  search.dispatchEvent(new Event("input"))
   const allSettled = settled(everyCassetteSettledEvent)
   const runAll = [...document.querySelectorAll("button")].find(({ textContent }) => textContent?.startsWith("Run all "))
   runAll?.click()
@@ -378,6 +609,9 @@ await scenario("the real browser entry runs every maintained cassette and retain
   await allSettled
   assert([...document.querySelectorAll("article")].every(({ dataset }) => dataset.state === "Completed"), "The real entry must complete every maintained row")
   assert(document.querySelectorAll("[data-role='execution-evidence']").length === expectedCatalogSize, "The real entry must retain every terminal result")
+  assert([...document.querySelectorAll<HTMLDetailsElement>("[data-role='delivery-workbench']")].every(({ open }) => !open), "Run all must keep graph workbenches collapsed")
+  assert([...document.querySelectorAll("[data-role='delivery-workbench']")].every((workbench) => workbench.querySelector("dalph-delivery-graph") === null), "Collapsed Run-all workbenches must remain lazy")
+  assert([...document.querySelectorAll<HTMLDetailsElement>("[data-role='execution-evidence']")].every(({ open }) => !open), "Run all must keep successful terminal evidence collapsed")
   assert(root.querySelector("[data-role='catalog-summary']")?.textContent?.startsWith(`${expectedCatalogSize} completed`) === true, "The real entry must show the complete catalog summary")
 })
 

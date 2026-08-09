@@ -1715,6 +1715,63 @@ it.effect("resumes actions when G2 introduces eligible B", () =>
   })
 )
 
+it.effect(
+  "captures every authored delivery frame from production and keeps desired tickets separate from held work",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette)
+      const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
+
+      expect(run.deliveryFrames[0]?.graph).toEqual({ _tag: "NotEstablished" })
+      expect(established.length).toBeGreaterThan(1)
+      expect(established.some(({ frontier }) => frontier.some(({ taskId }) => taskId === "B"))).toBe(true)
+      expect(
+        established.some(
+          ({ frontier, heldPositions }) =>
+            !heldPositions.some(({ taskId }) => taskId === "A") &&
+            frontier.some(
+              ({ reasons, standing, taskId }) =>
+                taskId === "B" &&
+                standing === "Excluded" &&
+                reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
+            )
+        )
+      ).toBe(true)
+      expect(
+        established.some(({ frontier }) =>
+          frontier.some(({ standing, taskId }) => taskId === "B" && standing === "Eligible")
+        )
+      ).toBe(true)
+      expect(
+        established.some(
+          ({ heldPositions, tickets }) =>
+            tickets.some(({ placement, taskId }) => taskId === "A" && placement.kind === "Selected") &&
+            !heldPositions.some(({ taskId }) => taskId === "A")
+        )
+      ).toBe(true)
+      expect(() => JSON.stringify(run.deliveryFrames)).not.toThrow()
+    })
+)
+
+it.effect("separates Fresh and Recovered delivery frames across authored coordinator death", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)
+    const fresh = run.deliveryFrames.filter(({ activation }) => activation === "Fresh")
+    const recovered = run.deliveryFrames.filter(({ activation }) => activation === "Recovered")
+
+    expect(fresh.length).toBeGreaterThan(0)
+    expect(recovered.length).toBeGreaterThan(0)
+    expect(run.deliveryFrames.findIndex(({ activation }) => activation === "Recovered")).toBe(fresh.length)
+    const lastFreshStoryPosition = fresh.at(-1)?.storyPosition
+    if (lastFreshStoryPosition === undefined) return expect.fail("expected a Fresh delivery frame")
+    expect(recovered.every(({ storyPosition }) => storyPosition >= lastFreshStoryPosition)).toBe(true)
+    const freshHeld = fresh.flatMap(({ heldPositions }) => heldPositions)
+    const recoveredHeld = recovered.flatMap(({ heldPositions }) => heldPositions)
+    expect(freshHeld.some(({ attemptId }) => attemptId === "attempt:A:0")).toBe(true)
+    expect(recoveredHeld.some(({ attemptId }) => attemptId === "attempt:A:0")).toBe(true)
+  })
+)
+
 it.effect("returns control after one unchanged refresh without terminating the unsettled Run", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(singleton)

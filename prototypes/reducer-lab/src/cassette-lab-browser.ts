@@ -13,6 +13,7 @@ import {
   resultEvidenceText,
   rowStateStatusText
 } from "./cassette-lab-view.ts"
+import { renderCassetteDeliveryWorkbench } from "./cassette-lab-workbench.ts"
 
 export const singleCassetteSettledEvent = "dalph-cassette-lab:single-settled"
 export const everyCassetteSettledEvent = "dalph-cassette-lab:every-settled"
@@ -32,6 +33,7 @@ export interface CassetteLabBrowserInput {
 
 interface RowElements {
   readonly article: HTMLElement
+  readonly deliveryWorkbenchHost: HTMLElement
   readonly evidenceHost: HTMLElement
   readonly heading: HTMLHeadingElement
   readonly matchReason: HTMLElement
@@ -135,12 +137,13 @@ const renderRawEvidence = (parent: HTMLElement, result: CassetteLabResult): void
   parent.append(details)
 }
 
-const renderResultEvidence = (host: HTMLElement, result: CassetteLabResult): void => {
+const renderResultEvidence = (host: HTMLElement, result: CassetteLabResult, open: boolean): void => {
   host.replaceChildren()
-  const evidence = document.createElement("section")
+  const evidence = document.createElement("details")
   evidence.className = "execution-evidence"
   evidence.dataset.role = "execution-evidence"
-  appendTextElement(evidence, "h4", result._tag === "Completed" ? "Execution proof" : "Cassette failure")
+  evidence.open = open || result._tag === "Failed"
+  appendTextElement(evidence, "summary", result._tag === "Completed" ? "Terminal execution proof and journal" : "Cassette failure diagnostic")
   renderDefinitionList(evidence, executionSummaryItems(result))
   const protocolDiagnostics = protocolDiagnosticItems(result)
   if (protocolDiagnostics.length > 0) {
@@ -202,22 +205,30 @@ const markSearchTokens = (element: HTMLElement, text: string, tokens: ReadonlyAr
 export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const { revision, root, rows, runCassette } = input
   const reloadLab = input.reloadLab ?? (() => globalThis.location.reload())
-  document.title = "Dalph cassette lab"
+  document.title = "Dalph reducer lab"
   const states = new Map<MaintainedCassetteKey, CassetteRowState>(
     rows.map(({ catalogKey }) => [catalogKey, { _tag: "NotRun" }])
   )
   const rowElements = new Map<MaintainedCassetteKey, RowElements>()
   const groupElements = new Map<CassetteCategory, GroupElements>()
+  const openWorkbenches = new Set<MaintainedCassetteKey>()
+  const openEvidence = new Set<MaintainedCassetteKey>()
   let busy = false
   let runShownActive = false
   let visibleKeys: ReadonlyArray<MaintainedCassetteKey> = rows.map(({ catalogKey }) => catalogKey)
 
   const header = document.createElement("header")
-  appendTextElement(header, "h1", "Dalph cassette lab")
+  appendTextElement(header, "h1", "Dalph reducer lab")
+  appendTextElement(
+    header,
+    "p",
+    "Choose a maintained cassette, run the real production workflow, and inspect how delivery consumes the observed task graph.",
+    "lab-purpose"
+  )
   const safety = appendTextElement(
     header,
     "p",
-    "Local deterministic developer harness. Production coordinator and protocol code executes with controlled in-memory boundaries; no GitHub issue, Git repository, executor process, or durable journal is changed.",
+    "Local deterministic developer harness. Production coordinator, delivery, and protocol code executes with controlled in-memory boundaries; no GitHub issue, Git repository, executor process, or durable journal is changed.",
     "safety-context"
   )
   safety.dataset.role = "safety-context"
@@ -228,10 +239,10 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const controls = document.createElement("section")
   controls.className = "catalog-controls"
   controls.setAttribute("aria-label", "Cassette catalog controls and live results")
-  const searchLabel = appendTextElement(controls, "label", "Search behavior")
+  const searchLabel = appendTextElement(controls, "label", "Search declared behavior and returned evidence")
   const search = document.createElement("input")
   search.type = "search"
-  search.placeholder = "Words from a story, key, runner, or declared value"
+  search.placeholder = "Words from a story, key, declared value, or returned production fact"
   searchLabel.append(search)
 
   const categoryLabel = appendTextElement(controls, "label", "Catalog")
@@ -354,19 +365,35 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     elements.article.setAttribute("aria-busy", String(state._tag === "Running"))
     elements.status.dataset.status = elements.article.dataset.state
     elements.status.textContent = rowStateStatusText(state)
+    const row = rows.find((candidate) => candidate.catalogKey === catalogKey)
+    if (row !== undefined) {
+      renderCassetteDeliveryWorkbench(
+        elements.deliveryWorkbenchHost,
+        row,
+        state,
+        openWorkbenches.has(catalogKey)
+      )
+      const workbench = elements.deliveryWorkbenchHost.querySelector<HTMLDetailsElement>(
+        '[data-role="delivery-workbench"]'
+      )
+      workbench?.addEventListener("toggle", () => {
+        if (workbench.open) openWorkbenches.add(catalogKey)
+        else openWorkbenches.delete(catalogKey)
+        renderState(catalogKey)
+      })
+    }
     for (const storyItem of elements.storyItems) {
       storyItem.classList.remove("failed-story-item")
       storyItem.removeAttribute("aria-current")
     }
     if (state._tag === "Settled") {
-      renderResultEvidence(elements.evidenceHost, state.result)
+      renderResultEvidence(elements.evidenceHost, state.result, openEvidence.has(catalogKey))
       if (state.result._tag === "Failed" && state.result.location._tag === "Known") {
         const stopped = elements.storyItems[state.result.location.storyPosition]
         stopped?.classList.add("failed-story-item")
         stopped?.setAttribute("aria-current", "true")
       }
     } else if (state._tag === "LabDefect") {
-      const row = rows.find((candidate) => candidate.catalogKey === catalogKey)
       if (row !== undefined) renderDefectEvidence(elements.evidenceHost, row, state.detail)
     } else elements.evidenceHost.replaceChildren()
   }
@@ -388,6 +415,12 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       runAnnouncement.textContent = `Running ${keys.length} ${keys.length === 1 ? "cassette" : "cassettes"}; progress is visible in the catalog summary`
     }
     for (const key of keys) {
+      if (announceRows) {
+        openWorkbenches.add(key)
+        openEvidence.add(key)
+      } else {
+        openEvidence.delete(key)
+      }
       const elements = rowElements.get(key)
       elements?.status.setAttribute("aria-live", announceRows ? "polite" : "off")
       states.set(key, { _tag: "Running" })
@@ -426,6 +459,9 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     groupFacts.append("Production runner: ")
     appendTextElement(groupFacts, "code", representative.runnerName)
     groupFacts.append(` · Controlled boundaries: ${representative.controlledBoundaries}`)
+    if (representative.surface._tag === "DirectProtocolSurface") {
+      groupFacts.append(" · This direct protocol runner does not publish the graph-level delivery relation, so no graph, frontier, or held-position workbench is shown.")
+    }
     group.append(groupFacts)
 
     for (const row of categoryRows) {
@@ -469,9 +505,11 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       rowControls.append(status)
       const evidenceHost = document.createElement("div")
       evidenceHost.className = "evidence-host"
-      article.append(keyLine, matchReason, chronology, rowControls, evidenceHost)
+      const deliveryWorkbenchHost = document.createElement("div")
+      article.append(keyLine, matchReason, deliveryWorkbenchHost, chronology, rowControls, evidenceHost)
       rowElements.set(row.catalogKey, {
         article,
+        deliveryWorkbenchHost,
         evidenceHost,
         heading,
         matchReason,
@@ -515,7 +553,12 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
         row.controlledBoundaries,
         ...row.storyItemSummaries
       ].join(" ").toLocaleLowerCase()
-      const searchable = `${visibleSearchable} ${row.declaredInputText.toLocaleLowerCase()}`
+      const declaredSearchable = row.declaredInputText.toLocaleLowerCase()
+      const resultSearchText = state._tag === "Settled"
+        ? resultEvidenceText(state.result)
+        : state._tag === "LabDefect" ? state.detail : ""
+      const resultSearchable = resultSearchText.toLocaleLowerCase()
+      const searchable = `${visibleSearchable} ${declaredSearchable} ${resultSearchable}`
       const visible = (category === "All" || row.category === category)
         && (status === "All" || stateFilterValue(state) === status)
         && tokens.every((token) => searchable.includes(token))
@@ -523,16 +566,25 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       if (elements !== undefined) {
         elements.article.hidden = !visible
         for (const item of elements.searchableText) markSearchTokens(item.element, item.text, tokens)
-        const exactInputOnlyMatch = tokens.length > 0
+        const hiddenOnlyMatch = tokens.length > 0
           && tokens.every((token) => searchable.includes(token))
           && !tokens.every((token) => visibleSearchable.includes(token))
-        elements.matchReason.hidden = !visible || !exactInputOnlyMatch
-        if (visible && exactInputOnlyMatch) {
-          const firstPosition = Math.max(0, row.declaredInputText.toLocaleLowerCase().indexOf(tokens[0] ?? ""))
-          const start = Math.max(0, firstPosition - 50)
-          const end = Math.min(row.declaredInputText.length, firstPosition + 130)
-          const excerpt = `${start > 0 ? "…" : ""}${row.declaredInputText.slice(start, end).replace(/\s+/gu, " ")}${end < row.declaredInputText.length ? "…" : ""}`
-          markSearchTokens(elements.matchReason, `Match in exact declared input: ${excerpt}`, tokens)
+        elements.matchReason.hidden = !visible || !hiddenOnlyMatch
+        if (visible && hiddenOnlyMatch) {
+          const declaredTokens = tokens.filter((token) => declaredSearchable.includes(token))
+          const resultTokens = tokens.filter((token) => resultSearchable.includes(token))
+          const excerpt = (matchedText: string, token: string): string => {
+            const firstPosition = Math.max(0, matchedText.toLocaleLowerCase().indexOf(token))
+            const start = Math.max(0, firstPosition - 50)
+            const end = Math.min(matchedText.length, firstPosition + 130)
+            return `${start > 0 ? "…" : ""}${matchedText.slice(start, end).replace(/\s+/gu, " ")}${end < matchedText.length ? "…" : ""}`
+          }
+          const explanation = declaredTokens.length === tokens.length
+            ? `Match in exact declared input: ${excerpt(row.declaredInputText, declaredTokens[0] ?? "")}`
+            : resultTokens.length === tokens.length
+              ? `Match in returned production delivery evidence: ${excerpt(resultSearchText, resultTokens[0] ?? "")}`
+              : `Match spans exact declared input and returned production evidence. Declared: ${excerpt(row.declaredInputText, declaredTokens[0] ?? "")} Returned: ${excerpt(resultSearchText, resultTokens[0] ?? "")}`
+          markSearchTokens(elements.matchReason, explanation, tokens)
         }
       }
       if (visible) {

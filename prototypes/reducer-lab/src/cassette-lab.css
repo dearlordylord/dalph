@@ -22,6 +22,11 @@ h5 {
   line-height: 1.25;
 }
 
+.lab-purpose {
+  font-size: 1.08rem;
+  max-width: 65rem;
+}
+
 .safety-context {
   background: #e7f2ed;
   border-left: 0.3rem solid #146b55;
@@ -198,6 +203,102 @@ dd {
   margin: 0.8rem 0;
 }
 
+.delivery-workbench {
+  background: #f7f3e9;
+  border: 1px solid #938a7c;
+  border-radius: 0.35rem;
+  margin: 1rem 0;
+  overflow: hidden;
+}
+
+.delivery-workbench > summary {
+  background: #243c33;
+  color: #f7f3e9;
+  cursor: pointer;
+  font-weight: 750;
+  padding: 0.8rem 1rem;
+}
+
+.delivery-workbench > :not(summary) {
+  margin-left: 1rem;
+  margin-right: 1rem;
+}
+
+.delivery-provenance,
+.delivery-not-observed {
+  border-left: 0.25rem solid #2e6788;
+  color: #344a41;
+  padding: 0.55rem 0.75rem;
+}
+
+.delivery-not-observed {
+  border-left-color: #9b7410;
+}
+
+.delivery-layer-chain {
+  background: #e7eee9;
+  font-family: ui-monospace, monospace;
+  overflow-wrap: anywhere;
+  padding: 0.6rem 0.75rem;
+}
+
+.delivery-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  gap: 0.45rem 1.2rem;
+  list-style: none;
+  padding: 0;
+}
+
+.delivery-frame-change {
+  background: #fff2b8;
+  border-left: 0.25rem solid #9b7410;
+  font-weight: 650;
+  padding: 0.55rem 0.75rem;
+}
+
+.selected-task-row {
+  background: #dce8dc;
+  outline: 2px solid #295b46;
+}
+
+.delivery-timeline-controls {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-bottom: 0.8rem !important;
+}
+
+.delivery-timeline-controls label {
+  display: grid;
+  flex: 1 1 28rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  gap: 0.25rem;
+}
+
+.delivery-timeline-controls output {
+  font-weight: 700;
+}
+
+.delivery-frame-facts {
+  display: grid;
+  gap: 0.3rem 0.8rem;
+  grid-template-columns: minmax(12rem, max-content) 1fr;
+  margin: 1rem 0;
+}
+
+[data-role="delivery-task-state"] {
+  margin-bottom: 1rem;
+}
+
+[data-role="delivery-task-state"] td {
+  white-space: normal;
+  vertical-align: top;
+}
+
 .declared-chronology p {
   color: #53615b;
   margin-bottom: 0.4rem;
@@ -243,6 +344,12 @@ output[data-status="Running"] {
   border-top: 1px solid #d6d1c7;
   margin-top: 1rem;
   padding-top: 0.2rem;
+}
+
+.execution-evidence > summary {
+  cursor: pointer;
+  font-weight: 750;
+  padding: 0.65rem 0;
 }
 
 table {
@@ -312,6 +419,10 @@ pre {
   }
 
   .execution-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .delivery-frame-facts {
     grid-template-columns: 1fr;
   }
 
