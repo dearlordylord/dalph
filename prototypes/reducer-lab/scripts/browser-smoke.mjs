@@ -48,7 +48,8 @@ try {
 
   await selector.selectOption(framedCassette)
   const workbench = page.locator('[data-role="delivery-workbench"]')
-  await workbench.locator("summary").click()
+  const workbenchDisclosure = workbench.locator(":scope > summary")
+  await workbenchDisclosure.click()
   const frameSelector = workbench.getByLabel("Delivery frame")
   await page.waitForFunction(
     () => document.querySelector('[data-role="delivery-workbench"] select')?.options.length > 1,
@@ -59,8 +60,29 @@ try {
   assert.equal(await frameSelector.inputValue(), "0")
   await workbench.getByRole("button", { name: "Next frame" }).click()
   assert.equal(await frameSelector.inputValue(), "1")
+  await workbench.getByRole("button", { name: "Next frame" }).click()
+  assert.equal(await frameSelector.inputValue(), "2")
+  const graphRendered = await page.locator("dalph-delivery-graph").evaluate((element) => {
+    const shadow = element.shadowRoot
+    const taskIds = [...(shadow?.querySelectorAll("button[data-task-id]") ?? [])]
+      .map((button) => button.getAttribute("data-task-id"))
+    return {
+      canvasChildren: shadow?.querySelector("#canvas")?.childElementCount ?? 0,
+      relationships: shadow?.querySelector("#summary")?.textContent ?? "",
+      taskIds
+    }
+  })
+  assert.ok(graphRendered.canvasChildren > 0)
+  assert.deepEqual(graphRendered.taskIds, ["A", "B"])
+  assert.match(graphRendered.relationships, /A blocks B/u)
+
+  await workbenchDisclosure.click()
+  assert.equal(await workbench.getAttribute("open"), null)
+  await workbenchDisclosure.click()
+  assert.equal(await workbench.getAttribute("open"), "")
+  assert.equal(await frameSelector.inputValue(), "2")
   await workbench.getByRole("button", { name: "Previous frame" }).click()
-  assert.equal(await frameSelector.inputValue(), "0")
+  assert.equal(await frameSelector.inputValue(), "1")
   assert.equal(await workbench.getAttribute("open"), "")
   assert.equal(await page.locator("#selected-cassette").getAttribute("data-catalog-key"), framedCassette)
   assert.deepEqual(browserErrors, [])
