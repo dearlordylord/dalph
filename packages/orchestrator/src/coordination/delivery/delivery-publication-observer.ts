@@ -1,5 +1,6 @@
 import { Context, Effect } from "effect"
 import { delivery } from "./delivery.js"
+import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { currentSignalOf, type DeliveryRelationInputBundle } from "./relations.js"
 
@@ -29,3 +30,16 @@ export const evaluateDeliveryRelationInputBundle = Effect.fn("DeliveryRelations.
   const signal = yield* delivery.pipe(Effect.provide(layer))
   return yield* signal.get
 })
+
+/** Evaluates the same captured bundle through descriptive delivery and downstream action planning. */
+export const evaluateDeliveryRuntimeInputBundle = Effect.fn("DeliveryRelations.evaluatePublishedRuntimeBundle")(
+  function* (bundle: DeliveryRelationInputBundle) {
+    const coherent = currentSignalOf(bundle)
+    const layer = makeDeliveryRelationsLayer({
+      ...deterministicDeliveryRuntimeSupport(bundle.publication.policy),
+      coherent
+    })
+    const signal = yield* deliveryRuntime.pipe(Effect.provide(layer))
+    return yield* signal.get
+  }
+)

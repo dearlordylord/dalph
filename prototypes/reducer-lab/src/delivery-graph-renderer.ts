@@ -54,6 +54,31 @@ const taskLabel = (task: RenderedTask): string => [
   ...(task.display?.labels ?? [])
 ].filter((part): part is string => part !== undefined && part.length > 0).join("\n")
 
+const compactVisualFact = (label: string): string | undefined => {
+  if (label === "Held position: none" || label === "Delivery: none" || label === "Settlement: none") return undefined
+  if (label.startsWith("Held position:")) return "Held: active"
+  if (label.startsWith("Settlement:")) return "Settlement: established"
+  if (label.startsWith("Desired ticket:")) return label.replace("Desired ticket:", "Ticket:")
+  if (label.startsWith("Delivery:")) {
+    const standings = /standings: ([^·]+)/u.exec(label)?.[1]?.trim()
+    return standings === undefined ? "Delivery: retained" : `Delivery: ${standings}`
+  }
+  return label
+}
+
+/**
+ * The canvas is an at-a-glance map. Exact locators, evidence, and obligations
+ * remain available in the adjacent task table and the non-canvas summary.
+ */
+const visualTaskLabel = (task: RenderedTask): string => [
+  task.id,
+  task.title === undefined
+    ? undefined
+    : task.title.length > 42 ? `${task.title.slice(0, 39)}…` : task.title,
+  task.lifecycle,
+  ...(task.display?.labels ?? []).map(compactVisualFact)
+].filter((part): part is string => part !== undefined && part.length > 0).join("\n")
+
 const graphElements = (
   projection: DeliveryGraphProjection,
   selectedTaskId: string | null
@@ -66,7 +91,7 @@ const graphElements = (
     ].filter((value): value is string => value !== undefined).join(" "),
     data: {
       id: task.id,
-      label: taskLabel(task),
+      label: visualTaskLabel(task),
       lifecycle: task.lifecycle,
       missing: task.missing ? "true" : "false"
     } satisfies CytoscapeTaskData,
@@ -108,6 +133,7 @@ const shadowCss = `
     color: #726b60;
     font: italic 14px system-ui, sans-serif;
   }
+  [hidden] { display: none !important; }
   #summary {
     border-top: 1px solid #bdb5a8;
     padding: .65rem .8rem;
@@ -116,7 +142,7 @@ const shadowCss = `
     font: 13px/1.45 system-ui, sans-serif;
   }
   #summary summary { cursor: pointer; font-weight: 650; }
-  #summary p { margin: .45rem 0; }
+  #summary p { margin: .45rem 0; overflow-wrap: anywhere; }
   #summary h4 { margin: .65rem 0 .2rem; }
   #summary ul { margin: .2rem 0 .5rem; padding-left: 1.4rem; }
   #summary button {
@@ -128,8 +154,16 @@ const shadowCss = `
     text-align: left;
     text-decoration: underline;
     cursor: pointer;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
   #summary button[aria-current="true"] { color: #295b46; font-weight: 700; }
+  @media (max-width: 42rem) {
+    :host { min-height: 340px; }
+    #canvas { height: 340px; }
+    #empty { min-height: 340px; }
+  }
 `
 
 const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
@@ -141,17 +175,17 @@ const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
       "border-width": 2,
       color: "#211f1a",
       "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
-      "font-size": 11,
-      height: 86,
+      "font-size": 10,
+      height: 116,
       label: "data(label)",
       "line-height": 1.35,
       padding: "8px",
       shape: "round-rectangle",
       "text-halign": "center",
-      "text-max-width": "178px",
+      "text-max-width": "196px",
       "text-valign": "center",
       "text-wrap": "wrap",
-      width: 184
+      width: 204
     }
   },
   {

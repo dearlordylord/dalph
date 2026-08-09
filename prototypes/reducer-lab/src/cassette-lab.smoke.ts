@@ -10,6 +10,7 @@ import {
 } from "./cassette-lab-browser.ts"
 import {
   browserDigest,
+  type CassetteRunObserver,
   maintainedCassetteKeys,
   maintainedCassetteRows,
   runAuthoredCassetteInput,
@@ -332,6 +333,11 @@ await scenario("keeps cassette selection and delivery frame navigation stable ac
         && option.value === choice.catalogKey)
   })
   assert(malformedOptions.length === 0, `Every ordinary selector option must expose a concise story label under its catalog and retain its exact key as the value: ${malformedOptions[0]?.outerHTML ?? "unknown"}`)
+  const visibleOptionLabels = [...selector.options].map(({ textContent }) => textContent)
+  assert(
+    new Set(visibleOptionLabels).size === visibleOptionLabels.length,
+    "Every collapsed cassette option label must identify one unique maintained scenario"
+  )
   chooseOption(selector, row.catalogKey)
   const completed = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
@@ -345,13 +351,14 @@ await scenario("keeps cassette selection and delivery frame navigation stable ac
   const status = workbench.querySelector(".delivery-timeline-controls output")
   const next = [...workbench.querySelectorAll("button")].find(({ textContent }) => textContent === "Next frame")
   const previous = [...workbench.querySelectorAll("button")].find(({ textContent }) => textContent === "Previous frame")
-  assert(status?.textContent?.startsWith("1 of ") === true, "The timeline must start at its first production publication")
-  next?.click()
-  assert(status?.textContent?.startsWith("2 of ") === true, "Next frame must advance the visible timeline")
+  const total = Number(status?.textContent?.match(/of (\d+)/u)?.[1])
+  assert(status?.textContent?.startsWith(`${total} of `) === true, "A completed followed timeline must remain on its newest production publication")
+  previous?.click()
+  assert(status?.textContent?.startsWith(`${total - 1} of `) === true, "Previous frame must rewind the visible timeline")
   await Promise.resolve()
   workbench.dispatchEvent(new Event("toggle"))
   assert(document.querySelector("[data-role='delivery-workbench']") === workbench, "Frame navigation must survive later disclosure events")
-  assert(status?.textContent?.startsWith("2 of ") === true, "A disclosure event must not reset the selected delivery frame")
+  assert(status?.textContent?.startsWith(`${total - 1} of `) === true, "A disclosure event must not reset the selected delivery frame")
   workbench.open = false
   await Promise.resolve()
   workbench.dispatchEvent(new Event("toggle"))
@@ -359,12 +366,55 @@ await scenario("keeps cassette selection and delivery frame navigation stable ac
   await Promise.resolve()
   workbench.dispatchEvent(new Event("toggle"))
   assert(document.querySelector("[data-role='delivery-workbench']") === workbench && workbench.open, "Closing and reopening must preserve the same usable workbench")
-  assert(status?.textContent?.startsWith("2 of ") === true, "Reopening must preserve the selected delivery frame")
-  previous?.click()
-  assert(status?.textContent?.startsWith("1 of ") === true, "Previous frame must navigate back without replacing the workbench")
+  assert(status?.textContent?.startsWith(`${total - 1} of `) === true, "Reopening must preserve the selected delivery frame")
+  next?.click()
+  assert(status?.textContent?.startsWith(`${total} of `) === true, "Next frame must navigate forward without replacing the workbench")
   await Promise.resolve()
   workbench.dispatchEvent(new Event("toggle"))
-  assert(status?.textContent?.startsWith("1 of ") === true, "Previous-frame navigation must persist across queued disclosure events")
+  assert(status?.textContent?.startsWith(`${total} of `) === true, "Frame navigation must persist across queued disclosure events")
+})
+
+await scenario("shows production delivery frames before the authored cassette settles", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null || result.deliveryFrames.length < 3) {
+    throw new Error("The live delivery fixture is incomplete")
+  }
+  let finish: (() => void) | undefined
+  let observer: CassetteRunObserver | undefined
+  mountCassetteLab({
+    revision: "acceptance-revision",
+    root,
+    rows: [row],
+    runCassette: async (_key, nextObserver) => {
+      observer = nextObserver
+      await new Promise<void>((resolve) => { finish = resolve })
+      return result
+    }
+  })
+  const terminal = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  observer?.onDeliveryFrame(result.deliveryFrames[0]!)
+  let workbench = document.querySelector<HTMLDetailsElement>("[data-role='delivery-workbench']")
+  assert(document.querySelector("article")?.dataset.state === "Running", "A real delivery frame must be visible while the cassette is still running")
+  assert(workbench?.querySelectorAll(".delivery-timeline-controls option").length === 1, "The first live publication must create one frame before terminal settlement")
+  observer?.onDeliveryFrame(result.deliveryFrames[1]!)
+  const status = workbench?.querySelector(".delivery-timeline-controls output")
+  assert(status?.textContent?.startsWith("2 of 2") === true, "Follow live must advance to the newest running frame")
+  const previous = [...workbench?.querySelectorAll("button") ?? []].find(({ textContent }) => textContent === "Previous frame")
+  previous?.click()
+  observer?.onDeliveryFrame(result.deliveryFrames[2]!)
+  assert(status?.textContent?.startsWith("1 of 3") === true, "A rewound playhead must not move when another production frame arrives")
+  const follow = workbench?.querySelector<HTMLButtonElement>("[data-role='follow-live']")
+  follow?.click()
+  assert(status?.textContent?.startsWith("3 of 3") === true, "Follow live must jump back to the newest available frame")
+  finish?.()
+  await terminal
+  workbench = document.querySelector<HTMLDetailsElement>("[data-role='delivery-workbench']")
+  const terminalStatus = workbench?.querySelector(".delivery-timeline-controls output")
+  assert(terminalStatus?.textContent?.startsWith(`${result.deliveryFrames.length} of ${result.deliveryFrames.length}`) === true, "Terminal settlement must retain the followed newest frame")
+  assert(document.querySelector("[data-role='journal-evidence']")?.hasAttribute("open") === false, "Terminal journal evidence must remain collapsed")
 })
 
 await scenario("shows an authored cassette declared graph only as input before production observes it", () => {
@@ -439,6 +489,63 @@ await scenario("does not fabricate a graph workbench for direct protocol cassett
   mountCassetteLab({ revision: "acceptance-revision", root, rows: protocolRows, runCassette: cannedRunner })
   assert(document.querySelector("[data-role='delivery-workbench']") === null, "Direct protocol runners must not display invented graph-level delivery state")
   assert(document.querySelector(".group-facts")?.textContent?.includes("does not publish the graph-level delivery relation") === true, "The direct protocol group must explain why no graph workbench applies")
+})
+
+await scenario("shows graph observation provenance quiescence and planned actions", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:runPauseSafelySuspends")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The pause delivery fixture is missing")
+  }
+  const passiveIndex = result.deliveryFrames.findIndex(({ graph, quiescence }) =>
+    graph._tag === "Established" && quiescence._tag === "QuiescencePassive"
+  )
+  if (passiveIndex < 0) throw new Error("The pause fixture has no established passive publication")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
+  if (timeline === null) throw new Error("The pause delivery timeline is missing")
+  chooseOption(timeline, String(passiveIndex))
+  const facts = document.querySelector("[data-role='delivery-frame']")?.textContent ?? ""
+  const passiveFrame = result.deliveryFrames[passiveIndex]
+  if (passiveFrame?.graph._tag !== "Established") throw new Error("The selected pause graph is not established")
+  assert(facts.includes("initial coordinator process"), "Fresh activation must be explained in process terms")
+  assert(
+    facts.includes(passiveFrame.graph.observation.operationId)
+      && facts.includes(`recorded at journal ${passiveFrame.graph.observation.recordedAt}`),
+    "Observed graph provenance must expose its exact read and journal correlation"
+  )
+  assert(facts.includes("passive because RunPaused"), "The exact quiescence reason must explain why desired tickets cannot start")
+  assert(facts.includes("planned action proposals") || facts.includes("planning fails closed"), "The downstream action plan must be summarized without implying execution")
+  assert(facts.includes("Operator paused the Run"), "A batched publication must retain the concrete operator Pause landmark")
+  assert(facts.includes("Task A reported Running"), "A batched publication must retain the executor report landmark after Pause")
+  assert(document.querySelector("[data-role='delivery-action-planning']") !== null, "Exact action proposals and isolated planning issues must remain inspectable")
+})
+
+await scenario("explains restart continuity at the Fresh to Recovered boundary", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:runPauseRestartsPassively")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The restart delivery fixture is missing")
+  }
+  const recoveredIndex = result.deliveryFrames.findIndex(({ activation }, index) =>
+    activation === "Recovered" && result.deliveryFrames?.[index - 1]?.activation === "Fresh"
+  )
+  if (recoveredIndex < 1) throw new Error("The restart boundary is missing")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
+  if (timeline === null) throw new Error("The recovery delivery timeline is missing")
+  chooseOption(timeline, String(recoveredIndex))
+  const boundary = document.querySelector(".delivery-restart-boundary")?.textContent ?? ""
+  assert(boundary.includes("Coordinator restarted: Fresh → Recovered"), "The first recovered publication must visibly mark the process restart")
+  assert(boundary.includes("Survived unchanged") && boundary.includes("task A"), "The restart marker must name exact held-position and obligation continuity")
 })
 
 await scenario("shows grouping relationships exact obligations and settlement state", async () => {

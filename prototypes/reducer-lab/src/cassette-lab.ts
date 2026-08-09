@@ -5,6 +5,8 @@ import { sha1 } from "@noble/hashes/legacy.js"
 import { sha256, sha384, sha512 } from "@noble/hashes/sha2.js"
 import {
   type AuthoredDeliveryFrame,
+  type AuthoredDeliveryPublication,
+  evaluateAuthoredDeliveryPublication,
   runAuthoredScenarioCassette
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import { maintainedAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/catalog.ts"
@@ -73,11 +75,16 @@ interface CassetteExecution {
 interface MaintainedCassetteDescriptor {
   readonly catalogKey: MaintainedCassetteKey
   readonly category: CassetteCategory
-  readonly execute: () => Promise<Exit.Exit<CassetteExecution, unknown>>
+  readonly execute: (observer?: CassetteRunObserver) => Promise<Exit.Exit<CassetteExecution, unknown>>
   readonly input: unknown
   readonly surface: CassetteDeliverySurface
   readonly story: ReadonlyArray<{ readonly _tag: string }>
   readonly storyName: string
+}
+
+/** Read-only progress from one selected cassette; it never feeds state back into production. */
+export interface CassetteRunObserver {
+  readonly onDeliveryFrame: (frame: AuthoredDeliveryFrame) => void
 }
 
 interface DeclaredTaskGraph {
@@ -160,10 +167,23 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
 ).map(([key, cassette]) => ({
   catalogKey: `authored:${key}` as AuthoredCassetteKey,
   category: "Authored",
-  execute: async () => {
+  execute: async (observer) => {
+    let projectionQueue: Promise<void> = Promise.resolve()
+    const onDeliveryPublication = observer === undefined
+      ? undefined
+      : (publication: AuthoredDeliveryPublication) => {
+          projectionQueue = projectionQueue.then(async () => {
+            const frame = await Effect.runPromise(evaluateAuthoredDeliveryPublication(publication))
+            observer.onDeliveryFrame(frame)
+          })
+        }
     const exit = await Effect.runPromiseExit(
-      runAuthoredScenarioCassette(cassette).pipe(Effect.provide(cassetteRuntimeLayer))
+      runAuthoredScenarioCassette(
+        cassette,
+        onDeliveryPublication === undefined ? {} : { onDeliveryPublication }
+      ).pipe(Effect.provide(cassetteRuntimeLayer))
     )
+    await projectionQueue
     return Exit.map(exit, (run) => ({
       activations: run.coordinatorActivations,
       deliveryFrames: run.deliveryFrames,
@@ -272,6 +292,29 @@ const storyItemSummary = (item: Readonly<Record<string, unknown>>): string => {
   return fragments.join(" · ")
 }
 
+const storyItemLandmark = (item: Readonly<Record<string, unknown>>): string | null => {
+  if (
+    item._tag === "OperatorAppliesControlDirection"
+    || item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
+  ) {
+    const subject = typeof item.subject === "object" && item.subject !== null
+      ? item.subject as Readonly<Record<string, unknown>>
+      : undefined
+    const target = subject?._tag === "Run" ? "the Run" : `task ${String(subject?.taskId ?? "unknown")}`
+    return `Operator ${String(item.direction).toLowerCase()}d ${target}${item._tag.endsWith("WhileExecutorRequestInFlight") ? " while its executor request was in flight" : ""}`
+  }
+  if (item._tag === "PlannedAttemptExecutorWorkReported") {
+    const report = typeof item.report === "object" && item.report !== null
+      ? item.report as Readonly<Record<string, unknown>>
+      : undefined
+    const attemptId = String(report?.attemptId ?? "unknown attempt")
+    const taskId = /attempt:(?<task>[^:]+):/u.exec(attemptId)?.groups?.task
+    return `${taskId === undefined ? attemptId : `Task ${taskId}`} reported ${String(report?._tag ?? "executor state")}${report?._tag === "SafelySuspended" ? "; its held position can now be released" : ""}`
+  }
+  if (item._tag === "CoordinatorProcessDies") return "The coordinator process died; the next activation reconstructs accepted journal history"
+  return null
+}
+
 export const maintainedCassetteRows = descriptors.map(({ catalogKey, category, input, story, storyName, surface }) => {
   const metadata = cassetteCategoryMetadata[category]
   return {
@@ -284,6 +327,7 @@ export const maintainedCassetteRows = descriptors.map(({ catalogKey, category, i
     runnerName: metadata.runnerName,
     surface,
     storyItemTags: story.map(({ _tag }) => _tag),
+    storyItemLandmarks: story.map((item) => storyItemLandmark(item)),
     storyItemSummaries: story.map((item) => storyItemSummary(item)),
     storyName,
     totalItemCount: story.length
@@ -349,10 +393,13 @@ const completedResult = (
 })
 
 /** Runs one exact checked-in cassette through the production runner that owns its catalog. */
-export const runMaintainedCassette = async (catalogKey: MaintainedCassetteKey): Promise<CassetteLabResult> => {
+export const runMaintainedCassette = async (
+  catalogKey: MaintainedCassetteKey,
+  observer?: CassetteRunObserver
+): Promise<CassetteLabResult> => {
   const descriptor = descriptorByKey.get(catalogKey)
   if (descriptor === undefined) throw new Error(`Unknown maintained cassette: ${catalogKey}`)
-  const exit = await descriptor.execute()
+  const exit = await descriptor.execute(observer)
   return Exit.isFailure(exit) ? failedResult(descriptor, exit.cause) : completedResult(descriptor, exit.value)
 }
 
@@ -385,4 +432,4 @@ export const runAuthoredCassetteInput = async (
 
 /** Runs all maintained catalogs independently; one failure never becomes a passing summary. */
 export const runEveryMaintainedCassette = (): Promise<ReadonlyArray<CassetteLabResult>> =>
-  Promise.all(maintainedCassetteKeys.map(runMaintainedCassette))
+  Promise.all(maintainedCassetteKeys.map((catalogKey) => runMaintainedCassette(catalogKey)))

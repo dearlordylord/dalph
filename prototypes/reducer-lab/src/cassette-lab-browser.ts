@@ -1,6 +1,7 @@
 import {
   type CassetteCategory,
   type CassetteLabResult,
+  type CassetteRunObserver,
   type maintainedCassetteRows,
   type MaintainedCassetteKey
 } from "./cassette-lab.ts"
@@ -13,11 +14,16 @@ import {
   resultEvidenceText,
   cassetteStateStatusText
 } from "./cassette-lab-view.ts"
-import { renderCassetteDeliveryWorkbench } from "./cassette-lab-workbench.ts"
+import {
+  type DeliveryWorkbenchController,
+  makeDeliveryWorkbenchPlaybackState,
+  renderCassetteDeliveryWorkbench
+} from "./cassette-lab-workbench.ts"
 
 export const singleCassetteSettledEvent = "dalph-cassette-lab:single-settled"
 export const everyCassetteSettledEvent = "dalph-cassette-lab:every-settled"
 export const cassetteSettledEvent = "dalph-cassette-lab:cassette-settled"
+export const deliveryFrameEvent = "dalph-cassette-lab:delivery-frame"
 
 type CassetteRow = (typeof maintainedCassetteRows)[number]
 
@@ -26,7 +32,10 @@ export interface CassetteLabBrowserInput {
   readonly revision: string
   readonly root: HTMLElement
   readonly rows: ReadonlyArray<CassetteRow>
-  readonly runCassette: (catalogKey: MaintainedCassetteKey) => Promise<CassetteLabResult>
+  readonly runCassette: (
+    catalogKey: MaintainedCassetteKey,
+    observer?: CassetteRunObserver
+  ) => Promise<CassetteLabResult>
 }
 
 const categoryOrder: ReadonlyArray<CassetteCategory> = ["Authored", "TargetPromotion", "IntegrationFinality"]
@@ -102,11 +111,15 @@ const renderJournalTable = (
 const renderJournal = (parent: HTMLElement, result: CassetteLabResult): void => {
   const evidence = journalEvidenceRows(result)
   if (evidence.length === 0) return
+  const disclosure = document.createElement("details")
+  disclosure.dataset.role = "journal-evidence"
+  appendTextElement(disclosure, "summary", `${evidence.length} journal records`)
   const runIds = [...new Set(evidence.map(({ runId }) => runId))]
-  appendTextElement(parent, "h5", runIds.length === 1 ? "Journal chronology" : "Journal records by Run identity")
+  appendTextElement(disclosure, "h5", runIds.length === 1 ? "Journal chronology" : "Journal records by Run identity")
   for (const runId of runIds) {
-    renderJournalTable(parent, runId, evidence.filter((row) => row.runId === runId), runIds.length > 1)
+    renderJournalTable(disclosure, runId, evidence.filter((row) => row.runId === runId), runIds.length > 1)
   }
+  parent.append(disclosure)
 }
 
 const renderRawEvidence = (parent: HTMLElement, result: CassetteLabResult): void => {
@@ -175,6 +188,13 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const reloadLab = input.reloadLab ?? (() => globalThis.location.reload())
   document.title = "Dalph reducer lab"
   const rowByKey = new Map(rows.map((row) => [row.catalogKey, row]))
+  const storyNameCounts = new Map<string, number>()
+  const categoryStoryNameCounts = new Map<string, number>()
+  for (const { storyName } of rows) storyNameCounts.set(storyName, (storyNameCounts.get(storyName) ?? 0) + 1)
+  for (const { category, storyName } of rows) {
+    const identity = `${category}:${storyName}`
+    categoryStoryNameCounts.set(identity, (categoryStoryNameCounts.get(identity) ?? 0) + 1)
+  }
   const states = new Map<MaintainedCassetteKey, CassetteState>(
     rows.map(({ catalogKey }) => [catalogKey, { _tag: "NotRun" }])
   )
@@ -182,6 +202,8 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   let workbenchOpen = false
   let evidenceOpen = false
   let busy = false
+  let selectedWorkbench: DeliveryWorkbenchController | undefined
+  const playbackByKey = new Map<MaintainedCassetteKey, ReturnType<typeof makeDeliveryWorkbenchPlaybackState>>()
 
   const header = document.createElement("header")
   appendTextElement(header, "h1", "Dalph reducer lab")
@@ -309,7 +331,9 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     }
 
     const deliveryWorkbenchHost = document.createElement("div")
-    renderCassetteDeliveryWorkbench(deliveryWorkbenchHost, row, state, workbenchOpen)
+    const playback = playbackByKey.get(row.catalogKey) ?? makeDeliveryWorkbenchPlaybackState()
+    playbackByKey.set(row.catalogKey, playback)
+    selectedWorkbench = renderCassetteDeliveryWorkbench(deliveryWorkbenchHost, row, state, workbenchOpen, playback)
     const workbench = deliveryWorkbenchHost.querySelector<HTMLDetailsElement>('[data-role="delivery-workbench"]')
     workbench?.addEventListener("toggle", () => {
       workbenchOpen = workbench.open
@@ -373,12 +397,19 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     setBusy(true)
     if (single) {
       workbenchOpen = true
-      evidenceOpen = true
+      evidenceOpen = false
     } else {
       evidenceOpen = false
       runAnnouncement.textContent = `Running ${keys.length} ${keys.length === 1 ? "cassette" : "cassettes"}; progress is visible in the catalog summary`
     }
-    for (const key of keys) states.set(key, { _tag: "Running" })
+    for (const key of keys) {
+      const row = rowByKey.get(key)
+      states.set(key, {
+        _tag: "Running",
+        deliveryFrames: row?.surface._tag === "AuthoredDeliverySurface" ? [] : null
+      })
+      playbackByKey.set(key, makeDeliveryWorkbenchPlaybackState())
+    }
     refreshSelector()
     renderSelected()
     updateAggregate()
@@ -389,7 +420,19 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
         nextIndex += 1
         if (catalogKey === undefined) return
         try {
-          states.set(catalogKey, { _tag: "Settled", result: await runCassette(catalogKey) })
+          const observer: CassetteRunObserver = {
+            onDeliveryFrame: (frame) => {
+              const state = states.get(catalogKey)
+              if (state?._tag !== "Running" || state.deliveryFrames === null) return
+              const nextState = { _tag: "Running", deliveryFrames: [...state.deliveryFrames, frame] } as const
+              states.set(catalogKey, nextState)
+              if (selectedKey === catalogKey) selectedWorkbench?.update(nextState)
+              root.dispatchEvent(new CustomEvent(deliveryFrameEvent, {
+                detail: { catalogKey, frameCount: nextState.deliveryFrames.length }
+              }))
+            }
+          }
+          states.set(catalogKey, { _tag: "Settled", result: await runCassette(catalogKey, observer) })
         } catch (error) {
           states.set(catalogKey, { _tag: "LabDefect", catalogKey, detail: defectDetail(error) })
         }
@@ -421,10 +464,15 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
         const row = rowByKey.get(key)
         if (row === undefined) continue
         const state = states.get(key) ?? { _tag: "NotRun" }
+        const duplicateQualifier = storyNameCounts.get(row.storyName) === 1
+          ? ""
+          : categoryStoryNameCounts.get(`${row.category}:${row.storyName}`) === 1
+            ? ` · ${row.categoryLabel}`
+            : ` · ${row.catalogKey.slice(row.catalogKey.indexOf(":") + 1)}`
         const option = appendTextElement(
           group,
           "option",
-          `${row.storyName} · ${cassetteStateStatusText(state)}`
+          `${row.storyName}${duplicateQualifier} · ${cassetteStateStatusText(state)}`
         )
         option.value = key
         option.selected = key === selectedKey

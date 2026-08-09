@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- One chronological adapter owns fresh, pause, crash, recovery, candidate, and terminal story boundaries. */
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
-import { type AttemptId, GitCommitSha, type RunId, type TaskId } from "@dalph/contracts"
+import { type AttemptId, GitCommitSha, type RunId, type TaskId, type TaskRevision } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
   controlDirectionApplicationLayer,
@@ -16,8 +16,11 @@ import {
   type BoundedTicketRank,
   DeliveryRelationPublicationObserver,
   evaluateDeliveryRelationInputBundle,
+  evaluateDeliveryRuntimeInputBundle,
   type DeliveryConsequences,
   type DeliveryRelationInputBundle,
+  type DeliveryRuntimeEvaluation,
+  type JournaledTrackerGraphObservation,
   freshWorkflowRunId,
   GitTargetLineage,
   IntegrationCandidateAgent,
@@ -115,6 +118,12 @@ export interface AuthoredDeliveryFrame {
     | {
         readonly _tag: "Established"
         readonly revision: TrackerRevision
+        /** Exact journal-backed logical read that established this graph publication. */
+        readonly observation: {
+          readonly operationId: JournaledTrackerGraphObservation["operationId"]
+          readonly contentIdentity: JournaledTrackerGraphObservation["contentIdentity"]
+          readonly recordedAt: JournaledTrackerGraphObservation["recordedAt"]
+        }
         readonly tasks: ReadonlyArray<{
           readonly id: TaskId
           readonly lifecycle: TrackerTask["lifecycle"]["_tag"]
@@ -123,16 +132,27 @@ export interface AuthoredDeliveryFrame {
         }>
       }
   readonly capacity: TaskWorkCapacity
+  /** Whether this exact runtime publication permits a finality read or must remain passive. */
+  readonly quiescence: DeliveryRelationInputBundle["legacy"]["runtimeFacts"]["quiescence"]
   readonly heldPositions: ReadonlyArray<{
     readonly taskId: TaskId
     readonly runId: RunId
     readonly attemptId: AttemptId
   }>
-  readonly frontier: ReadonlyArray<{
-    readonly taskId: TaskId
-    readonly standing: "Eligible" | "Excluded"
-    readonly reasons: ReadonlyArray<AuthoredDeliveryFact>
-  }>
+  readonly frontier: ReadonlyArray<
+    | {
+        readonly taskId: TaskId
+        readonly standing: "Eligible"
+        readonly taskRevision: TaskRevision
+        readonly reasons: readonly []
+      }
+    | {
+        readonly taskId: TaskId
+        readonly standing: "Excluded"
+        readonly taskRevision: null
+        readonly reasons: ReadonlyArray<AuthoredDeliveryFact>
+      }
+  >
   readonly tickets: ReadonlyArray<{
     readonly taskId: TaskId
     readonly placement: AuthoredDeliveryFact
@@ -148,12 +168,26 @@ export interface AuthoredDeliveryFrame {
   }>
   readonly settlements: ReadonlyArray<{ readonly taskId: TaskId; readonly attemptId: AttemptId }>
   readonly trackerReflection: { readonly _tag: "DeliveryReflection"; readonly settlementCount: number }
+  /** Downstream action-planning result; observing it performs no action. */
+  readonly actionPlanning:
+    | {
+        readonly _tag: "DeliveryProposalsAvailable"
+        readonly proposals: ReadonlyArray<AuthoredDeliveryFact>
+        readonly isolatedIssues: ReadonlyArray<AuthoredDeliveryFact>
+      }
+    | { readonly _tag: "DeliveryProposalOwnershipConflict"; readonly conflicts: ReadonlyArray<AuthoredDeliveryFact> }
 }
 
-interface CapturedDeliveryPublication {
+/** One exact production delivery publication correlated to the authored story cursor. */
+export interface AuthoredDeliveryPublication {
   readonly activation: "Fresh" | "Recovered"
   readonly storyPosition: AuthoredStoryPosition
   readonly bundle: DeliveryRelationInputBundle
+}
+
+export interface AuthoredScenarioCassetteRunOptions {
+  /** Synchronous read-only notification; callers must move expensive projection outside the runtime turn. */
+  readonly onDeliveryPublication?: (publication: AuthoredDeliveryPublication) => void
 }
 
 const diagnosticJsonIndent = 2
@@ -163,56 +197,98 @@ const authoredDeliveryFactOf = (value: { readonly _tag: string }): AuthoredDeliv
 })
 
 const authoredDeliveryFrameOf = (
-  captured: CapturedDeliveryPublication,
-  consequences: DeliveryConsequences
-): AuthoredDeliveryFrame => ({
-  activation: captured.activation,
-  storyPosition: captured.storyPosition,
-  acceptedAt: captured.bundle.legacy.runtimeFacts.acceptedAt,
-  graph:
-    consequences.graph._tag === "GraphNotEstablished"
-      ? { _tag: "NotEstablished" }
-      : {
-          _tag: "Established",
-          revision: consequences.graph.observation.snapshot.revision,
-          tasks: consequences.graph.observation.snapshot
-            .toWire()
-            .tasks.map((task) => ({
-              id: task.id,
-              lifecycle: task.lifecycle._tag,
-              parentTaskId: task.parentTaskId,
-              prerequisiteIds: task.prerequisiteIds
-            }))
-        },
-  capacity: captured.bundle.legacy.runtimeFacts.taskWork.capacity,
-  heldPositions: captured.bundle.legacy.runtimeFacts.taskWork.held.map(({ correlation, taskId }) => ({
-    taskId,
-    runId: correlation.runId,
-    attemptId: correlation.attemptId
-  })),
-  frontier: consequences.frontier.standings.map((standing) => ({
-    taskId: standing.taskId,
-    standing: standing._tag,
-    reasons: standing._tag === "Excluded" ? standing.reasons.map(authoredDeliveryFactOf) : []
-  })),
-  tickets: consequences.tickets.placements.map(({ placement, taskId }) => ({
-    taskId,
-    placement: authoredDeliveryFactOf(placement),
-    rank: "rank" in placement ? placement.rank : null,
-    reasons: placement._tag === "GraphExcluded" ? placement.reasons.map(authoredDeliveryFactOf) : []
-  })),
-  deliveries: consequences.ticketDeliveries.deliveries.map((ticket) => ({
-    taskId: ticket.taskId,
-    placement: authoredDeliveryFactOf(ticket.placement),
-    evidence: ticket.evidence.map(authoredDeliveryFactOf),
-    standings: ticket.standings.map(authoredDeliveryFactOf),
-    obligations: ticket.obligations.map(authoredDeliveryFactOf)
-  })),
-  settlements: consequences.settlements.settlements.map(({ attemptId, taskId }) => ({ attemptId, taskId })),
-  trackerReflection: {
-    _tag: consequences.trackerConsequences._tag,
-    settlementCount: consequences.trackerConsequences.source.settlements.length
+  captured: AuthoredDeliveryPublication,
+  consequences: DeliveryConsequences,
+  runtime: DeliveryRuntimeEvaluation
+): AuthoredDeliveryFrame => {
+  const conflictFacts: Array<AuthoredDeliveryFact> = []
+  if (runtime.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
+    for (const conflict of runtime.proposedActions.conflicts) {
+      conflictFacts.push({
+        kind: "DeliveryProposalOwnershipConflict",
+        exact: JSON.stringify(conflict, null, diagnosticJsonIndent)
+      })
+    }
   }
+  return {
+    activation: captured.activation,
+    storyPosition: captured.storyPosition,
+    acceptedAt: captured.bundle.legacy.runtimeFacts.acceptedAt,
+    graph:
+      consequences.graph._tag === "GraphNotEstablished"
+        ? { _tag: "NotEstablished" }
+        : {
+            _tag: "Established",
+            revision: consequences.graph.observation.snapshot.revision,
+            observation: {
+              operationId: consequences.graph.observation.operationId,
+              contentIdentity: consequences.graph.observation.contentIdentity,
+              recordedAt: consequences.graph.observation.recordedAt
+            },
+            tasks: consequences.graph.observation.snapshot
+              .toWire()
+              .tasks.map((task) => ({
+                id: task.id,
+                lifecycle: task.lifecycle._tag,
+                parentTaskId: task.parentTaskId,
+                prerequisiteIds: task.prerequisiteIds
+              }))
+          },
+    capacity: captured.bundle.legacy.runtimeFacts.taskWork.capacity,
+    quiescence: captured.bundle.legacy.runtimeFacts.quiescence,
+    heldPositions: captured.bundle.legacy.runtimeFacts.taskWork.held.map(({ correlation, taskId }) => ({
+      taskId,
+      runId: correlation.runId,
+      attemptId: correlation.attemptId
+    })),
+    frontier: consequences.frontier.standings.map((standing) =>
+      standing._tag === "Eligible"
+        ? { taskId: standing.taskId, standing: standing._tag, taskRevision: standing.taskRevision, reasons: [] }
+        : {
+            taskId: standing.taskId,
+            standing: standing._tag,
+            taskRevision: null,
+            reasons: standing.reasons.map(authoredDeliveryFactOf)
+          }
+    ),
+    tickets: consequences.tickets.placements.map(({ placement, taskId }) => ({
+      taskId,
+      placement: authoredDeliveryFactOf(placement),
+      rank: "rank" in placement ? placement.rank : null,
+      reasons: placement._tag === "GraphExcluded" ? placement.reasons.map(authoredDeliveryFactOf) : []
+    })),
+    deliveries: consequences.ticketDeliveries.deliveries.map((ticket) => ({
+      taskId: ticket.taskId,
+      placement: authoredDeliveryFactOf(ticket.placement),
+      evidence: ticket.evidence.map(authoredDeliveryFactOf),
+      standings: ticket.standings.map(authoredDeliveryFactOf),
+      obligations: ticket.obligations.map(authoredDeliveryFactOf)
+    })),
+    settlements: consequences.settlements.settlements.map(({ attemptId, taskId }) => ({ attemptId, taskId })),
+    trackerReflection: {
+      _tag: consequences.trackerConsequences._tag,
+      settlementCount: consequences.trackerConsequences.source.settlements.length
+    },
+    actionPlanning:
+      runtime.proposedActions._tag === "DeliveryProposalsAvailable"
+        ? {
+            _tag: "DeliveryProposalsAvailable",
+            proposals: runtime.proposedActions.proposals.map(authoredDeliveryFactOf),
+            isolatedIssues: runtime.proposedActions.isolatedIssues.map(authoredDeliveryFactOf)
+          }
+        : { _tag: "DeliveryProposalOwnershipConflict", conflicts: conflictFacts }
+  }
+}
+
+/** Projects one exact captured publication through the literal production delivery composition. */
+export const evaluateAuthoredDeliveryPublication = Effect.fn("AuthoredCassette.evaluateDeliveryPublication")(function* (
+  publication: AuthoredDeliveryPublication
+) {
+  const { consequences, runtime } = yield* Effect.all({
+    consequences: evaluateDeliveryRelationInputBundle(publication.bundle),
+    runtime: evaluateDeliveryRuntimeInputBundle(publication.bundle)
+  })
+  return authoredDeliveryFrameOf(publication, consequences, runtime)
 })
 
 const minimumCorrectionExhaustionValidationCount = 2
@@ -292,8 +368,12 @@ const targetVerificationTerminalFrom = (
 }
 
 /** Decodes and drives one story through the ordinary production delivery program. */
-const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(function* (input: unknown) {
-  return yield* Effect.scoped(
+const runAuthoredScenarioCassetteWith = (request: {
+  readonly input: unknown
+  readonly options: AuthoredScenarioCassetteRunOptions
+}) => {
+  const { input, options } = request
+  return Effect.scoped(
     // eslint-disable-next-line complexity -- One chronological adapter owns the fresh, crash, recovery, candidate, and terminal story boundaries.
     Effect.gen(function* () {
       const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette, { onExcessProperty: "error" })(input)
@@ -302,17 +382,17 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       })
       const cursor = yield* makeStoryCursor(cassette.story)
       const activeDeliveryActivation = yield* Ref.make<"Fresh" | "Recovered">("Fresh")
-      const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<CapturedDeliveryPublication>>([])
+      const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const publicationObserver = DeliveryRelationPublicationObserver.of({
         observe: (bundle) =>
-          Effect.all({ activation: Ref.get(activeDeliveryActivation), storyPosition: cursor.storyPosition }).pipe(
-            Effect.flatMap(({ activation, storyPosition }) =>
-              Ref.update(capturedDeliveryPublications, (captured) => [
-                ...captured,
-                { activation, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
-              ])
-            )
-          )
+          Effect.gen(function* () {
+            const activation = yield* Ref.get(activeDeliveryActivation)
+            const storyPosition = yield* cursor.storyPosition
+            const publication = { activation, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
+            yield* Ref.update(capturedDeliveryPublications, (captured) => [...captured, publication])
+            // A read-only diagnostic observer defect never changes production cassette execution.
+            yield* Effect.exit(Effect.sync(() => options.onDeliveryPublication?.(publication)))
+          })
       })
       const candidateOutcomeRecorded = yield* Deferred.make<void>()
       const targetVerificationStory = cassette.story.some((item) => item._tag === "TargetVerificationReturned")
@@ -760,10 +840,9 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
         return yield* Effect.failCause(behaviorExit.cause)
       }
       const observedBehavior = behaviorExit.value
-      const deliveryFrames = yield* Effect.forEach(yield* Ref.get(capturedDeliveryPublications), (captured) =>
-        evaluateDeliveryRelationInputBundle(captured.bundle).pipe(
-          Effect.map((consequences) => authoredDeliveryFrameOf(captured, consequences))
-        )
+      const deliveryFrames = yield* Effect.forEach(
+        yield* Ref.get(capturedDeliveryPublications),
+        evaluateAuthoredDeliveryPublication
       )
       return {
         cassette,
@@ -776,9 +855,8 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
       } satisfies AuthoredScenarioCassetteRun
     })
   )
-})
+}
 
 /** Decodes and drives one story through the production coordinator activation program. */
-export const runAuthoredScenarioCassette = Effect.fn("AuthoredCassette.run")((input: unknown) =>
-  runAuthoredScenarioCassetteWith(input)
-)
+export const runAuthoredScenarioCassette = (input: unknown, options: AuthoredScenarioCassetteRunOptions = {}) =>
+  runAuthoredScenarioCassetteWith({ input, options })

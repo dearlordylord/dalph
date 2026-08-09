@@ -1,8 +1,9 @@
+import type { AuthoredDeliveryFrame } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import type { CassetteLabResult, MaintainedCassetteKey } from "./cassette-lab.ts"
 
 export type CassetteState =
   | { readonly _tag: "NotRun" }
-  | { readonly _tag: "Running" }
+  | { readonly _tag: "Running"; readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null }
   | { readonly _tag: "Settled"; readonly result: CassetteLabResult }
   | { readonly _tag: "LabDefect"; readonly catalogKey: MaintainedCassetteKey; readonly detail: string }
 
@@ -48,7 +49,9 @@ export const cassetteStateStatusText = (state: CassetteState): string => {
     case "NotRun":
       return "not run"
     case "Running":
-      return "running production code with controlled boundaries…"
+      return state.deliveryFrames === null || state.deliveryFrames.length === 0
+        ? "running production code with controlled boundaries… waiting for its first delivery publication"
+        : `running production code with controlled boundaries · ${state.deliveryFrames.length} delivery frames captured`
     case "Settled":
       return resultStatusText(state.result)
   }

@@ -408,7 +408,8 @@ export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-del
 export { DeliveryAcceptedFactPublication } from "./coordination/delivery/delivery-accepted-fact-publication.js"
 export {
   DeliveryRelationPublicationObserver,
-  evaluateDeliveryRelationInputBundle
+  evaluateDeliveryRelationInputBundle,
+  evaluateDeliveryRuntimeInputBundle
 } from "./coordination/delivery/delivery-publication-observer.js"
 export {
   DeliveryControlPolicyMissing,
@@ -426,7 +427,8 @@ export {
   type BoundedTicketRank,
   type DeliveryGraphPublication,
   type DeliveryLegacyInputs,
-  type DeliveryRelationInputBundle
+  type DeliveryRelationInputBundle,
+  type DeliveryRuntimeEvaluation
 } from "./coordination/delivery/relations.js"
 export {
   DeliveryRuntimeProposalOwnershipConflict,

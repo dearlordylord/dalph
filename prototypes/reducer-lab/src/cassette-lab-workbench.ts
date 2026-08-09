@@ -25,6 +25,45 @@ const appendText = <K extends keyof HTMLElementTagNameMap>(
   return element
 }
 
+const objectRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
+  typeof value === "object" && value !== null ? value as Readonly<Record<string, unknown>> : undefined
+
+const firstNamedString = (value: unknown, names: ReadonlySet<string>): string | undefined => {
+  const record = objectRecord(value)
+  if (record === undefined) return undefined
+  for (const [key, child] of Object.entries(record)) {
+    if (names.has(key) && typeof child === "string") return child
+    const nested = firstNamedString(child, names)
+    if (nested !== undefined) return nested
+  }
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const nested = firstNamedString(child, names)
+      if (nested !== undefined) return nested
+    }
+  }
+  return undefined
+}
+
+const proposalSummary = (fact: { readonly exact: string; readonly kind: string }): string => {
+  try {
+    const value: unknown = JSON.parse(fact.exact)
+    const route = firstNamedString(value, new Set(["transition", "step"]))
+      ?? firstNamedString(objectRecord(value)?.route, new Set(["_tag"]))
+      ?? fact.kind
+    const action = route === "TrackerGraphReadRoute"
+      ? "Read the tracker graph again"
+      : route.replace(/Route$/u, "").replace(/(?<=[a-z])(?=[A-Z])/gu, " ")
+    const taskId = firstNamedString(value, new Set(["taskId"]))
+    const attemptId = firstNamedString(value, new Set(["attemptId"]))
+    const owner = firstNamedString(value, new Set(["owner"]))
+    const ownerText = owner?.replace(/(?<=[a-z])(?=[A-Z])/gu, " ").toLowerCase()
+    return `${action}${taskId === undefined ? "" : ` for task ${taskId}`}${attemptId === undefined ? "" : ` · attempt ${attemptId}`}${ownerText === undefined ? "" : ` · planned by the ${ownerText} layer`}`
+  } catch {
+    return fact.kind
+  }
+}
+
 const graphEdges = (
   tasks: ReadonlyArray<{
     readonly id: string
@@ -51,9 +90,9 @@ const declaredProjection = (row: AuthoredRow): DeliveryGraphProjection => ({
 })
 
 const frameLabel = (frame: AuthoredDeliveryFrame, index: number): string => {
-  const graph = frame.graph._tag === "Established" ? frame.graph.revision : "graph not established"
+  const graph = frame.graph._tag === "Established" ? `observed graph ${frame.graph.revision}` : "graph not established"
   const accepted = frame.acceptedAt === null ? "no accepted facts" : `facts through journal ${frame.acceptedAt}`
-  return `${index + 1}. ${frame.activation} · ${frame.storyPosition} authored items consumed · graph ${graph} · ${accepted}`
+  return `${index + 1}. ${frame.activation} · ${frame.storyPosition} declared interactions consumed · ${graph} · ${accepted}`
 }
 
 const deliverySummary = (delivery: AuthoredDeliveryFrame["deliveries"][number] | undefined): string =>
@@ -76,7 +115,7 @@ const taskFacts = (frame: AuthoredDeliveryFrame, taskId: string) => {
     frontier: frontier === undefined
       ? "not represented"
       : frontier.standing === "Eligible"
-        ? "eligible"
+        ? `eligible at task revision ${frontier.taskRevision}`
         : `excluded: ${frontier.reasons.map(({ kind }) => kind).join(", ")}`,
     held: held.length === 0 ? "none" : held.map(({ attemptId, runId }) => `${runId} / ${attemptId}`).join("; "),
     settlement: settlements.length === 0 ? "none" : settlements.map(({ attemptId }) => attemptId).join("; "),
@@ -101,17 +140,16 @@ const frameProjection = (row: AuthoredRow, frame: AuthoredDeliveryFrame, index: 
       return {
         display: {
           classes: [
-            facts.frontier === "eligible" ? "frontier" : "",
+            facts.frontierFact?.standing === "Eligible" ? "frontier" : "",
             facts.ticket.startsWith("Selected") ? "placement" : "",
             facts.held === "none" ? "" : "held",
             facts.delivery === undefined ? "" : "standing"
           ].filter((value) => value.length > 0),
           labels: [
-            `Frontier: ${facts.frontier}`,
+            `Frontier: ${facts.frontierFact?.standing === "Eligible" ? "eligible" : facts.frontier}`,
             `Desired ticket: ${facts.ticket}`,
-            `Held position: ${facts.held}`,
-            `Delivery: ${facts.deliverySummary}`,
-            `Settlement: ${facts.settlement}`
+            `Held: ${facts.held === "none" ? "no" : "yes"}`,
+            `Obligations: ${facts.delivery?.obligations.map(({ kind }) => kind).join(", ") || "none"}`
           ]
         },
         id,
@@ -126,7 +164,7 @@ const renderNotObserved = (parent: HTMLElement, row: AuthoredRow, state: Cassett
     parent,
     "p",
     state._tag === "Running"
-      ? "Production is consuming the cassette now. Any earlier delivery frames were cleared; captured frames appear only after this run reaches a terminal result."
+      ? "Production is consuming the cassette now. The declared graph remains controlled input until the first production delivery publication arrives."
       : state._tag === "LabDefect" || state._tag === "Settled"
         ? "No production delivery timeline was returned. The graph below remains declared cassette input, not observed delivery state."
         : "Before execution this is controlled cassette input only. Frontier, desired tickets, held positions, responsibilities, and settlements are not yet observed.",
@@ -138,26 +176,47 @@ const renderNotObserved = (parent: HTMLElement, row: AuthoredRow, state: Cassett
   parent.append(graph)
 }
 
-const renderFrameFacts = (parent: HTMLElement, row: AuthoredRow, frame: AuthoredDeliveryFrame): void => {
+const renderFrameFacts = (
+  parent: HTMLElement,
+  row: AuthoredRow,
+  frame: AuthoredDeliveryFrame,
+  running: boolean
+): void => {
   const facts = document.createElement("dl")
   facts.className = "delivery-frame-facts"
   const descriptions: ReadonlyArray<readonly [string, string]> = [
-    ["Production activation", frame.activation],
+    [
+      "Production activation",
+      frame.activation === "Fresh"
+        ? "Fresh · initial coordinator process"
+        : "Recovered · coordinator restarted from accepted journal history"
+    ],
     [
       "Authored input consumed",
       row.storyItemSummaries[frame.storyPosition] === undefined
         ? `${frame.storyPosition} items; declared story end reached`
-        : `${frame.storyPosition} items; next item #${frame.storyPosition + 1}: ${row.storyItemSummaries[frame.storyPosition]}`
+        : `${frame.storyPosition} interactions consumed at this production publication; next declared item #${frame.storyPosition + 1}: ${row.storyItemSummaries[frame.storyPosition]}${running ? "" : ". The terminal assertion subsequently completed."}`
     ],
-    ["Publication facts accepted through", frame.acceptedAt === null ? "no journal position yet" : `journal position ${frame.acceptedAt}`],
-    ["Observed graph", frame.graph._tag === "Established" ? frame.graph.revision : "not established"],
+    [
+      "Observed graph",
+      frame.graph._tag === "Established"
+        ? `${frame.graph.revision} · exact tracker-read correlation is available below`
+        : "not established"
+    ],
     ["Task-work capacity", String(frame.capacity)],
+    [
+      "Quiescence disposition",
+      frame.quiescence._tag === "QuiescencePassive"
+        ? `passive because ${frame.quiescence.reason}; selected tickets remain desired graph work, not permission to start`
+        : "if no delivery action is ready, Dalph may read the tracker graph again"
+    ],
     ["Desired selected tickets", String(frame.tickets.filter(({ placement }) => placement.kind === "Selected").length)],
     ["Actual held positions", String(frame.heldPositions.length)],
-    ["Established settlements", String(frame.settlements.length)],
     [
-      "Tracker reflection",
-      `${frame.trackerReflection._tag} derived from ${frame.trackerReflection.settlementCount} settlements; no tracker request is proved`
+      "Planned next actions",
+      frame.actionPlanning._tag === "DeliveryProposalsAvailable"
+        ? `${frame.actionPlanning.proposals.length} planned action proposals and ${frame.actionPlanning.isolatedIssues.length} isolated derivation issues; nothing is executed by this view`
+        : `${frame.actionPlanning.conflicts.length} proposal ownership conflicts; planning fails closed`
     ]
   ]
   for (const [term, description] of descriptions) {
@@ -165,6 +224,56 @@ const renderFrameFacts = (parent: HTMLElement, row: AuthoredRow, frame: Authored
     appendText(facts, "dd", description)
   }
   parent.append(facts)
+
+  const secondary = document.createElement("details")
+  secondary.dataset.role = "delivery-secondary-facts"
+  appendText(secondary, "summary", "Publication watermark, settlements, and tracker reflection")
+  const secondaryFacts = document.createElement("dl")
+  secondaryFacts.className = "delivery-frame-facts"
+  for (const [term, description] of [
+    ["Publication facts accepted through", frame.acceptedAt === null ? "no journal position yet" : `journal position ${frame.acceptedAt}`],
+    [
+      "Exact observed-graph correlation",
+      frame.graph._tag === "Established"
+        ? `read ${frame.graph.observation.operationId} recorded at journal ${frame.graph.observation.recordedAt} · content ${frame.graph.observation.contentIdentity}`
+        : "no established graph observation"
+    ],
+    ["Established settlements", String(frame.settlements.length)],
+    ["Tracker reflection", `${frame.trackerReflection._tag} derived from ${frame.trackerReflection.settlementCount} settlements; no tracker request is proved`]
+  ] as const) {
+    appendText(secondaryFacts, "dt", term)
+    appendText(secondaryFacts, "dd", description)
+  }
+  secondary.append(secondaryFacts)
+  parent.append(secondary)
+
+  const planning = document.createElement("details")
+  planning.dataset.role = "delivery-action-planning"
+  appendText(planning, "summary", "Proposed delivery actions and isolated planning issues")
+  appendText(
+    planning,
+    "p",
+    "This is the downstream production action plan for the same coherent publication. It describes what the runtime may try next; opening it performs nothing."
+  )
+  const values = frame.actionPlanning._tag === "DeliveryProposalsAvailable"
+    ? [...frame.actionPlanning.proposals, ...frame.actionPlanning.isolatedIssues]
+    : frame.actionPlanning.conflicts
+  if (values.length === 0) {
+    appendText(planning, "p", "No proposed actions or isolated issues.")
+  } else {
+    const list = document.createElement("ul")
+    for (const value of values) {
+      const item = document.createElement("li")
+      appendText(item, "span", proposalSummary(value))
+      const raw = document.createElement("details")
+      appendText(raw, "summary", `Raw ${value.kind}`)
+      appendText(raw, "pre", value.exact)
+      item.append(raw)
+      list.append(item)
+    }
+    planning.append(list)
+  }
+  parent.append(planning)
 }
 
 const renderDeliveryFacts = (
@@ -192,6 +301,19 @@ const renderDeliveryFacts = (
   }
 }
 
+const selectedTaskSummary = (frame: AuthoredDeliveryFrame, taskId: string): string => {
+  const facts = taskFacts(frame, taskId)
+  const planningValues = frame.actionPlanning._tag === "DeliveryProposalsAvailable"
+    ? [...frame.actionPlanning.proposals, ...frame.actionPlanning.isolatedIssues]
+    : frame.actionPlanning.conflicts
+  const linkedPlanning = planningValues.filter(({ exact }) =>
+    exact.includes(`"taskId": "${taskId}"`) || exact.includes(`"taskId":"${taskId}"`)
+  )
+  const heldAttempts = frame.heldPositions.filter(({ taskId: heldTaskId }) => heldTaskId === taskId)
+    .map(({ attemptId }) => attemptId)
+  return `Selected task ${taskId}. Graph: ${facts.frontier}. Desired ticket: ${facts.ticket}. Held position: ${heldAttempts.length === 0 ? "none" : heldAttempts.join(", ")}. Settlement: ${facts.settlement}.${linkedPlanning.length === 0 ? " No planned action is correlated to this task in this frame." : ` Planned actions: ${linkedPlanning.map(proposalSummary).join("; ")}.`}`
+}
+
 const renderTaskTable = (parent: HTMLElement, frame: AuthoredDeliveryFrame): void => {
   const taskIds = [...new Set([
     ...(frame.graph._tag === "Established" ? frame.graph.tasks.map(({ id }) => id) : []),
@@ -216,8 +338,10 @@ const renderTaskTable = (parent: HTMLElement, frame: AuthoredDeliveryFrame): voi
     const facts = taskFacts(frame, taskId)
     const row = document.createElement("tr")
     row.dataset.taskId = taskId
-    appendText(row, "td", taskId)
+    const taskCell = appendText(row, "td", taskId)
+    taskCell.dataset.label = "Task"
     const frontierCell = appendText(row, "td", facts.frontier)
+    frontierCell.dataset.label = "Graph-only eligibility"
     if (facts.frontierFact?.standing === "Excluded") {
       for (const reason of facts.frontierFact.reasons) {
         const details = document.createElement("details")
@@ -227,17 +351,21 @@ const renderTaskTable = (parent: HTMLElement, frame: AuthoredDeliveryFrame): voi
       }
     }
     const ticketCell = appendText(row, "td", facts.ticket)
+    ticketCell.dataset.label = "Does it fit the bounded desired set?"
     if (facts.ticketFact !== undefined) {
       const details = document.createElement("details")
       appendText(details, "summary", `Exact ${facts.ticketFact.placement.kind} placement`)
       appendText(details, "pre", facts.ticketFact.placement.exact)
       ticketCell.append(details)
     }
-    appendText(row, "td", facts.held)
+    const heldCell = appendText(row, "td", facts.held)
+    heldCell.dataset.label = "Does it occupy task-work capacity?"
     const deliveryCell = document.createElement("td")
+    deliveryCell.dataset.label = "What responsibility or obligation exists?"
     renderDeliveryFacts(deliveryCell, facts.delivery)
     row.append(deliveryCell)
-    appendText(row, "td", facts.settlement)
+    const settlementCell = appendText(row, "td", facts.settlement)
+    settlementCell.dataset.label = "What has settled?"
     body.append(row)
   }
   table.append(head, body)
@@ -262,11 +390,15 @@ const changedTaskIds = (
 
 const frameChangeSummary = (
   previous: AuthoredDeliveryFrame | undefined,
-  frame: AuthoredDeliveryFrame
+  frame: AuthoredDeliveryFrame,
+  row: AuthoredRow
 ): string => {
   if (previous === undefined) return "Initial current-first production publication."
   const changes: Array<string> = []
   if (previous.activation !== frame.activation) changes.push(`${previous.activation} → ${frame.activation} activation`)
+  if (JSON.stringify(previous.quiescence) !== JSON.stringify(frame.quiescence)) {
+    changes.push(`quiescence ${previous.quiescence._tag} → ${frame.quiescence._tag}`)
+  }
   if (previous.capacity !== frame.capacity) changes.push(`capacity ${previous.capacity} → ${frame.capacity}`)
   if (previous.acceptedAt !== frame.acceptedAt) {
     changes.push(`facts accepted through ${previous.acceptedAt ?? "none"} → ${frame.acceptedAt ?? "none"}`)
@@ -284,17 +416,91 @@ const frameChangeSummary = (
     const tasks = changedTaskIds(before, after)
     if (tasks.length > 0) changes.push(`${label} changed for ${tasks.join(", ")}`)
   }
+  if (JSON.stringify(previous.actionPlanning) !== JSON.stringify(frame.actionPlanning)) {
+    changes.push("proposed delivery actions or planning issues changed")
+  }
   if (previous.storyPosition !== frame.storyPosition) {
-    changes.push(`${frame.storyPosition - previous.storyPosition} authored items consumed`)
+    const consumed = frame.storyPosition - previous.storyPosition
+    changes.push(`${consumed} declared ${consumed === 1 ? "interaction" : "interactions"} consumed`)
+    const landmarks = row.storyItemLandmarks
+      .slice(previous.storyPosition, frame.storyPosition)
+      .flatMap((landmark) => landmark === null ? [] : [landmark])
+    if (landmarks.length > 0) {
+      changes.push(...landmarks)
+    } else {
+      const reached = row.storyItemSummaries[frame.storyPosition - 1]
+      if (reached !== undefined) changes.push(`reached #${frame.storyPosition}: ${reached}`)
+    }
   }
   return changes.length === 0 ? "No descriptive delivery fact changed; production republished the coherent input." : changes.join(" · ")
+}
+
+export interface DeliveryWorkbenchPlaybackState {
+  followLive: boolean
+  selectedFrameIndex: number
+  selectedTaskId: string | null
+}
+
+export const makeDeliveryWorkbenchPlaybackState = (): DeliveryWorkbenchPlaybackState => ({
+  followLive: true,
+  selectedFrameIndex: 0,
+  selectedTaskId: null
+})
+
+interface DeliveryTimelineController {
+  readonly update: (frames: ReadonlyArray<AuthoredDeliveryFrame>, running: boolean) => void
+}
+
+export interface DeliveryWorkbenchController {
+  readonly update: (state: CassetteState) => void
+}
+
+interface ExactCorrelationFact {
+  readonly key: string
+  readonly summary: string
+}
+
+const exactCorrelations = (frame: AuthoredDeliveryFrame): ReadonlyArray<ExactCorrelationFact> => [
+  ...frame.heldPositions.map(({ attemptId, runId, taskId }) => ({
+    key: `held:${taskId}:${runId}:${attemptId}`,
+    summary: `held position · task ${taskId} · attempt ${attemptId} · Run ${runId}`
+  })),
+  ...frame.deliveries.flatMap(({ obligations, taskId }) =>
+    obligations.map(({ exact, kind }) => {
+      let attemptId: string | undefined
+      try {
+        attemptId = firstNamedString(JSON.parse(exact), new Set(["attemptId"]))
+      } catch {
+        // The exact JSON remains available in the task facts when it cannot be summarized.
+      }
+      return {
+        key: `obligation:${taskId}:${kind}:${exact}`,
+        summary: `obligation · task ${taskId} · ${kind}${attemptId === undefined ? "" : ` · attempt ${attemptId}`}`
+      }
+    })
+  )
+]
+
+const restartContinuity = (
+  previous: AuthoredDeliveryFrame | undefined,
+  frame: AuthoredDeliveryFrame
+): string | undefined => {
+  if (previous?.activation !== "Fresh" || frame.activation !== "Recovered") return undefined
+  const before = new Map(exactCorrelations(previous).map((fact) => [fact.key, fact]))
+  const after = new Map(exactCorrelations(frame).map((fact) => [fact.key, fact]))
+  const retained = [...before].filter(([key]) => after.has(key)).map(([, fact]) => fact.summary)
+  const removed = [...before.keys()].filter((key) => !after.has(key))
+  const added = [...after.keys()].filter((key) => !before.has(key))
+  return `Coordinator restarted: Fresh → Recovered. Survived unchanged: ${retained.length === 0 ? "none" : retained.join("; ")}. ${removed.length} correlations disappeared; ${added.length} appeared after recovery.`
 }
 
 const renderTimeline = (
   parent: HTMLElement,
   row: AuthoredRow,
-  frames: ReadonlyArray<AuthoredDeliveryFrame>
-): void => {
+  initialFrames: ReadonlyArray<AuthoredDeliveryFrame>,
+  playback: DeliveryWorkbenchPlaybackState,
+  initiallyRunning: boolean
+): DeliveryTimelineController => {
   appendText(
     parent,
     "p",
@@ -304,7 +510,7 @@ const renderTimeline = (
   appendText(
     parent,
     "p",
-    "Production layer chain: observed graph → exhaustive frontier → bounded tickets → ticket deliveries → settlements → descriptive tracker reflection. Reflection is meaning derived from settlements; it does not prove a tracker mutation.",
+    "Production layer chain: observed graph → exhaustive frontier → bounded desired tickets → ticket deliveries → settlements → descriptive tracker reflection → downstream action planning. Reflection does not prove a tracker mutation, and a proposal does not prove an action ran.",
     "delivery-layer-chain"
   )
   const legend = document.createElement("ul")
@@ -313,21 +519,20 @@ const renderTimeline = (
     "Blue border: frontier eligible",
     "Purple fill: selected bounded ticket",
     "Double border: actual held task-work position",
-    "Gold fill: retained ticket-delivery standing"
+    "Gold fill: retained ticket-delivery standing",
+    "Excluded tasks remain visible with their exact graph reason in task facts",
+    "Settlement appears only from established settlement evidence, never from executor Terminal alone"
   ]) appendText(legend, "li", value)
   parent.append(legend)
   const controls = document.createElement("div")
   controls.className = "delivery-timeline-controls"
+  const follow = appendText(controls, "button", "Follow live")
+  follow.type = "button"
+  follow.dataset.role = "follow-live"
   const previous = appendText(controls, "button", "Previous frame")
   previous.type = "button"
   const selectLabel = appendText(controls, "label", "Delivery frame")
   const select = document.createElement("select")
-  for (const [index, frame] of frames.entries()) {
-    const option = document.createElement("option")
-    option.value = String(index)
-    option.textContent = frameLabel(frame, index)
-    select.append(option)
-  }
   selectLabel.append(select)
   const next = appendText(controls, "button", "Next frame")
   next.type = "button"
@@ -335,33 +540,52 @@ const renderTimeline = (
   controls.append(status)
   const frameHost = document.createElement("div")
   frameHost.dataset.role = "delivery-frame"
-  let selectedTaskId: string | null = null
+  let frames = initialFrames
+  let running = initiallyRunning
+
+  const refreshFollow = (): void => {
+    follow.setAttribute("aria-pressed", String(playback.followLive))
+    follow.textContent = playback.followLive ? "Following live" : "Follow live"
+  }
 
   const show = (index: number): void => {
     const frame = frames[index]
     if (frame === undefined) return
     frameHost.replaceChildren()
-    status.textContent = `${index + 1} of ${frames.length}`
+    playback.selectedFrameIndex = index
+    status.textContent = `${index + 1} of ${frames.length} · ${running ? "production still running" : "run settled"}${playback.followLive ? " · following newest frame" : " · inspecting history"}`
     previous.disabled = index === 0
     next.disabled = index === frames.length - 1
     const graph = document.createElement(deliveryGraphTag) as DeliveryGraphElement
     graph.projection = frameProjection(row, frame, index)
-    graph.selectedTaskId = selectedTaskId
-    appendText(frameHost, "p", frameChangeSummary(frames[index - 1], frame), "delivery-frame-change")
+    graph.selectedTaskId = playback.selectedTaskId
+    appendText(frameHost, "p", frameChangeSummary(frames[index - 1], frame, row), "delivery-frame-change")
+    const restart = restartContinuity(frames[index - 1], frame)
+    if (restart !== undefined) appendText(frameHost, "p", restart, "delivery-restart-boundary")
     frameHost.append(graph)
-    renderFrameFacts(frameHost, row, frame)
+    renderFrameFacts(frameHost, row, frame, running)
+    const selectedTask = appendText(
+      frameHost,
+      "aside",
+      playback.selectedTaskId === null
+        ? "Select a task in the graph summary to correlate its graph state with exact delivery facts."
+        : selectedTaskSummary(frame, playback.selectedTaskId),
+      "selected-task-facts"
+    )
+    selectedTask.dataset.role = "selected-task-facts"
     renderTaskTable(frameHost, frame)
     for (const taskRow of frameHost.querySelectorAll<HTMLTableRowElement>("tr[data-task-id]")) {
-      const selected = taskRow.dataset.taskId === selectedTaskId
+      const selected = taskRow.dataset.taskId === playback.selectedTaskId
       taskRow.classList.toggle("selected-task-row", selected)
       if (selected) taskRow.setAttribute("aria-current", "true")
     }
     graph.addEventListener("task-selected", (event) => {
-      selectedTaskId = (event as CustomEvent<{ readonly taskId: string }>).detail.taskId
-      graph.selectedTaskId = selectedTaskId
+      playback.selectedTaskId = (event as CustomEvent<{ readonly taskId: string }>).detail.taskId
+      graph.selectedTaskId = playback.selectedTaskId
+      selectedTask.textContent = selectedTaskSummary(frame, playback.selectedTaskId)
       for (const taskRow of frameHost.querySelectorAll<HTMLTableRowElement>("tr[data-task-id]")) {
-        taskRow.classList.toggle("selected-task-row", taskRow.dataset.taskId === selectedTaskId)
-        if (taskRow.dataset.taskId === selectedTaskId) taskRow.setAttribute("aria-current", "true")
+        taskRow.classList.toggle("selected-task-row", taskRow.dataset.taskId === playback.selectedTaskId)
+        if (taskRow.dataset.taskId === playback.selectedTaskId) taskRow.setAttribute("aria-current", "true")
         else taskRow.removeAttribute("aria-current")
       }
     })
@@ -378,43 +602,89 @@ const renderTimeline = (
     }
     show(index)
   }
-  previous.addEventListener("click", () => selectFrame(Math.max(0, Number(select.value) - 1)))
-  next.addEventListener("click", () => selectFrame(Math.min(frames.length - 1, Number(select.value) + 1)))
-  select.addEventListener("change", () => show(Number(select.value)))
+  const inspectFrame = (index: number): void => {
+    playback.followLive = false
+    refreshFollow()
+    selectFrame(index)
+  }
+  follow.addEventListener("click", () => {
+    playback.followLive = true
+    refreshFollow()
+    selectFrame(frames.length - 1)
+  })
+  previous.addEventListener("click", () => inspectFrame(Math.max(0, playback.selectedFrameIndex - 1)))
+  next.addEventListener("click", () => inspectFrame(Math.min(frames.length - 1, playback.selectedFrameIndex + 1)))
+  select.addEventListener("change", () => inspectFrame(Number(select.value)))
   parent.append(controls, frameHost)
-  selectFrame(0)
+  const update = (nextFrames: ReadonlyArray<AuthoredDeliveryFrame>, nextRunning: boolean): void => {
+    frames = nextFrames
+    running = nextRunning
+    select.replaceChildren()
+    for (const [index, frame] of frames.entries()) {
+      const option = document.createElement("option")
+      option.value = String(index)
+      option.textContent = frameLabel(frame, index)
+      select.append(option)
+    }
+    const selectedIndex = playback.followLive
+      ? frames.length - 1
+      : Math.min(playback.selectedFrameIndex, frames.length - 1)
+    refreshFollow()
+    selectFrame(Math.max(0, selectedIndex))
+  }
+  update(initialFrames, initiallyRunning)
+  return { update }
+}
+
+const deliveryFramesFrom = (state: CassetteState): ReadonlyArray<AuthoredDeliveryFrame> | null => {
+  if (state._tag === "Running") return state.deliveryFrames
+  return state._tag === "Settled" && state.result._tag === "Completed" ? state.result.deliveryFrames : null
 }
 
 export const renderCassetteDeliveryWorkbench = (
   host: HTMLElement,
   row: CassetteRow,
   state: CassetteState,
-  open: boolean
-): void => {
+  open: boolean,
+  playback: DeliveryWorkbenchPlaybackState = makeDeliveryWorkbenchPlaybackState()
+): DeliveryWorkbenchController => {
   host.replaceChildren()
-  if (row.surface._tag !== "AuthoredDeliverySurface") return
+  if (row.surface._tag !== "AuthoredDeliverySurface") return { update: () => undefined }
   const authoredRow: AuthoredRow = { ...row, surface: row.surface }
+  let currentState = state
+  let timeline: DeliveryTimelineController | undefined
   const details = document.createElement("details")
   details.className = "delivery-workbench"
   details.dataset.role = "delivery-workbench"
   details.open = open
   appendText(details, "summary", "Delivery workbench · graph, frontier, bounded tickets, held positions, obligations, and settlements")
   host.append(details)
+  const content = document.createElement("div")
+  details.append(content)
   const renderContents = (): void => {
-    if (details.querySelector("h4") !== null) return
-    const heading = appendText(details, "h4", "Production delivery timeline")
+    const frames = deliveryFramesFrom(currentState)
+    if (timeline !== undefined && frames !== null && frames.length > 0) {
+      timeline.update(frames, currentState._tag === "Running")
+      return
+    }
+    content.replaceChildren()
+    timeline = undefined
+    const heading = appendText(content, "h4", "Production delivery timeline")
     heading.tabIndex = -1
-    const completed = state._tag === "Settled" && state.result._tag === "Completed"
-      ? state.result
-      : undefined
-    if (completed?.deliveryFrames !== null && completed?.deliveryFrames !== undefined && completed.deliveryFrames.length > 0) {
-      renderTimeline(details, authoredRow, completed.deliveryFrames)
+    if (frames !== null && frames.length > 0) {
+      timeline = renderTimeline(content, authoredRow, frames, playback, currentState._tag === "Running")
     } else {
-      renderNotObserved(details, authoredRow, state)
+      renderNotObserved(content, authoredRow, currentState)
     }
   }
   if (open) renderContents()
   details.addEventListener("toggle", () => {
     if (details.open) renderContents()
   })
+  return {
+    update: (nextState) => {
+      currentState = nextState
+      if (details.open) renderContents()
+    }
+  }
 }

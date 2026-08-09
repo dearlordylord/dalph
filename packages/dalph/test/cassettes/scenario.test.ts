@@ -65,6 +65,7 @@ import {
   TaskLifecycle,
   TaskTrackerFactsObservedEvent,
   taskTrackerReadIntent,
+  taskRevisionFor,
   UntrackedWorktreePath,
   UnclaimedTask,
   WorktreeBaseMismatch,
@@ -133,8 +134,10 @@ const exactClaimAuthorities = (...attemptIds: ReadonlyArray<AttemptId>) =>
   new Map(attemptIds.map((attemptId) => [attemptId, { _tag: "Exact" as const }]))
 
 const singleton = singletonTaskCompletesAuthoredCassette
-const runAuthoredScenarioCassette = (input: unknown) =>
-  runAuthoredScenarioCassetteWithCrypto(input).pipe(Effect.provide(NodeCrypto.layer))
+const runAuthoredScenarioCassette = (
+  input: unknown,
+  options: Parameters<typeof runAuthoredScenarioCassetteWithCrypto>[1] = {}
+) => runAuthoredScenarioCassetteWithCrypto(input, options).pipe(Effect.provide(NodeCrypto.layer))
 
 it.effect("rejects a stale task after a fresh read without selecting task work", () =>
   Effect.gen(function* () {
@@ -1746,6 +1749,30 @@ it.effect(
 
       expect(run.deliveryFrames[0]?.graph).toEqual({ _tag: "NotEstablished" })
       expect(established.length).toBeGreaterThan(1)
+      const firstEstablished = established[0]
+      if (firstEstablished === undefined || firstEstablished.graph._tag !== "Established") {
+        return expect.fail("expected an established production delivery frame")
+      }
+      const establishedGraph = firstEstablished.graph
+      const graphRecord = run.records.find(({ position }) => position === establishedGraph.observation.recordedAt)
+      expect(graphRecord?.event._tag).toBe("TaskTrackerFactsObserved")
+      if (graphRecord?.event._tag !== "TaskTrackerFactsObserved") {
+        return expect.fail("expected the frame's exact graph observation record")
+      }
+      expect(establishedGraph.observation).toEqual({
+        operationId: graphRecord.event.operationId,
+        contentIdentity: establishedGraph.revision,
+        recordedAt: graphRecord.position
+      })
+      expect(graphRecord.event.observation.operationId).toBe(establishedGraph.observation.operationId)
+      const startingProjection = projectTrackerSnapshot(run.cassette.startingFacts.trackerGraph)
+      if (startingProjection._tag !== "Valid") return expect.fail("expected the declared starting graph to project")
+      const startingA = startingProjection.snapshot.eligibleTasks().find(({ id }) => id === TaskId.make("A"))
+      if (startingA === undefined) return expect.fail("expected eligible task A in the starting graph")
+      const eligibleA = firstEstablished.frontier.find(
+        (standing) => standing.standing === "Eligible" && standing.taskId === TaskId.make("A")
+      )
+      expect(eligibleA?.taskRevision).toBe(taskRevisionFor(startingA))
       expect(established.some(({ frontier }) => frontier.some(({ taskId }) => taskId === "B"))).toBe(true)
       expect(
         established.some(
@@ -1775,6 +1802,25 @@ it.effect(
     })
 )
 
+it.effect("notifies the read-only delivery observer before returning the terminal authored result", () =>
+  Effect.gen(function* () {
+    const publications: Array<{ readonly activation: "Fresh" | "Recovered"; readonly storyPosition: number }> = []
+    const run = yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette, {
+      onDeliveryPublication: ({ activation, storyPosition }) => {
+        publications.push({ activation, storyPosition })
+      }
+    })
+
+    expect(publications.length).toBe(run.deliveryFrames.length)
+    expect(publications.length).toBeGreaterThan(1)
+    expect(publications[0]).toEqual({
+      activation: run.deliveryFrames[0]?.activation,
+      storyPosition: run.deliveryFrames[0]?.storyPosition
+    })
+    expect(publications.at(-1)?.storyPosition).toBe(run.deliveryFrames.at(-1)?.storyPosition)
+  })
+)
+
 it.effect("separates Fresh and Recovered delivery frames across authored coordinator death", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)
@@ -1791,6 +1837,28 @@ it.effect("separates Fresh and Recovered delivery frames across authored coordin
     const recoveredHeld = recovered.flatMap(({ heldPositions }) => heldPositions)
     expect(freshHeld.some(({ attemptId }) => attemptId === "attempt:A:0")).toBe(true)
     expect(recoveredHeld.some(({ attemptId }) => attemptId === "attempt:A:0")).toBe(true)
+  })
+)
+
+it.effect("retains the exact paused quiescence disposition in production delivery frames", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runPauseSafelySuspendsAuthoredCassette)
+    const pauseRecord = run.records.find(
+      ({ event }) =>
+        event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
+    )
+    if (pauseRecord === undefined) return expect.fail("expected the accepted Run Pause record")
+
+    const beforePause = run.deliveryFrames.filter(
+      ({ acceptedAt }) => acceptedAt !== null && acceptedAt < pauseRecord.position
+    )
+    const afterPause = run.deliveryFrames.filter(
+      ({ acceptedAt }) => acceptedAt !== null && acceptedAt >= pauseRecord.position
+    )
+    expect(beforePause.some(({ quiescence }) => quiescence._tag === "TrackerReconfirmationAllowed")).toBe(true)
+    expect(afterPause.length).toBeGreaterThan(0)
+    expect(afterPause.every(({ quiescence }) => quiescence._tag === "QuiescencePassive")).toBe(true)
+    expect(afterPause[0]?.quiescence).toEqual({ _tag: "QuiescencePassive", reason: "RunPaused" })
   })
 )
 

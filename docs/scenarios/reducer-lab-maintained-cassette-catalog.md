@@ -310,13 +310,32 @@ those exact immutable publications, the current Fresh or Recovered activation,
 and the authored story position reached at publication time. It does not alter
 the publication, select an action, append a journal event, or call a boundary.
 
-After the production runner reaches the cassette's declared end, the Lab sends
-each recorded publication through the literal production `delivery`
-composition. At that production boundary a focused test checks the complete
+The Lab projects each recorded publication through the literal production
+`delivery` composition as soon as the controlled observer receives it. While
+the cassette is still running, the shared workbench shows the newest completed
+projection and says that it is following production. A maintainer may turn
+**Follow live** off, move to an earlier frame with **Previous frame** or the
+ordinary frame selector, and inspect that immutable frame while later
+publications continue to arrive. Turning **Follow live** back on moves to the
+newest available frame. An incoming publication must not replace the selected
+cassette surface, close a disclosure, or reset a paused frame or selected task.
+
+When the runner reaches the declared end, the workbench remains on the last
+production frame when live following is enabled. The terminal result does not
+append duplicate frames. If no publication has arrived yet, the Lab continues
+to show only the controlled declared graph and says production has not yet
+published delivery state. Direct protocol runners do not gain a fabricated
+timeline.
+
+At the production projection boundary a focused test checks the complete
 identity chain in the one `DeliveryConsequences` value. The runner then derives
 one serializable browser frame from that same value: observed graph, exhaustive
 delivery frontier, bounded ticket placements, ticket deliveries and exact
-obligations, settlements, and tracker-reflection meaning. It does not claim
+obligations, settlements, and tracker-reflection meaning. The downstream
+production action-planning composition then shows ordered proposals, isolated
+derivation issues, or ownership conflicts for that same publication. These
+are planned next actions: observing them performs nothing, and the Lab never
+presents a proposal as an action that ran. It does not claim
 that the browser DTO retains Effect services, private graph brands, or relation
 object identities. The recorded runtime facts separately retain the actual
 task-work capacity and exact held
@@ -331,6 +350,10 @@ lifecycle making B eligible. For a pause cassette, a Pause direction alone
 does not release A's held position; the frame after the exact safely-suspended
 report does. For a recovery cassette, Fresh and Recovered frames are visibly
 separated and retain the same exact planned attempt where the cassette does.
+The first Recovered frame names the restart boundary and summarizes which held
+positions and exact obligations survived, changed, or disappeared. The
+maintainer does not have to infer restart continuity only by comparing raw
+JSON.
 
 ### Visible and forbidden results
 
@@ -338,8 +361,9 @@ The graph is the primary authored-cassette result, with prerequisite and
 grouping edges, task lifecycle, frontier standing, bounded placement, ticket
 delivery standing, exact obligations, settlement state, and held-position
 correlation available per task. A frame identifies its production activation,
-authored story position, accepted journal position, graph revision, and
-capacity. The cassette chronology and raw journal remain available as the
+authored story position, accepted journal position, exact graph-read identity
+and recorded position, graph and task revisions, capacity, and quiescence
+disposition. The cassette chronology and raw journal remain available as the
 control/evidence record rather than replacing the graph.
 
 The Lab must not project a frontier from declared input, fabricate a privately
@@ -350,6 +374,12 @@ combine Fresh and Recovered publications into one activation, or restore the
 deleted Lab-owned scheduler and synthetic selector facts. Browser loss discards
 only this presentation. A retry reruns the cassette through fresh controlled
 runtime state.
+
+A populated graph must not also render or announce its empty-state sentence.
+Graph nodes contain compact state labels; exact evidence and correlations stay
+in selected-task facts. At a narrow viewport the frame control fits the
+viewport, per-task facts remain readable without page-wide horizontal
+overflow, and terminal journal evidence remains collapsed until requested.
 
 ### Acceptance-test mapping
 
@@ -380,6 +410,31 @@ runtime state.
 - `separates Fresh and Recovered delivery frames across authored coordinator death`
   checks activation boundaries and exact attempt correlation in a maintained
   recovery cassette.
+- `shows graph observation provenance quiescence and planned actions` selects
+  an established paused publication and checks its exact graph-read
+  correlation, `RunPaused` passive disposition, and the downstream
+  action-planning result without implying any proposal ran. When that one
+  publication consumed several declared interactions, it also checks the
+  visible chronology retains both the concrete Operator Pause and the later
+  executor Running report instead of showing only the final raw tag.
+- `shows production delivery frames before the authored cassette settles`
+  holds an authored runner open, publishes exact projected frames through its
+  controlled observer, and checks that the running shared workbench follows
+  new frames until Follow live is turned off, then preserves the inspected
+  frame until following is enabled again; `notifies the read-only delivery
+  observer before returning the terminal authored result` checks the production
+  cassette boundary publishes every exact revision before its terminal result.
+- `explains restart continuity at the Fresh to Recovered boundary` selects the
+  first Recovered frame and checks the visible restart marker plus held-position
+  and obligation continuity.
+- `keeps populated graphs truthful and delivery evidence usable at narrow width`
+  checks the graph shadow empty state is hidden for a populated projection,
+  narrow task facts retain their labels, and journal chronology is collapsed
+  by default.
+- The real-browser command listens for a delivery-frame event before the
+  selected cassette's settled event, proves the article is still Running when
+  a real frame appears, and then checks final auto-follow, rewind, disclosure
+  stability, and the complete 40-cassette terminal summary.
 - `does not fabricate a graph workbench for direct protocol cassettes` checks
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.
