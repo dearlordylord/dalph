@@ -395,23 +395,30 @@ worktree, and integration responsibilities. Terms such as
 `IdentityFreeWorkflowRoute` stay in the secondary exact JSON rather than
 becoming the human action label.
 
-The linked `authored:deliveryInvariantStory` spine crosses the ordinary
-production completion-finality boundary. After promotion, the controlled
-tracker returns the exact active claim, applies the exact replacement, later
-publishes a complete successful graph, returns the exact completion claim, and
-applies its deletion. Dalph itself records `IntegrationFinalitySettled`; the
-next production delivery publication contains the task-scoped settlement and
-its descriptive tracker reflection. The Lab does not call the direct protocol
-runner, append a settlement, or infer one from executor completion. The same
-spine begins with five production-observed tasks, crosses a coordinator death
-with A's exact integration obligation intact, and later publishes seven tasks.
-The later controlled tracker graph reports all seven tasks successfully
-complete, but only A crosses Dalph's completion-finality boundary. The Lab
-therefore labels tracker lifecycle as outside authority, counts one distinct A
-settlement even when several publications carry it, and never presents the
-other six tracker lifecycle values as Dalph execution or settlement evidence.
-The prose story's manifest names which other beats are proven only by narrower
-maintained cassettes and which combined beats remain unimplemented.
+The linked `authored:deliveryInvariantStory` is the real double-diamond graph
+story. Its tracker graph is `A -> {B, C} -> D -> {E, F} -> G`, and capacity is
+two. Production first exposes only A in the frontier. A later complete tracker
+read proves A successful and exposes B and C together. Both acquire exact
+task-work positions before the coordinator process dies. The first Recovered
+delivery publications retain both exact Run/attempt responsibilities rather
+than planning replacements. Later
+complete tracker reads prove each finished wave and expose D, then E and F
+together, then G. Every wave is admitted and
+reported through the ordinary coordinator and executor protocol. The Lab must
+show the frontier changing on the graph; it must not replace this chronology
+with a fan, a flat list, or one final tracker snapshot that declares unexecuted
+tasks complete.
+
+The separate `authored:deliveryFinalitySpine` crosses the ordinary production
+completion-finality boundary. After promotion, the controlled tracker returns
+the exact active claim, applies the exact replacement, later publishes a
+complete successful graph, returns the exact completion claim, and applies its
+deletion. Dalph itself records `IntegrationFinalitySettled`; the next
+production delivery publication contains the task-scoped settlement and its
+descriptive tracker reflection. The Lab does not call the direct protocol
+runner, append a settlement, or infer one from executor completion. Tracker
+lifecycle remains outside authority and exact Dalph settlements are counted
+separately.
 
 The Lab must not project a frontier from declared input, fabricate a privately
 branded journaled graph observation, infer missing topology from durable task
@@ -512,6 +519,15 @@ task whose exact facts are correlated below.
   `IntegrationFinalitySettled` order, plus a non-empty production settlement
   and tracker-reflection frame. It also proves the cassette does not fabricate
   whole-Run termination.
+- `consumes the double-diamond frontier through production delivery waves`
+  runs `authored:deliveryInvariantStory` through the public authored runner and
+  checks the exact prerequisite edges plus frontier waves A, B+C, D, E+F, G,
+  and empty. It requires real executor responsibility and terminal evidence
+  for every task rather than accepting a final tracker snapshot as execution.
+- `preserves the double-diamond middle wave across coordinator restart` checks
+  B and C hold exact task-work positions before process loss and the first
+  Recovered publications retain the same Run and attempt correlations before
+  either task advances.
 - `rejects a partial authored completion-finality boundary chronology` checks
   that once an authored story uses the controlled finality boundary, each task
   must declare exactly one Active read, replacement, Completion read, and
@@ -524,16 +540,10 @@ task whose exact facts are correlated below.
 - `keeps every delivery-story beat linked to maintained evidence or an explicit implementation gap`
   checks the document's 22 stable beat IDs, exact catalog keys, explicit gap
   reasons, and generated manifest block in both directions.
-- `shows the linked delivery story evolving from five to seven production-observed tasks`
-  runs the linked spine through the public authored runner and checks its
-  five-task and seven-task graph publications, exhaustive seven-task frontier,
-  recovered exact obligation, terminal authored assertion, and populated
-  settlement frame.
-- `shows the linked delivery story growing across restart and completion finality`
-  checks the same returned production frames through the Lab presentation
-  model: five graph nodes grow to seven exhaustive frontier entries, A's exact
-  obligation survives into Recovered, and A later has an established
-  settlement plus non-empty tracker reflection.
+- `shows the double-diamond frontier being consumed on one graph` checks the
+  same returned frames through the Lab presentation model, including seven
+  nodes, the eight exact prerequisite edges, every frontier wave, concurrent B/C
+  and E/F held positions, and restart-preserved responsibilities.
 - `keeps multi-task chronology landmarks attributable` checks task lifecycle
   landmarks include the task identity instead of rendering indistinguishable
   repeated lifecycle fragments.
@@ -554,10 +564,11 @@ task whose exact facts are correlated below.
   selected cassette's settled event, proves the article is still Running when
   a real frame appears, and then checks final auto-follow, rewind, disclosure
   stability, and the complete current-catalog terminal summary. Its
-  `drives the linked five-to-seven task delivery story through restart and completion finality`
-  checkpoint additionally observes both graph sizes while the linked cassette
-  is still Running, selects its recovered seven-task frame, and checks the
-  terminal settlement coverage through the actual served application.
+  `drives the double-diamond frontier through every production wave and restart`
+  checkpoint additionally observes the seven-node graph while the linked
+  cassette is still Running, traverses its exact prerequisite edges and
+  frontier waves, and checks the B/C attempt correlations on both sides of the
+  restart through the actual served application.
 - `does not fabricate a graph workbench for direct protocol cassettes` checks
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.

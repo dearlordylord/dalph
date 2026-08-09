@@ -184,7 +184,6 @@ try {
     { timeout: terminalTimeoutMs }
   )
   const linkedTrace = await page.evaluate(() => globalThis.__linkedDeliveryStoryTrace)
-  assert.ok(linkedTrace.some(({ state, taskCount }) => state === "Running" && taskCount === 5))
   assert.ok(linkedTrace.some(({ state, taskCount }) => state === "Running" && taskCount === 7))
   const linkedWorkbench = page.locator('[data-role="delivery-workbench"]')
   const linkedFrameSelector = linkedWorkbench.getByLabel("Delivery frame")
@@ -197,17 +196,38 @@ try {
       select.dispatchEvent(new Event("change"))
       return {
         facts: document.querySelector('[data-role="delivery-frame"]')?.textContent ?? "",
-        taskCount: graph.projection?.tasks.length ?? 0
+        edges: (graph.projection?.edges ?? []).map(({ from, to }) => `${from}->${to}`).sort(),
+        eligible: [...document.querySelectorAll('tr[data-task-id]')]
+          .filter((row) => row.querySelector('[data-label="Graph-only eligibility"]')?.textContent?.startsWith("eligible"))
+          .map((row) => row.getAttribute("data-task-id"))
+          .filter((taskId) => taskId !== null)
+          .sort()
+          .join("+"),
+        taskCount: graph.projection?.tasks.length ?? 0,
+        taskState: document.querySelector('[data-role="delivery-task-state"]')?.textContent ?? ""
       }
     })
   })
-  assert.ok(linkedFrameTruth.some(({ facts, taskCount }) => taskCount === 7 && /Recovered/u.test(facts)))
-  assert.match(
-    await linkedWorkbench.locator(".delivery-settlement-coverage").textContent() ?? "",
-    /1 distinct established delivery settlement across \d+ production publications/u
+  assert.deepEqual(
+    linkedFrameTruth.find(({ taskCount }) => taskCount === 7)?.edges,
+    ["A->B", "A->C", "B->D", "C->D", "D->E", "D->F", "E->G", "F->G"]
   )
+  const eligibleWaves = linkedFrameTruth.map(({ eligible }) => eligible)
+  let previousWave = -1
+  for (const wave of ["A", "B+C", "D", "E+F", "G", ""]) {
+    previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
+    assert.ok(previousWave >= 0, `missing rendered frontier wave ${wave || "empty"}`)
+  }
+  const freshMiddle = linkedFrameTruth.find(({ facts, taskState }) =>
+    /Fresh activation/u.test(facts) && /B/u.test(taskState) && /C/u.test(taskState) && /attempt:B:1/u.test(taskState) && /attempt:C:2/u.test(taskState)
+  )
+  const recoveredMiddle = linkedFrameTruth.find(({ facts }) => /Recovered/u.test(facts))
+  assert.ok(freshMiddle)
+  assert.ok(recoveredMiddle)
+  assert.match(recoveredMiddle.taskState, /attempt:B:1/u)
+  assert.match(recoveredMiddle.taskState, /attempt:C:2/u)
   assert.ok(await linkedFrameSelector.locator("option").count() > 1)
-  console.log("✓ drives the linked five-to-seven task delivery story through restart and completion finality")
+  console.log("✓ drives the double-diamond frontier through every production wave and restart")
 
   await page.reload({ waitUntil: "networkidle" })
   await page.getByRole("button", { name: `Run all ${maintainedCassetteCount} cassettes` }).click()

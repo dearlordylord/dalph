@@ -1761,7 +1761,7 @@ export const targetPromotionSuccessAuthoredCassette = promotionScenarioFrom(
   }
 )
 
-const deliveryStoryStartingGraph = {
+const deliveryFinalityStartingGraph = {
   revision: "delivery-story-G0",
   tasks: [
     { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
@@ -1774,10 +1774,10 @@ const deliveryStoryStartingGraph = {
   ]
 } as const
 
-const deliveryStoryExpandedGraph = {
+const deliveryFinalityExpandedGraph = {
   revision: "delivery-story-G5",
   tasks: [
-    ...deliveryStoryStartingGraph.tasks,
+    ...deliveryFinalityStartingGraph.tasks,
     ...["F", "G"].map((id) => ({
       id,
       lifecycle: { _tag: "Open" as const },
@@ -1787,20 +1787,20 @@ const deliveryStoryExpandedGraph = {
   ]
 } as const
 
-const deliveryStorySuccessfulGraph = {
+const deliveryFinalitySuccessfulGraph = {
   revision: "delivery-story-G6",
-  tasks: deliveryStoryExpandedGraph.tasks.map((task) => ({
+  tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
     lifecycle: { _tag: "CompletedSuccessfully" as const }
   }))
 } as const
 
-const deliveryStoryBase = (() => {
+const deliveryFinalityBase = (() => {
   let recovered = false
   return targetPromotionSuccessAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
     if (item._tag === "CoordinatorProcessDies") recovered = true
     if (item._tag === "TrackerGraphReadReturned") {
-      return [{ ...item, graph: recovered ? deliveryStoryExpandedGraph : deliveryStoryStartingGraph }]
+      return [{ ...item, graph: recovered ? deliveryFinalityExpandedGraph : deliveryFinalityStartingGraph }]
     }
     if (item._tag !== "ExpectedBehavior") return [item]
     return [
@@ -1811,19 +1811,19 @@ const deliveryStoryBase = (() => {
         decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
       },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: deliveryStorySuccessfulGraph },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalitySuccessfulGraph },
       { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
       { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: deliveryStorySuccessfulGraph },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalitySuccessfulGraph },
       {
         _tag: "CoordinatorActivationReturned",
         decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
       },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: deliveryStorySuccessfulGraph },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalitySuccessfulGraph },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: deliveryStorySuccessfulGraph },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalitySuccessfulGraph },
       {
         _tag: "CoordinatorActivationReturned",
         decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
@@ -1842,11 +1842,203 @@ const deliveryStoryBase = (() => {
  * boundary in this cassette; it does not claim Dalph executed or settled the
  * other tasks, and it does not fabricate whole-Run termination.
  */
-export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const deliveryFinalitySpineAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...targetPromotionSuccessAuthoredCassette,
   name: "real A-finality spine (partial delivery-invariant story): five-to-seven task graph across restart",
-  startingFacts: { ...targetPromotionSuccessAuthoredCassette.startingFacts, trackerGraph: deliveryStoryStartingGraph },
-  story: deliveryStoryBase
+  startingFacts: {
+    ...targetPromotionSuccessAuthoredCassette.startingFacts,
+    trackerGraph: deliveryFinalityStartingGraph
+  },
+  story: deliveryFinalityBase
+})
+
+const doubleDiamondTaskIds = ["A", "B", "C", "D", "E", "F", "G"] as const
+const doubleDiamondPrerequisites = {
+  A: [],
+  B: ["A"],
+  C: ["A"],
+  D: ["B", "C"],
+  E: ["D"],
+  F: ["D"],
+  G: ["E", "F"]
+} as const
+
+const doubleDiamondGraph = (revision: string, completed: ReadonlySet<string>) => ({
+  revision,
+  tasks: doubleDiamondTaskIds.map((id) => ({
+    id,
+    lifecycle: { _tag: completed.has(id) ? ("CompletedSuccessfully" as const) : ("Open" as const) },
+    parentTaskId: null,
+    prerequisiteIds: doubleDiamondPrerequisites[id]
+  }))
+})
+
+const doubleDiamondGraphs = [
+  doubleDiamondGraph("double-diamond-G0", new Set()),
+  doubleDiamondGraph("double-diamond-G1", new Set(["A"])),
+  doubleDiamondGraph("double-diamond-G2", new Set(["A", "B", "C"])),
+  doubleDiamondGraph("double-diamond-G3", new Set(["A", "B", "C", "D"])),
+  doubleDiamondGraph("double-diamond-G4", new Set(["A", "B", "C", "D", "E", "F"])),
+  doubleDiamondGraph("double-diamond-G5", new Set(doubleDiamondTaskIds))
+] as const
+
+const doubleDiamondGraphRead = (graph: (typeof doubleDiamondGraphs)[number]) => [
+  { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: "double-diamond-target" } },
+  { _tag: "TrackerGraphReadReturned" as const, graph }
+]
+
+const doubleDiamondSpecification = (taskId: (typeof doubleDiamondTaskIds)[number]) => ({
+  body: `Complete double-diamond task ${taskId}.`,
+  taskId,
+  title: `Complete ${taskId}`
+})
+
+const doubleDiamondPrepareBatch = (
+  graph: (typeof doubleDiamondGraphs)[number],
+  tasks: ReadonlyArray<{ readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] }>
+) => [
+  ...Array.from({ length: tasks.length + 1 }, () => doubleDiamondGraphRead(graph)).flat(),
+  ...tasks.map(({ taskId }) => ({
+    _tag: "DalphSelects" as const,
+    operation: { _tag: "AcquireTaskClaim" as const, taskId }
+  })),
+  ...Array.from({ length: tasks.length }, () => doubleDiamondGraphRead(graph)).flat(),
+  ...tasks.flatMap(({ taskId }) => [
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
+    { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
+  ]),
+  ...tasks.map(({ attemptId, taskId }) => ({
+    _tag: "DalphSelects" as const,
+    operation: { _tag: "RecordTaskAttemptPlan" as const, attemptId, taskId }
+  })),
+  ...tasks.map(({ attemptId, taskId }) => ({
+    _tag: "DalphSelects" as const,
+    operation: { _tag: "ReconcileTaskWorktree" as const, attemptId, taskId }
+  }))
+]
+
+const doubleDiamondExecutorReport = (
+  attempt: { readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] },
+  report: "Running" | "Terminal"
+) => ({
+  _tag: "PlannedAttemptExecutorWorkReported" as const,
+  report:
+    report === "Running"
+      ? { _tag: "Running" as const, attemptId: attempt.attemptId }
+      : { _tag: "Terminal" as const, attemptId: attempt.attemptId, result: { _tag: "Completed" as const } },
+  request: "StartOrContinue" as const
+})
+
+const doubleDiamondRecoveryReads = (
+  tasks: ReadonlyArray<{ readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] }>
+) => [
+  ...tasks.flatMap(({ taskId }) => [
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
+    { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
+  ]),
+  ...tasks.flatMap(({ taskId }) => [
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
+    { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
+  ]),
+  ...tasks.flatMap(({ taskId }) => [
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId },
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
+  ]),
+  ...tasks.flatMap(({ attemptId, taskId }) =>
+    Array.from({ length: 2 }, () => ({
+      _tag: "DalphSelects" as const,
+      operation: { _tag: "ReadTaskWorktree" as const, attemptId, taskId }
+    }))
+  ),
+  ...tasks.flatMap(({ attemptId, taskId }) =>
+    Array.from({ length: 2 }, () => ({
+      _tag: "DalphSelects" as const,
+      operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId }
+    }))
+  )
+]
+
+const doubleDiamondAttempts = [
+  { attemptId: "attempt:A:0", taskId: "A" },
+  { attemptId: "attempt:B:1", taskId: "B" },
+  { attemptId: "attempt:C:2", taskId: "C" },
+  { attemptId: "attempt:D:0", taskId: "D" },
+  { attemptId: "attempt:E:0", taskId: "E" },
+  { attemptId: "attempt:F:1", taskId: "F" },
+  { attemptId: "attempt:G:2", taskId: "G" }
+] as const
+
+/** The real delivery runtime consumes a double-diamond graph wave by wave and reconstructs both middle positions after restart. */
+export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  _tag: "AuthoredScenarioCassette",
+  name: "production delivery consumes a double-diamond frontier across restart",
+  schemaVersion: 1,
+  startingFacts: {
+    executorWork: "NoPriorReport",
+    journal: "Empty",
+    taskClaims: [],
+    taskWorkSpecifications: doubleDiamondTaskIds.map(doubleDiamondSpecification),
+    trackerGraph: doubleDiamondGraphs[0],
+    worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
+  },
+  story: [
+    { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: 2 } },
+    {
+      _tag: "RunCoordinator",
+      baseSha: "2222222222222222222222222222222222222222",
+      claimOwner: "double-diamond-owner",
+      claimTokenPrefix: "double-diamond-claim",
+      executor: "executor:double-diamond",
+      integrationTarget: { repository: "/dalph/cassettes/double-diamond.git", ref: "refs/heads/master" },
+      target: "double-diamond-target",
+      verificationPlanId: null,
+      worktreeRoot: "/dalph/cassettes/double-diamond"
+    },
+    ...doubleDiamondPrepareBatch(doubleDiamondGraphs[0], [doubleDiamondAttempts[0]]),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[0], "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[0], "Terminal"),
+    ...doubleDiamondPrepareBatch(doubleDiamondGraphs[1], [doubleDiamondAttempts[1], doubleDiamondAttempts[2]]),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[1], "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[2], "Running"),
+    { _tag: "CoordinatorProcessDies" },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs[1]),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs[1]),
+    ...doubleDiamondRecoveryReads([doubleDiamondAttempts[1], doubleDiamondAttempts[2]]),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[1], "Terminal"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[2], "Terminal"),
+    ...doubleDiamondPrepareBatch(doubleDiamondGraphs[2], [doubleDiamondAttempts[3]]),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[3], "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[3], "Terminal"),
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
+    },
+    ...doubleDiamondPrepareBatch(doubleDiamondGraphs[3], [doubleDiamondAttempts[4], doubleDiamondAttempts[5]]),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[4], "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[5], "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[4], "Terminal"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[5], "Terminal"),
+    ...doubleDiamondPrepareBatch(doubleDiamondGraphs[4], [doubleDiamondAttempts[6]]),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[6], "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts[6], "Terminal"),
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
+    },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs[5]),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs[5]),
+    {
+      _tag: "ExpectedBehavior",
+      orchestration: null,
+      protocol: null,
+      taskWork: {
+        absences: [],
+        results: doubleDiamondTaskIds.map((taskId) => ({ _tag: "PlannedWorkForTaskCompleted", taskId }))
+      }
+    }
+  ]
 })
 
 /** Three lost mutation responses are each reconciled against H; exhaustion sends no fourth request. */
@@ -1982,6 +2174,7 @@ export const maintainedAuthoredCassetteCatalog = defineAuthoredCassetteCatalog({
   changedAttemptStopsWithAbsentClaim: changedAttemptStopsWithAbsentClaimAuthoredCassette,
   changedAttemptStopsWithForeignClaim: changedAttemptStopsWithForeignClaimAuthoredCassette,
   compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
+  deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
   deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
   dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
   incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,

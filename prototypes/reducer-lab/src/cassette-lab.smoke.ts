@@ -91,35 +91,48 @@ await scenario("captures every authored delivery frame from the real production 
   }
 })
 
-await scenario("shows the linked delivery story growing across restart and completion finality", () => {
+await scenario("shows the double-diamond frontier being consumed on one graph", () => {
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The linked story must complete with frames")
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
-  assert(
-    result.deliveryFrames.some(({ graph }) => graph._tag === "Established" && graph.tasks.length === 5),
-    "The linked story must show the five-task production graph"
+  const frames = result.deliveryFrames
+  const established = frames.filter(({ graph }) => graph._tag === "Established")
+  const graph = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 7)?.graph
+  const edges = graph?._tag === "Established"
+    ? graph.tasks.flatMap(({ id, prerequisiteIds }) => prerequisiteIds.map((from) => `${from}->${id}`)).toSorted()
+    : []
+  const eligible = established.map(({ frontier }) => frontier
+    .filter(({ standing }) => standing === "Eligible")
+    .map(({ taskId }) => taskId)
+    .toSorted()
+    .join("+"))
+  const positions = ["A", "B+C", "D", "E+F", "G", ""].reduce<ReadonlyArray<number>>(
+    (found, wave) => [...found, eligible.indexOf(wave, (found.at(-1) ?? -1) + 1)],
+    []
   )
-  assert(
-    result.deliveryFrames.some(
-      ({ frontier, graph }) => graph._tag === "Established" && graph.tasks.length === 7 && frontier.length === 7
-    ),
-    "The linked story must show the exhaustive seven-task production frontier"
+  const heldMiddle = (activation: "Fresh" | "Recovered") => frames.find(
+    (frame) => activation === frame.activation && ["B", "C"].every((taskId) =>
+      frame.heldPositions.some((position) => position.taskId === taskId)
+    )
   )
-  assert(
-    result.deliveryFrames.some(
-      ({ activation, deliveries }) =>
-        activation === "Recovered" &&
-        deliveries.some(({ obligations, taskId }) => taskId === "A" && obligations.length > 0)
-    ),
-    "The linked story must preserve A's exact responsibility across restart"
-  )
-  assert(
-    result.deliveryFrames.some(
-      ({ settlements, trackerReflection }) =>
-        settlements.some(({ taskId }) => taskId === "A") && trackerReflection.settlementCount > 0
-    ),
-    "The linked story must show the production settlement and tracker reflection"
-  )
+  const fresh = heldMiddle("Fresh")
+  const recovered = frames.find(({ activation }) => activation === "Recovered")
+  const lowerDiamondHeld = frames.some(({ heldPositions }) => ["E", "F"].every((taskId) =>
+    heldPositions.some((position) => position.taskId === taskId)
+  ))
+  const correlations = (frame: NonNullable<typeof fresh>) => frame.heldPositions
+    .filter(({ taskId }) => taskId === "B" || taskId === "C")
+    .map(({ attemptId, runId, taskId }) => `${taskId}:${runId}:${attemptId}`)
+    .toSorted()
+
+  assert(edges.join(",") === "A->B,A->C,B->D,C->D,D->E,D->F,E->G,F->G", "The graph must be the exact double diamond")
+  assert(positions.every((position) => position >= 0), "The production frontier must consume every dependency wave in order")
+  assert(fresh !== undefined && recovered !== undefined, "B and C must remain held across restart")
+  assert(lowerDiamondHeld, "E and F must occupy the two bounded task-work positions together")
+  if (fresh !== undefined && recovered !== undefined) {
+    assert(recovered.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C", "The first recovered frame must retain both middle-wave positions")
+    assert(correlations(recovered).join(",") === correlations(fresh).join(","), "Recovery must preserve both exact positions")
+  }
 })
 
 await scenario("keeps a dependant blocked after executor completion until a later tracker observation", () => {
@@ -778,7 +791,7 @@ await scenario("states when the selected authored cassette has no populated sett
 
 await scenario("counts one delivery settlement once across repeated production publications", async () => {
   const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryFinalitySpine")
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The linked delivery story settlement frames are missing")

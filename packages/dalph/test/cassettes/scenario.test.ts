@@ -1918,26 +1918,78 @@ it.effect("settles a promoted authored task through the real completion-claim bo
   })
 )
 
-it.effect("shows the linked delivery story evolving from five to seven production-observed tasks", () =>
+it.effect("consumes the double-diamond frontier through production delivery waves", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory)
     const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
-    const fiveTasks = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 5)
     const sevenTasks = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 7)
-    const recoveredResponsibility = run.deliveryFrames.find(
-      ({ activation, deliveries, graph }) =>
-        activation === "Recovered" &&
-        graph._tag === "Established" &&
-        graph.tasks.length === 7 &&
-        deliveries.some(({ obligations, taskId }) => taskId === "A" && obligations.length > 0)
+    const edges =
+      sevenTasks?.graph._tag === "Established"
+        ? sevenTasks.graph.tasks.flatMap(({ id, prerequisiteIds }) =>
+            prerequisiteIds.map((prerequisiteId) => `${prerequisiteId}->${id}`)
+          )
+        : []
+    const eligibleWaves = established.map(({ frontier }) =>
+      frontier
+        .filter(({ standing }) => standing === "Eligible")
+        .map(({ taskId }) => taskId)
+        .toSorted()
+        .join("+")
+    )
+    const expectedWaves = ["A", "B+C", "D", "E+F", "G", ""]
+    let previousWave = -1
+    const wavePositions = expectedWaves.map((wave) => {
+      previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
+      return previousWave
+    })
+    const taskWork = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+        ? [`began:${event.plannedAttempt.taskId}`]
+        : event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
+          ? [`terminal:${event.report.correlation.attemptId.split(":")[1]}`]
+          : []
     )
 
-    expect(fiveTasks).toBeDefined()
     expect(sevenTasks).toBeDefined()
+    expect(edges.toSorted()).toEqual(["A->B", "A->C", "B->D", "C->D", "D->E", "D->F", "E->G", "F->G"])
     expect(sevenTasks?.frontier).toHaveLength(7)
-    expect(recoveredResponsibility).toBeDefined()
-    expect(run.deliveryFrames.some(({ settlements }) => settlements.some(({ taskId }) => taskId === "A"))).toBe(true)
+    expect(wavePositions.every((position) => position >= 0)).toBe(true)
+    expect(run.deliveryFrames.every(({ capacity, heldPositions }) => capacity === 2 && heldPositions.length <= 2)).toBe(
+      true
+    )
+    expect(
+      run.deliveryFrames.some(({ heldPositions }) =>
+        ["E", "F"].every((taskId) => heldPositions.some((position) => position.taskId === taskId))
+      )
+    ).toBe(true)
+    expect(taskWork.toSorted()).toEqual(
+      ["A", "B", "C", "D", "E", "F", "G"].flatMap((taskId) => [`began:${taskId}`, `terminal:${taskId}`]).toSorted()
+    )
     expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
+  })
+)
+
+it.effect("preserves the double-diamond middle wave across coordinator restart", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory)
+    const fresh = run.deliveryFrames.find(
+      ({ activation, heldPositions }) =>
+        activation === "Fresh" &&
+        heldPositions.some(({ taskId }) => taskId === "B") &&
+        heldPositions.some(({ taskId }) => taskId === "C")
+    )
+    const recovered = run.deliveryFrames.find(({ activation }) => activation === "Recovered")
+    const correlations = (frame: NonNullable<typeof fresh>) =>
+      frame.heldPositions
+        .filter(({ taskId }) => taskId === "B" || taskId === "C")
+        .map(({ attemptId, runId, taskId }) => `${taskId}:${runId}:${attemptId}`)
+        .toSorted()
+
+    expect(fresh).toBeDefined()
+    expect(recovered).toBeDefined()
+    if (fresh === undefined || recovered === undefined) return
+    expect(recovered.heldPositions.map(({ taskId }) => taskId).toSorted()).toEqual(["B", "C"])
+    expect(correlations(recovered)).toEqual(correlations(fresh))
   })
 )
 

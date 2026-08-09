@@ -330,6 +330,14 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       appendTextElement(
         article,
         "p",
+        "Delivery-story coverage: the real production delivery runtime consumes one double-diamond graph in dependency waves A → B+C → D → E+F → G. The coordinator restarts while B and C both hold exact task-work positions; recovered frames retain those same responsibilities before the frontier continues.",
+        "delivery-story-scope"
+      )
+    }
+    if (row.catalogKey === "authored:deliveryFinalitySpine") {
+      appendTextElement(
+        article,
+        "p",
         "Delivery-story coverage: this is the real A-finality spine, not the complete 22-beat one-Run target. It executes A through production graph, frontier, restart, promotion, completion-claim, settlement, and reflection layers. docs/DELIVERY-STORY.md links the remaining beats to exact maintained slices or explicit implementation gaps; this view does not simulate them.",
         "delivery-story-scope"
       )

@@ -66,7 +66,7 @@ const scenarioTest = (name: string): DeliveryStoryAcceptanceTest => ({
   sourceFile: "packages/dalph/test/cassettes/scenario.test.ts"
 })
 
-const spineTest = scenarioTest("shows the linked delivery story evolving from five to seven production-observed tasks")
+const spineTest = scenarioTest("preserves the double-diamond middle wave across coordinator restart")
 
 const spine = (
   beatId: DeliveryStoryBeatId,
@@ -95,7 +95,7 @@ const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeat
 
 /**
  * Machine-readable coverage for the prose story. The long spine proves the
- * graph/restart/finality path; one maintained story proves one narrower beat;
+ * double-diamond graph/restart path; one maintained story proves one narrower beat;
  * unsupported combined behavior remains explicit instead of fabricated.
  */
 export const deliveryStoryManifest = {
@@ -104,7 +104,7 @@ export const deliveryStoryManifest = {
   beats: [
     missing(
       "DS-01",
-      "The maintained spine observes five tasks, but B through E are A-blocked rather than all eligible."
+      "The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks."
     ),
     missing("DS-02", "No maintained run admits A, B, and C together yet."),
     missing(
@@ -128,10 +128,7 @@ export const deliveryStoryManifest = {
       "No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held."
     ),
     spine("DS-08", spineTest),
-    missing(
-      "DS-09",
-      "The maintained spine recovers A's exact obligation, not held positions for A, C, and D plus retained B."
-    ),
+    missing("DS-09", "The maintained double diamond recovers held B and C, not held A, C, and D plus retained B."),
     missing("DS-10", "No maintained run closes C without success and then asks its exact executor to suspend."),
     missing("DS-11", "No maintained run releases closed C's position while retaining its reversible lifecycle wait."),
     missing(
@@ -157,7 +154,7 @@ export const deliveryStoryManifest = {
     ),
     missing(
       "DS-17",
-      "The spine settles A through completion finality, but does not first reconcile a stale head and rebuild its successor candidate."
+      "The separate A-finality spine settles A, but does not first reconcile a stale head and rebuild its successor candidate."
     ),
     missing(
       "DS-18",
@@ -166,7 +163,7 @@ export const deliveryStoryManifest = {
     missing("DS-19", "No maintained run combines the retained C attempt with a later capacity increase."),
     missing(
       "DS-20",
-      "The maintained spine observes F and G, but does not prove both are eligible and capacity-waiting behind B, C, and D."
+      "The maintained double diamond makes E and F eligible together, then G; it does not add F and G behind three running tasks."
     ),
     missing("DS-21", "No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology."),
     missing("DS-22", "Whole-run seven-task completion and normal Run termination are not implemented as one cassette.")
