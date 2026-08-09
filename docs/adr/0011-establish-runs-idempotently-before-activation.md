@@ -59,7 +59,8 @@ evaluation, complete-history reduction, startup discovery, admission
 reconstruction, and finality must change together. The accepted chronology is
 [`run-establishment-and-activation.md`](../scenarios/run-establishment-and-activation.md).
 
-The future Run-establishment model must distinguish absent, exact unfinished,
-mismatched or invalid, multiple unfinished, and terminated histories. It must
-compose with the existing planned-attempt executor model for ambiguous executor
-outcomes rather than inventing a second recovery protocol.
+The `runActivation` model distinguishes absent, exact unfinished, mismatched or
+invalid, multiple unfinished, and terminated histories. Its production-backed
+adapter composes the same unified bootstrap with the existing planned-attempt
+executor protocol for ambiguous executor outcomes rather than inventing a
+second recovery protocol.

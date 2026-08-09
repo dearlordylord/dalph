@@ -49,7 +49,7 @@ module runActivationTest {
       .expect(and {
         retainedPositionReconstructedReached,
         not(state.process.independentTaskAdmitted),
-        activationRestoresHeldAdmission,
+        everyDurableRetainedAttemptHasExactPosition,
         latestPolicyControlsAdmission,
       })
   }
@@ -62,10 +62,10 @@ module runActivationTest {
       .expect(and {
         contractedRetainedPositionReached,
         state.process.heldPosition == ExactTaskPosition(RETAINED_ATTEMPT_A),
-        state.process.otherHeldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_B),
+        state.process.otherHeldPosition == ExactTaskPosition(RETAINED_ATTEMPT_B),
         establishedFacts(state.process.establishedRun).initialPolicy.taskCapacity == Capacity2,
         establishedFacts(state.process.establishedRun).latestPolicy.taskCapacity == Capacity1,
-        activationRestoresHeldAdmission,
+        everyDurableRetainedAttemptHasExactPosition,
         latestPolicyControlsAdmission,
       })
   }
@@ -79,7 +79,7 @@ module runActivationTest {
       .then(settleRetainedAttempt)
       .expect(and {
         state.process.heldPosition == NoTaskPosition,
-        state.process.otherHeldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_B),
+        state.process.otherHeldPosition == ExactTaskPosition(RETAINED_ATTEMPT_B),
         not(state.process.independentTaskAdmitted),
         not(newIndependentAdmissionAllowed),
         establishedFacts(state.process.establishedRun).latestPolicy.taskCapacity == Capacity1,
@@ -97,9 +97,32 @@ module runActivationTest {
       .then(admitIndependentTask)
       .expect(and {
         independentAdmissionReached,
-        state.process.heldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_B),
+        state.process.heldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_C),
         state.trace.executorCalls == 2,
         independentAdmissionRequiresAvailablePosition,
+      })
+  }
+
+  run bothRetainedAttemptsSettleBeforeNewTaskAdmissionTest = {
+    init
+      .then(selectContractedExactExistingHistory)
+      .then(establishExistingHistory)
+      .then(activateEstablishedRun)
+      .then(readInitialTrackerGraph)
+      .then(settleRetainedAttempt)
+      .then(settleOtherRetainedAttempt)
+      .then(admitIndependentTask)
+      .expect(and {
+        state.process.heldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_C),
+        state.process.otherHeldPosition == NoTaskPosition,
+        unfinishedFacts(state.durable.history).retainedAttempt
+          == ExactRetainedAttempt(INDEPENDENT_ATTEMPT_C),
+        unfinishedFacts(state.durable.history).otherRetainedAttempt == NoRetainedAttempt,
+        state.trace.executorCalls == 3,
+        otherRetainedAttemptSettledReached,
+        everyDurableRetainedAttemptHasExactPosition,
+        independentAdmissionRequiresAvailablePosition,
+        latestPolicyControlsAdmission,
       })
   }
 
@@ -248,7 +271,7 @@ module runActivationTest {
         terminatedReached,
         state.trace.trackerCalls == 2,
         terminationRequiresLaterSettledObservation,
-        terminationRequiresEveryRetainedPositionSettled,
+        terminationRequiresNoRetainedResponsibilityOrPosition,
         terminatedRunIsFinal,
       })
   }

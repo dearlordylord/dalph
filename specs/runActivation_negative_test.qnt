@@ -119,6 +119,15 @@ module runActivationNegativeTest {
     state' = { ...state, process: { ...state.process, heldPosition: NoTaskPosition } },
   }
 
+  // Forbidden: settling A does not permit process-local reconstruction to
+  // forget B while B remains an unfinished durable responsibility.
+  action discardOtherReconstructedPosition: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.heldPosition == NoTaskPosition,
+    state.process.otherHeldPosition == ExactTaskPosition(RETAINED_ATTEMPT_B),
+    state' = { ...state, process: { ...state.process, otherHeldPosition: NoTaskPosition } },
+  }
+
   action admitIndependentTaskWhilePositionIsHeld: bool = all {
     state.process.heldPosition == ExactTaskPosition(RETAINED_ATTEMPT_A),
     state' = {
@@ -136,15 +145,44 @@ module runActivationNegativeTest {
       durable: {
         ...state.durable,
         history: OneUnfinishedHistory(
-          retainAttempt(unfinishedFacts(state.durable.history), INDEPENDENT_ATTEMPT_B)
+          retainAttempt(unfinishedFacts(state.durable.history), INDEPENDENT_ATTEMPT_C)
         ),
       },
       process: {
         ...state.process,
         establishedRun: ExactEstablishedRun(
-          retainAttempt(establishedFacts(state.process.establishedRun), INDEPENDENT_ATTEMPT_B)
+          retainAttempt(establishedFacts(state.process.establishedRun), INDEPENDENT_ATTEMPT_C)
         ),
-        heldPosition: ExactTaskPosition(INDEPENDENT_ATTEMPT_B),
+        heldPosition: ExactTaskPosition(INDEPENDENT_ATTEMPT_C),
+        independentTaskAdmitted: true,
+        liveActionOwner: true,
+      },
+    },
+  }
+
+  // Forbidden: B's durable responsibility still consumes capacity after its
+  // process-local position is lost. C cannot be admitted by trusting the
+  // incomplete position map.
+  action admitIndependentTaskAfterDroppingRetainedB: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.heldPosition == NoTaskPosition,
+    state.process.otherHeldPosition == NoTaskPosition,
+    unfinishedFacts(state.durable.history).otherRetainedAttempt
+      == ExactRetainedAttempt(RETAINED_ATTEMPT_B),
+    state' = {
+      ...state,
+      durable: {
+        ...state.durable,
+        history: OneUnfinishedHistory(
+          retainAttempt(unfinishedFacts(state.durable.history), INDEPENDENT_ATTEMPT_C)
+        ),
+      },
+      process: {
+        ...state.process,
+        establishedRun: ExactEstablishedRun(
+          retainAttempt(establishedFacts(state.process.establishedRun), INDEPENDENT_ATTEMPT_C)
+        ),
+        heldPosition: ExactTaskPosition(INDEPENDENT_ATTEMPT_C),
         independentTaskAdmitted: true,
         liveActionOwner: true,
       },
@@ -195,7 +233,30 @@ module runActivationNegativeTest {
 
   action terminateWithOtherRetainedPosition: bool = all {
     state.process.phase == ActivatingRun,
-    state.process.otherHeldPosition == ExactTaskPosition(INDEPENDENT_ATTEMPT_B),
+    state.process.otherHeldPosition == ExactTaskPosition(RETAINED_ATTEMPT_B),
+    state' = {
+      ...state,
+      durable: {
+        ...state.durable,
+        history: TerminatedHistory(unfinishedFacts(state.durable.history)),
+      },
+      process: { ...state.process, phase: ActivationReturned },
+      trace: {
+        ...state.trace,
+        terminationAppends: state.trace.terminationAppends + 1,
+        terminationHadLaterSettledObservation: true,
+      },
+    },
+  }
+
+  // Forbidden: clearing B's process-local position cannot settle B's durable
+  // responsibility or permit Run termination.
+  action terminateAfterDroppingRetainedB: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.heldPosition == NoTaskPosition,
+    state.process.otherHeldPosition == NoTaskPosition,
+    unfinishedFacts(state.durable.history).otherRetainedAttempt
+      == ExactRetainedAttempt(RETAINED_ATTEMPT_B),
     state' = {
       ...state,
       durable: {
@@ -282,7 +343,22 @@ module runActivationNegativeTest {
   run lostReconstructedPositionIsDetectedTest = {
     init.then(selectExactExistingHistory).then(establishExistingHistory)
       .then(activateEstablishedRun).then(discardReconstructedPosition)
-      .expect(not(activationRestoresHeldAdmission))
+      .expect(not(everyDurableRetainedAttemptHasExactPosition))
+  }
+
+  run lostOtherReconstructedPositionIsDetectedTest = {
+    init.then(selectContractedExactExistingHistory).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(settleRetainedAttempt)
+      .then(discardOtherReconstructedPosition)
+      .expect(not(everyDurableRetainedAttemptHasExactPosition))
+  }
+
+  run admittingCAfterDroppingRetainedBIsDetectedTest = {
+    init.then(selectContractedExactExistingHistory).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(settleRetainedAttempt)
+      .then(discardOtherReconstructedPosition)
+      .then(admitIndependentTaskAfterDroppingRetainedB)
+      .expect(not(everyDurableRetainedAttemptHasExactPosition))
   }
 
   run admissionBeforePositionReleaseIsDetectedTest = {
@@ -324,7 +400,15 @@ module runActivationNegativeTest {
   run terminationWithOtherRetainedPositionIsDetectedTest = {
     init.then(selectContractedExactExistingHistory).then(establishExistingHistory)
       .then(activateEstablishedRun).then(terminateWithOtherRetainedPosition)
-      .expect(not(terminationRequiresEveryRetainedPositionSettled))
+      .expect(not(terminationRequiresNoRetainedResponsibilityOrPosition))
+  }
+
+  run terminatingAfterDroppingRetainedBIsDetectedTest = {
+    init.then(selectContractedExactExistingHistory).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(settleRetainedAttempt)
+      .then(discardOtherReconstructedPosition)
+      .then(terminateAfterDroppingRetainedB)
+      .expect(not(terminationRequiresNoRetainedResponsibilityOrPosition))
   }
 
   run invalidHistoryActivationIsDetectedTest = {
