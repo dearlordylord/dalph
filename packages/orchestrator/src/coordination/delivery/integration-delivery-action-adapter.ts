@@ -9,7 +9,7 @@ import {
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { runIntegrationCandidateConstruction } from "../run/integration-candidate-runtime.js"
 import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
-import { deliveryActionCompleted } from "./delivery-action-adapter-common.js"
+import { deliveryActionCompleted, deliveryActionDeferred } from "./delivery-action-adapter-common.js"
 import { EvidenceStore } from "../../workflow/protocols/target-verification/evidence-store.js"
 import { TargetVerificationBoundary } from "../../workflow/protocols/target-verification/events.js"
 import { runTargetVerification } from "../../workflow/protocols/target-verification/protocol.js"
@@ -21,6 +21,12 @@ import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotio
 import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import type { IdentityFreeWorkflowTransition } from "./delivery-action-proposal.js"
+import { CompletionClaimBoundary } from "../../workflow/protocols/integration-finality/events.js"
+import {
+  runCompletionClaimDeletionProtocol,
+  runCompletionClaimReplacementProtocol
+} from "../../workflow/protocols/integration-finality/protocol.js"
+import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -33,6 +39,76 @@ type ContinueIntegrationCandidate = Extract<
 >
 type RunTargetVerification = Extract<IntegrationTransition, { readonly _tag: "RunTargetVerification" }>
 type RunTargetPromotion = Extract<IntegrationTransition, { readonly _tag: "RunTargetPromotion" }>
+type ReplacePromotedTaskClaim = Extract<IntegrationTransition, { readonly _tag: "ReplacePromotedTaskClaim" }>
+type DeleteCompletedTaskCompletionClaim = Extract<
+  IntegrationTransition,
+  { readonly _tag: "DeleteCompletedTaskCompletionClaim" }
+>
+type AdvancedIntegrationTransition = Exclude<
+  IntegrationTransition,
+  {
+    readonly _tag:
+      | "QueueAcceptedResultIntegrationResponsibility"
+      | "StartQueuedIntegration"
+      | "AcquireStartedIntegrationTarget"
+      | "ReleaseStartedIntegrationTarget"
+  }
+>
+
+const completionClaimBoundary = Effect.fn("DeliveryAction.completionClaimBoundary")(function* () {
+  const boundary = Context.getOption(yield* Effect.context<never>(), CompletionClaimBoundary)
+  return Option.isSome(boundary) ? boundary.value : yield* new IntegrationFinalityRuntimeUnavailable()
+})
+
+const replacePromotedTaskClaim = Effect.fn("DeliveryAction.replacePromotedTaskClaim")(function* (
+  action: IdentityFreeAction,
+  transition: ReplacePromotedTaskClaim
+) {
+  return yield* runCompletionClaimReplacementProtocol(yield* completionClaimBoundary(), transition.request).pipe(
+    Effect.as(deliveryActionCompleted(action.proposal.id)),
+    Effect.catchTags({
+      /* v8 ignore next -- @preserve The bounded protocol tests own non-convergence; the runtime test owns deferred-result admission. */
+      "IntegrationFinality.CompletionClaimDidNotConverge": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimNonConvergent")),
+      "IntegrationFinality.CompletionClaimOwnershipConflict": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimConflict")),
+      "IntegrationFinality.CompletionClaimReadFailure": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimReadUnavailable")),
+      /* v8 ignore next -- @preserve The protocol tests own definite rejection; this adapter only translates its tag. */
+      "IntegrationFinality.CompletionClaimReplacementFailure": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimRejected"))
+    })
+  )
+})
+
+const deleteCompletedTaskCompletionClaim = Effect.fn("DeliveryAction.deleteCompletedTaskCompletionClaim")(function* (
+  action: IdentityFreeAction,
+  transition: DeleteCompletedTaskCompletionClaim
+) {
+  return yield* runCompletionClaimDeletionProtocol(
+    yield* completionClaimBoundary(),
+    transition.request,
+    transition.replacementOperationId
+  ).pipe(
+    Effect.as(deliveryActionCompleted(action.proposal.id)),
+    Effect.catchTags({
+      /* v8 ignore next -- @preserve The protocol tests own definite deletion rejection; this adapter only translates its tag. */
+      "IntegrationFinality.CompletionClaimDeletionFailure": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimRejected")),
+      /* v8 ignore next -- @preserve The bounded protocol tests own non-convergence; the runtime test owns deferred-result admission. */
+      "IntegrationFinality.CompletionClaimDidNotConverge": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimNonConvergent")),
+      /* v8 ignore next -- @preserve Foreign deletion claims are protocol-tested; the replacement route proves adapter translation. */
+      "IntegrationFinality.CompletionClaimOwnershipConflict": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimConflict")),
+      "IntegrationFinality.CompletionClaimReadFailure": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimReadUnavailable")),
+      /* v8 ignore next -- @preserve Fresh-success guarding is frontier/protocol tested before this tag translation. */
+      "IntegrationFinality.FreshTrackerSuccessRequired": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "FreshTrackerSuccessRequired"))
+    })
+  )
+})
 
 const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(function* (
   action: IdentityFreeAction,
@@ -100,6 +176,20 @@ const continueIntegrationCandidate = Effect.fn("DeliveryAction.continueIntegrati
   return { _tag: "IntegrationCandidateAdvanced" as const, proposalId: action.proposal.id, resourceDisposition, state }
 })
 
+const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvancedIntegration")(function* (
+  action: IdentityFreeAction,
+  transition: AdvancedIntegrationTransition,
+  lease: DeliveryActionExecutionLease
+) {
+  if (transition._tag === "RunTargetVerification") return yield* executeTargetVerification(action, transition, lease)
+  if (transition._tag === "RunTargetPromotion") return yield* executeTargetPromotion(action, transition, lease)
+  if (transition._tag === "ReplacePromotedTaskClaim") return yield* replacePromotedTaskClaim(action, transition)
+  if (transition._tag === "DeleteCompletedTaskCompletionClaim") {
+    return yield* deleteCompletedTaskCompletionClaim(action, transition)
+  }
+  return yield* continueIntegrationCandidate(action, transition, lease)
+})
+
 export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegration")(function* (
   action: IdentityFreeAction,
   transition: IntegrationTransition,
@@ -126,7 +216,5 @@ export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegra
     yield* lease.integrationTargets.release(transition.responsibility)
     return deliveryActionCompleted(action.proposal.id)
   }
-  if (transition._tag === "RunTargetVerification") return yield* executeTargetVerification(action, transition, lease)
-  if (transition._tag === "RunTargetPromotion") return yield* executeTargetPromotion(action, transition, lease)
-  return yield* continueIntegrationCandidate(action, transition, lease)
+  return yield* executeAdvancedIntegrationAction(action, transition, lease)
 })

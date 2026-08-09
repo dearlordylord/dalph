@@ -51,7 +51,10 @@ import {
   TargetPromotionStaleObservation,
   TargetPromotionNonConvergenceObservation,
   TargetPromotionAttemptLimit,
-  TargetPromotionTerminalBasis
+  TargetPromotionTerminalBasis,
+  CompletionTaskClaim,
+  CompletionClaimRequestOrdinal,
+  FreshCompletedTaskObservation
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -170,6 +173,44 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     lastObservation: TargetPromotionNonConvergenceObservation,
     ...nonActionOccurrence
   },
+  CompletionClaimReplacementIntended: {
+    claim: CompletionTaskClaim,
+    ...initiatedByCoordinator,
+    operationId: OperationId
+  },
+  CompletionClaimReplacementAttemptIntended: {
+    attemptOrdinal: CompletionClaimRequestOrdinal,
+    claim: CompletionTaskClaim,
+    ...initiatedByCoordinator,
+    operationId: OperationId
+  },
+  CompletionClaimReplaced: { claim: CompletionTaskClaim, ...nonActionOccurrence, operationId: OperationId },
+  CompletionClaimDeletionIntended: {
+    claim: CompletionTaskClaim,
+    ...initiatedByCoordinator,
+    operationId: OperationId,
+    successObservation: FreshCompletedTaskObservation
+  },
+  CompletionClaimDeletionAttemptIntended: {
+    attemptOrdinal: CompletionClaimRequestOrdinal,
+    claim: CompletionTaskClaim,
+    ...initiatedByCoordinator,
+    operationId: OperationId,
+    successObservation: FreshCompletedTaskObservation
+  },
+  CompletionClaimDeleted: {
+    claim: CompletionTaskClaim,
+    ...nonActionOccurrence,
+    operationId: OperationId,
+    successObservation: FreshCompletedTaskObservation
+  },
+  IntegrationFinalitySettled: {
+    claim: CompletionTaskClaim,
+    ...nonActionOccurrence,
+    deletionOperationId: OperationId,
+    replacementOperationId: OperationId,
+    successObservation: FreshCompletedTaskObservation
+  },
   PlannedAttemptExecutorWorkReported: {
     ...nonActionOccurrence,
     ordinal: PlannedAttemptExecutorReportOrdinal,
@@ -234,7 +275,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Incrementing it does not promise
  * backward compatibility until the project owner removes this comment.
  */
-const currentRecordedCassetteVersion = 7
+const currentRecordedCassetteVersion = 8
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

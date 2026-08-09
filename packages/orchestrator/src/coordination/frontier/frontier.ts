@@ -35,6 +35,11 @@ import type {
   TargetVerificationPlan
 } from "../../workflow/protocols/target-verification/events.js"
 import type { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
+import type {
+  CompletionTaskClaim,
+  CompletionClaimDeletionRequest,
+  CompletionClaimReplacementRequest
+} from "../../workflow/protocols/integration-finality/events.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
@@ -109,6 +114,15 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly responsibility: StartedIntegrationResponsibility
     readonly verification: Extract<TargetVerificationState, { readonly _tag: "VerificationPassed" }>
   }
+  ReplacePromotedTaskClaim: {
+    readonly request: CompletionClaimReplacementRequest
+    readonly responsibility: StartedIntegrationResponsibility
+  }
+  DeleteCompletedTaskCompletionClaim: {
+    readonly replacementOperationId: OperationId
+    readonly request: CompletionClaimDeletionRequest
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   ReleaseStartedIntegrationTarget: { readonly responsibility: StartedIntegrationResponsibility }
 }>
 
@@ -144,6 +158,8 @@ const transitionTrackerGraphRequirements = {
   ContinueStartedIntegrationCandidate: "CurrentTrackerGraphRequired",
   RunTargetVerification: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",
+  ReplacePromotedTaskClaim: "CurrentTrackerGraphRequired",
+  DeleteCompletedTaskCompletionClaim: "CurrentTrackerGraphRequired",
   ObservePlannedAttemptContinuationClaim: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationGraph: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationSpecification: "AcceptedHistorySufficient",
@@ -204,6 +220,21 @@ export type FrontierExplanation = Data.TaggedEnum<{
   TargetPromotionConfigurationWait: {
     readonly plannedAttempt: PlannedTaskAttempt
     readonly wakeCondition: "TargetPromotionRuntimeConfigured"
+  }
+  IntegrationFinalityConfigurationWait: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly wakeCondition: "CompletionClaimBoundaryConfigured"
+  }
+  IntegrationFinalityTrackerSuccessWait: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly wakeCondition: "TaskTrackerFactsObserved"
+  }
+  IntegrationFinalityNonConvergence: {
+    readonly claim: CompletionTaskClaim
+    readonly operationId: OperationId
+    readonly phase: "Replacement" | "Deletion"
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly wakeCondition: "ProcessRestartedOrAcceptedFactsChanged"
   }
   PlannedAttemptExecutorWorkSafelySuspended: {
     readonly correlation: PlannedAttemptExecutorCorrelation

@@ -20,6 +20,7 @@ import type {
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import type { TargetPromotionState } from "../../workflow/protocols/target-promotion/protocol.js"
+import type { IntegrationFinalitySettledEvent } from "../../workflow/protocols/integration-finality/events.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
 import { RunFinalityDecision, type RunFinalityDecision as RunFinalityDecisionType } from "../frontier/run-finality.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
@@ -204,6 +205,7 @@ export type TicketDeliveryStanding =
       readonly _tag: "TargetPromotionNonConvergent"
       readonly state: Extract<TargetPromotionState, { readonly _tag: "PromotionNonConvergent" }>
     }
+  | { readonly _tag: "IntegrationFinalitySettled"; readonly settlement: IntegrationFinalitySettledEvent }
   | { readonly _tag: "IntegrationNonConvergencePreserved"; readonly state: IntegrationCandidateConstructionState }
   | { readonly _tag: "IntegrationWait"; readonly wait: IntegrationDeliveryWait }
 
@@ -219,6 +221,7 @@ export type ExactTicketDeliveryEvidence =
   | { readonly _tag: "AcceptedAwaitingIntegration"; readonly accepted: UnqueuedAcceptedResult }
   | { readonly _tag: "QueuedIntegration"; readonly responsibility: QueuedIntegrationResponsibility }
   | { readonly _tag: "StartedIntegration"; readonly responsibility: StartedIntegrationResponsibility }
+  | { readonly _tag: "IntegrationFinalitySettlement"; readonly settlement: IntegrationFinalitySettledEvent }
   | {
       readonly _tag: "IntegrationCandidate"
       readonly responsibility: StartedIntegrationResponsibility
@@ -273,9 +276,19 @@ export interface DeliverySettlement {
   readonly taskId: TaskId
 }
 
+/** Constructs one task-scoped terminal delivery fact from exact accepted settlement evidence. */
+export const makeDeliverySettlement = (fields: {
+  readonly attemptId: AttemptId
+  readonly taskId: TaskId
+}): DeliverySettlement => ({
+  [DeliverySettlementTypeId]: DeliverySettlementTypeId,
+  _tag: "DeliverySettlement",
+  ...fields
+})
+
 const DeliverySettlementsTypeId: unique symbol = Symbol("DeliverySettlements")
 
-/** Established settlements only; current production honestly supplies none. */
+/** Established task-scoped settlements derived from accepted terminal evidence. */
 export interface DeliverySettlements {
   readonly [DeliverySettlementsTypeId]: typeof DeliverySettlementsTypeId
   readonly _tag: "DeliverySettlements"

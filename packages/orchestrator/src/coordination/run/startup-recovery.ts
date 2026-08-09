@@ -37,6 +37,10 @@ import {
   TargetPromotionRuntime,
   type TargetPromotionRuntimeInput
 } from "../../workflow/protocols/target-promotion/runtime.js"
+import {
+  CompletionClaimBoundary,
+  type CompletionClaimBoundaryService
+} from "../../workflow/protocols/integration-finality/events.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -92,6 +96,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   candidateContinuationLimit: CandidateContinuationLimit | undefined,
   targetVerification: TargetVerificationRuntimeInput | undefined,
   targetPromotion: TargetPromotionRuntimeInput | undefined,
+  integrationFinality: CompletionClaimBoundaryService | undefined,
   startup: "Fresh" | "Recovered"
 ) {
   yield* CoordinatorOwnership
@@ -119,6 +124,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
     integrationResources,
     targetVerification,
     targetPromotion,
+    integrationFinality !== undefined,
     startup
   )
   let context = Context.empty().pipe(
@@ -141,6 +147,10 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   if (targetPromotion !== undefined) {
     context = Context.add(context, TargetPromotionRuntime, TargetPromotionRuntime.of(targetPromotion))
   }
+  /* v8 ignore next -- @preserve Production supplies this service and planning flag from one input; the delivery-action route test exercises the configured boundary. */
+  if (integrationFinality !== undefined) {
+    context = Context.add(context, CompletionClaimBoundary, CompletionClaimBoundary.of(integrationFinality))
+  }
   /* v8 ignore next -- @preserve Production startup installs its configured integration target; targetless composition is covered at frontier configuration wait. */
   return integrationTarget === undefined ? context : Context.add(context, IntegrationTargetSelection, integrationTarget)
 })
@@ -153,6 +163,7 @@ const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(funct
   integrationResources: ReturnType<typeof DeliveryRuntimeResources.of>["integrationTargets"],
   targetVerification: TargetVerificationRuntimeInput | undefined,
   targetPromotion: TargetPromotionRuntimeInput | undefined,
+  integrationFinalityConfigured: boolean,
   startup: "Fresh" | "Recovered"
 ) {
   return startup === "Fresh"
@@ -163,7 +174,8 @@ const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(funct
         candidateContinuationLimit,
         integrationResources,
         targetVerification,
-        targetPromotion
+        targetPromotion,
+        integrationFinalityConfigured
       )
     : yield* makeRunRecoveryProjection(
         runId,
@@ -172,7 +184,8 @@ const makeRecoveryProjection = Effect.fn("StartupRecovery.makeProjection")(funct
         candidateContinuationLimit,
         integrationResources,
         targetVerification,
-        targetPromotion
+        targetPromotion,
+        integrationFinalityConfigured
       )
 })
 
@@ -184,7 +197,8 @@ export const validatedStartupRecoveryLayer = (
   candidateCorrectionLimit?: CandidateCorrectionLimit,
   candidateContinuationLimit?: CandidateContinuationLimit,
   targetVerification?: TargetVerificationRuntimeInput,
-  targetPromotion?: TargetPromotionRuntimeInput
+  targetPromotion?: TargetPromotionRuntimeInput,
+  integrationFinality?: CompletionClaimBoundaryService
 ) =>
   Layer.effectContext(
     makeStartupRecoveryContext(
@@ -194,6 +208,7 @@ export const validatedStartupRecoveryLayer = (
       candidateContinuationLimit,
       targetVerification,
       targetPromotion,
+      integrationFinality,
       startup
     )
   )

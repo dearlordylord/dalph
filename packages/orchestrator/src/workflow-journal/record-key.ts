@@ -15,6 +15,7 @@ import type {
   TargetPromotionAttemptOrdinal,
   TargetPromotionRequestId
 } from "../workflow/protocols/target-promotion/events.js"
+import type { CompletionClaimRequestOrdinal } from "../workflow/protocols/integration-finality/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -137,3 +138,39 @@ export const targetPromotionStaleRecordKey = (requestId: TargetPromotionRequestI
 /** Stable journal key for the accepted three-attempt terminal disposition. */
 export const targetPromotionNonConvergenceRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>
   JournalRecordKey.make(`${targetPromotionRecordKeyPrefix(requestId)}:nonconvergence`)
+
+const completionClaimRecordKeyPrefix = (operationId: OperationId): string => `completion-claim:${operationId}`
+
+/** Stable journal key for intent to replace one exact active claim. */
+export const completionClaimReplacementIntentRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${completionClaimRecordKeyPrefix(operationId)}:replacement-intent`)
+
+/** Stable journal key for one numbered completion-claim replacement request. */
+export const completionClaimReplacementAttemptIntentRecordKey = (
+  operationId: OperationId,
+  attemptOrdinal: CompletionClaimRequestOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${completionClaimRecordKeyPrefix(operationId)}:replacement-attempt:${attemptOrdinal}`)
+
+/** Stable journal key for the one exact completion-claim replacement result. */
+export const completionClaimReplacedRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${completionClaimRecordKeyPrefix(operationId)}:replaced`)
+
+/** Stable journal key for intent to delete one exact completion claim. */
+export const completionClaimDeletionIntentRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${completionClaimRecordKeyPrefix(operationId)}:deletion-intent`)
+
+/** Stable journal key for one numbered completion-claim deletion request. */
+export const completionClaimDeletionAttemptIntentRecordKey = (
+  operationId: OperationId,
+  attemptOrdinal: CompletionClaimRequestOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${completionClaimRecordKeyPrefix(operationId)}:deletion-attempt:${attemptOrdinal}`)
+
+/** Stable journal key for the one exact completion-claim deletion result. */
+export const completionClaimDeletedRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${completionClaimRecordKeyPrefix(operationId)}:deleted`)
+
+/** Stable journal key for one task-scoped integration finality settlement. */
+export const integrationFinalitySettledRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`integration-finality:${requestId}:settled`)

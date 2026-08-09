@@ -29,6 +29,11 @@ import type { runTargetVerification } from "../../workflow/protocols/target-veri
 import type { TargetVerificationRuntimeUnavailable } from "./target-verification-boundary.js"
 import type { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
 import type { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
+import type {
+  runCompletionClaimDeletionProtocol,
+  runCompletionClaimReplacementProtocol
+} from "../../workflow/protocols/integration-finality/protocol.js"
+import type { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
@@ -79,6 +84,16 @@ export interface DeliveryActionExecutionLease {
 export type DeliveryActionResult =
   | { readonly _tag: "ActionCompleted"; readonly proposalId: DeliveryProposalId }
   | {
+      readonly _tag: "ActionDeferred"
+      readonly proposalId: DeliveryProposalId
+      readonly reason:
+        | "CompletionClaimConflict"
+        | "CompletionClaimNonConvergent"
+        | "CompletionClaimReadUnavailable"
+        | "CompletionClaimRejected"
+        | "FreshTrackerSuccessRequired"
+    }
+  | {
       readonly _tag: "ExecutorReportPublished"
       readonly plannedAttempt: PlannedTaskAttempt
       readonly proposalId: DeliveryProposalId
@@ -115,10 +130,13 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof runTaskClaimReacquisition>
   | EffectFunctionFailure<typeof runTargetVerification>
   | EffectFunctionFailure<typeof runTargetPromotion>
+  | EffectFunctionFailure<typeof runCompletionClaimReplacementProtocol>
+  | EffectFunctionFailure<typeof runCompletionClaimDeletionProtocol>
   | EffectFunctionFailure<typeof startQueuedIntegration>
   | IntegrationCandidateBoundaryUnavailable
   | TargetVerificationRuntimeUnavailable
   | TargetPromotionRuntimeUnavailable
+  | IntegrationFinalityRuntimeUnavailable
   | PlannedAttemptExecutorContinuationLimitReached
   | PlannedAttemptExecutorCorrelationMismatch
   | DeliveryRelationSourceError

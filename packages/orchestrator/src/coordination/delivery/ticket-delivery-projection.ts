@@ -24,7 +24,10 @@ import {
   type TicketDeliveries,
   type TicketDelivery,
   type TicketDeliveryPlacement,
-  type TicketDeliveryStanding
+  type TicketDeliveryStanding,
+  makeDeliverySettlement,
+  makeDeliverySettlements,
+  type DeliverySettlements
 } from "./relations.js"
 
 const compareTaskIds = (left: { readonly taskId: TaskId }, right: { readonly taskId: TaskId }): number =>
@@ -106,6 +109,7 @@ const evidenceTaskId = (evidence: TicketDeliveryEvidence): TaskId =>
     AcceptedAwaitingIntegration: ({ accepted }) => accepted.plannedAttempt.taskId,
     IntegrationCandidate: ({ responsibility }) => responsibility.plannedAttempt.taskId,
     IntegrationWait: ({ wait }) => integrationWaitTaskId(wait),
+    IntegrationFinalitySettlement: ({ settlement }) => settlement.claim.plannedAttempt.taskId,
     QueuedIntegration: ({ responsibility }) => responsibility.plannedAttempt.taskId,
     ResponsibilityFacts: ({ facts }) => responsibilityTaskId(facts),
     StartedIntegration: ({ responsibility }) => responsibility.plannedAttempt.taskId,
@@ -131,6 +135,8 @@ const evidenceIdentity = (evidence: TicketDeliveryEvidence): string =>
     IntegrationCandidate: ({ responsibility }) =>
       JSON.stringify(["candidate", exactAttemptIdentity(responsibility.plannedAttempt), responsibility.startedAt]),
     IntegrationWait: ({ wait }) => JSON.stringify(["integration-wait", integrationWaitTaskId(wait), wait._tag]),
+    IntegrationFinalitySettlement: ({ settlement }) =>
+      JSON.stringify(["integration-finality", settlement.claim.promotionCorrelation.requestId]),
     QueuedIntegration: ({ responsibility }) =>
       JSON.stringify(["integration", exactAttemptIdentity(responsibility.plannedAttempt)]),
     ResponsibilityFacts: ({ facts }) => `workflow:${workflowResponsibilityKey(facts.responsibility)}`,
@@ -171,6 +177,7 @@ const obligationFrom = (evidence: TicketDeliveryEvidence): ReadonlyArray<ExactWo
     AcceptedAwaitingIntegration: ({ accepted }) => [{ _tag: "AcceptedAwaitingIntegration" as const, accepted }],
     IntegrationCandidate: () => [],
     IntegrationWait: () => [],
+    IntegrationFinalitySettlement: () => [],
     QueuedIntegration: ({ responsibility }) => [{ _tag: "QueuedIntegration" as const, responsibility }],
     ResponsibilityFacts: ({ facts }) => responsibilityObligationFrom(facts),
     StartedIntegration: ({ responsibility }) => [{ _tag: "StartedIntegration" as const, responsibility }],
@@ -232,6 +239,7 @@ const standingFrom = (
     AcceptedAwaitingIntegration: ({ accepted }) => [{ _tag: "AcceptedAwaitingIntegrationQueue" as const, accepted }],
     IntegrationCandidate: ({ state }) => candidateStandingFrom(state),
     IntegrationWait: ({ wait }) => [{ _tag: "IntegrationWait" as const, wait }],
+    IntegrationFinalitySettlement: ({ settlement }) => [{ _tag: "IntegrationFinalitySettled" as const, settlement }],
     QueuedIntegration: ({ responsibility }) => [{ _tag: "QueuedIntegration" as const, responsibility }],
     ResponsibilityFacts: ({ facts }) => responsibilityStandingFrom(facts, placement),
     StartedIntegration: ({ responsibility }) => [{ _tag: "StartedIntegration" as const, responsibility }],
@@ -297,3 +305,21 @@ export const ticketDeliveriesOf = (
   })
   return { _tag: "TicketDeliveries", deliveries, source: tickets }
 }
+
+/** Establishes task-scoped settlements only from exact finality journal evidence. */
+export const deliverySettlementsOf = (source: TicketDeliveries): DeliverySettlements =>
+  makeDeliverySettlements(
+    source,
+    source.deliveries.flatMap((delivery) =>
+      delivery.evidence.flatMap((evidence) =>
+        evidence._tag === "IntegrationFinalitySettlement"
+          ? [
+              makeDeliverySettlement({
+                attemptId: evidence.settlement.claim.plannedAttempt.attemptId,
+                taskId: evidence.settlement.claim.plannedAttempt.taskId
+              })
+            ]
+          : []
+      )
+    )
+  )

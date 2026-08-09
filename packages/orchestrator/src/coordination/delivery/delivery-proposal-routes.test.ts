@@ -24,10 +24,11 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
-import { InRunJournal } from "../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import {
   makeTargetLineageObservationOperation,
   makeTaskClaimAcquisitionOperation,
@@ -66,6 +67,15 @@ import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.j
 import { executePlannedAttemptTransition } from "./planned-attempt-delivery-action-adapter.js"
 import { liveDeliveryActionExecutorLayer, makeLiveDeliveryActionExecutor } from "./live-delivery-action-executor.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import {
+  completionClaimDeletionRequestFor,
+  CompletionClaimBoundary,
+  CompletionClaimReadFailure,
+  completionClaimReplacementOperationIdFor,
+  completionClaimReplacementRequestFor
+} from "../../workflow/protocols/integration-finality/events.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 
 const runId = RunId.make("route-matrix-run")
 const taskId = TaskId.make("A")
@@ -152,6 +162,18 @@ const inertLease: DeliveryActionExecutionLease = {
   recordIntent: () => Effect.void,
   releasePlannedAttemptPosition: () => Effect.void
 }
+
+const appendableJournalFor = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
+  InRunJournal.of({
+    append: (runId, key, event) =>
+      Ref.modify(records, (current) => {
+        const existing = current.find((candidate) => candidate.key === key)
+        if (existing !== undefined) return [Effect.succeed(existing), current] as const
+        const appended: JournalRecord = { event, key, position: JournalPosition.make(current.length + 1), runId }
+        return [Effect.succeed(appended), [...current, appended]] as const
+      }).pipe(Effect.flatten),
+    read: () => Ref.get(records)
+  })
 
 describe("delivery proposal route matrix", () => {
   it("reuses accepted identity for every operation-reconciliation route", () => {
@@ -409,6 +431,28 @@ describe("delivery proposal route matrix", () => {
         owner: "DeliverySettlement",
         position: null,
         transition: RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility: started })
+      },
+      {
+        access: "NoIntegrationTargetResource",
+        owner: "DeliverySettlement",
+        position: null,
+        transition: RunnableFrontierTransition.ReplacePromotedTaskClaim({
+          request: completionClaimReplacementRequestFor(integrationFinalityFixture.claim),
+          responsibility: started
+        })
+      },
+      {
+        access: "NoIntegrationTargetResource",
+        owner: "DeliverySettlement",
+        position: null,
+        transition: RunnableFrontierTransition.DeleteCompletedTaskCompletionClaim({
+          replacementOperationId: completionClaimReplacementOperationIdFor(integrationFinalityFixture.claim),
+          request: completionClaimDeletionRequestFor(
+            integrationFinalityFixture.claim,
+            integrationFinalityFixture.successObservation
+          ),
+          responsibility: started
+        })
       }
     ] as const
 
@@ -518,6 +562,130 @@ describe("delivery proposal route matrix", () => {
         Effect.flip
       )
       expect(missingGit).toEqual(new IntegrationCandidateBoundaryUnavailable({ boundary: "Git" }))
+    })
+  )
+
+  effectIt.effect("executes completion-claim replacement and deletion through the configured boundary", () =>
+    Effect.gen(function* () {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        {
+          event: integrationFinalityFixture.promotionSuccess,
+          key: JournalRecordKey.make("integration-finality-action:promotion"),
+          position: JournalPosition.make(1),
+          runId: integrationFinalityFixture.runId
+        }
+      ])
+      const journal = appendableJournalFor(records)
+      let currentClaim: typeof integrationFinalityFixture.activeClaim | typeof integrationFinalityFixture.claim =
+        integrationFinalityFixture.activeClaim
+      const boundary = CompletionClaimBoundary.of({
+        deleteTaskClaim: () => Effect.sync(() => undefined),
+        readTaskClaim: () => Effect.succeed(currentClaim),
+        replaceTaskClaim: (request) =>
+          Effect.sync(() => {
+            currentClaim = request.claim
+            return request.claim
+          })
+      })
+      const replacement = RunnableFrontierTransition.ReplacePromotedTaskClaim({
+        request: completionClaimReplacementRequestFor(integrationFinalityFixture.claim),
+        responsibility: started
+      })
+      const replacementProposal = proposalsFor(replacement).proposals[0]
+      if (replacementProposal === undefined || !isIdentityFreeProposal(replacementProposal)) {
+        return yield* Effect.die("missing completion-claim replacement proposal")
+      }
+      const replacementAction = { _tag: "IdentityFreeAction" as const, proposal: replacementProposal }
+      expect(
+        yield* executeIntegrationAction(replacementAction, replacement, inertLease).pipe(
+          Effect.provideService(InRunJournal, journal),
+          Effect.flip
+        )
+      ).toEqual(new IntegrationFinalityRuntimeUnavailable())
+      expect(
+        yield* executeIntegrationAction(replacementAction, replacement, inertLease).pipe(
+          Effect.provideService(CompletionClaimBoundary, boundary),
+          Effect.provideService(InRunJournal, journal)
+        )
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: replacementProposal.id })
+
+      const graphPosition = JournalPosition.make((yield* Ref.get(records)).length + 1)
+      yield* journal.append(
+        integrationFinalityFixture.runId,
+        outcomeRecordKey(integrationFinalityFixture.graphOperation.operationId),
+        integrationFinalityFixture.graphRecordEvent
+      )
+      const successObservation = { ...integrationFinalityFixture.successObservation, observedAt: graphPosition }
+      const deletion = RunnableFrontierTransition.DeleteCompletedTaskCompletionClaim({
+        replacementOperationId: completionClaimReplacementOperationIdFor(integrationFinalityFixture.claim),
+        request: completionClaimDeletionRequestFor(integrationFinalityFixture.claim, successObservation),
+        responsibility: started
+      })
+      const deletionProposal = proposalsFor(deletion).proposals[0]
+      if (deletionProposal === undefined || !isIdentityFreeProposal(deletionProposal)) {
+        return yield* Effect.die("missing completion-claim deletion proposal")
+      }
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: deletionProposal },
+          deletion,
+          inertLease
+        ).pipe(Effect.provideService(CompletionClaimBoundary, boundary), Effect.provideService(InRunJournal, journal))
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: deletionProposal.id })
+      expect((yield* Ref.get(records)).at(-1)?.event._tag).toBe("IntegrationFinalitySettled")
+
+      const waitingRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        {
+          event: integrationFinalityFixture.promotionSuccess,
+          key: JournalRecordKey.make("integration-finality-action:foreign-promotion"),
+          position: JournalPosition.make(1),
+          runId: integrationFinalityFixture.runId
+        }
+      ])
+      const waitingJournal = appendableJournalFor(waitingRecords)
+      const foreignBoundary = CompletionClaimBoundary.of({
+        deleteTaskClaim: () => Effect.die("foreign wait must not delete"),
+        readTaskClaim: () =>
+          Effect.succeed({
+            ...integrationFinalityFixture.activeClaim,
+            operationId: OperationId.make("foreign-finality-action-claim")
+          }),
+        replaceTaskClaim: () => Effect.die("foreign wait must not replace")
+      })
+      expect(
+        yield* executeIntegrationAction(replacementAction, replacement, inertLease).pipe(
+          Effect.provideService(CompletionClaimBoundary, foreignBoundary),
+          Effect.provideService(InRunJournal, waitingJournal)
+        )
+      ).toMatchObject({ _tag: "ActionDeferred", reason: "CompletionClaimConflict" })
+
+      const unreadableBoundary = CompletionClaimBoundary.of({
+        deleteTaskClaim: () => Effect.die("unreadable claim must not be deleted"),
+        readTaskClaim: (taskId) =>
+          Effect.fail(new CompletionClaimReadFailure({ detail: "tracker claim is unreadable", taskId })),
+        replaceTaskClaim: () => Effect.die("unreadable claim must not be replaced")
+      })
+      expect(
+        yield* executeIntegrationAction(replacementAction, replacement, inertLease).pipe(
+          Effect.provideService(CompletionClaimBoundary, unreadableBoundary),
+          Effect.provideService(InRunJournal, waitingJournal)
+        )
+      ).toMatchObject({ _tag: "ActionDeferred", reason: "CompletionClaimReadUnavailable" })
+
+      const deletionPrefix = (yield* Ref.get(records)).filter(({ event }) =>
+        ["TargetPromotionObservedSuccess", "CompletionClaimReplaced", "TaskTrackerFactsObserved"].includes(event._tag)
+      )
+      const deletionWaitingRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(deletionPrefix)
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: deletionProposal },
+          deletion,
+          inertLease
+        ).pipe(
+          Effect.provideService(CompletionClaimBoundary, unreadableBoundary),
+          Effect.provideService(InRunJournal, appendableJournalFor(deletionWaitingRecords))
+        )
+      ).toMatchObject({ _tag: "ActionDeferred", reason: "CompletionClaimReadUnavailable" })
     })
   )
 
