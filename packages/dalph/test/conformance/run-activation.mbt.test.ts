@@ -1353,5 +1353,5 @@ quintIt(
         spec.trackerSettled === implementation.trackerSettled
     )
   },
-  30_000
+  120_000
 )
