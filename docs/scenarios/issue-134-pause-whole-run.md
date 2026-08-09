@@ -179,7 +179,7 @@ tracker, claim, Git, and executor observations.
 ### Acceptance-test seam
 
 - `finishes the exact safe suspension before fresh reads after Unpause`
-- `recovers Unpause during safe suspension without competing executor work`
+- `continues Unpause in the next activation without competing executor work`
 
 ## Scenario-to-test mapping required at handoff
 

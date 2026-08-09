@@ -37,7 +37,7 @@ Acceptance tests:
 
 - `continues the same run with B only after a recorded refresh reports A completed`
   runs the authored cassette through the production activation loop.
-- `continues a fresh production task after its claim is journaled` runs the
+- `establishes an absent Run before its first tracker read and activates it once` runs the
   actual production startup composition and proves that A's newly recorded
   claim constrains duplicate acquisition without suppressing A's focused
   specification read.
