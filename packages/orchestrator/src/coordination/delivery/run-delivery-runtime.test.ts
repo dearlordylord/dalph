@@ -53,7 +53,7 @@ import {
 import { DeliveryActionExecutor, type DeliveryActionResult, DeliverySemanticTrace } from "./delivery-action-executor.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
-import { liveActionIsPresent } from "./live-delivery-action.js"
+import { liveActionIsPresent, liveActionKeyOf } from "./live-delivery-action.js"
 import {
   currentSignalOf,
   type DeliveryActionProposal,
@@ -324,6 +324,47 @@ it.effect("finds exact proposal identities in available and conflicting frontier
     expect(liveActionIsPresent(conflicts([a.id]), b)).toBe(false)
   })
 )
+
+it("keeps exact proposal identity for routes outside semantic recovered-read ownership", () => {
+  const responsibleClaim = recoveredProposalFor(
+    RunnableFrontierTransition.ObserveResponsibleTaskClaim({
+      operation: makeTaskClaimObservationOperation(
+        OperationId.make("runtime-fallback-responsible-claim"),
+        target,
+        plannedAttempt.taskId
+      ),
+      taskId: plannedAttempt.taskId
+    })
+  )
+  const freshOrder = proposal(8, plannedAttempt.taskId).order
+  const nonRecoveredOrder = { ...responsibleClaim, order: freshOrder }
+  const anotherNonRecoveredOrder = {
+    ...nonRecoveredOrder,
+    id: DeliveryProposalId.make("runtime-fallback-non-recovered-order")
+  }
+
+  const integrationOrder = {
+    _tag: "IntegrationOrder" as const,
+    frontierOrdinal: 9 as never,
+    queuedAt: JournalPosition.make(90),
+    startedAt: JournalPosition.make(91),
+    taskId: plannedAttempt.taskId
+  }
+  const nonRecoveredRoute = { ...proposal(9, plannedAttempt.taskId), order: integrationOrder }
+  const anotherNonRecoveredRoute = {
+    ...nonRecoveredRoute,
+    id: DeliveryProposalId.make("runtime-fallback-non-recovered-route")
+  }
+  const nonLineageIntegrationRead = { ...responsibleClaim, order: integrationOrder }
+  const anotherNonLineageIntegrationRead = {
+    ...nonLineageIntegrationRead,
+    id: DeliveryProposalId.make("runtime-fallback-non-lineage-integration-read")
+  }
+
+  expect(liveActionKeyOf(nonRecoveredOrder)).not.toBe(liveActionKeyOf(anotherNonRecoveredOrder))
+  expect(liveActionKeyOf(nonRecoveredRoute)).not.toBe(liveActionKeyOf(anotherNonRecoveredRoute))
+  expect(liveActionKeyOf(nonLineageIntegrationRead)).not.toBe(liveActionKeyOf(anotherNonLineageIntegrationRead))
+})
 
 it.effect("classifies a nonempty executable frontier as runnable before finality", () =>
   Effect.gen(function* () {
