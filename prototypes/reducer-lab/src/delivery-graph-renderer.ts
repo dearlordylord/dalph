@@ -114,6 +114,13 @@ const edgeDescription = (edge: DeliveryGraphEdge): string => edge.kind === "Prer
   ? `${edge.from} blocks ${edge.to}`
   : `${edge.from} contains ${edge.to}`
 
+const topologyIdentity = (projection: DeliveryGraphProjection | null): string | undefined => projection === null
+  ? undefined
+  : JSON.stringify({
+    edges: projection.edges.map(({ from, kind, to }) => ({ from, kind, to })),
+    tasks: renderedTasks(projection).map(({ id }) => id)
+  })
+
 const shadowCss = `
   :host {
     display: block;
@@ -276,6 +283,7 @@ class DalphDeliveryGraphElement extends HTMLElement {
   #core: Core | null = null
   #empty: HTMLDivElement
   #projection: DeliveryGraphProjection | null = null
+  #preserveViewport = false
   #resizeObserver: ResizeObserver | null = null
   #selectedTaskId: string | null = null
   #summary: HTMLDetailsElement
@@ -300,6 +308,7 @@ class DalphDeliveryGraphElement extends HTMLElement {
     const changed = this.#projection?.fingerprint !== value?.fingerprint
       || this.#projection?.key !== value?.key
       || this.#projection?.status !== value?.status
+    this.#preserveViewport = topologyIdentity(this.#projection) === topologyIdentity(value)
     this.#projection = value
     if (this.isConnected && changed) this.#render()
   }
@@ -345,6 +354,9 @@ class DalphDeliveryGraphElement extends HTMLElement {
   }
 
   #renderSummary(projection: DeliveryGraphProjection | null): void {
+    const focusedTaskId = this.shadowRoot?.activeElement instanceof HTMLButtonElement
+      ? this.shadowRoot.activeElement.dataset.taskId
+      : undefined
     this.#summary.replaceChildren()
     const heading = document.createElement("summary")
     heading.textContent = projection === null
@@ -387,6 +399,10 @@ class DalphDeliveryGraphElement extends HTMLElement {
     }
     this.#summary.append(edgesHeading, edgeList)
     this.#updateSummarySelection()
+    if (focusedTaskId !== undefined) {
+      this.#summary.querySelector<HTMLButtonElement>(`button[data-task-id="${CSS.escape(focusedTaskId)}"]`)
+        ?.focus({ preventScroll: true })
+    }
   }
 
   #updateSummarySelection(): void {
@@ -396,6 +412,10 @@ class DalphDeliveryGraphElement extends HTMLElement {
   }
 
   #render(): void {
+    const previousViewport = this.#preserveViewport && this.#core !== null
+      ? { pan: this.#core.pan(), zoom: this.#core.zoom() }
+      : undefined
+    this.#preserveViewport = false
     this.#core?.destroy()
     this.#core = null
     const projection = this.#projection
@@ -432,6 +452,10 @@ class DalphDeliveryGraphElement extends HTMLElement {
       minZoom: 0.28,
       style: cytoscapeStyle
     })
+    if (previousViewport !== undefined) {
+      this.#core.zoom(previousViewport.zoom)
+      this.#core.pan(previousViewport.pan)
+    }
     this.#core.on("tap", "node", (event: EventObjectNode) => {
       this.#dispatchTaskSelected(event.target.id())
     })

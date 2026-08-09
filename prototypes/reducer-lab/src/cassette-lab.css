@@ -49,9 +49,6 @@ h5 {
   gap: 0.8rem;
   margin: 1.5rem 0 0.8rem;
   padding: 1rem;
-  position: sticky;
-  top: 0;
-  z-index: 1;
 }
 
 .catalog-controls label {
@@ -191,20 +188,25 @@ dd {
   border: 1px solid #938a7c;
   border-radius: 0.35rem;
   margin: 1rem 0;
-  overflow: hidden;
+  overflow-anchor: none;
 }
 
-.delivery-workbench > summary {
+.delivery-workbench > h3 {
   background: #243c33;
   color: #f7f3e9;
-  cursor: pointer;
   font-weight: 750;
+  margin: 0;
   padding: 0.8rem 1rem;
 }
 
-.delivery-workbench > :not(summary) {
+.delivery-workbench > .delivery-workbench-purpose,
+.delivery-workbench > .delivery-workbench-content {
   margin-left: 1rem;
   margin-right: 1rem;
+}
+
+.delivery-workbench-purpose {
+  color: #344a41;
 }
 
 .delivery-provenance,
@@ -248,15 +250,20 @@ dd {
 
 .delivery-timeline-controls {
   align-items: end;
+  background: #f7f3e9;
   display: flex;
   flex-wrap: wrap;
   gap: 0.65rem;
   margin-bottom: 0.8rem !important;
+  padding: 0.55rem 0;
+  position: sticky;
+  top: 0;
+  z-index: 4;
 }
 
 .delivery-timeline-controls label {
   display: grid;
-  flex: 1 1 28rem;
+  flex: 1 1 20rem;
   font-size: 0.82rem;
   font-weight: 700;
   gap: 0.25rem;
@@ -270,7 +277,10 @@ dd {
 }
 
 .delivery-timeline-controls output {
+  display: block;
   font-weight: 700;
+  line-height: 1.25;
+  min-block-size: 2.5em;
 }
 
 .delivery-frame-facts {
@@ -286,6 +296,17 @@ dd {
   margin-bottom: 1rem;
   max-height: none;
   overflow: visible;
+}
+
+.all-task-facts {
+  border-top: 1px solid #c8c0b3;
+  margin: 1rem 0;
+  padding-top: 0.6rem;
+}
+
+.all-task-facts > summary {
+  cursor: pointer;
+  font-weight: 700;
 }
 
 [data-role="delivery-task-state"] th,
@@ -416,10 +437,6 @@ pre {
     padding: 1rem;
   }
 
-  .catalog-controls {
-    position: static;
-  }
-
   .execution-facts {
     grid-template-columns: 1fr;
   }
@@ -431,15 +448,17 @@ pre {
   article h2,
   .group-facts,
   .catalog-key,
-  .delivery-workbench summary {
+  .delivery-workbench summary,
+  .delivery-workbench h3 {
     overflow-wrap: anywhere;
   }
 
-  .delivery-workbench > summary {
+  .delivery-workbench > h3 {
     padding: 0.7rem 0.75rem;
   }
 
-  .delivery-workbench > :not(summary) {
+  .delivery-workbench > .delivery-workbench-purpose,
+  .delivery-workbench > .delivery-workbench-content {
     margin-left: 0.65rem;
     margin-right: 0.65rem;
   }
@@ -447,7 +466,10 @@ pre {
   .delivery-timeline-controls {
     align-items: stretch;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding-bottom: 0.35rem;
+    padding-top: 0.35rem;
   }
 
   .delivery-timeline-controls label {
@@ -457,23 +479,41 @@ pre {
   }
 
   .delivery-timeline-controls button[data-role="follow-live"] {
-    grid-column: 1 / -1;
+    grid-column: 3;
     grid-row: 2;
   }
 
-  .delivery-timeline-controls button:nth-of-type(2) {
+  .delivery-timeline-controls button[data-role="previous-landmark"] {
     grid-column: 1;
-    grid-row: 3;
+    grid-row: 2;
   }
 
-  .delivery-timeline-controls button:nth-of-type(3) {
+  .delivery-timeline-controls button[data-role="previous-frame"] {
     grid-column: 2;
-    grid-row: 3;
+    grid-row: 2;
+  }
+
+  .delivery-timeline-controls button[data-role="next-frame"] {
+    grid-column: 4;
+    grid-row: 2;
+  }
+
+  .delivery-timeline-controls button[data-role="next-landmark"] {
+    grid-column: 5;
+    grid-row: 2;
+  }
+
+  .delivery-timeline-controls button {
+    min-width: 0;
+    padding-bottom: 0.45rem;
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
+    padding-top: 0.45rem;
   }
 
   .delivery-timeline-controls output {
     grid-column: 1 / -1;
-    grid-row: 4;
+    grid-row: 3;
   }
 
   .delivery-frame-facts {

@@ -246,14 +246,15 @@ const renderFrameFacts = (
 
 const renderDeliveryFacts = (
   parent: HTMLElement,
-  delivery: AuthoredDeliveryFrame["deliveries"][number] | undefined
+  delivery: AuthoredDeliveryFrame["deliveries"][number] | undefined,
+  taskId: string
 ): void => {
   if (delivery === undefined) {
     parent.textContent = "none"
     return
   }
   const placement = document.createElement("details")
-  appendText(placement, "summary", `Broad placement: ${delivery.placement.kind}`)
+  appendText(placement, "summary", `Task ${taskId} broad placement: ${delivery.placement.kind}`)
   appendText(placement, "pre", delivery.placement.exact)
   parent.append(placement)
   for (const [label, values] of [
@@ -262,7 +263,7 @@ const renderDeliveryFacts = (
   ] as const) {
     if (values.length === 0) continue
     const details = document.createElement("details")
-    appendText(details, "summary", `${label}: ${values.map(({ kind }) => kind).join(", ")}`)
+    appendText(details, "summary", `Task ${taskId} ${label.toLowerCase()}: ${values.map(({ kind }) => kind).join(", ")}`)
     appendText(details, "pre", values.map(({ exact }) => exact).join("\n"))
     parent.append(details)
   }
@@ -271,7 +272,7 @@ const renderDeliveryFacts = (
     appendText(
       obligations,
       "summary",
-      `Exact obligations: ${delivery.obligations.map(({ summary }) => summary).join(", ")}`
+      `Task ${taskId} exact obligations: ${delivery.obligations.map(({ summary }) => summary).join(", ")}`
     )
     appendText(obligations, "pre", delivery.obligations.map(({ exact }) => exact).join("\n"))
     parent.append(obligations)
@@ -320,7 +321,7 @@ const renderTaskTable = (parent: HTMLElement, frame: AuthoredDeliveryFrame): voi
     if (facts.frontierFact?.standing === "Excluded") {
       for (const reason of facts.frontierFact.reasons) {
         const details = document.createElement("details")
-        appendText(details, "summary", `Exact ${reason.kind}`)
+        appendText(details, "summary", `Task ${taskId} exact ${reason.kind}`)
         appendText(details, "pre", reason.exact)
         frontierCell.append(details)
       }
@@ -329,7 +330,7 @@ const renderTaskTable = (parent: HTMLElement, frame: AuthoredDeliveryFrame): voi
     ticketCell.dataset.label = "Does it fit the bounded desired set?"
     if (facts.ticketFact !== undefined) {
       const details = document.createElement("details")
-      appendText(details, "summary", `Exact ${facts.ticketFact.placement.kind} placement`)
+      appendText(details, "summary", `Task ${taskId} exact ${facts.ticketFact.placement.kind} placement`)
       appendText(details, "pre", facts.ticketFact.placement.exact)
       ticketCell.append(details)
     }
@@ -337,13 +338,13 @@ const renderTaskTable = (parent: HTMLElement, frame: AuthoredDeliveryFrame): voi
     heldCell.dataset.label = "Does it occupy task-work capacity?"
     if (facts.heldFacts.length > 0) {
       const details = document.createElement("details")
-      appendText(details, "summary", "Exact Run and attempt correlation")
+      appendText(details, "summary", `Task ${taskId} exact Run and attempt correlation`)
       appendText(details, "pre", JSON.stringify(facts.heldFacts, null, 2))
       heldCell.append(details)
     }
     const deliveryCell = document.createElement("td")
     deliveryCell.dataset.label = "What responsibility or obligation exists?"
-    renderDeliveryFacts(deliveryCell, facts.delivery)
+    renderDeliveryFacts(deliveryCell, facts.delivery, taskId)
     row.append(deliveryCell)
     const settlementCell = appendText(row, "td", facts.settlement)
     settlementCell.dataset.label = "What has settled?"
@@ -496,7 +497,8 @@ const renderTimeline = (
     "Production layer chain: observed graph → exhaustive frontier → bounded desired tickets → ticket deliveries → settlements → descriptive tracker reflection → downstream action planning. Reflection does not prove a tracker mutation, and a proposal does not prove an action ran.",
     "delivery-layer-chain"
   )
-  const settlementCoverage = appendText(parent, "p", "", "delivery-settlement-coverage")
+  const settlementCoverage = document.createElement("p")
+  settlementCoverage.className = "delivery-settlement-coverage"
   const legend = document.createElement("ul")
   legend.className = "delivery-graph-legend"
   for (const value of [
@@ -511,22 +513,51 @@ const renderTimeline = (
   parent.append(legend)
   const controls = document.createElement("div")
   controls.className = "delivery-timeline-controls"
-  const follow = appendText(controls, "button", "Follow live")
+  const previousLandmark = appendText(controls, "button", "← Landmark")
+  previousLandmark.type = "button"
+  previousLandmark.dataset.role = "previous-landmark"
+  previousLandmark.setAttribute("aria-label", "Previous delivery landmark")
+  const previous = appendText(controls, "button", "← Frame")
+  previous.type = "button"
+  previous.dataset.role = "previous-frame"
+  previous.setAttribute("aria-label", "Previous frame")
+  const follow = appendText(controls, "button", "Live")
   follow.type = "button"
   follow.dataset.role = "follow-live"
-  const previous = appendText(controls, "button", "Previous frame")
-  previous.type = "button"
+  follow.setAttribute("aria-label", "Follow live")
   const selectLabel = appendText(controls, "label", "Delivery frame")
   const select = document.createElement("select")
   selectLabel.append(select)
-  const next = appendText(controls, "button", "Next frame")
+  const next = appendText(controls, "button", "Frame →")
   next.type = "button"
+  next.dataset.role = "next-frame"
+  next.setAttribute("aria-label", "Next frame")
+  const nextLandmark = appendText(controls, "button", "Landmark →")
+  nextLandmark.type = "button"
+  nextLandmark.dataset.role = "next-landmark"
+  nextLandmark.setAttribute("aria-label", "Next delivery landmark")
   const status = document.createElement("output")
   controls.append(status)
   const frameHost = document.createElement("div")
   frameHost.dataset.role = "delivery-frame"
+  const graph = document.createElement(deliveryGraphTag) as DeliveryGraphElement
+  const change = appendText(frameHost, "p", "", "delivery-frame-change")
+  const restart = appendText(frameHost, "p", "", "delivery-restart-boundary")
+  restart.hidden = true
+  const factsHost = document.createElement("div")
+  const selectedTask = appendText(frameHost, "aside", "", "selected-task-facts")
+  selectedTask.dataset.role = "selected-task-facts"
+  const taskFactsDisclosure = document.createElement("details")
+  taskFactsDisclosure.className = "all-task-facts"
+  taskFactsDisclosure.dataset.role = "all-task-facts"
+  const taskFactsSummary = appendText(taskFactsDisclosure, "summary", "All task delivery facts")
+  const taskFactsHost = document.createElement("div")
+  taskFactsDisclosure.append(taskFactsHost)
+  frameHost.prepend(graph, settlementCoverage)
+  frameHost.append(factsHost, taskFactsDisclosure)
   let frames = initialFrames
   let running = initiallyRunning
+  let renderedFrame: AuthoredDeliveryFrame | undefined
 
   const refreshSettlementCoverage = (): void => {
     const distinctSettlementCount = new Set(
@@ -549,52 +580,91 @@ const renderTimeline = (
 
   const refreshFollow = (): void => {
     follow.setAttribute("aria-pressed", String(playback.followLive))
-    follow.textContent = playback.followLive ? "Following live" : "Follow live"
+    follow.textContent = playback.followLive ? "Live: on" : "Live"
+  }
+
+  const eligibleFrontierSignature = (frame: AuthoredDeliveryFrame): string | undefined => {
+    if (frame.graph._tag !== "Established") return undefined
+    const eligible = frame.graph.tasks
+      .filter(({ id }) => taskFacts(frame, id).frontierFact?.standing === "Eligible")
+      .map(({ id }) => id)
+      .toSorted()
+    return eligible.length === 0 ? undefined : JSON.stringify(eligible)
+  }
+
+  const landmarkIndexes = (): ReadonlyArray<number> => {
+    const landmarks = [0]
+    const firstFrame = frames[0]
+    let lastEligibleFrontier = firstFrame === undefined ? undefined : eligibleFrontierSignature(firstFrame)
+    for (let index = 1; index < frames.length; index += 1) {
+      const frame = frames[index]
+      const previousFrame = frames[index - 1]
+      if (frame === undefined || previousFrame === undefined) continue
+      if (previousFrame.activationOrdinal !== frame.activationOrdinal) {
+        landmarks.push(index)
+        continue
+      }
+      const eligibleFrontier = eligibleFrontierSignature(frame)
+      const nextFrame = frames[index + 1]
+      const nextEligibleFrontier = nextFrame === undefined ? undefined : eligibleFrontierSignature(nextFrame)
+      if (
+        eligibleFrontier !== undefined
+        && eligibleFrontier !== lastEligibleFrontier
+        && eligibleFrontier === nextEligibleFrontier
+      ) {
+        landmarks.push(index)
+        lastEligibleFrontier = eligibleFrontier
+      }
+    }
+    const terminalIndex = frames.length - 1
+    if (!running && terminalIndex >= 0 && landmarks.at(-1) !== terminalIndex) landmarks.push(terminalIndex)
+    return landmarks
+  }
+
+  const refreshNavigation = (index: number): void => {
+    const newerCount = Math.max(0, frames.length - index - 1)
+    status.textContent = `${index + 1} of ${frames.length} · ${running ? "production still running" : "run settled"}`
+      + `${playback.followLive ? " · following newest frame" : ` · inspecting history · ${newerCount} newer ${newerCount === 1 ? "frame" : "frames"}`}`
+    previous.disabled = index === 0
+    next.disabled = index === frames.length - 1
+    const landmarks = landmarkIndexes()
+    previousLandmark.disabled = !landmarks.some((landmark) => landmark < index)
+    nextLandmark.disabled = !landmarks.some((landmark) => landmark > index)
+  }
+
+  const applyTaskSelection = (): void => {
+    graph.selectedTaskId = playback.selectedTaskId
+    for (const taskRow of taskFactsHost.querySelectorAll<HTMLTableRowElement>("tr[data-task-id]")) {
+      const selected = taskRow.dataset.taskId === playback.selectedTaskId
+      taskRow.classList.toggle("selected-task-row", selected)
+      if (selected) taskRow.setAttribute("aria-current", "true")
+      else taskRow.removeAttribute("aria-current")
+    }
   }
 
   const show = (index: number): void => {
     const frame = frames[index]
     if (frame === undefined) return
-    frameHost.replaceChildren()
     playback.selectedFrameIndex = index
-    status.textContent = `${index + 1} of ${frames.length} · ${running ? "production still running" : "run settled"}${playback.followLive ? " · following newest frame" : " · inspecting history"}`
-    previous.disabled = index === 0
-    next.disabled = index === frames.length - 1
-    const graph = document.createElement(deliveryGraphTag) as DeliveryGraphElement
     graph.projection = frameProjection(row, frame, index)
-    graph.selectedTaskId = playback.selectedTaskId
-    appendText(frameHost, "p", frameChangeSummary(frames[index - 1], frame, row), "delivery-frame-change")
-    const restart = restartContinuity(frames[index - 1], frame)
-    if (restart !== undefined) appendText(frameHost, "p", restart, "delivery-restart-boundary")
-    frameHost.append(graph)
-    renderFrameFacts(frameHost, row, frame, running)
-    const selectedTask = appendText(
-      frameHost,
-      "aside",
-      playback.selectedTaskId === null
-        ? frame.graph._tag === "Established"
-          ? "Select a task in the graph summary to correlate its graph state with exact delivery facts."
-          : "No production-observed task is selectable in this frame because the graph is not established. Journal-recovered positions and obligations remain in the delivery facts below."
-        : selectedTaskSummary(frame, playback.selectedTaskId),
-      "selected-task-facts"
-    )
-    selectedTask.dataset.role = "selected-task-facts"
-    renderTaskTable(frameHost, frame)
-    for (const taskRow of frameHost.querySelectorAll<HTMLTableRowElement>("tr[data-task-id]")) {
-      const selected = taskRow.dataset.taskId === playback.selectedTaskId
-      taskRow.classList.toggle("selected-task-row", selected)
-      if (selected) taskRow.setAttribute("aria-current", "true")
-    }
-    graph.addEventListener("task-selected", (event) => {
-      playback.selectedTaskId = (event as CustomEvent<{ readonly taskId: string }>).detail.taskId
-      graph.selectedTaskId = playback.selectedTaskId
-      selectedTask.textContent = selectedTaskSummary(frame, playback.selectedTaskId)
-      for (const taskRow of frameHost.querySelectorAll<HTMLTableRowElement>("tr[data-task-id]")) {
-        taskRow.classList.toggle("selected-task-row", taskRow.dataset.taskId === playback.selectedTaskId)
-        if (taskRow.dataset.taskId === playback.selectedTaskId) taskRow.setAttribute("aria-current", "true")
-        else taskRow.removeAttribute("aria-current")
-      }
-    })
+    change.textContent = frameChangeSummary(frames[index - 1], frame, row)
+    const restartSummary = restartContinuity(frames[index - 1], frame)
+    restart.hidden = restartSummary === undefined
+    restart.textContent = restartSummary ?? ""
+    factsHost.replaceChildren()
+    renderFrameFacts(factsHost, row, frame, running)
+    selectedTask.textContent = playback.selectedTaskId === null
+      ? frame.graph._tag === "Established"
+        ? "Select a task in the graph summary to correlate its graph state with exact delivery facts."
+        : "No production-observed task is selectable in this frame because the graph is not established. Journal-recovered positions and obligations remain in the delivery facts below."
+      : selectedTaskSummary(frame, playback.selectedTaskId)
+    taskFactsHost.replaceChildren()
+    renderTaskTable(taskFactsHost, frame)
+    const taskCount = taskFactsHost.querySelectorAll("tr[data-task-id]").length
+    taskFactsSummary.textContent = `All task delivery facts · ${taskCount} ${taskCount === 1 ? "task" : "tasks"}`
+    applyTaskSelection()
+    renderedFrame = frame
+    refreshNavigation(index)
   }
   const selectFrame = (index: number): void => {
     for (const option of select.options) {
@@ -620,14 +690,30 @@ const renderTimeline = (
   })
   previous.addEventListener("click", () => inspectFrame(Math.max(0, playback.selectedFrameIndex - 1)))
   next.addEventListener("click", () => inspectFrame(Math.min(frames.length - 1, playback.selectedFrameIndex + 1)))
+  previousLandmark.addEventListener("click", () => {
+    const target = landmarkIndexes().filter((index) => index < playback.selectedFrameIndex).at(-1)
+    if (target !== undefined) inspectFrame(target)
+  })
+  nextLandmark.addEventListener("click", () => {
+    const target = landmarkIndexes().find((index) => index > playback.selectedFrameIndex)
+    if (target !== undefined) inspectFrame(target)
+  })
   select.addEventListener("change", () => inspectFrame(Number(select.value)))
+  graph.addEventListener("task-selected", (event) => {
+    playback.selectedTaskId = (event as CustomEvent<{ readonly taskId: string }>).detail.taskId
+    const frame = frames[playback.selectedFrameIndex]
+    if (frame === undefined) return
+    selectedTask.textContent = selectedTaskSummary(frame, playback.selectedTaskId)
+    applyTaskSelection()
+  })
   parent.append(controls, frameHost)
   const update = (nextFrames: ReadonlyArray<AuthoredDeliveryFrame>, nextRunning: boolean): void => {
     frames = nextFrames
     running = nextRunning
     refreshSettlementCoverage()
-    select.replaceChildren()
-    for (const [index, frame] of frames.entries()) {
+    for (let index = select.options.length; index < frames.length; index += 1) {
+      const frame = frames[index]
+      if (frame === undefined) continue
       const option = document.createElement("option")
       option.value = String(index)
       option.textContent = frameLabel(frame, index)
@@ -637,7 +723,9 @@ const renderTimeline = (
       ? frames.length - 1
       : Math.min(playback.selectedFrameIndex, frames.length - 1)
     refreshFollow()
-    selectFrame(Math.max(0, selectedIndex))
+    const nextIndex = Math.max(0, selectedIndex)
+    if (frames[nextIndex] !== renderedFrame) selectFrame(nextIndex)
+    else refreshNavigation(nextIndex)
   }
   update(initialFrames, initiallyRunning)
   return { update }
@@ -652,7 +740,6 @@ export const renderCassetteDeliveryWorkbench = (
   host: HTMLElement,
   row: CassetteRow,
   state: CassetteState,
-  open: boolean,
   playback: DeliveryWorkbenchPlaybackState = makeDeliveryWorkbenchPlaybackState()
 ): DeliveryWorkbenchController => {
   host.replaceChildren()
@@ -660,14 +747,22 @@ export const renderCassetteDeliveryWorkbench = (
   const authoredRow: AuthoredRow = { ...row, surface: row.surface }
   let currentState = state
   let timeline: DeliveryTimelineController | undefined
-  const details = document.createElement("details")
-  details.className = "delivery-workbench"
-  details.dataset.role = "delivery-workbench"
-  details.open = open
-  appendText(details, "summary", "Delivery workbench · graph, frontier, bounded tickets, held positions, obligations, and settlements")
-  host.append(details)
+  const section = document.createElement("section")
+  section.className = "delivery-workbench"
+  section.dataset.role = "delivery-workbench"
+  const heading = appendText(section, "h3", "Delivery workbench")
+  heading.id = `delivery-workbench-${row.catalogKey.replaceAll(":", "-")}`
+  section.setAttribute("aria-labelledby", heading.id)
+  appendText(
+    section,
+    "p",
+    "Production graph, frontier, desired tickets, held task-work positions, obligations, and settlements for the selected cassette.",
+    "delivery-workbench-purpose"
+  )
+  host.append(section)
   const content = document.createElement("div")
-  details.append(content)
+  content.className = "delivery-workbench-content"
+  section.append(content)
   const renderContents = (): void => {
     const frames = deliveryFramesFrom(currentState)
     if (timeline !== undefined && frames !== null && frames.length > 0) {
@@ -684,14 +779,11 @@ export const renderCassetteDeliveryWorkbench = (
       renderNotObserved(content, authoredRow, currentState)
     }
   }
-  if (open) renderContents()
-  details.addEventListener("toggle", () => {
-    if (details.open) renderContents()
-  })
+  renderContents()
   return {
     update: (nextState) => {
       currentState = nextState
-      if (details.open) renderContents()
+      renderContents()
     }
   }
 }

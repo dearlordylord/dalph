@@ -15,7 +15,6 @@ import {
   cassetteStateStatusText
 } from "./cassette-lab-view.ts"
 import {
-  type DeliveryWorkbenchController,
   makeDeliveryWorkbenchPlaybackState,
   renderCassetteDeliveryWorkbench
 } from "./cassette-lab-workbench.ts"
@@ -98,7 +97,11 @@ const renderJournalTable = (
     appendTextElement(tableRow, "td", row.context)
     const rawCell = document.createElement("td")
     const raw = document.createElement("details")
-    appendTextElement(raw, "summary", "Event JSON")
+    appendTextElement(
+      raw,
+      "summary",
+      `Position ${row.position} · ${row.eventTag}${row.context.length > 0 ? ` · ${row.context}` : ""}`
+    )
     appendTextElement(raw, "pre", row.rawEvent)
     rawCell.append(raw)
     tableRow.append(rawCell)
@@ -199,10 +202,13 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     rows.map(({ catalogKey }) => [catalogKey, { _tag: "NotRun" }])
   )
   let selectedKey: MaintainedCassetteKey | undefined = rows[0]?.catalogKey
-  let workbenchOpen = false
   let evidenceOpen = false
   let busy = false
-  let selectedWorkbench: DeliveryWorkbenchController | undefined
+  let selectedSurface: {
+    readonly catalogKey: MaintainedCassetteKey
+    readonly update: (state: CassetteState) => void
+    readonly updateDeliveryFrame: (state: CassetteState) => void
+  } | undefined
   const playbackByKey = new Map<MaintainedCassetteKey, ReturnType<typeof makeDeliveryWorkbenchPlaybackState>>()
 
   const header = document.createElement("header")
@@ -296,9 +302,10 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
         event.preventDefault()
         selectedKey = row.catalogKey
         selectOption(cassetteSelector, row.catalogKey)
-        workbenchOpen = false
         evidenceOpen = true
         renderSelected()
+        const evidence = sharedSurface.querySelector<HTMLDetailsElement>("details[data-role='execution-evidence']")
+        if (evidence !== null) evidence.open = true
         sharedSurface.querySelector<HTMLElement>("h2")?.focus()
       })
       problemLinks.append(link)
@@ -307,25 +314,28 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   }
 
   renderSelected = (): void => {
-    sharedSurface.replaceChildren()
     const row = selectedKey === undefined ? undefined : rowByKey.get(selectedKey)
     if (row === undefined) {
+      selectedSurface = undefined
+      sharedSurface.replaceChildren()
       appendTextElement(sharedSurface, "p", "No maintained cassette is available.", "empty-selection")
       return
     }
     const state = states.get(row.catalogKey) ?? { _tag: "NotRun" }
+    if (selectedSurface?.catalogKey === row.catalogKey) {
+      selectedSurface.update(state)
+      return
+    }
     const article = document.createElement("article")
     article.id = "selected-cassette"
     article.dataset.catalogKey = row.catalogKey
-    article.dataset.state = state._tag === "Settled" ? state.result._tag : state._tag
-    article.setAttribute("aria-busy", String(state._tag === "Running"))
     const heading = appendTextElement(article, "h2", row.storyName)
     heading.tabIndex = -1
     const identity = appendTextElement(article, "p", `${row.categoryLabel} · Catalog key: `, "catalog-key")
     appendTextElement(identity, "code", row.catalogKey)
     const ownership = appendTextElement(article, "p", "Production runner: ", "group-facts")
     appendTextElement(ownership, "code", row.runnerName)
-    ownership.append(` · Controlled boundaries: ${row.controlledBoundaries}`)
+    ownership.append(` · Available controlled boundaries for this catalog: ${row.controlledBoundaries}`)
     if (row.catalogKey === "authored:deliveryInvariantStory") {
       appendTextElement(
         article,
@@ -349,11 +359,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     const deliveryWorkbenchHost = document.createElement("div")
     const playback = playbackByKey.get(row.catalogKey) ?? makeDeliveryWorkbenchPlaybackState()
     playbackByKey.set(row.catalogKey, playback)
-    selectedWorkbench = renderCassetteDeliveryWorkbench(deliveryWorkbenchHost, row, state, workbenchOpen, playback)
-    const workbench = deliveryWorkbenchHost.querySelector<HTMLDetailsElement>('[data-role="delivery-workbench"]')
-    workbench?.addEventListener("toggle", () => {
-      workbenchOpen = workbench.open
-    })
+    const workbench = renderCassetteDeliveryWorkbench(deliveryWorkbenchHost, row, state, playback)
 
     const chronology = document.createElement("details")
     chronology.className = "declared-chronology"
@@ -371,14 +377,11 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
 
     const rowControls = document.createElement("div")
     rowControls.className = "selected-cassette-controls"
-    const runButton = appendTextElement(rowControls, "button", state._tag === "NotRun" ? "Run selected cassette" : "Rerun selected cassette")
+    const runButton = appendTextElement(rowControls, "button", "Run selected cassette")
     runButton.type = "button"
-    runButton.disabled = busy
     runButton.setAttribute("aria-label", `Run selected cassette: ${row.storyName} (${row.catalogKey})`)
     const status = document.createElement("output")
-    status.dataset.status = article.dataset.state
     status.setAttribute("aria-live", "polite")
-    status.textContent = cassetteStateStatusText(state)
     rowControls.append(status)
     runButton.addEventListener("click", () => {
       void runKeys([row.catalogKey], true).then(() => root.dispatchEvent(new Event(singleCassetteSettledEvent)))
@@ -386,18 +389,44 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
 
     const evidenceHost = document.createElement("div")
     evidenceHost.className = "evidence-host"
-    if (state._tag === "Settled") {
-      renderResultEvidence(evidenceHost, state.result, evidenceOpen)
-      if (state.result._tag === "Failed" && state.result.location._tag === "Known") {
-        const stopped = storyItems[state.result.location.storyPosition]
-        stopped?.classList.add("failed-story-item")
-        stopped?.setAttribute("aria-current", "true")
+    article.append(identity, ownership, rowControls)
+    if (row.surface._tag === "AuthoredDeliverySurface") article.append(deliveryWorkbenchHost)
+    article.append(chronology, evidenceHost)
+    let renderedState: CassetteState | undefined
+    const update = (nextState: CassetteState): void => {
+      const displayState = nextState._tag === "Settled" ? nextState.result._tag : nextState._tag
+      article.dataset.state = displayState
+      article.setAttribute("aria-busy", String(nextState._tag === "Running"))
+      runButton.textContent = nextState._tag === "NotRun" ? "Run selected cassette" : "Rerun selected cassette"
+      runButton.disabled = busy
+      status.dataset.status = displayState
+      status.textContent = cassetteStateStatusText(nextState)
+      if (renderedState === nextState) return
+      renderedState = nextState
+      workbench.update(nextState)
+      evidenceHost.replaceChildren()
+      for (const item of storyItems) {
+        item.classList.remove("failed-story-item")
+        item.removeAttribute("aria-current")
       }
-    } else if (state._tag === "LabDefect") {
-      renderDefectEvidence(evidenceHost, row, state.detail)
+      if (nextState._tag === "Settled") {
+        renderResultEvidence(evidenceHost, nextState.result, evidenceOpen)
+        if (nextState.result._tag === "Failed" && nextState.result.location._tag === "Known") {
+          const stopped = storyItems[nextState.result.location.storyPosition]
+          stopped?.classList.add("failed-story-item")
+          stopped?.setAttribute("aria-current", "true")
+        }
+      } else if (nextState._tag === "LabDefect") {
+        renderDefectEvidence(evidenceHost, row, nextState.detail)
+      }
     }
-    article.append(identity, ownership, deliveryWorkbenchHost, chronology, rowControls, evidenceHost)
-    sharedSurface.append(article)
+    selectedSurface = {
+      catalogKey: row.catalogKey,
+      update,
+      updateDeliveryFrame: (nextState) => workbench.update(nextState)
+    }
+    sharedSurface.replaceChildren(article)
+    update(state)
   }
 
   const setBusy = (nextBusy: boolean): void => {
@@ -412,7 +441,6 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     if (keys.length === 0) return
     setBusy(true)
     if (single) {
-      workbenchOpen = true
       evidenceOpen = false
     } else {
       evidenceOpen = false
@@ -420,11 +448,15 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     }
     for (const key of keys) {
       const row = rowByKey.get(key)
+      const playback = playbackByKey.get(key) ?? makeDeliveryWorkbenchPlaybackState()
+      playback.followLive = true
+      playback.selectedFrameIndex = 0
+      playback.selectedTaskId = null
+      playbackByKey.set(key, playback)
       states.set(key, {
         _tag: "Running",
         deliveryFrames: row?.surface._tag === "AuthoredDeliverySurface" ? [] : null
       })
-      playbackByKey.set(key, makeDeliveryWorkbenchPlaybackState())
     }
     refreshSelector()
     renderSelected()
@@ -442,7 +474,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
               if (state?._tag !== "Running" || state.deliveryFrames === null) return
               const nextState = { _tag: "Running", deliveryFrames: [...state.deliveryFrames, frame] } as const
               states.set(catalogKey, nextState)
-              if (selectedKey === catalogKey) selectedWorkbench?.update(nextState)
+              if (selectedSurface?.catalogKey === catalogKey) selectedSurface.updateDeliveryFrame(nextState)
               root.dispatchEvent(new CustomEvent(deliveryFrameEvent, {
                 detail: { catalogKey, frameCount: nextState.deliveryFrames.length }
               }))
@@ -503,7 +535,6 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     const next = cassetteSelector.value as MaintainedCassetteKey
     if (!rowByKey.has(next)) return
     selectedKey = next
-    workbenchOpen = false
     evidenceOpen = false
     renderSelected()
   })

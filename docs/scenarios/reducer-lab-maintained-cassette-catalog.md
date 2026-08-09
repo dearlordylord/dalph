@@ -249,14 +249,43 @@ Opening the select must not run a cassette or replace the selected surface;
 choosing an option is the only selection trigger. No search box, catalog
 filter, status filter, or **Run shown** command appears.
 
-After an authored cassette completes, the maintainer opens its Delivery
-workbench and chooses **Next frame**. The already-rendered workbench stays
-connected, the frame control advances from frame 1 to frame 2, and the graph
-and task facts remain on frame 2 after the browser delivers its queued native
-disclosure events. Closing and reopening the workbench preserves one usable
-timeline. The Lab must not replace an open disclosure in response to its own
-`toggle` event, blink the frame selector closed, or reset navigation to frame
-1.
+An authored cassette's Delivery workbench is a permanent section of the one
+selected cassette surface, not a disclosure. Before execution it shows the
+controlled declared graph with an explicit statement that production has not
+observed it. As production publishes frames, the same mounted section gains
+one timeline control strip and one current-frame surface. The maintainer does
+not open, close, or rediscover the primary visualization.
+
+While **Follow live** is active, new frames update that current-frame surface.
+The frame controls and the top of the graph remain at stable document
+positions; variable change summaries and task facts appear after the graph so
+their changing height cannot push the graph away from the maintainer. Choosing
+**Previous frame**, **Next frame**, or an exact frame stops auto-follow and
+keeps the chosen frame until the maintainer explicitly resumes **Follow live**.
+The exact selector retains every production publication. **Previous delivery
+landmark** and **Next delivery landmark** skip repeated and transient
+publications to the stable eligible-frontier waves, coordinator restart, and
+terminal publication, so the double-diamond cassette reaches A, B+C, restart,
+D, the later activation boundaries, E+F, G, and the empty frontier without
+scanning more than nine landmarks. The complete
+per-task matrix is a secondary **All task delivery facts** disclosure; the
+graph and selected-task summary remain primary.
+
+Opening a raw journal event names its journal position, event tag, and
+available task/attempt context instead of repeating an indistinguishable
+**Event JSON** label. Exact task evidence names the task it belongs to. The
+catalog-level boundary sentence says which controlled boundaries are available
+to the runner category; it does not claim that the selected cassette exercised
+every one.
+
+Selecting another cassette replaces the one shared surface and its workbench;
+selecting the original cassette again restores its retained frame and task
+selection.
+
+The Lab must not put the primary graph/frontier visualization in an accordion,
+mount another workbench while frames arrive, move the graph because a change
+banner grew, reset the chosen frame, or change page scroll merely because one
+production frame replaced another.
 
 ### Acceptance-test mapping
 
@@ -282,11 +311,21 @@ timeline. The Lab must not replace an open disclosure in response to its own
   checks that all catalog choices drive one article and that changing the
   selected key replaces its identity, chronology, workbench applicability,
   action, status, and retained result without leaving the old UI visible.
-- `keeps cassette selection and delivery frame navigation stable across disclosure toggles`
+- `keeps one permanent delivery workbench stable while frames and selections change`
   checks the complete ordinary selector labels, runs an authored cassette,
-  queues the disclosure's native-style toggle after opening, and proves the
-  same workbench and timeline remain connected while Next and Previous frame
-  navigation persist.
+  proves the permanent section supports Next and Previous navigation, and
+  restores the retained frame after selecting away and back.
+- `shows production delivery frames before the authored cassette settles`
+  pauses on a historical frame, opens its exact task facts, then proves later
+  production publications and terminal settlement retain the same article,
+  workbench, controls, frame DOM, chronology disclosure, and exact-facts
+  disclosure.
+- `browser-smoke` drives the real Orb page through more than ten live
+  double-diamond publications, holds page scroll and graph position within two
+  pixels, traverses the six frontier waves and every activation boundary
+  through at most nine landmark
+  actions, preserves the graph summary and selected task across a frame change,
+  and requires unique position/tag/context labels for raw journal events.
 
 ## A maintainer watches an authored cassette move through delivery
 
