@@ -2,8 +2,9 @@ import { Crypto, Effect, Encoding, Result, Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import { TrackerTarget } from "../../authorities/task-tracker/target.js"
 
-export const AllocatedFreshWorkflowRunId = RunId.pipe(Schema.brand("AllocatedFreshWorkflowRunId"))
-export type AllocatedFreshWorkflowRunId = typeof AllocatedFreshWorkflowRunId.Type
+/** A Run identity returned by the creation boundary before establishment records it. */
+export const AllocatedWorkflowRunId = RunId.pipe(Schema.brand("AllocatedWorkflowRunId"))
+export type AllocatedWorkflowRunId = typeof AllocatedWorkflowRunId.Type
 
 const freshWorkflowRunUuidVersion = 7
 
@@ -24,8 +25,8 @@ export class FreshWorkflowRunIdDiagnosticDecodeFailure extends Schema.TaggedErro
 
 const freshWorkflowRunIdEncodingVersion = "r1."
 
-const encodeFreshWorkflowRunId = (payload: FreshWorkflowRunIdentityPayload): AllocatedFreshWorkflowRunId =>
-  AllocatedFreshWorkflowRunId.make(
+const encodeFreshWorkflowRunId = (payload: FreshWorkflowRunIdentityPayload): AllocatedWorkflowRunId =>
+  AllocatedWorkflowRunId.make(
     `${freshWorkflowRunIdEncodingVersion}${Encoding.encodeBase64Url(
       JSON.stringify(Schema.encodeUnknownSync(FreshWorkflowRunIdentityPayload)(payload))
     )}`
@@ -51,7 +52,7 @@ export const decodeFreshWorkflowRunIdForDiagnostics = Effect.fn("Workflow.decode
   )
 })
 
-/** Allocates the only identity accepted by Dalph's production fresh-run path. */
+/** Allocates the only identity accepted by Dalph's production Run-establishment path. */
 export const freshWorkflowRunId = Effect.fn("Workflow.freshRunId")(function* (target: TrackerTarget) {
   const crypto = yield* Crypto.Crypto
   return encodeFreshWorkflowRunId(

@@ -85,8 +85,11 @@ export const executionSummaryItems = (result: CassetteLabResult): ReadonlyArray<
     base.push({ term: "Failure", description: failureHeadline(result.detail) })
     return base
   }
-  if (result.activations.length > 0) {
-    base.push({ term: "Coordinator activations", description: result.activations.join(" → ") })
+  if (result.activationOrdinals.length > 0) {
+    base.push({
+      term: "Run activations",
+      description: result.activationOrdinals.map((ordinal) => `Activation ${ordinal}`).join(" → ")
+    })
   }
   if (result.runId !== null) base.push({ term: "Run identity", description: result.runId })
   base.push({ term: "Journal evidence", description: `${result.journalRecordCount} records, ordered within each Run` })

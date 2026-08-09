@@ -20,7 +20,7 @@ import {
   productionCoordinatorOwnershipLayer,
   productionJournalStoreLayer,
   type TrackerMutation,
-  validatedStartupRecoveryLayer,
+  validatedRunActivationLayer,
   taskWorkCapacityControlLayer,
   taskClaimReacquisitionControlLayer,
   workflowInterpreterLayer,
@@ -80,7 +80,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const crypto = yield* Crypto.Crypto
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
-      const runtimeLayer = ({ runId: activeRunId, startup }: JournaledRuntimeLayerInput) => {
+      const runtimeLayer = ({ runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(
           activeRunId,
           Layer.succeed(WorkflowInterpreter, interpreter)
@@ -91,10 +91,9 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           taskClaimReacquisitionControlLayer,
           taskWorkCapacityControlLayer
         )
-        return validatedStartupRecoveryLayer(
+        return validatedRunActivationLayer(
           activeRunId,
           integrationTarget,
-          startup,
           undefined,
           undefined,
           targetVerification,

@@ -352,8 +352,8 @@ starts the production coordinator. Production asks the controlled tracker for
 the graph, records accepted graph observations and later workflow facts, and
 the production reactive delivery layer publishes each coherent input revision
 that the ordinary runtime consumes. A read-only cassette observer records
-those exact immutable publications, the current Fresh or Recovered activation,
-its zero-based coordinator-activation ordinal, and the authored story position
+those exact immutable publications, the current one-based Run activation
+ordinal, and the authored story position
 reached at publication time. It does not alter
 the publication, select an action, append a journal event, or call a boundary.
 
@@ -396,7 +396,7 @@ B remains graph-blocked, and only a later tracker observation of A's successful
 lifecycle making B eligible. For a pause cassette, a Pause direction alone
 does not release A's held position; the frame after the exact safely-suspended
 report does. For a recovery cassette, every coordinator activation is visibly
-separated, including later Recovered-to-Recovered restarts, and retains the
+separated, including later-to-later activation restarts, and retains the
 same exact planned attempt where the cassette does. The first frame of each
 activation names its numbered restart boundary and summarizes which held
 positions and exact obligations survived, changed, or disappeared. The
@@ -438,7 +438,7 @@ The linked `authored:deliveryInvariantStory` is the real double-diamond graph
 story. Its tracker graph is `A -> {B, C} -> D -> {E, F} -> G`, and capacity is
 two. Production first exposes only A in the frontier. A later complete tracker
 read proves A successful and exposes B and C together. Both acquire exact
-task-work positions before the coordinator process dies. The first Recovered
+task-work positions before the coordinator process dies. The first later-activation
 delivery publications retain both exact Run/attempt responsibilities rather
 than planning replacements. Later
 complete tracker reads prove each finished wave and expose D, then E and F
@@ -463,7 +463,7 @@ The Lab must not project a frontier from declared input, fabricate a privately
 branded journaled graph observation, infer missing topology from durable task
 membership, call a selected bounded ticket an admitted or held position,
 equate executor completion with tracker completion or delivery settlement,
-combine Fresh and Recovered publications into one activation, or restore the
+combine publications from distinct Run activations into one activation, or restore the
 deleted Lab-owned scheduler and synthetic selector facts. Browser loss discards
 only this presentation. A retry reruns the cassette through fresh controlled
 runtime state.
@@ -512,8 +512,8 @@ task whose exact facts are correlated below.
   Pause direction and Running report leave A's exact attempt in the held map,
   and only the declared `SafelySuspended` report releases it.
 - `separates every coordinator activation in a multi-restart delivery timeline`
-  checks activation ordinals, every Fresh-to-Recovered and
-  Recovered-to-Recovered boundary, and exact attempt correlation in a maintained
+  checks activation ordinals, every initial-to-later and later-to-later
+  activation boundary, and exact attempt correlation in a maintained
   multi-restart cassette.
 - `distinguishes competing claim reads and exact responsibilities after Stop recovery`
   checks same-boundary reads retain their different workflow purposes, the
@@ -542,8 +542,8 @@ task whose exact facts are correlated below.
   frame until following is enabled again; `notifies the read-only delivery
   observer before returning the terminal authored result` checks the production
   cassette boundary publishes every exact revision before its terminal result.
-- `explains restart continuity at the Fresh to Recovered boundary` selects the
-  first Recovered frame and checks the visible restart marker plus held-position
+- `explains restart continuity at the first later activation boundary` selects the
+  first frame of activation 2 and checks the visible restart marker plus held-position
   and obligation continuity.
 - `keeps graph-not-established recovery frames compact and truthful` checks an
   empty recovery projection has no large canvas and explains that there is no
@@ -565,7 +565,7 @@ task whose exact facts are correlated below.
   for every task rather than accepting a final tracker snapshot as execution.
 - `preserves the double-diamond middle wave across coordinator restart` checks
   B and C hold exact task-work positions before process loss and the first
-  Recovered publications retain the same Run and attempt correlations before
+  later-activation publications retain the same Run and attempt correlations before
   either task advances.
 - `rejects a partial authored completion-finality boundary chronology` checks
   that once an authored story uses the controlled finality boundary, each task

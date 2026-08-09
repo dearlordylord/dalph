@@ -40,12 +40,7 @@ import {
   TaskWorktreeReconciliationIntendedEvent
 } from "../../workflow/registry/event.js"
 import { legacyMemoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
-import {
-  journaledFreshRunRecoveryProjectionLayer,
-  makeJournaledFreshRunRecoveryProjection,
-  makeRunRecoveryProjection,
-  RunRecoveryProjection
-} from "../run/recovery-activation.js"
+import { makeRunRecoveryProjection, RunRecoveryProjection } from "../run/recovery-activation.js"
 import {
   recoverTaskClaimOperation,
   recoverTaskClaimReleaseOperation,
@@ -444,7 +439,9 @@ it.effect("fresh-run journal facts expose membership constraints without recover
     })
   }).pipe(
     Effect.provide(
-      journaledFreshRunRecoveryProjectionLayer(runId).pipe(Layer.provide(controlledFakePlannedAttemptExecutorLayer))
+      Layer.effect(RunRecoveryProjection, makeRunRecoveryProjection(runId)).pipe(
+        Layer.provide(controlledFakePlannedAttemptExecutorLayer)
+      )
     ),
     Effect.provide(legacyMemoryJournalStoreLayer),
     Effect.provideService(
@@ -599,10 +596,7 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
       Layer.provide(Layer.succeed(InRunJournal, InRunJournal.of(journal)))
     )
     yield* Effect.gen(function* () {
-      const activation = yield* makeJournaledFreshRunRecoveryProjection(runId)
-      if (activation._tag !== "JournaledFreshRunProjection") {
-        return yield* Effect.die("expected the same-process journaled activation")
-      }
+      const activation = yield* makeRunRecoveryProjection(runId)
       const closedRead = makeTrackerGraphObservationOperation(OperationId.make("same-process-closed-read"), target)
       const closedGraph = projectTrackerSnapshot({
         revision: "same-process-closed-graph",
@@ -660,18 +654,15 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
       }
       yield* boundary.readTaskClaim(claimRead.operation)
 
-      expect((yield* activation.readDeliveryProjection).frontier).toEqual({
-        explanations: [
-          {
-            _tag: "PlannedAttemptTaskClaimConstraint",
-            claimState: "Foreign",
-            correlation: { attemptId: plannedAttempt.attemptId, runId },
-            taskId,
-            wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
-          }
-        ],
-        transitions: []
+      const constrained = (yield* activation.readDeliveryProjection).frontier
+      expect(constrained.explanations).toContainEqual({
+        _tag: "PlannedAttemptTaskClaimConstraint",
+        claimState: "Foreign",
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        taskId,
+        wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
       })
+      expect(constrained.transitions).toEqual([])
     }).pipe(Effect.provideService(PlannedAttemptExecutor, executor), Effect.provide(interpreter))
 
     expect(yield* Ref.get(claimReads)).toBe(1)

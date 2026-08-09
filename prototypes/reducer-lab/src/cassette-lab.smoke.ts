@@ -60,7 +60,7 @@ await scenario("runs every maintained cassette through production to its declare
     assert(result.consumedItemCount === result.totalItemCount, `${result.catalogKey} must consume its whole story`)
     assert(result.journalRecordCount > 0, `${result.catalogKey} must return production journal evidence`)
     if (result.category === "Authored") {
-      assert(result.activations.length > 0, `${result.catalogKey} must invoke the production coordinator`)
+      assert(result.activationOrdinals.length > 0, `${result.catalogKey} must invoke the production coordinator`)
       assert(
         result.deliveryFrames !== null && result.deliveryFrames.length > 0,
         `${result.catalogKey} must retain production delivery publications`
@@ -110,28 +110,28 @@ await scenario("shows the double-diamond frontier being consumed on one graph", 
     (found, wave) => [...found, eligible.indexOf(wave, (found.at(-1) ?? -1) + 1)],
     []
   )
-  const heldMiddle = (activation: "Fresh" | "Recovered") => frames.find(
-    (frame) => activation === frame.activation && ["B", "C"].every((taskId) =>
+  const heldMiddle = (activationOrdinal: number) => frames.find(
+    (frame) => activationOrdinal === frame.activationOrdinal && ["B", "C"].every((taskId) =>
       frame.heldPositions.some((position) => position.taskId === taskId)
     )
   )
-  const fresh = heldMiddle("Fresh")
-  const recovered = frames.find(({ activation }) => activation === "Recovered")
+  const initial = heldMiddle(1)
+  const later = frames.find(({ activationOrdinal }) => activationOrdinal === 2)
   const lowerDiamondHeld = frames.some(({ heldPositions }) => ["E", "F"].every((taskId) =>
     heldPositions.some((position) => position.taskId === taskId)
   ))
-  const correlations = (frame: NonNullable<typeof fresh>) => frame.heldPositions
+  const correlations = (frame: NonNullable<typeof initial>) => frame.heldPositions
     .filter(({ taskId }) => taskId === "B" || taskId === "C")
     .map(({ attemptId, runId, taskId }) => `${taskId}:${runId}:${attemptId}`)
     .toSorted()
 
   assert(edges.join(",") === "A->B,A->C,B->D,C->D,D->E,D->F,E->G,F->G", "The graph must be the exact double diamond")
   assert(positions.every((position) => position >= 0), "The production frontier must consume every dependency wave in order")
-  assert(fresh !== undefined && recovered !== undefined, "B and C must remain held across restart")
+  assert(initial !== undefined && later !== undefined, "B and C must remain held across restart")
   assert(lowerDiamondHeld, "E and F must occupy the two bounded task-work positions together")
-  if (fresh !== undefined && recovered !== undefined) {
-    assert(recovered.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C", "The first recovered frame must retain both middle-wave positions")
-    assert(correlations(recovered).join(",") === correlations(fresh).join(","), "Recovery must preserve both exact positions")
+  if (initial !== undefined && later !== undefined) {
+    assert(later.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C", "The first later-activation frame must retain both middle-wave positions")
+    assert(correlations(later).join(",") === correlations(initial).join(","), "A later activation must preserve both exact positions")
   }
 })
 
@@ -173,13 +173,13 @@ await scenario("separates desired tickets from exact held task-work positions", 
   )
 })
 
-await scenario("separates Fresh and Recovered delivery frames across authored coordinator death", () => {
+await scenario("separates delivery frames across authored coordinator activations", () => {
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:runPauseRestartsPassively")
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The recovery story must return delivery frames")
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
-  const firstRecovered = result.deliveryFrames.findIndex(({ activation }) => activation === "Recovered")
-  assert(firstRecovered > 0, "Recovered publications must follow Fresh publications")
-  assert(result.deliveryFrames.slice(0, firstRecovered).every(({ activation }) => activation === "Fresh"), "Activation frames must retain their boundary")
+  const firstLaterActivation = result.deliveryFrames.findIndex(({ activationOrdinal }) => activationOrdinal === 2)
+  assert(firstLaterActivation > 0, "Later-activation publications must follow the initial activation")
+  assert(result.deliveryFrames.slice(0, firstLaterActivation).every(({ activationOrdinal }) => activationOrdinal === 1), "Activation frames must retain their boundary")
 })
 
 await scenario("keeps a paused task held until the exact safe-suspension report", () => {
@@ -237,7 +237,7 @@ await scenario("accepts successful recovered completion at the terminal assertio
   const recovered = await runMaintainedCassette("authored:runPauseRestartsPassively")
   assert(recovered._tag === "Completed", "The maintained recovery story must complete")
   if (recovered._tag !== "Completed") return
-  assert(recovered.activations.join(",") === "Fresh,Recovered", "The story must execute both coordinator activations")
+  assert(recovered.activationOrdinals.join(",") === "1,2", "The story must execute both Run activations")
   assert(recovered.consumedItemCount === recovered.totalItemCount, "Terminal assertions must still be consumed")
 })
 
@@ -393,20 +393,20 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
   const status = workbench.querySelector(".delivery-timeline-controls output")
   const next = workbench.querySelector<HTMLButtonElement>("button[data-role='next-frame']")
   const previous = workbench.querySelector<HTMLButtonElement>("button[data-role='previous-frame']")
-  const total = Number(status?.textContent?.match(/of (\d+)/u)?.[1])
-  assert(status?.textContent?.startsWith(`${total} of `) === true, "A completed followed timeline must remain on its newest production publication")
+  const total = Number(status?.textContent?.match(/\/ (\d+)/u)?.[1])
+  assert(status?.textContent?.startsWith(`${total} / `) === true, "A completed followed timeline must remain on its newest production publication")
   previous?.click()
-  assert(status?.textContent?.startsWith(`${total - 1} of `) === true, "Previous frame must rewind the visible timeline")
+  assert(status?.textContent?.startsWith(`${total - 1} / `) === true, "Previous frame must rewind the visible timeline")
   const graph = workbench.querySelector("dalph-delivery-graph")
   graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: "A" } }))
   assert(workbench.querySelector("[data-role='selected-task-facts']")?.textContent?.startsWith("Selected task A") === true, "The selected task must be retained with the frame playback state")
   next?.click()
-  assert(status?.textContent?.startsWith(`${total} of `) === true, "Next frame must navigate forward without replacing the workbench")
+  assert(status?.textContent?.startsWith(`${total} / `) === true, "Next frame must navigate forward without replacing the workbench")
   chooseOption(selector, maintainedCassetteRows.find(({ category }) => category === "TargetPromotion")!.catalogKey)
   chooseOption(selector, row.catalogKey)
   const restored = document.querySelector<HTMLElement>("[data-role='delivery-workbench']")
   assert(restored !== workbench, "Selecting another cassette must replace the old cassette surface")
-  assert(restored?.querySelector(".delivery-timeline-controls output")?.textContent?.startsWith(`${total} of `) === true, "Returning to a cassette must restore its retained frame selection")
+  assert(restored?.querySelector(".delivery-timeline-controls output")?.textContent?.startsWith(`${total} / `) === true, "Returning to a cassette must restore its retained frame selection")
   assert(restored?.querySelector("[data-role='selected-task-facts']")?.textContent?.startsWith("Selected task A") === true, "Returning to a cassette must restore its retained task selection")
 })
 
@@ -444,14 +444,14 @@ await scenario("shows production delivery frames before the authored cassette se
   assert(workbench?.querySelectorAll(".delivery-timeline-controls option").length === 1, "The first live publication must create one frame before terminal settlement")
   observer?.onDeliveryFrame(result.deliveryFrames[1]!)
   const status = workbench?.querySelector(".delivery-timeline-controls output")
-  assert(status?.textContent?.startsWith("2 of 2") === true, "Follow live must advance to the newest running frame")
+  assert(status?.textContent?.startsWith("2 / 2") === true, "Follow live must advance to the newest running frame")
   const previous = workbench?.querySelector<HTMLButtonElement>("button[data-role='previous-frame']")
   previous?.click()
   const inspectedFrame = workbench?.querySelector("[data-role='delivery-frame']")
   const exactEvidence = inspectedFrame?.querySelector<HTMLDetailsElement>("details[data-role='all-task-facts']")
   exactEvidence?.setAttribute("open", "")
   observer?.onDeliveryFrame(result.deliveryFrames[2]!)
-  assert(status?.textContent?.startsWith("1 of 3") === true, "A rewound playhead must not move when another production frame arrives")
+  assert(status?.textContent?.startsWith("1 / 3") === true, "A rewound playhead must not move when another production frame arrives")
   assert(workbench?.querySelector(".delivery-timeline-controls") === timeline, "Appending a live frame must keep the same timeline controls mounted")
   assert(workbench?.querySelector("[data-role='delivery-frame']") === frameHost && inspectedFrame === frameHost, "Appending a live frame while paused must keep the inspected frame DOM mounted")
   assert(exactEvidence?.isConnected === true && exactEvidence.hasAttribute("open"), "Appending a live frame while paused must preserve an open exact-evidence disclosure")
@@ -463,7 +463,7 @@ await scenario("shows production delivery frames before the authored cassette se
   const follow = workbench?.querySelector<HTMLButtonElement>("[data-role='follow-live']")
   follow?.click()
   const terminalStatus = workbench?.querySelector(".delivery-timeline-controls output")
-  assert(terminalStatus?.textContent?.startsWith(`${result.deliveryFrames.length} of ${result.deliveryFrames.length}`) === true, "Follow live must move to the retained newest terminal frame")
+  assert(terminalStatus?.textContent?.startsWith(`${result.deliveryFrames.length} / ${result.deliveryFrames.length}`) === true, "Follow live must move to the retained newest terminal frame")
   assert(document.querySelector("[data-role='journal-evidence']")?.hasAttribute("open") === false, "Terminal journal evidence must remain collapsed")
 })
 
@@ -560,7 +560,7 @@ await scenario("shows graph observation provenance quiescence and planned action
   const facts = document.querySelector("[data-role='delivery-frame']")?.textContent ?? ""
   const passiveFrame = result.deliveryFrames[passiveIndex]
   if (passiveFrame?.graph._tag !== "Established") throw new Error("The selected pause graph is not established")
-  assert(facts.includes("initial coordinator process"), "Fresh activation must be explained in process terms")
+  assert(facts.includes("first coordinator process"), "The initial activation must be explained in process terms")
   assert(
     facts.includes(passiveFrame.graph.observation.operationId)
       && facts.includes(`recorded at journal ${passiveFrame.graph.observation.recordedAt}`),
@@ -573,7 +573,7 @@ await scenario("shows graph observation provenance quiescence and planned action
   assert(document.querySelector("[data-role='delivery-action-planning']") !== null, "Exact action proposals and isolated planning issues must remain inspectable")
 })
 
-await scenario("explains restart continuity at the Fresh to Recovered boundary", async () => {
+await scenario("explains restart continuity at the first later activation boundary", async () => {
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) =>
     catalogKey === "authored:acceptedResultRestartsIntoIntegration"
@@ -582,8 +582,8 @@ await scenario("explains restart continuity at the Fresh to Recovered boundary",
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The restart delivery fixture is missing")
   }
-  const recoveredIndex = result.deliveryFrames.findIndex(({ activation }, index) =>
-    activation === "Recovered" && result.deliveryFrames?.[index - 1]?.activation === "Fresh"
+  const recoveredIndex = result.deliveryFrames.findIndex(({ activationOrdinal }, index) =>
+    activationOrdinal === 2 && result.deliveryFrames?.[index - 1]?.activationOrdinal === 1
   )
   if (recoveredIndex < 1) throw new Error("The restart boundary is missing")
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
@@ -595,8 +595,8 @@ await scenario("explains restart continuity at the Fresh to Recovered boundary",
   chooseOption(timeline, String(recoveredIndex))
   const boundary = document.querySelector(".delivery-restart-boundary")?.textContent ?? ""
   assert(
-    boundary.includes("Coordinator restarted: Fresh activation 1 → Recovered activation 2"),
-    "The first recovered publication must visibly mark the process restart"
+    boundary.includes("Coordinator restarted: Initial activation 1 → Later activation 2"),
+    "The first later-activation publication must visibly mark the process restart"
   )
   assert(boundary.includes("Survived unchanged") && boundary.includes("task A"), "The restart marker must name exact held-position and obligation continuity")
 })
@@ -624,8 +624,8 @@ await scenario("separates every coordinator activation in a multi-restart delive
     chooseOption(timeline, String(frameIndex))
     const marker = document.querySelector(".delivery-restart-boundary")?.textContent ?? ""
     assert(
-      marker.includes(`activation ${boundaryOrdinal + 1} → Recovered activation ${boundaryOrdinal + 2}`),
-      `Recovery activation ${boundaryOrdinal + 2} must have its own visible boundary`
+      marker.includes(`activation ${boundaryOrdinal + 1} → Later activation ${boundaryOrdinal + 2}`),
+      `Later activation ${boundaryOrdinal + 2} must have its own visible boundary`
     )
   }
 })
@@ -639,8 +639,8 @@ await scenario("keeps graph-not-established recovery frames compact and truthful
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The recovery delivery fixture is missing")
   }
-  const emptyIndex = result.deliveryFrames.findIndex(({ activation, graph }) =>
-    activation === "Recovered" && graph._tag === "NotEstablished"
+  const emptyIndex = result.deliveryFrames.findIndex(({ activationOrdinal, graph }) =>
+    activationOrdinal > 1 && graph._tag === "NotEstablished"
   )
   const establishedIndex = result.deliveryFrames.findIndex((frame, index) =>
     index > emptyIndex && frame.graph._tag === "Established"
@@ -1059,7 +1059,7 @@ await scenario("presents concise execution proof before chronological journal an
   const evidence = document.querySelector("[data-role='execution-evidence']")
   const facts = evidence?.querySelector(".execution-facts")?.textContent ?? ""
   assert(facts.includes("runAuthoredScenarioCassette"), "Execution proof must name the exact production runner")
-  assert(facts.includes("Fresh → Recovered"), "Execution proof must show recovery activations")
+  assert(facts.includes("Activation 1 → Activation 2"), "Execution proof must show later Run activations")
   assert(facts.includes("Run identity"), "Authored execution proof must show its Run identity")
   assert((evidence?.querySelectorAll("[data-role='journal-chronology'] tbody tr").length ?? 0) > 0, "Journal evidence must be chronological within a Run")
   assert(evidence?.querySelector("[data-role='journal-chronology'] caption") !== null, "Journal evidence must name its ordering scope")

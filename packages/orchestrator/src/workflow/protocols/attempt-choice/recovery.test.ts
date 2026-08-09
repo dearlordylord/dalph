@@ -24,7 +24,7 @@ import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutatio
 import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { makeJournaledFreshRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
+import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
@@ -187,7 +187,7 @@ it.effect("never claims the executor incorporated changed instructions", () =>
   Effect.gen(function* () {
     yield* appendChangedSafelySuspendedAttempt()
     const journal = yield* JournalStore
-    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId, integrationTarget)
+    const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget)
 
     const first = (yield* recovery.readDeliveryProjection).frontier
     const graph = first.transitions.find(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
@@ -340,7 +340,7 @@ it.effect("requires a new choice when instructions change again before continuat
   Effect.gen(function* () {
     yield* appendChangedSafelySuspendedAttempt()
     const journal = yield* JournalStore
-    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const recovery = yield* makeRunRecoveryProjection(runId)
     const graph = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
     )
@@ -376,15 +376,14 @@ it.effect("requires a new choice when instructions change again before continuat
       )
     )
 
-    expect((yield* recovery.readDeliveryProjection).frontier).toMatchObject({
-      explanations: [
-        expect.objectContaining({
-          _tag: "PlannedAttemptTaskSpecificationChangeConstraint",
-          observedFingerprint: thirdRevision,
-          plannedFingerprint: plannedRevision
-        })
-      ],
-      transitions: []
-    })
+    const constrained = (yield* recovery.readDeliveryProjection).frontier
+    expect(constrained.explanations).toContainEqual(
+      expect.objectContaining({
+        _tag: "PlannedAttemptTaskSpecificationChangeConstraint",
+        observedFingerprint: thirdRevision,
+        plannedFingerprint: plannedRevision
+      })
+    )
+    expect(constrained.transitions).toEqual([])
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )

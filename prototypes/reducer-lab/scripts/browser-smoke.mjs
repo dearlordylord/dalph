@@ -253,14 +253,14 @@ try {
     previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
     assert.ok(previousWave >= 0, `missing rendered frontier wave ${wave || "empty"}`)
   }
-  const freshMiddle = linkedFrameTruth.find(({ facts, taskState }) =>
-    /Fresh activation/u.test(facts) && /B/u.test(taskState) && /C/u.test(taskState) && /attempt:B:1/u.test(taskState) && /attempt:C:2/u.test(taskState)
+  const initialMiddle = linkedFrameTruth.find(({ facts, taskState }) =>
+    /Initial activation 1/u.test(facts) && /B/u.test(taskState) && /C/u.test(taskState) && /attempt:B:1/u.test(taskState) && /attempt:C:2/u.test(taskState)
   )
-  const recoveredMiddle = linkedFrameTruth.find(({ facts }) => /Recovered/u.test(facts))
-  assert.ok(freshMiddle)
-  assert.ok(recoveredMiddle)
-  assert.match(recoveredMiddle.taskState, /attempt:B:1/u)
-  assert.match(recoveredMiddle.taskState, /attempt:C:2/u)
+  const laterMiddle = linkedFrameTruth.find(({ facts }) => /Later activation 2/u.test(facts))
+  assert.ok(initialMiddle)
+  assert.ok(laterMiddle)
+  assert.match(laterMiddle.taskState, /attempt:B:1/u)
+  assert.match(laterMiddle.taskState, /attempt:C:2/u)
   assert.ok(await linkedFrameSelector.locator("option").count() > 1)
   await linkedFrameSelector.selectOption("0")
   const landmarkWaves = []
@@ -276,11 +276,41 @@ try {
     landmarkWaves.push(`${await linkedFrameSelector.inputValue()}:${wave}:${await linkedFrameSelector.locator("option:checked").textContent()}`)
   }
   for (const wave of ["A", "B+C", "D", "E+F", "G", ""]) assert.ok(landmarkWaves.some((value) => value.includes(`:${wave}:`)))
-  for (const activation of ["Fresh activation 1", "Recovered activation 2", "Recovered activation 3", "Recovered activation 4"]) {
+  for (const activation of ["Initial activation 1", "Later activation 2", "Later activation 3", "Later activation 4"]) {
     assert.ok(landmarkWaves.some((value) => value.includes(activation)), `missing delivery landmark for ${activation}`)
   }
   assert.ok(landmarkWaves.length <= 9, `too many delivery landmarks: ${JSON.stringify(landmarkWaves)}`)
   console.log("✓ drives the double-diamond frontier through every production wave and restart")
+
+  const linkedFrameCount = await linkedFrameSelector.locator("option").count()
+  await linkedFrameSelector.selectOption(String(Math.max(0, linkedFrameCount - 28)))
+  await page.setViewportSize({ width: 390, height: 844 })
+  const compactPlayback = await linkedWorkbench.locator(".delivery-timeline-controls").evaluate((toolbar) => {
+    const bounds = toolbar.getBoundingClientRect()
+    return {
+      background: getComputedStyle(toolbar).backgroundColor,
+      buttons: [...toolbar.querySelectorAll("button")].map((button) => {
+        const buttonBounds = button.getBoundingClientRect()
+        return {
+          clientWidth: button.clientWidth,
+          left: buttonBounds.left,
+          right: buttonBounds.right,
+          scrollWidth: button.scrollWidth
+        }
+      }),
+      height: bounds.height,
+      left: bounds.left,
+      right: bounds.right
+    }
+  })
+  assert.equal(compactPlayback.background, "rgb(247, 243, 233)")
+  assert.ok(compactPlayback.height <= 180, `double-diamond playback toolbar is ${compactPlayback.height}px tall`)
+  for (const button of compactPlayback.buttons) {
+    assert.ok(button.scrollWidth <= button.clientWidth + 1, `playback label is clipped: ${JSON.stringify(button)}`)
+    assert.ok(button.left >= compactPlayback.left - 1 && button.right <= compactPlayback.right + 1)
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  console.log("✓ keeps late double-diamond playback compact and unclipped at 390px")
 
   await page.reload({ waitUntil: "networkidle" })
   await page.getByRole("button", { name: `Run all ${maintainedCassetteCount} cassettes` }).click()

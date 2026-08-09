@@ -52,10 +52,13 @@ const declaredProjection = (row: AuthoredRow): DeliveryGraphProjection => ({
   tasks: row.surface.declaredGraph.tasks.map(({ id, lifecycle, title }) => ({ id, lifecycle, title }))
 })
 
+const activationLabel = (ordinal: number): string =>
+  ordinal === 1 ? "Initial activation 1" : `Later activation ${ordinal}`
+
 const frameLabel = (frame: AuthoredDeliveryFrame, index: number): string => {
   const graph = frame.graph._tag === "Established" ? `observed graph ${frame.graph.revision}` : "graph not established"
   const accepted = frame.acceptedAt === null ? "no accepted facts" : `facts through journal ${frame.acceptedAt}`
-  return `${index + 1}. ${frame.activation} activation ${frame.activationOrdinal + 1} · ${frame.storyPosition} declared interactions consumed · ${graph} · ${accepted}`
+  return `${index + 1}. ${activationLabel(frame.activationOrdinal)} · ${frame.storyPosition} declared interactions consumed · ${graph} · ${accepted}`
 }
 
 const deliverySummary = (delivery: AuthoredDeliveryFrame["deliveries"][number] | undefined): string =>
@@ -151,9 +154,9 @@ const renderFrameFacts = (
   const descriptions: ReadonlyArray<readonly [string, string]> = [
     [
       "Production activation",
-      frame.activation === "Fresh"
-        ? "Fresh activation 1 · initial coordinator process"
-        : `Recovered activation ${frame.activationOrdinal + 1} · coordinator restarted from accepted journal history`
+      frame.activationOrdinal === 1
+        ? "Initial activation 1 · first coordinator process"
+        : `Later activation ${frame.activationOrdinal} · coordinator restarted from accepted journal history`
     ],
     [
       "Authored input consumed",
@@ -379,7 +382,7 @@ const frameChangeSummary = (
   const changes: Array<string> = []
   if (previous.activationOrdinal !== frame.activationOrdinal) {
     changes.push(
-      `${previous.activation} activation ${previous.activationOrdinal + 1} → ${frame.activation} activation ${frame.activationOrdinal + 1}`
+      `${activationLabel(previous.activationOrdinal)} → ${activationLabel(frame.activationOrdinal)}`
     )
   }
   if (JSON.stringify(previous.quiescence) !== JSON.stringify(frame.quiescence)) {
@@ -467,7 +470,7 @@ const restartContinuity = (
 ): string | undefined => {
   if (
     previous === undefined ||
-    frame.activation !== "Recovered" ||
+    frame.activationOrdinal === 1 ||
     previous.activationOrdinal === frame.activationOrdinal
   ) return undefined
   const before = new Map(exactCorrelations(previous).map((fact) => [fact.key, fact]))
@@ -475,7 +478,7 @@ const restartContinuity = (
   const retained = [...before].filter(([key]) => after.has(key)).map(([, fact]) => fact.summary)
   const removed = [...before.keys()].filter((key) => !after.has(key))
   const added = [...after.keys()].filter((key) => !before.has(key))
-  return `Coordinator restarted: ${previous.activation} activation ${previous.activationOrdinal + 1} → Recovered activation ${frame.activationOrdinal + 1}. Survived unchanged: ${retained.length === 0 ? "none" : retained.join("; ")}. ${removed.length} correlations disappeared; ${added.length} appeared after recovery.`
+  return `Coordinator restarted: ${activationLabel(previous.activationOrdinal)} → ${activationLabel(frame.activationOrdinal)}. Survived unchanged: ${retained.length === 0 ? "none" : retained.join("; ")}. ${removed.length} correlations disappeared; ${added.length} appeared after restart.`
 }
 
 const renderTimeline = (
@@ -513,7 +516,7 @@ const renderTimeline = (
   parent.append(legend)
   const controls = document.createElement("div")
   controls.className = "delivery-timeline-controls"
-  const previousLandmark = appendText(controls, "button", "← Landmark")
+  const previousLandmark = appendText(controls, "button", "← Jump")
   previousLandmark.type = "button"
   previousLandmark.dataset.role = "previous-landmark"
   previousLandmark.setAttribute("aria-label", "Previous delivery landmark")
@@ -532,7 +535,7 @@ const renderTimeline = (
   next.type = "button"
   next.dataset.role = "next-frame"
   next.setAttribute("aria-label", "Next frame")
-  const nextLandmark = appendText(controls, "button", "Landmark →")
+  const nextLandmark = appendText(controls, "button", "Jump →")
   nextLandmark.type = "button"
   nextLandmark.dataset.role = "next-landmark"
   nextLandmark.setAttribute("aria-label", "Next delivery landmark")
@@ -623,8 +626,8 @@ const renderTimeline = (
 
   const refreshNavigation = (index: number): void => {
     const newerCount = Math.max(0, frames.length - index - 1)
-    status.textContent = `${index + 1} of ${frames.length} · ${running ? "production still running" : "run settled"}`
-      + `${playback.followLive ? " · following newest frame" : ` · inspecting history · ${newerCount} newer ${newerCount === 1 ? "frame" : "frames"}`}`
+    status.textContent = `${index + 1} / ${frames.length} · ${running ? "running" : "settled"}`
+      + `${playback.followLive ? " · live" : ` · history · ${newerCount} newer`}`
     previous.disabled = index === 0
     next.disabled = index === frames.length - 1
     const landmarks = landmarkIndexes()

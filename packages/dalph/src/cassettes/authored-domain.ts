@@ -50,6 +50,12 @@ export const AuthoredTrackerGraph = Schema.Struct({
 })
 export type AuthoredTrackerGraph = typeof AuthoredTrackerGraph.Type
 
+/** The one-based position of a bounded Run activation in an authored whole-Run cassette. */
+export const AuthoredRunActivationOrdinal = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).pipe(
+  Schema.brand("AuthoredRunActivationOrdinal")
+)
+export type AuthoredRunActivationOrdinal = typeof AuthoredRunActivationOrdinal.Type
+
 export const AuthoredTaskWorkSpecification = Schema.Struct({
   body: Schema.String,
   taskId: TaskId,
@@ -490,14 +496,14 @@ const behaviorAssertionsAreConsistent = Schema.makeFilter((cassette: typeof Auth
 )
 
 const minimumItemsAfterCoordinatorDeath = 2
-const coordinatorLifecycleBoundariesHaveFollowingRecoveryWork = Schema.makeFilter(
+const coordinatorLifecycleBoundariesHaveFollowingActivationWork = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) =>
     cassette.story.every(
       (item, index) =>
         item._tag !== "CoordinatorProcessDies" || index < cassette.story.length - minimumItemsAfterCoordinatorDeath
     )
       ? undefined
-      : "each authored coordinator process death must leave a later recovery interaction before terminal assertions"
+      : "each authored coordinator process death must leave a later activation interaction before terminal assertions"
 )
 
 const ambiguousBoundaryLossesImmediatelyCrash = Schema.makeFilter(
@@ -573,8 +579,8 @@ const heldPauseGraphReturnOffset = 3
 const heldUnpauseOffset = 4
 const heldUnpauseGraphSelectionOffset = 5
 const heldUnpauseGraphReturnOffset = 6
-const heldRecoveryGraphSelectionOffset = 7
-const heldRecoveryGraphReturnOffset = 8
+const heldLaterActivationGraphSelectionOffset = 7
+const heldLaterActivationGraphReturnOffset = 8
 const heldSpecificationSelectionOffset = 9
 const heldSpecificationReturnOffset = 10
 const heldStopOffset = 11
@@ -692,7 +698,7 @@ const exactHeldControlReads = (story: AuthoredStory, holdIndex: number, taskId: 
     "Unpause",
     taskId
   ) &&
-  graphReadAt(story, holdIndex, heldRecoveryGraphSelectionOffset, heldRecoveryGraphReturnOffset)
+  graphReadAt(story, holdIndex, heldLaterActivationGraphSelectionOffset, heldLaterActivationGraphReturnOffset)
 
 const admittedContinuationClosureIssue = (
   story: AuthoredStory,
@@ -700,7 +706,7 @@ const admittedContinuationClosureIssue = (
   hold: AdmittedContinuationHold
 ): string | undefined => {
   if (!exactHeldControlReads(story, holdIndex, hold.taskId)) {
-    return "the admitted continuation hold must cross exact Task Pause, Unpause, and recovery graph reads"
+    return "the admitted continuation hold must cross exact Task Pause, Unpause, and later-activation graph reads"
   }
   const specification = exactHeldSpecificationAt(story, holdIndex, hold.taskId)
   if (specification === undefined) {
@@ -745,7 +751,7 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   )
   .check(startingFactsAreConsistent)
   .check(behaviorAssertionsAreConsistent)
-  .check(coordinatorLifecycleBoundariesHaveFollowingRecoveryWork)
+  .check(coordinatorLifecycleBoundariesHaveFollowingActivationWork)
   .check(ambiguousBoundaryLossesImmediatelyCrash)
   .check(lostExecutorResponsesRequireExplicitProjection)
   .check(completionFinalityStoryIsComplete)

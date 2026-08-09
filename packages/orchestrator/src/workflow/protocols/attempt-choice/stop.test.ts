@@ -24,7 +24,7 @@ import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.
 import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { transitionTaskWorkPosition } from "../../../coordination/frontier/transition-task-work.js"
-import { makeJournaledFreshRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
+import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
 import { acceptedOperationIdsOf } from "../../../coordination/delivery/delivery-evidence.js"
 import {
   acceptedWorkflowTransitionOperationId,
@@ -412,7 +412,7 @@ it.effect("keeps an abandoned attempt waiting when no tracker target can authori
       )
     )
 
-    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const recovery = yield* makeRunRecoveryProjection(runId)
     expect((yield* recovery.readDeliveryProjection).frontier.explanations).toContainEqual(
       expect.objectContaining({ _tag: "StoppedAttemptClaimPlanningWait", reason: "TrackerTargetUnavailable" })
     )
@@ -740,7 +740,7 @@ it.effect("shows a contradictory executor projection as an explicit Stop wait", 
         version: workflowJournalEventVersion
       })
     )
-    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const recovery = yield* makeRunRecoveryProjection(runId)
     const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
     yield* journal.append(
       runId,
@@ -906,7 +906,7 @@ it.effect("issues three suspension commands, never a fourth, then abandons after
       Effect.provideService(PlannedAttemptExecutor, runningExecutor)
     )
 
-    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const recovery = yield* makeRunRecoveryProjection(runId)
     const observe = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "ObserveAttemptStoppageExecutor"
     )
@@ -997,7 +997,7 @@ it.effect("reconciles a lost third suspension response before the bounded read-o
       ))._tag
     ).toBe("Failure")
 
-    const afterLostResponse = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const afterLostResponse = yield* makeRunRecoveryProjection(runId)
     const reconciliation = (yield* afterLostResponse.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "AdvanceAttemptStoppage"
     )
@@ -1011,7 +1011,7 @@ it.effect("reconciles a lost third suspension response before the bounded read-o
       Effect.provideService(PlannedAttemptExecutor, executorWithLostThirdResponse)
     )
 
-    const afterCommandProjection = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const afterCommandProjection = yield* makeRunRecoveryProjection(runId)
     const observation = (yield* afterCommandProjection.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "ObserveAttemptStoppageExecutor"
     )
@@ -1603,7 +1603,7 @@ it.effect("releases only the freshly confirmed exact claim after Stop", () =>
         })
       )
     )
-    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const recovery = yield* makeRunRecoveryProjection(runId)
     const claimReads = yield* Ref.make(0)
     const releases = yield* Ref.make(0)
     const base = Layer.succeed(
@@ -1674,7 +1674,7 @@ it.effect("retries the same stopped-claim release after reconstruction confirms 
         })
       )
     )
-    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const recovery = yield* makeRunRecoveryProjection(runId)
     const releases = yield* Ref.make<ReadonlyArray<OperationId>>([])
     const base = Layer.succeed(
       WorkflowInterpreter,
@@ -1782,7 +1782,7 @@ it.effect("stops implementation without mutating an absent or foreign claim", ()
         })
       )
     )
-    const recovery = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const recovery = yield* makeRunRecoveryProjection(runId)
     const reads = yield* Ref.make(0)
     const releases = yield* Ref.make(0)
     const foreignClaim = ActiveTaskClaim.make({
@@ -1863,7 +1863,7 @@ it.effect("stops implementation without mutating an absent or foreign claim", ()
     ).toBe(false)
     yield* recordStoppedAttemptClaimNoRelease(requestId, subject, noRelease.observationOperationId)
 
-    const laterRecovery = yield* makeJournaledFreshRunRecoveryProjection(runId)
+    const laterRecovery = yield* makeRunRecoveryProjection(runId)
     const laterProjection = yield* laterRecovery.readDeliveryProjection
     const records = yield* (yield* JournalStore).read(runId)
     expect(yield* Ref.get(reads)).toBe(2)

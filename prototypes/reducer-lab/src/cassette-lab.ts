@@ -66,7 +66,7 @@ const cassetteCategoryMetadata = {
 } as const satisfies Record<CassetteCategory, CassetteCategoryMetadata>
 
 interface CassetteExecution {
-  readonly activations: ReadonlyArray<"Fresh" | "Recovered">
+  readonly activationOrdinals: ReadonlyArray<number>
   readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null
   readonly evidence: unknown
   readonly journalRecords: ReadonlyArray<unknown>
@@ -116,7 +116,7 @@ export type CassetteFailureLocation =
 export type CassetteLabResult =
   | {
       readonly _tag: "Completed"
-      readonly activations: ReadonlyArray<"Fresh" | "Recovered">
+      readonly activationOrdinals: ReadonlyArray<number>
       readonly catalogKey: MaintainedCassetteKey
       readonly category: CassetteCategory
       readonly consumedItemCount: number
@@ -187,7 +187,7 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
     )
     await projectionQueue
     return Exit.map(exit, (run) => ({
-      activations: run.coordinatorActivations,
+      activationOrdinals: run.activationOrdinals,
       deliveryFrames: run.deliveryFrames,
       evidence: run,
       journalRecords: run.records,
@@ -224,7 +224,7 @@ const targetPromotionDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
       runTargetPromotionProtocolCassette(cassette).pipe(Effect.provide(cassetteRuntimeLayer))
     )
     return Exit.map(exit, (run) => ({
-      activations: [],
+      activationOrdinals: [],
       deliveryFrames: null,
       evidence: run,
       journalRecords: run.records,
@@ -248,7 +248,7 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
       runIntegrationFinalityProtocolCassette(cassette).pipe(Effect.provide(cassetteRuntimeLayer))
     )
     return Exit.map(exit, (run) => ({
-      activations: [],
+      activationOrdinals: [],
       deliveryFrames: null,
       evidence: run,
       journalRecords: run.records,
@@ -406,7 +406,7 @@ const completedResult = (
   execution: CassetteExecution
 ): CassetteLabResult => ({
   _tag: "Completed",
-  activations: execution.activations,
+  activationOrdinals: execution.activationOrdinals,
   catalogKey: descriptor.catalogKey,
   category: descriptor.category,
     consumedItemCount: descriptor.story.length,
@@ -450,7 +450,7 @@ export const runAuthoredCassetteInput = async (
   return Exit.isFailure(exit)
     ? failedResult(inputDescriptor, exit.cause)
     : completedResult(inputDescriptor, {
-        activations: exit.value.coordinatorActivations,
+        activationOrdinals: exit.value.activationOrdinals,
         deliveryFrames: exit.value.deliveryFrames,
         evidence: exit.value,
         journalRecords: exit.value.records,
