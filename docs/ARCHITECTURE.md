@@ -11,6 +11,13 @@ live under [adr/](adr/).
 
 ## Governing Composition
 
+Before delivery is constructed, one application entry establishes the exact
+Run from the Journal. Absent history causes one beginning to be appended using
+a lazily evaluated initial policy; existing history is validated and reduced
+to the same target, latest policy, and exact responsibilities. The established
+state then feeds one bounded Run activation. The caller does not select a
+separate restoration startup.
+
 Dalph treats the tracker graph as a current signal. Delivery projects that
 signal into a frontier, bounded tickets, responsibility-aware ticket delivery,
 settlement, and the tracker consequences implied by settlement.
@@ -103,6 +110,9 @@ higher-level description:
   the result, and records the established workflow fact.
 - **Runtime** owns subscriptions, bounded admission, process-local ownership,
   fibers, interruption, wake-up, and repetition.
+- **Establishment** reads exact Run history, appends the beginning only when
+  history is absent, validates complete history, and reconstructs the state
+  required by activation.
 - **Stabilization** obtains the required later complete tracker observation
   after quiescence, then decides whether the invocation returns or records Run
   termination.
@@ -115,10 +125,11 @@ them; declarative presentation does not erase those protocols.
 
 Effect services and Layers provide these seams. Controlled, test, and external
 adapters are selected when the program is assembled. Shared domain code and
-authored cassettes do not branch on an environment mode. Fresh and recovered
-initialization remain distinct because they establish different Run facts,
-then provide the same ordinary delivery, planning, runtime, and stabilization
-interfaces.
+authored cassettes do not branch on an environment mode. A transition that
+starts new task work and one that reconciles an earlier uncertain request may
+still call different named action protocols, but Run initialization is one
+idempotent establishment path. Every successfully established Run provides the
+same ordinary delivery, planning, runtime, and stabilization interfaces.
 
 ## Authority and Reconciliation
 
@@ -151,12 +162,18 @@ fail-closed.
 
 ## Durability and Reconstruction
 
-Dalph persists workflow history, not a serialized coordinator. On restart it
-validates each Run's complete journal history, reconstructs exact outstanding
-responsibilities through pure composed reducers, and obtains current evidence
-from each owning seam wherever the accepted protocol provides and requires that
-observation. The current same-process executor is recreated
+Dalph persists workflow history, not a serialized coordinator. On every Run
+entry it establishes the exact Run idempotently: absent history receives one
+beginning; existing history is validated in full and reduced to the latest
+policy and exact outstanding responsibilities. It then obtains current
+evidence from each owning seam wherever the accepted protocol provides and
+requires that observation. The current same-process executor is recreated
 rather than inspected after process loss.
+
+Task-work positions are reconstructed from exact unfinished responsibilities
+before the activation admits new work. The position map itself does not
+survive. A newly begun and an already existing Run then use the same bounded
+activation and finality path.
 
 Intent is recorded before an effect whose outcome could become ambiguous.
 After a lost response or crash, the ordinary protocol reconciles the recorded
@@ -165,8 +182,9 @@ journal history fails the affected Run closed. A contradiction local to one
 task, attempt, or resource prevents action only in the region that needs that
 fact when independent regions can still proceed safely.
 
-The detailed journal, publication, reduction, crash, and reconstruction rules
-are in [Journal and Reconstruction](architecture/journal-and-reconstruction.md).
+The detailed establishment, journal publication, reduction, crash, and
+reconstruction rules are in
+[Journal and Reconstruction](architecture/journal-and-reconstruction.md).
 
 ## Exclusive Coordinator Lock
 
@@ -346,8 +364,8 @@ depart from the community knowledge base.
 
 | Group | Owns |
 | --- | --- |
-| [Journal and Reconstruction](architecture/journal-and-reconstruction.md) | journal publication, reduction, recovery, responsibility reconstruction, and failure locality |
-| [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md) | exclusive coordinator ownership, Run lifecycle, pause, frontier/admission separation, capacity, waits, and stabilization |
+| [Journal and Reconstruction](architecture/journal-and-reconstruction.md) | Run establishment, journal publication, reduction, later-activation reconstruction, responsibility reconstruction, and failure locality |
+| [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md) | exclusive coordinator ownership, Run establishment and activation, pause, frontier/admission separation, capacity, waits, and stabilization |
 | [Tracker Graph and Claims](architecture/tracker-graph-and-claims.md) | tracker closure, observation evidence, GitHub consistency limits, named reads, mutations, and claims |
 | [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, candidate construction, verification, and exact-head promotion |
 | [CONTEXT.md](CONTEXT.md) | canonical domain vocabulary |
