@@ -3,8 +3,9 @@
 Issue:
 [Clean-restart an exact changed attempt](https://github.com/dearlordylord/dalph/issues/66)
 
-Status: proposed on 2026-08-08 and awaiting maintainer acceptance. This file
-does not authorize behavior-changing implementation.
+Status: proposed on 2026-08-08. The first maintainer decision was accepted on
+2026-08-09. The remaining choices and the full scenario still await maintainer
+acceptance, so this file does not authorize behavior-changing implementation.
 
 Issue #136 already exposes `RestartTaskImplementation` only after a current
 tracker read proves that task instructions changed and the executor reports the
@@ -18,40 +19,42 @@ ADR, model, or executor-internal stages still linked from issue #66.
 `specs/frontierRecovery.qnt` were deleted together in commit `360258012`; they
 are historical evidence rather than current authorization.
 
-## First maintainer decision before acceptance
+## Settled maintainer decision: Restart requires exact safe suspension
 
-Should Alice be allowed to choose Restart only after issue #136 has already
-obtained the exact safely-suspended report for P1, as this proposal recommends
-so #66 records the Restart direction and one replacement planning record
-without sending a second interruption, or
-should Alice also be allowed to choose Restart while P1 is still running, in
-which case #66 must own a new durable interrupt, owned-writer termination, and
-partial-evidence-sealing protocol before these scenarios can be accepted?
+The maintainer accepted this decision on 2026-08-09: Alice may choose Restart
+only after issue #136 has obtained an exact `SafelySuspended` planned-attempt
+executor-work report for P1. Alice cannot choose Restart while P1 is `Running`.
+Issue #66 owns no new interruption, writer-termination, or partial-evidence-
+sealing protocol.
 
-Under the recommended answer, issue #66's current “interruption intent is
-durable” acceptance text becomes “the Restart direction and one proposed
-planned-attempt replacement event are durable.” That event makes exact P1 no
-longer unsettled while recording immutable planned task attempt P2; its journal
-record is the durable envelope. No retained journal prefix contains a
-superseded P1 without its P2. The accepted generic executor boundary has no
-coding-agent session, inner process tree, or partial-evidence manifest. The
-controlled fake therefore has no separate evidence-sealing boundary to call.
-Before this proposal can become accepted, the issue owner must amend that
-criterion or choose the otherwise case; merging this proposed file alone does
-not satisfy it. Any future requirement for an executor to seal partial evidence
-needs its own accepted coarse executor contract, because generic Dalph must not
-inspect or reconstruct executor-internal stages. The execution substrate is not
-another Dalph boundary in this proposal: the selected executor owns any process
-observation, and the controlled fake shares Dalph's process lifetime.
+Issue #66's current “interruption intent is durable” acceptance text must now
+become “the Restart direction and one proposed planned-attempt replacement
+event are durable.” That event makes exact P1 no longer unsettled while it
+records immutable planned task attempt P2; its journal record is the durable
+envelope. No retained journal prefix contains a superseded P1 without P2. The
+accepted generic executor boundary has no coding-agent session, inner process
+tree, or partial-evidence manifest. The controlled fake therefore has no
+separate evidence-sealing boundary to call. The issue owner must amend the
+criterion before this proposal can become accepted; merging this proposed file
+alone does not satisfy it. A future requirement to seal executor-internal
+partial evidence needs a separate accepted coarse executor contract. Generic
+Dalph must not inspect or reconstruct executor-internal stages. The selected
+executor owns process observations, and the controlled fake shares Dalph's
+process lifetime.
 
-The otherwise case is materially different. Alice's request would arrive while
-the executor still reports P1 `Running`; Dalph would have to record an exact
-interruption intent before asking the executor to stop for replacement, prove
-that every P1 writer stopped, and receive a coarse executor result proving that
-its partial evidence was sealed. An unreadable result, a surviving writer, or a
-lost response would leave P1 unsettled and forbid P2. That chronology is not
-owned by #136, #65, the current planned-attempt executor boundary, or the
-current `taskFactReconciliation` model.
+## Next maintainer decision: disposition of P1 resources
+
+After Dalph records planned task attempt P2, should it keep P1's worktree,
+branch, commits, uncommitted work, and evidence for a separate disposition?
+I recommend this case because issue #67 owns the resource-disposition behavior.
+P2 starts in a different worktree at its exact Base SHA and receives no content
+from P1.
+
+Otherwise, issue #66 must name each P1 resource that it can dispose of during
+Restart. It must define a durable and recoverable disposition for each
+resource and amend the preservation invariant. It must record intent before
+each Git effect, reconcile an uncertain result before retry, and preserve every
+resource that has no accepted disposition.
 
 ## Alice restarts P1 from F2 without carrying W1 into P2
 
@@ -375,10 +378,11 @@ choice; unreadable facts authorize no successor; the three terminal result
 variants remain distinct; a late Accepted commit starts no integration after
 Restart won; and integration start removes the Restart capability.
 The executable conformance path must compose that model with the existing
-`specs/plannedAttemptExecutor.qnt` suspension protocol. If the maintainer
-instead accepts Restart while P1 is running or adds an evidence-bearing
-executor result, that executor model and its adapter require an explicit
-behavior change in the same dependency path.
+`specs/plannedAttemptExecutor.qnt` suspension protocol. It must reject a
+Restart request while P1 is `Running`. If a later command breaks the retained
+safe-suspension proof after Restart was applied, the composition may use only
+the existing planned-attempt executor-work suspension protocol. It must not add
+an evidence-bearing executor result or inspect executor-internal work.
 
 The late-`Accepted` branch is also a proposed amendment to
 `docs/scenarios/issue-56-queue-accepted-integration.md`. Acceptance must change
