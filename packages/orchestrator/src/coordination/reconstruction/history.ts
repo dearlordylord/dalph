@@ -1071,16 +1071,9 @@ const validateExecutorEvent = (
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   const event = record.event
+  const descriptor = describeJournalEvent(event)
   const executorAttemptId =
-    event._tag === "PlannedAttemptExecutorWorkReported"
-      ? event.report.correlation.attemptId
-      : event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
-          event._tag === "PlannedAttemptExecutorCommandIntended" ||
-          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
-          event._tag === "PlannedAttemptExecutorCommandResponseContradicted" ||
-          event._tag === "PlannedAttemptExecutorStateObserved"
-        ? event.plannedAttempt.attemptId
-        : undefined
+    descriptor._tag === "PlannedAttemptExecutorEventDescriptor" ? descriptor.correlation.attemptId : undefined
   if (executorAttemptId !== undefined && indexes.abandonedExecutorAttempts.has(executorAttemptId)) {
     semanticIssue(
       issues,
