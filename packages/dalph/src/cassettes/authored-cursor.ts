@@ -498,11 +498,13 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeTrackerGraph = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is AuthoredTrackerGraphReadResult =>
-        item?._tag === "TrackerGraphReadFailed" || item?._tag === "TrackerGraphReadReturned"
+        item?._tag === "TrackerGraphReadFailed" ||
+        item?._tag === "TrackerGraphReadReturned" ||
+        item?._tag === "RunActivationFinalTrackerGraphReadReturned"
     )
     if (claimed._tag === "Mismatch") {
       return yield* new AuthoredCassetteInteractionMismatch({
-        actual: "TrackerGraphReadFailed | TrackerGraphReadReturned",
+        actual: "TrackerGraphReadFailed | TrackerGraphReadReturned | RunActivationFinalTrackerGraphReadReturned",
         /* v8 ignore next -- A decoded story retains its terminal assertion after any graph interaction. */
         expected: claimed.item?._tag ?? "EndOfStory",
         storyPosition: claimed.index

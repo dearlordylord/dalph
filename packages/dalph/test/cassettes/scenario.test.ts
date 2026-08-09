@@ -102,6 +102,7 @@ import {
   changedAttemptStopsWithForeignClaimAuthoredCassette,
   compareRecordedCassetteCheckpoints,
   compatibleTargetAdvanceContinuesAuthoredCassette,
+  contractedCapacityRetainsTwoAttemptsAuthoredCassette,
   dependentTasksCompleteInOneRunAuthoredCassette,
   foldRecordedCassette,
   invertCassetteIdentityRenaming,
@@ -718,7 +719,7 @@ it.effect("preserves every exact resource when executor stoppage is unproved", (
   })
 )
 
-it.effect("rechecks the executor after restart before repeating Stop", () =>
+it.effect("reconstructs an ambiguous executor command before activating its continuation", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette)
     const stopAt = run.records.findIndex(({ event }) => event._tag === "AttemptChoiceApplied")
@@ -2908,17 +2909,103 @@ it.effect("retains the exact paused quiescence disposition in production deliver
   })
 )
 
-it.effect("returns control after one unchanged refresh without terminating the unsettled Run", () =>
+it.effect("performs one final tracker read before the current bounded activation returns or terminates", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(singleton)
+    const finalGraphReturnAt = singleton.story.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
+    const cassette = {
+      ...singleton,
+      name: "one final tracker read precedes the bounded activation return",
+      story: singleton.story.flatMap((item, index) => {
+        if (index !== finalGraphReturnAt || item._tag !== "TrackerGraphReadReturned") return [item]
+        return [
+          { _tag: "RunActivationFinalTrackerGraphReadReturned" as const, graph: item.graph },
+          {
+            _tag: "CoordinatorActivationReturned" as const,
+            decision: { _tag: "RunMustRemainActive" as const, reason: "TrackerTargetUnsettled" as const }
+          }
+        ]
+      })
+    }
+    const command = singleton.story[1]
+    if (command?._tag !== "RunCoordinator") return yield* Effect.die("singleton has no coordinator command")
+    const emptyGraph = { revision: TrackerRevision.make("activation-final-empty-target"), tasks: [] }
+    const terminatingCassette = {
+      ...singleton,
+      name: "one final tracker read precedes Run termination",
+      startingFacts: { ...singleton.startingFacts, taskWorkSpecifications: [], trackerGraph: emptyGraph },
+      story: [
+        singleton.story[0],
+        command,
+        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: command.target } },
+        { _tag: "TrackerGraphReadReturned" as const, graph: emptyGraph },
+        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: command.target } },
+        { _tag: "RunActivationFinalTrackerGraphReadReturned" as const, graph: emptyGraph },
+        { _tag: "CoordinatorActivationReturned" as const, decision: { _tag: "RunMayTerminate" as const } },
+        {
+          _tag: "ExpectedBehavior" as const,
+          orchestration: null,
+          protocol: null,
+          taskWork: { absences: [], results: [] }
+        }
+      ]
+    }
+    const [run, terminated] = yield* Effect.all([
+      runAuthoredScenarioCassette(cassette),
+      runAuthoredScenarioCassette(terminatingCassette)
+    ])
     const graphObservations = run.records.flatMap(({ event }) =>
       event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
     )
 
+    expect(run.activationOrdinals).toEqual([1])
+    expect(cassette.story.filter(({ _tag }) => _tag === "RunActivationFinalTrackerGraphReadReturned")).toHaveLength(1)
     expect(graphObservations.at(-1)?._tag).toBe("UnchangedTaskTrackerFactsReconfirmed")
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("final complete target-closure read")
     expect(run.records.at(-1)?.event._tag).toBe("TaskTrackerFactsObserved")
     expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
     expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A"])
+    expect(terminated.records.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
+    expect(terminated.activationOrdinals).toEqual([1])
+    expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
+    expectRecordedRoundTrip(terminated.records, yield* projectRecordedCassette(terminated.records))
+    const encoded = yield* Schema.encodeUnknownEffect(AuthoredScenarioCassette)(run.cassette)
+    expect(yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)(encoded)).toEqual(run.cassette)
+  })
+)
+
+it.effect("re-enters the same Run and activates it after quiescent incomplete return", () =>
+  Effect.gen(function* () {
+    const finalGraphReturnAt = singleton.story.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
+    const finalAssertions = singleton.story.at(-1)
+    if (finalAssertions?._tag !== "ExpectedBehavior") return yield* Effect.die("singleton has no assertions")
+    const storyBeforeFinalRead = singleton.story.slice(0, finalGraphReturnAt)
+    const finalGraph = singleton.startingFacts.trackerGraph
+    const finalReturn = {
+      _tag: "CoordinatorActivationReturned" as const,
+      decision: { _tag: "RunMustRemainActive" as const, reason: "TrackerTargetUnsettled" as const }
+    }
+    const cassette = {
+      ...singleton,
+      name: "the same Run enters another activation after an incomplete return",
+      story: [
+        ...storyBeforeFinalRead,
+        { _tag: "RunActivationFinalTrackerGraphReadReturned" as const, graph: finalGraph },
+        finalReturn,
+        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned" as const, graph: finalGraph },
+        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" } },
+        { _tag: "RunActivationFinalTrackerGraphReadReturned" as const, graph: finalGraph },
+        finalReturn,
+        finalAssertions
+      ]
+    }
+    const run = yield* runAuthoredScenarioCassette(cassette)
+
+    expect(run.activationOrdinals).toEqual([1, 2])
+    expect(run.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+    expect(new Set(run.records.map(({ runId }) => runId))).toEqual(new Set([run.runId]))
+    expect(cassette.story.filter(({ _tag }) => _tag === "RunActivationFinalTrackerGraphReadReturned")).toHaveLength(2)
+    expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
   })
 )
 
@@ -3309,6 +3396,37 @@ it.effect("requires one terminal assertion group and one owner for every decoded
     }
     expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(repeatedDeathsWithLaterActivations)).not.toThrow()
 
+    const finalGraphAt = singleton.story.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
+    const finalReadWithActivationReturn = {
+      ...singleton,
+      story: singleton.story.flatMap((item, index) =>
+        index === finalGraphAt && item._tag === "TrackerGraphReadReturned"
+          ? [
+              { _tag: "RunActivationFinalTrackerGraphReadReturned" as const, graph: item.graph },
+              {
+                _tag: "CoordinatorActivationReturned" as const,
+                decision: { _tag: "RunMustRemainActive" as const, reason: "TrackerTargetUnsettled" as const }
+              }
+            ]
+          : [item]
+      )
+    }
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(finalReadWithActivationReturn)).not.toThrow()
+    const finalReadWithoutSelection = {
+      ...finalReadWithActivationReturn,
+      story: finalReadWithActivationReturn.story.filter((_item, index) => index !== finalGraphAt - 1)
+    }
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(finalReadWithoutSelection)).toThrow()
+    const finalReadWithoutActivationReturn = {
+      ...singleton,
+      story: singleton.story.map((item, index) =>
+        index === finalGraphAt && item._tag === "TrackerGraphReadReturned"
+          ? { _tag: "RunActivationFinalTrackerGraphReadReturned" as const, graph: item.graph }
+          : item
+      )
+    }
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(finalReadWithoutActivationReturn)).toThrow()
+
     const executorLossWithoutDeath = {
       ...singleton,
       story: [
@@ -3502,6 +3620,85 @@ it.effect("lowers capacity while A holds a position and admits B only after A re
       { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
       { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
     ])
+  })
+)
+
+it.effect("reconstructs both retained holders and blocks C through a contracted capacity", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(contractedCapacityRetainsTwoAttemptsAuthoredCassette)
+    const recorded = yield* projectRecordedCassette(run.records)
+    const reopened = foldRecordedCassette(recorded)
+    const changedAt = run.records.findIndex(({ event }) => event._tag === "TaskWorkCapacityChanged")
+    const responsibilityAt = (taskId: TaskId) =>
+      run.records.findIndex(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.taskId === taskId
+      )
+    const cResponsibilityAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+        event.plannedAttempt.taskId === TaskId.make("C")
+    )
+    const cClaimAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("C")
+    )
+    const terminalAt = (attemptId: AttemptId) =>
+      run.records.findIndex(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.attemptId === attemptId &&
+          event.report._tag === "Terminal"
+      )
+    const aTerminalAt = terminalAt(AttemptId.make("attempt:A:0"))
+    const bTerminalAt = terminalAt(AttemptId.make("attempt:B:1"))
+    const aResponsibilityAt = responsibilityAt(TaskId.make("A"))
+    const bResponsibilityAt = responsibilityAt(TaskId.make("B"))
+    const cStartIntents = run.records.flatMap(({ event }, index) =>
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.plannedAttempt.attemptId === AttemptId.make("attempt:C:0") &&
+      event.command === "StartOrContinue"
+        ? [{ event, index }]
+        : []
+    )
+
+    expect(changedAt).toBeGreaterThan(0)
+    expect(aResponsibilityAt).toBeGreaterThan(0)
+    expect(bResponsibilityAt).toBeGreaterThan(0)
+    expect(aResponsibilityAt).toBeLessThan(changedAt)
+    expect(bResponsibilityAt).toBeLessThan(changedAt)
+    expect(
+      run.records.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          (event.plannedAttempt.taskId === TaskId.make("A") || event.plannedAttempt.taskId === TaskId.make("B"))
+      )
+    ).toHaveLength(2)
+    expect(aTerminalAt).toBeGreaterThan(changedAt)
+    expect(bTerminalAt).toBeGreaterThan(changedAt)
+    expect(cClaimAt).toBeGreaterThan(aTerminalAt)
+    expect(cClaimAt).toBeGreaterThan(bTerminalAt)
+    expect(cResponsibilityAt).toBeGreaterThan(aTerminalAt)
+    expect(cResponsibilityAt).toBeGreaterThan(bTerminalAt)
+    expect(cStartIntents).toHaveLength(1)
+    expect(cStartIntents[0]?.index).toBeGreaterThan(aTerminalAt)
+    expect(cStartIntents[0]?.index).toBeGreaterThan(bTerminalAt)
+    expect(run.activationOrdinals).toEqual([1, 2])
+    expect(run.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+    expect(new Set(run.records.map(({ runId }) => runId))).toEqual(new Set([run.runId]))
+    expect(reopened._tag).toBe("ValidWorkflowJournalHistory")
+    if (reopened._tag === "ValidWorkflowJournalHistory") {
+      expect(Option.getOrThrow(reopened.runState.controlPolicy)).toEqual({
+        revision: RunPolicyRevision.make(2),
+        taskExecutionCapacity: TaskWorkCapacity.make(1)
+      })
+    }
+    expect(run.observedBehavior.taskWorkResults).toEqual([
+      { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
+      { _tag: "PlannedWorkForTaskCompleted", taskId: "B" },
+      { _tag: "PlannedWorkForTaskCompleted", taskId: "C" }
+    ])
+    expectRecordedRoundTrip(run.records, recorded)
   })
 )
 

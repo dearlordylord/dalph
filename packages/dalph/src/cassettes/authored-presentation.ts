@@ -139,16 +139,22 @@ const expectedBehaviorLyric = (item: Extract<AuthoredCassetteStoryItem, { readon
 
 type AuthoredTrackerGraphStoryItem = Extract<
   AuthoredCassetteStoryItem,
-  { readonly _tag: "TrackerGraphReadFailed" | "TrackerGraphReadReturned" }
+  {
+    readonly _tag: "RunActivationFinalTrackerGraphReadReturned" | "TrackerGraphReadFailed" | "TrackerGraphReadReturned"
+  }
 >
 
 const isTrackerGraphStoryItem = (item: AuthoredCassetteStoryItem): item is AuthoredTrackerGraphStoryItem =>
-  item._tag === "TrackerGraphReadReturned" || item._tag === "TrackerGraphReadFailed"
+  item._tag === "TrackerGraphReadReturned" ||
+  item._tag === "RunActivationFinalTrackerGraphReadReturned" ||
+  item._tag === "TrackerGraphReadFailed"
 
 const trackerGraphLyric = (item: AuthoredTrackerGraphStoryItem): string =>
-  item._tag === "TrackerGraphReadReturned"
-    ? `The task tracker returns ${item.graph.tasks.length} task graph facts at ${item.graph.revision}.`
-    : `The task tracker fails the logical graph read because ${item.reason}.`
+  item._tag === "TrackerGraphReadFailed"
+    ? `The task tracker fails the logical graph read because ${item.reason}.`
+    : item._tag === "RunActivationFinalTrackerGraphReadReturned"
+      ? `The task tracker returns ${item.graph.tasks.length} task graph facts for this activation's final complete target-closure read at ${item.graph.revision}.`
+      : `The task tracker returns ${item.graph.tasks.length} task graph facts at ${item.graph.revision}.`
 
 type CoordinatorStoryItem = Exclude<
   AuthoredCassetteStoryItem,

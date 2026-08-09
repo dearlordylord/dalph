@@ -37,6 +37,12 @@ import {
   withPlannedAttemptProtocolPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
+import {
+  liveActionIsPresent,
+  liveActionKeyOf,
+  type LiveDeliveryActionKey,
+  proposalIsAvailable
+} from "./live-delivery-action.js"
 
 /** Two lower relations claim the same proposal identity, so no action is authorized. */
 export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedError<DeliveryRuntimeProposalOwnershipConflict>()(
@@ -256,27 +262,17 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         )
       )
 
-      const proposalIsAvailable = (
-        proposal: DeliveryActionProposal,
-        live: ReadonlyMap<DeliveryProposalId, LiveOwner>,
-        liveOperationIds: ReadonlySet<OperationId>,
-        deferred: ReadonlyMap<DeliveryProposalId, JournalPosition | null>,
-        acceptedAt: JournalPosition | null
-      ): boolean =>
-        !live.has(proposal.id) &&
-        deferred.get(proposal.id) !== acceptedAt &&
-        (proposal.waitsForLiveOperationId === null || !liveOperationIds.has(proposal.waitsForLiveOperationId))
-
       const admitLaterAvailableProposal = Effect.fn("DeliveryRuntime.admitLaterAvailableProposal")(function* (
         proposals: ReadonlyArray<DeliveryActionProposal>,
         deferredIndex: number,
         live: ReadonlyMap<DeliveryProposalId, LiveOwner>,
+        liveActionKeys: ReadonlySet<LiveDeliveryActionKey>,
         liveOperationIds: ReadonlySet<OperationId>,
         deferred: ReadonlyMap<DeliveryProposalId, JournalPosition | null>,
         acceptedAt: JournalPosition | null
       ) {
         for (const independent of proposals.slice(deferredIndex + 1)) {
-          if (!proposalIsAvailable(independent, live, liveOperationIds, deferred, acceptedAt)) continue
+          if (!proposalIsAvailable(independent, live, liveActionKeys, liveOperationIds, deferred, acceptedAt)) continue
           const laterReservation = yield* reserveAndStart(independent)
           if (laterReservation._tag === "Started") {
             return laterReservation.started
@@ -299,13 +295,14 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             }
             const live = yield* Ref.get(owners)
             const deferred = yield* Ref.get(deferredAt)
+            const liveActionKeys = new Set([...live.values()].map(({ proposal }) => liveActionKeyOf(proposal)))
             const liveOperationIds = new Set(
               (yield* Effect.forEach(live.values(), ({ operationId }) => Ref.get(operationId))).filter(
                 (operationId): operationId is OperationId => operationId !== null
               )
             )
             const proposal = proposedActions.proposals.find((candidate) =>
-              proposalIsAvailable(candidate, live, liveOperationIds, deferred, current.acceptedAt)
+              proposalIsAvailable(candidate, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)
             )
             if (proposal === undefined) return false
             const reservation = yield* reserveAndStart(proposal)
@@ -315,6 +312,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                 proposedActions.proposals,
                 proposedActions.proposals.findIndex(({ id }) => id === proposal.id),
                 live,
+                liveActionKeys,
                 liveOperationIds,
                 deferred,
                 current.acceptedAt
@@ -332,7 +330,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const current = yield* Ref.get(owners)
         const removable: Array<LiveOwner> = []
         for (const owner of current.values()) {
-          if ((yield* Ref.get(owner.settled)) && !proposalIsPresent(frontier, owner.proposal.id)) {
+          if ((yield* Ref.get(owner.settled)) && !liveActionIsPresent(frontier, owner.proposal)) {
             removable.push(owner)
           }
         }
@@ -388,7 +386,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                   owners,
                   (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))
                 )
-              } else if (!proposalIsPresent(current.proposedActions, completion.proposalId)) {
+              } else if (!liveActionIsPresent(current.proposedActions, owner.proposal)) {
                 yield* Ref.update(
                   owners,
                   (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))

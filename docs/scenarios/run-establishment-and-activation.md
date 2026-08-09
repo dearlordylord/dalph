@@ -186,7 +186,11 @@ termination rules because R existed before this invocation.
   `requires exact command reconciliation before a generic executor-state observation`
   prove the executor ambiguity boundary. Production-backed conformance test
   `reconciles an ambiguous executor command before continuation through unified Run activation`
-  proves the Run-establishment composition rather than restating that protocol.
+  proves the Run-establishment composition rather than restating that protocol;
+  application test
+  `reconstructs an ambiguous executor command before activating its continuation`
+  proves the same ordering through the authored public Run entry and recorded
+  cassette projection.
 - Production-backed conformance test
   `permits only one final tracker read in each unified Run activation` and
   `specs/runActivation.qnt` test
@@ -230,10 +234,11 @@ B's responsibility or position remains.
 
 ### Acceptance-test and model mapping
 
-- Production-backed conformance test
-  `replays idempotent Run establishment and bounded activation through production seams`
-  checks capacity two to one, both reconstructed holders, and C's deferral both
-  before and after A releases its position.
+- Production-backed authored-cassette test
+  `reconstructs both retained holders and blocks C through a contracted capacity`
+  checks capacity two to one, both reconstructed holders, no responsibility or
+  executor request for C while either holder remains, and one ordinary
+  start-or-continue request for C after both exact terminal settlements.
 - `specs/runActivation.qnt` tests
   `contractedRetainedHolderIsRestoredDespiteCapacityTest` and
   `contractedCapacityBlocksNewAdmissionAfterRetainedHolderSettlesTest`, and

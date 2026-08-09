@@ -184,8 +184,10 @@ behind this port or treat an empty proposal list alone as Run completion.
 - `a quiescence probe that reveals work cannot satisfy the later idle state`
 - `does not let a probe satisfy quiescence when work appears before its outcome`
 - `publishes a typed failure when a quiescence probe cannot read journal state`
-- Future Run-establishment test
+- Authored public-entry test
   `performs one final tracker read before the current bounded activation returns or terminates`
-  replaces the obsolete second-fresh-start expectation. The accepted entry for
-  an unfinished Run is the same idempotent establishment path described in
+  labels the exact post-quiescence tracker result in the declarative story and
+  proves the public activation returns only after consuming it. The accepted
+  entry for an unfinished Run is the same idempotent establishment path
+  described in
   [run-establishment-and-activation.md](run-establishment-and-activation.md).

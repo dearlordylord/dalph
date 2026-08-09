@@ -30,7 +30,11 @@ import {
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { makeTaskClaimReleaseOperation, TaskClaimReleaseAuthority } from "../../workflow/registry/operation.js"
+import {
+  makeTaskClaimReleaseOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  TaskClaimReleaseAuthority
+} from "../../workflow/registry/operation.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
@@ -454,6 +458,62 @@ it.effect("admits independent fresh work while a recovered action remains live",
     yield* Deferred.await(freshStarted)
 
     yield* Deferred.succeed(finishRecovered, undefined)
+    expect(yield* Fiber.join(runtime)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+  }).pipe(Effect.scoped)
+)
+
+it.effect("does not repeat one recovered observation after only its causal route changes while it is live", () =>
+  Effect.gen(function* () {
+    const specificationRead = (predecessor: string) =>
+      recoveredProposalFor(
+        RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({
+          operation: makeTaskWorkSpecificationObservationOperation(
+            OperationId.make(`runtime-specification:${predecessor}`),
+            target,
+            plannedAttempt.taskId,
+            [OperationId.make(`runtime-graph:${predecessor}`)]
+          ),
+          plannedAttempt
+        })
+      )
+    const first = specificationRead("first")
+    const superseding = specificationRead("superseding")
+    const independent = proposal(1, TaskId.make("independent-after-superseding-route"))
+    expect(superseding.id).not.toBe(first.id)
+
+    const initial = withProposals(yield* baseEvaluation, [first], 2)
+    const relation = yield* dynamicEvaluationSignal(initial)
+    const firstStarted = yield* Deferred.make<void>()
+    const supersedingStarted = yield* Deferred.make<void>()
+    const independentStarted = yield* Deferred.make<void>()
+    const finish = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        Effect.gen(function* () {
+          if (action.proposal.id === first.id) {
+            yield* Deferred.succeed(firstStarted, undefined)
+            yield* relation.publish(withProposals(initial, [superseding, independent], 2))
+          } else if (action.proposal.id === superseding.id) {
+            yield* Deferred.succeed(supersedingStarted, undefined)
+          } else {
+            yield* Deferred.succeed(independentStarted, undefined)
+          }
+          yield* Deferred.await(finish)
+          if (action.proposal.id === first.id) yield* relation.publish(withProposals(initial, [], 2))
+          return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+        })
+    })
+
+    const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+    yield* Deferred.await(firstStarted)
+    yield* Deferred.await(independentStarted)
+    expect(yield* Deferred.isDone(supersedingStarted)).toBe(false)
+
+    yield* Deferred.succeed(finish, undefined)
     expect(yield* Fiber.join(runtime)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
   }).pipe(Effect.scoped)
 )

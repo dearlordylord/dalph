@@ -87,8 +87,10 @@ uncorrelated read as G2.
 Acceptance tests:
 
 - `returns without terminating after equal G2 leaves the Run incomplete`
-- Future Run-establishment test
+- Authored public-entry test
   `re-enters the same Run and activates it after quiescent incomplete return`
+  proves the same Run identity receives a second bounded activation and a
+  separately labeled final tracker result without another Run beginning.
 - `a crash before append authorizes no work; restart after append reconstructs facts and only a later observed completion releases B`
 
 Invariant mapping: D34 distinguishes quiescence from completion, D35 forbids
