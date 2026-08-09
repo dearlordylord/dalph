@@ -154,36 +154,39 @@ D7, D8, and D19.
 - `gives newly begun and reconstructed Runs the same one-shot finality path`
 - `replays the exact durable claim and worktree intents`
 
-## Empty work asks the tracker for one final graph
+## Empty work hands control to Run-level stabilization for one final graph
 
 ### Starting situation and ordered boundary calls
 
 The current proposal publication is empty and no live or settled owner remains.
 The last complete GitHub graph observation is not yet sufficient for the
-runtime's finality decision. Dalph calls the one-purpose stabilization port.
-That port publishes one `ReadTrackerGraph` proposal; the runtime records its
-intent and asks GitHub for the current graph. A repeated stabilization request
-while that read remains pending does not create another proposal.
+Run's finality decision. The delivery runtime returns its quiescent G1 result
+to Run-level stabilization. Stabilization allocates one exact tracker-read
+operation, records its intent through the journaled tracker boundary, asks
+GitHub for the current graph, and waits for that exact accepted G2
+observation. `QuiescenceProbe` is not a delivery-action route or proposal.
 
-If the read reveals runnable task A, Dalph keeps the Run active and the probe
-cannot satisfy a later idle state. If it confirms no work and the accepted
-evaluation catches up, Dalph returns the derived Run decision. A crash before
-the observation loses only the process-local request; restart asks again if a
-final read is still needed. A crash after the observation was appended uses
-that journaled observation normally.
+If G2 reveals runnable task A, Dalph executes the newly published work before
+checking quiescence again. If G2 equals G1 and the Run remains incomplete,
+Dalph returns the typed incomplete decision. If G2 proves the target and every
+responsibility settled, bootstrap records the single Run termination. A crash
+before the observation loses only process-local activation state; the next
+ordinary establishment and activation asks again if a final read is still
+needed. A crash after the observation was appended uses that journaled
+observation normally.
 
 The maintainer sees the final tracker read and Run decision, or the existing
-typed tracker-read failure. Dalph must not disguise action-result invalidation
-behind this port or treat an empty proposal list alone as Run completion.
+typed tracker-read failure. Dalph must not publish G2 as delivery work,
+disguise action-result invalidation behind stabilization, perform a second G2
+read in the activation, or treat an empty proposal list alone as Run
+completion.
 
 ### Acceptance-test mapping
 
-- `requests and executes one quiescence probe before returning finality`
-- `keeps one outstanding quiescence probe request while its relation revision is still empty`
-- `keeps one pending reactive stabilization proposal until its graph fact is accepted`
-- `a quiescence probe that reveals work cannot satisfy the later idle state`
-- `does not let a probe satisfy quiescence when work appears before its outcome`
-- `publishes a typed failure when a quiescence probe cannot read journal state`
+- `requests accepted G2 only after G1 becomes quiescent`
+- `runs work published after G2 before phase two subscribes`
+- `returns without terminating after equal G2 leaves the Run incomplete`
+- `keeps quiescence probes out of action planning and compatibility runtime code`
 - Authored public-entry test
   `performs one final tracker read before the current bounded activation returns or terminates`
   labels the exact post-quiescence tracker result in the declarative story and
