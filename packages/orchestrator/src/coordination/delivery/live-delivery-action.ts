@@ -1,4 +1,3 @@
-import type { PlannedTaskAttempt } from "@dalph/contracts"
 import { Schema } from "effect"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -16,20 +15,24 @@ export type LiveDeliveryActionKey = typeof LiveDeliveryActionKey.Type
 const liveActionKey = (parts: ReadonlyArray<string>): LiveDeliveryActionKey =>
   LiveDeliveryActionKey.make(JSON.stringify(parts))
 
-const recoveredObservationAttempt = (
-  action: Extract<DeliveryActionProposal["route"], { readonly _tag: "RecoveredNewActionRoute" }>["action"]
-): PlannedTaskAttempt | undefined => {
+const recoveredReadSubject = (proposal: DeliveryActionProposal): ReadonlyArray<string> | undefined => {
+  const route = proposal.route
+  if (route._tag !== "RecoveredNewActionRoute" || proposal.order._tag !== "RecoveredWorkflowOrder") return undefined
+  const action = route.action
   if (!("operation" in action) || action.operation._tag === "ReleaseTaskClaim") return undefined
-  return action.plannedAttempt ?? undefined
+  if (action.plannedAttempt !== null) {
+    return [proposal.order.transition, "Attempt", action.plannedAttempt.runId, action.plannedAttempt.attemptId]
+  }
+  return action._tag === "ReadTaskClaim" && proposal.order.transition === "ObserveResponsibleTaskClaim"
+    ? [proposal.order.transition, "Task", action.taskId]
+    : undefined
 }
 
 export const liveActionKeyOf = (proposal: DeliveryActionProposal): LiveDeliveryActionKey => {
-  const route = proposal.route
-  if (route._tag !== "RecoveredNewActionRoute") return liveActionKey(["DeliveryProposal", proposal.id])
-  const plannedAttempt = recoveredObservationAttempt(route.action)
-  return plannedAttempt === undefined
+  const subject = recoveredReadSubject(proposal)
+  return subject === undefined
     ? liveActionKey(["DeliveryProposal", proposal.id])
-    : liveActionKey(["RecoveredAttemptObservation", route.action._tag, plannedAttempt.runId, plannedAttempt.attemptId])
+    : liveActionKey(["RecoveredRead", ...subject])
 }
 
 export const proposalIsAvailable = (
