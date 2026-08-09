@@ -1087,16 +1087,6 @@ const continuationFreshnessBaselineForAttempt = (
   return positions.length === 0 ? Option.none() : Option.some(JournalPosition.make(Math.max(...positions)))
 }
 
-const continuationRequiresFreshFacts = (
-  runState: ReconstructedRunState,
-  plannedAttempt: PlannedTaskAttempt
-): boolean => {
-  return (
-    latestCompletedPauseCyclePosition(runState) !== undefined ||
-    appliedContinueChoicePositionFor(runState.workflowHistory.records, plannedAttempt) !== undefined
-  )
-}
-
 const transitionTagsAllowedWhilePaused = new Set<RunnableFrontierTransition["_tag"]>([
   "AdvanceAttemptStoppage",
   "CheckTaskClaim",
@@ -1784,14 +1774,6 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
   )
   return {
     acceptedAt: runState.appliedThrough,
-    recoveredContinuationAttemptIds: new Set(
-      runState.responsibility.entries.flatMap((responsibility) =>
-        responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
-        continuationRequiresFreshFacts(runState, responsibility.plannedAttempt)
-          ? [responsibility.plannedAttempt.attemptId]
-          : []
-      )
-    ),
     frontier: filterFrontierForActivePauses(
       frontier,
       runState,
