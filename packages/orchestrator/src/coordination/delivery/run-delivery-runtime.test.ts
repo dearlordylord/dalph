@@ -1,5 +1,6 @@
 import { it } from "@effect/vitest"
 import {
+  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -33,12 +34,14 @@ import { OperationId } from "../../workflow/identity.js"
 import {
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
+  makeTargetLineageObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
+import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import {
@@ -70,6 +73,7 @@ import {
 } from "./run-delivery-runtime.js"
 import {
   DeliveryRuntimeResources,
+  type DeliveryRuntimeResourcesService,
   deliveryRuntimeResourcesLayer,
   deliveryRuntimeResourcesOf
 } from "./delivery-runtime-resources.js"
@@ -234,13 +238,15 @@ const withProposals = (
 const assertCausalRouteChangeDoesNotRepeat = Effect.fn("Test.assertCausalRouteChangeDoesNotRepeat")(function* (
   first: DeliveryActionProposal,
   superseding: DeliveryActionProposal,
-  independentTaskId: TaskId
+  independentTaskId: TaskId,
+  resources?: DeliveryRuntimeResourcesService
 ) {
   const independent = proposal(1, independentTaskId)
   expect(superseding.id).not.toBe(first.id)
   const initial = withProposals(yield* baseEvaluation, [first], 2)
   const relation = yield* dynamicEvaluationSignal(initial)
   const firstStarted = yield* Deferred.make<void>()
+  const supersedingAdmitted = yield* Deferred.make<void>()
   const supersedingStarted = yield* Deferred.make<void>()
   const independentStarted = yield* Deferred.make<void>()
   const finish = yield* Deferred.make<void>()
@@ -260,14 +266,34 @@ const assertCausalRouteChangeDoesNotRepeat = Effect.fn("Test.assertCausalRouteCh
         return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
       })
   })
+  const trace = DeliverySemanticTrace.of({
+    emit: (event) =>
+      event._tag === "ProposalAdmitted" && event.proposalId === superseding.id
+        ? Deferred.succeed(supersedingAdmitted, undefined)
+        : Effect.void
+  })
 
-  const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
-    Effect.provide(identityLayers),
+  const runtimeEffect = runDeliveryRuntimeDecision(relation).pipe(
     Effect.provideService(DeliveryActionExecutor, executor),
-    Effect.forkChild
+    Effect.provideService(DeliverySemanticTrace, trace)
   )
+  const configuredRuntime =
+    resources === undefined
+      ? runtimeEffect.pipe(Effect.provide(identityLayers))
+      : runtimeEffect.pipe(
+          Effect.provide(plannerLayer),
+          Effect.provide(deterministicOperationIdAllocatorLayer("runtime-causal-route-change")),
+          Effect.provide(plannedAttemptProtocolControllerLayer),
+          Effect.provideService(DeliveryRuntimeResources, DeliveryRuntimeResources.of(resources))
+        )
+  const runtime = yield* configuredRuntime.pipe(Effect.forkChild)
   yield* Deferred.await(firstStarted)
-  yield* Deferred.await(independentStarted)
+  expect(
+    yield* Effect.race(
+      Deferred.await(independentStarted).pipe(Effect.as("Independent" as const)),
+      Deferred.await(supersedingAdmitted).pipe(Effect.as("Superseding" as const))
+    )
+  ).toBe("Independent")
   expect(yield* Deferred.isDone(supersedingStarted)).toBe(false)
 
   yield* Deferred.succeed(finish, undefined)
@@ -551,6 +577,56 @@ it.effect("does not repeat one responsible-task claim read after only its causal
       first,
       superseding,
       TaskId.make("independent-after-responsible-claim-route")
+    )
+  }).pipe(Effect.scoped)
+)
+
+it.effect("does not repeat one started-integration lineage read after only its causal route changes while live", () =>
+  Effect.gen(function* () {
+    const integrationTarget = IntegrationTarget.make({
+      repository: GitRepositoryLocator.make("/runtime-test/integration-lineage.git"),
+      ref: IntegrationTargetRef.make("refs/heads/main")
+    })
+    const responsibility = StartedIntegrationResponsibility.make({
+      acceptedResult: AcceptedResult.make({ commit: GitCommitSha.make("3".repeat(40)) }),
+      integrationTarget,
+      plannedAttempt,
+      queuedAt: JournalPosition.make(70),
+      startedAt: JournalPosition.make(71)
+    })
+    const lineageRead = (causalForm: string) => {
+      const transition = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+        operation: makeTargetLineageObservationOperation({
+          integrationTarget,
+          operationId: OperationId.make(`runtime-integration-lineage:${causalForm}`),
+          plannedAttempt,
+          predecessorOperationIds: [OperationId.make(`runtime-integration-predecessor:${causalForm}`)]
+        }),
+        plannedAttempt
+      })
+      const proposals = deliveryProposalsOf({
+        acceptedOperationIds: new Set(),
+        fresh: [],
+        integrationResponsibilities: [responsibility],
+        runId,
+        transitions: [transition]
+      }).deliverySettlement
+      const derived = proposals[0]
+      if (derived === undefined) throw new Error("started integration must derive its target-lineage read")
+      return derived
+    }
+    const first = lineageRead("first")
+    const superseding = lineageRead("superseding")
+    const integrationTargets = yield* makeIntegrationTargetResourceController()
+    const held = { integrationTarget, queuedAt: responsibility.queuedAt }
+    yield* integrationTargets.acquire(held)
+    yield* integrationTargets.publishAcceptedOwnership(held)
+
+    yield* assertCausalRouteChangeDoesNotRepeat(
+      first,
+      superseding,
+      TaskId.make("independent-after-integration-lineage-route"),
+      deliveryRuntimeResourcesOf(integrationTargets)
     )
   }).pipe(Effect.scoped)
 )
