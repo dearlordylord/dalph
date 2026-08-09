@@ -26,6 +26,14 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
         name in maintainedIntegrationFinalityProtocolCassetteCatalog)
     )
   }
+  const acceptanceTestExists = (acceptance: {
+    readonly declaration: "it" | "it.effect" | "scenario"
+    readonly name: string
+    readonly sourceFile: string
+  }): boolean => {
+    const source = readFileSync(new URL(`../${acceptance.sourceFile}`, import.meta.url), "utf8")
+    return source.includes(`${acceptance.declaration}("${acceptance.name}"`)
+  }
 
   expect(documentedBeatIds).toEqual(deliveryStoryManifest.beats.map(({ beatId }) => beatId))
   expect(manifestBlock).toBe(renderDeliveryStoryManifest())
@@ -34,9 +42,12 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
     if (coverage._tag === "NotImplemented") {
       expect(coverage.reason.length).toBeGreaterThan(0)
       expect(coverage.cassetteKeys).toEqual([])
+      expect(coverage.acceptanceTests).toEqual([])
     } else {
       expect(coverage.cassetteKeys.length).toBeGreaterThan(0)
       expect(coverage.cassetteKeys.every(catalogHas)).toBe(true)
+      expect(coverage.acceptanceTests.length).toBeGreaterThan(0)
+      expect(coverage.acceptanceTests.every(acceptanceTestExists)).toBe(true)
     }
   }
 })

@@ -24,34 +24,73 @@ const deliveryStoryBeatIds = [
 ] as const
 
 /** Stable identity of one numbered beat in docs/DELIVERY-STORY.md. */
-export type DeliveryStoryBeatId = (typeof deliveryStoryBeatIds)[number]
+type DeliveryStoryBeatId = (typeof deliveryStoryBeatIds)[number]
 
-export type DeliveryStoryBeatCoverage =
-  | { readonly _tag: "DemonstratedBySpine"; readonly cassetteKeys: readonly ["authored:deliveryInvariantStory"] }
+interface DeliveryStoryAcceptanceTest {
+  readonly declaration: "it" | "it.effect" | "scenario"
+  readonly name: string
+  readonly sourceFile:
+    | "packages/dalph/test/cassettes/scenario.test.ts"
+    | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
+}
+
+type DeliveryStoryBeatCoverage =
+  | {
+      readonly _tag: "DemonstratedBySpine"
+      readonly acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
+      readonly cassetteKeys: readonly ["authored:deliveryInvariantStory"]
+    }
   | {
       readonly _tag: "DemonstratedByMaintainedSlice"
-      readonly cassetteKeys: ReadonlyArray<`authored:${string}` | `integration-finality:${string}`>
+      readonly acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
+      readonly cassetteKeys: readonly [
+        `authored:${string}` | `integration-finality:${string}`,
+        ...ReadonlyArray<`authored:${string}` | `integration-finality:${string}`>
+      ]
     }
-  | { readonly _tag: "NotImplemented"; readonly cassetteKeys: readonly []; readonly reason: string }
+  | {
+      readonly _tag: "NotImplemented"
+      readonly acceptanceTests: readonly []
+      readonly cassetteKeys: readonly []
+      readonly reason: string
+    }
 
-export interface DeliveryStoryBeatManifestEntry {
+interface DeliveryStoryBeatManifestEntry {
   readonly beatId: DeliveryStoryBeatId
   readonly coverage: DeliveryStoryBeatCoverage
 }
 
-const spine = (beatId: DeliveryStoryBeatId): DeliveryStoryBeatManifestEntry => ({
+const scenarioTest = (name: string): DeliveryStoryAcceptanceTest => ({
+  declaration: "it.effect",
+  name,
+  sourceFile: "packages/dalph/test/cassettes/scenario.test.ts"
+})
+
+const spineTest = scenarioTest("shows the linked delivery story evolving from five to seven production-observed tasks")
+
+const spine = (
+  beatId: DeliveryStoryBeatId,
+  ...acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
+): DeliveryStoryBeatManifestEntry => ({
   beatId,
-  coverage: { _tag: "DemonstratedBySpine", cassetteKeys: ["authored:deliveryInvariantStory"] }
+  coverage: { _tag: "DemonstratedBySpine", acceptanceTests, cassetteKeys: ["authored:deliveryInvariantStory"] }
 })
 
 const slice = (
   beatId: DeliveryStoryBeatId,
-  ...cassetteKeys: ReadonlyArray<`authored:${string}` | `integration-finality:${string}`>
-): DeliveryStoryBeatManifestEntry => ({ beatId, coverage: { _tag: "DemonstratedByMaintainedSlice", cassetteKeys } })
+  cassetteKeys: readonly [
+    `authored:${string}` | `integration-finality:${string}`,
+    ...ReadonlyArray<`authored:${string}` | `integration-finality:${string}`>
+  ],
+  ...acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
+): DeliveryStoryBeatManifestEntry => ({
+  beatId,
+  coverage: { _tag: "DemonstratedByMaintainedSlice", acceptanceTests, cassetteKeys }
+})
 
 const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeatManifestEntry => ({
   beatId,
-  coverage: { _tag: "NotImplemented", cassetteKeys: [], reason }
+  coverage: { _tag: "NotImplemented", acceptanceTests: [], cassetteKeys: [], reason }
 })
 
 /**
@@ -63,26 +102,73 @@ export const deliveryStoryManifest = {
   cassetteKey: "authored:deliveryInvariantStory" as const,
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
-    spine("DS-01"),
+    missing(
+      "DS-01",
+      "The maintained spine observes five tasks, but B through E are A-blocked rather than all eligible."
+    ),
     missing("DS-02", "No maintained run admits A, B, and C together yet."),
-    slice("DS-03", "authored:changedAttemptContinues"),
-    slice("DS-04", "authored:changedAttemptContinues"),
-    slice("DS-05", "authored:changedAttemptContinues", "authored:changedAttemptStopsAndReleases"),
-    slice("DS-06", "authored:taskPauseLetsIndependentTaskContinue"),
-    slice("DS-07", "authored:dependentTasksCompleteInOneRun"),
-    spine("DS-08"),
-    spine("DS-09"),
-    slice("DS-10", "authored:taskPauseLetsIndependentTaskContinue"),
-    slice("DS-11", "authored:taskPauseLetsIndependentTaskContinue"),
-    slice("DS-12", "authored:changedAttemptContinues"),
-    slice("DS-13", "authored:acceptedResultRestartsIntoIntegration"),
-    spine("DS-14"),
-    spine("DS-15"),
-    slice("DS-16", "authored:targetPromotionStaleBeforeCompareAndSet"),
-    spine("DS-17"),
-    slice("DS-18", "authored:taskUnpauseAfterSafeSuspension"),
+    slice(
+      "DS-03",
+      ["authored:changedAttemptContinues"],
+      scenarioTest("records both task fingerprints when Alice continues the exact attempt")
+    ),
+    missing(
+      "DS-04",
+      "No named acceptance test proves B's changed graph/specification rereads, safe-suspension request, and retained position together."
+    ),
+    missing(
+      "DS-05",
+      "The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart."
+    ),
+    missing(
+      "DS-06",
+      "No maintained run admits D after B's changed-instruction suspension releases one of three held positions."
+    ),
+    missing(
+      "DS-07",
+      "No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held."
+    ),
+    spine("DS-08", spineTest),
+    missing(
+      "DS-09",
+      "The maintained spine recovers A's exact obligation, not held positions for A, C, and D plus retained B."
+    ),
+    missing("DS-10", "No maintained run closes C without success and then asks its exact executor to suspend."),
+    missing("DS-11", "No maintained run releases closed C's position while retaining its reversible lifecycle wait."),
+    missing(
+      "DS-12",
+      "No maintained run applies Continue to retained B while two other tasks consume all current capacity."
+    ),
+    missing(
+      "DS-13",
+      "No maintained run releases A's position after its accepted result and then admits already-owned B."
+    ),
+    slice(
+      "DS-14",
+      ["authored:acceptedResultRestartsIntoIntegration"],
+      scenarioTest("recovers an accepted result in journal order and crosses its integration cutoff once")
+    ),
+    missing(
+      "DS-15",
+      "No named acceptance test proves the candidate's exact ordered expected-head and accepted-result parents for this beat."
+    ),
+    missing(
+      "DS-16",
+      "The maintained stale-head cassette detects H2 before compare-and-set; it does not send the beat's rejected exact-head offer."
+    ),
+    missing(
+      "DS-17",
+      "The spine settles A through completion finality, but does not first reconcile a stale head and rebuild its successor candidate."
+    ),
+    missing(
+      "DS-18",
+      "No maintained run reopens a tracker lifecycle wait for C; Operator task Unpause is a different phenomenon."
+    ),
     missing("DS-19", "No maintained run combines the retained C attempt with a later capacity increase."),
-    spine("DS-20"),
+    missing(
+      "DS-20",
+      "The maintained spine observes F and G, but does not prove both are eligible and capacity-waiting behind B, C, and D."
+    ),
     missing("DS-21", "No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology."),
     missing("DS-22", "Whole-run seven-task completion and normal Run termination are not implemented as one cassette.")
   ] satisfies ReadonlyArray<DeliveryStoryBeatManifestEntry>
@@ -91,7 +177,9 @@ export const deliveryStoryManifest = {
 const coverageLabel = (coverage: DeliveryStoryBeatCoverage): string =>
   coverage._tag === "NotImplemented"
     ? `${coverage._tag}|${coverage.reason}`
-    : `${coverage._tag}|${coverage.cassetteKeys.join(",")}`
+    : `${coverage._tag}|${coverage.cassetteKeys.join(",")}|${coverage.acceptanceTests
+        .map(({ declaration, name, sourceFile }) => `${sourceFile}#${declaration}#${name}`)
+        .join(",")}`
 
 /** Exact checked-in documentation block; tests require byte-for-byte parity. */
 export const renderDeliveryStoryManifest = (): string =>

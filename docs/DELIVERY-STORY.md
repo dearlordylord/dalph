@@ -182,11 +182,14 @@ consistent with `INVARIANTS.md`: I9 is modelled by no tool in the study.
 
 The maintained catalog key is `authored:deliveryInvariantStory`. Its source
 manifest names this document and all 22 beat numbers; this document names the
-same key. `keeps every delivery-story beat linked to maintained evidence or an
-explicit implementation gap` checks both directions, exact catalog keys, and
-the byte-for-byte manifest block. `shows the linked delivery story evolving
-from five to seven production-observed tasks` runs the executable spine through
-`runAuthoredScenarioCassette` and checks that it reaches its declared end.
+same key. Every demonstrated manifest row also names the exact registered
+acceptance test that checks its evidence; a catalog key by itself is not proof.
+`keeps every delivery-story beat linked to maintained evidence or an explicit
+implementation gap` checks both directions, exact catalog keys, exact test
+declarations, and the byte-for-byte manifest block. `shows the linked delivery
+story evolving from five to seven production-observed tasks` runs the executable
+spine through `runAuthoredScenarioCassette` and checks that it reaches its
+declared end.
 
 - `shows the linked delivery story evolving from five to seven production-observed tasks`
   checks the literal production delivery frames begin with established `G₀`
@@ -203,32 +206,32 @@ from five to seven production-observed tasks` runs the executable spine through
 - The real-browser checkpoint `drives the linked five-to-seven task delivery story through restart and completion finality`
   selects the ordinary catalog option, observes both graph sizes while the
   production run is still Running, selects a recovered seven-task frame, and
-  verifies populated settlement evidence. Capacity contraction, three
-  simultaneous holders, and seven-task finality remain the explicit manifest
-  gaps; no acceptance mapping claims them.
+  verifies populated settlement evidence. The manifest explicitly identifies
+  every beat whose full actor, authority facts, and chronology are still
+  missing; no acceptance mapping claims those gaps.
 
 <!-- DELIVERY-STORY-MANIFEST:START -->
 cassette|authored:deliveryInvariantStory
-DS-01|DemonstratedBySpine|authored:deliveryInvariantStory
+DS-01|NotImplemented|The maintained spine observes five tasks, but B through E are A-blocked rather than all eligible.
 DS-02|NotImplemented|No maintained run admits A, B, and C together yet.
-DS-03|DemonstratedByMaintainedSlice|authored:changedAttemptContinues
-DS-04|DemonstratedByMaintainedSlice|authored:changedAttemptContinues
-DS-05|DemonstratedByMaintainedSlice|authored:changedAttemptContinues,authored:changedAttemptStopsAndReleases
-DS-06|DemonstratedByMaintainedSlice|authored:taskPauseLetsIndependentTaskContinue
-DS-07|DemonstratedByMaintainedSlice|authored:dependentTasksCompleteInOneRun
-DS-08|DemonstratedBySpine|authored:deliveryInvariantStory
-DS-09|DemonstratedBySpine|authored:deliveryInvariantStory
-DS-10|DemonstratedByMaintainedSlice|authored:taskPauseLetsIndependentTaskContinue
-DS-11|DemonstratedByMaintainedSlice|authored:taskPauseLetsIndependentTaskContinue
-DS-12|DemonstratedByMaintainedSlice|authored:changedAttemptContinues
-DS-13|DemonstratedByMaintainedSlice|authored:acceptedResultRestartsIntoIntegration
-DS-14|DemonstratedBySpine|authored:deliveryInvariantStory
-DS-15|DemonstratedBySpine|authored:deliveryInvariantStory
-DS-16|DemonstratedByMaintainedSlice|authored:targetPromotionStaleBeforeCompareAndSet
-DS-17|DemonstratedBySpine|authored:deliveryInvariantStory
-DS-18|DemonstratedByMaintainedSlice|authored:taskUnpauseAfterSafeSuspension
+DS-03|DemonstratedByMaintainedSlice|authored:changedAttemptContinues|packages/dalph/test/cassettes/scenario.test.ts#it.effect#records both task fingerprints when Alice continues the exact attempt
+DS-04|NotImplemented|No named acceptance test proves B's changed graph/specification rereads, safe-suspension request, and retained position together.
+DS-05|NotImplemented|The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart.
+DS-06|NotImplemented|No maintained run admits D after B's changed-instruction suspension releases one of three held positions.
+DS-07|NotImplemented|No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held.
+DS-08|DemonstratedBySpine|authored:deliveryInvariantStory|packages/dalph/test/cassettes/scenario.test.ts#it.effect#shows the linked delivery story evolving from five to seven production-observed tasks
+DS-09|NotImplemented|The maintained spine recovers A's exact obligation, not held positions for A, C, and D plus retained B.
+DS-10|NotImplemented|No maintained run closes C without success and then asks its exact executor to suspend.
+DS-11|NotImplemented|No maintained run releases closed C's position while retaining its reversible lifecycle wait.
+DS-12|NotImplemented|No maintained run applies Continue to retained B while two other tasks consume all current capacity.
+DS-13|NotImplemented|No maintained run releases A's position after its accepted result and then admits already-owned B.
+DS-14|DemonstratedByMaintainedSlice|authored:acceptedResultRestartsIntoIntegration|packages/dalph/test/cassettes/scenario.test.ts#it.effect#recovers an accepted result in journal order and crosses its integration cutoff once
+DS-15|NotImplemented|No named acceptance test proves the candidate's exact ordered expected-head and accepted-result parents for this beat.
+DS-16|NotImplemented|The maintained stale-head cassette detects H2 before compare-and-set; it does not send the beat's rejected exact-head offer.
+DS-17|NotImplemented|The spine settles A through completion finality, but does not first reconcile a stale head and rebuild its successor candidate.
+DS-18|NotImplemented|No maintained run reopens a tracker lifecycle wait for C; Operator task Unpause is a different phenomenon.
 DS-19|NotImplemented|No maintained run combines the retained C attempt with a later capacity increase.
-DS-20|DemonstratedBySpine|authored:deliveryInvariantStory
+DS-20|NotImplemented|The maintained spine observes F and G, but does not prove both are eligible and capacity-waiting behind B, C, and D.
 DS-21|NotImplemented|No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology.
 DS-22|NotImplemented|Whole-run seven-task completion and normal Run termination are not implemented as one cassette.
 <!-- DELIVERY-STORY-MANIFEST:END -->
