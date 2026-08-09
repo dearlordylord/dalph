@@ -3,6 +3,12 @@
 Applies the bake-off's detection protocol to this repository's six canonical
 models under `specs/` that `pnpm check:quint` gates.
 
+The smaller `*_proof.qnt` exhaustive projections are intentionally outside this
+token-mutation census: the canonical models own the runtime vocabulary being
+mutated. Each projection instead has a gated `*_proof_negative_test.qnt` module
+whose forbidden transitions cover every projected invariant family before TLC
+enumerates the complete finite graph.
+
 The question is not "do the invariants hold". The gate already answers that.
 The question is **which invariants constrain the model at all**, which only
 mutation testing answers.

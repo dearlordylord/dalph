@@ -108,7 +108,10 @@ alone never creates one.
 attempt is in a holding phase. It is released on the correlated safe-suspension
 or terminal report, and on nothing else — not a stopped inner process, not a
 timeout, not process death.
-→ `I7 (weakened: no correlation on the report)`
+→ `plannedAttemptExecutor` states exact-correlated position discipline; its
+finite evidence and Suspend-bound proof projections completely enumerate that
+only safe or terminal evidence releases the position. Benchmark `I7` remains
+weaker because it has no report correlation.
 
 **D13 The ceiling binds admission only.** A new admission respects the current
 capacity. A capacity reduction never evicts, cancels, suspends, or discards an
@@ -175,17 +178,22 @@ cancellation, and unpause is not cancellation.
 outcome may become ambiguous, Dalph records the exact intent and waits for the
 append acknowledgement, then calls the owning system, then records the exact
 observed result.
-→ `integrationFinality` records replacement and deletion intents before their
-bounded requests; the fast-check journal arm also has the intent/outcome split
-for claim, worktree and promotion.
+→ `plannedAttemptExecutor` separates every exact command intent, call, and
+observation; its finite evidence, Start-bound, and Suspend-bound projections
+completely enumerate that ordering. `integrationFinality` records replacement
+and deletion intents before their bounded requests; the fast-check journal arm
+also has the intent/outcome split for claim, worktree and promotion.
 
 **D22 Reconcile before retry.** After an ambiguous outcome, Dalph rereads the
 owning system before acting again. A lost response never proves the effect did
 not happen, and never authorizes a duplicate request, a second override, or a
 second release.
-→ `integrationFinality` models lost replacement/deletion responses and requires
-a fresh claim read before a second request; other encodings still do not model
-ambiguous outcomes.
+→ `plannedAttemptExecutor` distinguishes a direct response, exact command
+projection, and command-free state projection, permits one reconciliation read
+per activation, and keeps post-limit recovery read-only; its finite projections
+completely enumerate those rules. `integrationFinality` separately models lost
+replacement/deletion responses and requires a fresh claim read before a second
+request.
 
 **D23 Incomplete and unreadable never prove absence.** Missing coverage,
 pagination, a timeout, or a partial response cannot prove a task, blocker, or

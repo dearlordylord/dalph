@@ -25,6 +25,13 @@ and behavior vocabulary. The paired projection must run its own typecheck,
 collected deterministic and negative tests, sampled invariant/witness check,
 and complete finite-state verification with no arbitrary depth token.
 
+The current proof projections are `taskFactReconciliation_proof.qnt` and
+`plannedAttemptExecutor_proof.qnt`. Their negative test modules are the mutation
+controls for the collapsed proof state: each performs a forbidden transition
+and proves that the corresponding projected invariant turns red. The canonical
+models remain in the token-mutation census because they own runtime vocabulary
+and production-backed MBT.
+
 Invariant and witness names are explicit gate inputs. The canonical
 `plannedAttemptExecutor` and `taskFactReconciliation` lists live in
 `scripts/quint-model-obligations.mjs`, which both

@@ -48,6 +48,15 @@ the same gate and retains
 `packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts` as its
 production seam; it is not a seventh model or an implementation input.
 
+`specs/plannedAttemptExecutor_proof.qnt` applies the same exception to the
+canonical executor model's resettable command cycles. Three finite graphs keep
+the exact intent/call/evidence chronology, one-read-per-activation recovery,
+three-command Start and Suspend bounds, and post-limit read-only recovery. The
+canonical model still owns their shared vocabulary and
+`packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts` remains
+the production seam. The projections have collected positive and negative
+tests, sampled witnesses, and complete TLC enumeration without a depth token.
+
 ## Consequences
 
 Every model exports a closed action and state projection. A test-only executable

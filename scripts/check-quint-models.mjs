@@ -57,18 +57,149 @@ await run("planned-attempt executor sampled model", [
   "--verbosity",
   "1"
 ])
-await run("planned-attempt executor exhaustive model", [
-  "verify",
-  "specs/plannedAttemptExecutor.qnt",
-  "--invariants",
-  ...plannedAttemptExecutorInvariants,
-  "--max-steps",
-  // Exhaust one local intent/call/evidence/settlement cycle. The collected
-  // tests and depth-45 sampled run own the longer three-command chronology.
-  "6",
-  "--verbosity",
-  "1"
+const plannedAttemptExecutorProofs = [
+  {
+    main: "plannedAttemptExecutorEvidenceProof",
+    testMain: "plannedAttemptExecutorEvidenceProofTest",
+    negativeTestMain: "plannedAttemptExecutorEvidenceProofNegativeTest",
+    title: "planned-attempt executor evidence proof",
+    maxSteps: "10",
+    seed: "6511",
+    invariants: [
+      "everyCallHasDurableIntent",
+      "directResponsesAndProjectionsStayDistinct",
+      "settlementUsesExactOrdinalAndCorrelation",
+      "freshStateProjectionNeverSettlesCommand",
+      "oneReconciliationReadPerActivation",
+      "ambiguousOrUnavailableEvidenceRetainsPosition",
+      "positionReleasesOnlyForSafeOrTerminalEvidence",
+      "evidenceProofTypeOk"
+    ],
+    witnesses: [
+      "startIntentReached",
+      "suspendIntentReached",
+      "commandCalledReached",
+      "responseLostReached",
+      "directResponseReached",
+      "commandProjectionReached",
+      "unavailableProjectionReached",
+      "recoveryActivatedReached",
+      "directResponseSettledReached",
+      "commandProjectionSettledReached",
+      "freshSafeStateProjectionReached",
+      "safePositionReleasedReached",
+      "terminalPositionReleasedReached"
+    ]
+  },
+  {
+    main: "plannedAttemptExecutorStartBoundProof",
+    testMain: "plannedAttemptExecutorStartBoundProofTest",
+    negativeTestMain: "plannedAttemptExecutorStartBoundProofNegativeTest",
+    title: "planned-attempt executor Start-bound proof",
+    maxSteps: "18",
+    seed: "6512",
+    invariants: [
+      "everyStartCallHasItsIntent",
+      "everyStartSettlementUsesItsOrdinal",
+      "lostResponsesStillConsumeStartBudget",
+      "startLimitBlocksFourthCommand",
+      "terminalStartReleasesPosition",
+      "startProofTypeOk"
+    ],
+    witnesses: [
+      "firstStartIntentReached",
+      "thirdStartIntentReached",
+      "startCalledReached",
+      "startResponseLostReached",
+      "directStartSettledReached",
+      "projectedStartSettledReached",
+      "thirdStartSettledReached",
+      "terminalStartReached"
+    ]
+  },
+  {
+    main: "plannedAttemptExecutorSuspendBoundProof",
+    testMain: "plannedAttemptExecutorSuspendBoundProofTest",
+    negativeTestMain: "plannedAttemptExecutorSuspendBoundProofNegativeTest",
+    title: "planned-attempt executor Suspend-bound proof",
+    maxSteps: "24",
+    seed: "6513",
+    invariants: [
+      "everySuspendCallHasItsIntent",
+      "everySuspendSettlementUsesItsOrdinal",
+      "lostResponsesStillConsumeSuspendBudget",
+      "suspendLimitBlocksFourthCommand",
+      "postLimitRecoveryIsReadOnly",
+      "positionReleasesOnlyForSafeOrTerminalEvidence",
+      "suspendProofTypeOk"
+    ],
+    witnesses: [
+      "firstSuspendIntentReached",
+      "thirdSuspendIntentReached",
+      "suspendCalledReached",
+      "suspendResponseLostReached",
+      "directSuspendSettledReached",
+      "projectedSuspendSettledReached",
+      "thirdSuspendSettledReached",
+      "safeSuspendReached",
+      "terminalSuspendReached",
+      "readOnlyRecoveryReached",
+      "readOnlySafeReached"
+    ]
+  }
+]
+
+await run("planned-attempt executor proof projection typecheck", [
+  "typecheck",
+  "specs/plannedAttemptExecutor_proof.qnt"
 ])
+for (const proof of plannedAttemptExecutorProofs) {
+  await run(`${proof.title} deterministic tests`, [
+    "test",
+    "specs/plannedAttemptExecutor_proof_test.qnt",
+    "--main",
+    proof.testMain
+  ])
+  await run(`${proof.title} negative mutation profile`, [
+    "test",
+    "specs/plannedAttemptExecutor_proof_negative_test.qnt",
+    "--main",
+    proof.negativeTestMain
+  ])
+  await run(`${proof.title} sampled model`, [
+    "run",
+    "specs/plannedAttemptExecutor_proof.qnt",
+    "--main",
+    proof.main,
+    "--invariants",
+    ...proof.invariants,
+    "--witnesses",
+    ...proof.witnesses,
+    "--max-steps",
+    proof.maxSteps,
+    "--max-samples",
+    "5000",
+    "--seed",
+    proof.seed,
+    "--verbosity",
+    "1"
+  ])
+  // TLC enumerates each complete finite projection graph without a depth
+  // token: evidence 109 generated / 45 distinct / depth 8; Start 55 / 52 /
+  // depth 16; Suspend 79 / 76 / depth 19 (Quint 0.32.0, linux-aarch64).
+  await run(`${proof.title} exhaustive model`, [
+    "verify",
+    "specs/plannedAttemptExecutor_proof.qnt",
+    "--main",
+    proof.main,
+    "--backend",
+    "tlc",
+    "--invariants",
+    ...proof.invariants,
+    "--verbosity",
+    "1"
+  ])
+}
 
 const controlDirectionApplicationInvariants = [
   "appliedDirectionIsOperatorInitiated",
