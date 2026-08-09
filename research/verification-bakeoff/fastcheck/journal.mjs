@@ -59,6 +59,8 @@
  * stays free of wall-clock and entropy reads (P4 greps this file's source).
  */
 
+import { EVENT_MANIFEST } from "./journal-events.generated.mjs"
+
 export const TASKS = [0, 1]
 export const MAX_CAPACITY = 2
 export const MAX_HEAD = 4
@@ -84,41 +86,18 @@ const HOLDS_POSITION = new Set(["Executing", "SuspensionRequested"])
 
 // ------------------------------------------------------------------- alphabet
 
-const action = (tag, fields) => ({ kind: "action", tag, ...fields })
-const occurrence = (tag, fields) => ({ kind: "occurrence", tag, ...fields })
+/** Generated from the canonical 23-event manifest, including payload order. */
+export const E = Object.fromEntries(EVENT_MANIFEST.map(({ name, kind, fields }) => [
+  name,
+  (...values) => {
+    if (values.length !== fields.length) {
+      throw new TypeError(`${name} expects ${fields.length} fields, received ${values.length}`)
+    }
+    return { kind, tag: name, ...Object.fromEntries(fields.map((field, index) => [field, values[index]])) }
+  }
+]))
 
-/** The 23 events of ../JOURNAL-EVENTS.md, with the action/occurrence split. */
-export const E = {
-  // Actions
-  ClaimIntentRecorded: (task, token) => action("ClaimIntentRecorded", { task, token }),
-  ClaimReleaseIntentRecorded: (task, token) => action("ClaimReleaseIntentRecorded", { task, token }),
-  AttemptPlanned: (task, runId, attemptId) => action("AttemptPlanned", { task, runId, attemptId }),
-  WorkAdmitted: (task, attemptId) => action("WorkAdmitted", { task, attemptId }),
-  SuspensionRequested: (task, attemptId) => action("SuspensionRequested", { task, attemptId }),
-  ResumeRequested: (task, attemptId) => action("ResumeRequested", { task, attemptId }),
-  WorktreeIntentRecorded: (task, attemptId) => action("WorktreeIntentRecorded", { task, attemptId }),
-  IntegrationSessionOpened: (task, expectedHead) => action("IntegrationSessionOpened", { task, expectedHead }),
-  PromotionIntentRecorded: (task, expectedHead) => action("PromotionIntentRecorded", { task, expectedHead }),
-  CandidateConstructionNonConvergent: (task, reason) => action("CandidateConstructionNonConvergent", { task, reason }),
-  DeliverySettled: (task) => action("DeliverySettled", { task }),
-  WorkflowRunBegun: (runId, target) => action("WorkflowRunBegun", { runId, target }),
-  WorkflowRunTerminated: (runId) => action("WorkflowRunTerminated", { runId }),
-  CapacityRevised: (capacity) => action("CapacityRevised", { capacity }),
-  DirectionApplied: (subject, direction) => action("DirectionApplied", { subject, direction }),
-  // Non-action occurrences
-  TrackerFactsObserved: (subjects, facts, complete, contentIdentity) =>
-    occurrence("TrackerFactsObserved", { subjects, facts, complete, contentIdentity }),
-  ClaimRecordRead: (task, owner, token) => occurrence("ClaimRecordRead", { task, owner, token }),
-  ClaimedTaskEligibilityObserved: (task, revision) => occurrence("ClaimedTaskEligibilityObserved", { task, revision }),
-  ClaimedTaskIneligible: (task, reason) => occurrence("ClaimedTaskIneligible", { task, reason }),
-  WorktreeReconciliationObserved: (task, attemptId, outcome) =>
-    occurrence("WorktreeReconciliationObserved", { task, attemptId, outcome }),
-  ExecutorReported: (task, attemptId, report) => occurrence("ExecutorReported", { task, attemptId, report }),
-  PromotionOutcomeObserved: (task, head) => occurrence("PromotionOutcomeObserved", { task, head }),
-  TargetHeadObserved: (head) => occurrence("TargetHeadObserved", { head })
-}
-
-export const EVENT_TAGS = Object.keys(E)
+export const EVENT_TAGS = EVENT_MANIFEST.map(({ name }) => name)
 
 // --------------------------------------------------------------------- state
 

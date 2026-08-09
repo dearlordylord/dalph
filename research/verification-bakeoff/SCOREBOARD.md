@@ -113,10 +113,13 @@ Each states the invariant and either discharges it or refuses.
 |---|---|---|---|
 | Agda, L1 | checks under `--safe` | n/a, defects are unwriteable or unprovable | <1s |
 | Agda, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
+| Agda, journal | P1/P4 structural, P2/P3 proved under `--safe` | P1/P2/P3 mutants rejected | 1s |
 | Lean 4, L1 | all proofs check | 3 rejected, `unsolved goals` | 2s |
 | Lean 4, L2 | `Inv` proved of every reachable state | n/a, the proof is the check | 2s |
+| Lean 4, journal | P1/P4 structural, P2/P3 proved | P1/P2/P3 mutants rejected | 1s |
 | Dafny, L1 | 9 obligations verified | 3 rejected, `postcondition could not be proved` | 1s |
 | Dafny, L2 | 40 obligations verified | 3 rejected, incl. the non-inductive invariant | 2s |
+| Dafny, journal | 24 obligations verified | P1/P2/P3 mutants rejected | 8s |
 | Alloy 6, L1 | 5 checks UNSAT, 3 witnesses SAT | 4 counterexamples constructed, one per check | 12s |
 | Alloy 6, L2 | `Inv` holds to 14 steps; `Inv` is inductive | CTI to `attemptsBounded` found in 49ms | 324s |
 
@@ -442,12 +445,16 @@ version now at least computes the obligation from an evidence value, so a
 mutated `ObligatedFrom` would fail — the others cannot be repaired without
 separating evidence from phase, which is a different model.
 
-**Two invariants are in no tool at all.** I9 (every executor interaction
-carries the exact `RunId` and `AttemptId`) and I15 (the journal is append-only
-and its reduction a pure, total, idempotent fold) are absent from all seven
-encodings. No model here has an identifier or a journal; `oneAttemptPerTask`
-counts attempts and never names one. Those are two of the invariants production
-leans on hardest, and the bake-off says nothing about either.
+**One invariant remains in no protocol encoding.** I9 (every executor
+interaction carries the exact `RunId` and `AttemptId`) is absent from all seven
+L1/L2 encodings; `oneAttemptPerTask` counts attempts and never names one. I15
+was absent when this audit was written, but the follow-up now gives its pure
+journal fold a concrete fast-check model plus Lean, Agda, and Dafny proofs.
+The later #200 work additionally proves the accepted claim/crash and regional
+Lean L2→L1 projections through an explicit relation. It does not prove
+append-only storage behavior, universal refinement for every L2 transition, or
+cross-language equivalence of the separately authored JavaScript/prover ports;
+those broader claims remain outside the result.
 
 **Two more are in exactly one.** I11 and I12 exist only in `alloy/Delivery.als`
 — and I11 only became a result during this audit, having been a `P implies P`
@@ -472,6 +479,15 @@ two are not interchangeable.
 | Dafny | 100 MB release zip | 158 lines L1 + 370 lines L2 | L1 on code-shaped definitions, and L2 as a class invariant |
 | Lean 4 | elan, no Mathlib needed | 125 lines L1 + 500 lines L2 | L1 incl. half of I2, and L2 |
 | Agda | `brew install agda`, no stdlib needed | 144 lines L1 + 580 lines L2, both incl. a hand-rolled prelude | L1 without I2, and L2 |
+
+The journal-law additions are intentionally factored differently from the
+executable fast-check arm. Lean ports the concrete transition and proves the
+local/shared separation theorem for arbitrary natural task identifiers. Agda
+and Dafny retain the benchmark's two named tasks, prove a generic separation
+kernel, and instantiate it with all concrete guards and effects; all three are
+unbounded in journal length. A visible refinement obligation remains: none
+parses `fastcheck/journal.mjs` and proves that its separately authored port is
+identical. `LEARNING.md` records the exact statements and limitations.
 
 Agda and Lean encode exclusion reasons the same way, and it is the reason both
 are here. That encoding costs *zero* proof: `excluded` takes a head reason and a

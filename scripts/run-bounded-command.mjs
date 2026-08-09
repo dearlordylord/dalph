@@ -21,7 +21,9 @@ const terminate = (child, signal) => {
 }
 
 export const runBoundedCommand = ({
+  acceptedExitCodes = [0],
   args,
+  captureOutput = false,
   executable,
   forwardOutput = true,
   name,
@@ -35,10 +37,12 @@ export const runBoundedCommand = ({
     })
     const stdoutLineCounter = { endsWithLineBreak: true, lineBreaks: 0, wasWritten: false }
     const stderrLineCounter = { endsWithLineBreak: true, lineBreaks: 0, wasWritten: false }
+    const outputChunks = []
     let timedOut = false
     let escalationTimer
 
     const observeOutput = (output, destination, lineCounter) => {
+      if (captureOutput) outputChunks.push(output)
       lineCounter.wasWritten = true
       lineCounter.endsWithLineBreak = output.at(-1) === 10
       for (const byte of output) {
@@ -98,7 +102,7 @@ export const runBoundedCommand = ({
         return
       }
       clearTimeout(escalationTimer)
-      if (code !== 0) {
+      if (!acceptedExitCodes.includes(code)) {
         reject(new Error(`${name} failed with ${signal ?? `exit ${code}`}`))
       } else {
         const outputLineCount = [stdoutLineCounter, stderrLineCounter].reduce(
@@ -106,9 +110,9 @@ export const runBoundedCommand = ({
             total + lineCounter.lineBreaks + (lineCounter.wasWritten && !lineCounter.endsWithLineBreak ? 1 : 0),
           0
         )
-        resolve({
-          outputLineCount
-        })
+        resolve(captureOutput
+          ? { exitCode: code, output: Buffer.concat(outputChunks).toString("utf8"), outputLineCount }
+          : { outputLineCount })
       }
     })
   })

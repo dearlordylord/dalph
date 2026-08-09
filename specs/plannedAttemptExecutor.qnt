@@ -559,6 +559,33 @@ module plannedAttemptExecutor {
     | _ => false
   }
 
+  // Exact safe or terminal evidence is the point at which Dalph can finish
+  // this protocol transition without another executor boundary call. Running,
+  // unavailable, and contradictory observations deliberately do not qualify.
+  pure def releasableEvidenceAwaitingSettlement(s: State): bool = match s.evidence {
+    | CommandResponse(result) =>
+        result.report == ReportSafelySuspended or result.report == ReportTerminal
+    | CommandProjectionEvidence(projection) =>
+        projection.outcome == CommandProjectionExactSafelySuspended
+          or projection.outcome == CommandProjectionExactTerminal
+    | FreshStateProjection(projection) =>
+        isNoCommand(s.commandState)
+          and s.positionHeld
+          and (projection.observation == ExecutorStateSafelySuspended
+            or projection.observation == ExecutorStateTerminal)
+    | NoEvidence => false
+  }
+
+  /// Once exact safe or terminal executor evidence is durable, a continuously
+  /// enabled protocol step eventually consumes it and releases this exact
+  /// planned attempt's task-work position. This is intentionally narrower than
+  /// assuming that an executor must eventually honor a Suspend command: the
+  /// boundary is allowed to report Running, unavailable, or contradictory.
+  temporal releasableEvidenceEventuallyReleasesPosition =
+    releasableEvidenceStep.weakFair(Set(state)) implies
+      always(releasableEvidenceAwaitingSettlement(state)
+        implies eventually(not(state.positionHeld)))
+
   action init: bool = all {
     state' = {
       status: ResponsibilityNotBegun,
@@ -807,6 +834,35 @@ module plannedAttemptExecutor {
         if (state.recoveryCount < RECOVERY_LIMIT) state.recoveryCount + 1
         else state.recoveryCount,
       lastAction: RecoveryActivatedAction,
+    },
+  }
+
+  // Focused temporal subgraph over the same production actions. It reaches
+  // direct-response, command-projection, and fresh-state evidence, but omits
+  // unrelated unavailable/contradictory recovery branches whose state-space
+  // cost cannot affect settlement after releasable evidence is already
+  // durable. The gate passes this action as TLC's configured next relation.
+  action releasableEvidenceStep: bool = any {
+    beginResponsibility,
+    all {
+      state.positionHeld,
+      any {
+        recordStartOrContinueIntent,
+        callStartOrContinue,
+        receiveCommandResponse(ReportRunning),
+        settleCommandResponse,
+        recordSuspendIntent,
+        callSuspend,
+        receiveCommandResponse(ReportSafelySuspended),
+        receiveCommandResponse(ReportTerminal),
+        loseCommandResponse,
+        recordCommandProjection(CommandProjectionExactSafelySuspended),
+        recordCommandProjection(CommandProjectionExactTerminal),
+        recordFreshStateProjection(ExecutorStateSafelySuspended),
+        recordFreshStateProjection(ExecutorStateTerminal),
+        acceptFreshStateProjectionProof,
+        settleCommandProjection,
+      },
     },
   }
 
