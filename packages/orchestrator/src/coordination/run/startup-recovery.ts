@@ -32,7 +32,7 @@ import {
 } from "../reconstruction/history-result.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { IntegrationTargetSelection } from "../../workflow/protocols/integration-admission/protocol.js"
-import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
+import { DeliveryRuntimeResources, deliveryRuntimeResourcesOf } from "../delivery/delivery-runtime-resources.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import {
   TargetVerificationRuntime,
@@ -121,7 +121,7 @@ const makeStartupRecoveryContext = Effect.fn("StartupRecovery.makeContext")(func
   const deliveryRuntimeResources = Context.getOption(ambient, DeliveryRuntimeResources)
   const runtimeResources = Option.isSome(deliveryRuntimeResources)
     ? deliveryRuntimeResources.value
-    : DeliveryRuntimeResources.of({ integrationTargets: yield* makeIntegrationTargetResourceController() })
+    : DeliveryRuntimeResources.of(deliveryRuntimeResourcesOf(yield* makeIntegrationTargetResourceController()))
   const integrationResources = runtimeResources.integrationTargets
   const recovery = yield* makeRecoveryProjection(
     runId,

@@ -20,7 +20,6 @@ import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
 import { DeliveryProposalId } from "./delivery-action-proposal.js"
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
 import {
-  makeDeliveryRuntimeAdmissionController,
   type DeliveryAdmissionReservation,
   type DeliveryRuntimeAdmissionController
 } from "./delivery-runtime-admission.js"
@@ -37,6 +36,7 @@ import {
   type PlannedAttemptProtocolController,
   withPlannedAttemptProtocolPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
 
 /** Two lower relations claim the same proposal identity, so no action is authorized. */
 export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedErrorClass<DeliveryRuntimeProposalOwnershipConflict>()(
@@ -186,7 +186,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const integrationTargets = resources.integrationTargets
       const first = yield* relation.get
       yield* Ref.set(latest, Option.some(first))
-      const admission = yield* makeDeliveryRuntimeAdmissionController(first.taskWork, integrationTargets)
+      const admission = yield* resources.makeAdmissionController(first.taskWork)
       const evaluationsSubscribed = yield* Deferred.make<void>()
 
       yield* relation.changes.pipe(
@@ -241,11 +241,20 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             completion: { acknowledged, exit, proposalId: proposal.id }
           })
           yield* Deferred.await(acknowledged)
-        }).pipe(Effect.onInterrupt(() => releaseInterruptedOwner))
-        yield* child.pipe(Effect.forkIn(scope))
-        yield* Effect.yieldNow
-        return true
+        })
+        return yield* installInterruptibleDeliveryChild(scope, child, releaseInterruptedOwner)
       })
+
+      const reserveAndStart = Effect.fn("DeliveryRuntime.reserveAndStart")((proposal: DeliveryActionProposal) =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const result = yield* admission.tryReserve(proposal)
+            if (result._tag === "Deferred") return result
+            const started = yield* start(result.reservation)
+            return { _tag: "Started" as const, started }
+          })
+        )
+      )
 
       const proposalIsAvailable = (
         proposal: DeliveryActionProposal,
@@ -268,9 +277,9 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       ) {
         for (const independent of proposals.slice(deferredIndex + 1)) {
           if (!proposalIsAvailable(independent, live, liveOperationIds, deferred, acceptedAt)) continue
-          const laterReservation = yield* admission.tryReserve(independent)
-          if (laterReservation._tag === "Admitted") {
-            return yield* start(laterReservation.reservation)
+          const laterReservation = yield* reserveAndStart(independent)
+          if (laterReservation._tag === "Started") {
+            return laterReservation.started
           }
           yield* emit({ _tag: "ProposalDeferred", proposalId: independent.id, reason: laterReservation.reason })
         }
@@ -299,7 +308,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               proposalIsAvailable(candidate, live, liveOperationIds, deferred, current.acceptedAt)
             )
             if (proposal === undefined) return false
-            const reservation = yield* admission.tryReserve(proposal)
+            const reservation = yield* reserveAndStart(proposal)
             if (reservation._tag === "Deferred") {
               yield* emit({ _tag: "ProposalDeferred", proposalId: proposal.id, reason: reservation.reason })
               return yield* admitLaterAvailableProposal(
@@ -311,7 +320,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                 current.acceptedAt
               )
             }
-            return yield* start(reservation.reservation)
+            return reservation.started
           })
         )
       })
