@@ -18,6 +18,14 @@ interaction mismatch. This changes deterministic test-harness chronology only;
 the production coordinator, boundaries, journal events, and visible command
 outcomes are unchanged.
 
+Some recovered stories consume their final controlled boundary response before
+the coordinator has durably recorded the terminal candidate or verification
+event. After that response, the harness waits for the exact required event and
+the recovered coordinator together. If the coordinator fails or stops first,
+the cassette returns that failure instead of waiting forever; if it records the
+event first, the harness proceeds to the terminal assertions. This observation
+does not retry or manufacture the event.
+
 ## A maintainer runs one maintained cassette to its authored end
 
 ### Starting situation
@@ -29,6 +37,12 @@ facts. No real GitHub repository, Git worktree, executor process, or durable
 journal is changed: each cassette declares controlled boundary results and the
 production cassette runner constructs fresh in-memory adapters and a fresh
 in-memory journal for that run.
+
+The maintainer may reach the Docker-hosted Lab over an ordinary Orb HTTP host,
+where browsers expose secure random bytes but do not expose `crypto.subtle`.
+The Lab computes the same requested SHA digest locally with its browser-safe
+cryptographic implementation, so production evidence storage executes without
+requiring a secure origin or substituting a made-up digest.
 
 ### Trigger and ordered behavior
 
@@ -69,6 +83,9 @@ in-memory adapters; recovery inside a cassette occurs only at an authored
 
 ### Acceptance-test mapping
 
+- `hashes verification evidence without requiring browser crypto.subtle`
+  checks the exact SHA-256 identity used by the browser evidence-store adapter
+  without reading the secure-origin-only Web Crypto digest API.
 - `runs every maintained cassette through production to its declared end`
   enumerates the exact three public catalogs, delegates every entry to its
   production runner, and requires complete story consumption.
@@ -77,7 +94,8 @@ in-memory adapters; recovery inside a cassette occurs only at an authored
   than skipped input or synthetic success.
 - `accepts successful recovered completion at the terminal assertion boundary`
   runs a maintained recovery story and requires its recovered coordinator and
-  terminal assertions both to complete without hiding failures.
+  terminal assertions both to complete without hiding failures or waiting
+  forever after a coordinator stops before its required terminal event.
 - `shows only information that selects, explains, or diagnoses a maintained cassette`
   checks that the browser selector contains every catalog choice while one
   shared surface exposes the safety boundary, declared input, production
@@ -92,11 +110,14 @@ maintainer chooses **Run all cassettes**.
 
 ### Ordered behavior and visible result
 
-The Lab starts each catalog entry independently through the same production
-runner used by the single-story action. A failure is retained beside its exact
-catalog key and does not become a passing result. Once every entry settles, the
-summary reports the exact completed and failed counts; successful entries have
-consumed their complete authored stories.
+The Lab starts one catalog entry at a time through the same production runner
+used by the single-story action. As it settles, the Lab starts the next
+maintained entry until all have run. Browser cassette runtimes do not overlap
+their controlled clocks and runtime layers; this is not Dalph's production
+task-work capacity. A
+failure is retained beside its exact catalog key and does not become a passing
+result. Once every entry settles, the summary reports the exact completed and
+failed counts; successful entries have consumed their complete authored stories.
 
 There is no bounded production task concurrency claim here: this is a local
 developer tool running isolated deterministic cassettes. No real boundary,
@@ -109,6 +130,9 @@ discards all displayed results.
   is the command-independent execution proof for the whole catalog.
 - `the real browser entry runs every maintained cassette and retains every terminal result`
   checks the browser update path and the exact completed/failed summary.
+- `runs browser Run all sequentially without changing its complete cassette set`
+  holds five controlled runners, proves only one starts initially, then proves
+  the next starts as the prior cassette settles and every choice retains its result.
 
 ## A maintainer finds, follows, and diagnoses the cassette that matters
 
@@ -125,12 +149,8 @@ owns the behavior they need to inspect.
 The Lab first states that this is a local deterministic harness, identifies the
 source revision, and says that no GitHub issue, Git repository, executor
 process, or durable journal will be changed. It groups selectable choices by
-the production runner that owns them. A search narrows choices by human story name,
-exact catalog key, category, runner, controlled-boundary description, or any
-declared input value. Search words may occur separately and all must match. A
-category filter and a terminal-status filter independently narrow the view.
-When a match exists only inside the exact input, the selected surface shows the
-matching snippet instead of appearing without an explanation.
+the production runner that owns them in one ordinary cassette selector. There
+is no second search or filter selection mechanism competing with that control.
 
 The selected surface makes the human story name primary and retains the exact
 catalog key, production runner, and controlled boundaries. A collapsed declared input
@@ -144,10 +164,9 @@ boundaries, and disables overlapping commands. When the maintainer runs the
 whole catalog, every retained cassette state immediately becomes running and
 each receives its terminal result as soon as its own production runner settles;
 the selector exposes those live states while the shared surface projects the
-current choice. **Run shown** is offered only for a narrowed view and runs only the choices admitted by the current
-filters. Status-filtered visibility updates at each state change. The Lab does not
-keep old green evidence visible and does not wait for the slowest cassette
-before showing faster results. The catalog summary distinguishes not-run,
+current choice. The Lab does not keep old green evidence visible and does not
+wait for the slowest cassette before retaining faster results. The catalog
+summary distinguishes not-run,
 running, cassette-completed, cassette-failed, and Lab-defect counts. It explains
 that cassette completion means reaching the declared end, which may include an
 expected protocol failure. After a single run it no longer claims that the
@@ -166,7 +185,7 @@ known, followed by a concise error. Raw cause and stack detail remain under
 **Raw diagnostic**. When the typed failed result cannot return partial journal
 records, the concise evidence explicitly says they are unavailable. The
 aggregate result links both failed cassettes and Lab defects by human story and
-exact key, clears concealing filters before focusing a linked problem, and
+exact key, selects the linked problem in the shared surface, and
 offers **Retry problem cassettes**. If the browser composition itself unexpectedly
 rejects instead of returning a cassette result, the affected cassette and aggregate
 summary retain a distinct Lab defect and controls become usable again. While any
@@ -180,8 +199,8 @@ the safety boundary, follow current execution, verify completion, or diagnose
 a stop. Category is not repeated in a prefixed title, empty evidence panels do
 not appear, a journal count is not presented as correctness proof, declared
 input is not presented as observed output, and an earlier result never appears
-current during a rerun. Filtering changes **Run shown** but never changes which
-catalog entries the explicitly counted **Run all** command executes.
+current during a rerun. The explicitly counted **Run all** command always
+executes the complete maintained catalog.
 
 Browser loss discards this local presentation state and cannot ambiguously
 change an outside system. Retrying repeats the selected deterministic
@@ -197,25 +216,23 @@ workbench, and terminal evidence. When the maintainer selects another cassette,
 that cassette replaces all content in the same surface. No workbench, status,
 chronology, or evidence from the previous selection remains visible beside it.
 
-Search, catalog, and status filters narrow the selectable choices. If they
-exclude the current selection, the first remaining choice replaces it; if no
-choice remains, the shared surface says that no cassette matches. **Run all**
-and **Run shown** still execute their exact catalog sets and retain one state per
-cassette, but only the currently selected cassette is projected into the shared
-surface. Selecting a previously completed cassette later restores its retained
-terminal result in that one surface. A problem link selects and focuses its
-failed cassette instead of revealing another cassette UI.
+**Run all** retains one state per cassette, but only the currently selected
+cassette is projected into the shared surface. Selecting a previously
+completed cassette later restores its retained terminal result in that one
+surface. A problem link selects and focuses its failed cassette instead of
+revealing another cassette UI.
 
 The Lab must not create one article, workbench, chronology, Run button, or
 evidence tree per catalog entry. A new selection must replace the old selected
 surface rather than append to it.
 
-The cassette control is an ordinary browser select containing every choice
-admitted by the current filters. Its label says **Choose cassette** and states
-the number of available choices. Three standard option groups name the
-catalogs; each concise option names the human story and current status while
-its value retains the exact key. Opening the select must not run a cassette or
-replace the selected surface; choosing an option is the only selection trigger.
+The cassette control is an ordinary browser select containing every maintained
+choice. Its label says **Choose cassette** and states the number of available
+choices. Three standard option groups name the catalogs; each concise option
+names the human story and current status while its value retains the exact key.
+Opening the select must not run a cassette or replace the selected surface;
+choosing an option is the only selection trigger. No search box, catalog
+filter, status filter, or **Run shown** command appears.
 
 After an authored cassette completes, the maintainer opens its Delivery
 workbench and chooses **Next frame**. The already-rendered workbench stays
@@ -232,19 +249,16 @@ timeline. The Lab must not replace an open disclosure in response to its own
   checks the source/safety context, complete ordinary selector, one selected
   surface, runner and boundary facts, completion meaning, hidden pre-run
   evidence, and readable and exact declared input.
-- `searches declared behavior without changing the maintained run-all catalog`
-  checks token-AND declared-behavior search, independent category filtering,
-  and the filter-independent full-catalog command.
 - `replaces stale evidence with live cassette progress and settles cassettes independently`
-  holds two controlled UI promises, observes both choices become running, and
-  observes the first leave the running choices while the shared surface moves
-  to the second before that runner settles.
+  holds two controlled UI promises, observes both choices become running,
+  selects between them while the batch is active, and observes each retained
+  terminal result as its runner settles.
 - `presents concise execution proof before chronological journal and raw output`
   runs one real cassette and checks its runner, activation or protocol facts,
   journal ordering scope, exact event detail, and secondary raw result.
 - `links, reveals, and retries cassette failures and Lab defects`
   injects one returned cassette failure and one unexpected rejected promise,
-  then checks distinct visible states, filter-safe navigation, retry of both
+  then checks distinct visible states, problem selection, retry of both
   problem kinds, and recovered controls.
 - `offers an explicit reload escape while a runner is still waiting` holds one
   runner promise open and checks that the isolated Lab exposes its reload

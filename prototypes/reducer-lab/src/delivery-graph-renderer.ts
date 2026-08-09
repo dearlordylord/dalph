@@ -100,7 +100,7 @@ const shadowCss = `
       #fbf8f1;
     background-size: 24px 24px;
   }
-  #canvas { width: 100%; height: 430px; }
+  #canvas { position: relative; width: 100%; height: 430px; }
   #empty {
     min-height: 430px;
     display: grid;

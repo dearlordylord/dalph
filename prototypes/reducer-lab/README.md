@@ -16,11 +16,9 @@ does not contain a second workflow reducer or scheduler.
 The browser offers the maintained catalog as one selector and projects only the
 selected cassette into one shared surface. Choosing a new cassette replaces the
 older graph, chronology, action, status, and evidence instead of appending
-another complete UI. Word-by-word search covers human story names, exact
-catalog keys, runner names, categories, controlled boundaries, complete
-declared inputs, and returned production evidence. Category and status filters
-narrow the choices and can define a **Run shown** subset; the explicitly
-counted **Run all** command always runs the complete catalog. Batch results stay
+another complete UI. There is no competing search or filter surface: the
+ordinary selector is the only way to choose a cassette. The explicitly counted
+**Run all** command always runs the complete catalog. Batch results stay
 retained behind the selector, while the shared surface presents only the chosen
 cassette's graph-first delivery timeline, compact terminal execution summary,
 journal evidence ordered within each Run, and secondary raw diagnostics. A

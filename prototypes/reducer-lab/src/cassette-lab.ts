@@ -1,6 +1,8 @@
 import { Cause, Crypto, Effect, Exit, Layer, Option } from "effect"
-import * as TestClock from "effect/testing/TestClock"
 import * as TestConsole from "effect/testing/TestConsole"
+import * as TestClock from "effect/testing/TestClock"
+import { sha1 } from "@noble/hashes/legacy.js"
+import { sha256, sha384, sha512 } from "@noble/hashes/sha2.js"
 import {
   type AuthoredDeliveryFrame,
   runAuthoredScenarioCassette
@@ -129,13 +131,24 @@ export type CassetteLabResult =
       readonly totalItemCount: number
     }
 
+/** Computes the Effect Crypto digest contract without requiring a secure browser origin. */
+export const browserDigest = (algorithm: Crypto.DigestAlgorithm, data: Uint8Array): Uint8Array => {
+  switch (algorithm) {
+    case "SHA-1":
+      return sha1(data)
+    case "SHA-256":
+      return sha256(data)
+    case "SHA-384":
+      return sha384(data)
+    case "SHA-512":
+      return sha512(data)
+  }
+}
+
 const browserCryptoLayer = Layer.succeed(
   Crypto.Crypto,
   Crypto.make({
-    digest: (algorithm, data) =>
-      Effect.promise(async () =>
-        new Uint8Array(await globalThis.crypto.subtle.digest(algorithm, Uint8Array.from(data).buffer))
-      ),
+    digest: (algorithm, data) => Effect.sync(() => browserDigest(algorithm, data)),
     randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size))
   })
 )

@@ -95,8 +95,7 @@ button:disabled {
   opacity: 0.55;
 }
 
-.catalog-summary,
-[data-role="visibility-summary"] {
+.catalog-summary {
   display: block;
   margin: 0.45rem 0;
 }
@@ -137,14 +136,6 @@ button:disabled {
 .catalog-key {
   color: #46534d;
   margin: 0;
-}
-
-.search-match-reason {
-  background: #fff2b8;
-  border-left: 0.25rem solid #9b7410;
-  font-family: ui-monospace, monospace;
-  overflow-wrap: anywhere;
-  padding: 0.45rem 0.65rem;
 }
 
 article {

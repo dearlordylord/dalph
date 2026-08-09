@@ -18,10 +18,8 @@ import { renderCassetteDeliveryWorkbench } from "./cassette-lab-workbench.ts"
 export const singleCassetteSettledEvent = "dalph-cassette-lab:single-settled"
 export const everyCassetteSettledEvent = "dalph-cassette-lab:every-settled"
 export const cassetteSettledEvent = "dalph-cassette-lab:cassette-settled"
-export const shownCassettesSettledEvent = "dalph-cassette-lab:shown-settled"
 
 type CassetteRow = (typeof maintainedCassetteRows)[number]
-type StatusFilter = "All" | "Completed" | "Failed" | "LabDefect" | "NotRun" | "Running"
 
 export interface CassetteLabBrowserInput {
   readonly reloadLab?: () => void
@@ -32,6 +30,7 @@ export interface CassetteLabBrowserInput {
 }
 
 const categoryOrder: ReadonlyArray<CassetteCategory> = ["Authored", "TargetPromotion", "IntegrationFinality"]
+const browserBatchConcurrency = 1
 
 const appendTextElement = <K extends keyof HTMLElementTagNameMap>(
   parent: HTMLElement,
@@ -163,27 +162,6 @@ const renderDefectEvidence = (host: HTMLElement, row: CassetteRow, detail: strin
 
 const defectDetail = (error: unknown): string => error instanceof Error ? error.stack ?? error.message : String(error)
 
-const stateFilterValue = (state: CassetteState): StatusFilter => {
-  if (state._tag !== "Settled") return state._tag
-  return state.result._tag
-}
-
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
-
-const markSearchTokens = (element: HTMLElement, text: string, tokens: ReadonlyArray<string>): void => {
-  element.replaceChildren()
-  if (tokens.length === 0) {
-    element.textContent = text
-    return
-  }
-  const expression = new RegExp(`(${tokens.map(escapeRegExp).join("|")})`, "giu")
-  for (const part of text.split(expression)) {
-    if (part.length === 0) continue
-    if (tokens.some((token) => part.toLocaleLowerCase() === token)) appendTextElement(element, "mark", part)
-    else element.append(document.createTextNode(part))
-  }
-}
-
 const selectOption = (select: HTMLSelectElement, value: string): void => {
   for (const option of select.options) {
     if (option.value === value) option.setAttribute("selected", "")
@@ -201,11 +179,9 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     rows.map(({ catalogKey }) => [catalogKey, { _tag: "NotRun" }])
   )
   let selectedKey: MaintainedCassetteKey | undefined = rows[0]?.catalogKey
-  let visibleKeys: ReadonlyArray<MaintainedCassetteKey> = rows.map(({ catalogKey }) => catalogKey)
   let workbenchOpen = false
   let evidenceOpen = false
   let busy = false
-  let runShownActive = false
 
   const header = document.createElement("header")
   appendTextElement(header, "h1", "Dalph reducer lab")
@@ -229,38 +205,6 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const controls = document.createElement("section")
   controls.className = "catalog-controls"
   controls.setAttribute("aria-label", "Cassette selection, catalog commands, and live results")
-  const searchLabel = appendTextElement(controls, "label", "Search declared behavior and returned evidence")
-  const search = document.createElement("input")
-  search.type = "search"
-  search.placeholder = "Words from a story, key, declared value, or returned production fact"
-  searchLabel.append(search)
-
-  const categoryLabel = appendTextElement(controls, "label", "Catalog")
-  const categoryFilter = document.createElement("select")
-  appendTextElement(categoryFilter, "option", "All maintained catalogs").value = "All"
-  for (const category of categoryOrder) {
-    const row = rows.find((candidate) => candidate.category === category)
-    if (row === undefined) continue
-    const option = appendTextElement(categoryFilter, "option", row.categoryLabel)
-    option.value = category
-  }
-  categoryLabel.append(categoryFilter)
-
-  const statusLabel = appendTextElement(controls, "label", "Status")
-  const statusFilter = document.createElement("select")
-  for (const [value, label] of [
-    ["All", "All statuses"],
-    ["NotRun", "Not run"],
-    ["Running", "Running"],
-    ["Completed", "Cassette completed"],
-    ["Failed", "Cassette failed"],
-    ["LabDefect", "Lab defect"]
-  ] as const) {
-    const option = appendTextElement(statusFilter, "option", label)
-    option.value = value
-  }
-  statusLabel.append(statusFilter)
-
   const selectionLabel = appendTextElement(controls, "label", "Choose cassette")
   selectionLabel.className = "cassette-selection"
   const selectionText = appendTextElement(selectionLabel, "span", `(${rows.length} available)`)
@@ -270,15 +214,13 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
 
   const runAllButton = appendTextElement(controls, "button", `Run all ${rows.length} cassettes`)
   runAllButton.type = "button"
-  runAllButton.title = "Runs every maintained cassette, regardless of the current filters"
-  const runShownButton = appendTextElement(controls, "button", `Run shown (${rows.length})`, "secondary-action")
-  runShownButton.type = "button"
+  runAllButton.title = "Runs every maintained cassette"
   const retryProblemsButton = appendTextElement(controls, "button", "Retry problem cassettes", "secondary-action")
   retryProblemsButton.type = "button"
   retryProblemsButton.hidden = true
   const reloadButton = appendTextElement(controls, "button", "Reload Lab and discard displayed results", "danger-action")
   reloadButton.type = "button"
-  reloadButton.title = "Stops waiting by reloading this local harness; all displayed results and filters are discarded"
+  reloadButton.title = "Stops waiting by reloading this local harness; all displayed results are discarded"
   reloadButton.hidden = true
   const completionLegend = appendTextElement(
     controls,
@@ -287,9 +229,6 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     "completion-legend"
   )
   completionLegend.dataset.role = "completion-legend"
-  const visibility = document.createElement("output")
-  visibility.dataset.role = "visibility-summary"
-  visibility.hidden = true
   const summary = document.createElement("output")
   summary.className = "catalog-summary"
   summary.dataset.role = "catalog-summary"
@@ -302,7 +241,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   problemLinks.dataset.role = "problem-links"
   problemLinks.setAttribute("aria-label", "Cassette failures and Lab defects")
   problemLinks.hidden = true
-  controls.append(completionLegend, visibility, summary, runAnnouncement, problemLinks)
+  controls.append(completionLegend, summary, runAnnouncement, problemLinks)
 
   const sharedSurface = document.createElement("main")
   sharedSurface.className = "selected-cassette-surface"
@@ -311,7 +250,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const currentStates = (): ReadonlyArray<CassetteState> =>
     rows.map(({ catalogKey }) => states.get(catalogKey) ?? { _tag: "NotRun" })
 
-  let applyFilters = (_announceVisibility?: boolean): void => undefined
+  let refreshSelector = (): void => undefined
   let renderSelected = (): void => undefined
 
   const updateAggregate = (): void => {
@@ -333,10 +272,6 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       link.textContent = `${row.storyName} (${row.catalogKey}; ${kind})`
       link.addEventListener("click", (event) => {
         event.preventDefault()
-        search.value = ""
-        selectOption(categoryFilter, "All")
-        selectOption(statusFilter, "All")
-        applyFilters()
         selectedKey = row.catalogKey
         selectOption(cassetteSelector, row.catalogKey)
         workbenchOpen = false
@@ -349,52 +284,11 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     }
   }
 
-  const searchableParts = (row: CassetteRow, state: CassetteState) => {
-    const visible = [
-      row.storyName,
-      row.catalogKey,
-      row.categoryLabel,
-      row.runnerName,
-      row.controlledBoundaries,
-      ...row.storyItemSummaries
-    ].join(" ").toLocaleLowerCase()
-    const declared = row.declaredInputText.toLocaleLowerCase()
-    const resultText = state._tag === "Settled"
-      ? resultEvidenceText(state.result)
-      : state._tag === "LabDefect" ? state.detail : ""
-    return { declared, result: resultText.toLocaleLowerCase(), resultText, visible }
-  }
-
-  const matchExplanation = (
-    row: CassetteRow,
-    state: CassetteState,
-    tokens: ReadonlyArray<string>
-  ): string | undefined => {
-    if (tokens.length === 0) return undefined
-    const searchable = searchableParts(row, state)
-    if (tokens.every((token) => searchable.visible.includes(token))) return undefined
-    const declaredTokens = tokens.filter((token) => searchable.declared.includes(token))
-    const resultTokens = tokens.filter((token) => searchable.result.includes(token))
-    const excerpt = (text: string, token: string): string => {
-      const firstPosition = Math.max(0, text.toLocaleLowerCase().indexOf(token))
-      const start = Math.max(0, firstPosition - 50)
-      const end = Math.min(text.length, firstPosition + 130)
-      return `${start > 0 ? "…" : ""}${text.slice(start, end).replace(/\s+/gu, " ")}${end < text.length ? "…" : ""}`
-    }
-    if (declaredTokens.length === tokens.length) {
-      return `Match in exact declared input: ${excerpt(row.declaredInputText, declaredTokens[0] ?? "")}`
-    }
-    if (resultTokens.length === tokens.length) {
-      return `Match in returned production delivery evidence: ${excerpt(searchable.resultText, resultTokens[0] ?? "")}`
-    }
-    return `Match spans exact declared input and returned production evidence. Declared: ${excerpt(row.declaredInputText, declaredTokens[0] ?? "")} Returned: ${excerpt(searchable.resultText, resultTokens[0] ?? "")}`
-  }
-
   renderSelected = (): void => {
     sharedSurface.replaceChildren()
     const row = selectedKey === undefined ? undefined : rowByKey.get(selectedKey)
     if (row === undefined) {
-      appendTextElement(sharedSurface, "p", "No maintained cassette matches the current filters.", "empty-selection")
+      appendTextElement(sharedSurface, "p", "No maintained cassette is available.", "empty-selection")
       return
     }
     const state = states.get(row.catalogKey) ?? { _tag: "NotRun" }
@@ -412,13 +306,6 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     ownership.append(` · Controlled boundaries: ${row.controlledBoundaries}`)
     if (row.surface._tag === "DirectProtocolSurface") {
       ownership.append(" · This direct protocol runner does not publish the graph-level delivery relation, so no graph, frontier, or held-position workbench is shown.")
-    }
-    const tokens = search.value.trim().toLocaleLowerCase().split(/\s+/u).filter((token) => token.length > 0)
-    markSearchTokens(heading, row.storyName, tokens)
-    const explanation = matchExplanation(row, state, tokens)
-    if (explanation !== undefined) {
-      const matchReason = appendTextElement(article, "p", "", "search-match-reason")
-      markSearchTokens(matchReason, explanation, tokens)
     }
 
     const deliveryWorkbenchHost = document.createElement("div")
@@ -476,7 +363,6 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const setBusy = (nextBusy: boolean): void => {
     busy = nextBusy
     runAllButton.disabled = nextBusy
-    runShownButton.disabled = nextBusy || visibleKeys.length === 0
     retryProblemsButton.disabled = nextBusy
     reloadButton.hidden = !nextBusy
     renderSelected()
@@ -493,45 +379,40 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       runAnnouncement.textContent = `Running ${keys.length} ${keys.length === 1 ? "cassette" : "cassettes"}; progress is visible in the catalog summary`
     }
     for (const key of keys) states.set(key, { _tag: "Running" })
+    refreshSelector()
     renderSelected()
-    applyFilters()
     updateAggregate()
-    await Promise.all(keys.map(async (catalogKey) => {
-      try {
-        states.set(catalogKey, { _tag: "Settled", result: await runCassette(catalogKey) })
-      } catch (error) {
-        states.set(catalogKey, { _tag: "LabDefect", catalogKey, detail: defectDetail(error) })
+    let nextIndex = 0
+    const runNext = async (): Promise<void> => {
+      while (nextIndex < keys.length) {
+        const catalogKey = keys[nextIndex]
+        nextIndex += 1
+        if (catalogKey === undefined) return
+        try {
+          states.set(catalogKey, { _tag: "Settled", result: await runCassette(catalogKey) })
+        } catch (error) {
+          states.set(catalogKey, { _tag: "LabDefect", catalogKey, detail: defectDetail(error) })
+        }
+        refreshSelector()
+        if (selectedKey === catalogKey) renderSelected()
+        updateAggregate()
+        root.dispatchEvent(new Event(cassetteSettledEvent))
       }
-      if (selectedKey === catalogKey) renderSelected()
-      applyFilters()
-      updateAggregate()
-      root.dispatchEvent(new Event(cassetteSettledEvent))
-    }))
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(browserBatchConcurrency, keys.length) }, () => runNext())
+    )
     setBusy(false)
-    applyFilters()
+    refreshSelector()
     if (!single) runAnnouncement.textContent = `Batch finished. ${catalogSummaryText(currentStates())}`
   }
 
-  applyFilters = (announceVisibility = false): void => {
-    const tokens = search.value.trim().toLocaleLowerCase().split(/\s+/u).filter((token) => token.length > 0)
-    const category = categoryFilter.value || "All"
-    const status = (statusFilter.value || "All") as StatusFilter
-    visibleKeys = rows.flatMap((row) => {
-      const state = states.get(row.catalogKey) ?? { _tag: "NotRun" }
-      const searchable = searchableParts(row, state)
-      const matches = (category === "All" || row.category === category)
-        && (status === "All" || stateFilterValue(state) === status)
-        && tokens.every((token) => `${searchable.visible} ${searchable.declared} ${searchable.result}`.includes(token))
-      return matches ? [row.catalogKey] : []
-    })
-    if (selectedKey === undefined || !visibleKeys.includes(selectedKey)) {
-      selectedKey = visibleKeys[0]
-      workbenchOpen = false
-      evidenceOpen = false
-    }
+  refreshSelector = (): void => {
+    const keys = rows.map(({ catalogKey }) => catalogKey)
+    if (selectedKey === undefined || !keys.includes(selectedKey)) selectedKey = keys[0]
     cassetteSelector.replaceChildren()
     for (const categoryName of categoryOrder) {
-      const categoryKeys = visibleKeys.filter((key) => rowByKey.get(key)?.category === categoryName)
+      const categoryKeys = keys.filter((key) => rowByKey.get(key)?.category === categoryName)
       const firstKey = categoryKeys[0]
       if (firstKey === undefined) continue
       const group = document.createElement("optgroup")
@@ -550,46 +431,22 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       }
       cassetteSelector.append(group)
     }
-    cassetteSelector.disabled = visibleKeys.length === 0
-    selectionText.textContent = `(${visibleKeys.length} available)`
-    const narrowed = tokens.length > 0 || category !== "All" || status !== "All"
-    visibility.hidden = !narrowed
-    visibility.textContent = narrowed ? `${visibleKeys.length} of ${rows.length} maintained cassettes available to select` : ""
-    runShownButton.textContent = `Run shown (${visibleKeys.length})`
-    runShownButton.hidden = !runShownActive && (visibleKeys.length === 0 || visibleKeys.length === rows.length)
-    runShownButton.disabled = busy || visibleKeys.length === 0
-    renderSelected()
-    if (announceVisibility) {
-      runAnnouncement.textContent = narrowed ? visibility.textContent : `All ${rows.length} maintained cassettes are selectable`
-    }
+    cassetteSelector.disabled = keys.length === 0
+    selectionText.textContent = `(${keys.length} available)`
   }
 
   cassetteSelector.addEventListener("change", () => {
     const next = cassetteSelector.value as MaintainedCassetteKey
-    if (!visibleKeys.includes(next)) return
+    if (!rowByKey.has(next)) return
     selectedKey = next
     workbenchOpen = false
     evidenceOpen = false
     renderSelected()
   })
-  search.addEventListener("input", () => applyFilters(true))
-  categoryFilter.addEventListener("change", () => applyFilters(true))
-  statusFilter.addEventListener("change", () => applyFilters(true))
   runAllButton.addEventListener("click", () => {
     void runKeys(rows.map(({ catalogKey }) => catalogKey), false).then(() =>
       root.dispatchEvent(new Event(everyCassetteSettledEvent))
     )
-  })
-  runShownButton.addEventListener("click", () => {
-    runShownActive = true
-    const keys = [...visibleKeys]
-    void runKeys(keys, false).finally(() => {
-      summary.tabIndex = -1
-      summary.focus()
-      runShownActive = false
-      applyFilters()
-      root.dispatchEvent(new Event(shownCassettesSettledEvent))
-    })
   })
   retryProblemsButton.addEventListener("click", () => {
     const problems = rows.flatMap(({ catalogKey }) => {
@@ -603,6 +460,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   reloadButton.addEventListener("click", reloadLab)
 
   root.replaceChildren(header, controls, sharedSurface)
-  applyFilters()
+  refreshSelector()
+  renderSelected()
   updateAggregate()
 }

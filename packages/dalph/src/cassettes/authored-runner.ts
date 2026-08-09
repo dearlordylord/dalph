@@ -727,7 +727,16 @@ const runAuthoredScenarioCassetteWith = Effect.fn("AuthoredCassette.runWith")(fu
             )
             const recovered = yield* recoveredRun.pipe(Effect.forkScoped({ startImmediately: true }))
             yield* Effect.raceFirst(cursor.awaitTerminalAssertions, Fiber.join(recovered))
-            if (candidateTerminalEventTag !== undefined) yield* Deferred.await(candidateOutcomeRecorded)
+            if (candidateTerminalEventTag !== undefined) {
+              yield* Effect.raceFirst(
+                Deferred.await(candidateOutcomeRecorded),
+                Fiber.join(recovered).pipe(
+                  Effect.andThen(
+                    Effect.die(`recovered coordinator stopped before ${candidateTerminalEventTag} was recorded`)
+                  )
+                )
+              )
+            }
             for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
             const recoveredCoordinatorExit = recovered.pollUnsafe()
             yield* Fiber.interrupt(recovered)
