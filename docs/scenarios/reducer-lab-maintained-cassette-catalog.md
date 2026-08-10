@@ -466,9 +466,11 @@ report does. For a recovery cassette, every coordinator activation is visibly
 separated, including later-to-later activation restarts, and retains the
 same exact planned attempt where the cassette does. The first frame of each
 activation names its numbered restart boundary and summarizes which held
-positions and exact obligations survived, changed, or disappeared. The
-maintainer does not have to infer restart continuity only by comparing raw
-JSON.
+positions and exact obligations are unchanged, changed, disappeared, or newly
+observed. For `acceptedResultRestartsIntoIntegration`, the first later frame
+truthfully shows task A's obligation changing from executor responsibility to
+accepted-result integration and its held position disappearing. The maintainer
+does not have to infer restart continuity only by comparing raw JSON.
 
 ### Visible and forbidden results
 
@@ -613,8 +615,8 @@ task whose exact facts are correlated below.
   observer before returning the terminal authored result` checks the production
   cassette boundary publishes every exact revision before its terminal result.
 - `explains restart continuity at the first later activation boundary` selects the
-  first frame of activation 2 and checks the visible restart marker plus held-position
-  and obligation continuity.
+  first frame of activation 2 and checks the visible restart marker plus task A's
+  changed accepted-result obligation and disappeared held position.
 - `keeps graph-not-established frames dimensionally stable and truthful`
   checks an empty later-activation projection retains the populated graph
   viewport height and explains that there is no observed task to select while
@@ -721,19 +723,22 @@ durable prefixes for this cassette: the records through the fresh authority
 observations before authorization, the authorization fact before an executor
 report, and the later `Running` or `Terminal` report. It shows each graph,
 specification, claim, and worktree operation identity with its intent and
-observation positions, the authorization position, and the Run/attempt pair.
-It also shows the identity check: one responsibility, one authorization, one
-planned attempt, no recovery-named journal event, and no separate executor
-invocation identity.
+observation positions, the authorization position, and the structured Run/attempt
+pair. It also inspects every typed planned-attempt, responsibility,
+authorization, and report fact for the selected Run, so a replacement attempt or
+additional responsibility cannot be hidden by selecting the first one.
 
 ### Invalid witness fixtures and executor boundary
 
 The Lab makes in-memory missing, stale, later, and wrong-attempt witness
-fixtures from the returned records. For each fixture it calls the exported
+fixtures from the returned records, each ending at the last pre-authorization
+observation and containing no authorization, command-intent, or report fact.
+For each fixture it calls the exported
 production `evaluatePlannedAttemptContinuationAuthorization` through the Lab
-contact-decision adapter. A rejected evaluation is shown as executor contact
-unavailable; the adapter performs no executor call. The Lab does not copy the
-production chronology or identity validation into a second reducer.
+contact-decision adapter. A rejected pre-contact evaluation is shown as executor
+contact unavailable with the executor boundary still not contacted; the adapter
+performs no executor call. The Lab does not copy the production chronology or
+identity validation into a second reducer.
 
 ### Crash, retry, and visible result
 
@@ -757,12 +762,17 @@ contact.
   runs the exact maintained #171 catalog entry through
   `runAuthoredScenarioCassette`, projects the pre-authorization,
   post-authorization-before-report, and terminal prefixes, and sends missing,
-  stale, later, and wrong-attempt fixtures through the shared production
-  evaluator. Every invalid fixture remains executor-contact unavailable.
+  stale, later, and wrong-attempt pre-authorization fixtures through the shared
+  production evaluator. Every invalid fixture has no command/report contact
+  evidence, remains executor-contact unavailable, and is marked not contacted
+  at the executor boundary.
 - `shows continuation authorization prefixes and retained Run/attempt identity`
   mounts the selected Lab result and checks that the three durable prefixes,
-  four witness operation identities, one generic authorization, and no
-  recovery/separate-invocation identity are visible.
+  four witness operation identities, one generic authorization, and every
+  structured planned-attempt/responsibility/authorization/report correlation
+  are visible; its typed replacement-attempt fixture checks that a second
+  responsibility, authorization, and report cannot be hidden by selecting the
+  first attempt.
 - The same two tests check that the responsibility, authorization, and
   `Running`/`Terminal` report use one exact `(RunId, AttemptId)` and introduce
   no recovery-named event or replacement attempt.

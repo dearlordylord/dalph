@@ -1,5 +1,7 @@
 import { strict as assert } from "node:assert"
 import { Schema } from "effect"
+import { coordinatorProcessDeathContinuesAuthoredCassette } from "../../../packages/dalph/src/cassettes/catalog.ts"
+import { AttemptId } from "../../../packages/contracts/src/planned-attempt.ts"
 import { TaskId } from "../../../packages/contracts/src/task-identity.ts"
 import { JournalPosition } from "../../../packages/orchestrator/src/workflow-journal/identity.ts"
 import { JournalRecord } from "../../../packages/orchestrator/src/workflow-journal/store.ts"
@@ -62,17 +64,76 @@ assert.equal(terminal.attemptId, projection.attemptId)
 assert.equal(projection.identity.responsibilityCount, 1)
 assert.equal(projection.identity.authorizationCount, 1)
 assert.deepEqual(projection.identity.plannedAttemptIds, [projection.attemptId])
-assert.deepEqual(projection.identity.executorInvocationIds, [])
-assert.deepEqual(projection.identity.recoveryEventTags, [])
-assert.deepEqual(projection.identity.coarseResponsibilityCorrelations, [`${projection.runId}/${projection.attemptId}`])
+assert.deepEqual(projection.identity.plannedAttemptCorrelations, [{ runId: projection.runId, attemptId: projection.attemptId }])
+assert.deepEqual(projection.identity.responsibilityCorrelations, [{ runId: projection.runId, attemptId: projection.attemptId }])
+assert.deepEqual(projection.identity.authorizationCorrelations, [{ runId: projection.runId, attemptId: projection.attemptId }])
+assert.deepEqual(projection.identity.reportCorrelations, [{ runId: projection.runId, attemptId: projection.attemptId }])
 
 const records = continuationAuthorizationJournalRecordsOf(result)
 assert.equal(records.length, result.journalRecordCount)
+const replacementAttempt = { ...projection.plannedAttempt, attemptId: AttemptId.make("attempt:A:replacement") }
+const replacementRecords: Array<unknown> = records.flatMap<unknown>((record): ReadonlyArray<unknown> => {
+  if (record.event._tag === "TaskAttemptPlanned") {
+    return [{ ...record, position: JournalPosition.make(record.position + 1), event: { ...record.event, operation: { ...record.event.operation, plannedAttempt: replacementAttempt } } }]
+  }
+  if (record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+    return [{ ...record, position: JournalPosition.make(record.position + 1), event: { ...record.event, plannedAttempt: replacementAttempt } }]
+  }
+  if (record.event._tag === "PlannedAttemptContinuationAuthorized") {
+    return [{ ...record, position: JournalPosition.make(record.position + 1), event: { ...record.event, plannedAttempt: replacementAttempt } }]
+  }
+  if (record.event._tag === "PlannedAttemptExecutorWorkReported") {
+    return [{
+      ...record,
+      position: JournalPosition.make(record.position + 1),
+      event: {
+        ...record.event,
+        report: {
+          ...record.event.report,
+          correlation: { ...record.event.report.correlation, attemptId: replacementAttempt.attemptId }
+        }
+      }
+    }]
+  }
+  return []
+})
+const identityProjection = continuationAuthorizationProjectionOf({
+  ...result,
+  journalRecordCount: result.journalRecordCount + replacementRecords.length,
+  journalRecords: [...result.journalRecords, ...replacementRecords]
+})
+assert.notEqual(identityProjection, null)
+if (identityProjection === null) throw new Error("The replacement-attempt identity fixture must remain projectable")
+assert.equal(identityProjection.identity.plannedAttemptCorrelations.length, 2)
+assert.equal(identityProjection.identity.responsibilityCorrelations.length, 2)
+assert.equal(identityProjection.identity.authorizationCorrelations.length, 2)
+assert.equal(identityProjection.identity.reportCorrelations.length, 2)
+assert.deepEqual(identityProjection.identity.plannedAttemptIds, [projection.attemptId, replacementAttempt.attemptId])
 const witness = projection.authorization.witness
 const plannedAttempt = projection.plannedAttempt
-const authorizationPrefixRecords = records.filter(({ position }) => position <= projection.authorization.position)
-const authorizedDecision = continuationAuthorizationContactDecision(authorizationPrefixRecords, plannedAttempt, witness)
+const preAuthorizationRecords = records.filter(({ position }) => position <= beforeAuthorization.throughPosition)
+const executorContactTags = new Set([
+  "PlannedAttemptContinuationAuthorized",
+  "PlannedAttemptExecutorCommandIntended",
+  "PlannedAttemptExecutorWorkReported"
+])
+assert.equal(preAuthorizationRecords.some(({ event }) => executorContactTags.has(event._tag)), false)
+const authorizedDecision = continuationAuthorizationContactDecision(preAuthorizationRecords, plannedAttempt, witness)
 assert.equal(authorizedDecision._tag, "ExecutorContactAvailable", "fresh witnesses must permit the existing executor contact")
+if (authorizedDecision._tag === "ExecutorContactAvailable") {
+  assert.equal(authorizedDecision.executorBoundary, "NotContacted")
+}
+const crossedExecutorBoundaryDecision = continuationAuthorizationContactDecision(records, plannedAttempt, witness)
+assert.equal(crossedExecutorBoundaryDecision._tag, "ExecutorContactUnavailable")
+if (crossedExecutorBoundaryDecision._tag === "ExecutorContactUnavailable") {
+  assert.equal(crossedExecutorBoundaryDecision.executorBoundary, "Contacted")
+}
+assert.equal(
+  coordinatorProcessDeathContinuesAuthoredCassette.story.some(({ _tag }) => _tag === "CoordinatorProcessDies"),
+  true,
+  "The exact authored lifecycle control must remain in the cassette story"
+)
+assert.equal(records.some(({ event }) => String(event._tag) === "CoordinatorProcessDies"), false)
 const staleGraphObservationOperationId = records.flatMap(({ event }) =>
   event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "CompleteTaskTrackerFacts"
     ? [event.operationId]
@@ -82,7 +143,7 @@ const staleGraphObservationOperationId = records.flatMap(({ event }) =>
 const decisions = [
   {
     name: "missing",
-    records,
+    records: preAuthorizationRecords,
     witness: {
       ...witness,
       activeTaskContinuationRead: {
@@ -93,7 +154,7 @@ const decisions = [
   },
   {
     name: "stale",
-    records: authorizationPrefixRecords,
+    records: preAuthorizationRecords,
     witness: {
       ...witness,
       activeTaskContinuationRead: {
@@ -104,7 +165,7 @@ const decisions = [
   },
   {
     name: "later",
-    records: records.filter(({ position }) => position <= JournalPosition.make(26)).map((record) => {
+    records: preAuthorizationRecords.map((record) => {
       if (
         record.event._tag === "TaskTrackerReadIntentRecorded"
         && record.event.operation._tag === "ReadTrackerGraph"
@@ -119,7 +180,7 @@ const decisions = [
   {
     name: "wrong-attempt",
     records: Schema.decodeUnknownSync(Schema.Array(JournalRecord))(
-      records.filter(({ position }) => position <= JournalPosition.make(26)).map((record) => {
+      preAuthorizationRecords.map((record) => {
         if (
           record.event._tag === "GitReadIntentRecorded"
           && record.event.operation._tag === "ReadTaskWorktree"
@@ -147,10 +208,12 @@ const decisions = [
 ] as const
 
 for (const { name, records: variantRecords, witness: variantWitness } of decisions) {
+  assert.equal(variantRecords.some(({ event }) => executorContactTags.has(event._tag)), false, `${name} fixture must stop before executor contact`)
   const decision = continuationAuthorizationContactDecision(variantRecords, plannedAttempt, variantWitness)
   assert.equal(decision._tag, "ExecutorContactUnavailable", `${name} witness must fail closed`)
   if (decision._tag === "ExecutorContactUnavailable") {
     assert.equal(decision.executorContact, "Unavailable")
+    assert.equal(decision.executorBoundary, "NotContacted")
     assert.equal(
       decision.evaluation.reason,
       {

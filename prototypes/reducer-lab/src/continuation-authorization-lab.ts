@@ -1,7 +1,9 @@
 import { Schema } from "effect"
 import {
+  plannedAttemptExecutorCorrelation,
   plannedTaskAttemptEquivalence,
   type AttemptId,
+  type PlannedAttemptExecutorCorrelation,
   type PlannedTaskAttempt,
   type RunId
 } from "@dalph/contracts"
@@ -36,6 +38,8 @@ export type ContinuationExecutorReport =
   | { readonly _tag: "Running"; readonly position: JournalPosition }
   | { readonly _tag: "Terminal"; readonly position: JournalPosition }
 
+export type ContinuationExecutorBoundary = "NotContacted" | "Contacted"
+
 interface ContinuationPrefixBase {
   readonly attemptId: AttemptId
   readonly authorizationPosition: JournalPosition | null
@@ -64,17 +68,20 @@ export type ContinuationAuthorizationPrefix =
   })
 
 export interface ContinuationAuthorizationIdentity {
-  /** One durable executor-work responsibility remains associated with one exact Run/attempt pair. */
+  /** Every planned executor attempt recorded for this Run, including later attempts. */
+  readonly plannedAttemptCorrelations: ReadonlyArray<PlannedAttemptExecutorCorrelation>
+  /** Every durable executor-work responsibility recorded for this Run. */
+  readonly responsibilityCorrelations: ReadonlyArray<PlannedAttemptExecutorCorrelation>
+  /** Every continuation authorization recorded for this Run. */
+  readonly authorizationCorrelations: ReadonlyArray<PlannedAttemptExecutorCorrelation>
+  /** Every executor report recorded for this Run, including Running and Terminal reports. */
+  readonly reportCorrelations: ReadonlyArray<PlannedAttemptExecutorCorrelation>
+  /** Number of durable executor-work responsibilities recorded for this Run. */
   readonly responsibilityCount: number
-  /** The generic authorization is one journal fact, not a replacement responsibility. */
+  /** Number of generic continuation authorizations recorded for this Run. */
   readonly authorizationCount: number
-  /** Attempt identities found in the continuation responsibility and its reports. */
+  /** Attempt identities found in all exact executor correlations for this Run. */
   readonly plannedAttemptIds: ReadonlyArray<AttemptId>
-  /** No executor-invocation identity is introduced by coordinator death. */
-  readonly executorInvocationIds: ReadonlyArray<string>
-  /** No recovery/death occurrence is added to the workflow journal. */
-  readonly recoveryEventTags: ReadonlyArray<string>
-  readonly coarseResponsibilityCorrelations: ReadonlyArray<string>
 }
 
 export interface ContinuationAuthorizationProjection {
@@ -159,65 +166,44 @@ const continuationWitnessPositions = (
 
 const distinct = <T>(values: ReadonlyArray<T>): ReadonlyArray<T> => [...new Set(values)]
 
-const scalarIdentityValues = (value: unknown): ReadonlyArray<string> => {
-  if (typeof value !== "object" || value === null) return []
-  if (Array.isArray(value)) return value.flatMap(scalarIdentityValues)
-  return Object.entries(value).flatMap(([key, nested]) => {
-    const own = key === "executorInvocationId" || key === "invocationId"
-      ? typeof nested === "string" ? [nested] : []
-      : []
-    return [...own, ...scalarIdentityValues(nested)]
-  })
-}
-
 const identityOf = (
   records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt,
-  authorizationPosition: JournalPosition
+  runId: RunId
 ): ContinuationAuthorizationIdentity => {
-  const responsibilityRecords = records.filter(
-    ({ event, runId }) =>
-      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-      runId === plannedAttempt.runId &&
-      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
+  const plannedAttemptCorrelations = records.flatMap(({ event, runId: recordRunId }) =>
+    event._tag === "TaskAttemptPlanned" && recordRunId === runId
+      ? [plannedAttemptExecutorCorrelation(event.operation.plannedAttempt)]
+      : []
   )
-  const authorizationRecords = records.filter(
-    ({ event, runId }) =>
-      event._tag === "PlannedAttemptContinuationAuthorized" &&
-      runId === plannedAttempt.runId &&
-      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
+  const responsibilityCorrelations = records.flatMap(({ event, runId: recordRunId }) =>
+    event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && recordRunId === runId
+      ? [plannedAttemptExecutorCorrelation(event.plannedAttempt)]
+      : []
   )
-  const reportAttemptIds = records.flatMap(({ event, runId }) =>
-    event._tag === "PlannedAttemptExecutorWorkReported" && runId === plannedAttempt.runId
-      ? [event.report.correlation.attemptId]
+  const authorizationCorrelations = records.flatMap(({ event, runId: recordRunId }) =>
+    event._tag === "PlannedAttemptContinuationAuthorized" && recordRunId === runId
+      ? [plannedAttemptExecutorCorrelation(event.plannedAttempt)]
+      : []
+  )
+  const reportCorrelations = records.flatMap(({ event, runId: recordRunId }) =>
+    event._tag === "PlannedAttemptExecutorWorkReported" && recordRunId === runId
+      ? [event.report.correlation]
       : []
   )
   const plannedAttemptIds = distinct([
-    ...responsibilityRecords.flatMap(({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ? [event.plannedAttempt.attemptId] : []
-    ),
-    ...authorizationRecords.flatMap(({ event }) =>
-      event._tag === "PlannedAttemptContinuationAuthorized" ? [event.plannedAttempt.attemptId] : []
-    ),
-    ...reportAttemptIds
-  ])
-  const executorInvocationIds = distinct(records.flatMap(({ event }) => scalarIdentityValues(event)))
-  const recoveryEventTags = distinct(
-    records
-      .map(({ event }) => event._tag)
-      .filter((tag) => /recovery|death/iu.test(tag))
-  )
+    ...plannedAttemptCorrelations,
+    ...responsibilityCorrelations,
+    ...authorizationCorrelations,
+    ...reportCorrelations
+  ].map(({ attemptId }) => attemptId))
   return {
-    responsibilityCount: responsibilityRecords.length,
-    authorizationCount: authorizationRecords.filter(({ position }) => position <= authorizationPosition).length,
-    plannedAttemptIds,
-    executorInvocationIds,
-    recoveryEventTags,
-    coarseResponsibilityCorrelations: distinct(
-      responsibilityRecords.map(({ runId, event }) =>
-        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ? `${runId}/${event.plannedAttempt.attemptId}` : ""
-      )
-    ).filter((value) => value.length > 0)
+    plannedAttemptCorrelations,
+    responsibilityCorrelations,
+    authorizationCorrelations,
+    reportCorrelations,
+    responsibilityCount: responsibilityCorrelations.length,
+    authorizationCount: authorizationCorrelations.length,
+    plannedAttemptIds
   }
 }
 
@@ -327,7 +313,7 @@ export const continuationAuthorizationProjectionOf = (
     },
     witnesses,
     prefixes,
-    identity: identityOf(sorted, plannedAttempt, authorization.position)
+    identity: identityOf(sorted, plannedAttempt.runId)
   }
 }
 
@@ -335,13 +321,27 @@ export type ContinuationAuthorizationContactDecision =
   | {
       readonly _tag: "ExecutorContactAvailable"
       readonly executorContact: "Available"
+      readonly executorBoundary: ContinuationExecutorBoundary
       readonly evaluation: { readonly _tag: "Authorized" }
     }
   | {
       readonly _tag: "ExecutorContactUnavailable"
       readonly executorContact: "Unavailable"
+      readonly executorBoundary: ContinuationExecutorBoundary
       readonly evaluation: Exclude<ReturnType<typeof evaluatePlannedAttemptContinuationAuthorization>, { readonly _tag: "Authorized" }>
     }
+
+const executorBoundaryOf = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): ContinuationExecutorBoundary => records.some(({ event, runId }) =>
+  runId === plannedAttempt.runId && (
+    (event._tag === "PlannedAttemptExecutorCommandIntended" && plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)) ||
+    (event._tag === "PlannedAttemptExecutorWorkReported" &&
+      event.report.correlation.runId === plannedAttempt.runId &&
+      event.report.correlation.attemptId === plannedAttempt.attemptId)
+  )
+) ? "Contacted" : "NotContacted"
 
 /** Applies the production causal gate to a Lab fixture without contacting an executor. */
 export const continuationAuthorizationContactDecision = (
@@ -350,7 +350,8 @@ export const continuationAuthorizationContactDecision = (
   witness: PlannedAttemptContinuationWitness
 ): ContinuationAuthorizationContactDecision => {
   const evaluation = evaluatePlannedAttemptContinuationAuthorization(records, plannedAttempt, witness)
+  const executorBoundary = executorBoundaryOf(records, plannedAttempt)
   return evaluation._tag === "Authorized"
-    ? { _tag: "ExecutorContactAvailable", executorContact: "Available", evaluation }
-    : { _tag: "ExecutorContactUnavailable", executorContact: "Unavailable", evaluation }
+    ? { _tag: "ExecutorContactAvailable", executorContact: "Available", executorBoundary, evaluation }
+    : { _tag: "ExecutorContactUnavailable", executorContact: "Unavailable", executorBoundary, evaluation }
 }

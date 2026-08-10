@@ -1,6 +1,6 @@
 import type { AuthoredDeliveryFrame } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import type { CassetteLabResult, MaintainedCassetteKey } from "./cassette-lab.ts"
-import { continuationAuthorizationProjectionOf } from "./continuation-authorization-lab.ts"
+import type { ContinuationAuthorizationProjection } from "./continuation-authorization-lab.ts"
 
 export type CassetteState =
   | { readonly _tag: "NotRun" }
@@ -144,9 +144,8 @@ export const protocolDiagnosticItems = (
 
 /** Readable summary of the durable continuation authorization, when the selected result owns it. */
 export const continuationAuthorizationSummaryItems = (
-  result: CassetteLabResult
+  projection: ContinuationAuthorizationProjection | null
 ): ReadonlyArray<ExecutionSummaryItem> => {
-  const projection = continuationAuthorizationProjectionOf(result)
   if (projection === null) return []
   const witness = projection.witnesses
   return [
@@ -175,7 +174,7 @@ export const continuationAuthorizationSummaryItems = (
     },
     {
       term: "Identity check",
-      description: `${projection.identity.responsibilityCount} responsibility · ${projection.identity.authorizationCount} authorization · ${projection.identity.plannedAttemptIds.length} planned attempt · ${projection.identity.executorInvocationIds.length} separate executor invocation · ${projection.identity.recoveryEventTags.length} recovery-named event`
+      description: `${projection.identity.responsibilityCount} responsibility · ${projection.identity.authorizationCount} authorization · ${projection.identity.plannedAttemptCorrelations.length} planned attempt · ${projection.identity.reportCorrelations.length} executor reports · all correlations retain structured Run/attempt identity`
     }
   ]
 }

@@ -149,7 +149,7 @@ const renderContinuationAuthorization = (parent: HTMLElement, result: CassetteLa
     "These are durable prefixes projected from the production journal. The coordinator process-death cassette control is not a journal event, and authorization keeps the existing Run/attempt responsibility.",
     "continuation-authorization-explanation"
   )
-  renderDefinitionList(section, continuationAuthorizationSummaryItems(result))
+  renderDefinitionList(section, continuationAuthorizationSummaryItems(projection))
 
   const prefixTable = document.createElement("table")
   prefixTable.dataset.role = "continuation-prefixes"

@@ -630,7 +630,17 @@ await scenario("explains restart continuity at the first later activation bounda
     boundary.includes("Coordinator restarted: Initial activation 1 → Later activation 2"),
     "The first later-activation publication must visibly mark the process restart"
   )
-  assert(boundary.includes("Survived unchanged") && boundary.includes("task A"), "The restart marker must name exact held-position and obligation continuity")
+  assert(
+    boundary.includes("Changed:")
+      && boundary.includes("task A")
+      && boundary.includes("planned-attempt executor responsibility")
+      && boundary.includes("accepted result awaiting integration"),
+    "The first later-activation publication must show task A's obligation changed"
+  )
+  assert(
+    boundary.includes("Disappeared:") && boundary.includes("held position · task A"),
+    "The first later-activation publication must show task A's held position disappeared"
+  )
 })
 
 await scenario("separates every coordinator activation in a multi-restart delivery timeline", async () => {
@@ -1144,7 +1154,10 @@ await scenario("shows continuation authorization prefixes and retained Run/attem
   const prefixText = prefixRows.map(({ textContent }) => textContent ?? "").join("|")
   assert(prefixText.includes("BeforeAuthorization") && prefixText.includes("AfterAuthorizationBeforeReport") && prefixText.includes("AfterTerminal"), "Each durable continuation prefix must remain named")
   assert(authorization.textContent?.includes("no recovery event is inferred") === true, "The Lab must explain that coordinator death is not a journal event")
-  assert(authorization.textContent?.includes("0 separate executor invocation") === true, "The Lab must show no separate executor invocation identity")
+  assert(
+    authorization.textContent?.includes("all correlations retain structured Run/attempt identity") === true,
+    "The Lab must show structured Run/attempt identity without inventing invocation identities"
+  )
   assert(authorization.querySelectorAll("[data-role='continuation-witness-operations'] li").length === 4, "All four witness operation identities must be visible")
 })
 

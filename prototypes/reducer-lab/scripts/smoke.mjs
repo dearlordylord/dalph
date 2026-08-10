@@ -7,6 +7,7 @@ const server = await createServer({
 })
 
 try {
+  await server.ssrLoadModule("/src/continuation-authorization-lab.test.ts")
   await server.ssrLoadModule("/src/cassette-lab.smoke.ts")
   console.log("Reducer Lab maintained-cassette scenarios passed.")
 } finally {

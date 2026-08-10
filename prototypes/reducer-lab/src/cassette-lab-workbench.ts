@@ -1,5 +1,7 @@
 import type { AuthoredDeliveryFrame } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
+import type { AttemptId } from "../../../packages/contracts/src/planned-attempt.ts"
 import { TaskId } from "../../../packages/contracts/src/task-identity.ts"
+import type { RunId } from "../../../packages/contracts/src/workflow-identity.ts"
 import {
   deliveryGraphEncoding,
   deliveryGraphInterpretationNotes,
@@ -464,25 +466,51 @@ export interface DeliveryWorkbenchController {
   readonly update: (state: CassetteState) => void
 }
 
+type ExactCorrelationIdentity =
+  | {
+      readonly _tag: "HeldPosition"
+      readonly attemptId: AttemptId
+      readonly runId: RunId
+      readonly taskId: TaskId
+    }
+  | {
+      readonly _tag: "Obligation"
+      readonly attemptId: AttemptId | null
+      readonly taskId: TaskId
+    }
+
 interface ExactCorrelationFact {
-  readonly key: string
+  readonly identity: ExactCorrelationIdentity
   readonly summary: string
 }
 
 const exactCorrelations = (frame: AuthoredDeliveryFrame): ReadonlyArray<ExactCorrelationFact> => [
   ...frame.heldPositions.map(({ attemptId, runId, taskId }) => ({
-    key: `held:${taskId}:${runId}:${attemptId}`,
+    identity: { _tag: "HeldPosition" as const, attemptId, runId, taskId },
     summary: `held position · task ${taskId} · attempt ${attemptId} · Run ${runId}`
   })),
   ...frame.deliveries.flatMap(({ obligations, taskId }) =>
-    obligations.map(({ exact, kind, summary }) =>
+    obligations.map(({ attemptId, summary }) =>
       ({
-        key: `obligation:${taskId}:${kind}:${exact}`,
+        identity: { _tag: "Obligation" as const, attemptId, taskId },
         summary: `obligation · task ${taskId} · ${summary}`
       })
     )
   )
 ]
+
+const sameCorrelationIdentity = (
+  left: ExactCorrelationIdentity,
+  right: ExactCorrelationIdentity
+): boolean => {
+  if (left._tag !== right._tag || left.taskId !== right.taskId || left.attemptId !== right.attemptId) return false
+  return left._tag === "HeldPosition" && right._tag === "HeldPosition"
+    ? left.runId === right.runId
+    : left._tag === "Obligation" && right._tag === "Obligation"
+}
+
+const joinedSummaries = (summaries: ReadonlyArray<string>): string =>
+  summaries.length === 0 ? "none" : summaries.join("; ")
 
 const restartContinuity = (
   previous: AuthoredDeliveryFrame | undefined,
@@ -493,12 +521,28 @@ const restartContinuity = (
     frame.activationOrdinal === 1 ||
     previous.activationOrdinal === frame.activationOrdinal
   ) return undefined
-  const before = new Map(exactCorrelations(previous).map((fact) => [fact.key, fact]))
-  const after = new Map(exactCorrelations(frame).map((fact) => [fact.key, fact]))
-  const retained = [...before].filter(([key]) => after.has(key)).map(([, fact]) => fact.summary)
-  const removed = [...before.keys()].filter((key) => !after.has(key))
-  const added = [...after.keys()].filter((key) => !before.has(key))
-  return `Coordinator restarted: ${activationLabel(previous.activationOrdinal)} → ${activationLabel(frame.activationOrdinal)}. Survived unchanged: ${retained.length === 0 ? "none" : retained.join("; ")}. ${removed.length} correlations disappeared; ${added.length} appeared after restart.`
+  const before = exactCorrelations(previous)
+  const after = exactCorrelations(frame)
+  const matchedAfter = new Set<number>()
+  const unchanged: Array<string> = []
+  const changed: Array<string> = []
+  const disappeared: Array<string> = []
+  for (const beforeFact of before) {
+    const afterIndex = after.findIndex((afterFact, index) =>
+      !matchedAfter.has(index) && sameCorrelationIdentity(beforeFact.identity, afterFact.identity)
+    )
+    if (afterIndex < 0) {
+      disappeared.push(beforeFact.summary)
+      continue
+    }
+    matchedAfter.add(afterIndex)
+    const afterFact = after[afterIndex]
+    if (afterFact === undefined) continue
+    if (afterFact.summary === beforeFact.summary) unchanged.push(beforeFact.summary)
+    else changed.push(`${beforeFact.summary} → ${afterFact.summary}`)
+  }
+  const added = after.flatMap((fact, index) => matchedAfter.has(index) ? [] : [fact.summary])
+  return `Coordinator restarted: ${activationLabel(previous.activationOrdinal)} → ${activationLabel(frame.activationOrdinal)}. Unchanged: ${joinedSummaries(unchanged)}. Changed: ${joinedSummaries(changed)}. Disappeared: ${joinedSummaries(disappeared)}. Added: ${joinedSummaries(added)}.`
 }
 
 const renderTimeline = (
