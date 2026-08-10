@@ -1214,19 +1214,24 @@ const eventForIntegrationPreparationEntry = (
   return eventForIntegrationFinalityEntry(entry)
 }
 
-const eventForRecordedEntry = (
-  entry: RecordedCassetteEntry,
+type RecordedContinuationAuthorizationEntry = Extract<
+  RecordedCassetteEntry,
+  { readonly _tag: "PlannedAttemptContinuationAuthorized" }
+>
+
+const eventForContinuationAuthorizationEntry = (entry: RecordedContinuationAuthorizationEntry): WorkflowJournalEvent =>
+  PlannedAttemptContinuationAuthorizedEvent.make({
+    plannedAttempt: entry.plannedAttempt,
+    version: workflowJournalEventVersion,
+    witness: entry.witness
+  })
+
+const eventForOtherRecordedEntry = (
+  entry: Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>,
   entries: ReadonlyArray<RecordedCassetteEntry>,
   index: number,
   runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent => {
-  if (entry._tag === "PlannedAttemptContinuationAuthorized") {
-    return PlannedAttemptContinuationAuthorizedEvent.make({
-      plannedAttempt: entry.plannedAttempt,
-      version: workflowJournalEventVersion,
-      witness: entry.witness
-    })
-  }
   if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
   if (isRecordedOperatorDirectionEntry(entry)) return eventForRecordedOperatorDirectionEntry(entry, runId)
   if (isRecordedAttemptStopEntry(entry)) return eventForRecordedAttemptStopEntry(entry)
@@ -1236,6 +1241,16 @@ const eventForRecordedEntry = (
   if (isRecordedTrackerEntry(entry)) return eventForTrackerEntry(entry)
   return eventForTaskBoundaryEntry(entry, entries, index)
 }
+
+const eventForRecordedEntry = (
+  entry: RecordedCassetteEntry,
+  entries: ReadonlyArray<RecordedCassetteEntry>,
+  index: number,
+  runId: RecordedCassetteType["runId"]
+): WorkflowJournalEvent =>
+  entry._tag === "PlannedAttemptContinuationAuthorized"
+    ? eventForContinuationAuthorizationEntry(entry)
+    : eventForOtherRecordedEntry(entry, entries, index, runId)
 
 const recordsFor = (cassette: RecordedCassetteType): ReadonlyArray<JournalRecord> =>
   cassette.entries.map((entry, index) => {
@@ -1483,7 +1498,9 @@ const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): stri
   }
 }
 
-const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
+const lyricForOtherRecordedEntry = (
+  entry: Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>
+): string => {
   if (isRecordedOperatorDirectionEntry(entry)) return lyricForRecordedOperatorDirectionEntry(entry)
   if (isRecordedAttemptStopEntry(entry)) return lyricForRecordedAttemptStopEntry(entry)
   if (isRecordedIntegrationPreparationEntry(entry)) return lyricForIntegrationPreparationEntry(entry)
@@ -1491,11 +1508,13 @@ const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
   if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)
   if (isRecordedTrackerEntry(entry)) return lyricForTrackerEntry(entry)
   if (isRecordedRunEntry(entry)) return lyricForRunEntry(entry)
-  if (entry._tag === "PlannedAttemptContinuationAuthorized") {
-    return `Dalph authorized continuation of planned attempt ${entry.plannedAttempt.attemptId} after four current observations.`
-  }
   return lyricForTaskBoundaryEntry(entry)
 }
+
+const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string =>
+  entry._tag === "PlannedAttemptContinuationAuthorized"
+    ? `Dalph authorized continuation of planned attempt ${entry.plannedAttempt.attemptId} after four current observations.`
+    : lyricForOtherRecordedEntry(entry)
 
 /** Human-readable prose derived from structured entries, never parsed as a contract. */
 export const renderRecordedCassetteLyrics = (cassette: RecordedCassetteType): string =>

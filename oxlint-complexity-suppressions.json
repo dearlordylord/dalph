@@ -4,11 +4,6 @@
       "count": 1
     }
   },
-  "packages/dalph/src/cassettes/recorded.ts": {
-    "complexity": {
-      "count": 2
-    }
-  },
   "packages/orchestrator/src/authorities/git/node-worktree.ts": {
     "complexity": {
       "count": 1
