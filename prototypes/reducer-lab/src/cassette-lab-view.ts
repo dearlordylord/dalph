@@ -1,5 +1,6 @@
 import type { AuthoredDeliveryFrame } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import type { CassetteLabResult, MaintainedCassetteKey } from "./cassette-lab.ts"
+import { continuationAuthorizationProjectionOf } from "./continuation-authorization-lab.ts"
 
 export type CassetteState =
   | { readonly _tag: "NotRun" }
@@ -139,6 +140,44 @@ export const protocolDiagnosticItems = (
     if (value !== undefined) diagnostics.push({ term, description: valueText(value) })
   }
   return diagnostics
+}
+
+/** Readable summary of the durable continuation authorization, when the selected result owns it. */
+export const continuationAuthorizationSummaryItems = (
+  result: CassetteLabResult
+): ReadonlyArray<ExecutionSummaryItem> => {
+  const projection = continuationAuthorizationProjectionOf(result)
+  if (projection === null) return []
+  const witness = projection.witnesses
+  return [
+    {
+      term: "Continuation responsibility",
+      description: `one existing Run/attempt responsibility · Run ${projection.runId} · attempt ${projection.attemptId}`
+    },
+    {
+      term: "Durable authorization",
+      description: `generic PlannedAttemptContinuationAuthorized at journal ${projection.authorization.position}; no recovery event is inferred`
+    },
+    {
+      term: "Fresh witness operations",
+      description: [
+        `graph ${witness.activeTask.graph.operationId}`,
+        `specification ${witness.activeTask.specification.operationId}`,
+        `claim ${witness.activeTask.claim.operationId}`,
+        `worktree ${witness.worktree.operationId}`
+      ].join(" · ")
+    },
+    {
+      term: "Continuation prefixes",
+      description: projection.prefixes.map(({ _tag, throughPosition, executorReport }) =>
+        `${_tag} through ${throughPosition}${executorReport === null ? "" : ` · ${executorReport._tag}`}`
+      ).join(" → ")
+    },
+    {
+      term: "Identity check",
+      description: `${projection.identity.responsibilityCount} responsibility · ${projection.identity.authorizationCount} authorization · ${projection.identity.plannedAttemptIds.length} planned attempt · ${projection.identity.executorInvocationIds.length} separate executor invocation · ${projection.identity.recoveryEventTags.length} recovery-named event`
+    }
+  ]
 }
 
 const journalContext = (event: Readonly<Record<string, unknown>> | undefined): string => {

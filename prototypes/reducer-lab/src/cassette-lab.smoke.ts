@@ -1128,6 +1128,26 @@ await scenario("presents concise execution proof before chronological journal an
   assert(evidence?.textContent?.includes("Production journal evidence") === false, "The UI must not mislabel the complete execution result")
 })
 
+await scenario("shows continuation authorization prefixes and retained Run/attempt identity", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:coordinatorProcessDeathContinues")
+  if (row === undefined) throw new Error("The continuation-authorization cassette row is missing")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article button") as HTMLButtonElement | null)?.click()
+  await done
+  const authorization = document.querySelector("[data-role='continuation-authorization']")
+  assert(authorization !== null, "The selected recovery result must render continuation authorization evidence")
+  if (authorization === null) return
+  const prefixRows = [...authorization.querySelectorAll("[data-role='continuation-prefixes'] tbody tr")]
+  assert(prefixRows.length === 3, "The maintained recovery cassette must render pre-auth, post-auth, and terminal prefixes")
+  const prefixText = prefixRows.map(({ textContent }) => textContent ?? "").join("|")
+  assert(prefixText.includes("BeforeAuthorization") && prefixText.includes("AfterAuthorizationBeforeReport") && prefixText.includes("AfterTerminal"), "Each durable continuation prefix must remain named")
+  assert(authorization.textContent?.includes("no recovery event is inferred") === true, "The Lab must explain that coordinator death is not a journal event")
+  assert(authorization.textContent?.includes("0 separate executor invocation") === true, "The Lab must show no separate executor invocation identity")
+  assert(authorization.querySelectorAll("[data-role='continuation-witness-operations'] li").length === 4, "All four witness operation identities must be visible")
+})
+
 await scenario("links, reveals, and retries cassette failures and Lab defects", async () => {
   const { document, root, settled } = installDom()
   if (mismatchedResult?._tag !== "Failed") throw new Error("The real mismatch result is missing")

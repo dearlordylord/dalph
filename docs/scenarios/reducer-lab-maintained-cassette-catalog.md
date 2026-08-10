@@ -682,3 +682,87 @@ task whose exact facts are correlated below.
 - `does not fabricate a graph workbench for direct protocol cassettes` checks
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.
+
+## A maintainer inspects continuation authorization in the selected recovery cassette
+
+### Starting situation and trigger
+
+A Dalph maintainer opens Reducer Lab at one source revision and selects the
+maintained authored cassette `authored:coordinatorProcessDeathContinues`, the
+recovery story delivered by issue #171. Its production runner is the ordinary
+`runAuthoredScenarioCassette`; the returned `CassetteLabResult` contains the
+fresh in-memory workflow-journal records for that run. No GitHub issue, Git
+repository, executor process, or durable journal outside the cassette run is
+changed.
+
+The maintainer chooses **Run selected cassette** and, after the production
+runner settles, opens the selected result's continuation-authorization
+evidence. This is a read-only inspection of facts already returned by the
+production runner. The Lab does not define another cassette, reducer, or
+causal validation rule.
+
+### Ordered production and Lab behavior
+
+The production runner first records one executor-work responsibility for task
+A's exact planned attempt. The typed cassette lifecycle control disposes the
+first coordinator activation; it is a harness control and is not a workflow
+journal event. The next production activation keeps the same Run and attempt,
+records fresh tracker observations for the active-task graph, task-work
+specification, and exact claim, and records a fresh Git observation for the
+exact planned worktree. It then records one generic
+`PlannedAttemptContinuationAuthorized` fact naming those four observation
+operation identities before the executor command. The existing executor
+protocol later records a `Running` or `Terminal` report for the same exact
+`(RunId, AttemptId)`; the maintained recovery cassette reaches its Terminal
+report.
+
+The Lab decodes the returned production `journalRecords` and presents three
+durable prefixes for this cassette: the records through the fresh authority
+observations before authorization, the authorization fact before an executor
+report, and the later `Running` or `Terminal` report. It shows each graph,
+specification, claim, and worktree operation identity with its intent and
+observation positions, the authorization position, and the Run/attempt pair.
+It also shows the identity check: one responsibility, one authorization, one
+planned attempt, no recovery-named journal event, and no separate executor
+invocation identity.
+
+### Invalid witness fixtures and executor boundary
+
+The Lab makes in-memory missing, stale, later, and wrong-attempt witness
+fixtures from the returned records. For each fixture it calls the exported
+production `evaluatePlannedAttemptContinuationAuthorization` through the Lab
+contact-decision adapter. A rejected evaluation is shown as executor contact
+unavailable; the adapter performs no executor call. The Lab does not copy the
+production chronology or identity validation into a second reducer.
+
+### Crash, retry, and visible result
+
+The browser has no persistence, so browser loss discards this local evidence
+and cannot ambiguously change an outside system. Rerunning the selected
+cassette invokes the same #171 production runner with fresh controlled runtime
+state and a fresh Run identity; the projection is derived again from that
+returned journal. There is no outside retry, cleanup, or process qualification
+to perform because every boundary is a controlled cassette adapter.
+
+The maintainer sees the exact durable prefixes, the four witness operation
+identities, the authorization, and the later report under the selected result.
+The Lab must not treat the lifecycle control as a recovery event, allocate a
+replacement attempt, invent a separate executor invocation identity, or allow
+missing, stale, later, or wrong-attempt evidence to advance to executor
+contact.
+
+### Acceptance-test mapping
+
+- `projects maintained continuation prefixes and fails invalid witnesses closed`
+  runs the exact maintained #171 catalog entry through
+  `runAuthoredScenarioCassette`, projects the pre-authorization,
+  post-authorization-before-report, and terminal prefixes, and sends missing,
+  stale, later, and wrong-attempt fixtures through the shared production
+  evaluator. Every invalid fixture remains executor-contact unavailable.
+- `shows continuation authorization prefixes and retained Run/attempt identity`
+  mounts the selected Lab result and checks that the three durable prefixes,
+  four witness operation identities, one generic authorization, and no
+  recovery/separate-invocation identity are visible.
+- The same two tests check that the responsibility, authorization, and
+  `Running`/`Terminal` report use one exact `(RunId, AttemptId)` and introduce
+  no recovery-named event or replacement attempt.

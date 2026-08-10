@@ -8,6 +8,7 @@ import {
 import {
   catalogSummaryText,
   type CassetteState,
+  continuationAuthorizationSummaryItems,
   executionSummaryItems,
   journalEvidenceRows,
   protocolDiagnosticItems,
@@ -19,6 +20,7 @@ import {
   renderCassetteDeliveryWorkbench
 } from "./cassette-lab-workbench.ts"
 import { makeDeliveryPlaybackModel } from "./delivery-playback.ts"
+import { continuationAuthorizationProjectionOf } from "./continuation-authorization-lab.ts"
 
 export const singleCassetteSettledEvent = "dalph-cassette-lab:single-settled"
 export const everyCassetteSettledEvent = "dalph-cassette-lab:every-settled"
@@ -134,6 +136,69 @@ const renderRawEvidence = (parent: HTMLElement, result: CassetteLabResult): void
   parent.append(details)
 }
 
+const renderContinuationAuthorization = (parent: HTMLElement, result: CassetteLabResult): void => {
+  const projection = continuationAuthorizationProjectionOf(result)
+  if (projection === null) return
+  const section = document.createElement("section")
+  section.className = "continuation-authorization-evidence"
+  section.dataset.role = "continuation-authorization"
+  appendTextElement(section, "h4", "Continuation authorization chronology")
+  appendTextElement(
+    section,
+    "p",
+    "These are durable prefixes projected from the production journal. The coordinator process-death cassette control is not a journal event, and authorization keeps the existing Run/attempt responsibility.",
+    "continuation-authorization-explanation"
+  )
+  renderDefinitionList(section, continuationAuthorizationSummaryItems(result))
+
+  const prefixTable = document.createElement("table")
+  prefixTable.dataset.role = "continuation-prefixes"
+  appendTextElement(prefixTable, "caption", "Continuation authorization durable prefixes")
+  const head = document.createElement("thead")
+  const headingRow = document.createElement("tr")
+  for (const heading of ["Prefix", "Journal through", "Authorization", "Executor report", "Run / attempt"]) {
+    const cell = appendTextElement(headingRow, "th", heading)
+    cell.setAttribute("scope", "col")
+  }
+  head.append(headingRow)
+  const body = document.createElement("tbody")
+  for (const prefix of projection.prefixes) {
+    const row = document.createElement("tr")
+    appendTextElement(row, "td", prefix._tag)
+    appendTextElement(row, "td", String(prefix.throughPosition))
+    appendTextElement(row, "td", prefix.authorizationPosition === null ? "not yet recorded" : String(prefix.authorizationPosition))
+    appendTextElement(
+      row,
+      "td",
+      prefix.executorReport === null ? "none" : `${prefix.executorReport._tag} at journal ${prefix.executorReport.position}`
+    )
+    appendTextElement(row, "td", `${prefix.runId} / ${prefix.attemptId}`)
+    body.append(row)
+  }
+  prefixTable.append(head, body)
+  section.append(prefixTable)
+
+  const witnesses = document.createElement("details")
+  witnesses.dataset.role = "continuation-witness-operations"
+  appendTextElement(witnesses, "summary", "Exact continuation witness operation identities")
+  const witnessList = document.createElement("ul")
+  for (const [name, operation] of [
+    ["Active-task graph", projection.witnesses.activeTask.graph],
+    ["Active-task specification", projection.witnesses.activeTask.specification],
+    ["Active-task claim", projection.witnesses.activeTask.claim],
+    ["Planned worktree", projection.witnesses.worktree]
+  ] as const) {
+    appendTextElement(
+      witnessList,
+      "li",
+      `${name}: ${operation.operationId} · intent journal ${operation.intentPosition} · observation journal ${operation.observationPosition}`
+    )
+  }
+  witnesses.append(witnessList)
+  section.append(witnesses)
+  parent.append(section)
+}
+
 const renderResultEvidence = (host: HTMLElement, result: CassetteLabResult, open: boolean): void => {
   const evidence = document.createElement("details")
   evidence.className = "execution-evidence"
@@ -153,6 +218,7 @@ const renderResultEvidence = (host: HTMLElement, result: CassetteLabResult, open
     renderDefinitionList(details, protocolDiagnostics)
     evidence.append(details)
   }
+  renderContinuationAuthorization(evidence, result)
   renderJournal(evidence, result)
   renderRawEvidence(evidence, result)
   host.append(evidence)

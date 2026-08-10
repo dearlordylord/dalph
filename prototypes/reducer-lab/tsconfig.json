@@ -24,6 +24,7 @@
     "src/cassette-lab-browser.ts",
     "src/cassette-lab-view.ts",
     "src/cassette-lab.smoke.ts",
+    "src/continuation-authorization-lab.test.ts",
     "src/entry.ts",
     "src/node-only-module-shim.ts",
     "src/platform-node-shim.ts",
