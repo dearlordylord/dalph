@@ -12,6 +12,7 @@ import {
   continuationAuthorizationProjectionOf
 } from "./continuation-authorization-lab.ts"
 import { runMaintainedCassette } from "./cassette-lab.ts"
+import { continuationAuthorizationSummaryItems } from "./cassette-lab-view.ts"
 
 const cassetteKey = "authored:coordinatorProcessDeathContinues" as const
 
@@ -110,6 +111,23 @@ assert.equal(identityProjection.identity.responsibilityCorrelations.length, 2)
 assert.equal(identityProjection.identity.authorizationCorrelations.length, 2)
 assert.equal(identityProjection.identity.reportCorrelations.length, 2)
 assert.deepEqual(identityProjection.identity.plannedAttemptIds, [projection.attemptId, replacementAttempt.attemptId])
+const identitySummary = continuationAuthorizationSummaryItems(identityProjection).find(({ term }) => term === "Identity check")
+assert.notEqual(identitySummary, undefined)
+if (identitySummary === undefined) throw new Error("The replacement-attempt identity summary is missing")
+for (const family of [
+  "TaskAttemptPlanned",
+  "Responsibility",
+  "Authorization",
+  "Executor report"
+] as const) {
+  const familySummary: string | undefined = identitySummary.description
+    .split(" · ")
+    .find((segment) => segment.startsWith(`${family}:`))
+  assert.notEqual(familySummary, undefined)
+  if (familySummary === undefined) continue
+  assert.equal(familySummary.includes(`Run ${projection.runId} / attempt ${projection.attemptId}`), true)
+  assert.equal(familySummary.includes(`Run ${projection.runId} / attempt ${replacementAttempt.attemptId}`), true)
+}
 const witness = projection.authorization.witness
 const plannedAttempt = projection.plannedAttempt
 const preAuthorizationRecords = records.filter(({ position }) => position <= beforeAuthorization.throughPosition)

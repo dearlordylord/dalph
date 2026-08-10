@@ -1,4 +1,5 @@
 import type { AuthoredDeliveryFrame } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
+import type { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import type { CassetteLabResult, MaintainedCassetteKey } from "./cassette-lab.ts"
 import type { ContinuationAuthorizationProjection } from "./continuation-authorization-lab.ts"
 
@@ -142,6 +143,12 @@ export const protocolDiagnosticItems = (
   return diagnostics
 }
 
+const continuationCorrelationDescription = (
+  label: string,
+  correlations: ReadonlyArray<PlannedAttemptExecutorCorrelation>
+): string =>
+  `${label}: ${correlations.map(({ attemptId, runId }) => `Run ${runId} / attempt ${attemptId}`).join(", ")}`
+
 /** Readable summary of the durable continuation authorization, when the selected result owns it. */
 export const continuationAuthorizationSummaryItems = (
   projection: ContinuationAuthorizationProjection | null
@@ -180,7 +187,17 @@ export const continuationAuthorizationSummaryItems = (
     },
     {
       term: "Identity check",
-      description: `${projection.identity.responsibilityCount} responsibility · ${projection.identity.authorizationCount} authorization · ${projection.identity.plannedAttemptCorrelations.length} planned attempt · ${projection.identity.reportCorrelations.length} executor reports · all correlations retain structured Run/attempt identity`
+      description: [
+        `${projection.identity.responsibilityCount} responsibility`,
+        `${projection.identity.authorizationCount} authorization`,
+        `${projection.identity.plannedAttemptCorrelations.length} planned attempt`,
+        `${projection.identity.reportCorrelations.length} executor reports`,
+        continuationCorrelationDescription("TaskAttemptPlanned", projection.identity.plannedAttemptCorrelations),
+        continuationCorrelationDescription("Responsibility", projection.identity.responsibilityCorrelations),
+        continuationCorrelationDescription("Authorization", projection.identity.authorizationCorrelations),
+        continuationCorrelationDescription("Executor report", projection.identity.reportCorrelations),
+        "all correlations retain structured Run/attempt identity"
+      ].join(" · ")
     }
   ]
 }
