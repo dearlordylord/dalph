@@ -33,6 +33,7 @@ import {
 } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
+import { evaluatePlannedAttemptContinuationAuthorization } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import {
   latestPlannedAttemptExecutorEvidence,
   latestUnsettledPlannedAttemptExecutorCommand,
@@ -794,187 +795,15 @@ const validateContinuationAuthorization = (
 ): void => {
   if (record.event._tag !== "PlannedAttemptContinuationAuthorized") return
   const event = record.event
-  const prior = records.filter(({ position }) => position < record.position)
   if (event.plannedAttempt.runId !== runId) {
     identityIssue(issues, runId, record.position, "continuation authorization binds another Run")
   }
-  const responsibility = prior.findLast(
-    ({ event: candidate }) =>
-      candidate._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-      plannedTaskAttemptEquivalence(candidate.plannedAttempt, event.plannedAttempt)
-  )
-  if (responsibility === undefined) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      "continuation authorization requires prior exact executor responsibility"
-    )
-    return
-  }
-  const baseline =
-    latestPlannedAttemptExecutorEvidence(prior, event.plannedAttempt)?.observedAt ?? responsibility.position
-  const graphOperationId = event.witness.activeTaskContinuationRead.graphObservationOperationId
-  const specificationOperationId = event.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
-  const claimOperationId = event.witness.activeTaskContinuationRead.taskClaimObservationOperationId
-  const worktreeOperationId = event.witness.worktreeObservationOperationId
-  const graphIntent = prior.findLast(
-    ({ event: candidate }) =>
-      candidate._tag === "TaskTrackerReadIntentRecorded" &&
-      candidate.operation._tag === "ReadTrackerGraph" &&
-      candidate.operation.operationId === graphOperationId
-  )
-  const graphOutcome = prior.findLast(
-    ({ event: candidate }) =>
-      candidate._tag === "TaskTrackerFactsObserved" && candidate.operationId === graphOperationId
-  )
-  const specificationIntent = prior.findLast(
-    ({ event: candidate }) =>
-      candidate._tag === "TaskTrackerReadIntentRecorded" &&
-      candidate.operation._tag === "ReadTaskWorkSpecification" &&
-      candidate.operation.operationId === specificationOperationId
-  )
-  const specificationOutcome = prior.findLast(
-    ({ event: candidate }) =>
-      candidate._tag === "TaskTrackerFactsObserved" && candidate.operationId === specificationOperationId
-  )
-  const claimIntent = prior.findLast(
-    ({ event: candidate }) =>
-      candidate._tag === "TaskTrackerReadIntentRecorded" &&
-      candidate.operation._tag === "ReadTaskClaim" &&
-      candidate.operation.operationId === claimOperationId
-  )
-  const claimOutcome = prior.findLast(
-    ({ event: candidate }) =>
-      candidate._tag === "TaskTrackerFactsObserved" && candidate.operationId === claimOperationId
-  )
-  const worktreeIntent = prior.findLast(
-    ({ event: candidate }) =>
-      candidate._tag === "GitReadIntentRecorded" &&
-      candidate.operation._tag === "ReadTaskWorktree" &&
-      candidate.operation.operationId === worktreeOperationId
-  )
-  const worktreeOutcome = prior.findLast(
-    (
-      candidate
-    ): candidate is JournalRecord & {
-      readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptWorktreeObserved" }>
-    } =>
-      candidate.event._tag === "PlannedAttemptWorktreeObserved" && candidate.event.operationId === worktreeOperationId
-  )
-  const missing = (name: string, operationId: OperationId) => {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      `continuation authorization requires prior ${name} observation ${operationId}`
-    )
-  }
-  if (graphIntent === undefined || graphOutcome === undefined) missing("graph", graphOperationId)
-  if (specificationIntent === undefined || specificationOutcome === undefined)
-    missing("specification", specificationOperationId)
-  if (claimIntent === undefined || claimOutcome === undefined) missing("claim", claimOperationId)
-  if (worktreeIntent === undefined || worktreeOutcome === undefined) missing("worktree", worktreeOperationId)
-  if (
-    graphIntent === undefined ||
-    graphOutcome === undefined ||
-    specificationIntent === undefined ||
-    specificationOutcome === undefined ||
-    claimIntent === undefined ||
-    claimOutcome === undefined ||
-    worktreeIntent === undefined ||
-    worktreeOutcome === undefined
-  ) {
-    return
-  }
-  if (
-    graphOutcome.position <= baseline ||
-    specificationOutcome.position <= graphOutcome.position ||
-    specificationOutcome.position <= baseline ||
-    claimOutcome.position <= specificationOutcome.position ||
-    claimOutcome.position <= baseline ||
-    worktreeOutcome.position <= claimOutcome.position ||
-    worktreeOutcome.position <= baseline
-  ) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      "continuation authorization witnesses stale or out-of-order current facts"
-    )
-  }
-  if (
-    graphIntent.position >= graphOutcome.position ||
-    specificationIntent.position >= specificationOutcome.position ||
-    claimIntent.position >= claimOutcome.position ||
-    worktreeIntent.position >= worktreeOutcome.position
-  ) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      "continuation authorization observation follows its read intent incorrectly"
-    )
-  }
-  if (
-    graphIntent.event._tag !== "TaskTrackerReadIntentRecorded" ||
-    graphIntent.event.operation._tag !== "ReadTrackerGraph" ||
-    graphOutcome.event._tag !== "TaskTrackerFactsObserved" ||
-    !taskTrackerObservationMatchesRead(graphOutcome.event.observation, graphIntent.event.operation)
-  ) {
-    semanticIssue(issues, runId, record.position, "continuation authorization graph witness does not match its read")
-  }
-  if (
-    graphOutcome.event._tag !== "TaskTrackerFactsObserved" ||
-    (graphOutcome.event.observation._tag !== "CompleteTaskTrackerFacts" &&
-      graphOutcome.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed")
-  ) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      "continuation authorization graph witness is not complete or unchanged"
-    )
-  }
-  if (
-    specificationIntent.event._tag !== "TaskTrackerReadIntentRecorded" ||
-    specificationIntent.event.operation._tag !== "ReadTaskWorkSpecification" ||
-    specificationIntent.event.operation.taskId !== event.plannedAttempt.taskId ||
-    specificationOutcome.event._tag !== "TaskTrackerFactsObserved" ||
-    specificationOutcome.event.observation._tag !== "FocusedTaskWorkSpecificationFacts" ||
-    specificationOutcome.event.observation.factFamily.taskId !== event.plannedAttempt.taskId
-  ) {
-    semanticIssue(issues, runId, record.position, "continuation authorization specification witness names another task")
-  }
-  const authorizedClaim = authorizedClaimForAttempt(prior, event.plannedAttempt)
-  if (
-    claimIntent.event._tag !== "TaskTrackerReadIntentRecorded" ||
-    claimIntent.event.operation._tag !== "ReadTaskClaim" ||
-    claimIntent.event.operation.taskId !== event.plannedAttempt.taskId ||
-    claimOutcome.event._tag !== "TaskTrackerFactsObserved" ||
-    claimOutcome.event.observation._tag !== "FocusedTaskClaimFacts" ||
-    claimOutcome.event.observation.observation._tag !== "ActiveTaskClaim" ||
-    authorizedClaim === undefined ||
-    !isExactTaskClaim(claimOutcome.event.observation.observation, authorizedClaim.claim)
-  ) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      "continuation authorization claim witness does not prove the exact claim"
-    )
-  }
-  if (
-    worktreeIntent.event._tag !== "GitReadIntentRecorded" ||
-    worktreeIntent.event.operation._tag !== "ReadTaskWorktree" ||
-    !plannedTaskAttemptEquivalence(worktreeIntent.event.operation.plannedAttempt, event.plannedAttempt) ||
-    worktreeOutcome.event.observation._tag !== "PlannedWorktreeReady" ||
-    !plannedAttemptWorktreeObservationMatchesPlan(worktreeOutcome.event.observation, event.plannedAttempt)
-  ) {
-    semanticIssue(issues, runId, record.position, "continuation authorization worktree witness names another attempt")
+  const prior = records.filter(({ position }) => position < record.position)
+  const evaluation = evaluatePlannedAttemptContinuationAuthorization(prior, event.plannedAttempt, event.witness)
+  if (evaluation._tag === "Rejected") {
+    semanticIssue(issues, runId, record.position, evaluation.detail)
   }
 }
-
 const validateGitReadEvent = (
   record: JournalRecord,
   runId: RunId,

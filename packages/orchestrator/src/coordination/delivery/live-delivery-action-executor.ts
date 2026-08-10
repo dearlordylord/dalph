@@ -22,6 +22,21 @@ import { executeAcceptedWorkflowAction, executeNewRecoveredAction } from "./reco
 type AcceptedOperationAction = Extract<MaterializedDeliveryAction, { readonly _tag: "AcceptedOperationAction" }>
 type FreshOperationAction = Extract<MaterializedDeliveryAction, { readonly _tag: "FreshOperationAction" }>
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
+type IdentityFreeTransition = Extract<
+  IdentityFreeAction["proposal"]["route"],
+  { readonly _tag: "IdentityFreeWorkflowRoute" }
+>["transition"]
+
+const isPlannedAttemptTransition = (
+  transition: IdentityFreeTransition
+): transition is Parameters<typeof executePlannedAttemptTransition>[1] =>
+  transition._tag === "AdvanceAttemptStoppage" ||
+  transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+  transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+  transition._tag === "ObservePlannedAttemptContinuationExecutor" ||
+  transition._tag === "ObserveAttemptStoppageExecutor" ||
+  transition._tag === "RecordStoppedAttemptClaimNoRelease" ||
+  transition._tag === "SuspendPlannedAttemptExecutorWork"
 
 const executeAcceptedAction = Effect.fn("DeliveryAction.executeAccepted")(function* (
   action: AcceptedOperationAction,
@@ -38,14 +53,7 @@ const executeIdentityFreeAction = Effect.fn("DeliveryAction.executeIdentityFree"
   const route = action.proposal.route
   if (route._tag === "FreshExecutorWorkflowRoute") return yield* executeFreshPlannedAttempt(action, route, lease)
   const transition = route.transition
-  if (
-    transition._tag === "AdvanceAttemptStoppage" ||
-    transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-    transition._tag === "ObservePlannedAttemptContinuationExecutor" ||
-    transition._tag === "ObserveAttemptStoppageExecutor" ||
-    transition._tag === "RecordStoppedAttemptClaimNoRelease" ||
-    transition._tag === "SuspendPlannedAttemptExecutorWork"
-  ) {
+  if (isPlannedAttemptTransition(transition)) {
     return yield* executePlannedAttemptTransition(action, transition, lease)
   }
   return yield* executeIntegrationAction(action, transition, lease)

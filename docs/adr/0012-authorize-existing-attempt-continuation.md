@@ -53,12 +53,14 @@ correlation.
 
 ## Consequences
 
-The recovery frontier carries an optional typed witness until the existing
-executor-work protocol permit is acquired. The permit adapter records one
-authorization before the executor command. Journal history validation checks
-the witness chronology and identity; reduction leaves the generic fact out of
-operational projections. Authored tests must assert the same Run and attempt,
-fresh tracker/Git reads, one authorization, no death record, and rejection of
+The recovery frontier represents same-process continuation and continuation
+authorized from current authority reads as distinct tagged routes. The latter
+route carries a required typed witness until the existing executor-work
+protocol permit is acquired. The permit adapter records one authorization
+before the executor command. Journal history validation checks the witness
+chronology and identity; reduction leaves the generic fact out of operational
+projections. Authored tests must assert the same Run and attempt, fresh
+tracker/Git reads, one authorization, no death record, and rejection of
 missing, stale, later, and wrong-attempt witnesses.
 
 The accepted chronology is

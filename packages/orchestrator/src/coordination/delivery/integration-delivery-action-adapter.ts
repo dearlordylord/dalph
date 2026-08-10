@@ -35,6 +35,7 @@ type IntegrationTransition = Exclude<
     readonly _tag:
       | "AdvanceAttemptStoppage"
       | "ContinuePlannedAttemptExecutorWork"
+      | "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
       | "ObservePlannedAttemptContinuationExecutor"
       | "ObserveAttemptStoppageExecutor"
       | "RecordStoppedAttemptClaimNoRelease"

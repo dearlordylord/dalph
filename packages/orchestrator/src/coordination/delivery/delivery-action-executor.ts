@@ -115,6 +115,7 @@ export type DeliveryActionResult =
         | "CompletionClaimNonConvergent"
         | "CompletionClaimReadUnavailable"
         | "CompletionClaimRejected"
+        | "ContinuationAuthorizationStale"
         | "FreshTrackerSuccessRequired"
     }
   | {

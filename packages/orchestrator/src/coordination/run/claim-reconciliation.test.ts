@@ -836,9 +836,17 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       })
     )
     expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual({
-      _tag: "ContinuePlannedAttemptExecutorWork",
+      _tag: "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts",
       acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(2) },
-      plannedAttempt
+      plannedAttempt,
+      witness: {
+        activeTaskContinuationRead: {
+          graphObservationOperationId: restartedGraphRead.operation.operationId,
+          taskClaimObservationOperationId: replacementRead.operation.operationId,
+          taskWorkSpecificationObservationOperationId: restartedSpecificationRead.operation.operationId
+        },
+        worktreeObservationOperationId: worktreeRead.operation.operationId
+      }
     })
   }).pipe(
     Effect.provide(legacyMemoryJournalStoreLayer),

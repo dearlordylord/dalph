@@ -303,11 +303,20 @@ it.effect("never claims the executor incorporated changed instructions", () =>
     )
 
     expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual({
-      _tag: "ObservePlannedAttemptContinuationExecutor",
-      plannedAttempt
+      _tag: "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts",
+      acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      plannedAttempt,
+      witness: {
+        activeTaskContinuationRead: {
+          graphObservationOperationId: graph.operation.operationId,
+          taskClaimObservationOperationId: claim.operation.operationId,
+          taskWorkSpecificationObservationOperationId: specification.operation.operationId
+        },
+        worktreeObservationOperationId: worktree.operation.operationId
+      }
     })
     const executorObservationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
-    const executorObservation = yield* journal.append(
+    yield* journal.append(
       runId,
       plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, executorObservationOrdinal),
       PlannedAttemptExecutorStateObservedEvent.make({
@@ -323,15 +332,11 @@ it.effect("never claims the executor incorporated changed instructions", () =>
       })
     )
 
-    expect((yield* recovery.readDeliveryProjection).frontier.transitions).toEqual(
-      expect.arrayContaining([
-        {
-          _tag: "ContinuePlannedAttemptExecutorWork",
-          acceptedProgress: { _tag: "ExecutorProjectionAccepted", observedAt: executorObservation.position },
-          plannedAttempt
-        }
-      ])
-    )
+    expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual({
+      _tag: "ObservePlannedAttemptContinuationGraph",
+      operation: expect.objectContaining({ _tag: "ReadTrackerGraph" }),
+      plannedAttempt
+    })
     expect(plannedAttempt.taskRevision).toBe(plannedRevision)
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )

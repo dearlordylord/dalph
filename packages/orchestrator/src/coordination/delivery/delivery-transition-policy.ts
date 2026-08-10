@@ -38,6 +38,7 @@ export const deliveryTransitionPolicy = {
   CommitTaskClaimReacquisitionIntent: policy("NewOperation", "None"),
   ContinueFreshWorkflowOperation: policy("FreshProvenance", "None"),
   ContinuePlannedAttemptExecutorWork: policy("IdentityFree", "PlannedAttempt"),
+  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: policy("IdentityFree", "PlannedAttempt"),
   ObservePlannedAttemptContinuationExecutor: policy("IdentityFree", "PlannedAttempt"),
   ObserveAttemptStoppageExecutor: policy("IdentityFree", "StopSubject"),
   ContinueStartedIntegrationCandidate: policy("IdentityFree", "None"),

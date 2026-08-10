@@ -38,28 +38,34 @@ export class PlannedAttemptContinuationAuthorizationRejected extends Schema.Tagg
 const exactAttempt = (left: PlannedTaskAttempt, right: PlannedTaskAttempt): boolean =>
   plannedTaskAttemptEquivalence(left, right)
 
+export type PlannedAttemptContinuationAuthorizationEvaluation =
+  | { readonly _tag: "Authorized" }
+  | {
+      readonly _tag: "Rejected"
+      readonly detail: string
+      readonly reason: ContinuationAuthorizationReason
+      readonly witness: ContinuationAuthorizationWitness
+    }
+
 const reject = (
-  plannedAttempt: PlannedTaskAttempt,
   witness: ContinuationAuthorizationWitness,
   reason: ContinuationAuthorizationReason,
   detail: string
-) => Effect.fail(new PlannedAttemptContinuationAuthorizationRejected({ detail, plannedAttempt, reason, witness }))
+) => ({ _tag: "Rejected" as const, detail, reason, witness })
 
 /* eslint-disable complexity -- one closed causal gate validates each exact read family before executor contact. */
-export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptContinuation.authorize")(function* (
+export const evaluatePlannedAttemptContinuationAuthorization = (
+  records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
   witness: PlannedAttemptContinuationWitness
-) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(plannedAttempt.runId)
+): PlannedAttemptContinuationAuthorizationEvaluation => {
   const responsibility = records.findLast(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       exactAttempt(event.plannedAttempt, plannedAttempt)
   )
   if (responsibility === undefined) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationGraph",
       "MissingWitness",
       "continuation authorization requires the exact prior executor-work responsibility"
@@ -81,24 +87,21 @@ export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptCont
       event._tag === "TaskTrackerFactsObserved" && event.operationId === observation.graphObservationOperationId
   )
   if (graphIntent === undefined || graphOutcome === undefined) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationGraph",
       "MissingWitness",
       `active-task continuation graph observation ${observation.graphObservationOperationId} is missing`
     )
   }
   if (graphOutcome.position <= freshnessBaseline) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationGraph",
       "StaleWitness",
       `active-task continuation graph observation ${observation.graphObservationOperationId} predates executor evidence at ${freshnessBaseline}`
     )
   }
   if (graphIntent.position >= graphOutcome.position || graphIntent.event._tag !== "TaskTrackerReadIntentRecorded") {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationGraph",
       "LaterWitness",
       `active-task continuation graph observation ${observation.graphObservationOperationId} is not after its read intent`
@@ -109,8 +112,7 @@ export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptCont
     graphOutcome.event._tag !== "TaskTrackerFactsObserved" ||
     !taskTrackerObservationMatchesRead(graphOutcome.event.observation, graphIntent.event.operation)
   ) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationGraph",
       "WrongAttemptWitness",
       `active-task continuation graph observation ${observation.graphObservationOperationId} does not match its read`
@@ -120,8 +122,7 @@ export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptCont
     graphOutcome.event.observation._tag !== "CompleteTaskTrackerFacts" &&
     graphOutcome.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
   ) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationGraph",
       "WrongAttemptWitness",
       `active-task continuation graph observation ${observation.graphObservationOperationId} is not complete or unchanged`
@@ -140,16 +141,14 @@ export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptCont
       event.operationId === observation.taskWorkSpecificationObservationOperationId
   )
   if (specificationIntent === undefined || specificationOutcome === undefined) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationSpecification",
       "MissingWitness",
       `active-task continuation specification observation ${observation.taskWorkSpecificationObservationOperationId} is missing`
     )
   }
   if (specificationOutcome.position <= graphOutcome.position || specificationOutcome.position <= freshnessBaseline) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationSpecification",
       "StaleWitness",
       `active-task continuation specification observation ${observation.taskWorkSpecificationObservationOperationId} is not after the current graph and executor evidence`
@@ -162,10 +161,10 @@ export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptCont
     specificationIntent.event.operation.taskId !== plannedAttempt.taskId ||
     specificationOutcome.event._tag !== "TaskTrackerFactsObserved" ||
     specificationOutcome.event.observation._tag !== "FocusedTaskWorkSpecificationFacts" ||
-    specificationOutcome.event.observation.factFamily.taskId !== plannedAttempt.taskId
+    specificationOutcome.event.observation.factFamily.taskId !== plannedAttempt.taskId ||
+    !taskTrackerObservationMatchesRead(specificationOutcome.event.observation, specificationIntent.event.operation)
   ) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationSpecification",
       "WrongAttemptWitness",
       `active-task continuation specification observation ${observation.taskWorkSpecificationObservationOperationId} names another task or read`
@@ -184,16 +183,14 @@ export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptCont
   )
   const authorizedClaim = authorizedClaimForAttempt(records, plannedAttempt)
   if (claimIntent === undefined || claimOutcome === undefined || authorizedClaim === undefined) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationClaim",
       "MissingWitness",
       `active-task continuation claim observation ${observation.taskClaimObservationOperationId} is missing`
     )
   }
   if (claimOutcome.position <= specificationOutcome.position || claimOutcome.position <= freshnessBaseline) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationClaim",
       "StaleWitness",
       `active-task continuation claim observation ${observation.taskClaimObservationOperationId} is not after the current specification and executor evidence`
@@ -208,10 +205,10 @@ export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptCont
     claimOutcome.event.observation._tag !== "FocusedTaskClaimFacts" ||
     claimOutcome.event.observation.coverage.taskId !== plannedAttempt.taskId ||
     claimOutcome.event.observation.observation._tag !== "ActiveTaskClaim" ||
+    !taskTrackerObservationMatchesRead(claimOutcome.event.observation, claimIntent.event.operation) ||
     !isExactTaskClaim(claimOutcome.event.observation.observation, authorizedClaim.claim)
   ) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "ActiveTaskContinuationClaim",
       "WrongAttemptWitness",
       `active-task continuation claim observation ${observation.taskClaimObservationOperationId} does not prove the authorized claim`
@@ -234,16 +231,14 @@ export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptCont
       record.event.operationId === witness.worktreeObservationOperationId
   )
   if (worktreeIntent === undefined || worktreeOutcome === undefined) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "PlannedAttemptWorktree",
       "MissingWitness",
       `planned-attempt worktree observation ${witness.worktreeObservationOperationId} is missing`
     )
   }
   if (worktreeOutcome.position <= claimOutcome.position || worktreeOutcome.position <= freshnessBaseline) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "PlannedAttemptWorktree",
       "StaleWitness",
       `planned-attempt worktree observation ${witness.worktreeObservationOperationId} is not after the current claim and executor evidence`
@@ -257,14 +252,33 @@ export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptCont
     worktreeOutcome.event.observation._tag !== "PlannedWorktreeReady" ||
     !plannedAttemptWorktreeObservationMatchesPlan(worktreeOutcome.event.observation, plannedAttempt)
   ) {
-    return yield* reject(
-      plannedAttempt,
+    return reject(
       "PlannedAttemptWorktree",
       "WrongAttemptWitness",
       `planned-attempt worktree observation ${witness.worktreeObservationOperationId} does not prove the exact planned worktree`
     )
   }
 
+  return { _tag: "Authorized" }
+}
+/* eslint-enable complexity */
+
+export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptContinuation.authorize")(function* (
+  plannedAttempt: PlannedTaskAttempt,
+  witness: PlannedAttemptContinuationWitness
+) {
+  const journal = yield* InRunJournal
+  const records = yield* journal.read(plannedAttempt.runId)
+  const evaluation = evaluatePlannedAttemptContinuationAuthorization(records, plannedAttempt, witness)
+  if (evaluation._tag === "Rejected") {
+    return yield* new PlannedAttemptContinuationAuthorizationRejected({
+      detail: evaluation.detail,
+      plannedAttempt,
+      reason: evaluation.reason,
+      witness: evaluation.witness
+    })
+  }
+  const observation = witness.activeTaskContinuationRead
   const witnessOperationIds = [
     observation.graphObservationOperationId,
     observation.taskClaimObservationOperationId,
@@ -280,4 +294,3 @@ export const authorizePlannedAttemptContinuation = Effect.fn("PlannedAttemptCont
     PlannedAttemptContinuationAuthorizedEvent.make({ plannedAttempt, version: workflowJournalEventVersion, witness })
   )
 })
-/* eslint-enable complexity */

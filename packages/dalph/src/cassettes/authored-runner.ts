@@ -40,7 +40,6 @@ import {
   IntegrationCandidateResourceLocator,
   IntegrationCandidateGit,
   IntegrationCandidateGitReadFailure,
-  InRunJournal,
   GitWorktree,
   gitTargetLineageTestLayer,
   gitWorktreeTestLayer,
@@ -84,7 +83,6 @@ import {
   type TrackerTask,
   TrackerAdapterReadError,
   type DeliveryActionExecutorService,
-  beginPlannedAttemptExecutorResponsibility,
   WorkflowInterpreter,
   WorkflowTrace
 } from "@dalph/orchestrator"
@@ -307,6 +305,8 @@ const proposalActionLabels = {
   CommitTaskClaimReacquisitionIntent: "Record intent to reacquire the task claim",
   ContinueFreshWorkflowOperation: "Send the already-journaled request to its recorded owning system",
   ContinuePlannedAttemptExecutorWork: "Tell the executor to continue the exact planned attempt",
+  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts:
+    "Authorize current tracker and Git facts, then tell the executor to continue the exact planned attempt",
   ContinueStartedIntegrationCandidate: "Ask the candidate agent to continue the exact started integration",
   DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
   ObserveAttemptStoppageExecutor: "Check the executor for safe suspension or a terminal result after Stop",
@@ -896,21 +896,34 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
           )
       }
+      const observedExecutorLifecycleKeys = yield* Ref.make<ReadonlySet<string>>(new Set())
       const journalLayer = journalStoreCapabilities(
         Layer.succeed(
           JournalStore,
           JournalStore.of({
             ...sharedJournal,
             append: (requestedRunId, key, event) =>
-              sharedJournal
-                .append(requestedRunId, key, event)
-                .pipe(
-                  Effect.tap(() =>
-                    candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag
-                      ? Deferred.succeed(candidateOutcomeRecorded, undefined)
-                      : Effect.void
-                  )
+              sharedJournal.append(requestedRunId, key, event).pipe(
+                Effect.tap(() =>
+                  Effect.gen(function* () {
+                    if (candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag) {
+                      yield* Deferred.succeed(candidateOutcomeRecorded, undefined)
+                    }
+                    if (
+                      event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+                      event._tag !== "PlannedAttemptExecutorWorkReported"
+                    ) {
+                      return
+                    }
+                    const firstDurableAppend = yield* Ref.modify(observedExecutorLifecycleKeys, (observed) => {
+                      const encodedKey = String(key)
+                      return [!observed.has(encodedKey), new Set([...observed, encodedKey])]
+                    })
+                    /* v8 ignore next -- @preserve Idempotent lifecycle redelivery must not consume an unrelated later death control. */
+                    if (firstDurableAppend) yield* cursor.pauseAtCoordinatorProcessDeath
+                  })
                 )
+              )
           })
         )
       )
@@ -1310,33 +1323,10 @@ const runAuthoredScenarioCassetteWith = (request: {
       const controlledExecutorFactory = (factoryRunId: RunId, factoryTarget: typeof command.target) =>
         Effect.gen(function* () {
           const live = yield* makeLiveDeliveryActionExecutor(factoryRunId, factoryTarget)
-          const journal = yield* InRunJournal
           return {
             ...live,
             execute: (action, lease) =>
               Effect.gen(function* () {
-                // The first accepted executor action durably establishes the
-                // existing responsibility before its cassette death item is
-                // claimed. The next activation can therefore reconstruct the
-                // same attempt while no command has contacted the executor.
-                const plannedAttempt =
-                  action._tag === "IdentityFreeAction"
-                    ? action.proposal.route._tag === "FreshExecutorWorkflowRoute"
-                      ? action.proposal.route.step.plannedAttempt
-                      : action.proposal.route.transition._tag === "ContinuePlannedAttemptExecutorWork"
-                        ? action.proposal.route.transition.plannedAttempt
-                        : undefined
-                    : undefined
-                if (plannedAttempt !== undefined) {
-                  yield* beginPlannedAttemptExecutorResponsibility(plannedAttempt).pipe(
-                    Effect.provideService(InRunJournal, journal)
-                  )
-                }
-                // Every authored action boundary reaches the next lifecycle
-                // item in order. A death item therefore interrupts that exact
-                // action fiber, even when the next action is a tracker or Git
-                // read rather than executor work.
-                yield* cursor.pauseAtCoordinatorProcessDeath
                 const hold = yield* cursor.consumeAdmittedContinuationExecutorIntentHold
                 if (Option.isSome(hold)) {
                   const expected = hold.value
@@ -1344,7 +1334,10 @@ const runAuthoredScenarioCassetteWith = (request: {
                   if (
                     action._tag !== "IdentityFreeAction" ||
                     action.proposal.route._tag !== "IdentityFreeWorkflowRoute" ||
-                    action.proposal.route.transition._tag !== "ContinuePlannedAttemptExecutorWork"
+                    ![
+                      "ContinuePlannedAttemptExecutorWork",
+                      "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
+                    ].includes(action.proposal.route.transition._tag)
                   ) {
                     return yield* Effect.die(
                       new Error(
@@ -1354,6 +1347,11 @@ const runAuthoredScenarioCassetteWith = (request: {
                   }
                   /* v8 ignore stop -- @preserve */
                   const transition = action.proposal.route.transition
+                  /* v8 ignore start -- @preserve The guarded route variants above both carry the exact planned attempt. */
+                  if (!("plannedAttempt" in transition)) {
+                    return yield* Effect.die("authored continuation hold received no planned attempt")
+                  }
+                  /* v8 ignore stop -- @preserve */
                   /* v8 ignore start -- @preserve Hold closure binds the same exact task and attempt through Stop and the executor outcome. */
                   if (
                     transition.plannedAttempt.attemptId !== expected.attemptId ||
@@ -1404,7 +1402,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           const boundary = { _tag: "CoordinatorActivationReturned" as const, exit: yield* Fiber.await(coordinator) }
           consumedLifecycleBoundaries += 1
           if (isAuthoredCoordinatorProcessDeath(boundary.exit)) {
-            // The exact executor-request fiber raised the typed cassette
+            // The exact production action fiber raised the typed cassette
             // control. Its scoped activation has already unwound; do not
             // synthesize an interrupt, journal event, or recovery attempt.
           } else {

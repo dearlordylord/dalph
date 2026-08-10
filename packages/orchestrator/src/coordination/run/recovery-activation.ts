@@ -1339,6 +1339,7 @@ const decisionAfterCurrentSpecification = (
 ): ContinuationDecision => {
   const plannedAttempt = transition.plannedAttempt
   const authorizedClaim = authorizedClaimForAttempt(records, plannedAttempt)
+  /* v8 ignore next -- @preserve A valid retained planned attempt has its exact historical claim authority. */
   const authorizedClaimRecord =
     authorizedClaim === undefined
       ? undefined
@@ -1348,6 +1349,7 @@ const decisionAfterCurrentSpecification = (
         )
   const claimObservationCutoff = Math.max(
     currentSpecificationRecord.position,
+    /* v8 ignore next -- @preserve The authorized claim selected above names its durable acquisition record. */
     authorizedClaimRecord?.position ?? currentSpecificationRecord.position
   )
   const currentClaimRecord = records.findLast(
@@ -1389,23 +1391,33 @@ const decisionAfterCurrentSpecification = (
       currentWorktreeEvent !== undefined &&
       currentWorktreeEvent.observation._tag === "PlannedWorktreeReady"
     ) {
+      const latestExecutorEvidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
+      if (
+        latestExecutorEvidence !== undefined &&
+        currentGraphObservation.position <= latestExecutorEvidence.observedAt
+      ) {
+        return decisionWithoutCurrentGraph(
+          plannedAttempt,
+          planOperationId,
+          records,
+          Option.some(latestExecutorEvidence.observedAt)
+        )
+      }
       const currentSpecificationEvent = currentSpecificationRecord.event
       const currentClaimEvent = currentClaimRecord.event
-      const continuationWithCurrentFacts = {
-        ...transition,
-        ...(latestPlannedAttemptExecutorEvidence(records, plannedAttempt) === undefined
-          ? {
-              continuationAuthorization: {
-                activeTaskContinuationRead: {
-                  graphObservationOperationId: currentGraphObservation.event.operationId,
-                  taskClaimObservationOperationId: currentClaimEvent.operationId,
-                  taskWorkSpecificationObservationOperationId: currentSpecificationEvent.operationId
-                },
-                worktreeObservationOperationId: currentWorktreeEvent.operationId
-              }
-            }
-          : {})
-      } satisfies typeof transition
+      const continuationWithCurrentFacts =
+        RunnableFrontierTransition.ContinuePlannedAttemptExecutorWorkAfterCurrentFacts({
+          acceptedProgress: transition.acceptedProgress,
+          plannedAttempt,
+          witness: {
+            activeTaskContinuationRead: {
+              graphObservationOperationId: currentGraphObservation.event.operationId,
+              taskClaimObservationOperationId: currentClaimEvent.operationId,
+              taskWorkSpecificationObservationOperationId: currentSpecificationEvent.operationId
+            },
+            worktreeObservationOperationId: currentWorktreeEvent.operationId
+          }
+        })
       const appliedContinueChoicePosition = appliedContinueChoicePositionFor(records, plannedAttempt)
       if (Option.isNone(integrationTarget)) {
         return appliedContinueChoicePosition === undefined
@@ -1436,18 +1448,15 @@ const decisionAfterCurrentSpecification = (
       )
       if (currentTargetLineageRecord !== undefined) {
         if (appliedContinueChoicePosition === undefined) return { transition: continuationWithCurrentFacts }
-        const currentExecutorEvidence = latestPlannedAttemptExecutorEvidence(
-          records,
-          plannedAttempt,
-          currentTargetLineageRecord.position
-        )
+        const currentExecutorEvidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
+        /* v8 ignore start -- @preserve An applied Continue choice is valid only after exact safely-suspended executor evidence. */
         if (currentExecutorEvidence === undefined) {
           return {
             transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({ plannedAttempt })
           }
         }
-        return currentExecutorEvidence.source._tag !== "CommandResponse" &&
-          currentExecutorEvidence.report._tag === "SafelySuspended"
+        /* v8 ignore stop -- @preserve */
+        return currentExecutorEvidence.report._tag === "SafelySuspended"
           ? { transition: continuationWithCurrentFacts }
           : {}
       }
@@ -1532,6 +1541,35 @@ export const safelySuspendedAttemptMayContinue = (
   currentGraph: TaskDagSnapshot | undefined
 ): boolean => !reconstructedTaskIsPaused(pause, plannedAttempt.taskId, currentGraph)
 
+const unsettledExecutorCommandFor = (
+  transition: RunnableFrontierTransition,
+  records: ReadonlyArray<JournalRecord>
+): PlannedTaskAttempt | undefined => {
+  if (
+    transition._tag !== "ContinuePlannedAttemptExecutorWork" &&
+    transition._tag !== "SuspendPlannedAttemptExecutorWork"
+  ) {
+    return undefined
+  }
+  return latestUnsettledPlannedAttemptExecutorCommand(records, transition.plannedAttempt) === undefined
+    ? undefined
+    : transition.plannedAttempt
+}
+
+const plannedAttemptPlanOperationId = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): OperationId | undefined =>
+  records.find(
+    (
+      record
+    ): record is JournalRecord & {
+      readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskAttemptPlanned" }>
+    } =>
+      record.event._tag === "TaskAttemptPlanned" &&
+      record.event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
+  )?.event.operation.operationId
+
 const continuationDecisionFor = (
   transition: RunnableFrontierTransition,
   records: ReadonlyArray<JournalRecord>,
@@ -1539,14 +1577,18 @@ const continuationDecisionFor = (
   activationBaselinePosition: Option.Option<JournalPosition>,
   integrationTarget: Option.Option<IntegrationTarget>
 ): ContinuationDecision => {
+  const unsettledPlannedAttempt = unsettledExecutorCommandFor(transition, records)
+  if (unsettledPlannedAttempt !== undefined) {
+    return {
+      transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({
+        plannedAttempt: unsettledPlannedAttempt
+      })
+    }
+  }
   if (transition._tag !== "ContinuePlannedAttemptExecutorWork") return { transition }
   const plannedAttempt = transition.plannedAttempt
-  const plan = records.find(
-    ({ event }) =>
-      event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
-  )?.event
   /* v8 ignore next -- @preserve A recovered executor-work responsibility always has its journaled task plan. */
-  const planOperationId = plan?._tag === "TaskAttemptPlanned" ? plan.operation.operationId : undefined
+  const planOperationId = plannedAttemptPlanOperationId(records, plannedAttempt)
   if (currentGraphObservation === undefined) {
     return decisionWithoutCurrentGraph(plannedAttempt, planOperationId, records, activationBaselinePosition)
   }

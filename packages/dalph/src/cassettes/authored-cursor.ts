@@ -445,7 +445,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       Effect.orDie
     )
     // Keep decoding as the boundary proof, then fail immediately in this
-    // executor/request fiber. The parent activation observes the defect and
+    // production action fiber. The parent activation observes the defect and
     // disposes the whole scoped activation before the next report can occur.
     return yield* Effect.die(new AuthoredCoordinatorProcessDies({ storyPosition: claimed.index }))
   })

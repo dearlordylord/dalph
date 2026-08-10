@@ -413,6 +413,24 @@ export const observePlannedAttemptExecutorStateWithPermit = (
     observePlannedAttemptExecutorStateUnserialized(plannedAttempt)
   )
 
+/** Reconciles one ambiguous command first; otherwise observes the executor without issuing a command. */
+export const reconcileOrObservePlannedAttemptExecutorStateWithPermit = (
+  permit: PlannedAttemptProtocolPermit,
+  plannedAttempt: PlannedTaskAttempt
+) =>
+  withPlannedAttemptProtocolPermit(
+    permit,
+    plannedAttemptExecutorCorrelation(plannedAttempt),
+    Effect.gen(function* () {
+      const journal = yield* InRunJournal
+      const records = yield* journal.read(plannedAttempt.runId)
+      const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
+      return unsettledCommand === undefined
+        ? yield* observePlannedAttemptExecutorStateUnserialized(plannedAttempt)
+        : yield* reconcileUnsettledCommand(records, plannedAttempt, unsettledCommand)
+    })
+  )
+
 /** Starts or resumes all executor work for the exact planned attempt. */
 export const continuePlannedAttemptExecutorWorkWithPermit = (
   permit: PlannedAttemptProtocolPermit,

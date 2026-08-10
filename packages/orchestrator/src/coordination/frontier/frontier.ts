@@ -68,8 +68,12 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   ContinuePlannedAttemptExecutorWork: {
     readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
     readonly plannedAttempt: PlannedTaskAttempt
-    /** Fresh current-fact witnesses required by a recovered continuation route. */
-    readonly continuationAuthorization?: PlannedAttemptContinuationWitness
+  }
+  /** Continue one retained responsibility only after the named current tracker and Git facts are authorized. */
+  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: {
+    readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly witness: PlannedAttemptContinuationWitness
   }
   ObservePlannedAttemptContinuationGraph: {
     readonly operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
@@ -215,6 +219,7 @@ const transitionTrackerGraphRequirements = {
   CommitTaskClaimReacquisitionIntent: "AcceptedHistorySufficient",
   ContinueFreshWorkflowOperation: "CurrentTrackerGraphRequired",
   ContinuePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
+  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
   ContinueStartedIntegrationCandidate: "CurrentTrackerGraphRequired",
   RunTargetVerification: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",

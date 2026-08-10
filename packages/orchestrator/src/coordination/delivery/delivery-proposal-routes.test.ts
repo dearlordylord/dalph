@@ -23,12 +23,25 @@ import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
-import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
+import { TaskLifecycle, type Task, TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
-import { outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  intentRecordKey,
+  outcomeRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+} from "../../workflow-journal/record-key.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
 import {
   makeTargetLineageObservationOperation,
   makeTaskClaimAcquisitionOperation,
@@ -839,6 +852,200 @@ describe("delivery proposal route matrix", () => {
       if (result._tag !== "ExecutorReportPublished") return yield* Effect.die("executor report was not published")
       expect(result.report).toEqual(report)
       expect(yield* Ref.get(releases)).toBe(0)
+    })
+  )
+
+  effectIt.effect("rejects a recovered continuation without current witnesses before executor contact", () =>
+    Effect.gen(function* () {
+      const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWorkAfterCurrentFacts({
+        acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+        plannedAttempt,
+        witness: {
+          activeTaskContinuationRead: {
+            graphObservationOperationId: OperationId.make("missing-current-graph"),
+            taskClaimObservationOperationId: OperationId.make("missing-current-claim"),
+            taskWorkSpecificationObservationOperationId: OperationId.make("missing-current-specification")
+          },
+          worktreeObservationOperationId: OperationId.make("missing-current-worktree")
+        }
+      })
+      const proposal = proposalsFor(transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing current-facts continuation proposal")
+      }
+      const executorContacts = yield* Ref.make(0)
+      const protocolController = yield* makePlannedAttemptProtocolController()
+      const lease: DeliveryActionExecutionLease = {
+        ...inertLease,
+        withPlannedAttemptProtocol: (correlation, effect) => protocolController.withPermit(correlation, effect)
+      }
+      const failure = yield* executePlannedAttemptTransition(
+        { _tag: "IdentityFreeAction", proposal },
+        transition,
+        lease
+      ).pipe(
+        Effect.provideService(
+          InRunJournal,
+          InRunJournal.of({
+            append: () => Effect.die("rejected continuation must not append"),
+            read: () => Effect.succeed([])
+          })
+        ),
+        Effect.provideService(
+          PlannedAttemptExecutor,
+          PlannedAttemptExecutor.of({
+            project: () => Effect.die("rejected continuation must not project executor state"),
+            requestSuspension: () => Effect.die("rejected continuation must not request suspension"),
+            startOrContinue: () =>
+              Ref.update(executorContacts, (count) => count + 1).pipe(Effect.andThen(Effect.die("unreachable")))
+          })
+        ),
+        Effect.flip
+      )
+
+      expect(failure).toMatchObject({
+        _tag: "PlannedAttemptContinuationAuthorizationRejected",
+        reason: "MissingWitness",
+        witness: "ActiveTaskContinuationGraph"
+      })
+      expect(yield* Ref.get(executorContacts)).toBe(0)
+    })
+  )
+
+  effectIt.effect("defers a recovered continuation when newer executor evidence makes its witnesses stale", () =>
+    Effect.gen(function* () {
+      const graphOperation = makeTrackerGraphObservationOperation(
+        OperationId.make("stale-continuation-graph"),
+        target,
+        [],
+        [taskId]
+      )
+      const witness = {
+        activeTaskContinuationRead: {
+          graphObservationOperationId: graphOperation.operationId,
+          taskClaimObservationOperationId: OperationId.make("stale-continuation-claim"),
+          taskWorkSpecificationObservationOperationId: OperationId.make("stale-continuation-specification")
+        },
+        worktreeObservationOperationId: OperationId.make("stale-continuation-worktree")
+      }
+      const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWorkAfterCurrentFacts({
+        acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+        plannedAttempt,
+        witness
+      })
+      const proposal = proposalsFor(transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing stale current-facts continuation proposal")
+      }
+      const record = (position: number, key: JournalRecordKey, event: JournalRecord["event"]): JournalRecord => ({
+        event,
+        key,
+        position: JournalPosition.make(position),
+        runId
+      })
+      const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+      const records = [
+        record(
+          1,
+          plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+          PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(2, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation)),
+        record(
+          3,
+          outcomeRecordKey(graphOperation.operationId),
+          taskTrackerGraphFactsObserved(graphOperation, {
+            revision: TrackerRevision.make("stale-continuation-graph-revision"),
+            taskIds: [taskId]
+          })
+        ),
+        record(
+          4,
+          plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
+          PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: reportOrdinal,
+            report: PlannedAttemptExecutorReport.cases.Running.make({
+              correlation: { attemptId: plannedAttempt.attemptId, runId }
+            }),
+            version: workflowJournalEventVersion
+          })
+        )
+      ]
+      const executorContacts = yield* Ref.make(0)
+      const protocolController = yield* makePlannedAttemptProtocolController()
+      const result = yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, {
+        ...inertLease,
+        withPlannedAttemptProtocol: (correlation, effect) => protocolController.withPermit(correlation, effect)
+      }).pipe(
+        Effect.provideService(
+          InRunJournal,
+          InRunJournal.of({
+            append: () => Effect.die("stale continuation must not append"),
+            read: () => Effect.succeed(records)
+          })
+        ),
+        Effect.provideService(
+          PlannedAttemptExecutor,
+          PlannedAttemptExecutor.of({
+            project: () => Effect.die("stale continuation must not project executor state"),
+            requestSuspension: () => Effect.die("stale continuation must not request suspension"),
+            startOrContinue: () =>
+              Ref.update(executorContacts, (count) => count + 1).pipe(Effect.andThen(Effect.die("unreachable")))
+          })
+        )
+      )
+
+      expect(result).toMatchObject({ _tag: "ActionDeferred", reason: "ContinuationAuthorizationStale" })
+      expect(yield* Ref.get(executorContacts)).toBe(0)
+    })
+  )
+
+  effectIt.effect("observes executor state when no ambiguous command needs reconciliation", () =>
+    Effect.gen(function* () {
+      const transition = RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({ plannedAttempt })
+      const proposal = proposalsFor(transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing executor observation proposal")
+      }
+      const report = PlannedAttemptExecutorReport.cases.Running.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId }
+      })
+      const responsibility = {
+        event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+        position: JournalPosition.make(1),
+        runId
+      }
+      const protocolController = yield* makePlannedAttemptProtocolController()
+      const result = yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, {
+        ...inertLease,
+        withPlannedAttemptProtocol: (correlation, effect) => protocolController.withPermit(correlation, effect)
+      }).pipe(
+        Effect.provideService(
+          InRunJournal,
+          InRunJournal.of({
+            append: (_requestedRunId, key, event) =>
+              Effect.succeed({ event, key, position: JournalPosition.make(2), runId }),
+            read: () => Effect.succeed([responsibility])
+          })
+        ),
+        Effect.provideService(
+          PlannedAttemptExecutor,
+          PlannedAttemptExecutor.of({
+            project: () => Effect.succeed(Option.some(report)),
+            requestSuspension: () => Effect.die("observation must not request suspension"),
+            startOrContinue: () => Effect.die("observation must not continue executor work")
+          })
+        )
+      )
+
+      expect(result).toMatchObject({ _tag: "ExecutorReportPublished", report })
     })
   )
 

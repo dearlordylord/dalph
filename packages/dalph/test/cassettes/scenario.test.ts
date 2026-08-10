@@ -40,6 +40,7 @@ import {
   deriveRunnableFrontier,
   describeJournalEvent,
   ForeignWorktreeRegistration,
+  FixtureTarget,
   JournalPosition,
   IntegrationCandidateId,
   IntegrationCandidateResourceLocator,
@@ -486,7 +487,7 @@ it.effect("reopens Continue and performs fresh reads before admitting the same a
       "PlannedAttemptWorktreeObserved",
       "GitReadIntentRecorded",
       "TargetLineageObserved",
-      "PlannedAttemptExecutorStateObserved"
+      "PlannedAttemptContinuationAuthorized"
     ])
     expect(planned).toMatchObject({
       _tag: "TaskAttemptPlanned",
@@ -995,6 +996,7 @@ it.effect("freshly rereads preserved task authorities before resuming after task
       "PlannedAttemptWorktreeObserved",
       "GitReadIntentRecorded",
       "TargetLineageObserved",
+      "PlannedAttemptContinuationAuthorized",
       "PlannedAttemptExecutorCommandIntended"
     ])
   })
@@ -4716,6 +4718,18 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
           ? { ...record, position }
           : record
       )
+    const replaceTrackerReadTarget = (records: ReadonlyArray<JournalRecord>, operationId: OperationId) =>
+      records.map((record) =>
+        record.event._tag === "TaskTrackerReadIntentRecorded" && record.event.operation.operationId === operationId
+          ? {
+              ...record,
+              event: {
+                ...record.event,
+                operation: { ...record.event.operation, target: FixtureTarget.make("foreign-continuation-target") }
+              }
+            }
+          : record
+      )
     const claimOutcome = preCommandRecords.find(
       (record): record is TaskFactsRecord =>
         record.event._tag === "TaskTrackerFactsObserved" &&
@@ -4834,6 +4848,18 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       reason: "WrongAttemptWitness",
       witness: "ActiveTaskContinuationSpecification"
     })
+    const wrongSpecificationTarget = yield* rejectWith(
+      replaceTrackerReadTarget(
+        preCommandRecords,
+        witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
+      ),
+      witness
+    )
+    expect(wrongSpecificationTarget).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "WrongAttemptWitness",
+      witness: "ActiveTaskContinuationSpecification"
+    })
 
     const missingClaim = yield* rejectWith(preCommandRecords, {
       ...witness,
@@ -4864,6 +4890,15 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(wrongClaim).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "WrongAttemptWitness",
+      witness: "ActiveTaskContinuationClaim"
+    })
+    const wrongClaimTarget = yield* rejectWith(
+      replaceTrackerReadTarget(preCommandRecords, witness.activeTaskContinuationRead.taskClaimObservationOperationId),
+      witness
+    )
+    expect(wrongClaimTarget).toMatchObject({
       _tag: "PlannedAttemptContinuationAuthorizationRejected",
       reason: "WrongAttemptWitness",
       witness: "ActiveTaskContinuationClaim"
