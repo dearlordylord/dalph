@@ -631,15 +631,12 @@ await scenario("explains restart continuity at the first later activation bounda
     "The first later-activation publication must visibly mark the process restart"
   )
   assert(
-    boundary.includes("Changed:")
-      && boundary.includes("task A")
-      && boundary.includes("planned-attempt executor responsibility")
-      && boundary.includes("accepted result awaiting integration"),
-    "The first later-activation publication must show task A's obligation changed"
-  )
-  assert(
-    boundary.includes("Disappeared:") && boundary.includes("held position · task A"),
-    "The first later-activation publication must show task A's held position disappeared"
+    boundary.includes("Changed: none")
+      && boundary.includes("Disappeared:")
+      && boundary.includes("Disappeared: held position · task A")
+      && boundary.includes("obligation · task A · planned-attempt executor responsibility")
+      && boundary.includes("Added: obligation · task A · accepted result awaiting integration"),
+    "The first later-activation publication must show task A's responsibility and held position disappeared while accepted integration was added"
   )
 })
 
@@ -1157,6 +1154,10 @@ await scenario("shows continuation authorization prefixes and retained Run/attem
   assert(
     authorization.textContent?.includes("all correlations retain structured Run/attempt identity") === true,
     "The Lab must show structured Run/attempt identity without inventing invocation identities"
+  )
+  assert(
+    authorization.textContent?.includes("ExecutorReportObserved at journal 28") === true,
+    "The Lab must distinguish an observed executor report from a command intent"
   )
   assert(authorization.querySelectorAll("[data-role='continuation-witness-operations'] li").length === 4, "All four witness operation identities must be visible")
 })

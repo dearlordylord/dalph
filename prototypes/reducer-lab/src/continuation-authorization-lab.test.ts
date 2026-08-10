@@ -60,6 +60,7 @@ assert.deepEqual(terminal.executorReport, { _tag: "Terminal", position: 28 })
 assert.equal(terminal.authorizationPosition, 26)
 assert.equal(terminal.runId, projection.runId)
 assert.equal(terminal.attemptId, projection.attemptId)
+assert.deepEqual(projection.executorBoundary, { _tag: "ExecutorReportObserved", position: 28 })
 
 assert.equal(projection.identity.responsibilityCount, 1)
 assert.equal(projection.identity.authorizationCount, 1)
@@ -112,21 +113,29 @@ assert.deepEqual(identityProjection.identity.plannedAttemptIds, [projection.atte
 const witness = projection.authorization.witness
 const plannedAttempt = projection.plannedAttempt
 const preAuthorizationRecords = records.filter(({ position }) => position <= beforeAuthorization.throughPosition)
-const executorContactTags = new Set([
-  "PlannedAttemptContinuationAuthorized",
-  "PlannedAttemptExecutorCommandIntended",
-  "PlannedAttemptExecutorWorkReported"
+const executorBoundaryEvidenceTags = new Set([
+  "PlannedAttemptExecutorWorkReported",
+  "PlannedAttemptExecutorCommandIntended"
 ])
-assert.equal(preAuthorizationRecords.some(({ event }) => executorContactTags.has(event._tag)), false)
+assert.equal(preAuthorizationRecords.some(({ event }) => executorBoundaryEvidenceTags.has(event._tag)), false)
 const authorizedDecision = continuationAuthorizationContactDecision(preAuthorizationRecords, plannedAttempt, witness)
-assert.equal(authorizedDecision._tag, "ExecutorContactAvailable", "fresh witnesses must permit the existing executor contact")
+assert.equal(authorizedDecision._tag, "ExecutorContactAvailable", "fresh witnesses must permit the existing executor command gate")
 if (authorizedDecision._tag === "ExecutorContactAvailable") {
-  assert.equal(authorizedDecision.executorBoundary, "NotContacted")
+  assert.deepEqual(authorizedDecision.executorBoundary, { _tag: "NoCommandIntent" })
 }
-const crossedExecutorBoundaryDecision = continuationAuthorizationContactDecision(records, plannedAttempt, witness)
-assert.equal(crossedExecutorBoundaryDecision._tag, "ExecutorContactUnavailable")
-if (crossedExecutorBoundaryDecision._tag === "ExecutorContactUnavailable") {
-  assert.equal(crossedExecutorBoundaryDecision.executorBoundary, "Contacted")
+const observedExecutorReportDecision = continuationAuthorizationContactDecision(records, plannedAttempt, witness)
+assert.equal(observedExecutorReportDecision._tag, "ExecutorContactUnavailable")
+if (observedExecutorReportDecision._tag === "ExecutorContactUnavailable") {
+  assert.deepEqual(observedExecutorReportDecision.executorBoundary, { _tag: "ExecutorReportObserved", position: 28 })
+}
+const commandIntentOnlyDecision = continuationAuthorizationContactDecision(
+  records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"),
+  plannedAttempt,
+  witness
+)
+assert.equal(commandIntentOnlyDecision._tag, "ExecutorContactUnavailable")
+if (commandIntentOnlyDecision._tag === "ExecutorContactUnavailable") {
+  assert.deepEqual(commandIntentOnlyDecision.executorBoundary, { _tag: "CommandIntentRecorded", position: 27 })
 }
 assert.equal(
   coordinatorProcessDeathContinuesAuthoredCassette.story.some(({ _tag }) => _tag === "CoordinatorProcessDies"),
@@ -208,12 +217,12 @@ const decisions = [
 ] as const
 
 for (const { name, records: variantRecords, witness: variantWitness } of decisions) {
-  assert.equal(variantRecords.some(({ event }) => executorContactTags.has(event._tag)), false, `${name} fixture must stop before executor contact`)
+  assert.equal(variantRecords.some(({ event }) => executorBoundaryEvidenceTags.has(event._tag)), false, `${name} fixture must stop before executor contact evidence`)
   const decision = continuationAuthorizationContactDecision(variantRecords, plannedAttempt, variantWitness)
   assert.equal(decision._tag, "ExecutorContactUnavailable", `${name} witness must fail closed`)
   if (decision._tag === "ExecutorContactUnavailable") {
     assert.equal(decision.executorContact, "Unavailable")
-    assert.equal(decision.executorBoundary, "NotContacted")
+    assert.deepEqual(decision.executorBoundary, { _tag: "NoCommandIntent" })
     assert.equal(
       decision.evaluation.reason,
       {

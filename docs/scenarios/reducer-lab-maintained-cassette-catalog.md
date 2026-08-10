@@ -468,9 +468,10 @@ same exact planned attempt where the cassette does. The first frame of each
 activation names its numbered restart boundary and summarizes which held
 positions and exact obligations are unchanged, changed, disappeared, or newly
 observed. For `acceptedResultRestartsIntoIntegration`, the first later frame
-truthfully shows task A's obligation changing from executor responsibility to
-accepted-result integration and its held position disappearing. The maintainer
-does not have to infer restart continuity only by comparing raw JSON.
+truthfully shows task A's executor responsibility and held position
+disappearing, while its accepted-result integration obligation is newly added.
+The maintainer does not have to infer restart continuity only by comparing raw
+JSON.
 
 ### Visible and forbidden results
 
@@ -726,7 +727,10 @@ specification, claim, and worktree operation identity with its intent and
 observation positions, the authorization position, and the structured Run/attempt
 pair. It also inspects every typed planned-attempt, responsibility,
 authorization, and report fact for the selected Run, so a replacement attempt or
-additional responsibility cannot be hidden by selecting the first one.
+additional responsibility cannot be hidden by selecting the first one. The
+selected result labels the executor boundary as `ExecutorReportObserved` only
+because the typed report is present; a command-intent record alone is shown as
+`CommandIntentRecorded`, not physical executor contact.
 
 ### Invalid witness fixtures and executor boundary
 
@@ -736,9 +740,12 @@ observation and containing no authorization, command-intent, or report fact.
 For each fixture it calls the exported
 production `evaluatePlannedAttemptContinuationAuthorization` through the Lab
 contact-decision adapter. A rejected pre-contact evaluation is shown as executor
-contact unavailable with the executor boundary still not contacted; the adapter
-performs no executor call. The Lab does not copy the production chronology or
-identity validation into a second reducer.
+contact unavailable with `NoCommandIntent`; the adapter performs no executor
+call. If a fixture contains only the durable command intent, the Lab labels it
+`CommandIntentRecorded`, which is still not physical executor contact. Only a
+typed `Running` or `Terminal` report produces `ExecutorReportObserved`. The Lab
+does not copy the production chronology or identity validation into a second
+reducer.
 
 ### Crash, retry, and visible result
 
@@ -764,15 +771,17 @@ contact.
   post-authorization-before-report, and terminal prefixes, and sends missing,
   stale, later, and wrong-attempt pre-authorization fixtures through the shared
   production evaluator. Every invalid fixture has no command/report contact
-  evidence, remains executor-contact unavailable, and is marked not contacted
-  at the executor boundary.
+  evidence, remains executor-contact unavailable, and is marked
+  `NoCommandIntent`; an intent-only control fixture is marked
+  `CommandIntentRecorded` without claiming physical contact.
 - `shows continuation authorization prefixes and retained Run/attempt identity`
   mounts the selected Lab result and checks that the three durable prefixes,
   four witness operation identities, one generic authorization, and every
   structured planned-attempt/responsibility/authorization/report correlation
   are visible; its typed replacement-attempt fixture checks that a second
   responsibility, authorization, and report cannot be hidden by selecting the
-  first attempt.
+  first attempt, while the restart fixture checks task A's old responsibility
+  and held position are `Disappeared` and accepted integration is `Added`.
 - The same two tests check that the responsibility, authorization, and
   `Running`/`Terminal` report use one exact `(RunId, AttemptId)` and introduce
   no recovery-named event or replacement attempt.

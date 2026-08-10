@@ -466,6 +466,8 @@ export interface DeliveryWorkbenchController {
   readonly update: (state: CassetteState) => void
 }
 
+type AuthoredObligationDiagnostic = AuthoredDeliveryFrame["deliveries"][number]["obligations"][number]
+
 type ExactCorrelationIdentity =
   | {
       readonly _tag: "HeldPosition"
@@ -476,6 +478,8 @@ type ExactCorrelationIdentity =
   | {
       readonly _tag: "Obligation"
       readonly attemptId: AttemptId | null
+      readonly exact: AuthoredObligationDiagnostic["exact"]
+      readonly kind: AuthoredObligationDiagnostic["kind"]
       readonly taskId: TaskId
     }
 
@@ -490,9 +494,9 @@ const exactCorrelations = (frame: AuthoredDeliveryFrame): ReadonlyArray<ExactCor
     summary: `held position · task ${taskId} · attempt ${attemptId} · Run ${runId}`
   })),
   ...frame.deliveries.flatMap(({ obligations, taskId }) =>
-    obligations.map(({ attemptId, summary }) =>
+    obligations.map(({ attemptId, exact, kind, summary }) =>
       ({
-        identity: { _tag: "Obligation" as const, attemptId, taskId },
+        identity: { _tag: "Obligation" as const, attemptId, exact, kind, taskId },
         summary: `obligation · task ${taskId} · ${summary}`
       })
     )
@@ -507,6 +511,8 @@ const sameCorrelationIdentity = (
   return left._tag === "HeldPosition" && right._tag === "HeldPosition"
     ? left.runId === right.runId
     : left._tag === "Obligation" && right._tag === "Obligation"
+      && left.kind === right.kind
+      && left.exact === right.exact
 }
 
 const joinedSummaries = (summaries: ReadonlyArray<string>): string =>

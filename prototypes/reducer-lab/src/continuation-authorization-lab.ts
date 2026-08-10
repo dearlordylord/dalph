@@ -38,7 +38,10 @@ export type ContinuationExecutorReport =
   | { readonly _tag: "Running"; readonly position: JournalPosition }
   | { readonly _tag: "Terminal"; readonly position: JournalPosition }
 
-export type ContinuationExecutorBoundary = "NotContacted" | "Contacted"
+export type ContinuationExecutorBoundary =
+  | { readonly _tag: "NoCommandIntent" }
+  | { readonly _tag: "CommandIntentRecorded"; readonly position: JournalPosition }
+  | { readonly _tag: "ExecutorReportObserved"; readonly position: JournalPosition }
 
 interface ContinuationPrefixBase {
   readonly attemptId: AttemptId
@@ -97,6 +100,7 @@ export interface ContinuationAuthorizationProjection {
   }
   readonly witnesses: ContinuationAuthorizationWitnessPositions
   readonly prefixes: ReadonlyArray<ContinuationAuthorizationPrefix>
+  readonly executorBoundary: ContinuationExecutorBoundary
   readonly identity: ContinuationAuthorizationIdentity
 }
 
@@ -313,6 +317,7 @@ export const continuationAuthorizationProjectionOf = (
     },
     witnesses,
     prefixes,
+    executorBoundary: executorBoundaryOf(sorted, plannedAttempt),
     identity: identityOf(sorted, plannedAttempt.runId)
   }
 }
@@ -334,14 +339,22 @@ export type ContinuationAuthorizationContactDecision =
 const executorBoundaryOf = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt
-): ContinuationExecutorBoundary => records.some(({ event, runId }) =>
-  runId === plannedAttempt.runId && (
-    (event._tag === "PlannedAttemptExecutorCommandIntended" && plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)) ||
-    (event._tag === "PlannedAttemptExecutorWorkReported" &&
-      event.report.correlation.runId === plannedAttempt.runId &&
-      event.report.correlation.attemptId === plannedAttempt.attemptId)
+): ContinuationExecutorBoundary => {
+  const report = records.findLast(({ event, runId }) =>
+    runId === plannedAttempt.runId &&
+    event._tag === "PlannedAttemptExecutorWorkReported" &&
+    event.report.correlation.runId === plannedAttempt.runId &&
+    event.report.correlation.attemptId === plannedAttempt.attemptId
   )
-) ? "Contacted" : "NotContacted"
+  if (report !== undefined) return { _tag: "ExecutorReportObserved", position: report.position }
+  const commandIntent = records.findLast(({ event, runId }) =>
+    runId === plannedAttempt.runId &&
+    event._tag === "PlannedAttemptExecutorCommandIntended" &&
+    plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
+  )
+  if (commandIntent !== undefined) return { _tag: "CommandIntentRecorded", position: commandIntent.position }
+  return { _tag: "NoCommandIntent" }
+}
 
 /** Applies the production causal gate to a Lab fixture without contacting an executor. */
 export const continuationAuthorizationContactDecision = (

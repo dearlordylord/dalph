@@ -173,6 +173,12 @@ export const continuationAuthorizationSummaryItems = (
       ).join(" → ")
     },
     {
+      term: "Executor boundary evidence",
+      description: projection.executorBoundary._tag === "NoCommandIntent"
+        ? "No executor command intent is recorded"
+        : `${projection.executorBoundary._tag} at journal ${projection.executorBoundary.position}`
+    },
+    {
       term: "Identity check",
       description: `${projection.identity.responsibilityCount} responsibility · ${projection.identity.authorizationCount} authorization · ${projection.identity.plannedAttemptCorrelations.length} planned attempt · ${projection.identity.reportCorrelations.length} executor reports · all correlations retain structured Run/attempt identity`
     }
