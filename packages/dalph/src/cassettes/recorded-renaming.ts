@@ -844,6 +844,31 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(responsibilityEntry.occurrenceClassification),
           plannedAttempt: renamePlannedAttempt(responsibilityEntry.plannedAttempt, maps)
         }),
+      PlannedAttemptContinuationAuthorized: (authorizationEntry) =>
+        completeFields<typeof authorizationEntry>({
+          _tag: "PlannedAttemptContinuationAuthorized",
+          plannedAttempt: renamePlannedAttempt(authorizationEntry.plannedAttempt, maps),
+          witness: {
+            activeTaskContinuationRead: {
+              graphObservationOperationId: renamed(
+                authorizationEntry.witness.activeTaskContinuationRead.graphObservationOperationId,
+                maps.operationIds
+              ),
+              taskClaimObservationOperationId: renamed(
+                authorizationEntry.witness.activeTaskContinuationRead.taskClaimObservationOperationId,
+                maps.operationIds
+              ),
+              taskWorkSpecificationObservationOperationId: renamed(
+                authorizationEntry.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
+                maps.operationIds
+              )
+            },
+            worktreeObservationOperationId: renamed(
+              authorizationEntry.witness.worktreeObservationOperationId,
+              maps.operationIds
+            )
+          }
+        }),
       PlannedAttemptWorktreeObserved: (observationEntry) =>
         completeFields<typeof observationEntry>({
           _tag: "PlannedAttemptWorktreeObserved",

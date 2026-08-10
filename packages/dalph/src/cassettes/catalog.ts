@@ -580,6 +580,50 @@ const targetLineageProtocolPrefix = [
   { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" }
 ] as const
 
+/** A fresh activation keeps the same Run/attempt after a typed death immediately before the first report. */
+export const coordinatorProcessDeathContinuesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "a fresh activation continues the same planned attempt after coordinator death before its first report",
+  startingFacts: {
+    ...singletonTaskCompletesAuthoredCassette.startingFacts,
+    targetLineageObservation: {
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: "1111111111111111111111111111111111111111",
+      targetHeadSha: "2222222222222222222222222222222222222222"
+    }
+  },
+  story: [
+    ...singletonStoryBeforeRunningExecutorReport,
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    ...targetLineagePostDeathReads,
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      ...singletonExpectedBehavior,
+      orchestration: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
+      ],
+      protocol: [
+        ...targetLineageProtocolPrefix,
+        {
+          _tag: "CompatibleTargetAdvance",
+          plannedBaseSha: "1111111111111111111111111111111111111111",
+          targetHeadSha: "2222222222222222222222222222222222222222",
+          taskId: "A"
+        }
+      ]
+    }
+  ]
+})
+
 const changedAttemptChoiceExposureReads = [
   { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
   { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification }
@@ -2283,6 +2327,7 @@ export const maintainedAuthoredCassetteCatalog = defineAuthoredCassetteCatalog({
   changedAttemptStopsWithAbsentClaim: changedAttemptStopsWithAbsentClaimAuthoredCassette,
   changedAttemptStopsWithForeignClaim: changedAttemptStopsWithForeignClaimAuthoredCassette,
   compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
+  coordinatorProcessDeathContinues: coordinatorProcessDeathContinuesAuthoredCassette,
   contractedCapacityRetainsTwoAttempts: contractedCapacityRetainsTwoAttemptsAuthoredCassette,
   deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
   deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,

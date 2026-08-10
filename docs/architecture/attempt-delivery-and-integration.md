@@ -83,6 +83,26 @@ of agent context plus every committed and uncommitted worktree layer.
 See
 [planned-attempt-executor-boundary.md](../scenarios/planned-attempt-executor-boundary.md).
 
+## Existing-attempt continuation after activation loss
+
+If the coordinator activation ends after Dalph records
+`PlannedAttemptExecutorWorkResponsibilityBegan`, the next activation retains
+the exact planned attempt. It does not derive a replacement attempt from
+volatile state or allocate another executor identity. Startup uses the same
+Journal-backed Run establishment and recovery composition as every other
+activation.
+
+Before the retained attempt contacts the executor, recovery performs the
+ordinary current task-tracker reads for the graph, authored specification, and
+exact claim. A comparable unchanged graph is represented by the compact
+`UnchangedTaskTrackerFactsReconfirmed` observation. It then performs a separate
+Git read for the exact planned worktree. One generic durable
+`PlannedAttemptContinuationAuthorized` fact witnesses the four operation
+identities and the exact `(RunId, AttemptId)`; it is not a recovery event and
+does not enter the occurrence projection. Missing, stale, later, or
+wrong-attempt witnesses fail before executor contact. The later executor
+report remains a report for the retained attempt.
+
 ## Accepted-result admission
 
 An accepted executor result contains one immutable result commit. It does not

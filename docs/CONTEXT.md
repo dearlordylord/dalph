@@ -746,6 +746,16 @@ exact claim, target-closure membership, and complete blockers needed before
 Dalph starts another long-running action for an existing attempt.
 _Avoid_: Initial attempt eligibility, coding-agent progress poll, global refresh
 
+**Planned-attempt continuation authorization**:
+The generic durable workflow fact that permits Dalph to continue one existing
+planned-attempt executor responsibility after the current active-task tracker
+read and exact planned-worktree Git observation are causally recorded. It names
+the exact read operation identities and planned `(RunId, AttemptId)`; it does
+not allocate an attempt, create a recovery occurrence, or prove an executor
+report.
+_Avoid_: Recovery event, replacement-attempt permission, executor invocation,
+volatile restart flag
+
 ## Executor-internal policy
 
 The generic orchestrator models only complete planned-attempt executor work and its running, safely suspended, or terminal report. Review, retry, provider-session, handback, restoration, and convergence policy are not current Dalph domain concepts. Any future production executor algorithm requires new accepted operational scenarios and must remain behind this coarse boundary.

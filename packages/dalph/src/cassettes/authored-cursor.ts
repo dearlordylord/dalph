@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- One cursor atomically owns every authored story interaction and optional boundary probe. */
-import { Deferred, Effect, Option, Queue, Schema, Stream, SubscriptionRef } from "effect"
+import { Deferred, Effect, Option, Schema, Stream, SubscriptionRef } from "effect"
 import {
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
@@ -35,6 +35,16 @@ export class AuthoredTargetPromotionGitReadFailure extends Schema.TaggedError<Au
   { detail: Schema.String, storyPosition: Schema.Int }
 ) {}
 
+/**
+ * A cassette-only lifecycle control. It is raised as an Effect defect so the
+ * delivery scope unwinds on the same fiber that reached the authored death
+ * item; it is never a workflow error, journal event, or projection input.
+ */
+export class AuthoredCoordinatorProcessDies extends Schema.TaggedError<AuthoredCoordinatorProcessDies>()(
+  "AuthoredCoordinatorProcessDies",
+  { storyPosition: Schema.Int }
+) {}
+
 type CursorFailure = AuthoredCassetteInteractionMismatch
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
@@ -44,9 +54,6 @@ export interface StoryCursor {
   readonly storyPosition: Effect.Effect<number>
   readonly atTerminalAssertions: Effect.Effect<boolean>
   readonly awaitTerminalAssertions: Effect.Effect<void>
-  readonly awaitCoordinatorProcessDeath: Effect.Effect<
-    typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type
-  >
   readonly consumeCoordinatorActivationReturned: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type,
     CursorFailure
@@ -150,8 +157,6 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   story: ReadonlyArray<StoryItem>
 ): Effect.fn.Return<StoryCursor> {
   const position = yield* SubscriptionRef.make(0)
-  const coordinatorProcessDeaths =
-    yield* Queue.unbounded<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
   const terminalAssertionsReached = yield* Deferred.make<void>()
   const claimNext = <A extends StoryItem>(
     predicate: (item: StoryItem | undefined) => item is A
@@ -436,11 +441,13 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         item?._tag === "CoordinatorProcessDies"
     )
     if (claimed._tag === "Mismatch") return
-    const decoded = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorProcessDies)(
-      claimed.item
-    ).pipe(Effect.orDie)
-    yield* Queue.offer(coordinatorProcessDeaths, decoded)
-    return yield* Effect.never
+    yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorProcessDies)(claimed.item).pipe(
+      Effect.orDie
+    )
+    // Keep decoding as the boundary proof, then fail immediately in this
+    // executor/request fiber. The parent activation observes the defect and
+    // disposes the whole scoped activation before the next report can occur.
+    return yield* Effect.die(new AuthoredCoordinatorProcessDies({ storyPosition: claimed.index }))
   })
   const consumeRunCoordinator = consume("RunCoordinator").pipe(
     Effect.flatMap((item) =>
@@ -516,7 +523,6 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     storyPosition: SubscriptionRef.get(position),
     atTerminalAssertions,
     awaitTerminalAssertions: Deferred.await(terminalAssertionsReached),
-    awaitCoordinatorProcessDeath: Queue.take(coordinatorProcessDeaths),
     consumeAdmittedContinuationExecutorIntentHold,
     consumeCoordinatorActivationReturned,
     consumeCompletionClaimDeletionApplied,

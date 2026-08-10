@@ -23,6 +23,14 @@ therefore stops that executor too. This milestone does not prove discovery,
 adoption, or safe classification of an independently surviving production
 executor session.
 
+When a retained planned-attempt responsibility is reconstructed after an
+activation boundary, the Journal-backed recovery composition obtains fresh
+tracker and Git observations before continuing executor work. It records one
+generic continuation-authorization fact that witnesses those operation
+identities; the fact is durable history for validation but is deliberately not
+an occurrence projection or a recovery event. A cassette-only coordinator
+death control is scoped lifecycle input and is never journaled or reconstructed.
+
 ## Journal state and publication
 
 The `Journal` service exposes one current-first `state` signal together with

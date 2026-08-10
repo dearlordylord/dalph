@@ -1247,6 +1247,12 @@ type CurrentGraphObservation = {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
   readonly position: JournalPosition
 }
+type TrackerFactsRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
+}
+type WorktreeObservationRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptWorktreeObserved" }>
+}
 
 const currentCompleteGraphObservationAfter = (
   records: ReadonlyArray<JournalRecord>,
@@ -1328,7 +1334,7 @@ const decisionAfterCurrentSpecification = (
   planOperationId: OperationId | undefined,
   records: ReadonlyArray<JournalRecord>,
   currentGraphObservation: CurrentGraphObservation,
-  currentSpecificationRecord: JournalRecord,
+  currentSpecificationRecord: TrackerFactsRecord,
   integrationTarget: Option.Option<IntegrationTarget>
 ): ContinuationDecision => {
   const plannedAttempt = transition.plannedAttempt
@@ -1345,18 +1351,17 @@ const decisionAfterCurrentSpecification = (
     authorizedClaimRecord?.position ?? currentSpecificationRecord.position
   )
   const currentClaimRecord = records.findLast(
-    ({ event, position }) =>
-      event._tag === "TaskTrackerFactsObserved" &&
-      (event.observation._tag === "FocusedTaskClaimFacts" ||
-        event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-      event.observation.coverage.taskId === plannedAttempt.taskId &&
-      position > claimObservationCutoff
+    (record): record is TrackerFactsRecord =>
+      record.event._tag === "TaskTrackerFactsObserved" &&
+      (record.event.observation._tag === "FocusedTaskClaimFacts" ||
+        record.event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+      record.event.observation.coverage.taskId === plannedAttempt.taskId &&
+      record.position > claimObservationCutoff
   )
   if (currentClaimRecord !== undefined) {
     const currentClaimEvent = currentClaimRecord.event
     const currentClaimIsExact =
       authorizedClaim !== undefined &&
-      currentClaimEvent._tag === "TaskTrackerFactsObserved" &&
       currentClaimEvent.observation._tag === "FocusedTaskClaimFacts" &&
       currentClaimEvent.observation.observation._tag === "ActiveTaskClaim" &&
       isExactTaskClaim(currentClaimEvent.observation.observation, authorizedClaim.claim)
@@ -1373,19 +1378,38 @@ const decisionAfterCurrentSpecification = (
       )
     )
     const currentWorktreeRecord = records.findLast(
-      ({ event, position }) =>
-        event._tag === "PlannedAttemptWorktreeObserved" &&
-        position > currentClaimRecord.position &&
-        currentWorktreeReadOperationIds.has(event.operationId)
+      (record): record is WorktreeObservationRecord =>
+        record.event._tag === "PlannedAttemptWorktreeObserved" &&
+        record.position > currentClaimRecord.position &&
+        currentWorktreeReadOperationIds.has(record.event.operationId)
     )
+    const currentWorktreeEvent = currentWorktreeRecord?.event
     if (
-      currentWorktreeRecord?.event._tag === "PlannedAttemptWorktreeObserved" &&
-      currentWorktreeRecord.event.observation._tag === "PlannedWorktreeReady"
+      currentWorktreeRecord !== undefined &&
+      currentWorktreeEvent !== undefined &&
+      currentWorktreeEvent.observation._tag === "PlannedWorktreeReady"
     ) {
+      const currentSpecificationEvent = currentSpecificationRecord.event
+      const currentClaimEvent = currentClaimRecord.event
+      const continuationWithCurrentFacts = {
+        ...transition,
+        ...(latestPlannedAttemptExecutorEvidence(records, plannedAttempt) === undefined
+          ? {
+              continuationAuthorization: {
+                activeTaskContinuationRead: {
+                  graphObservationOperationId: currentGraphObservation.event.operationId,
+                  taskClaimObservationOperationId: currentClaimEvent.operationId,
+                  taskWorkSpecificationObservationOperationId: currentSpecificationEvent.operationId
+                },
+                worktreeObservationOperationId: currentWorktreeEvent.operationId
+              }
+            }
+          : {})
+      } satisfies typeof transition
       const appliedContinueChoicePosition = appliedContinueChoicePositionFor(records, plannedAttempt)
       if (Option.isNone(integrationTarget)) {
         return appliedContinueChoicePosition === undefined
-          ? { transition }
+          ? { transition: continuationWithCurrentFacts }
           : {
               explanation: FrontierExplanation.IntegrationConfigurationWait({
                 plannedAttempt,
@@ -1411,7 +1435,7 @@ const decisionAfterCurrentSpecification = (
           targetLineageReadOperationIds.has(event.operationId)
       )
       if (currentTargetLineageRecord !== undefined) {
-        if (appliedContinueChoicePosition === undefined) return { transition }
+        if (appliedContinueChoicePosition === undefined) return { transition: continuationWithCurrentFacts }
         const currentExecutorEvidence = latestPlannedAttemptExecutorEvidence(
           records,
           plannedAttempt,
@@ -1424,7 +1448,7 @@ const decisionAfterCurrentSpecification = (
         }
         return currentExecutorEvidence.source._tag !== "CommandResponse" &&
           currentExecutorEvidence.report._tag === "SafelySuspended"
-          ? { transition }
+          ? { transition: continuationWithCurrentFacts }
           : {}
       }
       return {
@@ -1435,7 +1459,7 @@ const decisionAfterCurrentSpecification = (
               `continuation:${plannedAttempt.attemptId}:after:${currentWorktreeRecord.position}:target-lineage`
             ),
             plannedAttempt,
-            predecessorOperationIds: [currentWorktreeRecord.event.operationId]
+            predecessorOperationIds: [currentWorktreeEvent.operationId]
           }),
           plannedAttempt
         })
@@ -1453,14 +1477,8 @@ const decisionAfterCurrentSpecification = (
             /* v8 ignore next -- @preserve A recovered executor responsibility always has its durable plan operation. */
             ...(planOperationId === undefined ? [] : [planOperationId]),
             currentGraphObservation.event.operationId,
-            /* v8 ignore next -- @preserve This branch follows a narrowed task-tracker observation record. */
-            ...(currentSpecificationRecord.event._tag === "TaskTrackerFactsObserved"
-              ? [currentSpecificationRecord.event.operationId]
-              : []),
-            /* v8 ignore next -- @preserve This branch follows a narrowed task-tracker observation record. */
-            ...(currentClaimRecord.event._tag === "TaskTrackerFactsObserved"
-              ? [currentClaimRecord.event.operationId]
-              : [])
+            currentSpecificationRecord.event.operationId,
+            currentClaimRecord.event.operationId
           ]
         }),
         plannedAttempt
@@ -1477,10 +1495,7 @@ const decisionAfterCurrentSpecification = (
           /* v8 ignore next -- @preserve A recovered executor responsibility always has its durable plan operation. */
           ...(planOperationId === undefined ? [] : [planOperationId]),
           currentGraphObservation.event.operationId,
-          /* v8 ignore next -- @preserve The selecting predicate narrows this record to TaskTrackerFactsObserved. */
-          ...(currentSpecificationRecord.event._tag === "TaskTrackerFactsObserved"
-            ? [currentSpecificationRecord.event.operationId]
-            : [])
+          currentSpecificationRecord.event.operationId
         ]
       ),
       plannedAttempt
@@ -1536,11 +1551,11 @@ const continuationDecisionFor = (
     return decisionWithoutCurrentGraph(plannedAttempt, planOperationId, records, activationBaselinePosition)
   }
   const currentSpecificationRecord = records.findLast(
-    ({ event, position }) =>
-      event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-      event.observation.factFamily.taskId === plannedAttempt.taskId &&
-      position > currentGraphObservation.position
+    (record): record is TrackerFactsRecord =>
+      record.event._tag === "TaskTrackerFactsObserved" &&
+      record.event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      record.event.observation.factFamily.taskId === plannedAttempt.taskId &&
+      record.position > currentGraphObservation.position
   )
   if (currentSpecificationRecord !== undefined) {
     return decisionAfterCurrentSpecification(

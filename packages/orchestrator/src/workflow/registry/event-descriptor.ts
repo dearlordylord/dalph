@@ -52,7 +52,8 @@ import {
   completionClaimDeletionIntentRecordKey,
   completionClaimDeletionAttemptIntentRecordKey,
   completionClaimDeletedRecordKey,
-  integrationFinalitySettledRecordKey
+  integrationFinalitySettledRecordKey,
+  plannedAttemptContinuationAuthorizedRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
 import type {
@@ -240,6 +241,16 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
         event.plannedAttempt,
         undefined
       )
+    case "PlannedAttemptContinuationAuthorized":
+      return {
+        _tag: "GenericEventDescriptor",
+        expectedKey: plannedAttemptContinuationAuthorizedRecordKey(event.plannedAttempt.attemptId, [
+          event.witness.activeTaskContinuationRead.graphObservationOperationId,
+          event.witness.activeTaskContinuationRead.taskClaimObservationOperationId,
+          event.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
+          event.witness.worktreeObservationOperationId
+        ])
+      }
     case "PlannedAttemptExecutorCommandIntended":
       return plannedAttemptExecutorEvent(
         { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },

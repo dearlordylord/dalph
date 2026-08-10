@@ -19,6 +19,7 @@ import type {
   PlannedAttemptExecutorStateUnavailable,
   PlannedAttemptExecutorSuspensionLimitReached
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
+import type { PlannedAttemptContinuationAuthorizationRejected } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import type { PlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type {
   queueAcceptedResultIntegrationResponsibility,
@@ -172,6 +173,7 @@ export type DeliveryActionExecutionError =
   | PlannedAttemptExecutorResponsibilityContradiction
   | PlannedAttemptExecutorResponsibilityMissing
   | PlannedAttemptExecutorStateUnavailable
+  | PlannedAttemptContinuationAuthorizationRejected
   | PlannedAttemptExecutorSuspensionLimitReached
   | DeliveryRelationSourceError
   | ServiceFailure<InRunJournalService>

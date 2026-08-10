@@ -60,6 +60,13 @@ export const attemptPlanRecordKey = (attemptId: AttemptId): JournalRecordKey =>
 export const plannedAttemptExecutorWorkResponsibilityBeganRecordKey = (attemptId: AttemptId): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:executor-work-responsibility-began`)
 
+/** Stable key for one exact continuation authorization and its current-fact witnesses. */
+export const plannedAttemptContinuationAuthorizedRecordKey = (
+  attemptId: AttemptId,
+  witnessOperationIds: ReadonlyArray<OperationId>
+): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:continuation-authorized:${[...witnessOperationIds].toSorted().join(":")}`)
+
 export const plannedAttemptExecutorCommandIntendedRecordKey = (
   attemptId: AttemptId,
   ordinal: PlannedAttemptExecutorCommandOrdinal

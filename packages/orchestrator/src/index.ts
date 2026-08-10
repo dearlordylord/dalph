@@ -271,6 +271,8 @@ export {
   type PlannedAttemptProtocolControllerService
 } from "./workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
+export * from "./workflow/protocols/planned-attempt-continuation/events.js"
+export * from "./workflow/protocols/planned-attempt-continuation/protocol.js"
 export * from "./workflow/protocols/integration-admission/events.js"
 export * from "./workflow/protocols/integration-admission/protocol.js"
 export * from "./workflow/protocols/integration-candidate-construction/events.js"

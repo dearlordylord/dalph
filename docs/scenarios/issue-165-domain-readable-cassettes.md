@@ -70,21 +70,29 @@ before a terminal executor report is journaled.
 The maintainer runs the cassette. During the first activation, Dalph observes
 the graph, claims A, records its immutable planned attempt, prepares its exact
 worktree, and records that it has accepted responsibility for the executor
-work. At that semantic checkpoint, the cassette's
-`CoordinatorProcessDies` lifecycle event disposes the complete coordinator
-scope. The event belongs to the authored cassette and its execution harness; it
-is not appended to Dalph's workflow journal and is not supplied to a reducer as
-production history.
+work. At that exact semantic checkpoint, before the next executor report, the
+cassette's typed `CoordinatorProcessDies` lifecycle item immediately interrupts
+and disposes the complete coordinator scope on the same Effect fiber. The item
+belongs to the authored cassette and its execution harness; it is not appended
+to Dalph's workflow journal and is not supplied to a reducer as production
+history.
 
 The in-memory journal and the controlled tracker's claim and Git worktree facts
 survive into the next cassette activation. Because the milestone fake executor
 shares the coordinator process lifetime, no unjournaled executor report
 survives as evidence. The cassette constructs a new coordinator for the same
 run through the authoritative journal-backed startup-recovery composition.
-Dalph reconstructs the same planned attempt, rereads and verifies its exact
-current tracker claim and Git worktree, and asks the controlled executor to
-continue that same `(RunId, AttemptId)`. The executor reports for that attempt,
-and Dalph records the report through the production workflow.
+Dalph reconstructs the same planned attempt. Before contacting the executor,
+ordinary production protocols journal and perform one sufficiently fresh
+`ActiveTaskContinuationRead` for the current task facts and claim; when the
+complete graph content is unchanged, #164's compact unchanged-graph
+reconfirmation is the recorded observation. A separate fresh Git read proves
+the exact planned worktree. Dalph then records one generic durable continuation
+authorization that causally witnesses those observations and permits
+continuation of the existing executor-work responsibility. Missing, stale,
+later, or differently correlated witnesses fail before executor contact. The
+executor reports for that same `(RunId, AttemptId)`, and Dalph records the report
+through the production workflow.
 
 The coordinator death is harness-controlled, so real operating-system process
 qualification and an independently surviving executor do not apply. Pause and
@@ -105,7 +113,10 @@ Acceptance-test seams:
 
 - `runs one authored recovery cassette across coordinator death and startup recovery`
 - `does not journal the cassette coordinator-death lifecycle event`
-- `continues the same planned attempt only after current claim and worktree checks`
+- `records fresh active-task and exact-worktree observations before continuation`
+- `uses compact unchanged-graph reconfirmation when graph content is unchanged`
+- `records one generic continuation authorization witnessing the current observations`
+- `rejects missing, stale, later, and wrong-attempt witnesses before executor contact`
 
 The authored-cassette conformance law for every cassette A is:
 

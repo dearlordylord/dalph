@@ -13,6 +13,7 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../protocols/planned-attempt-executor-work/events.js"
+import { PlannedAttemptContinuationAuthorizedEvent } from "../protocols/planned-attempt-continuation/events.js"
 import { TaskTrackerFactsObservedEvent } from "../task-tracker-facts/observation.js"
 import { OperationId } from "../identity.js"
 import { WorkflowOperation as WorkflowOperationSchema } from "./operation.js"
@@ -191,7 +192,8 @@ export const WorkflowJournalEvent = Schema.Union([
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
   TargetLineageObservedEvent,
-  ResponsibilityJournalEvent
+  ResponsibilityJournalEvent,
+  PlannedAttemptContinuationAuthorizedEvent
 ]).check(
   Schema.makeFilter((event) =>
     event._tag !== "TargetLineageObserved" || event.observation.plannedBaseSha === event.plannedAttempt.baseSha

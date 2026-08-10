@@ -45,6 +45,7 @@ import type {
   CompletionClaimReplacementRequest
 } from "../../workflow/protocols/integration-finality/events.js"
 import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
+import type { PlannedAttemptContinuationWitness } from "../../workflow/protocols/planned-attempt-continuation/events.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
@@ -67,6 +68,8 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   ContinuePlannedAttemptExecutorWork: {
     readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
     readonly plannedAttempt: PlannedTaskAttempt
+    /** Fresh current-fact witnesses required by a recovered continuation route. */
+    readonly continuationAuthorization?: PlannedAttemptContinuationWitness
   }
   ObservePlannedAttemptContinuationGraph: {
     readonly operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type

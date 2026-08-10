@@ -64,7 +64,8 @@ import {
   TargetPromotionTerminalBasis,
   CompletionTaskClaim,
   CompletionClaimRequestOrdinal,
-  FreshCompletedTaskObservation
+  FreshCompletedTaskObservation,
+  PlannedAttemptContinuationWitness
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -279,6 +280,11 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     plannedAttempt: PlannedTaskAttempt
   },
   PlannedAttemptExecutorWorkResponsibilityBegan: { ...initiatedByCoordinator, plannedAttempt: PlannedTaskAttempt },
+  /** Internal journal authorization; it is not a workflow occurrence. */
+  PlannedAttemptContinuationAuthorized: {
+    plannedAttempt: PlannedTaskAttempt,
+    witness: PlannedAttemptContinuationWitness
+  },
   PlannedAttemptWorktreeObserved: {
     ...nonActionOccurrence,
     observation: PlannedAttemptWorktreeObservation,

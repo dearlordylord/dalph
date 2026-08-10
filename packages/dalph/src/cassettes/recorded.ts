@@ -17,6 +17,7 @@ import {
   IntegrationCandidateContinuationLimitReachedEvent,
   integrationCandidateCorrelationEquals,
   JournalPosition,
+  PlannedAttemptContinuationAuthorizedEvent,
   TargetVerificationCorrelationContradictedEvent,
   TargetVerificationEvidenceSealedEvent,
   TargetVerificationIntendedEvent,
@@ -591,6 +592,7 @@ const recordTaskBoundaryEntry = (
         | "IntegrationFinalitySettled"
         | "TaskTrackerFactsObserved"
         | "TaskTrackerReadIntentRecorded"
+        | "PlannedAttemptContinuationAuthorized"
         | "TaskWorkCapacityChanged"
         | "WorkflowRunBegan"
         | "WorkflowRunTerminated"
@@ -728,6 +730,13 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
     event._tag === "PlannedAttemptExecutorWorkReported"
   ) {
     return recordExecutorEntry(event)
+  }
+  if (event._tag === "PlannedAttemptContinuationAuthorized") {
+    return {
+      _tag: "PlannedAttemptContinuationAuthorized",
+      plannedAttempt: event.plannedAttempt,
+      witness: event.witness
+    }
   }
   return recordTaskBoundaryEntry(event)
 }
@@ -1211,6 +1220,13 @@ const eventForRecordedEntry = (
   index: number,
   runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent => {
+  if (entry._tag === "PlannedAttemptContinuationAuthorized") {
+    return PlannedAttemptContinuationAuthorizedEvent.make({
+      plannedAttempt: entry.plannedAttempt,
+      version: workflowJournalEventVersion,
+      witness: entry.witness
+    })
+  }
   if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
   if (isRecordedOperatorDirectionEntry(entry)) return eventForRecordedOperatorDirectionEntry(entry, runId)
   if (isRecordedAttemptStopEntry(entry)) return eventForRecordedAttemptStopEntry(entry)
@@ -1431,6 +1447,7 @@ const lyricForTaskBoundaryEntry = (
     | RecordedTargetVerificationEntry
     | RecordedTargetPromotionEntry
     | RecordedIntegrationFinalityEntry
+    | { readonly _tag: "PlannedAttemptContinuationAuthorized" }
     | { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
 ): string => {
@@ -1474,6 +1491,9 @@ const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string => {
   if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)
   if (isRecordedTrackerEntry(entry)) return lyricForTrackerEntry(entry)
   if (isRecordedRunEntry(entry)) return lyricForRunEntry(entry)
+  if (entry._tag === "PlannedAttemptContinuationAuthorized") {
+    return `Dalph authorized continuation of planned attempt ${entry.plannedAttempt.attemptId} after four current observations.`
+  }
   return lyricForTaskBoundaryEntry(entry)
 }
 

@@ -410,6 +410,7 @@ const nonProjectedJournalEventKinds = {
   TargetPromotionNonConvergence: true,
   TargetPromotionObservedSuccess: true,
   TargetPromotionStale: true,
+  PlannedAttemptContinuationAuthorized: true,
   CompletionClaimReplacementIntended: true,
   CompletionClaimReplacementAttemptIntended: true,
   CompletionClaimReplaced: true,

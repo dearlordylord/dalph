@@ -137,6 +137,10 @@ const encodedDecision = (decision: CassetteDecision): string =>
 export const controlledTrace = (cursor: StoryCursor): WorkflowTrace["Service"] =>
   WorkflowTrace.of({
     emit: Effect.fn("AuthoredCassette.WorkflowTrace.emit")(function* (item) {
+      // Stabilization performs its final tracker read outside the delivery
+      // action executor. Its operation-selection trace is the remaining
+      // same-fiber action boundary for a lifecycle control.
+      if (item._tag === "OperationSelected") yield* cursor.pauseAtCoordinatorProcessDeath
       const actual = actualDecision(item)
       if (actual === undefined) return
       const expected = yield* cursor.consumeDalphSelection.pipe(

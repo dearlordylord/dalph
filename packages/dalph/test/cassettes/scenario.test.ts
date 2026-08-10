@@ -20,6 +20,7 @@ import {
 } from "@dalph/contracts"
 import {
   AttemptWorktreeLost,
+  ActiveTaskContinuationRead,
   CandidateContinuationLimit,
   CandidateCorrectionLimit,
   controlledTrackerMutationLayerFrom,
@@ -45,6 +46,7 @@ import {
   IntegrationSessionId,
   IntegrationCandidateAgentReportOrdinal,
   IntegrationCandidateGitValidationAttemptOrdinal,
+  InRunJournal,
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
   makeCompleteTaskTrackerFactsObserved,
@@ -59,7 +61,10 @@ import {
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptContinuationAuthorizedEvent,
+  PlannedAttemptContinuationWitness,
   PlannedWorktreeReady,
+  authorizePlannedAttemptContinuation,
   projectWorkflowOccurrences,
   projectTrackerSnapshot,
   reduceWorkflowJournalHistory,
@@ -102,6 +107,7 @@ import {
   changedAttemptStopsWithForeignClaimAuthoredCassette,
   compareRecordedCassetteCheckpoints,
   compatibleTargetAdvanceContinuesAuthoredCassette,
+  coordinatorProcessDeathContinuesAuthoredCassette,
   contractedCapacityRetainsTwoAttemptsAuthoredCassette,
   dependentTasksCompleteInOneRunAuthoredCassette,
   foldRecordedCassette,
@@ -4611,6 +4617,479 @@ it.effect("records compatible target advancement and isolates a proven target re
   })
 )
 
+it.effect("reconstructs the same Run and attempt after typed cassette death before executor contact", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(coordinatorProcessDeathContinuesAuthoredCassette)
+    expect(run.activationOrdinals).toEqual([1, 2])
+    expect(run.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }])
+    const responsibility = run.records.find(
+      ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+    )
+    const authorization = run.records.find(
+      (
+        record
+      ): record is JournalRecord & {
+        readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptContinuationAuthorized" }>
+      } => record.event._tag === "PlannedAttemptContinuationAuthorized"
+    )
+    const firstCommand = run.records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+    expect(responsibility).toBeDefined()
+    expect(authorization).toBeDefined()
+    expect(firstCommand).toBeDefined()
+    expect(responsibility?.position).toBeLessThan(authorization?.position ?? 0)
+    expect(authorization?.position).toBeLessThan(firstCommand?.position ?? 0)
+    if (authorization === undefined) return yield* Effect.die("missing continuation authorization")
+    const graph = run.records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.operationId === authorization.event.witness.activeTaskContinuationRead.graphObservationOperationId
+    )
+    expect(graph?.event._tag === "TaskTrackerFactsObserved" ? graph.event.observation._tag : undefined).toBe(
+      "UnchangedTaskTrackerFactsReconfirmed"
+    )
+    expect(run.records.filter(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized")).toHaveLength(1)
+    const productionEventTags: ReadonlyArray<string> = run.records.map(({ event }) => event._tag)
+    expect(productionEventTags).not.toContain("CoordinatorProcessDies")
+    const occurrences = yield* projectWorkflowOccurrences(run.records)
+    expect(occurrences.occurrences.map(({ _tag }) => _tag)).not.toContain("PlannedAttemptContinuationAuthorized")
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(recorded.entries.map(({ _tag }) => _tag)).toContain("PlannedAttemptContinuationAuthorized")
+    expectRecordedRoundTrip(run.records, recorded)
+    const reports = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report.correlation] : []
+    )
+    expect(new Set(reports.map(({ runId }) => runId)).size).toBe(1)
+    expect(new Set(reports.map(({ attemptId }) => attemptId))).toEqual(new Set(["attempt:A:0"]))
+  })
+)
+
+it.effect("rejects missing, stale, later, and wrong-attempt continuation witnesses before executor contact", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(coordinatorProcessDeathContinuesAuthoredCassette)
+    const plan = run.records.find(({ event }) => event._tag === "TaskAttemptPlanned")
+    const authorization = run.records.find(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized")
+    if (
+      plan?.event._tag !== "TaskAttemptPlanned" ||
+      authorization?.event._tag !== "PlannedAttemptContinuationAuthorized"
+    ) {
+      return yield* Effect.die("continuation cassette did not produce its plan and authorization")
+    }
+    const plannedAttempt = plan.event.operation.plannedAttempt
+    const witness = authorization.event.witness
+    const firstCommandIndex = run.records.findIndex(
+      ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
+    )
+    const preCommandRecords = run.records.slice(0, firstCommandIndex)
+    type TaskFactsRecord = JournalRecord & {
+      readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>
+    }
+    type WorktreeRecord = JournalRecord & {
+      readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptWorktreeObserved" }>
+    }
+    const journalFor = (records: ReadonlyArray<JournalRecord>) =>
+      InRunJournal.of({
+        append: () => Effect.die("continuation authorization rejection test must not append"),
+        read: () => Effect.succeed(records)
+      })
+    const rejectWith = (records: ReadonlyArray<JournalRecord>, candidate: typeof witness) =>
+      authorizePlannedAttemptContinuation(plannedAttempt, candidate).pipe(
+        Effect.provideService(InRunJournal, journalFor(records)),
+        Effect.flip
+      )
+    const replaceObservation = (
+      records: ReadonlyArray<JournalRecord>,
+      operationId: OperationId,
+      observation: TaskTrackerFactsObservation
+    ) =>
+      records.map((record) =>
+        record.event._tag === "TaskTrackerFactsObserved" && record.event.operationId === operationId
+          ? { ...record, event: TaskTrackerFactsObservedEvent.make({ ...record.event, observation }) }
+          : record
+      )
+    const replacePosition = (
+      records: ReadonlyArray<JournalRecord>,
+      operationId: OperationId,
+      position: JournalPosition
+    ) =>
+      records.map((record) =>
+        record.event._tag === "TaskTrackerFactsObserved" && record.event.operationId === operationId
+          ? { ...record, position }
+          : record
+      )
+    const claimOutcome = preCommandRecords.find(
+      (record): record is TaskFactsRecord =>
+        record.event._tag === "TaskTrackerFactsObserved" &&
+        record.event.operationId === witness.activeTaskContinuationRead.taskClaimObservationOperationId
+    )
+    if (claimOutcome === undefined) {
+      return yield* Effect.die("continuation cassette did not produce claim outcome")
+    }
+    const claimObservation = claimOutcome.event.observation
+    if (claimObservation._tag !== "FocusedTaskClaimFacts") {
+      return yield* Effect.die("continuation cassette did not produce focused claim facts")
+    }
+    const claimObservationFor = (operationId: OperationId) => ({
+      ...claimObservation,
+      freshness: { ...claimObservation.freshness, operationId },
+      operationId
+    })
+    const graphOutcome = preCommandRecords.find(
+      (record): record is TaskFactsRecord =>
+        record.event._tag === "TaskTrackerFactsObserved" &&
+        record.event.operationId === witness.activeTaskContinuationRead.graphObservationOperationId
+    )
+    if (graphOutcome === undefined) {
+      return yield* Effect.die("continuation cassette did not produce graph outcome")
+    }
+    const idempotent = yield* authorizePlannedAttemptContinuation(plannedAttempt, witness).pipe(
+      Effect.provideService(InRunJournal, journalFor(preCommandRecords))
+    )
+    expect(idempotent.key).toBe(authorization.key)
+
+    const missingResponsibility = yield* rejectWith(
+      preCommandRecords.filter(({ event }) => event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan"),
+      witness
+    )
+    expect(missingResponsibility).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "MissingWitness",
+      witness: "ActiveTaskContinuationGraph"
+    })
+
+    expect(
+      Exit.isFailure(
+        yield* Schema.decodeUnknownEffect(ActiveTaskContinuationRead)({
+          graphObservationOperationId: OperationId.make("duplicate-continuation-observation"),
+          taskClaimObservationOperationId: OperationId.make("duplicate-continuation-observation"),
+          taskWorkSpecificationObservationOperationId: OperationId.make("distinct-continuation-observation")
+        }).pipe(Effect.exit)
+      )
+    ).toBe(true)
+    expect(
+      Exit.isFailure(
+        yield* Schema.decodeUnknownEffect(PlannedAttemptContinuationWitness)({
+          activeTaskContinuationRead: {
+            graphObservationOperationId: OperationId.make("duplicate-witness-observation"),
+            taskClaimObservationOperationId: OperationId.make("distinct-witness-claim"),
+            taskWorkSpecificationObservationOperationId: OperationId.make("distinct-witness-specification")
+          },
+          worktreeObservationOperationId: OperationId.make("duplicate-witness-observation")
+        }).pipe(Effect.exit)
+      )
+    ).toBe(true)
+
+    const missing = yield* rejectWith(preCommandRecords, {
+      ...witness,
+      activeTaskContinuationRead: {
+        ...witness.activeTaskContinuationRead,
+        graphObservationOperationId: OperationId.make("missing-continuation-graph")
+      }
+    })
+    expect(missing).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "MissingWitness",
+      witness: "ActiveTaskContinuationGraph"
+    })
+
+    const missingSpecification = yield* rejectWith(preCommandRecords, {
+      ...witness,
+      activeTaskContinuationRead: {
+        ...witness.activeTaskContinuationRead,
+        taskWorkSpecificationObservationOperationId: OperationId.make("missing-continuation-specification")
+      }
+    })
+    expect(missingSpecification).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "MissingWitness",
+      witness: "ActiveTaskContinuationSpecification"
+    })
+
+    const specificationOutcome = preCommandRecords.find(
+      (record): record is TaskFactsRecord =>
+        record.event._tag === "TaskTrackerFactsObserved" &&
+        record.event.operationId === witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
+    )
+    if (specificationOutcome === undefined) {
+      return yield* Effect.die("continuation cassette did not produce specification outcome")
+    }
+    const staleSpecification = yield* rejectWith(
+      replacePosition(preCommandRecords, specificationOutcome.event.operationId, graphOutcome.position),
+      witness
+    )
+    expect(staleSpecification).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "StaleWitness",
+      witness: "ActiveTaskContinuationSpecification"
+    })
+    const wrongSpecification = yield* rejectWith(
+      replaceObservation(
+        preCommandRecords,
+        specificationOutcome.event.operationId,
+        claimObservationFor(specificationOutcome.event.operationId)
+      ),
+      witness
+    )
+    expect(wrongSpecification).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "WrongAttemptWitness",
+      witness: "ActiveTaskContinuationSpecification"
+    })
+
+    const missingClaim = yield* rejectWith(preCommandRecords, {
+      ...witness,
+      activeTaskContinuationRead: {
+        ...witness.activeTaskContinuationRead,
+        taskClaimObservationOperationId: OperationId.make("missing-continuation-claim")
+      }
+    })
+    expect(missingClaim).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "MissingWitness",
+      witness: "ActiveTaskContinuationClaim"
+    })
+    const staleClaim = yield* rejectWith(
+      replacePosition(preCommandRecords, claimOutcome.event.operationId, specificationOutcome.position),
+      witness
+    )
+    expect(staleClaim).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "StaleWitness",
+      witness: "ActiveTaskContinuationClaim"
+    })
+    const wrongClaim = yield* rejectWith(
+      replaceObservation(preCommandRecords, claimOutcome.event.operationId, {
+        ...claimObservation,
+        observation: UnclaimedTask.make({ taskId: plannedAttempt.taskId })
+      }),
+      witness
+    )
+    expect(wrongClaim).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "WrongAttemptWitness",
+      witness: "ActiveTaskContinuationClaim"
+    })
+
+    const missingWorktree = yield* rejectWith(preCommandRecords, {
+      ...witness,
+      worktreeObservationOperationId: OperationId.make("missing-continuation-worktree")
+    })
+    expect(missingWorktree).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "MissingWitness",
+      witness: "PlannedAttemptWorktree"
+    })
+    const worktreeOutcome = preCommandRecords.find(
+      (record): record is WorktreeRecord => record.event._tag === "PlannedAttemptWorktreeObserved"
+    )
+    if (worktreeOutcome === undefined) {
+      return yield* Effect.die("continuation cassette did not produce worktree outcome")
+    }
+    const staleWorktree = yield* rejectWith(
+      preCommandRecords.map((record) =>
+        record.event._tag === "PlannedAttemptWorktreeObserved" &&
+        record.event.operationId === worktreeOutcome.event.operationId
+          ? { ...record, position: claimOutcome.position }
+          : record
+      ),
+      witness
+    )
+    expect(staleWorktree).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "StaleWitness",
+      witness: "PlannedAttemptWorktree"
+    })
+
+    const wrongGraph = yield* rejectWith(
+      replaceObservation(
+        preCommandRecords,
+        graphOutcome.event.operationId,
+        claimObservationFor(graphOutcome.event.operationId)
+      ),
+      witness
+    )
+    expect(wrongGraph).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "WrongAttemptWitness",
+      witness: "ActiveTaskContinuationGraph"
+    })
+
+    const stale = yield* rejectWith(run.records, witness)
+    expect(stale).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "StaleWitness",
+      witness: "ActiveTaskContinuationGraph"
+    })
+
+    const laterRecords = preCommandRecords.map((record) =>
+      record.event._tag === "TaskTrackerReadIntentRecorded" &&
+      record.event.operation._tag === "ReadTrackerGraph" &&
+      record.event.operation.operationId === witness.activeTaskContinuationRead.graphObservationOperationId
+        ? { ...record, position: JournalPosition.make((graphOutcome.position as number) + 1) }
+        : record
+    )
+    const later = yield* rejectWith(laterRecords, witness)
+    expect(later).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "LaterWitness",
+      witness: "ActiveTaskContinuationGraph"
+    })
+
+    const wrongAttempt = { ...plannedAttempt, attemptId: AttemptId.make("attempt:wrong:0") }
+    const wrongAttemptRecords = preCommandRecords.map((record) =>
+      record.event._tag === "GitReadIntentRecorded" &&
+      record.event.operation._tag === "ReadTaskWorktree" &&
+      record.event.operation.operationId === witness.worktreeObservationOperationId
+        ? {
+            ...record,
+            event: { ...record.event, operation: { ...record.event.operation, plannedAttempt: wrongAttempt } }
+          }
+        : record
+    )
+    const wrong = yield* rejectWith(wrongAttemptRecords, witness)
+    expect(wrong).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "WrongAttemptWitness",
+      witness: "PlannedAttemptWorktree"
+    })
+  })
+)
+
+it.effect("rejects forged continuation authorization during journal reconstruction", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(coordinatorProcessDeathContinuesAuthoredCassette)
+    const authorization = run.records.find(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized")
+    if (authorization?.event._tag !== "PlannedAttemptContinuationAuthorized") {
+      return yield* Effect.die("continuation cassette did not produce authorization")
+    }
+    const authorizationEvent = authorization.event
+    type AuthorizationEvent = Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptContinuationAuthorized" }>
+    const rewriteAuthorization = (
+      records: ReadonlyArray<JournalRecord>,
+      rewrite: (event: AuthorizationEvent) => AuthorizationEvent
+    ) =>
+      records.map((record) =>
+        record.event._tag === "PlannedAttemptContinuationAuthorized"
+          ? { ...record, event: PlannedAttemptContinuationAuthorizedEvent.make(rewrite(record.event)) }
+          : record
+      )
+    const replaceTrackerObservation = (
+      records: ReadonlyArray<JournalRecord>,
+      operationId: OperationId,
+      observation: TaskTrackerFactsObservation
+    ) =>
+      records.map((record) =>
+        record.event._tag === "TaskTrackerFactsObserved" && record.event.operationId === operationId
+          ? { ...record, event: TaskTrackerFactsObservedEvent.make({ ...record.event, observation }) }
+          : record
+      )
+    const claimRecord = run.records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.operationId === authorizationEvent.witness.activeTaskContinuationRead.taskClaimObservationOperationId
+    )
+    const graphRecord = run.records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.operationId === authorizationEvent.witness.activeTaskContinuationRead.graphObservationOperationId
+    )
+    const specificationRecord = run.records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.operationId ===
+          authorizationEvent.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
+    )
+    const worktreeRecord = run.records.find(({ event }) => event._tag === "PlannedAttemptWorktreeObserved")
+    if (
+      claimRecord?.event._tag !== "TaskTrackerFactsObserved" ||
+      claimRecord.event.observation._tag !== "FocusedTaskClaimFacts" ||
+      graphRecord?.event._tag !== "TaskTrackerFactsObserved" ||
+      specificationRecord?.event._tag !== "TaskTrackerFactsObserved" ||
+      worktreeRecord?.event._tag !== "PlannedAttemptWorktreeObserved"
+    ) {
+      return yield* Effect.die("continuation cassette did not produce all authorization witnesses")
+    }
+    const claimObservation = claimRecord.event.observation
+    const claimObservationFor = (operationId: OperationId) => ({
+      ...claimObservation,
+      freshness: { ...claimObservation.freshness, operationId },
+      operationId
+    })
+    const historyOf = (records: ReadonlyArray<JournalRecord>) => reduceWorkflowJournalHistory(run.runId, records)
+    const expectInvalid = (records: ReadonlyArray<JournalRecord>) =>
+      expect(historyOf(records)._tag).toBe("InvalidWorkflowJournalHistory")
+
+    expectInvalid(
+      rewriteAuthorization(run.records, (event) => ({
+        ...event,
+        witness: {
+          activeTaskContinuationRead: {
+            graphObservationOperationId: OperationId.make("missing-history-graph"),
+            taskClaimObservationOperationId: OperationId.make("missing-history-claim"),
+            taskWorkSpecificationObservationOperationId: OperationId.make("missing-history-specification")
+          },
+          worktreeObservationOperationId: OperationId.make("missing-history-worktree")
+        }
+      }))
+    )
+    expectInvalid(
+      rewriteAuthorization(run.records, (event) => ({
+        ...event,
+        plannedAttempt: { ...event.plannedAttempt, runId: RunId.make("foreign-history-run") }
+      }))
+    )
+    expectInvalid(
+      run.records.map((record) =>
+        record.event._tag === "PlannedAttemptContinuationAuthorized"
+          ? { ...record, position: JournalPosition.make(run.records.length + 1) }
+          : record
+      )
+    )
+    expectInvalid(
+      run.records.map((record) =>
+        record.event._tag === "TaskTrackerReadIntentRecorded" &&
+        record.event.operation._tag === "ReadTrackerGraph" &&
+        record.event.operation.operationId ===
+          authorizationEvent.witness.activeTaskContinuationRead.graphObservationOperationId
+          ? { ...record, position: JournalPosition.make((graphRecord.position as number) + 1) }
+          : record
+      )
+    )
+    expectInvalid(
+      replaceTrackerObservation(
+        run.records,
+        graphRecord.event.operationId,
+        claimObservationFor(graphRecord.event.operationId)
+      )
+    )
+    expectInvalid(
+      replaceTrackerObservation(
+        run.records,
+        specificationRecord.event.operationId,
+        claimObservationFor(specificationRecord.event.operationId)
+      )
+    )
+    expectInvalid(
+      replaceTrackerObservation(run.records, claimRecord.event.operationId, {
+        ...claimRecord.event.observation,
+        observation: UnclaimedTask.make({ taskId: claimRecord.event.observation.coverage.taskId })
+      })
+    )
+    expectInvalid(
+      run.records.map((record) =>
+        record.event._tag === "PlannedAttemptWorktreeObserved"
+          ? {
+              ...record,
+              event: {
+                ...record.event,
+                observation: AttemptWorktreeLost.make({ plannedAttempt: authorizationEvent.plannedAttempt })
+              }
+            }
+          : record
+      )
+    )
+  })
+)
+
 it.effect("fails typed expected-behavior assertions and renders the applied capacity item", () =>
   Effect.gen(function* () {
     const wrongOutcomes = {
@@ -5222,6 +5701,7 @@ it.effect(
         GitReadInitiated: true,
         IntegrationResponsibilityBegan: true,
         IntegrationStarted: true,
+        PlannedAttemptContinuationAuthorized: true,
         IntegrationCandidateAgentReported: true,
         IntegrationCandidateConstructed: true,
         IntegrationCandidateConstructionIntended: true,
@@ -5297,14 +5777,17 @@ it.effect(
         runAuthoredScenarioCassette(changedAttemptStopReleaseResponseLostAuthoredCassette),
         runAuthoredScenarioCassette(changedAttemptStopsWithForeignClaimAuthoredCassette)
       ])
-      const [stoppageRecorded, noReleaseRecorded, foreignNoReleaseRecorded] = yield* Effect.all([
+      const continuationRun = yield* runAuthoredScenarioCassette(coordinatorProcessDeathContinuesAuthoredCassette)
+      const [stoppageRecorded, noReleaseRecorded, foreignNoReleaseRecorded, continuationRecorded] = yield* Effect.all([
         projectRecordedCassette(stoppageRun.records),
         projectRecordedCassette(noReleaseRun.records),
-        projectRecordedCassette(foreignNoReleaseRun.records)
+        projectRecordedCassette(foreignNoReleaseRun.records),
+        projectRecordedCassette(continuationRun.records)
       ])
       expectRecordedRoundTrip(stoppageRun.records, stoppageRecorded)
       expectRecordedRoundTrip(noReleaseRun.records, noReleaseRecorded)
       expectRecordedRoundTrip(foreignNoReleaseRun.records, foreignNoReleaseRecorded)
+      expectRecordedRoundTrip(continuationRun.records, continuationRecorded)
       const [renamedStoppage, renamedNoRelease, renamedForeignNoRelease] = yield* Effect.all([
         renameRecordedCassette(stoppageRecorded, renaming),
         renameRecordedCassette(noReleaseRecorded, renaming),
@@ -5400,6 +5883,7 @@ it.effect(
             ...stoppageRecorded.entries,
             ...noReleaseRecorded.entries,
             ...foreignNoReleaseRecorded.entries,
+            ...continuationRecorded.entries,
             ...executorObservationVariants.entries
           ].map(({ _tag }) => _tag)
         )

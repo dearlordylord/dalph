@@ -5,6 +5,7 @@ import {
   observePlannedAttemptExecutorStateWithPermit,
   requestPlannedAttemptExecutorSuspensionWithPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
+import { authorizePlannedAttemptContinuation } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import {
   advanceAttemptStoppageWithPermit,
   observeAttemptStoppageExecutorWithPermit,
@@ -67,7 +68,10 @@ const executeExecutorTransition = Effect.fn("DeliveryAction.executeExecutorTrans
   }
   const report = yield* transition._tag === "ContinuePlannedAttemptExecutorWork"
     ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
-        continuePlannedAttemptExecutorWorkWithPermit(permit, transition.plannedAttempt)
+        (transition.continuationAuthorization === undefined
+          ? Effect.void
+          : authorizePlannedAttemptContinuation(transition.plannedAttempt, transition.continuationAuthorization)
+        ).pipe(Effect.andThen(continuePlannedAttemptExecutorWorkWithPermit(permit, transition.plannedAttempt)))
       )
     : transition._tag === "ObservePlannedAttemptContinuationExecutor"
       ? lease.withPlannedAttemptProtocol(correlation, (permit) =>

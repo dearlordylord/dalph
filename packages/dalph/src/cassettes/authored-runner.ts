@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- One chronological adapter owns activation, pause, crash, candidate, and terminal story boundaries. */
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, type Result, Schema, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, type Result, Schema, Stream } from "effect"
 import {
   type AttemptId,
   GitCommitSha,
@@ -40,6 +40,7 @@ import {
   IntegrationCandidateResourceLocator,
   IntegrationCandidateGit,
   IntegrationCandidateGitReadFailure,
+  InRunJournal,
   GitWorktree,
   gitTargetLineageTestLayer,
   gitWorktreeTestLayer,
@@ -83,6 +84,7 @@ import {
   type TrackerTask,
   TrackerAdapterReadError,
   type DeliveryActionExecutorService,
+  beginPlannedAttemptExecutorResponsibility,
   WorkflowInterpreter,
   WorkflowTrace
 } from "@dalph/orchestrator"
@@ -96,7 +98,7 @@ import {
   type AuthoredScenarioCassette as ScenarioCassette
 } from "./authored-domain.js"
 import { controlledExecutorLayer, controlledTrace, controlledTrackerGraphReaderLayer } from "./authored-adapters.js"
-import { makeStoryCursor, type StoryCursor } from "./authored-cursor.js"
+import { AuthoredCoordinatorProcessDies, makeStoryCursor, type StoryCursor } from "./authored-cursor.js"
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
@@ -678,6 +680,13 @@ const settleCoordinatorActivationReturn = <E>(cursor: StoryCursor, exit: Exit.Ex
       )
     }
   })
+
+/** The authored death control is a typed defect, never a production failure. */
+const isAuthoredCoordinatorProcessDeath = (exit: Exit.Exit<unknown, unknown>): boolean =>
+  Exit.isFailure(exit) &&
+  exit.cause.reasons.some(
+    (reason) => Cause.isDieReason(reason) && reason.defect instanceof AuthoredCoordinatorProcessDies
+  )
 
 type TargetVerificationStoryResult = Extract<
   AuthoredCassetteStoryItem,
@@ -1280,7 +1289,6 @@ const runAuthoredScenarioCassetteWith = (request: {
               })
             }).pipe(Effect.orDie)
             const drivers: Partial<Record<AuthoredCassetteStoryItem["_tag"], Effect.Effect<void>>> = {
-              CoordinatorProcessDies: cursor.pauseAtCoordinatorProcessDeath,
               OperatorContinuesAttempt: driveAttemptChoice,
               OperatorAppliesControlDirection: driveControlDirection,
               OperatorDirectsTaskClaimReacquisition: driveClaimReacquisition,
@@ -1302,10 +1310,33 @@ const runAuthoredScenarioCassetteWith = (request: {
       const controlledExecutorFactory = (factoryRunId: RunId, factoryTarget: typeof command.target) =>
         Effect.gen(function* () {
           const live = yield* makeLiveDeliveryActionExecutor(factoryRunId, factoryTarget)
+          const journal = yield* InRunJournal
           return {
             ...live,
             execute: (action, lease) =>
               Effect.gen(function* () {
+                // The first accepted executor action durably establishes the
+                // existing responsibility before its cassette death item is
+                // claimed. The next activation can therefore reconstruct the
+                // same attempt while no command has contacted the executor.
+                const plannedAttempt =
+                  action._tag === "IdentityFreeAction"
+                    ? action.proposal.route._tag === "FreshExecutorWorkflowRoute"
+                      ? action.proposal.route.step.plannedAttempt
+                      : action.proposal.route.transition._tag === "ContinuePlannedAttemptExecutorWork"
+                        ? action.proposal.route.transition.plannedAttempt
+                        : undefined
+                    : undefined
+                if (plannedAttempt !== undefined) {
+                  yield* beginPlannedAttemptExecutorResponsibility(plannedAttempt).pipe(
+                    Effect.provideService(InRunJournal, journal)
+                  )
+                }
+                // Every authored action boundary reaches the next lifecycle
+                // item in order. A death item therefore interrupts that exact
+                // action fiber, even when the next action is a tracker or Git
+                // read rather than executor work.
+                yield* cursor.pauseAtCoordinatorProcessDeath
                 const hold = yield* cursor.consumeAdmittedContinuationExecutorIntentHold
                 if (Option.isSome(hold)) {
                   const expected = hold.value
@@ -1370,17 +1401,14 @@ const runAuthoredScenarioCassetteWith = (request: {
         let consumedLifecycleBoundaries = 0
         let activationOrdinal = firstActivationOrdinal
         while (consumedLifecycleBoundaries < coordinatorLifecycleBoundaryCount) {
-          const boundary = yield* Effect.raceFirst(
-            cursor.awaitCoordinatorProcessDeath.pipe(Effect.as({ _tag: "CoordinatorProcessDied" as const })),
-            Fiber.await(coordinator).pipe(
-              Effect.map((exit) => ({ _tag: "CoordinatorActivationReturned" as const, exit }))
-            )
-          )
+          const boundary = { _tag: "CoordinatorActivationReturned" as const, exit: yield* Fiber.await(coordinator) }
           consumedLifecycleBoundaries += 1
-          if (boundary._tag === "CoordinatorActivationReturned") {
-            yield* settleCoordinatorActivationReturn(cursor, boundary.exit)
+          if (isAuthoredCoordinatorProcessDeath(boundary.exit)) {
+            // The exact executor-request fiber raised the typed cassette
+            // control. Its scoped activation has already unwound; do not
+            // synthesize an interrupt, journal event, or recovery attempt.
           } else {
-            yield* Fiber.interrupt(coordinator)
+            yield* settleCoordinatorActivationReturn(cursor, boundary.exit)
           }
           if (yield* cursor.atTerminalAssertions) break
           activationOrdinal = AuthoredRunActivationOrdinal.make(activationOrdinal + 1)

@@ -323,6 +323,16 @@ prove adoption of an independently surviving production session. See
 [planned-attempt-executor-boundary.md](scenarios/planned-attempt-executor-boundary.md)
 and [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md).
 
+When an activation ends after responsibility is durable but before the next
+executor report, the next activation reconstructs that exact responsibility
+through the ordinary Run entry. It rereads current tracker facts and the exact
+planned worktree through their journaled protocols, then records one generic
+continuation authorization naming those observations before executor contact.
+The authorization is an internal non-projected fact: it does not become a
+recovery occurrence, replacement attempt, or new executor identity. A typed
+cassette lifecycle control may dispose the activation at that same boundary,
+but it is not part of this production event vocabulary.
+
 ## Accepted-Result Integration Admission
 
 An accepted executor result does not complete its tracker task. Dalph first
