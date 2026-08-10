@@ -4718,6 +4718,17 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
           ? { ...record, position }
           : record
       )
+    const replaceReadIntentPosition = (
+      records: ReadonlyArray<JournalRecord>,
+      operationId: OperationId,
+      position: JournalPosition
+    ) =>
+      records.map((record) =>
+        (record.event._tag === "TaskTrackerReadIntentRecorded" || record.event._tag === "GitReadIntentRecorded") &&
+        record.event.operation.operationId === operationId
+          ? { ...record, position }
+          : record
+      )
     const replaceTrackerReadTarget = (records: ReadonlyArray<JournalRecord>, operationId: OperationId) =>
       records.map((record) =>
         record.event._tag === "TaskTrackerReadIntentRecorded" && record.event.operation.operationId === operationId
@@ -4835,6 +4846,19 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       reason: "StaleWitness",
       witness: "ActiveTaskContinuationSpecification"
     })
+    const laterSpecification = yield* rejectWith(
+      replaceReadIntentPosition(
+        preCommandRecords,
+        specificationOutcome.event.operationId,
+        JournalPosition.make((specificationOutcome.position as number) + 1)
+      ),
+      witness
+    )
+    expect(laterSpecification).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "LaterWitness",
+      witness: "ActiveTaskContinuationSpecification"
+    })
     const wrongSpecification = yield* rejectWith(
       replaceObservation(
         preCommandRecords,
@@ -4880,6 +4904,19 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
     expect(staleClaim).toMatchObject({
       _tag: "PlannedAttemptContinuationAuthorizationRejected",
       reason: "StaleWitness",
+      witness: "ActiveTaskContinuationClaim"
+    })
+    const laterClaim = yield* rejectWith(
+      replaceReadIntentPosition(
+        preCommandRecords,
+        claimOutcome.event.operationId,
+        JournalPosition.make((claimOutcome.position as number) + 1)
+      ),
+      witness
+    )
+    expect(laterClaim).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "LaterWitness",
       witness: "ActiveTaskContinuationClaim"
     })
     const wrongClaim = yield* rejectWith(
@@ -4933,6 +4970,19 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       reason: "StaleWitness",
       witness: "PlannedAttemptWorktree"
     })
+    const laterWorktree = yield* rejectWith(
+      replaceReadIntentPosition(
+        preCommandRecords,
+        worktreeOutcome.event.operationId,
+        JournalPosition.make((worktreeOutcome.position as number) + 1)
+      ),
+      witness
+    )
+    expect(laterWorktree).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "LaterWitness",
+      witness: "PlannedAttemptWorktree"
+    })
 
     const wrongGraph = yield* rejectWith(
       replaceObservation(
@@ -4955,12 +5005,10 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness: "ActiveTaskContinuationGraph"
     })
 
-    const laterRecords = preCommandRecords.map((record) =>
-      record.event._tag === "TaskTrackerReadIntentRecorded" &&
-      record.event.operation._tag === "ReadTrackerGraph" &&
-      record.event.operation.operationId === witness.activeTaskContinuationRead.graphObservationOperationId
-        ? { ...record, position: JournalPosition.make((graphOutcome.position as number) + 1) }
-        : record
+    const laterRecords = replaceReadIntentPosition(
+      preCommandRecords,
+      witness.activeTaskContinuationRead.graphObservationOperationId,
+      JournalPosition.make((graphOutcome.position as number) + 1)
     )
     const later = yield* rejectWith(laterRecords, witness)
     expect(later).toMatchObject({

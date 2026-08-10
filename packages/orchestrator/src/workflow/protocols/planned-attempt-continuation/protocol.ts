@@ -154,8 +154,14 @@ export const evaluatePlannedAttemptContinuationAuthorization = (
       `active-task continuation specification observation ${observation.taskWorkSpecificationObservationOperationId} is not after the current graph and executor evidence`
     )
   }
+  if (specificationIntent.position >= specificationOutcome.position) {
+    return reject(
+      "ActiveTaskContinuationSpecification",
+      "LaterWitness",
+      `active-task continuation specification observation ${observation.taskWorkSpecificationObservationOperationId} is not after its read intent`
+    )
+  }
   if (
-    specificationIntent.position >= specificationOutcome.position ||
     specificationIntent.event._tag !== "TaskTrackerReadIntentRecorded" ||
     specificationIntent.event.operation._tag !== "ReadTaskWorkSpecification" ||
     specificationIntent.event.operation.taskId !== plannedAttempt.taskId ||
@@ -196,8 +202,14 @@ export const evaluatePlannedAttemptContinuationAuthorization = (
       `active-task continuation claim observation ${observation.taskClaimObservationOperationId} is not after the current specification and executor evidence`
     )
   }
+  if (claimIntent.position >= claimOutcome.position) {
+    return reject(
+      "ActiveTaskContinuationClaim",
+      "LaterWitness",
+      `active-task continuation claim observation ${observation.taskClaimObservationOperationId} is not after its read intent`
+    )
+  }
   if (
-    claimIntent.position >= claimOutcome.position ||
     claimIntent.event._tag !== "TaskTrackerReadIntentRecorded" ||
     claimIntent.event.operation._tag !== "ReadTaskClaim" ||
     claimIntent.event.operation.taskId !== plannedAttempt.taskId ||
@@ -244,8 +256,14 @@ export const evaluatePlannedAttemptContinuationAuthorization = (
       `planned-attempt worktree observation ${witness.worktreeObservationOperationId} is not after the current claim and executor evidence`
     )
   }
+  if (worktreeIntent.position >= worktreeOutcome.position) {
+    return reject(
+      "PlannedAttemptWorktree",
+      "LaterWitness",
+      `planned-attempt worktree observation ${witness.worktreeObservationOperationId} is not after its read intent`
+    )
+  }
   if (
-    worktreeIntent.position >= worktreeOutcome.position ||
     worktreeIntent.event._tag !== "GitReadIntentRecorded" ||
     worktreeIntent.event.operation._tag !== "ReadTaskWorktree" ||
     !exactAttempt(worktreeIntent.event.operation.plannedAttempt, plannedAttempt) ||
