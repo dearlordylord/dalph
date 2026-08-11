@@ -6,8 +6,9 @@ Status: accepted on 2026-08-08. Issue #141 starts after issue #60 has
 durably proved an exact candidate promotion. It replaces and later deletes the
 task's exact claim and settles only that task's retained integration
 responsibility. Issue #61 owns the request that tells the tracker to complete
-the task and the fresh graph observation that releases dependants. Issue #102
-owns whole-Run termination.
+the task and the focused task observation that proves successful completion.
+Issue #53 owns the later complete graph observation that releases dependants.
+Issue #102 owns whole-Run termination.
 
 No person directly starts this protocol. The running Dalph coordinator reacts
 to Git and tracker facts. Git owns the promoted commit and target ancestry; the
@@ -41,9 +42,10 @@ claim K. No completion-claim replacement intent exists.
 6. Dalph records the replacement outcome. The physical Git-target position is
    already released, but A's logical integration-completion responsibility
    remains unsettled.
-7. Dalph waits for issue #61 to establish a fresh tracker observation that A
-   completed successfully. It sends no complete-task request itself and
-   releases no dependant itself.
+7. Dalph waits for issue #61 to establish a fresh focused tracker observation
+   that A completed successfully. It sends no complete-task request itself and
+   releases no dependant itself. The focused observation covers A only and
+   cannot release any dependant.
 
 A maintainer sees M remain promoted and KC mark the exact task whose tracker
 completion is pending. Dalph must not reopen A, start another integration
@@ -127,11 +129,12 @@ responsibility because the runnable frontier is empty, or let the wait stop B.
 ### Starting situation
 
 Exact KC is current and the integration-completion responsibility is
-unsettled. A later complete tracker observation, recorded after KC replacement,
+unsettled. A later focused tracker observation, recorded after KC replacement,
 now reports A `CompletedSuccessfully` and still reports exact KC. The success
-may have been written externally or by issue #61's future completion request;
-#141 does not infer or own that request. This fresh authority fact, not Git
-promotion or an executor result, proves tracker success.
+may have been written externally or by issue #61's completion request; #141
+does not infer or own that request. This fresh task-scoped authority fact, not
+Git promotion, an executor result, or a mutation acknowledgement, proves
+tracker success.
 
 ### Trigger and chronological behavior
 
@@ -153,8 +156,8 @@ promotion or an executor result, proves tracker success.
 
 The maintainer sees A remain successful, KC removed, and no duplicate
 integration work. Dalph must not delete K or a foreign claim, settle before
-fresh tracker success, infer dependant release, erase another task's
-responsibility, or record `RunTerminated`.
+focused tracker success, infer dependant release from that focused fact, erase
+another task's responsibility, or record `RunTerminated`.
 
 ### Acceptance tests and model checks
 
@@ -231,7 +234,7 @@ discard an isolated responsibility, or terminate the Run.
 | Forbidden result | Durable invariant |
 |---|---|
 | Replace or delete a claim before durable intent; retry before a read | D21 intent before ambiguity-crossing effects; D22 reconcile before retry |
-| Infer tracker success from promotion, an executor report, or claim removal | D24 no inferred completion across boundaries |
+| Infer tracker success from promotion, an executor report, claim removal, or a mutation acknowledgement | D24 no inferred completion across boundaries |
 | Mutate a foreign or stale claim identity | D1 exact identity; D4 exclusive claim; D5 foreign ownership is never mutated |
 | Lose the promoted work or restart integration while settlement waits | D10 retention; D16 work preservation; D31 recovery continues the same work |
 | Let one task's wait or settlement affect another | D18 subject-local constraints; issue #141 subject-scoped settlement |

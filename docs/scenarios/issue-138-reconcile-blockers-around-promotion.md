@@ -65,7 +65,7 @@ have advanced the configured target ref while A waited.
 
 ### Trigger and chronological behavior
 
-1. A fresh complete tracker read either reports B complete or proves that B is
+1. A fresh focused tracker read either reports B complete or proves that B is
    no longer a prerequisite of A, and still reports A inside the target with
    otherwise compatible lifecycle and claim facts. Removing the prerequisite
    edge is itself sufficient to clear the dependency wait; B need not complete.
@@ -164,7 +164,7 @@ wait. No integration target resource is held.
 
 ### Trigger and chronological behavior
 
-1. A fresh complete tracker read proves either that B completed or that B is no
+1. A fresh focused tracker read proves either that B completed or that B is no
    longer a prerequisite of A, and proves A otherwise eligible for completion.
 2. Dalph reads Git's current exact target head and proves that M is still an
    ancestor of it. Equality is not required because compatible work may have
@@ -202,12 +202,12 @@ result.
 ### Starting situation
 
 A is either approaching promotion or waiting before tracker completion. A
-tracker read is incomplete, unreadable, or omits the prerequisite family, so
+focused tracker read is incomplete, unreadable, or omits the prerequisite family, so
 it proves neither that a blocker appeared nor that an existing blocker cleared.
 
 ### Trigger and chronological behavior
 
-1. Dalph records the typed observation or boundary failure through the existing
+1. Dalph records the typed focused observation or boundary failure through the
    tracker-read protocol.
 2. Dalph preserves A's current candidate, promotion proof, integration
    responsibility, and dependency state.
@@ -235,14 +235,14 @@ the same-target queue, block the whole Run, or discard proven Git facts.
 
 ### Starting situation
 
-A has durable proof that M was promoted. A fresh complete tracker read reports
+A has durable proof that M was promoted. A fresh focused tracker read reports
 B complete and A otherwise eligible for completion, and a fresh Git read
 proves M remains an ancestor of the configured target. Dalph has initiated the
 ordinary tracker-completion protocol for A but has not yet recorded its result.
 
 ### Trigger and chronological behavior
 
-1. Another tracker client reopens B after Dalph's eligibility read.
+1. Another tracker client reopens B after Dalph's focused eligibility read.
 2. The task tracker nevertheless accepts Dalph's completion request for A.
    The prerequisite read and completion mutation cannot be assumed atomic
    unless the tracker boundary explicitly proves such a precondition.
