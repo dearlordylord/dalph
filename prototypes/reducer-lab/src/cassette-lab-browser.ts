@@ -16,10 +16,10 @@ import {
   cassetteStateStatusText
 } from "./cassette-lab-view.ts"
 import {
-  makeDeliveryWorkbenchPlaybackState,
+  makeDeliveryWorkbenchPlaybackRuntime,
   renderCassetteDeliveryWorkbench
 } from "./cassette-lab-workbench.ts"
-import { makeDeliveryPlaybackModel } from "./delivery-playback.ts"
+import { PlaybackRunStarted } from "./delivery-playback.ts"
 import { continuationAuthorizationProjectionOf } from "./continuation-authorization-lab.ts"
 
 export const singleCassetteSettledEvent = "dalph-cassette-lab:single-settled"
@@ -276,7 +276,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     readonly update: (state: CassetteState) => void
     readonly updateDeliveryFrame: (state: CassetteState) => void
   } | undefined
-  const playbackByKey = new Map<MaintainedCassetteKey, ReturnType<typeof makeDeliveryWorkbenchPlaybackState>>()
+  const playbackByKey = new Map<MaintainedCassetteKey, ReturnType<typeof makeDeliveryWorkbenchPlaybackRuntime>>()
 
   const header = document.createElement("header")
   appendTextElement(header, "h1", "Dalph reducer lab")
@@ -407,7 +407,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       appendTextElement(
         article,
         "p",
-        "Delivery-story coverage: the real production delivery runtime consumes one double-diamond graph in dependency waves A → B+C → D → E+F → G. The coordinator restarts while B and C both hold exact task-work positions; recovered frames retain those same responsibilities before the frontier continues.",
+        "Production scheduler/restart chronology: the runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues. Each executor returns coarse Terminal Completed, and later controlled tracker graphs report task success. This chronology contains no accepted-result integration; issue #167 owns replacing that test seam.",
         "delivery-story-scope"
       )
     }
@@ -415,7 +415,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       appendTextElement(
         article,
         "p",
-        "Delivery-story coverage: this is the real A-finality spine, not the complete 22-beat one-Run target. It executes A through production graph, frontier, restart, promotion, completion-claim, settlement, and reflection layers. docs/DELIVERY-STORY.md links the remaining beats to exact maintained slices or explicit implementation gaps; this view does not simulate them.",
+        "Delivery-story chronology: A crosses the production graph, frontier, restart, promotion, tracker-completion, completion-claim, settlement, and reflection boundaries. B remains open. Later graph answers report C through G successful, but this cassette contains no executor or integration chronology for those tasks. This is not the complete 22-beat one-Run target; docs/DELIVERY-STORY.md links the remaining beats to exact maintained slices or explicit implementation gaps.",
         "delivery-story-scope"
       )
     }
@@ -450,7 +450,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     })
 
     const deliveryWorkbenchHost = document.createElement("div")
-    const playback = playbackByKey.get(row.catalogKey) ?? makeDeliveryWorkbenchPlaybackState()
+    const playback = playbackByKey.get(row.catalogKey) ?? makeDeliveryWorkbenchPlaybackRuntime()
     playbackByKey.set(row.catalogKey, playback)
     const workbench = renderCassetteDeliveryWorkbench(
       deliveryWorkbenchHost,
@@ -525,8 +525,8 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     }
     for (const key of keys) {
       const row = rowByKey.get(key)
-      const playback = playbackByKey.get(key) ?? makeDeliveryWorkbenchPlaybackState()
-      playback.model = makeDeliveryPlaybackModel([], true)
+      const playback = playbackByKey.get(key) ?? makeDeliveryWorkbenchPlaybackRuntime()
+      playback.dispatch(PlaybackRunStarted())
       playbackByKey.set(key, playback)
       states.set(key, {
         _tag: "Running",

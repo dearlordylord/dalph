@@ -5,6 +5,7 @@ const labUrl = process.env.REDUCER_LAB_URL ?? "http://determined_johnson.orb.loc
 const terminalTimeoutMs = 180_000
 const insecureOriginCassette = "authored:candidateCorrectionAfterUnreadableGit"
 const framedCassette = "authored:dependentTasksCompleteInOneRun"
+const acceptedIntegrationCassette = "authored:acceptedResultRestartsIntoIntegration"
 const linkedDeliveryStoryCassette = "authored:deliveryInvariantStory"
 
 const browser = await chromium.launch({ headless: true })
@@ -110,7 +111,7 @@ try {
   )
   assert.equal(
     await workbench.locator(".delivery-playback-shortcuts").textContent(),
-    "Frame = adjacent production publication · Jump = dependency wave, restart, or end · Live = follow newest · Keys: ←/→ and [/]."
+    "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/]."
   )
   const primaryBeforeGuide = await workbench.evaluate((element) => {
     const controls = element.querySelector(".delivery-timeline-controls")
@@ -212,6 +213,24 @@ try {
   assert.equal(await playbackControls.evaluate((element) => document.activeElement === element), true)
   await page.keyboard.press("ArrowRight")
   assert.equal(await frameSelector.inputValue(), "1")
+  await frameSelector.selectOption("3")
+  await workbench.getByRole("button", { name: "Previous frame" }).focus()
+  await page.keyboard.press("ArrowLeft")
+  await page.keyboard.press("ArrowLeft")
+  await page.keyboard.press("ArrowLeft")
+  assert.equal(await frameSelector.inputValue(), "0")
+  assert.equal(await playbackControls.evaluate((element) => document.activeElement === element), true)
+  await page.keyboard.press("ArrowRight")
+  assert.equal(await frameSelector.inputValue(), "1")
+  await frameSelector.selectOption(String(frameCount - 4))
+  await nextFrameButton.focus()
+  await page.keyboard.press("ArrowRight")
+  await page.keyboard.press("ArrowRight")
+  await page.keyboard.press("ArrowRight")
+  assert.equal(await frameSelector.inputValue(), String(frameCount - 1))
+  assert.equal(await playbackControls.evaluate((element) => document.activeElement === element), true)
+  await page.keyboard.press("ArrowLeft")
+  assert.equal(await frameSelector.inputValue(), String(frameCount - 2))
   await frameSelector.selectOption(String(frameCount - 2))
   console.log("✓ navigates exact frames with arrows and landmarks with brackets")
   assert.match(graphRendered.relationships, /Graph summary · 2 tasks · 1 relationship/u)
@@ -283,7 +302,7 @@ try {
     /Select a task in the graph summary/u
   )
   assert.equal(await resetGraphView.isDisabled(), true)
-  assert.match(await workbench.locator(".delivery-graph-view-controls").textContent() ?? "", /Drag to pan · wheel or trackpad to zoom/u)
+  assert.match(await workbench.locator(".delivery-graph-view-controls").textContent() ?? "", /Drag to pan · pinch, wheel, or trackpad to zoom/u)
   console.log("✓ keeps graph-not-established frames dimensionally stable and truthful")
   await frameSelector.selectOption(String(frameCount - 2))
   assert.equal(await resetGraphView.isEnabled(), true)
@@ -331,7 +350,52 @@ try {
   console.log("✓ keeps exactly one keyboard playback handler after rerun")
 
   await page.reload({ waitUntil: "networkidle" })
+  await selector.selectOption(acceptedIntegrationCassette)
+  await page.getByRole("button", { name: /Run selected cassette:/u }).click()
+  await page.waitForFunction(
+    (catalogKey) => document.querySelector("#selected-cassette")?.getAttribute("data-catalog-key") === catalogKey
+      && document.querySelector("#selected-cassette")?.getAttribute("data-state") === "Completed",
+    acceptedIntegrationCassette,
+    { timeout: terminalTimeoutMs }
+  )
+  const integrationFrameSelector = page.getByLabel("Delivery frame")
+  const integrationOrderFrames = await page.evaluate(() => {
+    const select = document.querySelector('[data-role="delivery-workbench"] select')
+    if (!(select instanceof HTMLSelectElement)) return []
+    return [...select.options].map((option) => {
+      select.value = option.value
+      select.dispatchEvent(new Event("change"))
+      return {
+        capacity: document.querySelector('[data-role="delivery-capacity-positions"]')?.textContent ?? "",
+        order: document.querySelector('[data-role="delivery-integration-order"]')?.textContent ?? "",
+        value: option.value
+      }
+    })
+  })
+  assert.ok(integrationOrderFrames.some(({ order }) => order.includes("0 ordered · 1 awaiting responsibility")))
+  assert.ok(integrationOrderFrames.some(({ order }) =>
+    order.includes("#1 · Task A · queued before integration cutoff")
+    && order.includes("/dalph/cassettes/integration.git · refs/heads/master")
+  ))
+  const startedIntegrationFrame = integrationOrderFrames.find(({ order }) =>
+    order.includes("#1 · Task A · started past integration cutoff at journal")
+  )
+  assert.ok(startedIntegrationFrame)
+  assert.match(startedIntegrationFrame.order, /not a persisted queue row or proof that this process holds/u)
+  assert.match(startedIntegrationFrame.capacity, /held of capacity 1/u)
+  await integrationFrameSelector.selectOption(startedIntegrationFrame.value)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.waitForFunction(() => document.documentElement.scrollWidth <= globalThis.innerWidth)
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= globalThis.innerWidth))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  console.log("✓ shows the accepted result enter and start its journal-derived integration order")
+
+  await page.reload({ waitUntil: "networkidle" })
   await selector.selectOption(linkedDeliveryStoryCassette)
+  assert.match(
+    await page.locator("#selected-cassette .delivery-story-scope").textContent() ?? "",
+    /Each executor returns coarse Terminal Completed.*later controlled tracker graphs report task success.*contains no accepted-result integration.*issue #167 owns replacing that test seam/u
+  )
   await page.evaluate(() => {
     globalThis.__linkedDeliveryStoryTrace = []
     document.querySelector("#root")?.addEventListener("dalph-cassette-lab:delivery-frame", () => {
@@ -355,7 +419,7 @@ try {
     { timeout: terminalTimeoutMs }
   )
   const linkedTrace = await page.evaluate(() => globalThis.__linkedDeliveryStoryTrace)
-  assert.ok(linkedTrace.some(({ state, taskCount }) => state === "Running" && taskCount === 7))
+  assert.ok(linkedTrace.some(({ state, taskCount }) => state === "Running" && taskCount === 10))
   const stableTrace = linkedTrace.filter(({ graphTop }) => graphTop !== null)
   assert.ok(stableTrace.length > 10)
   assert.ok(stableTrace.every(({ graphTop, scrollY }) =>
@@ -367,10 +431,11 @@ try {
     const select = document.querySelector('[data-role="delivery-workbench"] select')
     const graph = document.querySelector("dalph-delivery-graph")
     if (!(select instanceof HTMLSelectElement) || graph === null) return []
-    return [...select.options].map((option) => {
+    return [...select.options].map((option, index) => {
       select.value = option.value
       select.dispatchEvent(new Event("change"))
       return {
+        index,
         facts: document.querySelector('[data-role="delivery-frame"]')?.textContent ?? "",
         edges: (graph.projection?.edges ?? []).map(({ from, to }) => `${from}->${to}`).sort(),
         eligible: [...document.querySelectorAll('tr[data-task-id]')]
@@ -379,18 +444,25 @@ try {
           .filter((taskId) => taskId !== null)
           .sort()
           .join("+"),
+        held: [...document.querySelectorAll('[data-role="delivery-capacity-positions"] [data-task-id]')]
+          .map((item) => item.getAttribute("data-task-id"))
+          .filter((taskId) => taskId !== null)
+          .sort()
+          .join("+"),
+        offGraph: document.querySelector('[data-role="delivery-off-graph-responsibilities"]')?.textContent ?? "",
+        capacity: document.querySelector('[data-role="delivery-capacity-positions"]')?.textContent ?? "",
         taskCount: graph.projection?.tasks.length ?? 0,
         taskState: document.querySelector('[data-role="delivery-task-state"]')?.textContent ?? ""
       }
     })
   })
   assert.deepEqual(
-    linkedFrameTruth.find(({ taskCount }) => taskCount === 7)?.edges,
-    ["A->B", "A->C", "B->D", "C->D", "D->E", "D->F", "E->G", "F->G"]
+    linkedFrameTruth.find(({ taskCount }) => taskCount === 10)?.edges,
+    ["A->B", "A->C", "A->X", "B->D", "C->D", "D->E", "D->F", "E->H", "F->I", "H->G", "I->G", "X->G"]
   )
   const eligibleWaves = linkedFrameTruth.map(({ eligible }) => eligible)
   let previousWave = -1
-  for (const wave of ["A", "B+C", "D", "E+F", "G", ""]) {
+  for (const wave of ["A", "B+C", "D+X", "E+F", "H+I", "G", ""]) {
     previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
     assert.ok(previousWave >= 0, `missing rendered frontier wave ${wave || "empty"}`)
   }
@@ -402,11 +474,38 @@ try {
   assert.ok(laterMiddle)
   assert.match(laterMiddle.taskState, /attempt:B:1/u)
   assert.match(laterMiddle.taskState, /attempt:C:2/u)
+  assert.match(laterMiddle.capacity, /2 held of capacity 2/u)
+  assert.match(laterMiddle.capacity, /Anonymous process-local positions/u)
+  assert.match(laterMiddle.offGraph, /Task B · graph not established/u)
+  assert.match(laterMiddle.offGraph, /Task C · graph not established/u)
+  assert.match(laterMiddle.offGraph, /placement GraphNotEstablished/u)
+  assert.match(laterMiddle.offGraph, /occupies capacity · Run .+ · attempt attempt:B:1/u)
+  assert.match(laterMiddle.offGraph, /planned-attempt executor responsibility/u)
+  await linkedFrameSelector.selectOption(String(laterMiddle.index))
+  await page.setViewportSize({ width: 390, height: 844 })
+  const restartNarrowTruth = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    restartWidth: document.querySelector(".delivery-restart-boundary")?.scrollWidth ?? 0,
+    viewportWidth: globalThis.innerWidth,
+    workbenchWidth: document.querySelector('[data-role="delivery-workbench"]')?.getBoundingClientRect().width ?? 0
+  }))
+  assert.ok(
+    restartNarrowTruth.documentWidth <= restartNarrowTruth.viewportWidth,
+    `restart correlations overflow the mobile viewport: ${JSON.stringify(restartNarrowTruth)}`
+  )
+  assert.ok(restartNarrowTruth.restartWidth <= restartNarrowTruth.workbenchWidth)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const heldSequence = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"]
+  let previousHeld = -1
+  for (const held of heldSequence) {
+    previousHeld = linkedFrameTruth.findIndex(({ held: value }, index) => index > previousHeld && value === held)
+    assert.ok(previousHeld >= 0, `missing rendered held-position state ${held}`)
+  }
   assert.ok(await linkedFrameSelector.locator("option").count() > 1)
   await linkedFrameSelector.selectOption("0")
   const landmarkWaves = []
   const nextLandmark = linkedWorkbench.getByRole("button", { name: "Next delivery landmark" })
-  while (await nextLandmark.isEnabled() && landmarkWaves.length < 12) {
+  while (await nextLandmark.isEnabled() && landmarkWaves.length < 64) {
     await nextLandmark.click()
     const wave = await linkedWorkbench.locator('tr[data-task-id]').evaluateAll((rows) => rows
       .filter((row) => row.querySelector('[data-label="Graph-only eligibility"]')?.textContent?.startsWith("eligible"))
@@ -416,12 +515,23 @@ try {
       .join("+"))
     landmarkWaves.push(`${await linkedFrameSelector.inputValue()}:${wave}:${await linkedFrameSelector.locator("option:checked").textContent()}`)
   }
-  for (const wave of ["A", "B+C", "D", "E+F", "G", ""]) assert.ok(landmarkWaves.some((value) => value.includes(`:${wave}:`)))
+  for (const wave of ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""]) {
+    assert.ok(
+      landmarkWaves.some((value) => value.includes(`:${wave}:`)),
+      `missing landmark frontier ${wave || "empty"}: ${JSON.stringify(landmarkWaves)}`
+    )
+  }
   for (const activation of ["Initial activation 1", "Later activation 2", "Later activation 3", "Later activation 4"]) {
     assert.ok(landmarkWaves.some((value) => value.includes(activation)), `missing delivery landmark for ${activation}`)
   }
-  assert.ok(landmarkWaves.length <= 9, `too many delivery landmarks: ${JSON.stringify(landmarkWaves)}`)
-  console.log("✓ drives the double-diamond frontier through every production wave and restart")
+  for (const held of heldSequence.filter((value) => value !== "G")) {
+    assert.ok(
+      landmarkWaves.some((value) => value.includes(`held task-work positions ${held}`)),
+      `missing held-position landmark ${held}: ${JSON.stringify(landmarkWaves)}`
+    )
+  }
+  assert.ok(landmarkWaves.length <= 24, `too many delivery landmarks: ${JSON.stringify(landmarkWaves)}`)
+  console.log("✓ drives the staggered double-diamond frontier through every production wave, held-position release, and restart")
 
   const linkedFrameCount = await linkedFrameSelector.locator("option").count()
   await linkedFrameSelector.selectOption(String(Math.max(0, linkedFrameCount - 28)))

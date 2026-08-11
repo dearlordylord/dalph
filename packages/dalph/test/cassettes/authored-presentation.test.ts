@@ -1,7 +1,10 @@
 import { AttemptId, TaskId } from "@dalph/contracts"
 import { describe, expect, it } from "vitest"
 import { AuthoredCassetteStoryItem } from "../../src/cassettes/authored-domain.js"
-import { renderAuthoredStoryItemLandmark } from "../../src/cassettes/authored-presentation.js"
+import {
+  renderAuthoredStoryItemLandmark,
+  renderAuthoredStoryItemLyric
+} from "../../src/cassettes/authored-presentation.js"
 import { contractedCapacityRetainsTwoAttemptsAuthoredCassette } from "../../src/cassettes/catalog.js"
 
 describe("authored delivery landmarks", () => {
@@ -53,5 +56,16 @@ describe("authored delivery landmarks", () => {
       "The coordinator process died; the next activation reconstructs accepted journal history",
       null
     ])
+  })
+
+  it("explains the tracker's classification of an ambiguous completion request", () => {
+    const item = AuthoredCassetteStoryItem.cases.CompletionTaskRequestLookupReturned.make({
+      outcome: "NotApplied",
+      taskId: TaskId.make("B")
+    })
+
+    expect(renderAuthoredStoryItemLyric(item)).toBe(
+      "The task tracker classifies the exact completion request for task B as NotApplied."
+    )
   })
 })

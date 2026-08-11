@@ -6,6 +6,7 @@ import {
   AuthoredRunActivationOrdinal,
   type AuthoredRunActivationOrdinal as AuthoredRunActivationOrdinalType
 } from "../../../packages/dalph/src/cassettes/authored-domain.ts"
+import type { TaskWorkCapacity } from "../../../packages/orchestrator/src/coordination/admission/capacity.ts"
 
 /**
  * Stable renderer contract for every playback control. A new FoldKit, React,
@@ -14,7 +15,7 @@ import {
  */
 export const deliveryPlaybackViewContract = {
   groupLabel: "Delivery playback controls",
-  help: "Frame = adjacent production publication · Jump = dependency wave, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
+  help: "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
   nextFrame: { accessibleName: "Next frame", label: "Frame →", shortcut: "ArrowRight" },
   nextLandmark: { accessibleName: "Next delivery landmark", label: "Jump →", shortcut: "]" },
   previousFrame: { accessibleName: "Previous frame", label: "← Frame", shortcut: "ArrowLeft" },
@@ -35,6 +36,7 @@ export const DeliveryLandmark = Schema.Union([
   ts("InitialPublication"),
   ts("CoordinatorRestart", { activationOrdinal: AuthoredRunActivationOrdinal }),
   ts("EligibleFrontierWave", { taskIds: Schema.NonEmptyArray(TaskId) }),
+  ts("HeldPositionsChanged", { taskIds: Schema.Array(TaskId) }),
   ts("TerminalPublication")
 ])
 export type DeliveryLandmark = typeof DeliveryLandmark.Type
@@ -42,7 +44,9 @@ export type DeliveryLandmark = typeof DeliveryLandmark.Type
 /** Framework-neutral facts needed to derive playback stops from production frames. */
 export interface DeliveryPlaybackFrameInput {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
+  readonly capacity: TaskWorkCapacity
   readonly eligibleTaskIds: ReadonlyArray<TaskIdType>
+  readonly heldTaskIds: ReadonlyArray<TaskIdType>
   readonly label: string
 }
 
@@ -87,6 +91,15 @@ export const deliveryPlaybackFramesFrom = (
         }
         lastFrontier = frontier
       }
+    }
+    const heldChanged = previous !== undefined
+      && JSON.stringify(previous.heldTaskIds.toSorted()) !== JSON.stringify(input.heldTaskIds.toSorted())
+    const fullCapacityReached = input.capacity > 0 && input.heldTaskIds.length === input.capacity
+    const oneHolderRemainsAfterRelease = previous !== undefined
+      && input.heldTaskIds.length > 0
+      && input.heldTaskIds.length < previous.heldTaskIds.length
+    if (heldChanged && (fullCapacityReached || oneHolderRemainsAfterRelease)) {
+      landmarks.push({ _tag: "HeldPositionsChanged", taskIds: input.heldTaskIds.toSorted() })
     }
     if (!running && index === inputs.length - 1) landmarks.push({ _tag: "TerminalPublication" })
     return DeliveryPlaybackFrame.make({ label: input.label, landmarks })
@@ -147,6 +160,7 @@ export const NextLandmarkRequested = m("NextLandmarkRequested", {
 export const ExactFrameSelected = m("ExactFrameSelected", { frameIndex: DeliveryFrameIndex })
 export const FollowLiveRequested = m("FollowLiveRequested")
 export const TaskSelectedRequested = m("TaskSelectedRequested", { taskId: TaskId })
+export const PlaybackRunStarted = m("PlaybackRunStarted")
 export const FramesUpdated = m("FramesUpdated", {
   frames: Schema.Array(DeliveryPlaybackFrame),
   running: Schema.Boolean
@@ -159,21 +173,25 @@ export const DeliveryPlaybackMessage = Schema.Union([
   ExactFrameSelected,
   FollowLiveRequested,
   TaskSelectedRequested,
+  PlaybackRunStarted,
   FramesUpdated
 ])
 export type DeliveryPlaybackMessage = typeof DeliveryPlaybackMessage.Type
 
 /** One executable registry binds declared shortcuts to their pure messages. */
-export const deliveryPlaybackShortcutMessage = (key: string): DeliveryPlaybackMessage | null => {
+export const deliveryPlaybackShortcutMessage = (
+  key: string,
+  source: PlaybackNavigationSource = "WorkbenchShortcut"
+): DeliveryPlaybackMessage | null => {
   switch (key) {
     case deliveryPlaybackViewContract.previousFrame.shortcut:
-      return PreviousFrameRequested({ source: "WorkbenchShortcut" })
+      return PreviousFrameRequested({ source })
     case deliveryPlaybackViewContract.nextFrame.shortcut:
-      return NextFrameRequested({ source: "WorkbenchShortcut" })
+      return NextFrameRequested({ source })
     case deliveryPlaybackViewContract.previousLandmark.shortcut:
-      return PreviousLandmarkRequested({ source: "WorkbenchShortcut" })
+      return PreviousLandmarkRequested({ source })
     case deliveryPlaybackViewContract.nextLandmark.shortcut:
-      return NextLandmarkRequested({ source: "WorkbenchShortcut" })
+      return NextLandmarkRequested({ source })
     default:
       return null
   }
@@ -216,6 +234,10 @@ const landmarkLabel = (landmarks: ReadonlyArray<DeliveryLandmark>): string | nul
       Match.tagsExhaustive({
         CoordinatorRestart: ({ activationOrdinal }) => `coordinator restart into activation ${activationOrdinal}`,
         EligibleFrontierWave: ({ taskIds }) => `eligible frontier ${taskIds.join("+")}`,
+        HeldPositionsChanged: ({ taskIds }) =>
+          taskIds.length === 0
+            ? "all task-work positions released"
+            : `held task-work positions ${taskIds.join("+")}`,
         InitialPublication: () => "initial publication",
         TerminalPublication: () => "settled terminal publication"
       })
@@ -325,6 +347,7 @@ export const updateDeliveryPlayback = (
         model._tag === "EmptyDeliveryPlayback"
           ? playbackUpdate(model)
           : playbackUpdate({ ...model, position: FollowingLive() }),
+      PlaybackRunStarted: () => playbackUpdate(makeDeliveryPlaybackModel([], true)),
       FramesUpdated: ({ frames, running }) => {
         const firstFrame = frames[0]
         if (firstFrame === undefined) {

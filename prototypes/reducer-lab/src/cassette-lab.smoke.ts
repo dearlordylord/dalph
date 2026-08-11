@@ -94,13 +94,19 @@ await scenario("captures every authored delivery frame from the real production 
   }
 })
 
-await scenario("shows the double-diamond frontier being consumed on one graph", () => {
+await scenario("shows the staggered double-diamond frontier being consumed on one graph", () => {
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  assert(
+    row?.storyName ===
+      "coarse executor reports and later tracker observations consume a staggered double diamond while restart-delayed X waits for capacity",
+    "The linked graph story title must name its concrete production chronology"
+  )
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The linked story must complete with frames")
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
   const frames = result.deliveryFrames
   const established = frames.filter(({ graph }) => graph._tag === "Established")
-  const graph = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 7)?.graph
+  const graph = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 10)?.graph
   const edges = graph?._tag === "Established"
     ? graph.tasks.flatMap(({ id, prerequisiteIds }) => prerequisiteIds.map((from) => `${from}->${id}`)).toSorted()
     : []
@@ -109,7 +115,7 @@ await scenario("shows the double-diamond frontier being consumed on one graph", 
     .map(({ taskId }) => taskId)
     .toSorted()
     .join("+"))
-  const positions = ["A", "B+C", "D", "E+F", "G", ""].reduce<ReadonlyArray<number>>(
+  const positions = ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""].reduce<ReadonlyArray<number>>(
     (found, wave) => [...found, eligible.indexOf(wave, (found.at(-1) ?? -1) + 1)],
     []
   )
@@ -120,18 +126,25 @@ await scenario("shows the double-diamond frontier being consumed on one graph", 
   )
   const initial = heldMiddle(1)
   const later = frames.find(({ activationOrdinal }) => activationOrdinal === 2)
-  const lowerDiamondHeld = frames.some(({ heldPositions }) => ["E", "F"].every((taskId) =>
-    heldPositions.some((position) => position.taskId === taskId)
-  ))
+  const heldSequence = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"].reduce<ReadonlyArray<number>>(
+    (found, tasks) => [...found, frames.findIndex((frame, index) =>
+      index > (found.at(-1) ?? -1)
+      && frame.heldPositions.map(({ taskId }) => taskId).toSorted().join("+") === tasks
+    )],
+    []
+  )
   const correlations = (frame: NonNullable<typeof initial>) => frame.heldPositions
     .filter(({ taskId }) => taskId === "B" || taskId === "C")
     .map(({ attemptId, runId, taskId }) => `${taskId}:${runId}:${attemptId}`)
     .toSorted()
 
-  assert(edges.join(",") === "A->B,A->C,B->D,C->D,D->E,D->F,E->G,F->G", "The graph must be the exact double diamond")
+  assert(
+    edges.join(",") === "A->B,A->C,A->X,B->D,C->D,D->E,D->F,E->H,F->I,H->G,I->G,X->G",
+    "The graph must be the staggered double diamond with restart-added X"
+  )
   assert(positions.every((position) => position >= 0), "The production frontier must consume every dependency wave in order")
+  assert(heldSequence.every((position) => position >= 0), "The graph must expose each staggered held-position release in order")
   assert(initial !== undefined && later !== undefined, "B and C must remain held across restart")
-  assert(lowerDiamondHeld, "E and F must occupy the two bounded task-work positions together")
   if (initial !== undefined && later !== undefined) {
     assert(later.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C", "The first later-activation frame must retain both middle-wave positions")
     assert(correlations(later).join(",") === correlations(initial).join(","), "A later activation must preserve both exact positions")
@@ -416,7 +429,7 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
     "The primary graph must precede the explanatory delivery manual"
   )
   assert(
-    workbench.querySelector(".delivery-playback-shortcuts")?.textContent === "Frame = adjacent production publication · Jump = dependency wave, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
+    workbench.querySelector(".delivery-playback-shortcuts")?.textContent === "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
     "Visible playback help must distinguish adjacent frames, delivery landmarks, and live following"
   )
   const status = workbench.querySelector(".delivery-timeline-controls output")
@@ -560,6 +573,110 @@ await scenario("shows the production-observed graph frontier bounded tickets and
 
 })
 
+await scenario("shows represented and off-graph responsibilities without inventing tracker nodes", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The staggered delivery story is missing")
+  }
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const select = document.querySelector<HTMLSelectElement>(".delivery-timeline-controls select")
+  if (select === null) throw new Error("The delivery timeline is missing")
+  const selectFrame = (index: number): void => {
+    for (const option of select.options) {
+      if (option.value === String(index)) option.setAttribute("selected", "")
+      else option.removeAttribute("selected")
+    }
+    select.dispatchEvent(new Event("change"))
+  }
+  const restartIndex = result.deliveryFrames.findIndex((frame) =>
+    frame.activationOrdinal === 2
+    && frame.graph._tag === "NotEstablished"
+    && frame.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C"
+  )
+  if (restartIndex < 0) throw new Error("The restart frame with reconstructed B/C positions is missing")
+  selectFrame(restartIndex)
+  const capacity = document.querySelector("[data-role='delivery-capacity-positions']")
+  const rail = document.querySelector("[data-role='delivery-off-graph-responsibilities']")
+  assert(capacity?.textContent?.includes("2 held of capacity 2") === true, "The capacity strip must show both reconstructed positions")
+  assert(capacity?.textContent?.includes("B · attempt:B:1") === true, "The capacity strip must correlate B's exact attempt")
+  assert(capacity?.textContent?.includes("C · attempt:C:2") === true, "The capacity strip must correlate C's exact attempt")
+  assert(capacity?.textContent?.toLowerCase().includes("anonymous") === true, "The capacity strip must not invent durable slot identities")
+  assert(rail?.textContent?.includes("B") === true && rail.textContent.includes("C"), "The off-graph rail must retain both responsibilities")
+  assert(rail?.textContent?.includes("graph not established") === true, "The rail must explain why the responsibilities are outside the graph")
+  assert(rail?.textContent?.includes(`Run ${result.runId}`) === true, "The rail must retain the exact Run correlation")
+  assert(rail?.textContent?.includes("placement GraphNotEstablished") === true, "The rail must name the exact delivery placement")
+  assert(rail?.textContent?.includes("planned-attempt executor responsibility") === true, "The rail must name the retained obligation")
+  assert(rail?.textContent?.includes("occupies capacity") === true, "The rail must state whether the responsibility holds capacity")
+
+  const staggeredIndex = result.deliveryFrames.findIndex((frame) =>
+    frame.graph._tag === "Established"
+    && frame.heldPositions.map(({ taskId }) => taskId).join(",") === "C"
+  )
+  if (staggeredIndex < 0) throw new Error("The staggered C-only frame is missing")
+  selectFrame(staggeredIndex)
+  const representedCapacity = document.querySelector("[data-role='delivery-capacity-positions']")
+  assert(representedCapacity?.textContent?.includes("1 held of capacity 2") === true, "One released position must be visible before C finishes")
+  assert(representedCapacity?.textContent?.includes("1 unheld position") === true, "Released capacity must remain anonymous and visible")
+  assert(representedCapacity?.textContent?.includes("capacity, not permission") === true, "Unheld capacity must not imply that eligible work is already admitted")
+  assert(document.querySelector("[data-role='delivery-off-graph-responsibilities']") === null, "Graph-represented responsibilities must stay on their graph nodes")
+})
+
+await scenario("shows an absent responsibility in the mismatch rail without inventing a graph node", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The staggered delivery story is missing")
+  }
+  const heldFrame = result.deliveryFrames.find((frame) =>
+    frame.graph._tag === "NotEstablished"
+    && frame.heldPositions.some(({ taskId }) => taskId === "B")
+  )
+  const establishedFrame = result.deliveryFrames.find((frame) => frame.graph._tag === "Established")
+  if (heldFrame === undefined || establishedFrame?.graph._tag !== "Established") {
+    throw new Error("The exact responsibility and established graph fixtures are missing")
+  }
+  const establishedGraph = establishedFrame.graph
+  const absentFrame = {
+    ...heldFrame,
+    deliveries: heldFrame.deliveries.map((delivery) =>
+      delivery.taskId === "B"
+        ? {
+            ...delivery,
+            placement: {
+              exact: JSON.stringify({ _tag: "AbsentFromCurrentGraph", graphRevision: establishedGraph.revision }),
+              kind: "AbsentFromCurrentGraph"
+            }
+          }
+        : delivery
+    ),
+    graph: { ...establishedGraph, tasks: [] }
+  }
+  const absentResult = { ...result, deliveryFrames: [absentFrame] }
+  mountCassetteLab({
+    revision: "acceptance-revision",
+    root,
+    rows: [row],
+    runCassette: async () => absentResult
+  })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+    projection?: { readonly tasks: ReadonlyArray<{ readonly id: string }> }
+  }) | null
+  const rail = document.querySelector("[data-role='delivery-off-graph-responsibilities']")
+  assert(graph?.projection?.tasks.some(({ id }) => id === "B") === false, "An absent responsibility must not become a topology node")
+  assert(rail?.textContent?.includes("Task B · absent from current tracker graph") === true, "The rail must explain the exact graph mismatch")
+  assert(rail?.textContent?.includes("placement AbsentFromCurrentGraph") === true, "The rail must retain the production placement kind")
+  assert(rail?.textContent?.includes(`Run ${result.runId}`) === true, "The absent responsibility must retain its exact Run")
+})
+
 await scenario("does not fabricate a graph workbench for direct protocol cassettes", () => {
   const { document, root } = installDom()
   const protocolRows = maintainedCassetteRows.filter(({ category }) => category !== "Authored")
@@ -640,6 +757,55 @@ await scenario("explains restart continuity at the first later activation bounda
   )
 })
 
+await scenario("shows integration order separately from task-work capacity", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) =>
+    catalogKey === "authored:acceptedResultRestartsIntoIntegration"
+  )
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The accepted-result integration fixture is missing")
+  }
+  const awaitingIndex = result.deliveryFrames.findIndex(({ integrationOrder }) =>
+    integrationOrder.awaitingResponsibility.length === 1
+  )
+  const queuedIndex = result.deliveryFrames.findIndex(({ integrationOrder }) =>
+    integrationOrder.responsibilities.some(({ state }) => state === "QueuedBeforeCutoff")
+  )
+  const startedIndex = result.deliveryFrames.findIndex(({ integrationOrder }) =>
+    integrationOrder.responsibilities.some(({ state }) => state === "StartedPastCutoff")
+  )
+  if (awaitingIndex < 0 || queuedIndex < 0 || startedIndex < 0) {
+    throw new Error("The accepted, queued, and started integration frames are incomplete")
+  }
+
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
+  if (timeline === null) throw new Error("The integration delivery timeline is missing")
+
+  chooseOption(timeline, String(awaitingIndex))
+  const order = document.querySelector("[data-role='delivery-integration-order']")
+  assert(order?.textContent?.includes("0 ordered · 1 awaiting responsibility") === true, "An accepted result must remain outside integration order until its responsibility is durable")
+  assert(order?.textContent?.includes("Accepted results not ordered yet") === true, "The waiting result must not receive an invented position")
+  assert(order?.textContent?.includes("accepted commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") === true, "The waiting result must retain its exact commit")
+
+  chooseOption(timeline, String(queuedIndex))
+  assert(order?.textContent?.includes("#1 · Task A · queued before integration cutoff") === true, "The durable responsibility must expose its target-relative position")
+  assert(order?.textContent?.includes("/dalph/cassettes/integration.git · refs/heads/master") === true, "Integration order must be scoped to the exact repository/ref target")
+  assert(order?.textContent?.includes(`Run ${result.runId} · attempt attempt:A:0`) === true, "Integration order must retain its exact Run and attempt")
+
+  chooseOption(timeline, String(startedIndex))
+  assert(order?.textContent?.includes("started past integration cutoff at journal") === true, "The durable cutoff must replace the queued state")
+  assert(order?.textContent?.includes("not a persisted queue row or proof that this process holds") === true, "Integration order must not claim process-local ownership")
+  assert(
+    document.querySelector("[data-role='delivery-capacity-positions']")?.textContent?.includes("held of capacity") === true,
+    "Task-work capacity must remain a separate visible resource"
+  )
+})
+
 await scenario("separates every coordinator activation in a multi-restart delivery timeline", async () => {
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) =>
@@ -708,7 +874,7 @@ await scenario("keeps graph-not-established frames dimensionally stable and trut
   const reset = document.querySelector<HTMLButtonElement>(".delivery-graph-view-controls button")
   assert(reset?.disabled === true, "An absent production graph must not offer a no-op reset")
   assert(
-    document.querySelector(".delivery-graph-view-controls")?.textContent?.includes("Drag to pan · wheel or trackpad to zoom")
+    document.querySelector(".delivery-graph-view-controls")?.textContent?.includes("Drag to pan · pinch, wheel, or trackpad to zoom")
       === true,
     "The graph must visibly explain its pointer gestures"
   )
@@ -894,8 +1060,10 @@ await scenario("counts one delivery settlement once across repeated production p
     "The workbench must separate tracker lifecycle observations from exact Dalph settlements"
   )
   assert(
-    (root.textContent ?? "").includes("the real A-finality spine, not the complete 22-beat one-Run target"),
-    "The linked cassette must visibly state the exact scope it executes"
+    (root.textContent ?? "").includes(
+      "B remains open. Later graph answers report C through G successful, but this cassette contains no executor or integration chronology for those tasks"
+    ),
+    "The linked cassette must visibly state the exact chronology it executes"
   )
 })
 
