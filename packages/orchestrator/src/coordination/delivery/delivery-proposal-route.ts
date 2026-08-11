@@ -1,4 +1,5 @@
 import type { OperationId } from "../../workflow/identity.js"
+import { Match } from "effect"
 import { runnableTransitionTaskId, type RunnableFrontierTransition } from "../frontier/frontier.js"
 import type { NewRecoveredWorkflowAction } from "./delivery-action-proposal.js"
 import { deliveryTransitionPolicy, type TransitionForRoute } from "./delivery-transition-policy.js"
@@ -28,55 +29,47 @@ type ObservationTransition = TransitionForRoute<"Observation">
 const isObservationTransition = (transition: RunnableFrontierTransition): transition is ObservationTransition =>
   deliveryTransitionPolicy[transition._tag].route === "Observation"
 
-const recoveredObservationActionOf = (transition: ObservationTransition): NewRecoveredWorkflowAction => {
-  switch (transition._tag) {
-    case "ObservePlannedAttemptContinuationGraph":
-      return {
-        _tag: "ReadTrackerGraph",
-        operation: withoutOperationId(transition.operation),
-        plannedAttempt: transition.plannedAttempt
-      }
-    case "ObservePlannedAttemptContinuationClaim":
-      return {
-        _tag: "ReadTaskClaim",
-        operation: withoutOperationId(transition.operation),
-        plannedAttempt: transition.plannedAttempt,
-        taskId: runnableTransitionTaskId(transition)
-      }
-    case "ObserveResponsibleTaskClaim":
-      return {
-        _tag: "ReadTaskClaim",
-        operation: withoutOperationId(transition.operation),
-        plannedAttempt: null,
-        taskId: transition.taskId
-      }
-    case "ObserveStoppedAttemptClaim":
-      return {
-        _tag: "ReadTaskClaim",
-        operation: withoutOperationId(transition.operation),
-        plannedAttempt: transition.subject.plannedAttempt,
-        taskId: transition.subject.plannedAttempt.taskId
-      }
-    case "ObservePlannedAttemptContinuationSpecification":
-      return {
-        _tag: "ReadTaskWorkSpecification",
-        operation: withoutOperationId(transition.operation),
-        plannedAttempt: transition.plannedAttempt
-      }
-    case "ObservePlannedAttemptContinuationWorktree":
-      return {
-        _tag: "ReadTaskWorktree",
-        operation: withoutOperationId(transition.operation),
-        plannedAttempt: transition.plannedAttempt
-      }
-    case "ObservePlannedAttemptContinuationTargetLineage":
-      return {
-        _tag: "ReadTargetLineage",
-        operation: withoutOperationId(transition.operation),
-        plannedAttempt: transition.plannedAttempt
-      }
-  }
-}
+const recoveredObservationActionOf = (transition: ObservationTransition): NewRecoveredWorkflowAction =>
+  Match.valueTags(transition, {
+    ObservePlannedAttemptContinuationGraph: (transition): NewRecoveredWorkflowAction => ({
+      _tag: "ReadTrackerGraph",
+      operation: withoutOperationId(transition.operation),
+      plannedAttempt: transition.plannedAttempt
+    }),
+    ObservePlannedAttemptContinuationClaim: (transition): NewRecoveredWorkflowAction => ({
+      _tag: "ReadTaskClaim",
+      operation: withoutOperationId(transition.operation),
+      plannedAttempt: transition.plannedAttempt,
+      taskId: runnableTransitionTaskId(transition)
+    }),
+    ObserveResponsibleTaskClaim: (transition): NewRecoveredWorkflowAction => ({
+      _tag: "ReadTaskClaim",
+      operation: withoutOperationId(transition.operation),
+      plannedAttempt: null,
+      taskId: transition.taskId
+    }),
+    ObserveStoppedAttemptClaim: (transition): NewRecoveredWorkflowAction => ({
+      _tag: "ReadTaskClaim",
+      operation: withoutOperationId(transition.operation),
+      plannedAttempt: transition.subject.plannedAttempt,
+      taskId: transition.subject.plannedAttempt.taskId
+    }),
+    ObservePlannedAttemptContinuationSpecification: (transition): NewRecoveredWorkflowAction => ({
+      _tag: "ReadTaskWorkSpecification",
+      operation: withoutOperationId(transition.operation),
+      plannedAttempt: transition.plannedAttempt
+    }),
+    ObservePlannedAttemptContinuationWorktree: (transition): NewRecoveredWorkflowAction => ({
+      _tag: "ReadTaskWorktree",
+      operation: withoutOperationId(transition.operation),
+      plannedAttempt: transition.plannedAttempt
+    }),
+    ObservePlannedAttemptContinuationTargetLineage: (transition): NewRecoveredWorkflowAction => ({
+      _tag: "ReadTargetLineage",
+      operation: withoutOperationId(transition.operation),
+      plannedAttempt: transition.plannedAttempt
+    })
+  })
 
 export const newRecoveredActionOf = (
   transition: RunnableFrontierTransition

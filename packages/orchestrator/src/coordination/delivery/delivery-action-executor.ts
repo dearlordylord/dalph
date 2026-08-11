@@ -43,6 +43,13 @@ import type {
   runCompletionClaimReplacementProtocol
 } from "../../workflow/protocols/integration-finality/protocol.js"
 import type { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
+import type {
+  CompletionTaskAmbiguousWait,
+  CompletionTaskAuthorizationConflict,
+  CompletionTaskAuthorizationWait,
+  CompletionTaskConfirmationWait,
+  CompletionTaskPreconditionConflict
+} from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
@@ -115,8 +122,15 @@ export type DeliveryActionResult =
         | "CompletionClaimNonConvergent"
         | "CompletionClaimReadUnavailable"
         | "CompletionClaimRejected"
+        | "CompletionTaskNonConvergent"
+        | "CompletionTaskUnavailable"
         | "ContinuationAuthorizationStale"
-        | "FreshTrackerSuccessRequired"
+        | "FocusedTaskCompletionSuccessRequired"
+        | CompletionTaskAmbiguousWait
+        | CompletionTaskAuthorizationConflict
+        | CompletionTaskAuthorizationWait
+        | CompletionTaskConfirmationWait
+        | CompletionTaskPreconditionConflict
     }
   | {
       readonly _tag: "ExecutorReportPublished"
@@ -196,11 +210,7 @@ export class DeliveryActionExecutor extends Context.Service<DeliveryActionExecut
 ) {}
 
 export type DeliverySemanticTraceEvent =
-  | {
-      readonly _tag: "ActionOutcome"
-      readonly outcome: DeliveryActionResult["_tag"]
-      readonly proposalId: DeliveryProposalId
-    }
+  | { readonly _tag: "ActionOutcome"; readonly result: DeliveryActionResult }
   | { readonly _tag: "ProposalAdmitted"; readonly proposalId: DeliveryProposalId }
   | {
       readonly _tag: "ProposalDeferred"

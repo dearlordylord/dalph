@@ -5,6 +5,7 @@ import {
   WorkflowRunTerminatedEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
+import { Match } from "effect"
 import type { RecordedCassetteEntry } from "./recorded-domain.js"
 
 type JournalRunEntry = Extract<
@@ -27,69 +28,67 @@ export const isRecordedRunEntry = (entry: RecordedCassetteEntry): entry is Recor
   entry._tag === "WorkflowRunBegan" ||
   entry._tag === "WorkflowRunTerminated"
 
-export const recordedRunEntryFor = (event: JournalRunEntry): RecordedRunEntry => {
-  switch (event._tag) {
-    case "TaskWorkCapacityChanged":
-      return {
+export const recordedRunEntryFor = (event: JournalRunEntry): RecordedRunEntry =>
+  Match.value(event).pipe(
+    Match.tagsExhaustive({
+      TaskWorkCapacityChanged: (value): RecordedRunEntry => ({
         _tag: "TaskWorkCapacityChanged",
-        capacity: event.capacity,
-        initiatedBy: event.initiatedBy,
-        occurrenceClassification: event.occurrenceClassification,
-        previousRevision: event.previousRevision,
-        revision: event.revision
-      }
-    case "WorkflowRunBegan":
-      return {
+        capacity: value.capacity,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        previousRevision: value.previousRevision,
+        revision: value.revision
+      }),
+      WorkflowRunBegan: (value): RecordedRunEntry => ({
         _tag: "WorkflowRunBegan",
-        initiatedBy: event.initiatedBy,
-        initialControlPolicy: event.initialControlPolicy,
-        occurrenceClassification: event.occurrenceClassification,
-        target: event.target
-      }
-    case "WorkflowRunTerminated":
-      return {
+        initiatedBy: value.initiatedBy,
+        initialControlPolicy: value.initialControlPolicy,
+        occurrenceClassification: value.occurrenceClassification,
+        target: value.target
+      }),
+      WorkflowRunTerminated: (value): RecordedRunEntry => ({
         _tag: "WorkflowRunTerminated",
-        disposition: event.disposition,
-        occurrenceClassification: event.occurrenceClassification
-      }
-  }
-}
+        disposition: value.disposition,
+        occurrenceClassification: value.occurrenceClassification
+      })
+    })
+  )
 
-export const eventForRunEntry = (entry: RecordedRunEntry): WorkflowJournalEvent => {
-  switch (entry._tag) {
-    case "TaskWorkCapacityChanged":
-      return TaskWorkCapacityChangedEvent.make({
-        capacity: entry.capacity,
-        initiatedBy: entry.initiatedBy,
-        occurrenceClassification: entry.occurrenceClassification,
-        previousRevision: entry.previousRevision,
-        revision: entry.revision,
-        version: workflowJournalEventVersion
-      })
-    case "WorkflowRunBegan":
-      return WorkflowRunBeganEvent.make({
-        initialControlPolicy: entry.initialControlPolicy,
-        initiatedBy: entry.initiatedBy,
-        occurrenceClassification: entry.occurrenceClassification,
-        target: entry.target,
-        version: workflowJournalEventVersion
-      })
-    case "WorkflowRunTerminated":
-      return WorkflowRunTerminatedEvent.make({
-        disposition: entry.disposition,
-        occurrenceClassification: entry.occurrenceClassification,
-        version: workflowJournalEventVersion
-      })
-  }
-}
+export const eventForRunEntry = (entry: RecordedRunEntry): WorkflowJournalEvent =>
+  Match.value(entry).pipe(
+    Match.tagsExhaustive({
+      TaskWorkCapacityChanged: (value) =>
+        TaskWorkCapacityChangedEvent.make({
+          capacity: value.capacity,
+          initiatedBy: value.initiatedBy,
+          occurrenceClassification: value.occurrenceClassification,
+          previousRevision: value.previousRevision,
+          revision: value.revision,
+          version: workflowJournalEventVersion
+        }),
+      WorkflowRunBegan: (value) =>
+        WorkflowRunBeganEvent.make({
+          initialControlPolicy: value.initialControlPolicy,
+          initiatedBy: value.initiatedBy,
+          occurrenceClassification: value.occurrenceClassification,
+          target: value.target,
+          version: workflowJournalEventVersion
+        }),
+      WorkflowRunTerminated: (value) =>
+        WorkflowRunTerminatedEvent.make({
+          disposition: value.disposition,
+          occurrenceClassification: value.occurrenceClassification,
+          version: workflowJournalEventVersion
+        })
+    })
+  )
 
-export const lyricForRunEntry = (entry: RecordedRunEntry): string => {
-  switch (entry._tag) {
-    case "TaskWorkCapacityChanged":
-      return `Operator changed task-work capacity to ${entry.capacity} at policy revision ${entry.revision}.`
-    case "WorkflowRunBegan":
-      return `Dalph began the Run for tracker target ${JSON.stringify(entry.target)}.`
-    case "WorkflowRunTerminated":
-      return `Dalph terminated the Run with disposition ${entry.disposition}.`
-  }
-}
+export const lyricForRunEntry = (entry: RecordedRunEntry): string =>
+  Match.value(entry).pipe(
+    Match.tagsExhaustive({
+      TaskWorkCapacityChanged: (value) =>
+        `Operator changed task-work capacity to ${value.capacity} at policy revision ${value.revision}.`,
+      WorkflowRunBegan: (value) => `Dalph began the Run for tracker target ${JSON.stringify(value.target)}.`,
+      WorkflowRunTerminated: (value) => `Dalph terminated the Run with disposition ${value.disposition}.`
+    })
+  )

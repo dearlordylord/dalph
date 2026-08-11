@@ -56,8 +56,18 @@ import {
   type TargetVerificationCorrelation,
   type TargetPromotionCorrelation,
   type CompletionTaskClaim,
+  type CompletionTaskRequest,
+  type CompletionTaskRequestLookup,
+  type CompletionClaimObservation,
+  type CompletionSuccessObservation,
+  type FocusedTaskCompletionFacts,
+  type FocusedCompletedTaskObservation,
   type CompletionClaimRequestOrdinal,
-  type FreshCompletedTaskObservation,
+  type CompletionTaskRequestOrdinal,
+  type CompletionTaskAuthorizationReadOrdinal,
+  type CompletionTaskConfirmationReadOrdinal,
+  type CompletionTaskFocusedReadPurpose,
+  completionTaskFocusedReadOperationIdFor,
   type TargetPromotionAttemptOrdinal,
   type TargetPromotionAttemptLimit,
   targetPromotionRequestIdForCandidate,
@@ -140,6 +150,9 @@ type PreservedCassetteBrand =
   | TargetPromotionAttemptOrdinal
   | TargetPromotionAttemptLimit
   | CompletionClaimRequestOrdinal
+  | CompletionTaskRequestOrdinal
+  | CompletionTaskAuthorizationReadOrdinal
+  | CompletionTaskConfirmationReadOrdinal
   | RunPolicyRevision
   | TaskWorkCapacity
   | TaskClaimReacquisitionRequestId
@@ -183,47 +196,45 @@ const renameExecutorReport = (
     attemptId: renamed(report.correlation.attemptId, maps.attemptIds),
     runId: renamed(report.correlation.runId, maps.runIds)
   })
-  switch (report._tag) {
-    case "Running":
-      return completeFields<typeof report>({ _tag: "Running", correlation })
-    case "SafelySuspended":
-      return completeFields<typeof report>({ _tag: "SafelySuspended", correlation })
-    case "Terminal":
-      return completeFields<typeof report>({
-        _tag: "Terminal",
-        correlation,
-        result: preserveCassetteValue(report.result)
-      })
-  }
+  return Match.value(report).pipe(
+    Match.tagsExhaustive({
+      Running: (value) => completeFields<typeof value>({ _tag: "Running", correlation }),
+      SafelySuspended: (value) => completeFields<typeof value>({ _tag: "SafelySuspended", correlation }),
+      Terminal: (value) =>
+        completeFields<typeof value>({ _tag: "Terminal", correlation, result: preserveCassetteValue(value.result) })
+    })
+  )
 }
 
 const renameExecutorCommandProjectionObservation = (
   observation: PlannedAttemptExecutorCommandProjectionObservation,
   maps: IdentityRenamingMaps
-): PlannedAttemptExecutorCommandProjectionObservation => {
-  switch (observation._tag) {
-    case "ExactExecutorReport":
-      return { _tag: observation._tag, report: renameExecutorReport(observation.report, maps) }
-    case "ExecutorReportContradiction":
-      return { _tag: observation._tag, observed: renameExecutorReport(observation.observed, maps) }
-    case "ExecutorStateUnavailable":
-      return preserveCassetteValue(observation)
-  }
-}
+): PlannedAttemptExecutorCommandProjectionObservation =>
+  Match.value(observation).pipe(
+    Match.tagsExhaustive({
+      ExactExecutorReport: (value) => ({ _tag: value._tag, report: renameExecutorReport(value.report, maps) }),
+      ExecutorReportContradiction: (value) => ({
+        _tag: value._tag,
+        observed: renameExecutorReport(value.observed, maps)
+      }),
+      ExecutorStateUnavailable: (value) => preserveCassetteValue(value)
+    })
+  )
 
 const renameExecutorStateObservation = (
   observation: PlannedAttemptExecutorStateObservation,
   maps: IdentityRenamingMaps
-): PlannedAttemptExecutorStateObservation => {
-  switch (observation._tag) {
-    case "ExactExecutorReport":
-      return { _tag: observation._tag, report: renameExecutorReport(observation.report, maps) }
-    case "ExecutorReportContradiction":
-      return { _tag: observation._tag, observed: renameExecutorReport(observation.observed, maps) }
-    case "ExecutorStateUnavailable":
-      return preserveCassetteValue(observation)
-  }
-}
+): PlannedAttemptExecutorStateObservation =>
+  Match.value(observation).pipe(
+    Match.tagsExhaustive({
+      ExactExecutorReport: (value) => ({ _tag: value._tag, report: renameExecutorReport(value.report, maps) }),
+      ExecutorReportContradiction: (value) => ({
+        _tag: value._tag,
+        observed: renameExecutorReport(value.observed, maps)
+      }),
+      ExecutorStateUnavailable: (value) => preserveCassetteValue(value)
+    })
+  )
 
 const renameActiveTaskClaim = (claim: ActiveTaskClaim, maps: IdentityRenamingMaps): ActiveTaskClaim => ({
   ...claim,
@@ -237,6 +248,32 @@ const renameTaskClaimObservation = (
 ): TaskClaimObservation =>
   observation._tag === "ActiveTaskClaim" ? renameActiveTaskClaim(observation, maps) : preserveCassetteValue(observation)
 
+const renameCompletionClaimObservation = (
+  observation: CompletionClaimObservation,
+  maps: IdentityRenamingMaps
+): CompletionClaimObservation =>
+  Match.valueTags(observation, {
+    ActiveTaskClaim: (value) => renameActiveTaskClaim(value, maps),
+    CompletionTaskClaim: (value) => renameCompletionTaskClaim(value, maps),
+    UnclaimedTask: (value) => preserveCassetteValue(value)
+  })
+
+const renameFocusedTaskCompletionFacts = (
+  facts: FocusedTaskCompletionFacts,
+  maps: IdentityRenamingMaps
+): FocusedTaskCompletionFacts =>
+  completeFields<FocusedTaskCompletionFacts>({
+    currentClaim: renameCompletionClaimObservation(facts.currentClaim, maps),
+    lifecycle: preserveCassetteValue(facts.lifecycle),
+    operationId: renamed(facts.operationId, maps.operationIds),
+    target: preserveCassetteValue(facts.target),
+    targetMembership: preserveCassetteValue(facts.targetMembership),
+    taskId: preserveCassetteValue(facts.taskId),
+    taskRevision: preserveCassetteValue(facts.taskRevision),
+    trackerRevision: preserveCassetteValue(facts.trackerRevision),
+    unfinishedPrerequisiteTaskIds: preserveCassetteValue(facts.unfinishedPrerequisiteTaskIds)
+  })
+
 const renameAttemptChoiceRequestId = (
   requestId: AttemptChoiceRequestId,
   maps: IdentityRenamingMaps
@@ -248,6 +285,7 @@ const renameCandidateCorrelation = (
   maps: IdentityRenamingMaps
 ): IntegrationCandidateCorrelation =>
   completeFields<IntegrationCandidateCorrelation>({
+    acceptanceManifest: preserveCassetteValue(correlation.acceptanceManifest),
     acceptedResultCommit: preserveCassetteValue(correlation.acceptedResultCommit),
     attemptId: renamed(correlation.attemptId, maps.attemptIds),
     candidateId: renamed(correlation.candidateId, maps.integrationCandidateIds),
@@ -281,11 +319,13 @@ const renameTargetPromotionCorrelation = (
 ): TargetPromotionCorrelation => {
   const candidateCorrelation = renameCandidateCorrelation(correlation.candidateCorrelation, maps)
   return completeFields<TargetPromotionCorrelation>({
+    acceptanceManifest: preserveCassetteValue(correlation.acceptanceManifest),
     candidateCommit: preserveCassetteValue(correlation.candidateCommit),
     candidateConstructedAt: preserveCassetteValue(correlation.candidateConstructedAt),
     candidateCorrelation,
     expectedTargetHead: preserveCassetteValue(correlation.expectedTargetHead),
     integrationTarget: preserveCassetteValue(correlation.integrationTarget),
+    reviewManifest: preserveCassetteValue(correlation.reviewManifest),
     requestId: targetPromotionRequestIdForCandidate(candidateCorrelation.candidateId),
     verificationCorrelation: renameTargetVerificationCorrelation(correlation.verificationCorrelation, maps),
     verificationManifest: preserveCassetteValue(correlation.verificationManifest)
@@ -295,6 +335,8 @@ const renameTargetPromotionCorrelation = (
 const renameCompletionTaskClaim = (claim: CompletionTaskClaim, maps: IdentityRenamingMaps): CompletionTaskClaim =>
   completeFields<CompletionTaskClaim>({
     _tag: "CompletionTaskClaim",
+    acceptanceManifest: preserveCassetteValue(claim.acceptanceManifest),
+    integrationReviewManifest: preserveCassetteValue(claim.integrationReviewManifest),
     originalClaim: completeFields<typeof claim.originalClaim>({
       _tag: "ActiveTaskClaim",
       operationId: renamed(claim.originalClaim.operationId, maps.operationIds),
@@ -303,19 +345,81 @@ const renameCompletionTaskClaim = (claim: CompletionTaskClaim, maps: IdentityRen
       token: renamed(claim.originalClaim.token, maps.claimTokens)
     }),
     plannedAttempt: renamePlannedAttempt(claim.plannedAttempt, maps),
-    promotionCorrelation: renameTargetPromotionCorrelation(claim.promotionCorrelation, maps)
+    promotionCorrelation: renameTargetPromotionCorrelation(claim.promotionCorrelation, maps),
+    verificationManifest: preserveCassetteValue(claim.verificationManifest)
   })
 
-const renameFreshCompletedTaskObservation = (
-  observation: FreshCompletedTaskObservation,
+const renameCompletionTaskRequest = (
+  request: CompletionTaskRequest,
   maps: IdentityRenamingMaps
-): FreshCompletedTaskObservation =>
-  completeFields<FreshCompletedTaskObservation>({
+): CompletionTaskRequest =>
+  completeFields<CompletionTaskRequest>({
+    acceptanceManifest: preserveCassetteValue(request.acceptanceManifest),
+    claim: renameCompletionTaskClaim(request.claim, maps),
+    integrationReviewManifest: preserveCassetteValue(request.integrationReviewManifest),
+    operationId: renamed(request.operationId, maps.operationIds),
+    promotionCorrelation: renameTargetPromotionCorrelation(request.promotionCorrelation, maps),
+    taskId: preserveCassetteValue(request.taskId),
+    taskRevision: preserveCassetteValue(request.taskRevision),
+    verificationManifest: preserveCassetteValue(request.verificationManifest)
+  })
+
+const renameFocusedCompletedTaskObservation = (
+  observation: FocusedCompletedTaskObservation,
+  maps: IdentityRenamingMaps
+): FocusedCompletedTaskObservation =>
+  completeFields<FocusedCompletedTaskObservation>({
+    _tag: "FocusedCompletedTaskObservation",
+    claim: renameCompletionTaskClaim(observation.claim, maps),
     lifecycle: "CompletedSuccessfully",
     observedAt: preserveCassetteValue(observation.observedAt),
     operationId: renamed(observation.operationId, maps.operationIds),
     taskId: preserveCassetteValue(observation.taskId),
-    trackerRevision: preserveCassetteValue(observation.trackerRevision)
+    taskRevision: preserveCassetteValue(observation.taskRevision),
+    trackerRevision: preserveCassetteValue(observation.trackerRevision),
+    target: preserveCassetteValue(observation.target)
+  })
+
+const renameCompletionSuccessObservation = (
+  observation: CompletionSuccessObservation,
+  maps: IdentityRenamingMaps
+): CompletionSuccessObservation => renameFocusedCompletedTaskObservation(observation, maps)
+
+const renameCompletionTaskRequestLookup = (
+  lookup: CompletionTaskRequestLookup,
+  maps: IdentityRenamingMaps
+): CompletionTaskRequestLookup =>
+  Match.value(lookup).pipe(
+    Match.tagsExhaustive({
+      Applied: (value) =>
+        completeFields<typeof value>({ _tag: "Applied", request: renameCompletionTaskRequest(value.request, maps) }),
+      NotApplied: (value) =>
+        completeFields<typeof value>({ _tag: "NotApplied", request: renameCompletionTaskRequest(value.request, maps) }),
+      Unreadable: (value) =>
+        completeFields<typeof value>({
+          _tag: "Unreadable",
+          detail: value.detail,
+          request: renameCompletionTaskRequest(value.request, maps)
+        })
+    })
+  )
+
+const preserveCompletionTaskFocusedReadPurpose = (
+  purpose: CompletionTaskFocusedReadPurpose
+): CompletionTaskFocusedReadPurpose =>
+  Match.valueTags(purpose, {
+    Authorization: (value) =>
+      completeFields<typeof value>({
+        _tag: "Authorization",
+        attemptOrdinal: preserveCassetteValue(value.attemptOrdinal),
+        authorizationOrdinal: preserveCassetteValue(value.authorizationOrdinal)
+      }),
+    Confirmation: (value) =>
+      completeFields<typeof value>({
+        _tag: "Confirmation",
+        attemptOrdinal: preserveCassetteValue(value.attemptOrdinal),
+        confirmationOrdinal: preserveCassetteValue(value.confirmationOrdinal)
+      })
   })
 
 const renameCandidateAgentReport = (
@@ -323,78 +427,79 @@ const renameCandidateAgentReport = (
   maps: IdentityRenamingMaps
 ): IntegrationCandidateAgentReport => {
   const correlation = renameCandidateCorrelation(report.correlation, maps)
-  switch (report._tag) {
-    case "Conflict":
-      return completeFields<typeof report>({ _tag: "Conflict", correlation })
-    case "ExitedWithoutCandidate":
-      return completeFields<typeof report>({ _tag: "ExitedWithoutCandidate", correlation })
-    case "Submitted":
-      return completeFields<typeof report>({
-        _tag: "Submitted",
-        candidateCommit: preserveCassetteValue(report.candidateCommit),
-        correlation
-      })
-    case "Working":
-      return completeFields<typeof report>({ _tag: "Working", correlation })
-  }
+  return Match.value(report).pipe(
+    Match.tagsExhaustive({
+      Conflict: (value) => completeFields<typeof value>({ _tag: "Conflict", correlation }),
+      ExitedWithoutCandidate: (value) => completeFields<typeof value>({ _tag: "ExitedWithoutCandidate", correlation }),
+      Submitted: (value) =>
+        completeFields<typeof value>({
+          _tag: "Submitted",
+          candidateCommit: preserveCassetteValue(value.candidateCommit),
+          correlation,
+          reviewManifest: preserveCassetteValue(value.reviewManifest)
+        }),
+      Working: (value) => completeFields<typeof value>({ _tag: "Working", correlation })
+    })
+  )
 }
 
 // eslint-disable-next-line complexity -- Distinct worktree facts carry different generated locators and require exhaustive renaming.
 const renamePlannedAttemptWorktreeObservation = (
   observation: PlannedAttemptWorktreeObservation,
   maps: IdentityRenamingMaps
-): PlannedAttemptWorktreeObservation => {
-  switch (observation._tag) {
-    case "AttemptWorktreeLost":
-      return completeFields<typeof observation>({
-        _tag: "AttemptWorktreeLost",
-        plannedAttempt: renamePlannedAttempt(observation.plannedAttempt, maps)
-      })
-    case "CompetingWorktreeRegistrations":
-      return new CompetingWorktreeRegistrations({
-        observedBranchAtPlannedWorktree: renamed(observation.observedBranchAtPlannedWorktree, maps.taskBranchRefs),
-        observedHeadAtPlannedWorktree: preserveCassetteValue(observation.observedHeadAtPlannedWorktree),
-        plannedBranch: renamed(observation.plannedBranch, maps.taskBranchRefs),
-        plannedBranchRegisteredWorktree: renamed(observation.plannedBranchRegisteredWorktree, maps.worktreeLocators),
-        plannedWorktree: renamed(observation.plannedWorktree, maps.worktreeLocators)
-      })
-    case "ConflictingWorktreeRegistration":
-      return new ConflictingWorktreeRegistration({
-        observedBranch: renamed(observation.observedBranch, maps.taskBranchRefs),
-        observedHead: preserveCassetteValue(observation.observedHead),
-        plannedBranch: renamed(observation.plannedBranch, maps.taskBranchRefs),
-        worktree: renamed(observation.worktree, maps.worktreeLocators)
-      })
-    case "ContradictoryWorktreeState":
-      return new ContradictoryWorktreeState({
-        detail: preserveCassetteValue(observation.detail),
-        worktree: renamed(observation.worktree, maps.worktreeLocators)
-      })
-    case "ForeignWorktreeRegistration":
-      return new ForeignWorktreeRegistration({
-        branch: renamed(observation.branch, maps.taskBranchRefs),
-        plannedWorktree: renamed(observation.plannedWorktree, maps.worktreeLocators),
-        registeredWorktree: renamed(observation.registeredWorktree, maps.worktreeLocators)
-      })
-    case "PlannedWorktreeReady":
-      return completeFields<typeof observation>({
-        _tag: "PlannedWorktreeReady",
-        baseSha: preserveCassetteValue(observation.baseSha),
-        branch: renamed(observation.branch, maps.taskBranchRefs),
-        headSha: preserveCassetteValue(observation.headSha),
-        worktree: renamed(observation.worktree, maps.worktreeLocators)
-      })
-    case "UntrackedWorktreePath":
-      return new UntrackedWorktreePath({ worktree: renamed(observation.worktree, maps.worktreeLocators) })
-    case "WorktreeBaseMismatch":
-      return new WorktreeBaseMismatch({
-        baseSha: preserveCassetteValue(observation.baseSha),
-        branch: renamed(observation.branch, maps.taskBranchRefs),
-        headSha: preserveCassetteValue(observation.headSha),
-        worktree: renamed(observation.worktree, maps.worktreeLocators)
-      })
-  }
-}
+): PlannedAttemptWorktreeObservation =>
+  Match.value(observation).pipe(
+    Match.tagsExhaustive({
+      AttemptWorktreeLost: (value) =>
+        completeFields<typeof value>({
+          _tag: "AttemptWorktreeLost",
+          plannedAttempt: renamePlannedAttempt(value.plannedAttempt, maps)
+        }),
+      CompetingWorktreeRegistrations: (value) =>
+        new CompetingWorktreeRegistrations({
+          observedBranchAtPlannedWorktree: renamed(value.observedBranchAtPlannedWorktree, maps.taskBranchRefs),
+          observedHeadAtPlannedWorktree: preserveCassetteValue(value.observedHeadAtPlannedWorktree),
+          plannedBranch: renamed(value.plannedBranch, maps.taskBranchRefs),
+          plannedBranchRegisteredWorktree: renamed(value.plannedBranchRegisteredWorktree, maps.worktreeLocators),
+          plannedWorktree: renamed(value.plannedWorktree, maps.worktreeLocators)
+        }),
+      ConflictingWorktreeRegistration: (value) =>
+        new ConflictingWorktreeRegistration({
+          observedBranch: renamed(value.observedBranch, maps.taskBranchRefs),
+          observedHead: preserveCassetteValue(value.observedHead),
+          plannedBranch: renamed(value.plannedBranch, maps.taskBranchRefs),
+          worktree: renamed(value.worktree, maps.worktreeLocators)
+        }),
+      ContradictoryWorktreeState: (value) =>
+        new ContradictoryWorktreeState({
+          detail: preserveCassetteValue(value.detail),
+          worktree: renamed(value.worktree, maps.worktreeLocators)
+        }),
+      ForeignWorktreeRegistration: (value) =>
+        new ForeignWorktreeRegistration({
+          branch: renamed(value.branch, maps.taskBranchRefs),
+          plannedWorktree: renamed(value.plannedWorktree, maps.worktreeLocators),
+          registeredWorktree: renamed(value.registeredWorktree, maps.worktreeLocators)
+        }),
+      PlannedWorktreeReady: (value) =>
+        completeFields<typeof value>({
+          _tag: "PlannedWorktreeReady",
+          baseSha: preserveCassetteValue(value.baseSha),
+          branch: renamed(value.branch, maps.taskBranchRefs),
+          headSha: preserveCassetteValue(value.headSha),
+          worktree: renamed(value.worktree, maps.worktreeLocators)
+        }),
+      UntrackedWorktreePath: (value) =>
+        new UntrackedWorktreePath({ worktree: renamed(value.worktree, maps.worktreeLocators) }),
+      WorktreeBaseMismatch: (value) =>
+        new WorktreeBaseMismatch({
+          baseSha: preserveCassetteValue(value.baseSha),
+          branch: renamed(value.branch, maps.taskBranchRefs),
+          headSha: preserveCassetteValue(value.headSha),
+          worktree: renamed(value.worktree, maps.worktreeLocators)
+        })
+    })
+  )
 
 type CompleteFactFamilies = Extract<
   TaskTrackerFactsObservation,
@@ -447,56 +552,67 @@ const renameFactFamilies = <
 const renameTrackerFactsObservation = (
   observation: TaskTrackerFactsObservation,
   maps: IdentityRenamingMaps
-): TaskTrackerFactsObservation => {
-  switch (observation._tag) {
-    case "CompleteTaskTrackerFacts":
-      return completeFields<typeof observation>({
-        _tag: "CompleteTaskTrackerFacts",
-        factFamilies: renameFactFamilies(observation.factFamilies, maps),
-        operationId: renamed(observation.operationId, maps.operationIds),
-        target: preserveCassetteValue(observation.target)
-      })
-    case "FocusedTaskWorkSpecificationFacts":
-      return completeFields<typeof observation>({
-        _tag: "FocusedTaskWorkSpecificationFacts",
-        factFamily: renameFreshness(observation.factFamily, maps),
-        operationId: renamed(observation.operationId, maps.operationIds),
-        target: preserveCassetteValue(observation.target)
-      })
-    case "FocusedTaskClaimFacts":
-      return completeFields<typeof observation>({
-        ...observation,
-        freshness: {
-          ...observation.freshness,
-          operationId: renamed(observation.freshness.operationId, maps.operationIds)
-        },
-        observation:
-          observation.observation._tag === "ActiveTaskClaim"
-            ? {
-                ...observation.observation,
-                operationId: renamed(observation.observation.operationId, maps.operationIds),
-                token: renamed(observation.observation.token, maps.claimTokens)
-              }
-            : preserveCassetteValue(observation.observation),
-        operationId: renamed(observation.operationId, maps.operationIds),
-        target: preserveCassetteValue(observation.target)
-      })
-    case "FocusedTaskClaimFactsUnreadable":
-      return completeFields<typeof observation>({
-        ...observation,
-        operationId: renamed(observation.operationId, maps.operationIds),
-        target: preserveCassetteValue(observation.target)
-      })
-    case "UnchangedTaskTrackerFactsReconfirmed":
-      return completeFields<typeof observation>({
-        _tag: "UnchangedTaskTrackerFactsReconfirmed",
-        factFamilies: renameFactFamilies(observation.factFamilies, maps),
-        operationId: renamed(observation.operationId, maps.operationIds),
-        priorFullObservationOperationId: renamed(observation.priorFullObservationOperationId, maps.operationIds),
-        target: preserveCassetteValue(observation.target)
-      })
-  }
-}
+): TaskTrackerFactsObservation =>
+  Match.value(observation).pipe(
+    Match.tagsExhaustive({
+      CompleteTaskTrackerFacts: (value) =>
+        completeFields<typeof value>({
+          _tag: "CompleteTaskTrackerFacts",
+          factFamilies: renameFactFamilies(value.factFamilies, maps),
+          operationId: renamed(value.operationId, maps.operationIds),
+          target: preserveCassetteValue(value.target)
+        }),
+      FocusedTaskCompletionFacts: (value) =>
+        (() => {
+          const request = renameCompletionTaskRequest(value.request, maps)
+          const operationId = completionTaskFocusedReadOperationIdFor(request, value.purpose)
+          return completeFields<typeof value>({
+            _tag: "FocusedTaskCompletionFacts",
+            facts: { ...renameFocusedTaskCompletionFacts(value.facts, maps), operationId },
+            operationId,
+            purpose: preserveCompletionTaskFocusedReadPurpose(value.purpose),
+            request,
+            target: preserveCassetteValue(value.target)
+          })
+        })(),
+      FocusedTaskWorkSpecificationFacts: (value) =>
+        completeFields<typeof value>({
+          _tag: "FocusedTaskWorkSpecificationFacts",
+          factFamily: renameFreshness(value.factFamily, maps),
+          operationId: renamed(value.operationId, maps.operationIds),
+          target: preserveCassetteValue(value.target)
+        }),
+      FocusedTaskClaimFacts: (value) =>
+        completeFields<typeof value>({
+          ...value,
+          freshness: { ...value.freshness, operationId: renamed(value.freshness.operationId, maps.operationIds) },
+          observation:
+            value.observation._tag === "ActiveTaskClaim"
+              ? {
+                  ...value.observation,
+                  operationId: renamed(value.observation.operationId, maps.operationIds),
+                  token: renamed(value.observation.token, maps.claimTokens)
+                }
+              : preserveCassetteValue(value.observation),
+          operationId: renamed(value.operationId, maps.operationIds),
+          target: preserveCassetteValue(value.target)
+        }),
+      FocusedTaskClaimFactsUnreadable: (value) =>
+        completeFields<typeof value>({
+          ...value,
+          operationId: renamed(value.operationId, maps.operationIds),
+          target: preserveCassetteValue(value.target)
+        }),
+      UnchangedTaskTrackerFactsReconfirmed: (value) =>
+        completeFields<typeof value>({
+          _tag: "UnchangedTaskTrackerFactsReconfirmed",
+          factFamilies: renameFactFamilies(value.factFamilies, maps),
+          operationId: renamed(value.operationId, maps.operationIds),
+          priorFullObservationOperationId: renamed(value.priorFullObservationOperationId, maps.operationIds),
+          target: preserveCassetteValue(value.target)
+        })
+    })
+  )
 
 type RecordedOperationEntry = Extract<RecordedCassetteEntryType, { readonly operation: WorkflowOperation }>
 type WithoutOperation<Value> = Value extends unknown ? Omit<Value, "operation"> : never
@@ -520,7 +636,7 @@ function renameRecordedOperationEntry(
   void recordedOperationEntryFieldsWithoutOperationArePreservable
   return Schema.decodeUnknownSync(RecordedOperationEntrySchema)({
     ...preservedEntryFields,
-    operation: renameWorkflowOperation(operation, maps)
+    operation: renameWorkflowOperation(operation, maps, (request) => renameCompletionTaskRequest(request, maps))
   })
 }
 
@@ -570,7 +686,8 @@ const renameRecordedCassetteEntry = (
           _tag: "IntegrationCandidateConstructed",
           candidateCommit: preserveCassetteValue(candidateEntry.candidateCommit),
           correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
-          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
+          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification),
+          reviewManifest: preserveCassetteValue(candidateEntry.reviewManifest)
         }),
       IntegrationCandidateGitValidationFailed: (candidateEntry) =>
         completeFields<typeof candidateEntry>({
@@ -694,7 +811,7 @@ const renameRecordedCassetteEntry = (
           initiatedBy: preserveCassetteValue(entry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           operationId: renamed(entry.operationId, maps.operationIds),
-          successObservation: renameFreshCompletedTaskObservation(entry.successObservation, maps)
+          successObservation: renameCompletionSuccessObservation(entry.successObservation, maps)
         }),
       CompletionClaimDeletionAttemptIntended: (entry) =>
         completeFields<typeof entry>({
@@ -704,7 +821,7 @@ const renameRecordedCassetteEntry = (
           initiatedBy: preserveCassetteValue(entry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           operationId: renamed(entry.operationId, maps.operationIds),
-          successObservation: renameFreshCompletedTaskObservation(entry.successObservation, maps)
+          successObservation: renameCompletionSuccessObservation(entry.successObservation, maps)
         }),
       CompletionClaimDeleted: (entry) =>
         completeFields<typeof entry>({
@@ -712,7 +829,7 @@ const renameRecordedCassetteEntry = (
           claim: renameCompletionTaskClaim(entry.claim, maps),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           operationId: renamed(entry.operationId, maps.operationIds),
-          successObservation: renameFreshCompletedTaskObservation(entry.successObservation, maps)
+          successObservation: renameCompletionSuccessObservation(entry.successObservation, maps)
         }),
       IntegrationFinalitySettled: (entry) =>
         completeFields<typeof entry>({
@@ -721,7 +838,86 @@ const renameRecordedCassetteEntry = (
           deletionOperationId: renamed(entry.deletionOperationId, maps.operationIds),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           replacementOperationId: renamed(entry.replacementOperationId, maps.operationIds),
-          successObservation: renameFreshCompletedTaskObservation(entry.successObservation, maps)
+          successObservation: renameCompletionSuccessObservation(entry.successObservation, maps)
+        }),
+      CompletionTaskIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionTaskIntended",
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          request: renameCompletionTaskRequest(entry.request, maps)
+        }),
+      CompletionTaskAttemptIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionTaskAttemptIntended",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          focusedFactsOperationId: renamed(entry.focusedFactsOperationId, maps.operationIds),
+          gitReadOperationId: renamed(entry.gitReadOperationId, maps.operationIds),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          request: renameCompletionTaskRequest(entry.request, maps)
+        }),
+      CompletionTaskAcknowledged: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionTaskAcknowledged",
+          acknowledgement: completeFields<typeof entry.acknowledgement>({
+            operationId: renamed(entry.acknowledgement.operationId, maps.operationIds),
+            taskId: preserveCassetteValue(entry.acknowledgement.taskId)
+          }),
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          request: renameCompletionTaskRequest(entry.request, maps)
+        }),
+      CompletionTaskResponseLost: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionTaskResponseLost",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          request: renameCompletionTaskRequest(entry.request, maps)
+        }),
+      CompletionTaskRejected: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionTaskRejected",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          detail: preserveCassetteValue(entry.detail),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          request: renameCompletionTaskRequest(entry.request, maps)
+        }),
+      CompletionTaskCandidateAncestryReadIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionTaskCandidateAncestryReadIntended",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: renamed(entry.operationId, maps.operationIds),
+          request: renameCompletionTaskRequest(entry.request, maps)
+        }),
+      CompletionTaskCandidateAncestryObserved: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionTaskCandidateAncestryObserved",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          observation: preserveCassetteValue(entry.observation),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: renamed(entry.operationId, maps.operationIds),
+          request: renameCompletionTaskRequest(entry.request, maps)
+        }),
+      CompletionTaskRequestLookupIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionTaskRequestLookupIntended",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: renamed(entry.operationId, maps.operationIds),
+          request: renameCompletionTaskRequest(entry.request, maps)
+        }),
+      CompletionTaskRequestLookupObserved: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionTaskRequestLookupObserved",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          lookup: renameCompletionTaskRequestLookup(entry.lookup, maps),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: renamed(entry.operationId, maps.operationIds),
+          request: renameCompletionTaskRequest(entry.request, maps)
         }),
       AttemptChoiceApplied: (choiceEntry) =>
         completeFields<typeof choiceEntry>({
@@ -923,12 +1119,15 @@ const renameRecordedCassetteEntry = (
           })
         }),
       TaskTrackerFactsObserved: (observationEntry) =>
-        completeFields<typeof observationEntry>({
-          _tag: "TaskTrackerFactsObserved",
-          evidence: renameTrackerFactsObservation(observationEntry.evidence, maps),
-          occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
-          originatingActionOperationId: renamed(observationEntry.originatingActionOperationId, maps.operationIds)
-        }),
+        (() => {
+          const evidence = renameTrackerFactsObservation(observationEntry.evidence, maps)
+          return completeFields<typeof observationEntry>({
+            _tag: "TaskTrackerFactsObserved",
+            evidence,
+            occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
+            originatingActionOperationId: evidence.operationId
+          })
+        })(),
       TaskWorkCapacityChanged: preserveRecordedRunPolicyChange,
       TaskWorktreeReady: (worktreeEntry) =>
         completeFields<typeof worktreeEntry>({

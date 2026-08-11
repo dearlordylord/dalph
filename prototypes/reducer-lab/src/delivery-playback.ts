@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import { m } from "foldkit/message"
 import { ts } from "foldkit/schema"
 import { TaskId, type TaskId as TaskIdType } from "../../../packages/contracts/src/task-identity.ts"
@@ -211,18 +211,15 @@ const landmarkIndexes = (model: DeliveryPlaybackModel): ReadonlyArray<DeliveryFr
 
 const landmarkLabel = (landmarks: ReadonlyArray<DeliveryLandmark>): string | null => {
   if (landmarks.length === 0) return null
-  return landmarks.map((landmark) => {
-    switch (landmark._tag) {
-      case "InitialPublication":
-        return "initial publication"
-      case "CoordinatorRestart":
-        return `coordinator restart into activation ${landmark.activationOrdinal}`
-      case "EligibleFrontierWave":
-        return `eligible frontier ${landmark.taskIds.join("+")}`
-      case "TerminalPublication":
-        return "settled terminal publication"
-    }
-  }).join("; ")
+  return landmarks.map((landmark) =>
+    Match.value(landmark).pipe(
+      Match.tagsExhaustive({
+        CoordinatorRestart: ({ activationOrdinal }) => `coordinator restart into activation ${activationOrdinal}`,
+        EligibleFrontierWave: ({ taskIds }) => `eligible frontier ${taskIds.join("+")}`,
+        InitialPublication: () => "initial publication",
+        TerminalPublication: () => "settled terminal publication"
+      })
+    )).join("; ")
 }
 
 export interface DeliveryPlaybackFrameOption {
@@ -281,6 +278,11 @@ export const projectDeliveryPlayback = (model: DeliveryPlaybackModel): DeliveryP
 
 export type DeliveryPlaybackUpdate = readonly [DeliveryPlaybackModel, ReadonlyArray<DeliveryPlaybackCommand>]
 
+const playbackUpdate = (
+  model: DeliveryPlaybackModel,
+  commands: ReadonlyArray<DeliveryPlaybackCommand> = []
+): DeliveryPlaybackUpdate => [model, commands]
+
 const inspect = (
   model: typeof PopulatedDeliveryPlayback.Type,
   frameIndex: DeliveryFrameIndex
@@ -313,56 +315,54 @@ export const updateDeliveryPlayback = (
 ): DeliveryPlaybackUpdate => {
   const projection = projectDeliveryPlayback(model)
   const selectedIndex = projection.currentFrameIndex
-  switch (message._tag) {
-    case "PreviousFrameRequested":
-      return selectedIndex === null || !projection.previousFrameAvailable
-        ? [model, []]
-        : moveTo(model, DeliveryFrameIndex.make(selectedIndex - 1), message.source, (next) => next.previousFrameAvailable)
-    case "NextFrameRequested":
-      return selectedIndex === null || !projection.nextFrameAvailable
-        ? [model, []]
-        : moveTo(model, DeliveryFrameIndex.make(selectedIndex + 1), message.source, (next) => next.nextFrameAvailable)
-    case "PreviousLandmarkRequested": {
-      const target = selectedIndex === null
-        ? undefined
-        : projection.landmarkIndexes.filter((index) => index < selectedIndex).at(-1)
-      return moveTo(model, target, message.source, (next) => next.previousLandmarkAvailable)
-    }
-    case "NextLandmarkRequested": {
-      const target = selectedIndex === null
-        ? undefined
-        : projection.landmarkIndexes.find((index) => index > selectedIndex)
-      return moveTo(model, target, message.source, (next) => next.nextLandmarkAvailable)
-    }
-    case "ExactFrameSelected":
-      return model._tag === "EmptyDeliveryPlayback" || message.frameIndex >= model.frames.length
-        ? [model, []]
-        : [inspect(model, message.frameIndex), []]
-    case "FollowLiveRequested":
-      return model._tag === "EmptyDeliveryPlayback"
-        ? [model, []]
-        : [{ ...model, position: FollowingLive() }, []]
-    case "TaskSelectedRequested":
-      return [{ ...model, taskSelection: TaskSelected({ taskId: message.taskId }) }, []]
-    case "FramesUpdated": {
-      const firstFrame = message.frames[0]
-      if (firstFrame === undefined) {
-        return [EmptyDeliveryPlayback({
-          running: message.running,
+  return Match.value(message).pipe(
+    Match.tagsExhaustive({
+      ExactFrameSelected: ({ frameIndex }) =>
+        model._tag === "EmptyDeliveryPlayback" || frameIndex >= model.frames.length
+          ? playbackUpdate(model)
+          : playbackUpdate(inspect(model, frameIndex)),
+      FollowLiveRequested: () =>
+        model._tag === "EmptyDeliveryPlayback"
+          ? playbackUpdate(model)
+          : playbackUpdate({ ...model, position: FollowingLive() }),
+      FramesUpdated: ({ frames, running }) => {
+        const firstFrame = frames[0]
+        if (firstFrame === undefined) {
+          return playbackUpdate(EmptyDeliveryPlayback({ running, taskSelection: model.taskSelection }))
+        }
+        const position = model._tag === "EmptyDeliveryPlayback" || model.position._tag === "FollowingLive"
+          ? FollowingLive()
+          : InspectingFrame({
+            frameIndex: DeliveryFrameIndex.make(Math.min(model.position.frameIndex, frames.length - 1))
+          })
+        return playbackUpdate(PopulatedDeliveryPlayback.make({
+          frames: [firstFrame, ...frames.slice(1)],
+          position,
+          running,
           taskSelection: model.taskSelection
-        }), []]
-      }
-      const position = model._tag === "EmptyDeliveryPlayback" || model.position._tag === "FollowingLive"
-        ? FollowingLive()
-        : InspectingFrame({
-          frameIndex: DeliveryFrameIndex.make(Math.min(model.position.frameIndex, message.frames.length - 1))
-        })
-      return [PopulatedDeliveryPlayback.make({
-        frames: [firstFrame, ...message.frames.slice(1)],
-        position,
-        running: message.running,
-        taskSelection: model.taskSelection
-      }), []]
-    }
-  }
+        }))
+      },
+      NextFrameRequested: ({ source }) =>
+        selectedIndex === null || !projection.nextFrameAvailable
+          ? playbackUpdate(model)
+          : moveTo(model, DeliveryFrameIndex.make(selectedIndex + 1), source, (next) => next.nextFrameAvailable),
+      NextLandmarkRequested: ({ source }) => {
+        const target = selectedIndex === null
+          ? undefined
+          : projection.landmarkIndexes.find((index) => index > selectedIndex)
+        return moveTo(model, target, source, (next) => next.nextLandmarkAvailable)
+      },
+      PreviousFrameRequested: ({ source }) =>
+        selectedIndex === null || !projection.previousFrameAvailable
+          ? playbackUpdate(model)
+          : moveTo(model, DeliveryFrameIndex.make(selectedIndex - 1), source, (next) => next.previousFrameAvailable),
+      PreviousLandmarkRequested: ({ source }) => {
+        const target = selectedIndex === null
+          ? undefined
+          : projection.landmarkIndexes.filter((index) => index < selectedIndex).at(-1)
+        return moveTo(model, target, source, (next) => next.previousLandmarkAvailable)
+      },
+      TaskSelectedRequested: ({ taskId }) => playbackUpdate({ ...model, taskSelection: TaskSelected({ taskId }) })
+    })
+  )
 }

@@ -15,7 +15,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Context, Deferred, Effect, Fiber, Layer, Option, Queue, Schema, Scope, Stream } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer, Match, Option, Queue, Schema, Scope, Stream } from "effect"
 import { expect } from "vitest"
 import {
   InitialControlPolicy,
@@ -674,127 +674,162 @@ const makeRunActivationDriverImplementation = () => {
             // oxlint-disable-next-line typescript/no-unnecessary-condition -- a final command returns the proof.
             while (true) {
               const command = yield* Queue.take(commands)
-              switch (command.tag) {
-                case "ActivateEstablishedRun":
-                  heldPosition = recovery.reconstructedPlannedAttemptPositions.some(({ taskId }) => taskId === taskA)
-                    ? "AttemptA"
-                    : recovery.reconstructedPlannedAttemptPositions.some(({ taskId }) => taskId === taskC)
-                      ? "AttemptC"
-                      : "NoTaskPosition"
-                  otherHeldPositions = recovery.reconstructedPlannedAttemptPositions.filter(
-                    ({ taskId }) => taskId === taskB
-                  ).length
-                  if (otherHeldPositions > 0) {
-                    const blocked = yield* activeController.tryReserve(admissionProposalC)
-                    if (blocked._tag !== "Deferred") {
+              const finalResult = yield* Match.value(command.tag).pipe(
+                Match.when("ActivateEstablishedRun", () =>
+                  Effect.gen(function* () {
+                    heldPosition = recovery.reconstructedPlannedAttemptPositions.some(({ taskId }) => taskId === taskA)
+                      ? "AttemptA"
+                      : recovery.reconstructedPlannedAttemptPositions.some(({ taskId }) => taskId === taskC)
+                        ? "AttemptC"
+                        : "NoTaskPosition"
+                    otherHeldPositions = recovery.reconstructedPlannedAttemptPositions.filter(
+                      ({ taskId }) => taskId === taskB
+                    ).length
+                    if (otherHeldPositions > 0) {
+                      const blocked = yield* activeController.tryReserve(admissionProposalC)
+                      if (blocked._tag !== "Deferred") {
+                        return yield* Effect.die(
+                          `contracted capacity admitted new work over reconstructed holders: ${JSON.stringify({
+                            basis: productionAdmissionBasis,
+                            positions: [...(yield* activeController.snapshot).positions]
+                          })}`
+                        )
+                      }
+                    }
+                    phase = "ActivatingRun"
+                    activationsStarted += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
+                Match.when("ReadInitialTrackerGraph", () =>
+                  Effect.gen(function* () {
+                    initialTrackerObserved = true
+                    trackerCalls += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
+                Match.when("ReconcileAmbiguousExecutorCommand", () =>
+                  Effect.gen(function* () {
+                    const report = yield* continuePlannedAttemptExecutorWork(attemptA)
+                    if (report._tag !== "Running") {
+                      return yield* Effect.die("ambiguous executor command did not reconcile to exact Running")
+                    }
+                    executorCalls += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
+                Match.when("SettleRetainedAttempt", () =>
+                  Effect.gen(function* () {
+                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptA.attemptId, runId })
+                    appendTerminalReport(attemptA)
+                    heldPosition = "NoTaskPosition"
+                    executorCalls += 1
+                    if (otherHeldPositions > 0) {
+                      const blocked = yield* activeController.tryReserve(admissionProposalC)
+                      if (blocked._tag !== "Deferred") {
+                        return yield* Effect.die("capacity-one admission ignored the remaining retained holder")
+                      }
+                    }
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
+                Match.when("SettleOtherRetainedAttempt", () =>
+                  Effect.gen(function* () {
+                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptB.attemptId, runId })
+                    appendTerminalReport(attemptB)
+                    otherHeldPositions -= 1
+                    executorCalls += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
+                Match.when("AdmitIndependentTask", () =>
+                  Effect.gen(function* () {
+                    const decision = yield* activeController.tryReserve(admissionProposalC)
+                    if (decision._tag === "Deferred") {
+                      return yield* Effect.die("independent task must fit released capacity")
+                    }
+                    yield* activeController.bindPlannedAttemptPosition(taskC, { attemptId: attemptC.attemptId, runId })
+                    appendResponsibility(attemptC)
+                    heldPosition = "AttemptC"
+                    independentTaskAdmitted = true
+                    executorCalls += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
+                Match.when("SettleIndependentTask", () =>
+                  Effect.gen(function* () {
+                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptC.attemptId, runId })
+                    appendTerminalReport(attemptC)
+                    heldPosition = "NoTaskPosition"
+                    independentTaskAdmitted = false
+                    independentTaskSettled = true
+                    executorCalls += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
+                Match.when("TrackerFactsBecomeSettled", () =>
+                  Effect.gen(function* () {
+                    trackerSettled = true
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
+                Match.when("ReachQuiescence", () =>
+                  Effect.gen(function* () {
+                    quiescent = true
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
+                Match.when("ReadPostQuiescenceTrackerGraph", () =>
+                  Effect.gen(function* () {
+                    if (postQuiescenceReads !== 0) {
+                      return yield* Effect.die("one activation cannot perform a second final tracker read")
+                    }
+                    postQuiescenceReads = 1
+                    trackerCalls += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
+                Match.when("ReturnIncomplete", () =>
+                  Effect.gen(function* () {
+                    phase = "ActivationReturned"
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return {
+                      acceptedAt: records.at(-1)?.position ?? null,
+                      decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+                    }
+                  })
+                ),
+                Match.when("TerminateRun", () =>
+                  Effect.gen(function* () {
+                    const decision = deriveRunFinalityDecision(
+                      { explanations: [], transitions: [] },
+                      WorkflowResponsibilityState.make({ entries: [] }),
+                      trackerSettled
+                    )
+                    if (decision._tag !== "RunMayTerminate") {
                       return yield* Effect.die(
-                        `contracted capacity admitted new work over reconstructed holders: ${JSON.stringify({
-                          basis: productionAdmissionBasis,
-                          positions: [...(yield* activeController.snapshot).positions]
-                        })}`
+                        `production finality rejected settled model Run: ${JSON.stringify(decision)}`
                       )
                     }
-                  }
-                  phase = "ActivatingRun"
-                  activationsStarted += 1
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  break
-                case "ReadInitialTrackerGraph":
-                  initialTrackerObserved = true
-                  trackerCalls += 1
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  break
-                case "ReconcileAmbiguousExecutorCommand": {
-                  const report = yield* continuePlannedAttemptExecutorWork(attemptA)
-                  if (report._tag !== "Running") {
-                    return yield* Effect.die("ambiguous executor command did not reconcile to exact Running")
-                  }
-                  executorCalls += 1
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  break
-                }
-                case "SettleRetainedAttempt": {
-                  yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptA.attemptId, runId })
-                  appendTerminalReport(attemptA)
-                  heldPosition = "NoTaskPosition"
-                  executorCalls += 1
-                  if (otherHeldPositions > 0) {
-                    const blocked = yield* activeController.tryReserve(admissionProposalC)
-                    if (blocked._tag !== "Deferred") {
-                      return yield* Effect.die("capacity-one admission ignored the remaining retained holder")
-                    }
-                  }
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  break
-                }
-                case "SettleOtherRetainedAttempt": {
-                  yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptB.attemptId, runId })
-                  appendTerminalReport(attemptB)
-                  otherHeldPositions -= 1
-                  executorCalls += 1
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  break
-                }
-                case "AdmitIndependentTask": {
-                  const decision = yield* activeController.tryReserve(admissionProposalC)
-                  if (decision._tag === "Deferred") {
-                    return yield* Effect.die("independent task must fit released capacity")
-                  }
-                  yield* activeController.bindPlannedAttemptPosition(taskC, { attemptId: attemptC.attemptId, runId })
-                  appendResponsibility(attemptC)
-                  heldPosition = "AttemptC"
-                  independentTaskAdmitted = true
-                  executorCalls += 1
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  break
-                }
-                case "SettleIndependentTask":
-                  yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptC.attemptId, runId })
-                  appendTerminalReport(attemptC)
-                  heldPosition = "NoTaskPosition"
-                  independentTaskAdmitted = false
-                  independentTaskSettled = true
-                  executorCalls += 1
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  break
-                case "TrackerFactsBecomeSettled":
-                  trackerSettled = true
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  break
-                case "ReachQuiescence":
-                  quiescent = true
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  break
-                case "ReadPostQuiescenceTrackerGraph":
-                  if (postQuiescenceReads !== 0) {
-                    return yield* Effect.die("one activation cannot perform a second final tracker read")
-                  }
-                  postQuiescenceReads = 1
-                  trackerCalls += 1
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  break
-                case "ReturnIncomplete":
-                  phase = "ActivationReturned"
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  return {
-                    acceptedAt: records.at(-1)?.position ?? null,
-                    decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
-                  }
-                case "TerminateRun": {
-                  const decision = deriveRunFinalityDecision(
-                    { explanations: [], transitions: [] },
-                    WorkflowResponsibilityState.make({ entries: [] }),
-                    trackerSettled
-                  )
-                  if (decision._tag !== "RunMayTerminate") {
-                    return yield* Effect.die(
-                      `production finality rejected settled model Run: ${JSON.stringify(decision)}`
-                    )
-                  }
-                  phase = "ActivationReturned"
-                  yield* Deferred.succeed(command.acknowledged, undefined)
-                  return { acceptedAt: records.at(-1)?.position ?? null, decision }
-                }
+                    phase = "ActivationReturned"
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return { acceptedAt: records.at(-1)?.position ?? null, decision }
+                  })
+                ),
+                Match.exhaustive
+              )
+              if (finalResult !== undefined) {
+                return finalResult
               }
             }
           })

@@ -4,7 +4,6 @@ import {
   AttemptId,
   GitCommitSha,
   IntegrationTarget,
-  PlannedAttemptExecutorResult,
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
@@ -83,7 +82,14 @@ export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
 export const AuthoredPlannedAttemptExecutorReport = Schema.TaggedUnion({
   Running: { attemptId: AttemptId },
   SafelySuspended: { attemptId: AttemptId },
-  Terminal: { attemptId: AttemptId, result: PlannedAttemptExecutorResult }
+  Terminal: {
+    attemptId: AttemptId,
+    result: Schema.TaggedUnion({
+      Accepted: { acceptedResult: Schema.Struct({ commit: GitCommitSha }) },
+      Completed: {},
+      Failed: {}
+    })
+  }
 })
 export type AuthoredPlannedAttemptExecutorReport = typeof AuthoredPlannedAttemptExecutorReport.Type
 
@@ -245,6 +251,22 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   CompletionClaimReadReturned: { claim: Schema.Literals(["Active", "Completion"]), taskId: TaskId },
   /** The tracker applied replacement of the active claim with the exact completion claim. */
   CompletionClaimReplacementApplied: { taskId: TaskId },
+  /** One all-or-nothing task-local lifecycle, prerequisite, membership, revision, and claim read. */
+  CompletionTaskFocusedReadReturned: {
+    lifecycle: Schema.Literals(["Open", "CompletedSuccessfully", "TerminalWithoutSuccess"]),
+    taskId: TaskId,
+    unfinishedPrerequisiteTaskIds: Schema.Array(TaskId)
+  },
+  /** The tracker returned or lost the direct response to exact request Q. */
+  CompletionTaskRequestReturned: {
+    outcome: Schema.Literals(["Acknowledged", "DefinitelyRejected", "ResponseLost"]),
+    taskId: TaskId
+  },
+  /** The tracker classified exact request Q after an ambiguous response. */
+  CompletionTaskRequestLookupReturned: {
+    outcome: Schema.Literals(["Applied", "NotApplied", "Unreadable"]),
+    taskId: TaskId
+  },
   /** Harness synchronization: hold this exact admitted continuation before its durable executor command intent. */
   DalphHoldsAdmittedContinuationBeforeExecutorIntent: { attemptId: AttemptId, taskId: TaskId },
   DalphSelects: { operation: AuthoredCassetteDecision },
@@ -401,6 +423,9 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CompletionClaimDeletionApplied",
     "CompletionClaimReadReturned",
     "CompletionClaimReplacementApplied",
+    "CompletionTaskFocusedReadReturned",
+    "CompletionTaskRequestLookupReturned",
+    "CompletionTaskRequestReturned",
     "TaskClaimReadFailed",
     "TaskClaimCurrentReadReturned",
     "TaskClaimReadReturned",
@@ -585,11 +610,11 @@ const completionFinalityStoryIsComplete = Schema.makeFilter((cassette: typeof Au
             ? "Replace"
             : "Delete"
       )
-    return JSON.stringify(actualSteps) !== JSON.stringify(expectedSteps)
+    return actualSteps.some((step, index) => step !== expectedSteps[index]) || actualSteps.length > expectedSteps.length
   })?.[0]
   return incompleteTaskId === undefined
     ? undefined
-    : `authored completion finality for ${incompleteTaskId} must read Active, replace, read Completion, and delete exactly once in order`
+    : `authored completion finality for ${incompleteTaskId} must be an exact prefix of read Active, replace, read Completion, and delete`
 })
 
 const heldPauseOffset = 1

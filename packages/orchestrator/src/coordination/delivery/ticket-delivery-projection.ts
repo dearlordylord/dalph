@@ -9,6 +9,7 @@ import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import type { TrackerTask } from "../../authorities/task-tracker/task.js"
 import { isDependencySatisfied, isTaskOpen } from "../../authorities/task-tracker/task.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import { targetPromotionCorrelationEquals } from "../../workflow/protocols/target-promotion/events.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import { workflowResponsibilityKey } from "../reconstruction/state.js"
 import {
@@ -29,6 +30,7 @@ import {
   makeDeliverySettlements,
   type DeliverySettlements
 } from "./relations.js"
+import type { DeliveryActionProposal, DeliveryProposalContributions } from "./delivery-proposal.js"
 
 const compareTaskIds = (left: { readonly taskId: TaskId }, right: { readonly taskId: TaskId }): number =>
   left.taskId.localeCompare(right.taskId)
@@ -51,6 +53,56 @@ const exclusionsFor = (
   return prerequisiteTaskIds.length === 0
     ? lifecycle
     : [...lifecycle, { _tag: "PrerequisitesIncomplete", prerequisiteTaskIds }]
+}
+
+type PromotedIntegrationFinality = Extract<TicketDeliveryEvidence, { readonly _tag: "TargetPromotion" }> & {
+  readonly state: Extract<
+    Extract<TicketDeliveryEvidence, { readonly _tag: "TargetPromotion" }>["state"],
+    { readonly _tag: "PromotionSucceeded" }
+  >
+}
+
+const isPromotedIntegrationFinality = (evidence: TicketDeliveryEvidence): evidence is PromotedIntegrationFinality =>
+  evidence._tag === "TargetPromotion" && evidence.state._tag === "PromotionSucceeded"
+
+const samePlannedAttempt = (left: PlannedTaskAttempt, right: PlannedTaskAttempt): boolean =>
+  exactAttemptIdentity(left) === exactAttemptIdentity(right)
+
+const promotedFinalityChronologiesFor = (
+  taskId: TaskId,
+  evidence: ReadonlyArray<TicketDeliveryEvidence>
+): ReadonlyArray<PromotedIntegrationFinality> => {
+  const started = evidence.flatMap((item) => (item._tag === "StartedIntegration" ? [item.responsibility] : []))
+  return evidence
+    .filter(isPromotedIntegrationFinality)
+    .filter(
+      (promotion) =>
+        promotion.responsibility.plannedAttempt.taskId === taskId &&
+        started.some((responsibility) =>
+          samePlannedAttempt(responsibility.plannedAttempt, promotion.responsibility.plannedAttempt)
+        )
+    )
+}
+
+const graphFollowsFocusedSuccess = (
+  promotion: PromotedIntegrationFinality,
+  publication: DeliveryGraphPublication
+): boolean => {
+  if (publication.graph._tag !== "GraphEstablished") return false
+  const graphRecordedAt = publication.graph.observation.recordedAt
+  return publication.exactEvidence.some(
+    (evidence) =>
+      evidence._tag === "FocusedTaskCompletionSuccess" &&
+      evidence.recordedAt < graphRecordedAt &&
+      samePlannedAttempt(
+        evidence.observed.observation.request.claim.plannedAttempt,
+        promotion.responsibility.plannedAttempt
+      ) &&
+      targetPromotionCorrelationEquals(
+        evidence.observed.observation.request.claim.promotionCorrelation,
+        promotion.state.correlation
+      )
+  )
 }
 
 /** Exhaustively classifies the journaled graph inside one coherent descriptive publication. */
@@ -107,6 +159,7 @@ const integrationWaitTaskId = (
 const evidenceTaskId = (evidence: TicketDeliveryEvidence): TaskId =>
   Match.valueTags(evidence, {
     AcceptedAwaitingIntegration: ({ accepted }) => accepted.plannedAttempt.taskId,
+    FocusedTaskCompletionSuccess: ({ observed }) => observed.observation.facts.taskId,
     IntegrationCandidate: ({ responsibility }) => responsibility.plannedAttempt.taskId,
     IntegrationWait: ({ wait }) => integrationWaitTaskId(wait),
     IntegrationFinalitySettlement: ({ settlement }) => settlement.claim.plannedAttempt.taskId,
@@ -132,6 +185,7 @@ const evidenceIdentity = (evidence: TicketDeliveryEvidence): string =>
   Match.valueTags(evidence, {
     AcceptedAwaitingIntegration: ({ accepted }) =>
       JSON.stringify(["integration", exactAttemptIdentity(accepted.plannedAttempt)]),
+    FocusedTaskCompletionSuccess: ({ observed }) => JSON.stringify(["focused-task-completion", observed.operationId]),
     IntegrationCandidate: ({ responsibility }) =>
       JSON.stringify(["candidate", exactAttemptIdentity(responsibility.plannedAttempt), responsibility.startedAt]),
     IntegrationWait: ({ wait }) => JSON.stringify(["integration-wait", integrationWaitTaskId(wait), wait._tag]),
@@ -175,6 +229,7 @@ const responsibilityObligationFrom = (facts: ResponsibilityFreshFacts): Readonly
 const obligationFrom = (evidence: TicketDeliveryEvidence): ReadonlyArray<ExactWorkflowObligation> =>
   Match.valueTags(evidence, {
     AcceptedAwaitingIntegration: ({ accepted }) => [{ _tag: "AcceptedAwaitingIntegration" as const, accepted }],
+    FocusedTaskCompletionSuccess: () => [],
     IntegrationCandidate: () => [],
     IntegrationWait: () => [],
     IntegrationFinalitySettlement: () => [],
@@ -195,33 +250,31 @@ const candidateStandingFrom = (state: IntegrationCandidateConstructionState): Re
 
 const targetVerificationStandingFrom = (
   state: Extract<TicketDeliveryEvidence, { readonly _tag: "TargetVerification" }>["state"]
-): ReadonlyArray<TicketDeliveryStanding> => {
-  switch (state._tag) {
-    case "VerificationPending":
-      return [{ _tag: "TargetVerificationPending", state }]
-    case "VerificationPassed":
-      return [{ _tag: "TargetVerificationPassed", state }]
-    case "VerificationStopped":
-      return [{ _tag: "TargetVerificationStopped", state }]
-    case "VerificationContradicted":
-      return [{ _tag: "TargetVerificationContradicted", state }]
-  }
-}
+): ReadonlyArray<TicketDeliveryStanding> =>
+  Match.valueTags(state, {
+    VerificationPending: (state): ReadonlyArray<TicketDeliveryStanding> => [
+      { _tag: "TargetVerificationPending", state }
+    ],
+    VerificationPassed: (state): ReadonlyArray<TicketDeliveryStanding> => [{ _tag: "TargetVerificationPassed", state }],
+    VerificationStopped: (state): ReadonlyArray<TicketDeliveryStanding> => [
+      { _tag: "TargetVerificationStopped", state }
+    ],
+    VerificationContradicted: (state): ReadonlyArray<TicketDeliveryStanding> => [
+      { _tag: "TargetVerificationContradicted", state }
+    ]
+  })
 
 const targetPromotionStandingFrom = (
   state: Extract<TicketDeliveryEvidence, { readonly _tag: "TargetPromotion" }>["state"]
-): ReadonlyArray<TicketDeliveryStanding> => {
-  switch (state._tag) {
-    case "PromotionPending":
-      return [{ _tag: "TargetPromotionPending", state }]
-    case "PromotionSucceeded":
-      return [{ _tag: "TargetPromotionSucceeded", state }]
-    case "PromotionStale":
-      return [{ _tag: "TargetPromotionStale", state }]
-    case "PromotionNonConvergent":
-      return [{ _tag: "TargetPromotionNonConvergent", state }]
-  }
-}
+): ReadonlyArray<TicketDeliveryStanding> =>
+  Match.valueTags(state, {
+    PromotionPending: (state): ReadonlyArray<TicketDeliveryStanding> => [{ _tag: "TargetPromotionPending", state }],
+    PromotionSucceeded: (state): ReadonlyArray<TicketDeliveryStanding> => [{ _tag: "TargetPromotionSucceeded", state }],
+    PromotionStale: (state): ReadonlyArray<TicketDeliveryStanding> => [{ _tag: "TargetPromotionStale", state }],
+    PromotionNonConvergent: (state): ReadonlyArray<TicketDeliveryStanding> => [
+      { _tag: "TargetPromotionNonConvergent", state }
+    ]
+  })
 
 const responsibilityStandingFrom = (
   facts: ResponsibilityFreshFacts,
@@ -237,6 +290,7 @@ const standingFrom = (
 ): ReadonlyArray<TicketDeliveryStanding> =>
   Match.valueTags(evidence, {
     AcceptedAwaitingIntegration: ({ accepted }) => [{ _tag: "AcceptedAwaitingIntegrationQueue" as const, accepted }],
+    FocusedTaskCompletionSuccess: () => [],
     IntegrationCandidate: ({ state }) => candidateStandingFrom(state),
     IntegrationWait: ({ wait }) => [{ _tag: "IntegrationWait" as const, wait }],
     IntegrationFinalitySettlement: ({ settlement }) => [{ _tag: "IntegrationFinalitySettled" as const, settlement }],
@@ -255,10 +309,55 @@ const placementFor = (tickets: BoundedParallelTickets, taskId: TaskId): TicketDe
     : { _tag: "AbsentFromCurrentGraph", graphRevision: tickets.source.source.observation.snapshot.revision }
 }
 
+const promotedPrerequisiteReleasePendingFor = (
+  tickets: BoundedParallelTickets,
+  taskId: TaskId
+): ReadonlyArray<TaskId> => {
+  const graph = tickets.publication.graph
+  if (graph._tag !== "GraphEstablished") return []
+  const task = graph.observation.snapshot.toWire().tasks.find((candidate) => candidate.id === taskId)
+  if (task === undefined) return []
+  return task.prerequisiteIds.filter((prerequisiteTaskId) =>
+    promotedFinalityChronologiesFor(prerequisiteTaskId, tickets.publication.exactEvidence).some(
+      (promotion) => !graphFollowsFocusedSuccess(promotion, tickets.publication)
+    )
+  )
+}
+
+const freshProposalCanEnterFrontier = (tickets: BoundedParallelTickets, proposal: DeliveryActionProposal): boolean =>
+  proposal.order._tag !== "FreshWorkflowOrder" ||
+  promotedPrerequisiteReleasePendingFor(tickets, proposal.order.taskId).length === 0
+
+/**
+ * Keeps a fresh dependant out of the executable proposal frontier while its
+ * selected placement still lacks issue-61's exact focused-success chronology.
+ * Existing responsibilities and ordinary external successes are unchanged.
+ */
+export const releaseEligibleProposalContributionsOf = (
+  tickets: BoundedParallelTickets,
+  contributions: DeliveryProposalContributions
+): DeliveryProposalContributions => ({
+  ...contributions,
+  ticketDelivery: contributions.ticketDelivery.filter((proposal) => freshProposalCanEnterFrontier(tickets, proposal))
+})
+
 /**
  * Relates desired placement to exact retained evidence. A task exists here iff
  * it is selected now or exact lower evidence still gives Dalph work to settle.
  */
+const freshSelectedStandingsFor = (
+  tickets: BoundedParallelTickets,
+  taskId: TaskId,
+  selectedWithoutEvidence: boolean
+): ReadonlyArray<TicketDeliveryStanding> => {
+  if (!selectedWithoutEvidence) return []
+  const pending = promotedPrerequisiteReleasePendingFor(tickets, taskId)
+  const firstPending = pending[0]
+  return firstPending === undefined
+    ? [{ _tag: "ProposedDelivery" }]
+    : [{ _tag: "PromotedPrerequisiteReleasePending", prerequisiteTaskIds: [firstPending, ...pending.slice(1)] }]
+}
+
 export const ticketDeliveriesOf = (
   tickets: BoundedParallelTickets,
   exactEvidence: ReadonlyArray<TicketDeliveryEvidence>
@@ -277,8 +376,11 @@ export const ticketDeliveriesOf = (
   const deliveries = taskIds.flatMap((taskId): ReadonlyArray<TicketDelivery> => {
     const evidence = evidenceByTask.get(taskId) ?? []
     const placement = placementFor(tickets, taskId)
-    const desiredStanding: ReadonlyArray<TicketDeliveryStanding> =
-      placement._tag === "Selected" && evidence.length === 0 ? [{ _tag: "ProposedDelivery" }] : []
+    const freshSelectedStandings = freshSelectedStandingsFor(
+      tickets,
+      taskId,
+      placement._tag === "Selected" && evidence.length === 0
+    )
     const identities = evidence.map(evidenceIdentity)
     const taskConflicts = identities
       .filter((identity, index) => identities.indexOf(identity) !== index)
@@ -291,7 +393,7 @@ export const ticketDeliveriesOf = (
         : [{ _tag: "ExactEvidenceConflict", evidenceIdentities: [firstConflict, ...taskConflicts.slice(1)] }]
     const obligations = evidence.flatMap(obligationFrom)
     const standings = [
-      ...desiredStanding,
+      ...freshSelectedStandings,
       ...evidence.flatMap((item) => standingFrom(item, placement)),
       ...conflictStanding
     ]

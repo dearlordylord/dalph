@@ -1,9 +1,24 @@
 /* eslint-disable max-lines -- One chronological adapter owns activation, pause, crash, candidate, and terminal story boundaries. */
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, type Result, Schema, Stream } from "effect"
 import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Match,
+  Option,
+  Ref,
+  type Result,
+  Schema,
+  Stream
+} from "effect"
+import {
+  AcceptedResultEvidenceManifest,
   type AttemptId,
   GitCommitSha,
-  type PlannedAttemptExecutorReport,
+  PlannedAttemptExecutorReport,
   type PlannedTaskAttempt,
   type RunId,
   type TaskId,
@@ -25,6 +40,7 @@ import {
   CandidateCorrectionLimit,
   CandidateContinuationLimit,
   CompletionClaimBoundary,
+  CompletionTaskBoundary,
   type BoundedTicketRank,
   DeliveryRelationPublicationObserver,
   evaluateDeliveryRelationInputBundle,
@@ -39,6 +55,7 @@ import {
   IntegrationCandidateAgentReport,
   IntegrationCandidateResourceLocator,
   IntegrationCandidateGit,
+  IntegrationReviewManifest,
   IntegrationCandidateGitReadFailure,
   GitWorktree,
   gitTargetLineageTestLayer,
@@ -77,6 +94,8 @@ import {
   type TargetPromotionGitService,
   memoryEvidenceStoreLayer,
   EvidenceStore,
+  EvidenceDigest,
+  EvidenceReference,
   TestGitWorktree,
   TrackerMutation,
   type TrackerRevision,
@@ -100,6 +119,8 @@ import { AuthoredCoordinatorProcessDies, makeStoryCursor, type StoryCursor } fro
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
+
+const evidenceDigestHexLength = 64
 
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
@@ -230,44 +251,33 @@ type WorkflowResponsibility = Extract<DeliveryObligation, { readonly _tag: "Work
 
 const authoredWorkflowResponsibilityCorrelation = (
   responsibility: WorkflowResponsibility
-): Pick<AuthoredObligationDiagnostic, "attemptId" | "summary"> => {
-  switch (responsibility._tag) {
-    case "TaskClaimResponsibility":
-      return { attemptId: null, summary: "task-claim acquisition responsibility" }
-    case "TaskClaimReleaseResponsibility":
-      return { attemptId: null, summary: "task-claim release responsibility" }
-    case "TaskWorktreeResponsibility":
-      return { attemptId: null, summary: "Git worktree responsibility" }
-    case "PlannedAttemptExecutorWorkResponsibility":
-      return {
-        attemptId: responsibility.plannedAttempt.attemptId,
-        summary: `planned-attempt executor responsibility · attempt ID ${responsibility.plannedAttempt.attemptId}`
-      }
-  }
-}
+): Pick<AuthoredObligationDiagnostic, "attemptId" | "summary"> =>
+  Match.valueTags(responsibility, {
+    TaskClaimResponsibility: () => ({ attemptId: null, summary: "task-claim acquisition responsibility" }),
+    TaskClaimReleaseResponsibility: () => ({ attemptId: null, summary: "task-claim release responsibility" }),
+    TaskWorktreeResponsibility: () => ({ attemptId: null, summary: "Git worktree responsibility" }),
+    PlannedAttemptExecutorWorkResponsibility: (value) => ({
+      attemptId: value.plannedAttempt.attemptId,
+      summary: `planned-attempt executor responsibility · attempt ID ${value.plannedAttempt.attemptId}`
+    })
+  })
 
 const authoredObligationDiagnosticOf = (obligation: DeliveryObligation): AuthoredObligationDiagnostic => {
-  const correlation = (() => {
-    switch (obligation._tag) {
-      case "WorkflowResponsibility":
-        return authoredWorkflowResponsibilityCorrelation(obligation.responsibility)
-      case "AcceptedAwaitingIntegration":
-        return {
-          attemptId: obligation.accepted.plannedAttempt.attemptId,
-          summary: `accepted result awaiting integration · attempt ID ${obligation.accepted.plannedAttempt.attemptId}`
-        }
-      case "QueuedIntegration":
-        return {
-          attemptId: obligation.responsibility.plannedAttempt.attemptId,
-          summary: `queued integration responsibility · attempt ID ${obligation.responsibility.plannedAttempt.attemptId}`
-        }
-      case "StartedIntegration":
-        return {
-          attemptId: obligation.responsibility.plannedAttempt.attemptId,
-          summary: `started integration responsibility · attempt ID ${obligation.responsibility.plannedAttempt.attemptId}`
-        }
-    }
-  })()
+  const correlation = Match.valueTags(obligation, {
+    WorkflowResponsibility: (value) => authoredWorkflowResponsibilityCorrelation(value.responsibility),
+    AcceptedAwaitingIntegration: (value) => ({
+      attemptId: value.accepted.plannedAttempt.attemptId,
+      summary: `accepted result awaiting integration · attempt ID ${value.accepted.plannedAttempt.attemptId}`
+    }),
+    QueuedIntegration: (value) => ({
+      attemptId: value.responsibility.plannedAttempt.attemptId,
+      summary: `queued integration responsibility · attempt ID ${value.responsibility.plannedAttempt.attemptId}`
+    }),
+    StartedIntegration: (value) => ({
+      attemptId: value.responsibility.plannedAttempt.attemptId,
+      summary: `started integration responsibility · attempt ID ${value.responsibility.plannedAttempt.attemptId}`
+    })
+  })
   return { ...correlation, kind: obligation._tag, exact: JSON.stringify(obligation, null, diagnosticJsonIndent) }
 }
 
@@ -318,6 +328,8 @@ const proposalActionLabels = {
   ObservePlannedAttemptContinuationTargetLineage: "Check Git target lineage before continuing the planned attempt",
   ObservePlannedAttemptContinuationWorktree: "Check the Git worktree before continuing the planned attempt",
   ObserveResponsibleTaskClaim: "Check the tracker claim held by the current workflow responsibility",
+  CompletePromotedTask: "Ask the tracker to complete the exact promoted task",
+  ObserveFocusedTaskCompletion: "Check that the exact promoted task completed successfully",
   ObserveStoppedAttemptClaim: "Check the tracker claim before releasing a stopped attempt",
   QueueAcceptedResultIntegrationResponsibility: "Queue the accepted result for integration",
   ReadCurrentTaskGraph: "Read the tracker graph for the selected task",
@@ -356,61 +368,49 @@ const proposalOwnerLabels = {
 const proposalTaskId = (proposal: DeliveryProposal): TaskId | null =>
   "taskId" in proposal.order ? proposal.order.taskId : null
 
-const proposalActionTag = (proposal: DeliveryProposal): ProposalActionTag => {
-  switch (proposal.route._tag) {
-    case "TrackerGraphReadRoute":
-      return proposal.route._tag
-    case "FreshWorkflowRoute":
-    case "FreshExecutorWorkflowRoute":
-      return proposal.route.step._tag
-    case "RecoveredNewActionRoute":
-      return proposal.route.action._tag
-    case "AcceptedWorkflowRoute":
-    case "IdentityFreeWorkflowRoute":
-      return proposal.route.transition._tag
-  }
-}
+const proposalActionTag = (proposal: DeliveryProposal): ProposalActionTag =>
+  Match.valueTags(proposal.route, {
+    TrackerGraphReadRoute: (route) => route._tag,
+    FreshWorkflowRoute: (route) => route.step._tag,
+    FreshExecutorWorkflowRoute: (route) => route.step._tag,
+    RecoveredNewActionRoute: (route) => route.action._tag,
+    AcceptedWorkflowRoute: (route) => route.transition._tag,
+    IdentityFreeWorkflowRoute: (route) => route.transition._tag
+  })
 
 const taskWorkAdmissionSummary = (proposal: DeliveryProposal): string => {
   const requirement = proposal.admission.taskWorkPosition
-  switch (requirement._tag) {
-    case "NoTaskWorkPosition":
-      return "needs no task-work position"
-    case "TaskWorkPositionRequired":
-      switch (requirement.mode) {
-        case "Existing":
-          return "requires the existing task-work position"
-        case "ReserveOrReuse":
-          return "must reserve or reuse a task-work position"
-      }
-  }
+  return Match.valueTags(requirement, {
+    NoTaskWorkPosition: () => "needs no task-work position",
+    TaskWorkPositionRequired: (value) =>
+      Match.value(value.mode).pipe(
+        Match.when("Existing", () => "requires the existing task-work position"),
+        Match.when("ReserveOrReuse", () => "must reserve or reuse a task-work position"),
+        Match.exhaustive
+      )
+  })
 }
 
 const integrationTargetAdmissionSummary = (proposal: DeliveryProposal): string => {
   const requirement = proposal.admission.integrationTarget
-  switch (requirement._tag) {
-    case "NoIntegrationTargetResource":
-      return "needs no integration-target resource"
-    case "IntegrationTargetResourceRequired":
-      switch (requirement.access) {
-        case "Acquire":
-          return "must acquire the integration-target resource"
-        case "Release":
-          return "must release the held integration-target resource"
-        case "UseHeld":
-          return "requires the held integration-target resource"
-      }
-  }
+  return Match.valueTags(requirement, {
+    NoIntegrationTargetResource: () => "needs no integration-target resource",
+    IntegrationTargetResourceRequired: (value) =>
+      Match.value(value.access).pipe(
+        Match.when("Acquire", () => "must acquire the integration-target resource"),
+        Match.when("Release", () => "must release the held integration-target resource"),
+        Match.when("UseHeld", () => "requires the held integration-target resource"),
+        Match.exhaustive
+      )
+  })
 }
 
 const plannedAttemptProtocolAdmissionSummary = (proposal: DeliveryProposal): string => {
   const requirement = proposal.admission.plannedAttemptProtocol
-  switch (requirement._tag) {
-    case "NoPlannedAttemptProtocol":
-      return "needs no executor/Continue-or-Stop serialization"
-    case "PlannedAttemptProtocolRequired":
-      return "must serialize this action with executor commands and Continue or Stop"
-  }
+  return Match.valueTags(requirement, {
+    NoPlannedAttemptProtocol: () => "needs no executor/Continue-or-Stop serialization",
+    PlannedAttemptProtocolRequired: () => "must serialize this action with executor commands and Continue or Stop"
+  })
 }
 
 const authoredActionProposalFactOf = (proposal: DeliveryProposal): AuthoredActionPlanningFact => {
@@ -449,16 +449,13 @@ const authoredActionProposalFactOf = (proposal: DeliveryProposal): AuthoredActio
 
 const authoredActionIssueFactOf = (issue: DeliveryProposalIssue): AuthoredActionPlanningFact => {
   const action = proposalActionLabels[issue.transition]
-  const summary = (() => {
-    switch (issue._tag) {
-      case "AcceptedOperationEvidenceMissing":
-        return `Dalph cannot ${action.toLowerCase()} because accepted journal evidence is missing`
-      case "FreshRouteProvenanceMissing":
-        return `Dalph cannot ${action.toLowerCase()} because fresh route provenance is missing`
-      case "TypedRoutePolicyContradiction":
-        return `Dalph cannot ${action.toLowerCase()} because the typed route policy contradicts this transition`
-    }
-  })()
+  const summary = Match.valueTags(issue, {
+    AcceptedOperationEvidenceMissing: () =>
+      `Dalph cannot ${action.toLowerCase()} because accepted journal evidence is missing`,
+    FreshRouteProvenanceMissing: () => `Dalph cannot ${action.toLowerCase()} because fresh route provenance is missing`,
+    TypedRoutePolicyContradiction: () =>
+      `Dalph cannot ${action.toLowerCase()} because the typed route policy contradicts this transition`
+  })
   return {
     attemptId: null,
     kind: issue._tag,
@@ -592,20 +589,14 @@ const attemptChoiceFailureReason = (
   /* v8 ignore start -- @preserve AttemptChoiceControl exposes only its closed tagged error union to these callers. */
   if (typeof failure !== "object" || failure === null || !("_tag" in failure)) return undefined
   /* v8 ignore stop -- @preserve */
-  switch (failure._tag) {
-    case "AttemptChoiceAlreadyApplied":
-      return "AlreadyApplied"
-    case "AttemptChoiceRequestIdentityContradiction":
-      return "IdentityContradiction"
-    case "AttemptChoiceNotAvailable":
-      return "NotAvailable"
-    case "AttemptChoiceOutsidePreIntegrationPhase":
-      return "OutsidePreIntegrationPhase"
-    /* v8 ignore start -- @preserve The closed AttemptChoiceControl failure union is exhausted above. */
-    default:
-      return undefined
-    /* v8 ignore stop -- @preserve */
-  }
+  return Match.value(failure._tag).pipe(
+    Match.when("AttemptChoiceAlreadyApplied", () => "AlreadyApplied" as const),
+    Match.when("AttemptChoiceRequestIdentityContradiction", () => "IdentityContradiction" as const),
+    Match.when("AttemptChoiceNotAvailable", () => "NotAvailable" as const),
+    Match.when("AttemptChoiceOutsidePreIntegrationPhase", () => "OutsidePreIntegrationPhase" as const),
+    /* v8 ignore next -- @preserve Other control and infrastructure failures are not authored rejection reasons. */
+    Match.orElse(() => undefined)
+  )
 }
 
 type AttemptChoiceControlResult = Result.Result<AttemptChoiceApplicationResult, unknown>
@@ -731,19 +722,13 @@ const targetVerificationTerminalFrom = (
 ): TargetVerificationTerminal => {
   const artifacts = targetVerificationArtifactsFrom(result)
   if (result._tag === "CorrelationContradiction") return foreignTargetVerificationTerminalFrom(correlation)
-  switch (result._tag) {
-    case "Failed":
-      return TargetVerificationTerminal.cases.Failed.make({ artifacts, correlation })
-    case "Killed":
-      return TargetVerificationTerminal.cases.Killed.make({ artifacts, correlation })
-    case "Partial":
-      return TargetVerificationTerminal.cases.Partial.make({ artifacts, correlation })
-    case "Passed": {
-      return passedTargetVerificationTerminalFrom(artifacts, correlation)
-    }
-    case "TimedOut":
-      return TargetVerificationTerminal.cases.TimedOut.make({ artifacts, correlation })
-  }
+  return Match.valueTags(result, {
+    Failed: () => TargetVerificationTerminal.cases.Failed.make({ artifacts, correlation }),
+    Killed: () => TargetVerificationTerminal.cases.Killed.make({ artifacts, correlation }),
+    Partial: () => TargetVerificationTerminal.cases.Partial.make({ artifacts, correlation }),
+    Passed: () => passedTargetVerificationTerminalFrom(artifacts, correlation),
+    TimedOut: () => TargetVerificationTerminal.cases.TimedOut.make({ artifacts, correlation })
+  })
 }
 
 /** Decodes and drives one story through the ordinary production delivery program. */
@@ -831,6 +816,30 @@ const runAuthoredScenarioCassetteWith = (request: {
       const sharedJournal = Context.get(sharedContext, JournalStore)
       const evidenceStoreContext = yield* Layer.build(memoryEvidenceStoreLayer)
       const evidenceStore = Context.get(evidenceStoreContext, EvidenceStore)
+      const prepareExecutorReport = Effect.fn("AuthoredCassette.sealAcceptedExecutorEvidence")(function* (
+        report: PlannedAttemptExecutorReport
+      ) {
+        if (report._tag !== "Terminal" || report.result._tag !== "Accepted") return report
+        const acceptedResult = report.result.acceptedResult
+        const evidenceManifest = yield* evidenceStore
+          .put(
+            new TextEncoder().encode(
+              JSON.stringify(
+                AcceptedResultEvidenceManifest.make({
+                  commit: acceptedResult.commit,
+                  correlation: report.correlation,
+                  formatVersion: 1,
+                  outcome: "Accepted"
+                })
+              )
+            )
+          )
+          .pipe(Effect.orElseSucceed(() => acceptedResult.evidenceManifest))
+        return PlannedAttemptExecutorReport.cases.Terminal.make({
+          correlation: report.correlation,
+          result: { _tag: "Accepted", acceptedResult: { commit: acceptedResult.commit, evidenceManifest } }
+        })
+      })
       const verificationPlan =
         command.verificationPlanId === null
           ? undefined
@@ -949,11 +958,18 @@ const runAuthoredScenarioCassetteWith = (request: {
       )
       const trackerMutationLayer = Layer.succeed(TrackerMutation, Context.get(trackerAuthority, TrackerMutation))
       const completionClaimBoundary = Context.get(trackerAuthority, CompletionClaimBoundary)
+      const completionTaskBoundary = Context.get(trackerAuthority, CompletionTaskBoundary)
       const completionFinalityConfigured = cassette.story.some(
         (item) =>
           item._tag === "CompletionClaimReadReturned" ||
           item._tag === "CompletionClaimReplacementApplied" ||
           item._tag === "CompletionClaimDeletionApplied"
+      )
+      const completionTaskConfigured = cassette.story.some(
+        (item) =>
+          item._tag === "CompletionTaskFocusedReadReturned" ||
+          item._tag === "CompletionTaskRequestLookupReturned" ||
+          item._tag === "CompletionTaskRequestReturned"
       )
       const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
@@ -1033,28 +1049,63 @@ const runAuthoredScenarioCassetteWith = (request: {
                       )
                   }
                   const authored = candidateReport.value.report
-                  return Effect.succeed(
-                    authored._tag === "Submitted"
-                      ? IntegrationCandidateAgentReport.cases.Submitted.make({
-                          candidateCommit: authored.candidateCommit,
-                          correlation: request.correlation
-                        })
-                      : authored._tag === "Conflict"
-                        ? IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: request.correlation })
-                        : authored._tag === "CorrelationContradiction"
-                          ? IntegrationCandidateAgentReport.cases.Working.make({
-                              correlation: {
-                                ...request.correlation,
-                                candidateResource: IntegrationCandidateResourceLocator.make(
-                                  "/candidate-resources/authored-foreign"
-                                )
-                              }
-                            })
-                          : authored._tag === "ExitedWithoutCandidate"
-                            ? IntegrationCandidateAgentReport.cases.ExitedWithoutCandidate.make({
-                                correlation: request.correlation
+                  return Match.value(authored).pipe(
+                    Match.tagsExhaustive({
+                      Submitted: ({ candidateCommit }) =>
+                        evidenceStore
+                          .put(
+                            new TextEncoder().encode(
+                              JSON.stringify(
+                                IntegrationReviewManifest.make({
+                                  candidateCommit,
+                                  correlation: request.correlation,
+                                  formatVersion: 1,
+                                  outcome: "Passed"
+                                })
+                              )
+                            )
+                          )
+                          .pipe(
+                            Effect.orElseSucceed(() =>
+                              EvidenceReference.make({
+                                byteLength: 0,
+                                digest: EvidenceDigest.make("0".repeat(evidenceDigestHexLength))
                               })
-                            : IntegrationCandidateAgentReport.cases.Working.make({ correlation: request.correlation })
+                            ),
+                            Effect.map((reviewManifest) =>
+                              IntegrationCandidateAgentReport.cases.Submitted.make({
+                                candidateCommit,
+                                correlation: request.correlation,
+                                reviewManifest
+                              })
+                            )
+                          ),
+                      Conflict: () =>
+                        Effect.succeed(
+                          IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: request.correlation })
+                        ),
+                      CorrelationContradiction: () =>
+                        Effect.succeed(
+                          IntegrationCandidateAgentReport.cases.Working.make({
+                            correlation: {
+                              ...request.correlation,
+                              candidateResource: IntegrationCandidateResourceLocator.make(
+                                "/candidate-resources/authored-foreign"
+                              )
+                            }
+                          })
+                        ),
+                      ExitedWithoutCandidate: () =>
+                        Effect.succeed(
+                          IntegrationCandidateAgentReport.cases.ExitedWithoutCandidate.make({
+                            correlation: request.correlation
+                          })
+                        ),
+                      Working: () =>
+                        Effect.succeed(
+                          IntegrationCandidateAgentReport.cases.Working.make({ correlation: request.correlation })
+                        )
+                    })
                   )
                 })
               )
@@ -1098,7 +1149,8 @@ const runAuthoredScenarioCassetteWith = (request: {
           runId,
           applyNextControlDirection,
           survivingExecutorReports,
-          unresolvedLostExecutorResponses
+          unresolvedLostExecutorResponses,
+          prepareExecutorReport
         ).pipe(Layer.provide(controlPolicyLayer))
         const activationLayer = validatedRunActivationLayer(
           runId,
@@ -1109,7 +1161,8 @@ const runAuthoredScenarioCassetteWith = (request: {
             ? undefined
             : { boundary: targetVerificationBoundary, evidenceStore, plan: verificationPlan },
           targetPromotionStory ? { git: targetPromotionGit } : undefined,
-          completionFinalityConfigured ? completionClaimBoundary : undefined
+          completionFinalityConfigured ? completionClaimBoundary : undefined,
+          completionTaskConfigured ? completionTaskBoundary : undefined
         ).pipe(
           Layer.provide(candidateLayer),
           Layer.provide(interpreterLayer),

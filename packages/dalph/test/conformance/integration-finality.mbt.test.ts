@@ -1,33 +1,85 @@
 import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
-import { TaskRevision } from "@dalph/contracts"
+import { AcceptedResultEvidenceManifest, TaskId, TaskRevision } from "@dalph/contracts"
 import {
   CompletionClaimBoundary,
   CompletionClaimDeletionFailure,
   CompletionClaimReplacementFailure,
+  CompletionTaskAcknowledgement,
+  CompletionTaskAuthorizationWait,
+  CompletionTaskAuthorizationReadOrdinal,
   CompletionTaskClaim,
+  CompletionTaskConfirmationReadOrdinal,
+  CompletionTaskRequestOrdinal,
+  CompletionTaskRequestFailure,
+  CompletionTaskRequestLookup,
+  FocusedCompletedTaskObservation,
+  FocusedTaskCompletionReadFailure,
   InRunJournal,
+  JournalStoreContradiction,
+  JournalStorageUnavailable,
+  OperationId,
+  TaskLifecycle,
+  TrackerRevision,
   completionClaimDeletionRequestFor,
   completionClaimReplacementRequestFor,
   completionClaimRequestLimit,
+  completionTaskRequestLimit,
   completionTaskClaimEquals,
+  describeJournalEvent,
   deriveIntegrationFinalityStateFor,
   deriveRunFinalityDecision,
-  FreshCompletedTaskObservation,
   JournalPosition,
   UnclaimedTask,
   runCompletionClaimDeletionProtocol,
   runCompletionClaimReplacementProtocol,
+  runCompletionTaskProtocol,
+  taskTrackerReadIntent,
   outcomeRecordKey,
   targetPromotionObservedSuccessRecordKey,
+  makeTrackerGraphObservationOperation,
+  workflowJournalEventVersion,
   type WorkflowResponsibilityEntry,
   type WorkflowResponsibilityState,
   type CompletionClaimObservation,
-  type JournalRecord
+  type CompletionSuccessObservation,
+  type CompletionTaskBoundaryService,
+  type JournalRecord,
+  WorkflowJournalEvent
 } from "@dalph/orchestrator"
-import { Effect, Schema } from "effect"
+import { Deferred, Effect, Fiber, Option, Schema } from "effect"
+import {
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskIntendedEvent,
+  completionTaskRequestFor
+} from "../../../orchestrator/src/workflow/protocols/integration-finality/events.js"
+import {
+  authorizeCompletionTaskAttempt,
+  completionTaskAuthorizationIssue,
+  readCompletionCandidateAncestry,
+  readCompletionFocusedFacts,
+  rereadCompletionEvidence
+} from "../../../orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
+import { IntegrationReviewManifest } from "../../../orchestrator/src/workflow/protocols/integration-candidate-construction/events.js"
+import {
+  TargetPromotionGit,
+  TargetPromotionGitReadFailure,
+  TargetPromotionGitReadObservation
+} from "../../../orchestrator/src/workflow/protocols/target-promotion/events.js"
+import { EvidenceStore } from "../../../orchestrator/src/workflow/protocols/target-verification/evidence-store.js"
+import { TargetVerificationManifest } from "../../../orchestrator/src/workflow/protocols/target-verification/manifest.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  TaskTrackerFactsObservedEvent
+} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
+import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
+import { TrackerGraphState } from "../../../orchestrator/src/coordination/delivery/relations.js"
+import { frontierOf } from "../../../orchestrator/src/coordination/delivery/ticket-delivery-projection.js"
+import { initialRunPolicyRevision, RunControlPolicy } from "../../../orchestrator/src/control/policy.js"
+import { makeTestJournaledTrackerGraphObservation } from "../../../orchestrator/test/journaled-graph-observation.js"
 
 const RUN_ID = 141n
 const TASK_A = 1n
@@ -43,6 +95,9 @@ const CANDIDATE_A = 301n
 const EXPECTED_HEAD_A = 401n
 const INTEGRATION_TARGET_A = 501n
 const PROMOTION_CORRELATION_A = 601n
+const ACCEPTANCE_MANIFEST_A = 701n
+const INTEGRATION_REVIEW_MANIFEST_A = 702n
+const VERIFICATION_MANIFEST_A = 703n
 const TRACKER_COMPLETION_REQUEST_REVISION = 10n
 const STALE_TRACKER_REVISION = 10n
 const FRESH_TRACKER_REVISION = 11n
@@ -60,6 +115,17 @@ type Phase =
   | "ReplacementWait"
   | "ReplacementExhausted"
   | "CompletionClaimCurrent"
+  | "CompletionFactsObserved"
+  | "CompletionAncestryObserved"
+  | "CompletionEvidenceObserved"
+  | "CompletionIntentRecorded"
+  | "CompletionAttemptIntentRecorded"
+  | "CompletionRequested"
+  | "CompletionResponseLost"
+  | "CompletionConfirmationObserved"
+  | "CompletionAcknowledged"
+  | "CompletionRetryReady"
+  | "CompletionWait"
   | "DeleteIntentPending"
   | "DeleteIntentRecorded"
   | "DeleteRequested"
@@ -72,7 +138,12 @@ type Phase =
 
 type ClaimState = "OriginalClaim" | "CompletionClaim" | "ForeignClaim" | "AbsentClaim" | "UnreadableClaim"
 type TrackerObservation = "NoTrackerObservation" | "StaleSuccess" | "FreshSuccess"
-type MutationTarget = "NoMutation" | "OriginalClaimMutation" | "CompletionClaimMutation" | "ForeignClaimMutation"
+type MutationTarget =
+  | "NoMutation"
+  | "OriginalClaimMutation"
+  | "CompletionClaimMutation"
+  | "CompleteTaskMutation"
+  | "ForeignClaimMutation"
 
 type Proof = {
   runId: bigint
@@ -83,6 +154,9 @@ type Proof = {
   expectedTargetHead: bigint
   integrationTarget: bigint
   promotionCorrelation: bigint
+  acceptanceManifest: bigint
+  integrationReviewManifest: bigint
+  verificationManifest: bigint
 }
 
 type CompletionClaim = {
@@ -93,6 +167,9 @@ type CompletionClaim = {
   taskRevision: bigint
   predecessorClaimId: bigint
   promotionCorrelation: bigint
+  acceptanceManifest: bigint
+  integrationReviewManifest: bigint
+  verificationManifest: bigint
 }
 
 type Subject = {
@@ -123,6 +200,27 @@ type Subject = {
   trackerObservationRevision: bigint
   freshTrackerSuccess: boolean
   trackerSuccessEver: boolean
+  focusedSuccessRecorded: boolean
+  successSource: string
+  focusedFactsRecorded: boolean
+  focusedFactsOpen: boolean
+  focusedFactsNoBlocker: boolean
+  completionAncestry: string
+  completionEvidenceRecorded: boolean
+  completionRequestId: bigint
+  completionIntentRecorded: boolean
+  completionAttemptIntents: bigint
+  completionOpenConfirmationRecorded: boolean
+  completionConfirmationViolationLookups: bigint
+  completionRequests: bigint
+  completionPremiseViolationCalls: bigint
+  completionReads: bigint
+  completionNotAppliedReads: bigint
+  completionOutcome: string
+  completeTaskAcknowledged: boolean
+  completionConflict: string
+  completeGraphObservation: string
+  dependantEligible: boolean
   responsibilityHeld: boolean
   settled: boolean
   foreignMutationCount: bigint
@@ -150,7 +248,10 @@ const proofForA: Proof = {
   candidateCommit: CANDIDATE_A,
   expectedTargetHead: EXPECTED_HEAD_A,
   integrationTarget: INTEGRATION_TARGET_A,
-  promotionCorrelation: PROMOTION_CORRELATION_A
+  promotionCorrelation: PROMOTION_CORRELATION_A,
+  acceptanceManifest: ACCEPTANCE_MANIFEST_A,
+  integrationReviewManifest: INTEGRATION_REVIEW_MANIFEST_A,
+  verificationManifest: VERIFICATION_MANIFEST_A
 }
 
 const emptyCompletionClaim: CompletionClaim = {
@@ -160,7 +261,10 @@ const emptyCompletionClaim: CompletionClaim = {
   attemptId: 0n,
   taskRevision: 0n,
   predecessorClaimId: 0n,
-  promotionCorrelation: 0n
+  promotionCorrelation: 0n,
+  acceptanceManifest: 0n,
+  integrationReviewManifest: 0n,
+  verificationManifest: 0n
 }
 
 const subjectA = (): Subject => ({
@@ -191,6 +295,27 @@ const subjectA = (): Subject => ({
   trackerObservationRevision: 0n,
   freshTrackerSuccess: false,
   trackerSuccessEver: false,
+  focusedSuccessRecorded: false,
+  successSource: "NoSuccess",
+  focusedFactsRecorded: false,
+  focusedFactsOpen: false,
+  focusedFactsNoBlocker: false,
+  completionAncestry: "NoCandidateAncestry",
+  completionEvidenceRecorded: false,
+  completionRequestId: 0n,
+  completionIntentRecorded: false,
+  completionAttemptIntents: 0n,
+  completionOpenConfirmationRecorded: false,
+  completionConfirmationViolationLookups: 0n,
+  completionRequests: 0n,
+  completionPremiseViolationCalls: 0n,
+  completionReads: 0n,
+  completionNotAppliedReads: 0n,
+  completionOutcome: "NoCompletionOutcome",
+  completeTaskAcknowledged: false,
+  completionConflict: "NoCompletionConflict",
+  completeGraphObservation: "NoCompleteGraph",
+  dependantEligible: false,
   responsibilityHeld: true,
   settled: false,
   foreignMutationCount: 0n,
@@ -217,7 +342,10 @@ const subjectB = (): Subject => ({
     candidateCommit: 0n,
     expectedTargetHead: 0n,
     integrationTarget: 0n,
-    promotionCorrelation: 0n
+    promotionCorrelation: 0n,
+    acceptanceManifest: 0n,
+    integrationReviewManifest: 0n,
+    verificationManifest: 0n
   },
   completionClaimDerived: false,
   completionClaim: emptyCompletionClaim,
@@ -237,6 +365,27 @@ const subjectB = (): Subject => ({
   trackerObservationRevision: 0n,
   freshTrackerSuccess: false,
   trackerSuccessEver: false,
+  focusedSuccessRecorded: false,
+  successSource: "NoSuccess",
+  focusedFactsRecorded: false,
+  focusedFactsOpen: false,
+  focusedFactsNoBlocker: false,
+  completionAncestry: "NoCandidateAncestry",
+  completionEvidenceRecorded: false,
+  completionRequestId: 0n,
+  completionIntentRecorded: false,
+  completionAttemptIntents: 0n,
+  completionOpenConfirmationRecorded: false,
+  completionConfirmationViolationLookups: 0n,
+  completionRequests: 0n,
+  completionPremiseViolationCalls: 0n,
+  completionReads: 0n,
+  completionNotAppliedReads: 0n,
+  completionOutcome: "NoCompletionOutcome",
+  completeTaskAcknowledged: false,
+  completionConflict: "NoCompletionConflict",
+  completeGraphObservation: "NoCompleteGraph",
+  dependantEligible: false,
   responsibilityHeld: true,
   settled: false,
   foreignMutationCount: 0n,
@@ -262,6 +411,22 @@ const SpecSubject = Schema.Struct({
   claimState: Schema.Unknown,
   completionClaim: Schema.Unknown,
   completionClaimDerived: Schema.Boolean,
+  completionAncestry: Schema.Unknown,
+  completionAttemptIntents: ITFBigInt,
+  completionOpenConfirmationRecorded: Schema.Boolean,
+  completionConfirmationViolationLookups: ITFBigInt,
+  completionConflict: Schema.Unknown,
+  completionEvidenceRecorded: Schema.Boolean,
+  completionIntentRecorded: Schema.Boolean,
+  completionOutcome: Schema.Unknown,
+  completionNotAppliedReads: ITFBigInt,
+  completionReads: ITFBigInt,
+  completionRequestId: ITFBigInt,
+  completionPremiseViolationCalls: ITFBigInt,
+  completionRequests: ITFBigInt,
+  completeGraphObservation: Schema.Unknown,
+  completeTaskAcknowledged: Schema.Boolean,
+  dependantEligible: Schema.Boolean,
   currentClaimId: ITFBigInt,
   deleteIntentRecorded: Schema.Boolean,
   deleteReadBeforeRetry: Schema.Boolean,
@@ -271,6 +436,10 @@ const SpecSubject = Schema.Struct({
   deletionOutcomeRecorded: Schema.Boolean,
   foreignMutationCount: ITFBigInt,
   freshTrackerSuccess: Schema.Boolean,
+  focusedFactsNoBlocker: Schema.Boolean,
+  focusedFactsOpen: Schema.Boolean,
+  focusedFactsRecorded: Schema.Boolean,
+  focusedSuccessRecorded: Schema.Boolean,
   lastMutation: Schema.Unknown,
   phase: Schema.Unknown,
   proof: Schema.Unknown,
@@ -289,7 +458,8 @@ const SpecSubject = Schema.Struct({
   trackerCompletionRequestRevision: ITFBigInt,
   trackerObservation: Schema.Unknown,
   trackerObservationRevision: ITFBigInt,
-  trackerSuccessEver: Schema.Boolean
+  trackerSuccessEver: Schema.Boolean,
+  successSource: Schema.Unknown
 })
 
 const SpecProjection = Schema.Struct({
@@ -327,7 +497,10 @@ const normalizedProof = (value: unknown): string => {
     "candidateCommit",
     "expectedTargetHead",
     "integrationTarget",
-    "promotionCorrelation"
+    "promotionCorrelation",
+    "acceptanceManifest",
+    "integrationReviewManifest",
+    "verificationManifest"
   ]
   return fields.map((field) => `${field}=${quintInt(Reflect.get(value, field))}`).join(",")
 }
@@ -341,7 +514,10 @@ const normalizedCompletionClaim = (value: unknown): string => {
     "attemptId",
     "taskRevision",
     "predecessorClaimId",
-    "promotionCorrelation"
+    "promotionCorrelation",
+    "acceptanceManifest",
+    "integrationReviewManifest",
+    "verificationManifest"
   ]
   return fields.map((field) => `${field}=${quintInt(Reflect.get(value, field))}`).join(",")
 }
@@ -352,6 +528,21 @@ const normalizedSubject = (subject: Subject | Schema.Schema.Type<typeof SpecSubj
   claimState: variantTag(subject.claimState),
   completionClaim: normalizedCompletionClaim(subject.completionClaim),
   completionClaimDerived: subject.completionClaimDerived,
+  completionAncestry: variantTag(subject.completionAncestry),
+  completionAttemptIntents: quintInt(subject.completionAttemptIntents),
+  completionOpenConfirmationRecorded: subject.completionOpenConfirmationRecorded,
+  completionConfirmationViolationLookups: quintInt(subject.completionConfirmationViolationLookups),
+  completionConflict: variantTag(subject.completionConflict),
+  completionEvidenceRecorded: subject.completionEvidenceRecorded,
+  completionIntentRecorded: subject.completionIntentRecorded,
+  completionOutcome: variantTag(subject.completionOutcome),
+  completionNotAppliedReads: subject.completionNotAppliedReads,
+  completionReads: quintInt(subject.completionReads),
+  completionRequestId: quintInt(subject.completionRequestId),
+  completionPremiseViolationCalls: subject.completionPremiseViolationCalls,
+  completionRequests: quintInt(subject.completionRequests),
+  completeGraphObservation: variantTag(subject.completeGraphObservation),
+  completeTaskAcknowledged: subject.completeTaskAcknowledged,
   currentClaimId: quintInt(subject.currentClaimId),
   deleteIntentRecorded: subject.deleteIntentRecorded,
   deleteReadBeforeRetry: subject.deleteReadBeforeRetry,
@@ -361,6 +552,10 @@ const normalizedSubject = (subject: Subject | Schema.Schema.Type<typeof SpecSubj
   deletionOutcomeRecorded: subject.deletionOutcomeRecorded,
   foreignMutationCount: quintInt(subject.foreignMutationCount),
   freshTrackerSuccess: subject.freshTrackerSuccess,
+  focusedFactsNoBlocker: subject.focusedFactsNoBlocker,
+  focusedFactsOpen: subject.focusedFactsOpen,
+  focusedFactsRecorded: subject.focusedFactsRecorded,
+  focusedSuccessRecorded: subject.focusedSuccessRecorded,
   lastMutation: variantTag(subject.lastMutation),
   phase: variantTag(subject.phase),
   proof: normalizedProof(subject.proof),
@@ -379,7 +574,8 @@ const normalizedSubject = (subject: Subject | Schema.Schema.Type<typeof SpecSubj
   trackerCompletionRequestRevision: quintInt(subject.trackerCompletionRequestRevision),
   trackerObservation: variantTag(subject.trackerObservation),
   trackerObservationRevision: quintInt(subject.trackerObservationRevision),
-  trackerSuccessEver: subject.trackerSuccessEver
+  trackerSuccessEver: subject.trackerSuccessEver,
+  dependantEligible: subject.dependantEligible
 })
 
 const integrationAttempt = integrationFinalityFixture.plannedAttempt
@@ -391,8 +587,107 @@ const integrationResponsibility: WorkflowResponsibilityEntry = {
 }
 
 const productionClaimIdentity: CompletionTaskClaim = integrationFinalityFixture.claim
+const productionCompletionRequest = completionTaskRequestFor(productionClaimIdentity)
+
+const encodeEvidence = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
+
+const productionEvidenceObjects = new Map([
+  [
+    productionCompletionRequest.acceptanceManifest.digest,
+    encodeEvidence(
+      AcceptedResultEvidenceManifest.make({
+        commit: productionCompletionRequest.promotionCorrelation.candidateCorrelation.acceptedResultCommit,
+        correlation: {
+          attemptId: productionCompletionRequest.claim.plannedAttempt.attemptId,
+          runId: productionCompletionRequest.claim.plannedAttempt.runId
+        },
+        formatVersion: 1,
+        outcome: "Accepted"
+      })
+    )
+  ],
+  [
+    productionCompletionRequest.integrationReviewManifest.digest,
+    encodeEvidence(
+      IntegrationReviewManifest.make({
+        candidateCommit: productionCompletionRequest.promotionCorrelation.candidateCommit,
+        correlation: productionCompletionRequest.promotionCorrelation.candidateCorrelation,
+        formatVersion: 1,
+        outcome: "Passed"
+      })
+    )
+  ],
+  [
+    productionCompletionRequest.verificationManifest.digest,
+    encodeEvidence(
+      TargetVerificationManifest.make({
+        artifacts: [],
+        correlation: productionCompletionRequest.promotionCorrelation.verificationCorrelation,
+        formatVersion: 1,
+        outcome: "Passed"
+      })
+    )
+  ]
+] as const)
+
+const dependantTaskId = TaskId.make("integration-finality-dependant")
+const concurrentBlockerTaskId = TaskId.make("integration-finality-concurrent-blocker")
+
+const completeGraphEvent = (outcome: "Blocked" | "Released", observationOrdinal: number) => {
+  const observationIdentity = `${outcome}:${observationOrdinal}`
+  const operationId = OperationId.make(`integration-finality-complete-graph:${observationIdentity}`)
+  const graph = projectTrackerSnapshot({
+    revision: TrackerRevision.make(`integration-finality-complete-graph:${observationIdentity}`),
+    tasks: [
+      {
+        id: productionClaimIdentity.plannedAttempt.taskId,
+        lifecycle: TaskLifecycle.cases.CompletedSuccessfully.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      },
+      {
+        id: concurrentBlockerTaskId,
+        lifecycle:
+          outcome === "Released"
+            ? TaskLifecycle.cases.CompletedSuccessfully.make({})
+            : TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      },
+      {
+        id: dependantTaskId,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: [productionClaimIdentity.plannedAttempt.taskId, concurrentBlockerTaskId]
+      }
+    ]
+  })
+  const snapshot = Option.getOrThrow(graph._tag === "Valid" ? Option.some(graph.snapshot) : Option.none())
+  const operation = makeTrackerGraphObservationOperation(
+    operationId,
+    integrationFinalityFixture.target,
+    [],
+    [productionClaimIdentity.plannedAttempt.taskId, concurrentBlockerTaskId, dependantTaskId]
+  )
+  return {
+    event: TaskTrackerFactsObservedEvent.make({
+      observation: makeCompleteTaskTrackerFactsObserved(operation, snapshot),
+      operationId,
+      version: workflowJournalEventVersion
+    }),
+    operation,
+    snapshot
+  } as const
+}
 
 type ProductionMutationDisposition = "Applied" | "Rejected"
+type CompletionMutationDisposition = "Acknowledged" | "DefinitelyRejected" | "ResponseLost"
+type CompletionLookupDisposition = "Applied" | "NotApplied" | "Unreadable"
+type CompletionAncestryDisposition = "Current" | "NotAncestor" | "Unreadable"
+
+const workflowJournalEventsEqual = (left: WorkflowJournalEvent, right: WorkflowJournalEvent): boolean =>
+  JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(left)) ===
+  JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(right))
 
 const promotionRecord = (): JournalRecord => ({
   event: integrationFinalityFixture.promotionSuccess,
@@ -409,17 +704,51 @@ const makeProductionState = () => {
   let claimObservation: CompletionClaimObservation = productionClaimIdentity.originalClaim
   let replacementDisposition: ProductionMutationDisposition = "Rejected"
   let deletionDisposition: ProductionMutationDisposition = "Rejected"
-  let successObservation: FreshCompletedTaskObservation | undefined
+  let successObservation: CompletionSuccessObservation | undefined
+  let completionDisposition: CompletionMutationDisposition = "Acknowledged"
+  let completionLookupDisposition: CompletionLookupDisposition = "Applied"
+  let focusedLifecycle: "CompletedSuccessfully" | "Open" | "TerminalWithoutSuccess" = "Open"
+  let focusedTaskId = productionCompletionRequest.taskId
+  let focusedTaskRevision = productionCompletionRequest.taskRevision
+  let completionAncestryDisposition: CompletionAncestryDisposition = "Current"
+  let confirmationReadUnavailable = false
+  let blockedAppendTag: JournalRecord["event"]["_tag"] | undefined
+  let pauseCompletionAttemptIntent = false
+  let completionAttemptIntentSignal = Deferred.makeUnsafe<void>()
+  let completionAttemptIntentGate = Deferred.makeUnsafe<void>()
+  let completionCallSignal = Deferred.makeUnsafe<void>()
+  let completionResponse = Deferred.makeUnsafe<CompletionMutationDisposition>()
+  let pendingCompletion: Fiber.Fiber<unknown, unknown> | undefined
+  let completionBoundaryCalls = 0
+  let completionEvidenceReads = 0
 
   const journal = InRunJournal.of({
     append: (runId, key, event) =>
-      Effect.sync(() => {
-        const existing = records.find((record) => record.key === key)
-        if (existing !== undefined) return existing
-        const record: JournalRecord = { event, key, position: JournalPosition.make(records.length + 1), runId }
-        records = [...records, record]
-        return record
-      }),
+      event._tag === blockedAppendTag
+        ? Effect.fail(
+            new JournalStorageUnavailable({
+              detail: `conformance cut before ${event._tag}`,
+              operation: "JournalStore.append"
+            })
+          )
+        : Effect.suspend(() => {
+            const existing = records.find((record) => record.runId === runId && record.key === key)
+            if (existing !== undefined) {
+              return workflowJournalEventsEqual(existing.event, event)
+                ? Effect.succeed(existing)
+                : Effect.fail(new JournalStoreContradiction({ existingPosition: existing.position, key, runId }))
+            }
+            const record: JournalRecord = { event, key, position: JournalPosition.make(records.length + 1), runId }
+            records = [...records, record]
+            return pauseCompletionAttemptIntent && event._tag === "CompletionTaskAttemptIntended"
+              ? Effect.gen(function* () {
+                  pauseCompletionAttemptIntent = false
+                  yield* Deferred.succeed(completionAttemptIntentSignal, undefined)
+                  yield* Deferred.await(completionAttemptIntentGate)
+                  return record
+                })
+              : Effect.succeed(record)
+          }),
     read: (runId) => Effect.sync(() => records.filter((record) => record.runId === runId))
   })
 
@@ -455,14 +784,432 @@ const makeProductionState = () => {
           )
   })
 
-  const appendObservedSuccess = (): void => {
-    const event = integrationFinalityFixture.graphRecordEvent
-    const key = outcomeRecordKey(event.operationId)
-    const record = Effect.runSync(journal.append(productionClaimIdentity.plannedAttempt.runId, key, event))
-    successObservation = FreshCompletedTaskObservation.make({
-      ...integrationFinalityFixture.successObservation,
-      observedAt: record.position
+  const completionBoundary: CompletionTaskBoundaryService = {
+    readFocusedTaskCompletion: (taskId, target, operationId) =>
+      confirmationReadUnavailable && String(operationId).includes(":confirmation:")
+        ? Effect.fail(
+            new FocusedTaskCompletionReadFailure({
+              detail: "conformance cut after the lost completion response",
+              taskId
+            })
+          )
+        : Effect.succeed({
+            currentClaim: claimObservation,
+            lifecycle: focusedLifecycle,
+            operationId,
+            target,
+            targetMembership: "Member",
+            taskId: focusedTaskId,
+            taskRevision: focusedTaskRevision,
+            trackerRevision: TrackerRevision.make(`completion-facts:${operationId}`),
+            unfinishedPrerequisiteTaskIds: []
+          }),
+    completeTask: (request) =>
+      Effect.gen(function* () {
+        completionBoundaryCalls += 1
+        if (pendingCompletion !== undefined) {
+          yield* Deferred.succeed(completionCallSignal, undefined)
+          completionDisposition = yield* Deferred.await(completionResponse)
+        }
+        if (completionDisposition === "Acknowledged") {
+          focusedLifecycle = "CompletedSuccessfully"
+          return CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId: request.taskId })
+        }
+        return yield* new CompletionTaskRequestFailure({
+          detail:
+            completionDisposition === "ResponseLost"
+              ? "conformance completion response lost"
+              : "conformance completion request rejected",
+          outcome: completionDisposition === "ResponseLost" ? "Unknown" : "DefinitelyNotApplied",
+          request
+        })
+      }),
+    readCompletionRequest: (request) =>
+      Effect.succeed(
+        completionLookupDisposition === "Unreadable"
+          ? CompletionTaskRequestLookup.cases.Unreadable.make({
+              detail: "conformance completion lookup unreadable",
+              request
+            })
+          : CompletionTaskRequestLookup.cases[completionLookupDisposition].make({ request })
+      )
+  }
+
+  const evidenceStore = EvidenceStore.of({
+    put: () => Effect.die("completion conformance never publishes evidence"),
+    read: (reference) => {
+      completionEvidenceReads += 1
+      const bytes = productionEvidenceObjects.get(reference.digest)
+      return bytes === undefined ? Effect.die(`missing completion evidence ${reference.digest}`) : Effect.succeed(bytes)
+    }
+  })
+
+  const promotionGit = TargetPromotionGit.of({
+    compareAndSet: () => Effect.die("completion conformance never mutates Git"),
+    read: (request) =>
+      completionAncestryDisposition === "Unreadable"
+        ? Effect.fail(
+            new TargetPromotionGitReadFailure({
+              candidateCommit: request.candidateCommit,
+              detail: "conformance target ancestry is unreadable",
+              target: request.integrationTarget
+            })
+          )
+        : Effect.succeed(
+            TargetPromotionGitReadObservation.cases[
+              completionAncestryDisposition === "Current" ? "CandidateCurrent" : "CandidateNotInAncestry"
+            ].make({ currentHeadSha: request.candidateCommit })
+          )
+  })
+
+  const provideCompletionRuntime = <A, E>(
+    effect: Effect.Effect<A, E, InRunJournal | EvidenceStore | TargetPromotionGit>
+  ): Effect.Effect<A, E> =>
+    effect.pipe(
+      Effect.provideService(InRunJournal, journal),
+      Effect.provideService(EvidenceStore, evidenceStore),
+      Effect.provideService(TargetPromotionGit, promotionGit)
+    )
+
+  const completionAuthorization = (maximumOrdinal: number) => (ordinal: CompletionTaskRequestOrdinal) =>
+    Number(ordinal) > maximumOrdinal
+      ? Effect.fail(
+          new CompletionTaskAuthorizationWait({
+            detail: "conformance cut before the next numbered completion call",
+            reason: "FocusedFactsUnavailable",
+            request: productionCompletionRequest
+          })
+        )
+      : authorizeCompletionTaskAttempt(
+          completionBoundary,
+          productionCompletionRequest,
+          integrationFinalityFixture.target,
+          ordinal
+        )
+
+  const productionCompletionEffect = (maximumOrdinal: number) =>
+    provideCompletionRuntime(
+      runCompletionTaskProtocol(
+        completionBoundary,
+        productionCompletionRequest,
+        integrationFinalityFixture.target,
+        completionAuthorization(maximumOrdinal)
+      )
+    )
+
+  const runProductionCompletion = (maximumOrdinal: number): void => {
+    Effect.runSyncExit(productionCompletionEffect(maximumOrdinal))
+  }
+
+  const observeFocusedAuthorization = (ordinal: number): void => {
+    confirmationReadUnavailable = false
+    const authorizationOrdinal =
+      records.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadCompletionTaskFacts" &&
+          event.operation.purpose._tag === "Authorization" &&
+          Number(event.operation.purpose.attemptOrdinal) === ordinal
+      ).length + 1
+    Effect.runSync(
+      provideCompletionRuntime(
+        readCompletionFocusedFacts(
+          completionBoundary,
+          productionCompletionRequest,
+          integrationFinalityFixture.target,
+          CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+            attemptOrdinal: CompletionTaskRequestOrdinal.make(ordinal),
+            authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(authorizationOrdinal)
+          })
+        )
+      )
+    )
+  }
+
+  const observeFocusedConflict = (kind: "ForeignTask" | "ReopenedTask" | "RevisionConflict", ordinal: number): void => {
+    focusedTaskId =
+      kind === "ForeignTask" ? TaskId.make("integration-finality-foreign-task") : productionCompletionRequest.taskId
+    focusedTaskRevision =
+      kind === "RevisionConflict"
+        ? TaskRevision.make("integration-finality-conflicting-revision")
+        : productionCompletionRequest.taskRevision
+    focusedLifecycle = kind === "ReopenedTask" ? "TerminalWithoutSuccess" : "Open"
+    const priorFocusedEvent = records.findLast(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskCompletionFacts" &&
+        event.observation.purpose._tag === "Authorization" &&
+        Number(event.observation.purpose.attemptOrdinal) === ordinal
+    )?.event
+    if (
+      priorFocusedEvent?._tag !== "TaskTrackerFactsObserved" ||
+      priorFocusedEvent.observation._tag !== "FocusedTaskCompletionFacts"
+    ) {
+      throw new Error("production conflict requires a durable focused task observation")
+    }
+    const focusedFacts =
+      kind === "ForeignTask"
+        ? Effect.runSync(
+            completionBoundary.readFocusedTaskCompletion(
+              productionCompletionRequest.taskId,
+              integrationFinalityFixture.target,
+              priorFocusedEvent.operationId
+            )
+          )
+        : (() => {
+            observeFocusedAuthorization(ordinal)
+            const focusedEvent = records.findLast(
+              ({ event }) =>
+                event._tag === "TaskTrackerFactsObserved" &&
+                event.observation._tag === "FocusedTaskCompletionFacts" &&
+                event.observation.purpose._tag === "Authorization" &&
+                Number(event.observation.purpose.attemptOrdinal) === ordinal
+            )?.event
+            if (
+              focusedEvent?._tag !== "TaskTrackerFactsObserved" ||
+              focusedEvent.observation._tag !== "FocusedTaskCompletionFacts"
+            ) {
+              throw new Error("production conflict requires a durable focused task observation")
+            }
+            return focusedEvent.observation.facts
+          })()
+    const issue = completionTaskAuthorizationIssue(
+      {
+        acceptanceManifest: productionCompletionRequest.acceptanceManifest,
+        candidateAncestry: "Current",
+        focusedFacts,
+        gitReadOperationId: OperationId.make("integration-finality-conflict-git-read"),
+        integrationReviewManifest: productionCompletionRequest.integrationReviewManifest,
+        target: integrationFinalityFixture.target,
+        verificationManifest: productionCompletionRequest.verificationManifest
+      },
+      productionCompletionRequest
+    )
+    const expectedReason = kind === "ReopenedTask" ? "TaskLifecycleConflict" : "TaskIdentityOrRevisionChanged"
+    if (issue?.reason !== expectedReason) {
+      throw new Error(`production focused conflict ${kind} produced ${issue?.reason ?? "no conflict"}`)
+    }
+    focusedTaskId = productionCompletionRequest.taskId
+    focusedTaskRevision = productionCompletionRequest.taskRevision
+    focusedLifecycle = "Open"
+  }
+
+  const observeCompletionAncestry = (ordinal: number): void => {
+    const purpose = records.findLast(
+      ({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadCompletionTaskFacts" &&
+        event.operation.purpose._tag === "Authorization" &&
+        Number(event.operation.purpose.attemptOrdinal) === ordinal
+    )?.event
+    if (
+      purpose?._tag !== "TaskTrackerReadIntentRecorded" ||
+      purpose.operation._tag !== "ReadCompletionTaskFacts" ||
+      purpose.operation.purpose._tag !== "Authorization"
+    ) {
+      throw new Error("production ancestry read requires the matching focused authorization cycle")
+    }
+    Effect.runSync(
+      provideCompletionRuntime(readCompletionCandidateAncestry(productionCompletionRequest, purpose.operation.purpose))
+    )
+  }
+
+  const observeCompletionAncestryResult = (
+    disposition: Exclude<CompletionAncestryDisposition, "Current">,
+    ordinal: number
+  ): void => {
+    const purpose = records.findLast(
+      ({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadCompletionTaskFacts" &&
+        event.operation.purpose._tag === "Authorization" &&
+        Number(event.operation.purpose.attemptOrdinal) === ordinal
+    )?.event
+    if (
+      purpose?._tag !== "TaskTrackerReadIntentRecorded" ||
+      purpose.operation._tag !== "ReadCompletionTaskFacts" ||
+      purpose.operation.purpose._tag !== "Authorization"
+    ) {
+      throw new Error("production ancestry read requires the matching focused authorization cycle")
+    }
+    completionAncestryDisposition = disposition
+    const exit = Effect.runSyncExit(
+      provideCompletionRuntime(readCompletionCandidateAncestry(productionCompletionRequest, purpose.operation.purpose))
+    )
+    completionAncestryDisposition = "Current"
+    if (disposition === "Unreadable") {
+      if (exit._tag !== "Failure") throw new Error("unreadable production ancestry unexpectedly succeeded")
+      return
+    }
+    if (exit._tag !== "Success" || exit.value.observation._tag !== "CandidateNotInAncestry") {
+      throw new Error("production ancestry did not preserve the candidate-not-ancestor result")
+    }
+  }
+
+  const observeCompletionEvidence = (): void => {
+    Effect.runSync(provideCompletionRuntime(rereadCompletionEvidence(productionCompletionRequest)))
+  }
+
+  const recordCompletionIntentCutPoint = (ordinal: number): void => {
+    blockedAppendTag = "CompletionTaskAttemptIntended"
+    runProductionCompletion(ordinal)
+    blockedAppendTag = undefined
+  }
+
+  const recordCompletionAttemptIntentCutPoint = (ordinal: number) =>
+    Effect.gen(function* () {
+      completionAttemptIntentSignal = Deferred.makeUnsafe<void>()
+      completionAttemptIntentGate = Deferred.makeUnsafe<void>()
+      completionCallSignal = Deferred.makeUnsafe<void>()
+      completionResponse = Deferred.makeUnsafe<CompletionMutationDisposition>()
+      pauseCompletionAttemptIntent = true
+      pendingCompletion = yield* productionCompletionEffect(ordinal).pipe(Effect.forkDetach({ startImmediately: true }))
+      yield* Deferred.await(completionAttemptIntentSignal)
     })
+
+  const crossCompletionBoundaryCutPoint = () =>
+    Deferred.succeed(completionAttemptIntentGate, undefined).pipe(
+      Effect.andThen(Deferred.await(completionCallSignal)),
+      Effect.asVoid
+    )
+
+  const observeFocusedCompletionOpenAfterLossCutPoint = (ordinal: number): void => {
+    focusedLifecycle = "Open"
+    confirmationReadUnavailable = false
+    blockedAppendTag = "CompletionTaskRequestLookupIntended"
+    runProductionCompletion(ordinal)
+    blockedAppendTag = undefined
+    if (
+      !records.some(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskCompletionFacts" &&
+          event.observation.purpose._tag === "Confirmation" &&
+          Number(event.observation.purpose.attemptOrdinal) === ordinal &&
+          event.observation.facts.lifecycle === "Open"
+      )
+    ) {
+      throw new Error(`production did not retain open completion confirmation ${ordinal}`)
+    }
+  }
+
+  const invokeCompletion = (disposition: CompletionMutationDisposition, maximumOrdinal: number) =>
+    Effect.gen(function* () {
+      completionDisposition = disposition
+      confirmationReadUnavailable = disposition === "ResponseLost"
+      if (pendingCompletion === undefined) {
+        runProductionCompletion(maximumOrdinal)
+      } else {
+        yield* Deferred.succeed(completionResponse, disposition)
+        yield* Fiber.await(pendingCompletion)
+        pendingCompletion = undefined
+      }
+      confirmationReadUnavailable = false
+    })
+
+  const reconcileCompletion = (disposition: CompletionLookupDisposition, attemptedOrdinal: number): void => {
+    completionLookupDisposition = disposition
+    focusedLifecycle = "Open"
+    focusedTaskId = productionCompletionRequest.taskId
+    focusedTaskRevision = productionCompletionRequest.taskRevision
+    confirmationReadUnavailable = false
+    runProductionCompletion(attemptedOrdinal)
+  }
+
+  const observeFocusedCompletionSuccess = (observation: CompletionClaimObservation): void => {
+    claimObservation = observation
+    focusedLifecycle = "CompletedSuccessfully"
+    if (
+      !records.some(
+        ({ event }) =>
+          event._tag === "CompletionTaskIntended" &&
+          event.request.operationId === productionCompletionRequest.operationId
+      )
+    ) {
+      const intent = CompletionTaskIntendedEvent.make({
+        request: productionCompletionRequest,
+        version: workflowJournalEventVersion
+      })
+      Effect.runSync(
+        journal.append(productionClaimIdentity.plannedAttempt.runId, describeJournalEvent(intent).expectedKey, intent)
+      )
+    }
+    const attemptedOrdinal = Math.max(
+      1,
+      records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended").length
+    )
+    const confirmationOrdinal =
+      records.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadCompletionTaskFacts" &&
+          event.operation.purpose._tag === "Confirmation" &&
+          event.operation.purpose.attemptOrdinal === attemptedOrdinal
+      ).length + 1
+    const focused = Effect.runSync(
+      provideCompletionRuntime(
+        readCompletionFocusedFacts(
+          completionBoundary,
+          productionCompletionRequest,
+          integrationFinalityFixture.target,
+          CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
+            attemptOrdinal: CompletionTaskRequestOrdinal.make(attemptedOrdinal),
+            confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(confirmationOrdinal)
+          })
+        )
+      )
+    )
+    const observationRecord = FocusedCompletedTaskObservation.make({
+      claim: productionCompletionRequest.claim,
+      lifecycle: "CompletedSuccessfully",
+      observedAt: focused.observedAt,
+      operationId: focused.operationId,
+      taskId: productionCompletionRequest.taskId,
+      taskRevision: productionCompletionRequest.taskRevision,
+      trackerRevision: focused.facts.trackerRevision,
+      target: focused.facts.target
+    })
+    successObservation = observationRecord
+  }
+
+  const appendCompleteGraph = (outcome: "Blocked" | "Released"): boolean => {
+    const observationOrdinal = records.filter(({ event }) => event._tag === "TaskTrackerFactsObserved").length + 1
+    const { event, operation, snapshot } = completeGraphEvent(outcome, observationOrdinal)
+    const intent = taskTrackerReadIntent(operation)
+    const observed = Effect.runSync(
+      Effect.gen(function* () {
+        yield* journal.append(
+          productionClaimIdentity.plannedAttempt.runId,
+          describeJournalEvent(intent).expectedKey,
+          intent
+        )
+        return yield* journal.append(
+          productionClaimIdentity.plannedAttempt.runId,
+          outcomeRecordKey(event.operationId),
+          event
+        )
+      })
+    )
+    const graph = TrackerGraphState.cases.GraphEstablished.make({
+      observation: makeTestJournaledTrackerGraphObservation({
+        operationId: operation.operationId,
+        recordedAt: observed.position,
+        snapshot
+      })
+    })
+    const frontier = frontierOf({
+      exactEvidence: [],
+      graph,
+      policy: RunControlPolicy.make({
+        revision: initialRunPolicyRevision,
+        taskExecutionCapacity: TaskWorkCapacity.make(1)
+      })
+    })
+    return frontier.standings.some(({ _tag, taskId }) => _tag === "Eligible" && taskId === dependantTaskId)
+  }
+
+  const appendObservedSuccess = (): void => {
+    observeFocusedCompletionSuccess(productionClaimIdentity)
   }
 
   const invokeReplacement = (disposition: ProductionMutationDisposition): void => {
@@ -486,7 +1233,9 @@ const makeProductionState = () => {
 
   const invokeDeletion = (disposition: ProductionMutationDisposition): void => {
     deletionDisposition = disposition
-    if (successObservation === undefined) throw new Error("production deletion requires observed tracker success")
+    if (successObservation === undefined) {
+      throw new Error("production deletion requires a focused task-completion observation")
+    }
     Effect.runSync(
       runCompletionClaimDeletionProtocol(
         boundary,
@@ -500,7 +1249,7 @@ const makeProductionState = () => {
           "IntegrationFinality.CompletionClaimOwnershipConflict": () => Effect.void,
           "IntegrationFinality.CompletionClaimPremiseContradiction": () => Effect.void,
           "IntegrationFinality.CompletionClaimReadFailure": () => Effect.void,
-          "IntegrationFinality.FreshTrackerSuccessRequired": () => Effect.void
+          "IntegrationFinality.FocusedTaskCompletionSuccessRequired": () => Effect.void
         }),
         Effect.orDie
       )
@@ -513,17 +1262,48 @@ const makeProductionState = () => {
     replacementDisposition = "Rejected"
     deletionDisposition = "Rejected"
     successObservation = undefined
+    completionDisposition = "Acknowledged"
+    completionLookupDisposition = "Applied"
+    completionAncestryDisposition = "Current"
+    focusedLifecycle = "Open"
+    focusedTaskId = productionCompletionRequest.taskId
+    focusedTaskRevision = productionCompletionRequest.taskRevision
+    confirmationReadUnavailable = false
+    blockedAppendTag = undefined
+    pauseCompletionAttemptIntent = false
+    pendingCompletion = undefined
+    completionBoundaryCalls = 0
+    completionEvidenceReads = 0
   }
 
   const readState = () => deriveIntegrationFinalityStateFor(records, productionClaimIdentity)
 
   return {
+    appendCompleteGraph,
     appendObservedSuccess,
+    get completionBoundaryCalls(): number {
+      return completionBoundaryCalls
+    },
+    get completionEvidenceReads(): number {
+      return completionEvidenceReads
+    },
     get records(): ReadonlyArray<JournalRecord> {
       return records
     },
     invokeDeletion,
+    invokeCompletion,
     invokeReplacement,
+    observeCompletionAncestry,
+    observeCompletionAncestryResult,
+    observeCompletionEvidence,
+    observeFocusedAuthorization,
+    observeFocusedConflict,
+    observeFocusedCompletionSuccess,
+    observeFocusedCompletionOpenAfterLossCutPoint,
+    reconcileCompletion,
+    recordCompletionIntentCutPoint,
+    recordCompletionAttemptIntentCutPoint,
+    crossCompletionBoundaryCutPoint,
     readState,
     reset,
     setClaimObservation: (observation: CompletionClaimObservation): void => {
@@ -539,6 +1319,9 @@ type ProductionState = ReturnType<typeof makeProductionState>
 const assertProductionFinality = (current: ModelState, productionState: ProductionState): void => {
   if (completionClaimRequestLimit !== Number(COMPLETION_CLAIM_REQUEST_LIMIT)) {
     throw new Error("model request bound diverges from production completion-claim request bound")
+  }
+  if (completionTaskRequestLimit !== Number(COMPLETION_CLAIM_REQUEST_LIMIT)) {
+    throw new Error("model request bound diverges from production complete-task request bound")
   }
   if (!completionTaskClaimEquals(productionClaimIdentity, productionClaimIdentity)) {
     throw new Error("production completion-claim equality rejected an identical exact claim")
@@ -572,6 +1355,60 @@ const assertProductionFinality = (current: ModelState, productionState: Producti
     throw new Error("model settlement did not reach production integration finality")
   }
 
+  const completionEvents = productionState.records.map(({ event }) => event._tag)
+  const focusedFactsRecorded = productionState.records.some(
+    ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskCompletionFacts"
+  )
+  if (current.promoted.focusedFactsRecorded && !focusedFactsRecorded) {
+    throw new Error("model focused facts did not cross the production focused-read journal seam")
+  }
+  if (
+    current.promoted.completionAncestry === "CandidateAncestor" &&
+    !completionEvents.includes("CompletionTaskCandidateAncestryObserved")
+  ) {
+    throw new Error("model ancestry did not cross the production Git-read journal seam")
+  }
+  if (current.promoted.completionEvidenceRecorded && productionState.completionEvidenceReads < 3) {
+    throw new Error("model evidence observation did not reread all three production manifests")
+  }
+  if (current.promoted.completionIntentRecorded && !completionEvents.includes("CompletionTaskIntended")) {
+    throw new Error("model Q intent was not durable in the production journal")
+  }
+  const modelCompletionCalls = Number(current.completeTaskRequests)
+  const productionCompletionCalls = productionState.completionBoundaryCalls
+  const requestCrossingIsPending = current.promoted.phase === "CompletionRequested"
+  if (
+    productionCompletionCalls !== modelCompletionCalls &&
+    !(requestCrossingIsPending && productionCompletionCalls + 1 === modelCompletionCalls)
+  ) {
+    throw new Error("model complete-task calls diverged from the production tracker boundary")
+  }
+  if (current.promoted.focusedSuccessRecorded) {
+    const focusedSuccessAt = productionState.records.findLastIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskCompletionFacts" &&
+        event.observation.facts.lifecycle === "CompletedSuccessfully"
+    )
+    if (focusedSuccessAt < 0) {
+      throw new Error("model focused success was not durable in the production journal")
+    }
+    if (
+      current.promoted.completeGraphObservation === "GraphBlocked" ||
+      current.promoted.completeGraphObservation === "GraphReleased"
+    ) {
+      const graphAt = productionState.records.findLastIndex(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.operationId !== integrationFinalityFixture.graphOperation.operationId
+      )
+      if (graphAt <= focusedSuccessAt) {
+        throw new Error("model dependant graph was not durably observed after focused success")
+      }
+    }
+  }
+
   const decision = deriveRunFinalityDecision(
     { explanations: [{ _tag: "IntegrationInProgress", plannedAttempt: integrationAttempt }], transitions: [] },
     { entries: [integrationResponsibility] } satisfies WorkflowResponsibilityState,
@@ -586,13 +1423,33 @@ const integrationFinalityDriver = defineDriver(
   {
     deriveCompletionClaim: {},
     init: {},
+    observeCompletionEvidence: {},
+    observeCompleteTaskAcknowledgement: {},
+    observeFocusedCompletionFacts: {},
+    observeFocusedCompletionForeignTaskConflict: {},
+    observeFocusedCompletionHumanSuccessWithAbsentClaim: {},
+    observeFocusedCompletionHumanSuccessWithForeignClaim: {},
+    observeFocusedCompletionReopenedConflict: {},
+    observeFocusedCompletionRevisionConflict: {},
+    observeFocusedCompletionSuccess: {},
+    observeLaterCompleteGraphBlocked: {},
+    observeLaterCompleteGraphReleased: {},
+    observeLaterCompleteGraphUnreadable: {},
+    observePromotedCandidateAncestry: {},
+    observePromotedCandidateAncestryUnreadable: {},
+    observePromotedCandidateNotAncestor: {},
+    lookupCompletionRequestApplied: {},
+    lookupCompletionRequestNotApplied: {},
+    lookupCompletionRequestUnreadable: {},
+    loseCompleteTaskResponse: {},
+    observeFocusedCompletionOpenAfterLoss: {},
     loseCompletionClaimDeletionResponse: {},
     loseCompletionClaimReplacementResponse: {},
     markEmptyFrontier: {},
     observeCompletionClaimDeleted: {},
     observeCompletionClaimReplacement: {},
     observeFreshBlockerClear: {},
-    observeFreshTrackerSuccess: {},
+    observeFocusedCompletionHumanSuccessWithExactClaim: {},
     observePostPromotionBlocker: {},
     observeStaleTrackerSuccess: {},
     reconcileDeletionAsAbsent: {},
@@ -605,9 +1462,13 @@ const integrationFinalityDriver = defineDriver(
     reconcileReplacementAsUnreadableClaim: {},
     recordCompletionClaimDeletionIntent: {},
     recordCompletionClaimReplacementIntent: {},
+    recordCompleteTaskIntent: {},
+    recordCompletionAttemptIntent: {},
     rejectCompletionClaimDeletion: {},
     requestCompletionClaimDeletion: {},
     requestCompletionClaimReplacement: {},
+    requestCompleteTask: {},
+    refreshCompletionPremisesForRetry: {},
     retryCompletionClaimDeletion: {},
     retryCompletionClaimReplacement: {},
     settlePromotedTask: {}
@@ -653,7 +1514,10 @@ const integrationFinalityDriver = defineDriver(
               attemptId: subject.proof.attemptId,
               taskRevision: subject.proof.taskRevision,
               predecessorClaimId: subject.originalClaimId,
-              promotionCorrelation: subject.proof.promotionCorrelation
+              promotionCorrelation: subject.proof.promotionCorrelation,
+              acceptanceManifest: subject.proof.acceptanceManifest,
+              integrationReviewManifest: subject.proof.integrationReviewManifest,
+              verificationManifest: subject.proof.verificationManifest
             }
           }))
         ),
@@ -756,7 +1620,7 @@ const integrationFinalityDriver = defineDriver(
             trackerObservationRevision: STALE_TRACKER_REVISION
           }))
         ),
-      observeFreshTrackerSuccess: () =>
+      observeFocusedCompletionHumanSuccessWithExactClaim: () =>
         Effect.sync(() => {
           productionState.appendObservedSuccess()
           updatePromoted((subject) => ({
@@ -765,9 +1629,259 @@ const integrationFinalityDriver = defineDriver(
             trackerObservation: "FreshSuccess",
             trackerObservationRevision: FRESH_TRACKER_REVISION,
             freshTrackerSuccess: true,
-            trackerSuccessEver: true
+            trackerSuccessEver: true,
+            focusedSuccessRecorded: true,
+            successSource: "ExternalFocusedSuccess"
           }))
         }),
+      observeFocusedCompletionFacts: () =>
+        Effect.sync(() => {
+          productionState.observeFocusedAuthorization(Number(current.promoted.completionRequests) + 1)
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionFactsObserved",
+            focusedFactsRecorded: true,
+            focusedFactsOpen: true,
+            focusedFactsNoBlocker: true,
+            completionConflict: "NoCompletionConflict"
+          }))
+        }),
+      observeFocusedCompletionHumanSuccessWithAbsentClaim: () =>
+        Effect.sync(() => {
+          productionState.observeFocusedCompletionSuccess(
+            UnclaimedTask.make({ taskId: productionClaimIdentity.plannedAttempt.taskId })
+          )
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "DeleteIntentPending",
+            claimState: "AbsentClaim",
+            currentClaimId: 0n,
+            trackerObservation: "FreshSuccess",
+            trackerObservationRevision: FRESH_TRACKER_REVISION,
+            freshTrackerSuccess: true,
+            trackerSuccessEver: true,
+            focusedSuccessRecorded: true,
+            successSource: "ExternalFocusedSuccess",
+            completionConflict: "NoCompletionConflict"
+          }))
+        }),
+      observeFocusedCompletionHumanSuccessWithForeignClaim: () =>
+        Effect.sync(() => {
+          productionState.observeFocusedCompletionSuccess(productionClaimIdentity.originalClaim)
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "DeleteIntentPending",
+            claimState: "ForeignClaim",
+            currentClaimId: 999n,
+            trackerObservation: "FreshSuccess",
+            trackerObservationRevision: FRESH_TRACKER_REVISION,
+            freshTrackerSuccess: true,
+            trackerSuccessEver: true,
+            focusedSuccessRecorded: true,
+            successSource: "ExternalFocusedSuccess",
+            completionConflict: "NoCompletionConflict"
+          }))
+        }),
+      observeFocusedCompletionForeignTaskConflict: () =>
+        Effect.sync(() => {
+          productionState.observeFocusedConflict("ForeignTask", Number(current.promoted.completionRequests) + 1)
+          updatePromoted((subject) => ({ ...subject, phase: "CompletionWait", completionConflict: "ForeignTask" }))
+        }),
+      observeFocusedCompletionRevisionConflict: () =>
+        Effect.sync(() => {
+          productionState.observeFocusedConflict("RevisionConflict", Number(current.promoted.completionRequests) + 1)
+          updatePromoted((subject) => ({ ...subject, phase: "CompletionWait", completionConflict: "RevisionConflict" }))
+        }),
+      observeFocusedCompletionReopenedConflict: () =>
+        Effect.sync(() => {
+          productionState.observeFocusedConflict("ReopenedTask", Number(current.promoted.completionRequests) + 1)
+          updatePromoted((subject) => ({ ...subject, phase: "CompletionWait", completionConflict: "ReopenedTask" }))
+        }),
+      observePromotedCandidateAncestry: () =>
+        Effect.sync(() => {
+          productionState.observeCompletionAncestry(Number(current.promoted.completionRequests) + 1)
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionAncestryObserved",
+            completionAncestry: "CandidateAncestor"
+          }))
+        }),
+      observePromotedCandidateNotAncestor: () =>
+        Effect.sync(() => {
+          productionState.observeCompletionAncestryResult(
+            "NotAncestor",
+            Number(current.promoted.completionRequests) + 1
+          )
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionWait",
+            completionAncestry: "CandidateNotAncestor"
+          }))
+        }),
+      observePromotedCandidateAncestryUnreadable: () =>
+        Effect.sync(() => {
+          productionState.observeCompletionAncestryResult("Unreadable", Number(current.promoted.completionRequests) + 1)
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionWait",
+            completionAncestry: "UnreadableAncestry"
+          }))
+        }),
+      observeCompletionEvidence: () =>
+        Effect.sync(() => {
+          productionState.observeCompletionEvidence()
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionEvidenceObserved",
+            completionEvidenceRecorded: true
+          }))
+        }),
+      recordCompleteTaskIntent: () =>
+        Effect.sync(() => {
+          productionState.recordCompletionIntentCutPoint(Number(current.promoted.completionRequests) + 1)
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionIntentRecorded",
+            completionIntentRecorded: true,
+            completionRequestId: 801n
+          }))
+        }),
+      recordCompletionAttemptIntent: () =>
+        Effect.gen(function* () {
+          yield* productionState.recordCompletionAttemptIntentCutPoint(Number(current.promoted.completionRequests) + 1)
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionAttemptIntentRecorded",
+            completionAttemptIntents: subject.completionAttemptIntents + 1n
+          }))
+        }),
+      requestCompleteTask: () =>
+        productionState.crossCompletionBoundaryCutPoint().pipe(
+          Effect.andThen(
+            Effect.sync(() =>
+              updatePromoted((subject) => ({
+                ...subject,
+                phase: "CompletionRequested",
+                completionRequests: subject.completionRequests + 1n,
+                completionPremiseViolationCalls: subject.completionPremiseViolationCalls,
+                completeTaskAcknowledged: false,
+                completionOutcome: "NoCompletionOutcome",
+                lastMutation: "CompleteTaskMutation"
+              }))
+            )
+          ),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              current = { ...current, completeTaskRequests: current.completeTaskRequests + 1n }
+            })
+          )
+        ),
+      observeCompleteTaskAcknowledgement: () =>
+        Effect.gen(function* () {
+          yield* productionState.invokeCompletion("Acknowledged", Number(current.promoted.completionRequests))
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionAcknowledged",
+            completionOutcome: "Applied",
+            completeTaskAcknowledged: true
+          }))
+        }),
+      loseCompleteTaskResponse: () =>
+        Effect.gen(function* () {
+          yield* productionState.invokeCompletion("ResponseLost", Number(current.promoted.completionRequests))
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionResponseLost",
+            completionOpenConfirmationRecorded: false
+          }))
+        }),
+      observeFocusedCompletionOpenAfterLoss: () =>
+        Effect.sync(() => {
+          productionState.observeFocusedCompletionOpenAfterLossCutPoint(Number(current.promoted.completionRequests))
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionConfirmationObserved",
+            completionOpenConfirmationRecorded: true
+          }))
+        }),
+      lookupCompletionRequestApplied: () =>
+        Effect.sync(() => {
+          productionState.reconcileCompletion("Applied", Number(current.promoted.completionRequests))
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionAcknowledged",
+            completionReads: subject.completionReads + 1n,
+            completionOutcome: "Applied",
+            completeTaskAcknowledged: true
+          }))
+        }),
+      lookupCompletionRequestNotApplied: () =>
+        Effect.sync(() => {
+          productionState.reconcileCompletion("NotApplied", Number(current.promoted.completionRequests))
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionRetryReady",
+            completionReads: subject.completionReads + 1n,
+            completionOutcome: "NotApplied",
+            completionNotAppliedReads: subject.completionNotAppliedReads + 1n
+          }))
+        }),
+      lookupCompletionRequestUnreadable: () =>
+        Effect.sync(() => {
+          productionState.reconcileCompletion("Unreadable", Number(current.promoted.completionRequests))
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionWait",
+            completionReads: subject.completionReads + 1n,
+            completionOutcome: "UnreadableCompletionOutcome"
+          }))
+        }),
+      refreshCompletionPremisesForRetry: () =>
+        Effect.sync(() => {
+          productionState.observeFocusedAuthorization(Number(current.promoted.completionRequests) + 1)
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "CompletionFactsObserved",
+            completionOutcome: "NoCompletionOutcome",
+            completeTaskAcknowledged: false,
+            completionOpenConfirmationRecorded: false
+          }))
+        }),
+      observeFocusedCompletionSuccess: () =>
+        Effect.sync(() => {
+          productionState.observeFocusedCompletionSuccess(productionClaimIdentity)
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "DeleteIntentPending",
+            trackerObservation: "FreshSuccess",
+            trackerObservationRevision: FRESH_TRACKER_REVISION,
+            freshTrackerSuccess: true,
+            trackerSuccessEver: true,
+            focusedSuccessRecorded: true,
+            successSource: "PostRequestFocusedSuccess"
+          }))
+        }),
+      observeLaterCompleteGraphBlocked: () =>
+        Effect.sync(() => {
+          const dependantEligible = productionState.appendCompleteGraph("Blocked")
+          if (dependantEligible)
+            throw new Error("production graph projection released B while its blocker remained open")
+          updatePromoted((subject) => ({ ...subject, completeGraphObservation: "GraphBlocked", dependantEligible }))
+        }),
+      observeLaterCompleteGraphReleased: () =>
+        Effect.sync(() => {
+          const dependantEligible = productionState.appendCompleteGraph("Released")
+          if (!dependantEligible) throw new Error("production graph projection kept B blocked after G1 released it")
+          updatePromoted((subject) => ({ ...subject, completeGraphObservation: "GraphReleased", dependantEligible }))
+        }),
+      observeLaterCompleteGraphUnreadable: () =>
+        Effect.sync(() =>
+          updatePromoted((subject) => ({
+            ...subject,
+            completeGraphObservation: "UnreadableGraph",
+            dependantEligible: false
+          }))
+        ),
       recordCompletionClaimDeletionIntent: () =>
         Effect.sync(() =>
           updatePromoted((subject) => ({ ...subject, phase: "DeleteIntentRecorded", deleteIntentRecorded: true }))
@@ -928,6 +2042,23 @@ quintIt(
         spec.promoted.claimState === implementation.promoted.claimState &&
         spec.promoted.completionClaim === implementation.promoted.completionClaim &&
         spec.promoted.completionClaimDerived === implementation.promoted.completionClaimDerived &&
+        spec.promoted.completionAncestry === implementation.promoted.completionAncestry &&
+        spec.promoted.completionAttemptIntents === implementation.promoted.completionAttemptIntents &&
+        spec.promoted.completionOpenConfirmationRecorded ===
+          implementation.promoted.completionOpenConfirmationRecorded &&
+        spec.promoted.completionConfirmationViolationLookups ===
+          implementation.promoted.completionConfirmationViolationLookups &&
+        spec.promoted.completionConflict === implementation.promoted.completionConflict &&
+        spec.promoted.completionEvidenceRecorded === implementation.promoted.completionEvidenceRecorded &&
+        spec.promoted.completionIntentRecorded === implementation.promoted.completionIntentRecorded &&
+        spec.promoted.completionOutcome === implementation.promoted.completionOutcome &&
+        spec.promoted.completionNotAppliedReads === implementation.promoted.completionNotAppliedReads &&
+        spec.promoted.completionReads === implementation.promoted.completionReads &&
+        spec.promoted.completionRequestId === implementation.promoted.completionRequestId &&
+        spec.promoted.completionPremiseViolationCalls === implementation.promoted.completionPremiseViolationCalls &&
+        spec.promoted.completionRequests === implementation.promoted.completionRequests &&
+        spec.promoted.completeGraphObservation === implementation.promoted.completeGraphObservation &&
+        spec.promoted.completeTaskAcknowledged === implementation.promoted.completeTaskAcknowledged &&
         spec.promoted.currentClaimId === implementation.promoted.currentClaimId &&
         spec.promoted.deleteIntentRecorded === implementation.promoted.deleteIntentRecorded &&
         spec.promoted.deleteReadBeforeRetry === implementation.promoted.deleteReadBeforeRetry &&
@@ -937,6 +2068,10 @@ quintIt(
         spec.promoted.deletionOutcomeRecorded === implementation.promoted.deletionOutcomeRecorded &&
         spec.promoted.foreignMutationCount === implementation.promoted.foreignMutationCount &&
         spec.promoted.freshTrackerSuccess === implementation.promoted.freshTrackerSuccess &&
+        spec.promoted.focusedFactsNoBlocker === implementation.promoted.focusedFactsNoBlocker &&
+        spec.promoted.focusedFactsOpen === implementation.promoted.focusedFactsOpen &&
+        spec.promoted.focusedFactsRecorded === implementation.promoted.focusedFactsRecorded &&
+        spec.promoted.focusedSuccessRecorded === implementation.promoted.focusedSuccessRecorded &&
         spec.promoted.lastMutation === implementation.promoted.lastMutation &&
         spec.promoted.phase === implementation.promoted.phase &&
         spec.promoted.proof === implementation.promoted.proof &&
@@ -956,6 +2091,7 @@ quintIt(
         spec.promoted.trackerObservation === implementation.promoted.trackerObservation &&
         spec.promoted.trackerObservationRevision === implementation.promoted.trackerObservationRevision &&
         spec.promoted.trackerSuccessEver === implementation.promoted.trackerSuccessEver &&
+        spec.promoted.dependantEligible === implementation.promoted.dependantEligible &&
         spec.reintegrationRequests === implementation.reintegrationRequests &&
         spec.runTerminated === implementation.runTerminated &&
         spec.unrelated.phase === implementation.unrelated.phase &&

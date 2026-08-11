@@ -30,8 +30,8 @@ import {
   completionClaimRequestLimit,
   CompletionTaskClaim,
   completionTaskClaimEquals,
-  FreshCompletedTaskObservation,
-  freshCompletedTaskObservationEquals,
+  CompletionSuccessObservation,
+  completionSuccessObservationEquals,
   IntegrationFinalitySettledEvent,
   type CompletionClaimDeletionRequest,
   type CompletionClaimReplacementRequest,
@@ -40,7 +40,7 @@ import {
 } from "./events.js"
 import { targetPromotionCorrelationEquals } from "../target-promotion/events.js"
 import { OperationId } from "../../identity.js"
-import { latestFreshCompletedTaskObservationFor } from "./state.js"
+import { latestFocusedCompletedTaskObservationFor } from "./state.js"
 
 /** The offered claim is not the exact claim authorized by promotion history. */
 export class CompletionClaimPremiseContradiction extends Schema.TaggedError<CompletionClaimPremiseContradiction>()(
@@ -60,10 +60,10 @@ export class CompletionClaimReplacementRequired extends Schema.TaggedError<Compl
   { claim: CompletionTaskClaim }
 ) {}
 
-/** Deletion requires the fresh tracker observation to be durably present. */
-export class FreshTrackerSuccessRequired extends Schema.TaggedError<FreshTrackerSuccessRequired>()(
-  "IntegrationFinality.FreshTrackerSuccessRequired",
-  { claim: CompletionTaskClaim, observation: FreshCompletedTaskObservation }
+/** Deletion requires the exact focused task-completion success observation to be durably present. */
+export class FocusedTaskCompletionSuccessRequired extends Schema.TaggedError<FocusedTaskCompletionSuccessRequired>()(
+  "IntegrationFinality.FocusedTaskCompletionSuccessRequired",
+  { claim: CompletionTaskClaim, observation: CompletionSuccessObservation }
 ) {}
 
 /** Three exact requests did not establish the requested claim disposition. */
@@ -186,7 +186,7 @@ const exactPromotionWasObserved = (records: ReadonlyArray<JournalRecord>, claim:
 
 const freshSuccessWasObserved = (
   records: ReadonlyArray<JournalRecord>,
-  observation: FreshCompletedTaskObservation,
+  observation: CompletionSuccessObservation,
   claim: CompletionTaskClaim,
   replacementOperationId: OperationId
 ): boolean => {
@@ -195,12 +195,13 @@ const freshSuccessWasObserved = (
   const replacement = replacementOutcomeRecord(records, replacementOperationId)
   /* v8 ignore next -- @preserve Delivery proposes deletion only from the exact reconstructed replacement outcome. */
   if (replacement === undefined || !completionTaskClaimEquals(replacement.event.claim, claim)) return false
-  const candidate = latestFreshCompletedTaskObservationFor(
-    records.filter((record) => record.position <= observation.observedAt),
-    observation.taskId,
-    replacement.position
+  const focused = latestFocusedCompletedTaskObservationFor(
+    records,
+    claim.plannedAttempt.taskId,
+    replacement.position,
+    claim
   )
-  return candidate !== undefined && freshCompletedTaskObservationEquals(candidate, observation)
+  return focused !== undefined && completionSuccessObservationEquals(focused, observation)
 }
 
 const ensureReplacementIntent = Effect.fn("IntegrationFinality.ensureReplacementIntent")(function* (
@@ -393,7 +394,7 @@ const ensureDeletionIntent = Effect.fn("IntegrationFinality.ensureDeletionIntent
   if (existing !== undefined) {
     if (
       !completionTaskClaimEquals(existing.claim, request.claim) ||
-      !freshCompletedTaskObservationEquals(existing.successObservation, request.successObservation)
+      !completionSuccessObservationEquals(existing.successObservation, request.successObservation)
     ) {
       return yield* new CompletionClaimPremiseContradiction({
         claim: request.claim,
@@ -404,7 +405,10 @@ const ensureDeletionIntent = Effect.fn("IntegrationFinality.ensureDeletionIntent
   }
   /* v8 ignore stop */
   if (!freshSuccessWasObserved(records, request.successObservation, request.claim, replacementOperationId)) {
-    return yield* new FreshTrackerSuccessRequired({ claim: request.claim, observation: request.successObservation })
+    return yield* new FocusedTaskCompletionSuccessRequired({
+      claim: request.claim,
+      observation: request.successObservation
+    })
   }
   yield* append(
     request.claim.plannedAttempt.runId,
@@ -465,7 +469,7 @@ const settlementMatchesRequest = (
   [
     completionTaskClaimEquals(settled.claim, request.claim),
     settled.replacementOperationId === replacementOperationId,
-    freshCompletedTaskObservationEquals(settled.successObservation, request.successObservation),
+    completionSuccessObservationEquals(settled.successObservation, request.successObservation),
     freshSuccessWasObserved(records, settled.successObservation, settled.claim, replacementOperationId)
   ].every(Boolean)
 
@@ -477,7 +481,7 @@ const deletionOutcomeMatchesRequest = (
 ): boolean =>
   [
     completionTaskClaimEquals(deleted.claim, request.claim),
-    freshCompletedTaskObservationEquals(deleted.successObservation, request.successObservation),
+    completionSuccessObservationEquals(deleted.successObservation, request.successObservation),
     freshSuccessWasObserved(records, deleted.successObservation, deleted.claim, replacementOperationId)
   ].every(Boolean)
 /* v8 ignore stop */

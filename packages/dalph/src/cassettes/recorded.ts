@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
-import { Effect, Schema } from "effect"
+import { Effect, Match, Schema } from "effect"
 import {
   AttemptChoiceAppliedEvent,
   AttemptImplementationAbandonedEvent,
@@ -33,6 +33,15 @@ import {
   CompletionClaimDeletionAttemptIntendedEvent,
   CompletionClaimDeletedEvent,
   IntegrationFinalitySettledEvent,
+  CompletionTaskAcknowledgedEvent,
+  CompletionTaskAttemptIntendedEvent,
+  CompletionTaskCandidateAncestryObservedEvent,
+  CompletionTaskCandidateAncestryReadIntendedEvent,
+  CompletionTaskIntendedEvent,
+  CompletionTaskRequestLookupIntendedEvent,
+  CompletionTaskRequestLookupObservedEvent,
+  CompletionTaskRejectedEvent,
+  CompletionTaskResponseLostEvent,
   type JournalRecord,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
@@ -127,58 +136,53 @@ const recordExecutorEntry = (
         | "PlannedAttemptExecutorWorkResponsibilityBegan"
     }
   >
-): RecordedCassetteEntry => {
-  switch (event._tag) {
-    case "PlannedAttemptExecutorWorkResponsibilityBegan":
-      return {
+): RecordedCassetteEntry =>
+  Match.value(event).pipe(
+    Match.tagsExhaustive({
+      PlannedAttemptExecutorWorkResponsibilityBegan: (value): RecordedCassetteEntry => ({
         _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
-        plannedAttempt: event.plannedAttempt
-      }
-    case "PlannedAttemptExecutorWorkReported":
-      return {
+        plannedAttempt: value.plannedAttempt
+      }),
+      PlannedAttemptExecutorWorkReported: (value): RecordedCassetteEntry => ({
         _tag: "PlannedAttemptExecutorWorkReported",
         occurrenceClassification: "NonActionOccurrence",
-        ordinal: event.ordinal,
-        report: event.report
-      }
-    case "PlannedAttemptExecutorCommandIntended":
-      return {
+        ordinal: value.ordinal,
+        report: value.report
+      }),
+      PlannedAttemptExecutorCommandIntended: (value): RecordedCassetteEntry => ({
         _tag: "PlannedAttemptExecutorCommandIntended",
-        command: event.command,
-        initiatedBy: event.initiatedBy,
-        occurrenceClassification: event.occurrenceClassification,
-        ordinal: event.ordinal,
-        plannedAttempt: event.plannedAttempt
-      }
-    case "PlannedAttemptExecutorCommandProjectionObserved":
-      return {
+        command: value.command,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        ordinal: value.ordinal,
+        plannedAttempt: value.plannedAttempt
+      }),
+      PlannedAttemptExecutorCommandProjectionObserved: (value): RecordedCassetteEntry => ({
         _tag: "PlannedAttemptExecutorCommandProjectionObserved",
-        commandOrdinal: event.commandOrdinal,
-        observation: event.observation,
-        occurrenceClassification: event.occurrenceClassification,
-        plannedAttempt: event.plannedAttempt,
-        projectionOrdinal: event.projectionOrdinal
-      }
-    case "PlannedAttemptExecutorCommandResponseContradicted":
-      return {
+        commandOrdinal: value.commandOrdinal,
+        observation: value.observation,
+        occurrenceClassification: value.occurrenceClassification,
+        plannedAttempt: value.plannedAttempt,
+        projectionOrdinal: value.projectionOrdinal
+      }),
+      PlannedAttemptExecutorCommandResponseContradicted: (value): RecordedCassetteEntry => ({
         _tag: "PlannedAttemptExecutorCommandResponseContradicted",
-        commandOrdinal: event.commandOrdinal,
-        observed: event.observed,
-        occurrenceClassification: event.occurrenceClassification,
-        plannedAttempt: event.plannedAttempt
-      }
-    case "PlannedAttemptExecutorStateObserved":
-      return {
+        commandOrdinal: value.commandOrdinal,
+        observed: value.observed,
+        occurrenceClassification: value.occurrenceClassification,
+        plannedAttempt: value.plannedAttempt
+      }),
+      PlannedAttemptExecutorStateObserved: (value): RecordedCassetteEntry => ({
         _tag: "PlannedAttemptExecutorStateObserved",
-        observation: event.observation,
-        occurrenceClassification: event.occurrenceClassification,
-        ordinal: event.ordinal,
-        plannedAttempt: event.plannedAttempt
-      }
-  }
-}
+        observation: value.observation,
+        occurrenceClassification: value.occurrenceClassification,
+        ordinal: value.ordinal,
+        plannedAttempt: value.plannedAttempt
+      })
+    })
+  )
 
 type RecordedIntegrationEntry = Extract<
   RecordedCassetteEntry,
@@ -242,68 +246,63 @@ const isRecordedCandidateConstructionEntry = (
     "IntegrationCandidateContinuationLimitReached"
   ]).has(entry._tag)
 
-const recordCandidateConstructionEntry = (event: CandidateConstructionEvent): RecordedCandidateConstructionEntry => {
-  switch (event._tag) {
-    case "IntegrationCandidateConstructionIntended":
-      return {
-        _tag: event._tag,
-        correlation: event.correlation,
-        correctionLimit: event.correctionLimit,
-        continuationLimit: event.continuationLimit,
+const recordCandidateConstructionEntry = (event: CandidateConstructionEvent): RecordedCandidateConstructionEntry =>
+  Match.value(event).pipe(
+    Match.tagsExhaustive({
+      IntegrationCandidateConstructionIntended: (value): RecordedCandidateConstructionEntry => ({
+        _tag: value._tag,
+        correlation: value.correlation,
+        correctionLimit: value.correctionLimit,
+        continuationLimit: value.continuationLimit,
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
-        plannedAttempt: event.plannedAttempt
-      }
-    case "IntegrationCandidateAgentReported":
-      return {
-        _tag: event._tag,
-        expectedCorrelation: event.expectedCorrelation,
+        plannedAttempt: value.plannedAttempt
+      }),
+      IntegrationCandidateAgentReported: (value): RecordedCandidateConstructionEntry => ({
+        _tag: value._tag,
+        expectedCorrelation: value.expectedCorrelation,
         occurrenceClassification: "NonActionOccurrence",
-        ordinal: event.ordinal,
-        report: event.report
-      }
-    case "IntegrationCandidateGitObserved":
-      return {
-        _tag: event._tag,
-        candidateCommit: event.candidateCommit,
-        correlation: event.correlation,
-        observation: event.observation,
+        ordinal: value.ordinal,
+        report: value.report
+      }),
+      IntegrationCandidateGitObserved: (value): RecordedCandidateConstructionEntry => ({
+        _tag: value._tag,
+        candidateCommit: value.candidateCommit,
+        correlation: value.correlation,
+        observation: value.observation,
         occurrenceClassification: "NonActionOccurrence"
-      }
-    case "IntegrationCandidateConstructed":
-      return {
-        _tag: event._tag,
-        candidateCommit: event.candidateCommit,
-        correlation: event.correlation,
+      }),
+      IntegrationCandidateConstructed: (value): RecordedCandidateConstructionEntry => ({
+        _tag: value._tag,
+        candidateCommit: value.candidateCommit,
+        correlation: value.correlation,
+        occurrenceClassification: "NonActionOccurrence",
+        reviewManifest: value.reviewManifest
+      }),
+      IntegrationCandidateGitValidationFailed: (value): RecordedCandidateConstructionEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        candidateCommit: value.candidateCommit,
+        correlation: value.correlation,
+        detail: value.detail,
         occurrenceClassification: "NonActionOccurrence"
-      }
-    case "IntegrationCandidateGitValidationFailed":
-      return {
-        _tag: event._tag,
-        attemptOrdinal: event.attemptOrdinal,
-        candidateCommit: event.candidateCommit,
-        correlation: event.correlation,
-        detail: event.detail,
+      }),
+      IntegrationCandidateCorrectionLimitReached: (value): RecordedCandidateConstructionEntry => ({
+        _tag: value._tag,
+        correctionCount: value.correctionCount,
+        correctionLimit: value.correctionLimit,
+        correlation: value.correlation,
         occurrenceClassification: "NonActionOccurrence"
-      }
-    case "IntegrationCandidateCorrectionLimitReached":
-      return {
-        _tag: event._tag,
-        correctionCount: event.correctionCount,
-        correctionLimit: event.correctionLimit,
-        correlation: event.correlation,
+      }),
+      IntegrationCandidateContinuationLimitReached: (value): RecordedCandidateConstructionEntry => ({
+        _tag: value._tag,
+        continuationCount: value.continuationCount,
+        continuationLimit: value.continuationLimit,
+        correlation: value.correlation,
         occurrenceClassification: "NonActionOccurrence"
-      }
-    case "IntegrationCandidateContinuationLimitReached":
-      return {
-        _tag: event._tag,
-        continuationCount: event.continuationCount,
-        continuationLimit: event.continuationLimit,
-        correlation: event.correlation,
-        occurrenceClassification: "NonActionOccurrence"
-      }
-  }
-}
+      })
+    })
+  )
 
 type TargetVerificationEvent = Extract<
   WorkflowJournalEvent,
@@ -330,32 +329,30 @@ const isRecordedTargetVerificationEntry = (entry: RecordedCassetteEntry): entry 
   entry._tag === "TargetVerificationEvidenceSealed" ||
   entry._tag === "TargetVerificationCorrelationContradicted"
 
-const recordTargetVerificationEntry = (event: TargetVerificationEvent): RecordedTargetVerificationEntry => {
-  switch (event._tag) {
-    case "TargetVerificationIntended":
-      return {
-        _tag: event._tag,
-        correlation: event.correlation,
+const recordTargetVerificationEntry = (event: TargetVerificationEvent): RecordedTargetVerificationEntry =>
+  Match.value(event).pipe(
+    Match.tagsExhaustive({
+      TargetVerificationIntended: (value): RecordedTargetVerificationEntry => ({
+        _tag: value._tag,
+        correlation: value.correlation,
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction"
-      }
-    case "TargetVerificationEvidenceSealed":
-      return {
-        _tag: event._tag,
-        correlation: event.correlation,
-        manifest: event.manifest,
+      }),
+      TargetVerificationEvidenceSealed: (value): RecordedTargetVerificationEntry => ({
+        _tag: value._tag,
+        correlation: value.correlation,
+        manifest: value.manifest,
         occurrenceClassification: "NonActionOccurrence",
-        terminal: event.terminal
-      }
-    case "TargetVerificationCorrelationContradicted":
-      return {
-        _tag: event._tag,
-        expected: event.expected,
+        terminal: value.terminal
+      }),
+      TargetVerificationCorrelationContradicted: (value): RecordedTargetVerificationEntry => ({
+        _tag: value._tag,
+        expected: value.expected,
         occurrenceClassification: "NonActionOccurrence",
-        received: event.received
-      }
-  }
-}
+        received: value.received
+      })
+    })
+  )
 
 type TargetPromotionEvent = Extract<WorkflowJournalEvent, { readonly _tag: `TargetPromotion${string}` }>
 type RecordedTargetPromotionEntry = Extract<RecordedCassetteEntry, { readonly _tag: TargetPromotionEvent["_tag"] }>
@@ -374,152 +371,201 @@ const isRecordedTargetPromotionEntry = (entry: RecordedCassetteEntry): entry is 
   entry._tag === "TargetPromotionStale" ||
   entry._tag === "TargetPromotionNonConvergence"
 
-const recordTargetPromotionEntry = (event: TargetPromotionEvent): RecordedTargetPromotionEntry => {
-  switch (event._tag) {
-    case "TargetPromotionIntended":
-      return {
-        _tag: event._tag,
-        correlation: event.correlation,
+const recordTargetPromotionEntry = (event: TargetPromotionEvent): RecordedTargetPromotionEntry =>
+  Match.value(event).pipe(
+    Match.tagsExhaustive({
+      TargetPromotionIntended: (value): RecordedTargetPromotionEntry => ({
+        _tag: value._tag,
+        correlation: value.correlation,
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction"
-      }
-    case "TargetPromotionAttemptIntended":
-      return {
-        _tag: event._tag,
-        attemptOrdinal: event.attemptOrdinal,
-        correlation: event.correlation,
+      }),
+      TargetPromotionAttemptIntended: (value): RecordedTargetPromotionEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        correlation: value.correlation,
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
-        reason: event.reason
-      }
-    case "TargetPromotionObservedSuccess":
-      return {
-        _tag: event._tag,
-        basis: event.basis,
-        correlation: event.correlation,
-        observation: event.observation,
+        reason: value.reason
+      }),
+      TargetPromotionObservedSuccess: (value): RecordedTargetPromotionEntry => ({
+        _tag: value._tag,
+        basis: value.basis,
+        correlation: value.correlation,
+        observation: value.observation,
         occurrenceClassification: "NonActionOccurrence"
-      }
-    case "TargetPromotionStale":
-      return {
-        _tag: event._tag,
-        basis: event.basis,
-        correlation: event.correlation,
-        observation: event.observation,
+      }),
+      TargetPromotionStale: (value): RecordedTargetPromotionEntry => ({
+        _tag: value._tag,
+        basis: value.basis,
+        correlation: value.correlation,
+        observation: value.observation,
         occurrenceClassification: "NonActionOccurrence"
-      }
-    case "TargetPromotionNonConvergence":
-      return {
-        _tag: event._tag,
-        attemptLimit: event.attemptLimit,
-        attemptOrdinal: event.attemptOrdinal,
-        correlation: event.correlation,
-        lastObservation: event.lastObservation,
+      }),
+      TargetPromotionNonConvergence: (value): RecordedTargetPromotionEntry => ({
+        _tag: value._tag,
+        attemptLimit: value.attemptLimit,
+        attemptOrdinal: value.attemptOrdinal,
+        correlation: value.correlation,
+        lastObservation: value.lastObservation,
         occurrenceClassification: "NonActionOccurrence"
-      }
-  }
-}
+      })
+    })
+  )
 
-type IntegrationFinalityEvent = Extract<
-  WorkflowJournalEvent,
-  {
-    readonly _tag:
-      | "CompletionClaimReplacementIntended"
-      | "CompletionClaimReplacementAttemptIntended"
-      | "CompletionClaimReplaced"
-      | "CompletionClaimDeletionIntended"
-      | "CompletionClaimDeletionAttemptIntended"
-      | "CompletionClaimDeleted"
-      | "IntegrationFinalitySettled"
-  }
->
-type RecordedIntegrationFinalityEntry = Extract<
-  RecordedCassetteEntry,
-  { readonly _tag: IntegrationFinalityEvent["_tag"] }
->
+const integrationFinalityTags = [
+  "CompletionClaimReplacementIntended",
+  "CompletionClaimReplacementAttemptIntended",
+  "CompletionClaimReplaced",
+  "CompletionClaimDeletionIntended",
+  "CompletionClaimDeletionAttemptIntended",
+  "CompletionClaimDeleted",
+  "IntegrationFinalitySettled",
+  "CompletionTaskIntended",
+  "CompletionTaskAttemptIntended",
+  "CompletionTaskAcknowledged",
+  "CompletionTaskResponseLost",
+  "CompletionTaskRejected",
+  "CompletionTaskCandidateAncestryReadIntended",
+  "CompletionTaskCandidateAncestryObserved",
+  "CompletionTaskRequestLookupIntended",
+  "CompletionTaskRequestLookupObserved"
+] as const satisfies ReadonlyArray<WorkflowJournalEvent["_tag"] & RecordedCassetteEntry["_tag"]>
 
-const isIntegrationFinalityEvent = (event: WorkflowJournalEvent): event is IntegrationFinalityEvent =>
-  event._tag === "CompletionClaimReplacementIntended" ||
-  event._tag === "CompletionClaimReplacementAttemptIntended" ||
-  event._tag === "CompletionClaimReplaced" ||
-  event._tag === "CompletionClaimDeletionIntended" ||
-  event._tag === "CompletionClaimDeletionAttemptIntended" ||
-  event._tag === "CompletionClaimDeleted" ||
-  event._tag === "IntegrationFinalitySettled"
+type IntegrationFinalityTag = (typeof integrationFinalityTags)[number]
+type IntegrationFinalityEvent = Extract<WorkflowJournalEvent, { readonly _tag: IntegrationFinalityTag }>
+type RecordedIntegrationFinalityEntry = Extract<RecordedCassetteEntry, { readonly _tag: IntegrationFinalityTag }>
 
-const isRecordedIntegrationFinalityEntry = (entry: RecordedCassetteEntry): entry is RecordedIntegrationFinalityEntry =>
-  entry._tag === "CompletionClaimReplacementIntended" ||
-  entry._tag === "CompletionClaimReplacementAttemptIntended" ||
-  entry._tag === "CompletionClaimReplaced" ||
-  entry._tag === "CompletionClaimDeletionIntended" ||
-  entry._tag === "CompletionClaimDeletionAttemptIntended" ||
-  entry._tag === "CompletionClaimDeleted" ||
-  entry._tag === "IntegrationFinalitySettled"
+const isIntegrationFinalityTagged = <Value extends { readonly _tag: string }>(
+  value: Value
+): value is Extract<Value, { readonly _tag: IntegrationFinalityTag }> =>
+  integrationFinalityTags.some((tag) => tag === value._tag)
 
-const recordIntegrationFinalityEntry = (event: IntegrationFinalityEvent): RecordedIntegrationFinalityEntry => {
-  switch (event._tag) {
-    case "CompletionClaimReplacementIntended":
-      return {
-        _tag: event._tag,
-        claim: event.claim,
+const recordIntegrationFinalityEntry = (event: IntegrationFinalityEvent): RecordedIntegrationFinalityEntry =>
+  Match.value(event).pipe(
+    Match.tagsExhaustive({
+      CompletionClaimReplacementIntended: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        claim: value.claim,
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
-        operationId: event.operationId
-      }
-    case "CompletionClaimReplacementAttemptIntended":
-      return {
-        _tag: event._tag,
-        attemptOrdinal: event.attemptOrdinal,
-        claim: event.claim,
+        operationId: value.operationId
+      }),
+      CompletionClaimReplacementAttemptIntended: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        claim: value.claim,
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
-        operationId: event.operationId
-      }
-    case "CompletionClaimReplaced":
-      return {
-        _tag: event._tag,
-        claim: event.claim,
+        operationId: value.operationId
+      }),
+      CompletionClaimReplaced: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        claim: value.claim,
         occurrenceClassification: "NonActionOccurrence",
-        operationId: event.operationId
-      }
-    case "CompletionClaimDeletionIntended":
-      return {
-        _tag: event._tag,
-        claim: event.claim,
+        operationId: value.operationId
+      }),
+      CompletionClaimDeletionIntended: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        claim: value.claim,
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
-        operationId: event.operationId,
-        successObservation: event.successObservation
-      }
-    case "CompletionClaimDeletionAttemptIntended":
-      return {
-        _tag: event._tag,
-        attemptOrdinal: event.attemptOrdinal,
-        claim: event.claim,
+        operationId: value.operationId,
+        successObservation: value.successObservation
+      }),
+      CompletionClaimDeletionAttemptIntended: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        claim: value.claim,
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
-        operationId: event.operationId,
-        successObservation: event.successObservation
-      }
-    case "CompletionClaimDeleted":
-      return {
-        _tag: event._tag,
-        claim: event.claim,
+        operationId: value.operationId,
+        successObservation: value.successObservation
+      }),
+      CompletionClaimDeleted: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        claim: value.claim,
         occurrenceClassification: "NonActionOccurrence",
-        operationId: event.operationId,
-        successObservation: event.successObservation
-      }
-    case "IntegrationFinalitySettled":
-      return {
-        _tag: event._tag,
-        claim: event.claim,
-        deletionOperationId: event.deletionOperationId,
+        operationId: value.operationId,
+        successObservation: value.successObservation
+      }),
+      IntegrationFinalitySettled: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        claim: value.claim,
+        deletionOperationId: value.deletionOperationId,
         occurrenceClassification: "NonActionOccurrence",
-        replacementOperationId: event.replacementOperationId,
-        successObservation: event.successObservation
-      }
-  }
-}
+        replacementOperationId: value.replacementOperationId,
+        successObservation: value.successObservation
+      }),
+      CompletionTaskIntended: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        request: value.request
+      }),
+      CompletionTaskAttemptIntended: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        focusedFactsOperationId: value.focusedFactsOperationId,
+        gitReadOperationId: value.gitReadOperationId,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        request: value.request
+      }),
+      CompletionTaskAcknowledged: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        acknowledgement: value.acknowledgement,
+        attemptOrdinal: value.attemptOrdinal,
+        occurrenceClassification: "NonActionOccurrence",
+        request: value.request
+      }),
+      CompletionTaskResponseLost: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        occurrenceClassification: "NonActionOccurrence",
+        request: value.request
+      }),
+      CompletionTaskRejected: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        detail: value.detail,
+        occurrenceClassification: "NonActionOccurrence",
+        request: value.request
+      }),
+      CompletionTaskCandidateAncestryReadIntended: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        operationId: value.operationId,
+        request: value.request
+      }),
+      CompletionTaskCandidateAncestryObserved: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        observation: value.observation,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: value.operationId,
+        request: value.request
+      }),
+      CompletionTaskRequestLookupIntended: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        operationId: value.operationId,
+        request: value.request
+      }),
+      CompletionTaskRequestLookupObserved: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        attemptOrdinal: value.attemptOrdinal,
+        lookup: value.lookup,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: value.operationId,
+        request: value.request
+      })
+    })
+  )
 
 type IntegrationPreparationEvent =
   | CandidateConstructionEvent
@@ -536,7 +582,7 @@ const isIntegrationPreparationEvent = (event: WorkflowJournalEvent): event is In
   isCandidateConstructionEvent(event) ||
   isTargetVerificationEvent(event) ||
   isTargetPromotionEvent(event) ||
-  isIntegrationFinalityEvent(event)
+  isIntegrationFinalityTagged(event)
 
 const recordIntegrationPreparationEntry = (event: IntegrationPreparationEvent): RecordedIntegrationPreparationEntry => {
   if (isCandidateConstructionEvent(event)) return recordCandidateConstructionEntry(event)
@@ -551,73 +597,42 @@ const isRecordedIntegrationPreparationEntry = (
   isRecordedCandidateConstructionEntry(entry) ||
   isRecordedTargetVerificationEntry(entry) ||
   isRecordedTargetPromotionEntry(entry) ||
-  isRecordedIntegrationFinalityEntry(entry)
+  isIntegrationFinalityTagged(entry)
 
-const recordTaskBoundaryEntry = (
-  event: Exclude<
-    WorkflowJournalEvent,
-    {
-      readonly _tag:
-        | "AttemptChoiceApplied"
-        | "AttemptImplementationAbandoned"
-        | "AttemptStoppageIntended"
-        | "ControlDirectionApplied"
-        | "TaskClaimReacquisitionDirected"
-        | "GitReadIntentRecorded"
-        | "PlannedAttemptWorktreeObserved"
-        | "TargetLineageObserved"
-        | "PlannedAttemptExecutorCommandIntended"
-        | "PlannedAttemptExecutorCommandProjectionObserved"
-        | "PlannedAttemptExecutorCommandResponseContradicted"
-        | "PlannedAttemptExecutorStateObserved"
-        | "PlannedAttemptExecutorWorkReported"
-        | "PlannedAttemptExecutorWorkResponsibilityBegan"
-        | "IntegrationCandidateAgentReported"
-        | "IntegrationCandidateConstructed"
-        | "IntegrationCandidateConstructionIntended"
-        | "IntegrationCandidateGitObserved"
-        | "IntegrationCandidateGitValidationFailed"
-        | "IntegrationCandidateCorrectionLimitReached"
-        | "IntegrationCandidateContinuationLimitReached"
-        | "TargetVerificationIntended"
-        | "TargetVerificationEvidenceSealed"
-        | "TargetVerificationCorrelationContradicted"
-        | `TargetPromotion${string}`
-        | "CompletionClaimReplacementIntended"
-        | "CompletionClaimReplacementAttemptIntended"
-        | "CompletionClaimReplaced"
-        | "CompletionClaimDeletionIntended"
-        | "CompletionClaimDeletionAttemptIntended"
-        | "CompletionClaimDeleted"
-        | "IntegrationFinalitySettled"
-        | "TaskTrackerFactsObserved"
-        | "TaskTrackerReadIntentRecorded"
-        | "PlannedAttemptContinuationAuthorized"
-        | "TaskWorkCapacityChanged"
-        | "WorkflowRunBegan"
-        | "WorkflowRunTerminated"
-        | "StoppedAttemptClaimNoReleaseObserved"
-    }
-  >
-): RecordedCassetteEntry => {
+type TaskBoundaryEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "TaskAttemptPlanned"
+      | "TaskClaimAcquired"
+      | "TaskClaimAcquisitionIntended"
+      | "TaskClaimAcquisitionRejected"
+      | "TaskClaimReleaseIntended"
+      | "TaskClaimReleased"
+      | "IntegrationResponsibilityBegan"
+      | "IntegrationStarted"
+      | "TaskWorktreeReady"
+      | "TaskWorktreeReconciliationIntended"
+  }
+>
+
+const recordTaskBoundaryEntry = (event: TaskBoundaryEvent): RecordedCassetteEntry => {
   if (isRecordedClaimReleaseEntry(event)) return recordClaimReleaseEntry(event)
   if (isRecordedIntegrationEntry(event)) return recordIntegrationEntry(event)
   if (isRecordedWorktreeEntry(event)) return recordWorktreeEntry(event)
-  switch (event._tag) {
-    case "TaskAttemptPlanned":
-      return { _tag: "TaskAttemptPlanned", operation: event.operation }
-    case "TaskClaimAcquired":
-      return { _tag: "TaskClaimAcquired", claim: event.claim }
-    case "TaskClaimAcquisitionIntended":
-      return { _tag: "TaskClaimAcquisitionIntended", operation: event.operation }
-    case "TaskClaimAcquisitionRejected":
-      return {
-        _tag: "TaskClaimAcquisitionRejected",
-        observed: event.observed,
-        operationId: event.operationId,
-        reason: event.reason
-      }
-  }
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      TaskAttemptPlanned: (value) => ({ _tag: value._tag, operation: value.operation }),
+      TaskClaimAcquired: (value) => ({ _tag: value._tag, claim: value.claim }),
+      TaskClaimAcquisitionIntended: (value) => ({ _tag: value._tag, operation: value.operation }),
+      TaskClaimAcquisitionRejected: (value) => ({
+        _tag: value._tag,
+        observed: value.observed,
+        operationId: value.operationId,
+        reason: value.reason
+      })
+    })
+  )
 }
 
 type OperatorDirectionEvent = Extract<
@@ -672,38 +687,34 @@ const isAttemptStopEvent = (event: WorkflowJournalEvent): event is AttemptStopEv
   event._tag === "AttemptStoppageIntended" ||
   event._tag === "StoppedAttemptClaimNoReleaseObserved"
 
-const recordedAttemptStopEntryFor = (event: AttemptStopEvent): RecordedCassetteEntry => {
-  switch (event._tag) {
-    case "AttemptStoppageIntended":
-      return {
-        _tag: event._tag,
-        initiatedBy: event.initiatedBy,
-        occurrenceClassification: event.occurrenceClassification,
-        requestId: event.requestId,
-        subject: event.subject
-      }
-    case "AttemptImplementationAbandoned":
-      return {
-        _tag: event._tag,
-        expectedClaim: event.expectedClaim,
-        initiatedBy: event.initiatedBy,
-        occurrenceClassification: event.occurrenceClassification,
-        proof: event.proof,
-        requestId: event.requestId,
-        subject: event.subject
-      }
-    case "StoppedAttemptClaimNoReleaseObserved":
-      return {
-        _tag: event._tag,
-        expectedClaim: event.expectedClaim,
-        observation: event.observation,
-        observationOperationId: event.observationOperationId,
-        occurrenceClassification: event.occurrenceClassification,
-        requestId: event.requestId,
-        subject: event.subject
-      }
-  }
-}
+const recordedAttemptStopEntryFor = (event: AttemptStopEvent): RecordedCassetteEntry =>
+  Match.valueTags(event, {
+    AttemptStoppageIntended: (value) => ({
+      _tag: value._tag,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      requestId: value.requestId,
+      subject: value.subject
+    }),
+    AttemptImplementationAbandoned: (value) => ({
+      _tag: value._tag,
+      expectedClaim: value.expectedClaim,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      proof: value.proof,
+      requestId: value.requestId,
+      subject: value.subject
+    }),
+    StoppedAttemptClaimNoReleaseObserved: (value) => ({
+      _tag: value._tag,
+      expectedClaim: value.expectedClaim,
+      observation: value.observation,
+      observationOperationId: value.observationOperationId,
+      occurrenceClassification: value.occurrenceClassification,
+      requestId: value.requestId,
+      subject: value.subject
+    })
+  })
 
 // eslint-disable-next-line complexity -- The closed journal vocabulary has one total projection into recorded cassette entries.
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
@@ -784,24 +795,21 @@ const eventForTaskBoundaryEntry = (
   if (isRecordedClaimReleaseEntry(entry)) return eventForClaimReleaseEntry(entry)
   if (isRecordedIntegrationEntry(entry)) return eventForIntegrationEntry(entry, entries, index)
   if (isRecordedWorktreeEntry(entry)) return eventForWorktreeEntry(entry)
-  switch (entry._tag) {
-    case "TaskAttemptPlanned":
-      return TaskAttemptPlannedEvent.make({ operation: entry.operation, version: workflowJournalEventVersion })
-    case "TaskClaimAcquired":
-      return TaskClaimAcquiredEvent.make({ claim: entry.claim, version: workflowJournalEventVersion })
-    case "TaskClaimAcquisitionIntended":
-      return TaskClaimAcquisitionIntendedEvent.make({
-        operation: entry.operation,
+  return Match.valueTags(entry, {
+    TaskAttemptPlanned: (value) =>
+      TaskAttemptPlannedEvent.make({ operation: value.operation, version: workflowJournalEventVersion }),
+    TaskClaimAcquired: (value) =>
+      TaskClaimAcquiredEvent.make({ claim: value.claim, version: workflowJournalEventVersion }),
+    TaskClaimAcquisitionIntended: (value) =>
+      TaskClaimAcquisitionIntendedEvent.make({ operation: value.operation, version: workflowJournalEventVersion }),
+    TaskClaimAcquisitionRejected: (value) =>
+      TaskClaimAcquisitionRejectedEvent.make({
+        observed: value.observed,
+        operationId: value.operationId,
+        reason: value.reason,
         version: workflowJournalEventVersion
       })
-    case "TaskClaimAcquisitionRejected":
-      return TaskClaimAcquisitionRejectedEvent.make({
-        observed: entry.observed,
-        operationId: entry.operationId,
-        reason: entry.reason,
-        version: workflowJournalEventVersion
-      })
-  }
+  })
 }
 
 type RecordedExecutorEntry = Extract<
@@ -826,55 +834,54 @@ const isRecordedExecutorEntry = (entry: RecordedCassetteEntry): entry is Recorde
     "PlannedAttemptExecutorWorkResponsibilityBegan"
   ]).has(entry._tag)
 
-const eventForExecutorEntry = (entry: RecordedExecutorEntry): WorkflowJournalEvent => {
-  switch (entry._tag) {
-    case "PlannedAttemptExecutorWorkReported":
-      return PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: entry.ordinal,
-        report: entry.report,
+const eventForExecutorEntry = (entry: RecordedExecutorEntry): WorkflowJournalEvent =>
+  Match.valueTags(entry, {
+    PlannedAttemptExecutorWorkReported: (value) =>
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: value.ordinal,
+        report: value.report,
+        version: workflowJournalEventVersion
+      }),
+    PlannedAttemptExecutorWorkResponsibilityBegan: (value) =>
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt: value.plannedAttempt,
+        version: workflowJournalEventVersion
+      }),
+    PlannedAttemptExecutorCommandIntended: (value) =>
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: value.command,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        ordinal: value.ordinal,
+        plannedAttempt: value.plannedAttempt,
+        version: workflowJournalEventVersion
+      }),
+    PlannedAttemptExecutorCommandProjectionObserved: (value) =>
+      PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+        commandOrdinal: value.commandOrdinal,
+        observation: value.observation,
+        occurrenceClassification: value.occurrenceClassification,
+        plannedAttempt: value.plannedAttempt,
+        projectionOrdinal: value.projectionOrdinal,
+        version: workflowJournalEventVersion
+      }),
+    PlannedAttemptExecutorCommandResponseContradicted: (value) =>
+      PlannedAttemptExecutorCommandResponseContradictedEvent.make({
+        commandOrdinal: value.commandOrdinal,
+        observed: value.observed,
+        occurrenceClassification: value.occurrenceClassification,
+        plannedAttempt: value.plannedAttempt,
+        version: workflowJournalEventVersion
+      }),
+    PlannedAttemptExecutorStateObserved: (value) =>
+      PlannedAttemptExecutorStateObservedEvent.make({
+        observation: value.observation,
+        occurrenceClassification: value.occurrenceClassification,
+        ordinal: value.ordinal,
+        plannedAttempt: value.plannedAttempt,
         version: workflowJournalEventVersion
       })
-    case "PlannedAttemptExecutorWorkResponsibilityBegan":
-      return PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-        plannedAttempt: entry.plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    case "PlannedAttemptExecutorCommandIntended":
-      return PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: entry.command,
-        initiatedBy: entry.initiatedBy,
-        occurrenceClassification: entry.occurrenceClassification,
-        ordinal: entry.ordinal,
-        plannedAttempt: entry.plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    case "PlannedAttemptExecutorCommandProjectionObserved":
-      return PlannedAttemptExecutorCommandProjectionObservedEvent.make({
-        commandOrdinal: entry.commandOrdinal,
-        observation: entry.observation,
-        occurrenceClassification: entry.occurrenceClassification,
-        plannedAttempt: entry.plannedAttempt,
-        projectionOrdinal: entry.projectionOrdinal,
-        version: workflowJournalEventVersion
-      })
-    case "PlannedAttemptExecutorCommandResponseContradicted":
-      return PlannedAttemptExecutorCommandResponseContradictedEvent.make({
-        commandOrdinal: entry.commandOrdinal,
-        observed: entry.observed,
-        occurrenceClassification: entry.occurrenceClassification,
-        plannedAttempt: entry.plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    case "PlannedAttemptExecutorStateObserved":
-      return PlannedAttemptExecutorStateObservedEvent.make({
-        observation: entry.observation,
-        occurrenceClassification: entry.occurrenceClassification,
-        ordinal: entry.ordinal,
-        plannedAttempt: entry.plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-  }
-}
+  })
 
 type RecordedTrackerEntry = Extract<
   RecordedCassetteEntry,
@@ -967,16 +974,15 @@ const isRecordedAttemptStopEntry = (entry: RecordedCassetteEntry): entry is Reco
   entry._tag === "AttemptStoppageIntended" ||
   entry._tag === "StoppedAttemptClaimNoReleaseObserved"
 
-const eventForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): WorkflowJournalEvent => {
-  switch (entry._tag) {
-    case "AttemptStoppageIntended":
-      return AttemptStoppageIntendedEvent.make({ ...entry, version: workflowJournalEventVersion })
-    case "AttemptImplementationAbandoned":
-      return AttemptImplementationAbandonedEvent.make({ ...entry, version: workflowJournalEventVersion })
-    case "StoppedAttemptClaimNoReleaseObserved":
-      return StoppedAttemptClaimNoReleaseObservedEvent.make({ ...entry, version: workflowJournalEventVersion })
-  }
-}
+const eventForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): WorkflowJournalEvent =>
+  Match.valueTags(entry, {
+    AttemptStoppageIntended: (value) =>
+      AttemptStoppageIntendedEvent.make({ ...value, version: workflowJournalEventVersion }),
+    AttemptImplementationAbandoned: (value) =>
+      AttemptImplementationAbandonedEvent.make({ ...value, version: workflowJournalEventVersion }),
+    StoppedAttemptClaimNoReleaseObserved: (value) =>
+      StoppedAttemptClaimNoReleaseObservedEvent.make({ ...value, version: workflowJournalEventVersion })
+  })
 
 const priorEntryPosition = (
   entries: ReadonlyArray<RecordedCassetteEntry>,
@@ -991,217 +997,282 @@ const eventForCandidateConstructionEntry = (
   entry: RecordedCandidateConstructionEntry,
   entries: ReadonlyArray<RecordedCassetteEntry>,
   index: number
-): WorkflowJournalEvent => {
-  switch (entry._tag) {
-    case "IntegrationCandidateConstructionIntended":
-      return IntegrationCandidateConstructionIntendedEvent.make({
-        correlation: entry.correlation,
-        correctionLimit: entry.correctionLimit,
-        continuationLimit: entry.continuationLimit,
-        plannedAttempt: entry.plannedAttempt,
+): WorkflowJournalEvent =>
+  Match.valueTags(entry, {
+    IntegrationCandidateConstructionIntended: (value) =>
+      IntegrationCandidateConstructionIntendedEvent.make({
+        correlation: value.correlation,
+        correctionLimit: value.correctionLimit,
+        continuationLimit: value.continuationLimit,
+        plannedAttempt: value.plannedAttempt,
         responsibilityBeganAt: priorEntryPosition(
           entries,
           index,
           (candidate) =>
             candidate._tag === "IntegrationResponsibilityBegan" &&
-            candidate.plannedAttempt.attemptId === entry.correlation.attemptId
+            candidate.plannedAttempt.attemptId === value.correlation.attemptId
         ),
         startedAt: priorEntryPosition(
           entries,
           index,
           (candidate) =>
             candidate._tag === "IntegrationStarted" &&
-            candidate.plannedAttempt.attemptId === entry.correlation.attemptId
+            candidate.plannedAttempt.attemptId === value.correlation.attemptId
         ),
         version: workflowJournalEventVersion
-      })
-    case "IntegrationCandidateAgentReported":
-      return IntegrationCandidateAgentReportedEvent.make({
-        expectedCorrelation: entry.expectedCorrelation,
-        ordinal: entry.ordinal,
-        report: entry.report,
+      }),
+    IntegrationCandidateAgentReported: (value) =>
+      IntegrationCandidateAgentReportedEvent.make({
+        expectedCorrelation: value.expectedCorrelation,
+        ordinal: value.ordinal,
+        report: value.report,
         version: workflowJournalEventVersion
-      })
-    case "IntegrationCandidateGitObserved":
-      return IntegrationCandidateGitObservedEvent.make({
-        candidateCommit: entry.candidateCommit,
-        correlation: entry.correlation,
-        observation: entry.observation,
+      }),
+    IntegrationCandidateGitObserved: (value) =>
+      IntegrationCandidateGitObservedEvent.make({
+        candidateCommit: value.candidateCommit,
+        correlation: value.correlation,
+        observation: value.observation,
         submissionAt: priorEntryPosition(
           entries,
           index,
           (candidate) =>
             candidate._tag === "IntegrationCandidateAgentReported" &&
             candidate.report._tag === "Submitted" &&
-            candidate.report.candidateCommit === entry.candidateCommit &&
-            candidate.report.correlation.candidateId === entry.correlation.candidateId
+            candidate.report.candidateCommit === value.candidateCommit &&
+            candidate.report.correlation.candidateId === value.correlation.candidateId
         ),
         version: workflowJournalEventVersion
-      })
-    case "IntegrationCandidateConstructed":
-      return IntegrationCandidateConstructedEvent.make({
-        candidateCommit: entry.candidateCommit,
-        correlation: entry.correlation,
+      }),
+    IntegrationCandidateConstructed: (value) =>
+      IntegrationCandidateConstructedEvent.make({
+        candidateCommit: value.candidateCommit,
+        correlation: value.correlation,
         gitObservationAt: priorEntryPosition(
           entries,
           index,
           (candidate) =>
             candidate._tag === "IntegrationCandidateGitObserved" &&
-            candidate.candidateCommit === entry.candidateCommit &&
-            candidate.correlation.candidateId === entry.correlation.candidateId
+            candidate.candidateCommit === value.candidateCommit &&
+            candidate.correlation.candidateId === value.correlation.candidateId
         ),
+        reviewManifest: value.reviewManifest,
         version: workflowJournalEventVersion
-      })
-    case "IntegrationCandidateGitValidationFailed":
-      return IntegrationCandidateGitValidationFailedEvent.make({
-        attemptOrdinal: entry.attemptOrdinal,
-        candidateCommit: entry.candidateCommit,
-        correlation: entry.correlation,
-        detail: entry.detail,
+      }),
+    IntegrationCandidateGitValidationFailed: (value) =>
+      IntegrationCandidateGitValidationFailedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        candidateCommit: value.candidateCommit,
+        correlation: value.correlation,
+        detail: value.detail,
         submissionAt: priorEntryPosition(
           entries,
           index,
           (candidate) =>
             candidate._tag === "IntegrationCandidateAgentReported" &&
             candidate.report._tag === "Submitted" &&
-            candidate.report.candidateCommit === entry.candidateCommit &&
-            candidate.report.correlation.candidateId === entry.correlation.candidateId
+            candidate.report.candidateCommit === value.candidateCommit &&
+            candidate.report.correlation.candidateId === value.correlation.candidateId
         ),
         version: workflowJournalEventVersion
-      })
-    case "IntegrationCandidateCorrectionLimitReached":
-      return IntegrationCandidateCorrectionLimitReachedEvent.make({
-        correctionCount: entry.correctionCount,
-        correctionLimit: entry.correctionLimit,
-        correlation: entry.correlation,
+      }),
+    IntegrationCandidateCorrectionLimitReached: (value) =>
+      IntegrationCandidateCorrectionLimitReachedEvent.make({
+        correctionCount: value.correctionCount,
+        correctionLimit: value.correctionLimit,
+        correlation: value.correlation,
         invalidObservationAt: priorEntryPosition(
           entries,
           index,
           (candidate) =>
             candidate._tag === "IntegrationCandidateGitObserved" &&
-            candidate.correlation.candidateId === entry.correlation.candidateId
+            candidate.correlation.candidateId === value.correlation.candidateId
         ),
         version: workflowJournalEventVersion
-      })
-    case "IntegrationCandidateContinuationLimitReached":
-      return IntegrationCandidateContinuationLimitReachedEvent.make({
-        continuationCount: entry.continuationCount,
-        continuationLimit: entry.continuationLimit,
-        correlation: entry.correlation,
+      }),
+    IntegrationCandidateContinuationLimitReached: (value) =>
+      IntegrationCandidateContinuationLimitReachedEvent.make({
+        continuationCount: value.continuationCount,
+        continuationLimit: value.continuationLimit,
+        correlation: value.correlation,
         lastReportAt: priorEntryPosition(
           entries,
           index,
           (candidate) =>
             candidate._tag === "IntegrationCandidateAgentReported" &&
             candidate.report._tag !== "Submitted" &&
-            candidate.report.correlation.candidateId === entry.correlation.candidateId
+            candidate.report.correlation.candidateId === value.correlation.candidateId
         ),
         version: workflowJournalEventVersion
       })
-  }
-}
+  })
 
-const eventForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry): WorkflowJournalEvent => {
-  switch (entry._tag) {
-    case "TargetVerificationIntended":
-      return TargetVerificationIntendedEvent.make({
-        correlation: entry.correlation,
+const eventForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry): WorkflowJournalEvent =>
+  Match.valueTags(entry, {
+    TargetVerificationIntended: (value) =>
+      TargetVerificationIntendedEvent.make({ correlation: value.correlation, version: workflowJournalEventVersion }),
+    TargetVerificationEvidenceSealed: (value) =>
+      TargetVerificationEvidenceSealedEvent.make({
+        correlation: value.correlation,
+        manifest: value.manifest,
+        terminal: value.terminal,
+        version: workflowJournalEventVersion
+      }),
+    TargetVerificationCorrelationContradicted: (value) =>
+      TargetVerificationCorrelationContradictedEvent.make({
+        expected: value.expected,
+        received: value.received,
         version: workflowJournalEventVersion
       })
-    case "TargetVerificationEvidenceSealed":
-      return TargetVerificationEvidenceSealedEvent.make({
-        correlation: entry.correlation,
-        manifest: entry.manifest,
-        terminal: entry.terminal,
-        version: workflowJournalEventVersion
-      })
-    case "TargetVerificationCorrelationContradicted":
-      return TargetVerificationCorrelationContradictedEvent.make({
-        expected: entry.expected,
-        received: entry.received,
-        version: workflowJournalEventVersion
-      })
-  }
-}
+  })
 
-const eventForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): WorkflowJournalEvent => {
-  const common = { correlation: entry.correlation, version: workflowJournalEventVersion }
-  switch (entry._tag) {
-    case "TargetPromotionIntended":
-      return TargetPromotionIntendedEvent.make(common)
-    case "TargetPromotionAttemptIntended":
-      return TargetPromotionAttemptIntendedEvent.make({
-        ...common,
-        attemptOrdinal: entry.attemptOrdinal,
-        reason: entry.reason
+const eventForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): WorkflowJournalEvent =>
+  Match.valueTags(entry, {
+    TargetPromotionIntended: (value) =>
+      TargetPromotionIntendedEvent.make({ correlation: value.correlation, version: workflowJournalEventVersion }),
+    TargetPromotionAttemptIntended: (value) =>
+      TargetPromotionAttemptIntendedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        correlation: value.correlation,
+        reason: value.reason,
+        version: workflowJournalEventVersion
+      }),
+    TargetPromotionObservedSuccess: (value) =>
+      TargetPromotionObservedSuccessEvent.make({
+        basis: value.basis,
+        correlation: value.correlation,
+        observation: value.observation,
+        version: workflowJournalEventVersion
+      }),
+    TargetPromotionStale: (value) =>
+      TargetPromotionStaleEvent.make({
+        basis: value.basis,
+        correlation: value.correlation,
+        observation: value.observation,
+        version: workflowJournalEventVersion
+      }),
+    TargetPromotionNonConvergence: (value) =>
+      TargetPromotionNonConvergenceEvent.make({
+        attemptLimit: value.attemptLimit,
+        attemptOrdinal: value.attemptOrdinal,
+        correlation: value.correlation,
+        lastObservation: value.lastObservation,
+        version: workflowJournalEventVersion
       })
-    case "TargetPromotionObservedSuccess":
-      return TargetPromotionObservedSuccessEvent.make({ ...common, basis: entry.basis, observation: entry.observation })
-    case "TargetPromotionStale":
-      return TargetPromotionStaleEvent.make({ ...common, basis: entry.basis, observation: entry.observation })
-    case "TargetPromotionNonConvergence":
-      return TargetPromotionNonConvergenceEvent.make({
-        ...common,
-        attemptLimit: entry.attemptLimit,
-        attemptOrdinal: entry.attemptOrdinal,
-        lastObservation: entry.lastObservation
-      })
-  }
-}
+  })
 
-const eventForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntry): WorkflowJournalEvent => {
-  switch (entry._tag) {
-    case "CompletionClaimReplacementIntended":
-      return CompletionClaimReplacementIntendedEvent.make({
-        claim: entry.claim,
-        operationId: entry.operationId,
+const eventForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntry): WorkflowJournalEvent =>
+  Match.valueTags(entry, {
+    CompletionClaimReplacementIntended: (value) =>
+      CompletionClaimReplacementIntendedEvent.make({
+        claim: value.claim,
+        operationId: value.operationId,
+        version: workflowJournalEventVersion
+      }),
+    CompletionClaimReplacementAttemptIntended: (value) =>
+      CompletionClaimReplacementAttemptIntendedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        claim: value.claim,
+        operationId: value.operationId,
+        version: workflowJournalEventVersion
+      }),
+    CompletionClaimReplaced: (value) =>
+      CompletionClaimReplacedEvent.make({
+        claim: value.claim,
+        operationId: value.operationId,
+        version: workflowJournalEventVersion
+      }),
+    CompletionClaimDeletionIntended: (value) =>
+      CompletionClaimDeletionIntendedEvent.make({
+        claim: value.claim,
+        operationId: value.operationId,
+        successObservation: value.successObservation,
+        version: workflowJournalEventVersion
+      }),
+    CompletionClaimDeletionAttemptIntended: (value) =>
+      CompletionClaimDeletionAttemptIntendedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        claim: value.claim,
+        operationId: value.operationId,
+        successObservation: value.successObservation,
+        version: workflowJournalEventVersion
+      }),
+    CompletionClaimDeleted: (value) =>
+      CompletionClaimDeletedEvent.make({
+        claim: value.claim,
+        operationId: value.operationId,
+        successObservation: value.successObservation,
+        version: workflowJournalEventVersion
+      }),
+    IntegrationFinalitySettled: (value) =>
+      IntegrationFinalitySettledEvent.make({
+        claim: value.claim,
+        deletionOperationId: value.deletionOperationId,
+        replacementOperationId: value.replacementOperationId,
+        successObservation: value.successObservation,
+        version: workflowJournalEventVersion
+      }),
+    CompletionTaskIntended: (value) =>
+      CompletionTaskIntendedEvent.make({ request: value.request, version: workflowJournalEventVersion }),
+    CompletionTaskAttemptIntended: (value) =>
+      CompletionTaskAttemptIntendedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        focusedFactsOperationId: value.focusedFactsOperationId,
+        gitReadOperationId: value.gitReadOperationId,
+        request: value.request,
+        version: workflowJournalEventVersion
+      }),
+    CompletionTaskAcknowledged: (value) =>
+      CompletionTaskAcknowledgedEvent.make({
+        acknowledgement: value.acknowledgement,
+        attemptOrdinal: value.attemptOrdinal,
+        request: value.request,
+        version: workflowJournalEventVersion
+      }),
+    CompletionTaskResponseLost: (value) =>
+      CompletionTaskResponseLostEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        request: value.request,
+        version: workflowJournalEventVersion
+      }),
+    CompletionTaskRejected: (value) =>
+      CompletionTaskRejectedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        detail: value.detail,
+        request: value.request,
+        version: workflowJournalEventVersion
+      }),
+    CompletionTaskCandidateAncestryReadIntended: (value) =>
+      CompletionTaskCandidateAncestryReadIntendedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        operationId: value.operationId,
+        request: value.request,
+        version: workflowJournalEventVersion
+      }),
+    CompletionTaskCandidateAncestryObserved: (value) =>
+      CompletionTaskCandidateAncestryObservedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        observation: value.observation,
+        operationId: value.operationId,
+        request: value.request,
+        version: workflowJournalEventVersion
+      }),
+    CompletionTaskRequestLookupIntended: (value) =>
+      CompletionTaskRequestLookupIntendedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        operationId: value.operationId,
+        request: value.request,
+        version: workflowJournalEventVersion
+      }),
+    CompletionTaskRequestLookupObserved: (value) =>
+      CompletionTaskRequestLookupObservedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        lookup: value.lookup,
+        operationId: value.operationId,
+        request: value.request,
         version: workflowJournalEventVersion
       })
-    case "CompletionClaimReplacementAttemptIntended":
-      return CompletionClaimReplacementAttemptIntendedEvent.make({
-        attemptOrdinal: entry.attemptOrdinal,
-        claim: entry.claim,
-        operationId: entry.operationId,
-        version: workflowJournalEventVersion
-      })
-    case "CompletionClaimReplaced":
-      return CompletionClaimReplacedEvent.make({
-        claim: entry.claim,
-        operationId: entry.operationId,
-        version: workflowJournalEventVersion
-      })
-    case "CompletionClaimDeletionIntended":
-      return CompletionClaimDeletionIntendedEvent.make({
-        claim: entry.claim,
-        operationId: entry.operationId,
-        successObservation: entry.successObservation,
-        version: workflowJournalEventVersion
-      })
-    case "CompletionClaimDeletionAttemptIntended":
-      return CompletionClaimDeletionAttemptIntendedEvent.make({
-        attemptOrdinal: entry.attemptOrdinal,
-        claim: entry.claim,
-        operationId: entry.operationId,
-        successObservation: entry.successObservation,
-        version: workflowJournalEventVersion
-      })
-    case "CompletionClaimDeleted":
-      return CompletionClaimDeletedEvent.make({
-        claim: entry.claim,
-        operationId: entry.operationId,
-        successObservation: entry.successObservation,
-        version: workflowJournalEventVersion
-      })
-    case "IntegrationFinalitySettled":
-      return IntegrationFinalitySettledEvent.make({
-        claim: entry.claim,
-        deletionOperationId: entry.deletionOperationId,
-        replacementOperationId: entry.replacementOperationId,
-        successObservation: entry.successObservation,
-        version: workflowJournalEventVersion
-      })
-  }
-}
+  })
 
 const eventForIntegrationPreparationEntry = (
   entry: RecordedIntegrationPreparationEntry,
@@ -1333,22 +1404,21 @@ export const compareRecordedCassetteCheckpoints = (
     return checkpointComparison(checkpoint, prefix(expected), prefix(actual))
   })
 
-const lyricForExecutorEntry = (entry: RecordedExecutorEntry): string => {
-  switch (entry._tag) {
-    case "PlannedAttemptExecutorWorkReported":
-      return `The executor returned ${entry.report._tag} for attempt ${entry.report.correlation.attemptId}.`
-    case "PlannedAttemptExecutorWorkResponsibilityBegan":
-      return `Dalph coordinator began executor-work responsibility for task ${entry.plannedAttempt.taskId}, attempt ${entry.plannedAttempt.attemptId}.`
-    case "PlannedAttemptExecutorCommandIntended":
-      return `Dalph coordinator intended executor command ${entry.command} for attempt ${entry.plannedAttempt.attemptId}.`
-    case "PlannedAttemptExecutorCommandProjectionObserved":
-      return `Dalph observed ${entry.observation._tag} while reconciling executor command ${entry.commandOrdinal} for attempt ${entry.plannedAttempt.attemptId}.`
-    case "PlannedAttemptExecutorCommandResponseContradicted":
-      return `The executor returned a response for attempt ${entry.observed.correlation.attemptId} to command ${entry.commandOrdinal} for expected attempt ${entry.plannedAttempt.attemptId}; Dalph kept the command unresolved.`
-    case "PlannedAttemptExecutorStateObserved":
-      return `Dalph observed ${entry.observation._tag} from a read-only executor projection for attempt ${entry.plannedAttempt.attemptId}.`
-  }
-}
+const lyricForExecutorEntry = (entry: RecordedExecutorEntry): string =>
+  Match.valueTags(entry, {
+    PlannedAttemptExecutorWorkReported: (value) =>
+      `The executor returned ${value.report._tag} for attempt ${value.report.correlation.attemptId}.`,
+    PlannedAttemptExecutorWorkResponsibilityBegan: (value) =>
+      `Dalph coordinator began executor-work responsibility for task ${value.plannedAttempt.taskId}, attempt ${value.plannedAttempt.attemptId}.`,
+    PlannedAttemptExecutorCommandIntended: (value) =>
+      `Dalph coordinator intended executor command ${value.command} for attempt ${value.plannedAttempt.attemptId}.`,
+    PlannedAttemptExecutorCommandProjectionObserved: (value) =>
+      `Dalph observed ${value.observation._tag} while reconciling executor command ${value.commandOrdinal} for attempt ${value.plannedAttempt.attemptId}.`,
+    PlannedAttemptExecutorCommandResponseContradicted: (value) =>
+      `The executor returned a response for attempt ${value.observed.correlation.attemptId} to command ${value.commandOrdinal} for expected attempt ${value.plannedAttempt.attemptId}; Dalph kept the command unresolved.`,
+    PlannedAttemptExecutorStateObserved: (value) =>
+      `Dalph observed ${value.observation._tag} from a read-only executor projection for attempt ${value.plannedAttempt.attemptId}.`
+  })
 
 const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
   entry._tag === "TaskTrackerFactsObserved"
@@ -1356,71 +1426,85 @@ const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
     : `Dalph coordinator initiated ${entry.operation._tag} for the task tracker.`
 
 // eslint-disable-next-line complexity -- Every closed candidate occurrence receives one concrete actor-first lyric.
-const lyricForCandidateConstructionEntry = (entry: RecordedCandidateConstructionEntry): string => {
-  switch (entry._tag) {
-    case "IntegrationCandidateConstructionIntended":
-      return `Dalph coordinator began candidate ${entry.correlation.candidateId} in session ${entry.correlation.integrationSessionId}.`
-    case "IntegrationCandidateAgentReported":
-      return integrationCandidateCorrelationEquals(entry.expectedCorrelation, entry.report.correlation)
-        ? `The integration agent reported ${entry.report._tag} for session ${entry.report.correlation.integrationSessionId}.`
-        : `The integration agent returned an infrastructure correlation contradiction for expected session ${entry.expectedCorrelation.integrationSessionId}; Dalph preserved the involved candidate resources.`
-    case "IntegrationCandidateGitObserved":
-      return `Git reported ${entry.observation._tag} for submitted commit ${entry.candidateCommit}.`
-    case "IntegrationCandidateConstructed":
-      return `Git proved candidate ${entry.candidateCommit} has the exact ordered parents selected for the session.`
-    case "IntegrationCandidateGitValidationFailed":
-      return `Git could not validate submitted commit ${entry.candidateCommit}: ${entry.detail}`
-    case "IntegrationCandidateCorrectionLimitReached":
-      return `Candidate session ${entry.correlation.integrationSessionId} stopped after ${entry.correctionCount} correction attempts.`
-    case "IntegrationCandidateContinuationLimitReached":
-      return `Candidate session ${entry.correlation.integrationSessionId} stopped after ${entry.continuationCount} automatic agent continuations.`
-  }
-}
+const lyricForCandidateConstructionEntry = (entry: RecordedCandidateConstructionEntry): string =>
+  Match.valueTags(entry, {
+    IntegrationCandidateConstructionIntended: (value) =>
+      `Dalph coordinator began candidate ${value.correlation.candidateId} in session ${value.correlation.integrationSessionId}.`,
+    IntegrationCandidateAgentReported: (value) =>
+      integrationCandidateCorrelationEquals(value.expectedCorrelation, value.report.correlation)
+        ? `The integration agent reported ${value.report._tag} for session ${value.report.correlation.integrationSessionId}.`
+        : `The integration agent returned an infrastructure correlation contradiction for expected session ${value.expectedCorrelation.integrationSessionId}; Dalph preserved the involved candidate resources.`,
+    IntegrationCandidateGitObserved: (value) =>
+      `Git reported ${value.observation._tag} for submitted commit ${value.candidateCommit}.`,
+    IntegrationCandidateConstructed: (value) =>
+      `Git proved candidate ${value.candidateCommit} has the exact ordered parents selected for the session.`,
+    IntegrationCandidateGitValidationFailed: (value) =>
+      `Git could not validate submitted commit ${value.candidateCommit}: ${value.detail}`,
+    IntegrationCandidateCorrectionLimitReached: (value) =>
+      `Candidate session ${value.correlation.integrationSessionId} stopped after ${value.correctionCount} correction attempts.`,
+    IntegrationCandidateContinuationLimitReached: (value) =>
+      `Candidate session ${value.correlation.integrationSessionId} stopped after ${value.continuationCount} automatic agent continuations.`
+  })
 
-const lyricForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry): string => {
-  switch (entry._tag) {
-    case "TargetVerificationIntended":
-      return `Dalph coordinator fixed verification request ${entry.correlation.requestId} to plan ${entry.correlation.planId}.`
-    case "TargetVerificationEvidenceSealed":
-      return `The target repository's public verification wrapper returned ${entry.terminal} for candidate ${entry.correlation.candidateCommit}.`
-    case "TargetVerificationCorrelationContradicted":
-      return `Dalph stopped verification request ${entry.expected.requestId} after the wrapper returned a foreign correlation.`
-  }
-}
+const lyricForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry): string =>
+  Match.valueTags(entry, {
+    TargetVerificationIntended: (value) =>
+      `Dalph coordinator fixed verification request ${value.correlation.requestId} to plan ${value.correlation.planId}.`,
+    TargetVerificationEvidenceSealed: (value) =>
+      `The target repository's public verification wrapper returned ${value.terminal} for candidate ${value.correlation.candidateCommit}.`,
+    TargetVerificationCorrelationContradicted: (value) =>
+      `Dalph stopped verification request ${value.expected.requestId} after the wrapper returned a foreign correlation.`
+  })
 
-const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): string => {
-  switch (entry._tag) {
-    case "TargetPromotionIntended":
-      return `Dalph coordinator fixed exact promotion ${entry.correlation.expectedTargetHead} -> ${entry.correlation.candidateCommit}.`
-    case "TargetPromotionAttemptIntended":
-      return `Dalph coordinator sent exact compare-and-set attempt ${entry.attemptOrdinal} for candidate ${entry.correlation.candidateCommit}.`
-    case "TargetPromotionObservedSuccess":
-      return `Git established candidate ${entry.correlation.candidateCommit} by ${entry.observation._tag}.`
-    case "TargetPromotionStale":
-      return `Git preserved a different target head while candidate ${entry.correlation.candidateCommit} became stale.`
-    case "TargetPromotionNonConvergence":
-      return `Dalph stopped candidate ${entry.correlation.candidateCommit} after ${entry.attemptOrdinal} ambiguous compare-and-set attempts.`
-  }
-}
+const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): string =>
+  Match.valueTags(entry, {
+    TargetPromotionIntended: (value) =>
+      `Dalph coordinator fixed exact promotion ${value.correlation.expectedTargetHead} -> ${value.correlation.candidateCommit}.`,
+    TargetPromotionAttemptIntended: (value) =>
+      `Dalph coordinator sent exact compare-and-set attempt ${value.attemptOrdinal} for candidate ${value.correlation.candidateCommit}.`,
+    TargetPromotionObservedSuccess: (value) =>
+      `Git established candidate ${value.correlation.candidateCommit} by ${value.observation._tag}.`,
+    TargetPromotionStale: (value) =>
+      `Git preserved a different target head while candidate ${value.correlation.candidateCommit} became stale.`,
+    TargetPromotionNonConvergence: (value) =>
+      `Dalph stopped candidate ${value.correlation.candidateCommit} after ${value.attemptOrdinal} ambiguous compare-and-set attempts.`
+  })
 
-const lyricForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntry): string => {
-  switch (entry._tag) {
-    case "CompletionClaimReplacementIntended":
-      return `Dalph coordinator intended to replace the exact active claim for task ${entry.claim.plannedAttempt.taskId}.`
-    case "CompletionClaimReplacementAttemptIntended":
-      return `Dalph coordinator sent completion-claim replacement attempt ${entry.attemptOrdinal} for task ${entry.claim.plannedAttempt.taskId}.`
-    case "CompletionClaimReplaced":
-      return `The task tracker proved the promotion-bound completion claim current for task ${entry.claim.plannedAttempt.taskId}.`
-    case "CompletionClaimDeletionIntended":
-      return `Dalph coordinator intended to delete the exact completion claim for task ${entry.claim.plannedAttempt.taskId} after fresh success.`
-    case "CompletionClaimDeletionAttemptIntended":
-      return `Dalph coordinator sent completion-claim deletion attempt ${entry.attemptOrdinal} for task ${entry.claim.plannedAttempt.taskId}.`
-    case "CompletionClaimDeleted":
-      return `The task tracker proved the exact completion claim absent for successful task ${entry.claim.plannedAttempt.taskId}.`
-    case "IntegrationFinalitySettled":
-      return `Dalph settled integration finality for promoted task ${entry.claim.plannedAttempt.taskId}.`
-  }
-}
+const lyricForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntry): string =>
+  Match.valueTags(entry, {
+    CompletionClaimReplacementIntended: (value) =>
+      `Dalph coordinator intended to replace the exact active claim for task ${value.claim.plannedAttempt.taskId}.`,
+    CompletionClaimReplacementAttemptIntended: (value) =>
+      `Dalph coordinator sent completion-claim replacement attempt ${value.attemptOrdinal} for task ${value.claim.plannedAttempt.taskId}.`,
+    CompletionClaimReplaced: (value) =>
+      `The task tracker proved the promotion-bound completion claim current for task ${value.claim.plannedAttempt.taskId}.`,
+    CompletionClaimDeletionIntended: (value) =>
+      `Dalph coordinator intended to delete the exact completion claim for task ${value.claim.plannedAttempt.taskId} after fresh success.`,
+    CompletionClaimDeletionAttemptIntended: (value) =>
+      `Dalph coordinator sent completion-claim deletion attempt ${value.attemptOrdinal} for task ${value.claim.plannedAttempt.taskId}.`,
+    CompletionClaimDeleted: (value) =>
+      `The task tracker proved the exact completion claim absent for successful task ${value.claim.plannedAttempt.taskId}.`,
+    IntegrationFinalitySettled: (value) =>
+      `Dalph settled integration finality for promoted task ${value.claim.plannedAttempt.taskId}.`,
+    CompletionTaskIntended: (value) =>
+      `Dalph coordinator fixed one exact tracker completion request for task ${value.request.taskId}.`,
+    CompletionTaskAttemptIntended: (value) =>
+      `Dalph coordinator intended tracker completion call ${value.attemptOrdinal} for task ${value.request.taskId} after focused tracker read ${value.focusedFactsOperationId} and Git read ${value.gitReadOperationId}.`,
+    CompletionTaskAcknowledged: (value) =>
+      `The task tracker acknowledged completion request ${value.request.operationId} for task ${value.request.taskId}; Dalph still required a later focused success read.`,
+    CompletionTaskResponseLost: (value) =>
+      `Dalph lost the response to tracker completion call ${value.attemptOrdinal} for task ${value.request.taskId}.`,
+    CompletionTaskRejected: (value) =>
+      `The task tracker definitively rejected completion call ${value.attemptOrdinal} for task ${value.request.taskId}: ${value.detail}`,
+    CompletionTaskCandidateAncestryReadIntended: (value) =>
+      `Dalph coordinator intended a current Git ancestry read before completion call ${value.attemptOrdinal} for task ${value.request.taskId}.`,
+    CompletionTaskCandidateAncestryObserved: (value) =>
+      `Git reported ${value.observation._tag} for promoted candidate ${value.request.promotionCorrelation.candidateCommit}.`,
+    CompletionTaskRequestLookupIntended: (value) =>
+      `Dalph coordinator intended to look up exact completion request ${value.request.operationId} after call ${value.attemptOrdinal}.`,
+    CompletionTaskRequestLookupObserved: (value) =>
+      `The task tracker reported ${value.lookup._tag} for exact completion request ${value.request.operationId}.`
+  })
 
 const lyricForIntegrationPreparationEntry = (entry: RecordedIntegrationPreparationEntry): string => {
   if (isRecordedCandidateConstructionEntry(entry)) return lyricForCandidateConstructionEntry(entry)
@@ -1439,16 +1523,13 @@ const isRecordedClaimAcquisitionEntry = (entry: RecordedCassetteEntry): entry is
   entry._tag === "TaskClaimAcquisitionIntended" ||
   entry._tag === "TaskClaimAcquisitionRejected"
 
-const lyricForClaimAcquisitionEntry = (entry: RecordedClaimAcquisitionEntry): string => {
-  switch (entry._tag) {
-    case "TaskClaimAcquired":
-      return `The task tracker showed Dalph's exact claim for task ${entry.claim.taskId}.`
-    case "TaskClaimAcquisitionIntended":
-      return `Dalph intended to claim task ${entry.operation.acquisition.taskId}.`
-    case "TaskClaimAcquisitionRejected":
-      return `The task tracker preserved foreign claim ${entry.observed.operationId} for task ${entry.observed.taskId}.`
-  }
-}
+const lyricForClaimAcquisitionEntry = (entry: RecordedClaimAcquisitionEntry): string =>
+  Match.valueTags(entry, {
+    TaskClaimAcquired: (value) => `The task tracker showed Dalph's exact claim for task ${value.claim.taskId}.`,
+    TaskClaimAcquisitionIntended: (value) => `Dalph intended to claim task ${value.operation.acquisition.taskId}.`,
+    TaskClaimAcquisitionRejected: (value) =>
+      `The task tracker preserved foreign claim ${value.observed.operationId} for task ${value.observed.taskId}.`
+  })
 
 const lyricForTaskBoundaryEntry = (
   entry: Exclude<
@@ -1487,16 +1568,15 @@ const lyricForRecordedOperatorDirectionEntry = (entry: RecordedOperatorDirection
   return `Operator directed Dalph to reacquire the claim for task ${entry.taskId}.`
 }
 
-const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): string => {
-  switch (entry._tag) {
-    case "AttemptStoppageIntended":
-      return `Dalph coordinator began stopping attempt ${entry.subject.plannedAttempt.attemptId}.`
-    case "AttemptImplementationAbandoned":
-      return `Dalph coordinator abandoned implementation attempt ${entry.subject.plannedAttempt.attemptId} after proving executor quiescence.`
-    case "StoppedAttemptClaimNoReleaseObserved":
-      return `The task tracker proved that stopping attempt ${entry.subject.plannedAttempt.attemptId} must not release the current claim.`
-  }
-}
+const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): string =>
+  Match.valueTags(entry, {
+    AttemptStoppageIntended: (value) =>
+      `Dalph coordinator began stopping attempt ${value.subject.plannedAttempt.attemptId}.`,
+    AttemptImplementationAbandoned: (value) =>
+      `Dalph coordinator abandoned implementation attempt ${value.subject.plannedAttempt.attemptId} after proving executor quiescence.`,
+    StoppedAttemptClaimNoReleaseObserved: (value) =>
+      `The task tracker proved that stopping attempt ${value.subject.plannedAttempt.attemptId} must not release the current claim.`
+  })
 
 const lyricForOtherRecordedEntry = (
   entry: Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>

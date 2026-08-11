@@ -1,9 +1,9 @@
 import { it } from "@effect/vitest"
+import { acceptedResultFixture, evidenceReferenceFixture } from "../../../../test/support/evidence.js"
 import { NodeServices } from "@effect/platform-node"
 import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
-  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -62,8 +62,10 @@ import type {
   DeliveryActionProposal,
   IdentityFreeDeliveryProposal
 } from "../../../coordination/delivery/delivery-action-proposal.js"
+import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 
 const runId = RunId.make("verification-run")
+const trackerTarget = FixtureTarget.make("verification-tracker-target")
 const target = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/verification.git"),
   ref: IntegrationTargetRef.make("refs/heads/master")
@@ -84,6 +86,7 @@ const candidate: TargetVerificationCandidate = {
   candidateCommit: GitCommitSha.make("4".repeat(40)),
   constructedAt: JournalPosition.make(11),
   correlation: {
+    acceptanceManifest: evidenceReferenceFixture,
     acceptedResultCommit: GitCommitSha.make("3".repeat(40)),
     attemptId: AttemptId.make("verification-attempt"),
     candidateId: IntegrationCandidateId.make("verification-candidate"),
@@ -92,11 +95,12 @@ const candidate: TargetVerificationCandidate = {
     integrationSessionId: IntegrationSessionId.make("verification-session"),
     integrationTarget: target,
     runId
-  }
+  },
+  reviewManifest: evidenceReferenceFixture
 }
 const correlation = targetVerificationCorrelationFor(candidate, planId)
 const responsibility = StartedIntegrationResponsibility.make({
-  acceptedResult: AcceptedResult.make({ commit: candidate.correlation.acceptedResultCommit }),
+  acceptedResult: acceptedResultFixture(candidate.correlation.acceptedResultCommit),
   integrationTarget: target,
   plannedAttempt,
   queuedAt: JournalPosition.make(8),
@@ -112,6 +116,7 @@ const constructedRecord: JournalRecord = {
     candidateCommit: candidate.candidateCommit,
     correlation: candidate.correlation,
     gitObservationAt: JournalPosition.make(10),
+    reviewManifest: candidate.reviewManifest,
     version: workflowJournalEventVersion
   }),
   key: JournalRecordKey.make("fixture:candidate-constructed"),
@@ -205,23 +210,33 @@ it.effect("keeps another target usable while exact M verifies and releases only 
             yield* resources.publishAcceptedOwnership(responsibility)
             const { action, transition } = verificationActionFor(responsibility)
             expect(
-              (yield* executeIntegrationAction(action, transition, {
+              (yield* executeIntegrationAction(
+                action,
+                transition,
+                {
+                  acceptIntegrationTargetOwnership: Effect.void,
+                  bindPlannedAttemptPosition: () => Effect.void,
+                  integrationTargets: resources,
+                  recordIntent: () => Effect.void,
+                  releasePlannedAttemptPosition: () => Effect.void,
+                  withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
+                },
+                trackerTarget
+              ).pipe(Effect.flip))._tag
+            ).toBe("TargetVerificationRuntimeUnavailable")
+            const running = yield* executeIntegrationAction(
+              action,
+              transition,
+              {
                 acceptIntegrationTargetOwnership: Effect.void,
                 bindPlannedAttemptPosition: () => Effect.void,
                 integrationTargets: resources,
                 recordIntent: () => Effect.void,
                 releasePlannedAttemptPosition: () => Effect.void,
                 withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
-              }).pipe(Effect.flip))._tag
-            ).toBe("TargetVerificationRuntimeUnavailable")
-            const running = yield* executeIntegrationAction(action, transition, {
-              acceptIntegrationTargetOwnership: Effect.void,
-              bindPlannedAttemptPosition: () => Effect.void,
-              integrationTargets: resources,
-              recordIntent: () => Effect.void,
-              releasePlannedAttemptPosition: () => Effect.void,
-              withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
-            }).pipe(
+              },
+              trackerTarget
+            ).pipe(
               Effect.provideService(
                 TargetVerificationRuntime,
                 TargetVerificationRuntime.of({ boundary, evidenceStore, plan })
@@ -430,14 +445,19 @@ it.effect("fails closed when referenced evidence cannot be reread", () => {
         yield* resources.acquire(responsibility)
         yield* resources.publishAcceptedOwnership(responsibility)
         const { action, transition } = verificationActionFor(responsibility)
-        const failure = yield* executeIntegrationAction(action, transition, {
-          acceptIntegrationTargetOwnership: Effect.void,
-          bindPlannedAttemptPosition: () => Effect.void,
-          integrationTargets: resources,
-          recordIntent: () => Effect.void,
-          releasePlannedAttemptPosition: () => Effect.void,
-          withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
-        }).pipe(
+        const failure = yield* executeIntegrationAction(
+          action,
+          transition,
+          {
+            acceptIntegrationTargetOwnership: Effect.void,
+            bindPlannedAttemptPosition: () => Effect.void,
+            integrationTargets: resources,
+            recordIntent: () => Effect.void,
+            releasePlannedAttemptPosition: () => Effect.void,
+            withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
+          },
+          trackerTarget
+        ).pipe(
           Effect.provideService(
             TargetVerificationRuntime,
             TargetVerificationRuntime.of({ boundary, evidenceStore, plan })

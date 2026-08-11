@@ -1,7 +1,7 @@
 import { Effect } from "effect"
+import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { expect, it } from "vitest"
 import {
-  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -39,7 +39,7 @@ it("fails with a typed error when a fresh accepted result has no ambient journal
       Effect.gen(function* () {
         yield* context.queueAcceptedResult(
           plannedAttempt,
-          AcceptedResult.make({ commit: GitCommitSha.make("a".repeat(40)) }),
+          acceptedResultFixture(GitCommitSha.make("a".repeat(40))),
           IntegrationTarget.make({
             repository: GitRepositoryLocator.make("/repo/.git"),
             ref: IntegrationTargetRef.make("refs/heads/master")
@@ -81,7 +81,7 @@ it("uses the ambient journal when a fresh accepted result is queued", async () =
       Effect.gen(function* () {
         yield* context.queueAcceptedResult(
           plannedAttempt,
-          AcceptedResult.make({ commit: GitCommitSha.make("a".repeat(40)) }),
+          acceptedResultFixture(GitCommitSha.make("a".repeat(40))),
           IntegrationTarget.make({
             repository: GitRepositoryLocator.make("/repo/.git"),
             ref: IntegrationTargetRef.make("refs/heads/master")

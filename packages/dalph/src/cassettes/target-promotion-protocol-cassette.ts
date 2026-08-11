@@ -1,4 +1,4 @@
-import { Deferred, Effect, Ref } from "effect"
+import { Deferred, Effect, Match, Ref } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -64,6 +64,10 @@ const preparedPromotion = (participant: PromotionParticipant) => {
     candidateCommit,
     constructedAt: JournalPosition.make(queuedAt + candidateConstructedPositionOffset),
     correlation: {
+      acceptanceManifest: EvidenceReference.make({
+        byteLength: 1,
+        digest: EvidenceDigest.make("a".repeat(evidenceDigestLength))
+      }),
       acceptedResultCommit: GitCommitSha.make("a".repeat(gitCommitShaLength)),
       attemptId: AttemptId.make(`target-promotion-protocol-${owner}`),
       candidateId: IntegrationCandidateId.make(`target-promotion-protocol-candidate-${owner}`),
@@ -72,7 +76,11 @@ const preparedPromotion = (participant: PromotionParticipant) => {
       integrationSessionId: IntegrationSessionId.make(`target-promotion-protocol-session-${owner}`),
       integrationTarget: target,
       runId
-    }
+    },
+    reviewManifest: EvidenceReference.make({
+      byteLength: 1,
+      digest: EvidenceDigest.make("b".repeat(evidenceDigestLength))
+    })
   })
   const correlation = targetVerificationCorrelationFor(
     candidate,
@@ -287,18 +295,13 @@ const interpretStoryItem = Effect.fn("TargetPromotionProtocolCassette.interpretS
     return yield* Ref.update(state.leaseObservations, (current) => [...current, observation])
   }
   const runtime = yield* runtimeFor(state.runtimes, item.owner)
-  switch (item._tag) {
-    case "Acquire":
-      return yield* acquire(state.resources, runtime.prepared.responsibility)
-    case "AwaitBlockedBoundary":
-      return yield* Deferred.await(runtime.blocked)
-    case "AwaitSettlement":
-      return yield* observeTerminal(runtime, item.expected)
-    case "ReleaseBlockedBoundary":
-      return yield* Deferred.succeed(runtime.release, undefined)
-    case "StartPromotion":
-      return yield* startPromotion(state.resources, runtime, state.calls)
-  }
+  return yield* Match.valueTags(item, {
+    Acquire: () => acquire(state.resources, runtime.prepared.responsibility),
+    AwaitBlockedBoundary: () => Deferred.await(runtime.blocked),
+    AwaitSettlement: (value) => observeTerminal(runtime, value.expected),
+    ReleaseBlockedBoundary: () => Deferred.succeed(runtime.release, undefined),
+    StartPromotion: () => startPromotion(state.resources, runtime, state.calls)
+  })
 })
 
 /** Replays declared Git results and observations through the production promotion protocol and exact target leases. */

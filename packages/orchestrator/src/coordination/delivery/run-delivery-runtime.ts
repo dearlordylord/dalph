@@ -371,11 +371,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               )
             } else {
               yield* admission.complete(owner.reservation)
-              yield* emit({
-                _tag: "ActionOutcome",
-                outcome: completion.exit.value._tag,
-                proposalId: completion.proposalId
-              })
+              yield* emit({ _tag: "ActionOutcome", result: completion.exit.value })
               yield* Ref.set(owner.settled, true)
               const current = Option.getOrThrow(yield* Ref.get(latest))
               if (completion.exit.value._tag === "ActionDeferred") {
@@ -409,7 +405,14 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         if (proposedActions._tag === "DeliveryProposalOwnershipConflict")
           return Option.none<DeliveryRuntimeQuiescence>()
         /* v8 ignore stop */
-        if (live.size !== 0 || proposedActions.proposals.length !== 0) {
+        const deferred = yield* Ref.get(deferredAt)
+        // An action deferred against these exact accepted facts has released its owner and cannot run again
+        // until a later accepted journal position clears that deferral. Its retained proposal must not prevent
+        // the tracker-reconfirmation quiet point that can supply those later facts.
+        const everyProposalAwaitsChangedAcceptedFacts = proposedActions.proposals.every(
+          ({ id }) => deferred.get(id) === current.acceptedAt
+        )
+        if (live.size !== 0 || !everyProposalAwaitsChangedAcceptedFacts) {
           return Option.none<DeliveryRuntimeQuiescence>()
         }
         const empty: EmptyProposalFrontier = { ...proposedActions, proposals: [] }

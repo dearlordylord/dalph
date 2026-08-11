@@ -62,6 +62,14 @@ today.
 | `issue-138-reconcile-blockers-around-promotion.md` | 138 |
 | `issue-139-reconcile-git-facts.md` | 139 |
 
+**Accepted planning-only Wayfinder** — the owning issue resolves behavior,
+architecture, model ownership, and implementation-ticket edges without itself
+implementing runtime behavior.
+
+| File | Issue |
+|---|---|
+| `issue-169-graceful-application-exit.md` | 169 |
+
 **Accepted, not yet implemented** — the owning issue is accepted as work and
 the chronology is precise enough to permit runtime implementation. These files
 state required behavior and remain an operational-scenario gate for their

@@ -45,6 +45,8 @@ export const deliveryTransitionPolicy = {
   RunTargetVerification: policy("IdentityFree", "None"),
   RunTargetPromotion: policy("IdentityFree", "None"),
   ReplacePromotedTaskClaim: policy("IdentityFree", "None"),
+  CompletePromotedTask: policy("IdentityFree", "None"),
+  ObserveFocusedTaskCompletion: policy("IdentityFree", "None"),
   DeleteCompletedTaskCompletionClaim: policy("IdentityFree", "None"),
   ObservePlannedAttemptContinuationClaim: acceptedPolicy("Observation", "Observation"),
   ObservePlannedAttemptContinuationGraph: acceptedPolicy("Observation", "Observation"),

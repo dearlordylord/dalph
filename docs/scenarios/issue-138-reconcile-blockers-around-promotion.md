@@ -246,18 +246,21 @@ ordinary tracker-completion protocol for A but has not yet recorded its result.
 2. The task tracker nevertheless accepts Dalph's completion request for A.
    The prerequisite read and completion mutation cannot be assumed atomic
    unless the tracker boundary explicitly proves such a precondition.
-3. Dalph records the actual successful completion result. It does not undo or
-   reinterpret that external fact.
+3. The tracker acknowledges that it accepted Dalph's exact completion request.
+   Dalph records that acknowledgement without treating it as lifecycle proof,
+   then performs a focused read of A. Only when that read reports A
+   successfully complete does Dalph record the task-local successful completion
+   observation. It does not undo or reinterpret that external fact.
 4. A later complete tracker read reports the resulting inconsistency: A is
    complete while B is again unfinished. Dalph preserves A's completed state
    and derives a visible warning from those current facts and the recorded
-   completion result.
+   focused successful-completion observation.
 5. Ordinary graph reconciliation uses the current tracker facts for other
    tasks; Dalph does not manufacture a repair for A or B.
 
 If a later complete observation reports B complete again, the current
 inconsistency and its visible warning clear. The supporting tracker
-observations and completion result remain in durable workflow history; Dalph
+observations, request acknowledgement, and focused success remain in durable workflow history; Dalph
 does not persist a separate permanent race-warning state.
 
 If Dalph crashes after the completion request but before recording its result,

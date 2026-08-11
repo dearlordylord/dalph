@@ -52,6 +52,7 @@ export const TaskTrackerReadInitiated = Schema.TaggedStruct("TaskTrackerReadInit
   ...initiatedActionFields,
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   operation: Schema.Union([
+    WorkflowOperation.cases.ReadCompletionTaskFacts,
     WorkflowOperation.cases.ReadTaskClaim,
     WorkflowOperation.cases.ReadTrackerGraph,
     WorkflowOperation.cases.ReadTaskWorkSpecification
@@ -418,6 +419,15 @@ const nonProjectedJournalEventKinds = {
   CompletionClaimDeletionAttemptIntended: true,
   CompletionClaimDeleted: true,
   IntegrationFinalitySettled: true,
+  CompletionTaskIntended: true,
+  CompletionTaskAttemptIntended: true,
+  CompletionTaskAcknowledged: true,
+  CompletionTaskResponseLost: true,
+  CompletionTaskRejected: true,
+  CompletionTaskCandidateAncestryReadIntended: true,
+  CompletionTaskCandidateAncestryObserved: true,
+  CompletionTaskRequestLookupIntended: true,
+  CompletionTaskRequestLookupObserved: true,
   PlannedAttemptExecutorCommandIntended: true,
   PlannedAttemptExecutorCommandProjectionObserved: true,
   PlannedAttemptExecutorCommandResponseContradicted: true,

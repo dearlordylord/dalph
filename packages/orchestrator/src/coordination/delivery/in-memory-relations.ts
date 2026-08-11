@@ -26,7 +26,13 @@ import {
   type TrackerGraphActionProposal,
   zipCurrentSignals
 } from "./relations.js"
-import { boundedParallelTicketsOf, deliverySettlementsOf, ticketDeliveriesOf } from "./ticket-delivery-projection.js"
+import {
+  boundedParallelTicketsOf,
+  deliverySettlementsOf,
+  frontierOf,
+  releaseEligibleProposalContributionsOf,
+  ticketDeliveriesOf
+} from "./ticket-delivery-projection.js"
 import type { DeliveryProposalContributions } from "./delivery-proposal.js"
 
 export interface DeliveryRelationsLayerInput {
@@ -97,7 +103,37 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     issues: [],
     ticketDelivery: []
   })
-  const proposalContributions = input.proposalContributions ?? noProposalContributions
+  const rawProposalContributions = input.proposalContributions ?? noProposalContributions
+  const releaseEligibleContributions = (
+    bundle: DeliveryRelationInputBundle,
+    contributions: DeliveryProposalContributions
+  ): DeliveryProposalContributions =>
+    releaseEligibleProposalContributionsOf(boundedParallelTicketsOf(frontierOf(bundle.publication)), contributions)
+  const proposalContributions =
+    input.proposalContributions === undefined
+      ? mapCurrentSignal(input.coherent, (bundle) =>
+          releaseEligibleContributions(bundle, bundle.legacy.proposalContributions)
+        )
+      : (() => {
+          const get = Effect.all([input.coherent.get, rawProposalContributions.get]).pipe(
+            Effect.map(([bundle, contributions]) => releaseEligibleContributions(bundle, contributions))
+          )
+          const changes = Stream.merge(
+            input.coherent.changes.pipe(
+              Stream.mapEffect((bundle) =>
+                rawProposalContributions.get.pipe(
+                  Effect.map((contributions) => releaseEligibleContributions(bundle, contributions))
+                )
+              )
+            ),
+            rawProposalContributions.changes.pipe(
+              Stream.mapEffect((contributions) =>
+                input.coherent.get.pipe(Effect.map((bundle) => releaseEligibleContributions(bundle, contributions)))
+              )
+            )
+          ).pipe(Stream.changesWith((left, right) => JSON.stringify(left) === JSON.stringify(right)))
+          return { changes, get }
+        })()
   const reflectionProposals = input.reflectionProposals ?? noActions
   const planningInputOf = (
     trackerProposals: ReadonlyArray<TrackerGraphActionProposal>,
@@ -133,8 +169,12 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         ([, [trackerProposals, [lowerContributions, deliveryReflection]]]) =>
           planningInputOf(trackerProposals, lowerContributions, deliveryReflection)
       )
-    : mapCurrentSignal(input.coherent, ({ legacy }) =>
-        planningInputOf(legacy.trackerGraphProposals, legacy.proposalContributions, legacy.reflectionProposals)
+    : mapCurrentSignal(input.coherent, (bundle) =>
+        planningInputOf(
+          bundle.legacy.trackerGraphProposals,
+          releaseEligibleContributions(bundle, bundle.legacy.proposalContributions),
+          bundle.legacy.reflectionProposals
+        )
       )
   const actionPlanTrackerGraphProposals = mapCurrentSignal(planningInputs, ({ trackerGraph }) => trackerGraph)
   const publication = deduplicatedPublicationSignal(mapCurrentSignal(input.coherent, ({ publication }) => publication))

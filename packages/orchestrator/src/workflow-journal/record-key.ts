@@ -21,7 +21,11 @@ import type {
   TargetPromotionAttemptOrdinal,
   TargetPromotionRequestId
 } from "../workflow/protocols/target-promotion/events.js"
-import type { CompletionClaimRequestOrdinal } from "../workflow/protocols/integration-finality/events.js"
+import type {
+  CompletionClaimRequestOrdinal,
+  CompletionTaskRequest,
+  CompletionTaskRequestOrdinal
+} from "../workflow/protocols/integration-finality/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -224,3 +228,51 @@ export const completionClaimDeletedRecordKey = (operationId: OperationId): Journ
 /** Stable journal key for one task-scoped integration finality settlement. */
 export const integrationFinalitySettledRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>
   JournalRecordKey.make(`integration-finality:${requestId}:settled`)
+
+const completionTaskRecordKeyPrefix = (operationId: OperationId): string => `completion-task:${operationId}`
+
+/** Stable key for the immutable task-completion request intent. */
+export const completionTaskIntentRecordKey = (request: CompletionTaskRequest): JournalRecordKey =>
+  JournalRecordKey.make(`${completionTaskRecordKeyPrefix(request.operationId)}:intent`)
+
+/** Stable key for one numbered task-completion call intent. */
+export const completionTaskAttemptIntentRecordKey = (
+  request: CompletionTaskRequest,
+  ordinal: CompletionTaskRequestOrdinal
+): JournalRecordKey => JournalRecordKey.make(`${completionTaskRecordKeyPrefix(request.operationId)}:attempt:${ordinal}`)
+
+/** Stable key for the direct tracker acknowledgement. */
+export const completionTaskAcknowledgedRecordKey = (request: CompletionTaskRequest): JournalRecordKey =>
+  JournalRecordKey.make(`${completionTaskRecordKeyPrefix(request.operationId)}:acknowledged`)
+
+/** Stable key for the lost-response occurrence. */
+export const completionTaskResponseLostRecordKey = (
+  request: CompletionTaskRequest,
+  ordinal: CompletionTaskRequestOrdinal
+): JournalRecordKey => JournalRecordKey.make(`${completionTaskRecordKeyPrefix(request.operationId)}:lost:${ordinal}`)
+
+/** Stable key for one definitive tracker rejection of numbered Q. */
+export const completionTaskRejectedRecordKey = (
+  request: CompletionTaskRequest,
+  ordinal: CompletionTaskRequestOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${completionTaskRecordKeyPrefix(request.operationId)}:rejected:${ordinal}`)
+
+/** Stable keys around one exact promoted-candidate ancestry boundary read. */
+export const completionTaskCandidateAncestryReadIntentRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${completionTaskRecordKeyPrefix(operationId)}:ancestry-read:intent`)
+export const completionTaskCandidateAncestryObservedRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${completionTaskRecordKeyPrefix(operationId)}:ancestry-read:observed`)
+
+/** Stable key for intent before one exact request-result lookup. */
+export const completionTaskRequestLookupIntentRecordKey = (
+  request: CompletionTaskRequest,
+  ordinal: CompletionTaskRequestOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${completionTaskRecordKeyPrefix(request.operationId)}:lookup:${ordinal}:intent`)
+
+/** Stable key for one exact-request lookup result. */
+export const completionTaskRequestLookupRecordKey = (
+  request: CompletionTaskRequest,
+  ordinal: CompletionTaskRequestOrdinal
+): JournalRecordKey => JournalRecordKey.make(`${completionTaskRecordKeyPrefix(request.operationId)}:lookup:${ordinal}`)

@@ -27,6 +27,9 @@ export const renderAuthoredStoryItemLandmark = Match.type<AuthoredCassetteStoryI
     CompletionClaimDeletionApplied: noLandmark,
     CompletionClaimReadReturned: noLandmark,
     CompletionClaimReplacementApplied: noLandmark,
+    CompletionTaskFocusedReadReturned: noLandmark,
+    CompletionTaskRequestLookupReturned: noLandmark,
+    CompletionTaskRequestReturned: noLandmark,
     CoordinatorActivationReturned: noLandmark,
     CoordinatorProcessDies: () =>
       "The coordinator process died; the next activation reconstructs accepted journal history",
@@ -74,16 +77,15 @@ export const renderAuthoredStoryItemLandmark = Match.type<AuthoredCassetteStoryI
   })
 )
 
-const taskWorkResultLyric = (result: AuthoredTaskWorkResult): string => {
-  switch (result._tag) {
-    case "PlannedWorkForTaskAccepted":
-      return `The story expects task ${result.taskId} to produce accepted commit ${result.commit}.`
-    case "PlannedWorkForTaskCompleted":
-      return `The story expects the planned work for task ${result.taskId} to complete.`
-    case "PlannedWorkForTaskFailed":
-      return `The story expects the planned work for task ${result.taskId} to fail.`
-  }
-}
+const taskWorkResultLyric = Match.type<AuthoredTaskWorkResult>().pipe(
+  Match.tagsExhaustive({
+    PlannedWorkForTaskAccepted: (result) =>
+      `The story expects task ${result.taskId} to produce accepted commit ${result.commit}.`,
+    PlannedWorkForTaskCompleted: (result) =>
+      `The story expects the planned work for task ${result.taskId} to complete.`,
+    PlannedWorkForTaskFailed: (result) => `The story expects the planned work for task ${result.taskId} to fail.`
+  })
+)
 
 type AuthoredTargetPromotionEvidence = Extract<
   AuthoredOrchestrationEvidence,
@@ -94,16 +96,16 @@ const isTargetPromotionEvidence = (
   evidence: AuthoredOrchestrationEvidence
 ): evidence is AuthoredTargetPromotionEvidence => evidence._tag.startsWith("TargetPromotion")
 
-const targetPromotionEvidenceLyric = (evidence: AuthoredTargetPromotionEvidence): string => {
-  switch (evidence._tag) {
-    case "TargetPromotionSucceeded":
-      return `The story expects ${evidence.basis._tag} to establish candidate ${evidence.candidateCommit} on target head ${evidence.observedTargetHead} by ${evidence.observation}.`
-    case "TargetPromotionNonConvergent":
-      return `The story expects candidate ${evidence.candidateCommit} to stop after attempt ${evidence.attemptOrdinal} with ${evidence.lastObservation}.`
-    case "TargetPromotionStale":
-      return `The story expects Git to preserve head ${evidence.observedTargetHead} instead of replacing it with stale candidate ${evidence.candidateCommit}.`
-  }
-}
+const targetPromotionEvidenceLyric = Match.type<AuthoredTargetPromotionEvidence>().pipe(
+  Match.tagsExhaustive({
+    TargetPromotionSucceeded: (evidence) =>
+      `The story expects ${evidence.basis._tag} to establish candidate ${evidence.candidateCommit} on target head ${evidence.observedTargetHead} by ${evidence.observation}.`,
+    TargetPromotionNonConvergent: (evidence) =>
+      `The story expects candidate ${evidence.candidateCommit} to stop after attempt ${evidence.attemptOrdinal} with ${evidence.lastObservation}.`,
+    TargetPromotionStale: (evidence) =>
+      `The story expects Git to preserve head ${evidence.observedTargetHead} instead of replacing it with stale candidate ${evidence.candidateCommit}.`
+  })
+)
 
 type AuthoredTargetVerificationEvidence = Extract<
   AuthoredOrchestrationEvidence,
@@ -133,66 +135,65 @@ const isExecutorOrchestrationEvidence = (
   evidence: AuthoredOrchestrationEvidence
 ): evidence is AuthoredExecutorOrchestrationEvidence => evidence._tag.startsWith("PlannedAttemptExecutor")
 
-const executorOrchestrationEvidenceLyric = (evidence: AuthoredExecutorOrchestrationEvidence): string => {
-  switch (evidence._tag) {
-    case "PlannedAttemptExecutorWorkResponsibilityBegan":
-      return `The story expects Dalph to assume executor-work responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
-    case "PlannedAttemptExecutorWorkReported":
-      return `The story expects executor report ${evidence.report} for attempt ${evidence.attemptId}.`
-    case "PlannedAttemptExecutorCommandProjectionObserved":
-      return `The story expects exact executor projection ${evidence.report} for attempt ${evidence.attemptId}.`
-  }
-}
+const executorOrchestrationEvidenceLyric = Match.type<AuthoredExecutorOrchestrationEvidence>().pipe(
+  Match.tagsExhaustive({
+    PlannedAttemptExecutorWorkResponsibilityBegan: (evidence) =>
+      `The story expects Dalph to assume executor-work responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`,
+    PlannedAttemptExecutorWorkReported: (evidence) =>
+      `The story expects executor report ${evidence.report} for attempt ${evidence.attemptId}.`,
+    PlannedAttemptExecutorCommandProjectionObserved: (evidence) =>
+      `The story expects exact executor projection ${evidence.report} for attempt ${evidence.attemptId}.`
+  })
+)
 
 const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): string => {
   if (isTargetPromotionEvidence(evidence)) return targetPromotionEvidenceLyric(evidence)
   if (isTargetVerificationEvidence(evidence)) return targetVerificationEvidenceLyric(evidence)
   if (isExecutorOrchestrationEvidence(evidence)) return executorOrchestrationEvidenceLyric(evidence)
-  switch (evidence._tag) {
-    case "AcceptedResultIntegrationResponsibilityBegan":
-      return `The story expects Dalph to queue accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
-    case "AcceptedResultIntegrationStarted":
-      return `The story expects Dalph to start integrating accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
-    case "IntegrationCandidateConstructed":
-      return `The story expects candidate ${evidence.candidateCommit} to have target ${evidence.expectedTargetHead} first and accepted result ${evidence.acceptedResultCommit} second.`
-  }
+  return Match.value(evidence).pipe(
+    Match.tagsExhaustive({
+      AcceptedResultIntegrationResponsibilityBegan: (evidence) =>
+        `The story expects Dalph to queue accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`,
+      AcceptedResultIntegrationStarted: (evidence) =>
+        `The story expects Dalph to start integrating accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`,
+      IntegrationCandidateConstructed: (evidence) =>
+        `The story expects candidate ${evidence.candidateCommit} to have target ${evidence.expectedTargetHead} first and accepted result ${evidence.acceptedResultCommit} second.`
+    })
+  )
 }
 
-// eslint-disable-next-line complexity -- Every closed protocol-evidence variant owns one maintainer-readable sentence.
-const protocolEvidenceLyric = (evidence: AuthoredProtocolEvidence): string => {
-  switch (evidence._tag) {
-    case "AttemptChoiceApplied":
-      return `The story expects Operator to apply ${evidence.choice} to task ${evidence.taskId}, attempt ${evidence.attemptId}, at authored revision ${evidence.observedTaskRevision}.`
-    case "AttemptImplementationAbandoned":
-      return `The story expects Dalph to abandon implementation responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
-    case "AttemptWorktreeLost":
-      return `The story expects Git to report the planned worktree lost for task ${evidence.taskId}, attempt ${evidence.attemptId}.`
-    case "CompatibleTargetAdvance":
-      return `The story expects Git to prove target ${evidence.targetHeadSha} descends from Base ${evidence.plannedBaseSha} for task ${evidence.taskId}.`
-    case "ControlDirectionApplied":
-      return `The story expects Operator to apply ${evidence.direction} to ${
+const protocolEvidenceLyric = Match.type<AuthoredProtocolEvidence>().pipe(
+  Match.tagsExhaustive({
+    AttemptChoiceApplied: (evidence) =>
+      `The story expects Operator to apply ${evidence.choice} to task ${evidence.taskId}, attempt ${evidence.attemptId}, at authored revision ${evidence.observedTaskRevision}.`,
+    AttemptImplementationAbandoned: (evidence) =>
+      `The story expects Dalph to abandon implementation responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`,
+    AttemptWorktreeLost: (evidence) =>
+      `The story expects Git to report the planned worktree lost for task ${evidence.taskId}, attempt ${evidence.attemptId}.`,
+    CompatibleTargetAdvance: (evidence) =>
+      `The story expects Git to prove target ${evidence.targetHeadSha} descends from Base ${evidence.plannedBaseSha} for task ${evidence.taskId}.`,
+    ControlDirectionApplied: (evidence) =>
+      `The story expects Operator to apply ${evidence.direction} to ${
         evidence.subject._tag === "Run" ? "the Run" : `task ${evidence.subject.taskId}`
-      }.`
-    case "IncompatibleTargetRewrite":
-      return `The story expects Git to prove target ${evidence.targetHeadSha} is outside Base ${evidence.plannedBaseSha} for task ${evidence.taskId}.`
-    case "TaskClaimAcquired":
-      return `The story expects Dalph to acquire the claim for task ${evidence.taskId}.`
-    case "TaskClaimReleased":
-      return `The story expects Dalph to release its exact claim for task ${evidence.taskId}.`
-    case "TaskClaimObserved":
-      return `The story expects Dalph to record ${evidence.claimState.toLowerCase()} claim authority for task ${evidence.taskId}.`
-    case "TaskClaimReadExhausted":
-      return `The story expects Dalph to exhaust the bounded claim read for task ${evidence.taskId}.`
-    case "TaskClaimReacquisitionDirected":
-      return `The story expects Operator request ${evidence.requestId} to direct Dalph to reacquire the claim for task ${evidence.taskId}.`
-    case "TaskAttemptPlanned":
-      return `The story expects Dalph to plan attempt ${evidence.attemptId} for task ${evidence.taskId}.`
-    case "TaskWorktreeReady":
-      return `The story expects the worktree for task ${evidence.taskId}, attempt ${evidence.attemptId}, to become ready.`
-    case "StoppedAttemptClaimNoReleaseObserved":
-      return `The story expects Dalph to preserve the ${evidence.claimState.toLowerCase()} claim state for stopped task ${evidence.taskId}.`
-  }
-}
+      }.`,
+    IncompatibleTargetRewrite: (evidence) =>
+      `The story expects Git to prove target ${evidence.targetHeadSha} is outside Base ${evidence.plannedBaseSha} for task ${evidence.taskId}.`,
+    TaskClaimAcquired: (evidence) => `The story expects Dalph to acquire the claim for task ${evidence.taskId}.`,
+    TaskClaimReleased: (evidence) => `The story expects Dalph to release its exact claim for task ${evidence.taskId}.`,
+    TaskClaimObserved: (evidence) =>
+      `The story expects Dalph to record ${evidence.claimState.toLowerCase()} claim authority for task ${evidence.taskId}.`,
+    TaskClaimReadExhausted: (evidence) =>
+      `The story expects Dalph to exhaust the bounded claim read for task ${evidence.taskId}.`,
+    TaskClaimReacquisitionDirected: (evidence) =>
+      `The story expects Operator request ${evidence.requestId} to direct Dalph to reacquire the claim for task ${evidence.taskId}.`,
+    TaskAttemptPlanned: (evidence) =>
+      `The story expects Dalph to plan attempt ${evidence.attemptId} for task ${evidence.taskId}.`,
+    TaskWorktreeReady: (evidence) =>
+      `The story expects the worktree for task ${evidence.taskId}, attempt ${evidence.attemptId}, to become ready.`,
+    StoppedAttemptClaimNoReleaseObserved: (evidence) =>
+      `The story expects Dalph to preserve the ${evidence.claimState.toLowerCase()} claim state for stopped task ${evidence.taskId}.`
+  })
+)
 
 const expectedBehaviorLyric = (item: Extract<AuthoredCassetteStoryItem, { readonly _tag: "ExpectedBehavior" }>) =>
   [
@@ -250,22 +251,20 @@ const isTrackerClaimStoryItem = (item: CoordinatorStoryItem): item is AuthoredTr
   item._tag === "TaskClaimReadFailed" ||
   item._tag === "TaskClaimReadReturned"
 
-const trackerClaimLyric = (item: AuthoredTrackerClaimStoryItem): string => {
-  switch (item._tag) {
-    case "CompletionClaimDeletionApplied":
-      return `The task tracker deletes the exact completion claim for task ${item.taskId}.`
-    case "CompletionClaimReadReturned":
-      return `The task tracker returns the exact ${item.claim.toLowerCase()} claim for finality task ${item.taskId}.`
-    case "CompletionClaimReplacementApplied":
-      return `The task tracker replaces task ${item.taskId}'s active claim with its exact promotion-correlated completion claim.`
-    case "TaskClaimCurrentReadReturned":
-      return `The task tracker returns its current exact claim for task ${item.taskId}.`
-    case "TaskClaimReadFailed":
-      return `The task tracker cannot read the claim for task ${item.taskId}.`
-    case "TaskClaimReadReturned":
-      return `The task tracker returns ${item.observation._tag} for task ${item.observation.taskId}.`
-  }
-}
+const trackerClaimLyric = Match.type<AuthoredTrackerClaimStoryItem>().pipe(
+  Match.tagsExhaustive({
+    CompletionClaimDeletionApplied: (item) =>
+      `The task tracker deletes the exact completion claim for task ${item.taskId}.`,
+    CompletionClaimReadReturned: (item) =>
+      `The task tracker returns the exact ${item.claim.toLowerCase()} claim for finality task ${item.taskId}.`,
+    CompletionClaimReplacementApplied: (item) =>
+      `The task tracker replaces task ${item.taskId}'s active claim with its exact promotion-correlated completion claim.`,
+    TaskClaimCurrentReadReturned: (item) => `The task tracker returns its current exact claim for task ${item.taskId}.`,
+    TaskClaimReadFailed: (item) => `The task tracker cannot read the claim for task ${item.taskId}.`,
+    TaskClaimReadReturned: (item) =>
+      `The task tracker returns ${item.observation._tag} for task ${item.observation.taskId}.`
+  })
+)
 
 type RemainingCoordinatorStoryItem = Exclude<
   CoordinatorStoryItem,
@@ -347,46 +346,48 @@ const operatorLyric = (item: OperatorStoryItem): string => {
 // eslint-disable-next-line complexity -- Every remaining authored story variant is rendered at this exhaustive presentation boundary.
 const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string => {
   if (isOperatorStoryItem(item)) return operatorLyric(item)
-  switch (item._tag) {
-    case "DalphHoldsAdmittedContinuationBeforeExecutorIntent":
-      return `Dalph holds the admitted continuation for attempt ${item.attemptId} before its executor command intent while Alice's Stop request is applied.`
-    case "DalphSelects":
-      return `Dalph selects ${item.operation._tag}.`
-    case "GitWorktreeObservationChanged":
-      return `Git changes the planned worktree observation to ${item.observation._tag}.`
-    case "IntegrationCandidateAgentReported":
-      return `The integration agent reports ${item.report._tag}.`
-    case "IntegrationCandidateGitValidationFailed":
-      return `Git cannot validate the explicitly submitted candidate: ${item.detail}`
-    case "IntegrationCandidateGitValidationReturned":
-      return `Git returns ${item.observation._tag} for the explicitly submitted candidate.`
-    case "TargetVerificationReturned":
-      return `The target repository's public verification wrapper returns ${item.result._tag}.`
-    case "TargetPromotionCompareAndSetReturned":
-      return `Git returns ${item.result._tag} for the exact expected-head compare-and-set.`
-    case "TargetPromotionCompareAndSetResponseLost":
-      return `Git may have applied the exact compare-and-set, but its response is lost: ${item.detail}`
-    case "TargetPromotionGitReadReturned":
-      return `Git returns ${item.observation._tag} from the current-head candidate-ancestry read.`
-    case "TargetPromotionGitReadFailed":
-      return `Git cannot complete the current-head candidate-ancestry read: ${item.detail}`
-    case "TaskWorkSpecificationReadReturned":
-      return `The task tracker returns "${item.title}" for task ${item.taskId}.`
-    case "PlannedAttemptExecutorWorkReported":
-      return `The executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`
-    case "PlannedAttemptExecutorProjectionReturned":
-      return `A read-only executor projection returns ${item.report._tag} for attempt ${item.report.attemptId}.`
-    case "PlannedAttemptExecutorResponseLost":
-      return `The executor reaches ${item.report._tag} for attempt ${item.report.attemptId}, but Dalph loses the ${item.request} response: ${item.detail}`
-    case "TaskClaimReleaseResponseLost":
-      return `The task tracker applies the exact claim release for task ${item.taskId}, but Dalph loses the response: ${item.detail}`
-    case "ExpectedBehavior":
-      return expectedBehaviorLyric(item)
-    case "InitialControlPolicy":
-      return `Dalph starts with task-execution capacity ${item.policy.taskExecutionCapacity}.`
-    case "RunCoordinator":
-      return `The maintainer asks Dalph to coordinate ${JSON.stringify(item.target)}.`
-  }
+  return Match.value(item).pipe(
+    Match.tagsExhaustive({
+      DalphHoldsAdmittedContinuationBeforeExecutorIntent: (item) =>
+        `Dalph holds the admitted continuation for attempt ${item.attemptId} before its executor command intent while Alice's Stop request is applied.`,
+      DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,
+      GitWorktreeObservationChanged: (item) =>
+        `Git changes the planned worktree observation to ${item.observation._tag}.`,
+      IntegrationCandidateAgentReported: (item) => `The integration agent reports ${item.report._tag}.`,
+      IntegrationCandidateGitValidationFailed: (item) =>
+        `Git cannot validate the explicitly submitted candidate: ${item.detail}`,
+      IntegrationCandidateGitValidationReturned: (item) =>
+        `Git returns ${item.observation._tag} for the explicitly submitted candidate.`,
+      CompletionTaskFocusedReadReturned: (item) =>
+        `The task tracker reports task ${item.taskId} ${item.lifecycle} with ${item.unfinishedPrerequisiteTaskIds.length} unfinished prerequisites in the focused completion read.`,
+      CompletionTaskRequestReturned: (item) =>
+        `The task tracker returns ${item.outcome} for the exact completion request for task ${item.taskId}.`,
+      CompletionTaskRequestLookupReturned: (item) =>
+        `The task tracker classifies the exact completion request for task ${item.taskId} as ${item.outcome}.`,
+      TargetVerificationReturned: (item) =>
+        `The target repository's public verification wrapper returns ${item.result._tag}.`,
+      TargetPromotionCompareAndSetReturned: (item) =>
+        `Git returns ${item.result._tag} for the exact expected-head compare-and-set.`,
+      TargetPromotionCompareAndSetResponseLost: (item) =>
+        `Git may have applied the exact compare-and-set, but its response is lost: ${item.detail}`,
+      TargetPromotionGitReadReturned: (item) =>
+        `Git returns ${item.observation._tag} from the current-head candidate-ancestry read.`,
+      TargetPromotionGitReadFailed: (item) =>
+        `Git cannot complete the current-head candidate-ancestry read: ${item.detail}`,
+      TaskWorkSpecificationReadReturned: (item) => `The task tracker returns "${item.title}" for task ${item.taskId}.`,
+      PlannedAttemptExecutorWorkReported: (item) =>
+        `The executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`,
+      PlannedAttemptExecutorProjectionReturned: (item) =>
+        `A read-only executor projection returns ${item.report._tag} for attempt ${item.report.attemptId}.`,
+      PlannedAttemptExecutorResponseLost: (item) =>
+        `The executor reaches ${item.report._tag} for attempt ${item.report.attemptId}, but Dalph loses the ${item.request} response: ${item.detail}`,
+      TaskClaimReleaseResponseLost: (item) =>
+        `The task tracker applies the exact claim release for task ${item.taskId}, but Dalph loses the response: ${item.detail}`,
+      ExpectedBehavior: expectedBehaviorLyric,
+      InitialControlPolicy: (item) => `Dalph starts with task-execution capacity ${item.policy.taskExecutionCapacity}.`,
+      RunCoordinator: (item) => `The maintainer asks Dalph to coordinate ${JSON.stringify(item.target)}.`
+    })
+  )
 }
 
 const coordinatorStoryLyric = (item: CoordinatorStoryItem): string => {

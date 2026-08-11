@@ -1,4 +1,4 @@
-import { Cause, Crypto, Effect, Exit, Layer, Option } from "effect"
+import { Cause, Crypto, Effect, Exit, Layer, Match, Option } from "effect"
 import * as TestConsole from "effect/testing/TestConsole"
 import * as TestClock from "effect/testing/TestClock"
 import { sha1 } from "@noble/hashes/legacy.js"
@@ -146,16 +146,13 @@ export type CassetteLabResult =
 
 /** Computes the Effect Crypto digest contract without requiring a secure browser origin. */
 export const browserDigest = (algorithm: Crypto.DigestAlgorithm, data: Uint8Array): Uint8Array => {
-  switch (algorithm) {
-    case "SHA-1":
-      return sha1(data)
-    case "SHA-256":
-      return sha256(data)
-    case "SHA-384":
-      return sha384(data)
-    case "SHA-512":
-      return sha512(data)
-  }
+  return Match.value(algorithm).pipe(
+    Match.when("SHA-1", () => sha1(data)),
+    Match.when("SHA-256", () => sha256(data)),
+    Match.when("SHA-384", () => sha384(data)),
+    Match.when("SHA-512", () => sha512(data)),
+    Match.exhaustive
+  )
 }
 
 const browserCryptoLayer = Layer.succeed(

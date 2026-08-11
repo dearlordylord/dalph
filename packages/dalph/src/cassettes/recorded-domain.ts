@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The versioned recorded-cassette schema stays one exhaustive compatibility boundary. */
 import { Schema } from "effect"
 import {
   AcceptedResult,
@@ -64,7 +65,12 @@ import {
   TargetPromotionTerminalBasis,
   CompletionTaskClaim,
   CompletionClaimRequestOrdinal,
-  FreshCompletedTaskObservation,
+  CompletionSuccessObservation,
+  CompletionTaskAcknowledgement,
+  CompletionTaskRequest,
+  CompletionTaskRequestLookup,
+  CompletionTaskRequestOrdinal,
+  TargetPromotionGitReadObservation,
   PlannedAttemptContinuationWitness
 } from "@dalph/orchestrator"
 
@@ -152,7 +158,8 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   IntegrationCandidateConstructed: {
     candidateCommit: GitCommitSha,
     correlation: IntegrationCandidateCorrelation,
-    ...nonActionOccurrence
+    ...nonActionOccurrence,
+    reviewManifest: EvidenceReference
   },
   IntegrationCandidateGitValidationFailed: {
     attemptOrdinal: IntegrationCandidateGitValidationAttemptOrdinal,
@@ -227,27 +234,78 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     claim: CompletionTaskClaim,
     ...initiatedByCoordinator,
     operationId: OperationId,
-    successObservation: FreshCompletedTaskObservation
+    successObservation: CompletionSuccessObservation
   },
   CompletionClaimDeletionAttemptIntended: {
     attemptOrdinal: CompletionClaimRequestOrdinal,
     claim: CompletionTaskClaim,
     ...initiatedByCoordinator,
     operationId: OperationId,
-    successObservation: FreshCompletedTaskObservation
+    successObservation: CompletionSuccessObservation
   },
   CompletionClaimDeleted: {
     claim: CompletionTaskClaim,
     ...nonActionOccurrence,
     operationId: OperationId,
-    successObservation: FreshCompletedTaskObservation
+    successObservation: CompletionSuccessObservation
   },
   IntegrationFinalitySettled: {
     claim: CompletionTaskClaim,
     ...nonActionOccurrence,
     deletionOperationId: OperationId,
     replacementOperationId: OperationId,
-    successObservation: FreshCompletedTaskObservation
+    successObservation: CompletionSuccessObservation
+  },
+  CompletionTaskIntended: { ...initiatedByCoordinator, request: CompletionTaskRequest },
+  CompletionTaskAttemptIntended: {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    focusedFactsOperationId: OperationId,
+    gitReadOperationId: OperationId,
+    ...initiatedByCoordinator,
+    request: CompletionTaskRequest
+  },
+  CompletionTaskAcknowledged: {
+    acknowledgement: CompletionTaskAcknowledgement,
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    ...nonActionOccurrence,
+    request: CompletionTaskRequest
+  },
+  CompletionTaskResponseLost: {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    ...nonActionOccurrence,
+    request: CompletionTaskRequest
+  },
+  CompletionTaskRejected: {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    detail: Schema.String,
+    ...nonActionOccurrence,
+    request: CompletionTaskRequest
+  },
+  CompletionTaskCandidateAncestryReadIntended: {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    operationId: OperationId,
+    ...initiatedByCoordinator,
+    request: CompletionTaskRequest
+  },
+  CompletionTaskCandidateAncestryObserved: {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    observation: TargetPromotionGitReadObservation,
+    operationId: OperationId,
+    ...nonActionOccurrence,
+    request: CompletionTaskRequest
+  },
+  CompletionTaskRequestLookupIntended: {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    operationId: OperationId,
+    ...initiatedByCoordinator,
+    request: CompletionTaskRequest
+  },
+  CompletionTaskRequestLookupObserved: {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    lookup: CompletionTaskRequestLookup,
+    operationId: OperationId,
+    ...nonActionOccurrence,
+    request: CompletionTaskRequest
   },
   PlannedAttemptExecutorWorkReported: {
     ...nonActionOccurrence,
@@ -320,6 +378,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   TaskTrackerReadInitiated: {
     ...initiatedByCoordinator,
     operation: Schema.Union([
+      WorkflowOperation.cases.ReadCompletionTaskFacts,
       WorkflowOperation.cases.ReadTaskClaim,
       WorkflowOperation.cases.ReadTrackerGraph,
       WorkflowOperation.cases.ReadTaskWorkSpecification

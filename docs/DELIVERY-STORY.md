@@ -100,7 +100,7 @@ capacity behind the three tasks already running.
 
 **21.** B, C and D report accepted results in turn. Each task releases its
 task-work position, passes through the same exact candidate, verification,
-promotion, completion-claim replacement, fresh tracker-success, claim-deletion,
+promotion, completion-claim replacement, focused task-completion success, claim-deletion,
 and delivery-settlement protocol as A, and then admits one of E, F, G in graph
 order.
 
@@ -131,7 +131,7 @@ record normal termination.
 | 14 | A queued for integration | G₂ | 2 | B D | A C | — | D10 |
 | 15 | candidate built | G₂ | 2 | B D | A C | — | **D26** |
 | 16 | promotion finds a stale head | G₂ | 2 | B D | A C | — | **D27** |
-| 17 | A promoted; exact completion claim deleted after fresh tracker success; A settles | G₃ | 2 | B D | C | — | D24 D27 D28 D33 |
+| 17 | A promoted; exact completion claim deleted after a focused task read proves success; A settles | G₃ | 2 | B D | C | — | D24 D27 D28 D33 |
 | 18 | C reopened | G₄ | 2 | B D | C | — | D9 D19 |
 | 19 | capacity 2 → 3; C admitted | G₄ | 3 | B C D | — | — | D6 D13 |
 | 20 | F and G added | G₅ | 3 | B C D | — | — | D7 D9 |

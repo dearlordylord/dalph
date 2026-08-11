@@ -11,7 +11,6 @@ import {
   completionClaimReplacementIntentRecordKey,
   completionClaimReplacedRecordKey as replacedKey,
   integrationFinalitySettledRecordKey,
-  outcomeRecordKey,
   targetPromotionObservedSuccessRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -30,9 +29,10 @@ import {
   CompletionClaimReplacementIntendedEvent,
   CompletionClaimReplacementFailure,
   CompletionTaskClaim,
+  CompletionTaskIntendedEvent,
   CompletionClaimRequestOrdinal,
   type CompletionClaimReplacementRequest,
-  FreshCompletedTaskObservation,
+  FocusedCompletedTaskObservation,
   completionClaimDeletionRequestFor,
   completionClaimDeletionOperationIdFor,
   completionClaimReplacementRequestFor,
@@ -44,7 +44,7 @@ import {
 import {
   CompletionClaimDidNotConverge,
   CompletionClaimPromotionRequired,
-  FreshTrackerSuccessRequired,
+  FocusedTaskCompletionSuccessRequired,
   runCompletionClaimDeletionProtocol,
   runCompletionClaimReplacementProtocol
 } from "./protocol.js"
@@ -90,7 +90,22 @@ const replacementRecord = (position = 2, operationId = replacementOperationFor(f
     CompletionClaimReplacedEvent.make({ claim: fixture.claim, operationId, version: workflowJournalEventVersion })
   )
 
-const graphRecord = recordOf(3, outcomeRecordKey(fixture.graphOperation.operationId), fixture.graphRecordEvent)
+const focusedSuccessObservation = { ...fixture.successObservation, observedAt: JournalPosition.make(5) }
+const focusedSuccessRecords = [
+  recordOf(
+    3,
+    describeJournalEvent(
+      CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
+    ).expectedKey,
+    CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
+  ),
+  recordOf(
+    4,
+    describeJournalEvent(fixture.focusedSuccessFactsReadIntentEvent).expectedKey,
+    fixture.focusedSuccessFactsReadIntentEvent
+  ),
+  recordOf(5, describeJournalEvent(fixture.focusedSuccessFactsEvent).expectedKey, fixture.focusedSuccessFactsEvent)
+] as const
 
 it("describes every completion-finality event with its stable record key", () => {
   const replacementOperationId = replacementOperationFor(fixture.claim)
@@ -116,27 +131,27 @@ it("describes every completion-finality event with its stable record key", () =>
     CompletionClaimDeletionIntendedEvent.make({
       claim: fixture.claim,
       operationId: deletionOperationId,
-      successObservation: fixture.successObservation,
+      successObservation: focusedSuccessObservation,
       version: workflowJournalEventVersion
     }),
     CompletionClaimDeletionAttemptIntendedEvent.make({
       attemptOrdinal: ordinal,
       claim: fixture.claim,
       operationId: deletionOperationId,
-      successObservation: fixture.successObservation,
+      successObservation: focusedSuccessObservation,
       version: workflowJournalEventVersion
     }),
     CompletionClaimDeletedEvent.make({
       claim: fixture.claim,
       operationId: deletionOperationId,
-      successObservation: fixture.successObservation,
+      successObservation: focusedSuccessObservation,
       version: workflowJournalEventVersion
     }),
     IntegrationFinalitySettledEvent.make({
       claim: fixture.claim,
       deletionOperationId,
       replacementOperationId,
-      successObservation: fixture.successObservation,
+      successObservation: focusedSuccessObservation,
       version: workflowJournalEventVersion
     })
   ]
@@ -276,7 +291,7 @@ it.effect("stops immediately after definite replacement or deletion rejection", 
     const deletionRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
       promotionRecord,
       replacementRecord(),
-      graphRecord
+      ...focusedSuccessRecords
     ])
     const deletionBoundary = makeBoundary({
       deletion: ["DefinitelyNotApplied"],
@@ -289,7 +304,7 @@ it.effect("stops immediately after definite replacement or deletion rejection", 
       (yield* runWith(
         runCompletionClaimDeletionProtocol(
           deletionBoundary,
-          completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation),
+          completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation),
           replacementOperationFor(fixture.claim)
         ).pipe(Effect.flip),
         deletionRecords
@@ -367,7 +382,11 @@ it.effect("fails closed on a foreign claim without attempting replacement", () =
 
 it.effect("does not delete a different completion claim", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord, replacementRecord(), graphRecord])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+      promotionRecord,
+      replacementRecord(),
+      ...focusedSuccessRecords
+    ])
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -378,7 +397,7 @@ it.effect("does not delete a different completion claim", () =>
     const failure = yield* runWith(
       runCompletionClaimDeletionProtocol(
         makeBoundary({ initial: [foreignCompletion], replacementCalls, deletionCalls, readCalls }),
-        completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation),
+        completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation),
         replacementOperationFor(fixture.claim)
       ).pipe(Effect.flip),
       records
@@ -539,7 +558,7 @@ it.effect("resumes replacement from its exact durable request ordinal and ignore
         })
       ),
       recordOf(
-        4,
+        5,
         completionClaimReplacementAttemptIntentRecordKey(foreignOperationId, CompletionClaimRequestOrdinal.make(1)),
         CompletionClaimReplacementAttemptIntendedEvent.make({
           attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
@@ -549,7 +568,7 @@ it.effect("resumes replacement from its exact durable request ordinal and ignore
         })
       ),
       recordOf(
-        5,
+        6,
         completionClaimReplacementAttemptIntentRecordKey(operationId, CompletionClaimRequestOrdinal.make(1)),
         CompletionClaimReplacementAttemptIntendedEvent.make({
           attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
@@ -599,14 +618,18 @@ it.effect("returns an already recorded exact replacement without touching the tr
 
 it.effect("deletes only the exact completion claim after actual fresh success and settles once", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord, replacementRecord(), graphRecord])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+      promotionRecord,
+      replacementRecord(),
+      ...focusedSuccessRecords
+    ])
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
     const request = {
       claim: fixture.claim,
       operationId: deletionOperationFor(fixture.claim),
-      successObservation: fixture.successObservation
+      successObservation: focusedSuccessObservation
     }
     const result = yield* runWith(
       runCompletionClaimDeletionProtocol(
@@ -621,6 +644,8 @@ it.effect("deletes only the exact completion claim after actual fresh success an
     expect(tags(yield* Ref.get(records))).toEqual([
       "TargetPromotionObservedSuccess",
       "CompletionClaimReplaced",
+      "CompletionTaskIntended",
+      "TaskTrackerReadIntentRecorded",
       "TaskTrackerFactsObserved",
       "CompletionClaimDeletionIntended",
       "CompletionClaimDeletionAttemptIntended",
@@ -646,24 +671,24 @@ it.effect("ignores another deletion operation while settling the exact completio
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
       promotionRecord,
       replacementRecord(),
-      graphRecord,
+      ...focusedSuccessRecords,
       recordOf(
-        4,
+        5,
         completionClaimDeletionIntentRecordKey(foreignOperationId),
         CompletionClaimDeletionIntendedEvent.make({
           claim: fixture.claim,
           operationId: foreignOperationId,
-          successObservation: fixture.successObservation,
+          successObservation: focusedSuccessObservation,
           version: workflowJournalEventVersion
         })
       ),
       recordOf(
-        5,
+        6,
         completionClaimDeletedRecordKey(foreignOperationId),
         CompletionClaimDeletedEvent.make({
           claim: fixture.claim,
           operationId: foreignOperationId,
-          successObservation: fixture.successObservation,
+          successObservation: focusedSuccessObservation,
           version: workflowJournalEventVersion
         })
       )
@@ -674,7 +699,7 @@ it.effect("ignores another deletion operation while settling the exact completio
     yield* runWith(
       runCompletionClaimDeletionProtocol(
         makeBoundary({ initial: [fixture.claim], replacementCalls, deletionCalls, readCalls }),
-        completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation),
+        completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation),
         replacementOperationFor(fixture.claim)
       ),
       records
@@ -689,14 +714,14 @@ it.effect("adds the missing settlement when restart finds an exact prior deletio
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
       promotionRecord,
       replacementRecord(),
-      graphRecord,
+      ...focusedSuccessRecords,
       recordOf(
         4,
         completionClaimDeletionIntentRecordKey(deletionOperationId),
         CompletionClaimDeletionIntendedEvent.make({
           claim: fixture.claim,
           operationId: deletionOperationId,
-          successObservation: fixture.successObservation,
+          successObservation: focusedSuccessObservation,
           version: workflowJournalEventVersion
         })
       ),
@@ -706,7 +731,7 @@ it.effect("adds the missing settlement when restart finds an exact prior deletio
         CompletionClaimDeletedEvent.make({
           claim: fixture.claim,
           operationId: deletionOperationId,
-          successObservation: fixture.successObservation,
+          successObservation: focusedSuccessObservation,
           version: workflowJournalEventVersion
         })
       )
@@ -717,7 +742,7 @@ it.effect("adds the missing settlement when restart finds an exact prior deletio
     yield* runWith(
       runCompletionClaimDeletionProtocol(
         makeBoundary({ initial: [], replacementCalls, deletionCalls, readCalls }),
-        completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation),
+        completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation),
         replacementOperationFor(fixture.claim)
       ),
       records
@@ -733,8 +758,8 @@ it.effect("rejects a forged success proof before deletion intent", () =>
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
-    const forged = FreshCompletedTaskObservation.make({
-      ...fixture.successObservation,
+    const forged = FocusedCompletedTaskObservation.make({
+      ...focusedSuccessObservation,
       operationId: OperationId.make("not-observed")
     })
     const failure = yield* runWith(
@@ -745,7 +770,7 @@ it.effect("rejects a forged success proof before deletion intent", () =>
       ).pipe(Effect.flip),
       records
     )
-    expect(failure).toBeInstanceOf(FreshTrackerSuccessRequired)
+    expect(failure).toBeInstanceOf(FocusedTaskCompletionSuccessRequired)
     expect(tags(yield* Ref.get(records))).toEqual(["TargetPromotionObservedSuccess", "CompletionClaimReplaced"])
     expect(yield* Ref.get(deletionCalls)).toBe(0)
   })
@@ -753,7 +778,11 @@ it.effect("rejects a forged success proof before deletion intent", () =>
 
 it.effect("does not reopen success when deletion response is unknown but already applied", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord, replacementRecord(), graphRecord])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+      promotionRecord,
+      replacementRecord(),
+      ...focusedSuccessRecords
+    ])
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -769,13 +798,13 @@ it.effect("does not reopen success when deletion response is unknown but already
         {
           claim: fixture.claim,
           operationId: deletionOperationFor(fixture.claim),
-          successObservation: fixture.successObservation
+          successObservation: focusedSuccessObservation
         },
         replacementOperationFor(fixture.claim)
       ),
       records
     )
-    expect(result.successObservation).toEqual(fixture.successObservation)
+    expect(result.successObservation).toEqual(focusedSuccessObservation)
     expect(yield* Ref.get(deletionCalls)).toBe(1)
     expect(tags(yield* Ref.get(records))).toContain("IntegrationFinalitySettled")
     expect(tags(yield* Ref.get(records))).toContain("CompletionClaimDeletionAttemptIntended")
@@ -784,7 +813,11 @@ it.effect("does not reopen success when deletion response is unknown but already
 
 it.effect("bounds deletion retries at three and preserves the successful observation on non-convergence", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord, replacementRecord(), graphRecord])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+      promotionRecord,
+      replacementRecord(),
+      ...focusedSuccessRecords
+    ])
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -800,7 +833,7 @@ it.effect("bounds deletion retries at three and preserves the successful observa
         {
           claim: fixture.claim,
           operationId: deletionOperationFor(fixture.claim),
-          successObservation: fixture.successObservation
+          successObservation: focusedSuccessObservation
         },
         replacementOperationFor(fixture.claim)
       ).pipe(Effect.flip),
@@ -818,11 +851,15 @@ it.effect("bounds deletion retries at three and preserves the successful observa
 
 it.effect("later activation discovers deletion success after three ambiguous requests without request four", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord, replacementRecord(), graphRecord])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+      promotionRecord,
+      replacementRecord(),
+      ...focusedSuccessRecords
+    ])
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
-    const request = completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation)
+    const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
     yield* runWith(
       runCompletionClaimDeletionProtocol(
         makeBoundary({
@@ -845,7 +882,7 @@ it.effect("later activation discovers deletion success after three ambiguous req
       ),
       records
     )
-    expect(result.successObservation).toEqual(fixture.successObservation)
+    expect(result.successObservation).toEqual(focusedSuccessObservation)
     expect(yield* Ref.get(deletionCalls)).toBe(3)
     expect(tags(yield* Ref.get(records))).toContain("IntegrationFinalitySettled")
   })
@@ -853,11 +890,15 @@ it.effect("later activation discovers deletion success after three ambiguous req
 
 it.effect("fails closed when exhausted deletion reconciliation observes another completion claim", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord, replacementRecord(), graphRecord])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+      promotionRecord,
+      replacementRecord(),
+      ...focusedSuccessRecords
+    ])
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
-    const request = completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation)
+    const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
     yield* runWith(
       runCompletionClaimDeletionProtocol(
         makeBoundary({
@@ -891,7 +932,11 @@ it.effect("fails closed when exhausted deletion reconciliation observes another 
 
 it.effect("records deletion success on the third and final request without a fourth read", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord, replacementRecord(), graphRecord])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+      promotionRecord,
+      replacementRecord(),
+      ...focusedSuccessRecords
+    ])
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -907,13 +952,13 @@ it.effect("records deletion success on the third and final request without a fou
         {
           claim: fixture.claim,
           operationId: deletionOperationFor(fixture.claim),
-          successObservation: fixture.successObservation
+          successObservation: focusedSuccessObservation
         },
         replacementOperationFor(fixture.claim)
       ),
       records
     )
-    expect(result.successObservation).toEqual(fixture.successObservation)
+    expect(result.successObservation).toEqual(focusedSuccessObservation)
     expect(yield* Ref.get(deletionCalls)).toBe(3)
     expect(yield* Ref.get(readCalls)).toBe(3)
     expect(tags(yield* Ref.get(records)).at(-1)).toBe("IntegrationFinalitySettled")

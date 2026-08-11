@@ -1,3 +1,4 @@
+import { Match } from "effect"
 import type { reduceWorkflowJournalHistory } from "@dalph/orchestrator"
 
 export const semanticJson = (value: unknown): string => JSON.stringify(value)
@@ -6,18 +7,31 @@ const semanticResponsibility = (
   history: Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { readonly _tag: "ValidWorkflowJournalHistory" }>
 ) =>
   history.runState.responsibility.entries
-    .map((entry) => {
-      switch (entry._tag) {
-        case "PlannedAttemptExecutorWorkResponsibility":
-          return { _tag: entry._tag, plannedAttempt: entry.plannedAttempt }
-        case "TaskClaimResponsibility":
-          return { _tag: entry._tag, acquisition: entry.acquisition, taskId: entry.taskId }
-        case "TaskClaimReleaseResponsibility":
-          return { _tag: entry._tag, operation: entry.operation, taskId: entry.taskId }
-        case "TaskWorktreeResponsibility":
-          return { _tag: entry._tag, operation: entry.operation, taskId: entry.taskId }
-      }
-    })
+    .map(
+      Match.type<(typeof history.runState.responsibility.entries)[number]>().pipe(
+        Match.tagsExhaustive({
+          PlannedAttemptExecutorWorkResponsibility: (entry) => ({
+            _tag: entry._tag,
+            plannedAttempt: entry.plannedAttempt
+          }),
+          TaskClaimResponsibility: (entry) => ({
+            _tag: entry._tag,
+            acquisition: entry.acquisition,
+            taskId: entry.taskId
+          }),
+          TaskClaimReleaseResponsibility: (entry) => ({
+            _tag: entry._tag,
+            operation: entry.operation,
+            taskId: entry.taskId
+          }),
+          TaskWorktreeResponsibility: (entry) => ({
+            _tag: entry._tag,
+            operation: entry.operation,
+            taskId: entry.taskId
+          })
+        })
+      )
+    )
     .toSorted((left, right) => semanticJson(left).localeCompare(semanticJson(right)))
 
 export const semanticState = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>

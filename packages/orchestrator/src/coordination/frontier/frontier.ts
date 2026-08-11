@@ -42,13 +42,26 @@ import type { TargetVerificationState } from "../../workflow/protocols/target-ve
 import type {
   CompletionTaskClaim,
   CompletionClaimDeletionRequest,
-  CompletionClaimReplacementRequest
+  CompletionClaimReplacementRequest,
+  CompletionTaskRequest
 } from "../../workflow/protocols/integration-finality/events.js"
 import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
 import type { PlannedAttemptContinuationWitness } from "../../workflow/protocols/planned-attempt-continuation/events.js"
+import type { CompletionTaskConflictReason } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
+
+/** Exact reconstructed reason that one promoted task still waits for focused success. */
+export type IntegrationFinalityTrackerSuccessWaitReason =
+  | { readonly _tag: "FocusedConfirmationNotObserved" }
+  | { readonly _tag: "FocusedCompletionPending"; readonly operationId: OperationId }
+  | {
+      readonly _tag: "FocusedCompletionConflict"
+      readonly detail: string
+      readonly operationId: OperationId
+      readonly reason: CompletionTaskConflictReason
+    }
 
 export type RunnableFrontierTransition = Data.TaggedEnum<{
   AdvanceAttemptStoppage: {
@@ -158,6 +171,14 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly request: CompletionClaimReplacementRequest
     readonly responsibility: StartedIntegrationResponsibility
   }
+  CompletePromotedTask: {
+    readonly request: CompletionTaskRequest
+    readonly responsibility: StartedIntegrationResponsibility
+  }
+  ObserveFocusedTaskCompletion: {
+    readonly request: CompletionTaskRequest
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   DeleteCompletedTaskCompletionClaim: {
     readonly replacementOperationId: OperationId
     readonly request: CompletionClaimDeletionRequest
@@ -224,6 +245,8 @@ const transitionTrackerGraphRequirements = {
   RunTargetVerification: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",
   ReplacePromotedTaskClaim: "CurrentTrackerGraphRequired",
+  CompletePromotedTask: "CurrentTrackerGraphRequired",
+  ObserveFocusedTaskCompletion: "CurrentTrackerGraphRequired",
   DeleteCompletedTaskCompletionClaim: "CurrentTrackerGraphRequired",
   ObservePlannedAttemptContinuationClaim: "AcceptedHistorySufficient",
   ObserveAttemptStoppageExecutor: "AcceptedHistorySufficient",
@@ -304,6 +327,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
   }
   IntegrationFinalityTrackerSuccessWait: {
     readonly plannedAttempt: PlannedTaskAttempt
+    readonly reason: IntegrationFinalityTrackerSuccessWaitReason
     readonly wakeCondition: "TaskTrackerFactsObserved"
   }
   IntegrationFinalityNonConvergence: {

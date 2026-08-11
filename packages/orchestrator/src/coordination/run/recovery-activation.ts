@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Exact history reconstruction spans every delivery authority boundary. */
-import { Context, Effect, Option } from "effect"
+import { Context, Effect, Match, Option } from "effect"
 import {
   type IntegrationTarget,
   type PlannedTaskAttempt,
@@ -1123,6 +1123,8 @@ const transitionTagsAllowedToFinishHeldIntegration = new Set<RunnableFrontierTra
   "RunTargetVerification",
   "RunTargetPromotion",
   "ReplacePromotedTaskClaim",
+  "CompletePromotedTask",
+  "ObserveFocusedTaskCompletion",
   "DeleteCompletedTaskCompletionClaim",
   "ObservePlannedAttemptContinuationTargetLineage",
   "ObserveResponsibleTaskClaim",
@@ -1167,35 +1169,42 @@ const startedIntegrationIntentMayReconcileBeforePause = (
   pausePosition: JournalPosition | undefined
 ): boolean => {
   if (pausePosition === undefined || !isPausedIntegrationReconciliation(transition)) return false
-  switch (transition._tag) {
-    case "RunTargetVerification":
-      return recordBeforePause(
+  return Match.valueTags(transition, {
+    RunTargetVerification: (transition) =>
+      recordBeforePause(
         records,
         pausePosition,
         ({ event }) =>
           event._tag === "TargetVerificationIntended" &&
           event.correlation.requestId ===
             targetVerificationRequestIdForCandidate(transition.candidate.correlation.candidateId)
-      )
-    case "RunTargetPromotion":
-      return recordBeforePause(
+      ),
+    RunTargetPromotion: (transition) =>
+      recordBeforePause(
         records,
         pausePosition,
         ({ event }) =>
           event._tag === "TargetPromotionIntended" &&
           event.correlation.requestId ===
             targetPromotionRequestIdForCandidate(transition.candidate.correlation.candidateId)
-      )
-    case "AcquireStartedIntegrationTarget":
-    case "ContinueStartedIntegrationCandidate":
-      return recordBeforePause(
+      ),
+    AcquireStartedIntegrationTarget: (transition) =>
+      recordBeforePause(
+        records,
+        pausePosition,
+        ({ event }) =>
+          event._tag === "IntegrationCandidateConstructionIntended" &&
+          event.startedAt === transition.responsibility.startedAt
+      ),
+    ContinueStartedIntegrationCandidate: (transition) =>
+      recordBeforePause(
         records,
         pausePosition,
         ({ event }) =>
           event._tag === "IntegrationCandidateConstructionIntended" &&
           event.startedAt === transition.responsibility.startedAt
       )
-  }
+  })
 }
 
 const activeTaskPausePosition = (
@@ -1635,7 +1644,8 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
   candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
   targetVerificationPlan: Option.Option<TargetVerificationPlan>,
   targetPromotionConfigured: boolean,
-  integrationFinalityConfigured: boolean
+  integrationFinalityConfigured: boolean,
+  completionTaskConfigured: boolean
 ) {
   const runState = yield* readRecoveredRunState(runId)
   const currentTaskGraph = Option.getOrUndefined(latestReconstructedTaskGraph(runState.graphKnowledge))
@@ -1745,6 +1755,7 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
     targetPromotionConfigured,
     activeClaimByAttemptId,
     integrationFinalityConfigured,
+    completionTaskConfigured,
     taskClaimAuthorityByAttemptId: new Map(
       runState.workflowHistory.records.flatMap(({ event }) => {
         if (event._tag !== "TaskAttemptPlanned") return []
@@ -1908,7 +1919,8 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
   targetVerificationPlan: Option.Option<TargetVerificationPlan>,
   integrationResourcesOverride: IntegrationTargetResourceController | undefined,
   targetPromotionConfigured: boolean,
-  integrationFinalityConfigured: boolean
+  integrationFinalityConfigured: boolean,
+  completionTaskConfigured: boolean
 ) {
   const journal = yield* InRunJournal
   const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
@@ -1926,7 +1938,8 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
     candidateContinuationLimit,
     targetVerificationPlan,
     targetPromotionConfigured,
-    integrationFinalityConfigured
+    integrationFinalityConfigured,
+    completionTaskConfigured
   ).pipe(Effect.map(recoveryProjectionSnapshot), Effect.provideService(InRunJournal, journal))
   return RunRecoveryProjection.of({
     _tag: "AuthoritativeRunRecoveryProjection",
@@ -1945,7 +1958,8 @@ export const makeRunRecoveryProjection = (
   integrationResources?: IntegrationTargetResourceController,
   targetVerification?: TargetVerificationRuntimeInput,
   targetPromotion?: TargetPromotionRuntimeInput,
-  integrationFinalityConfigured = false
+  integrationFinalityConfigured = false,
+  completionTaskConfigured = false
 ) =>
   makeRunRecoveryProjectionEffect(
     runId,
@@ -1955,5 +1969,6 @@ export const makeRunRecoveryProjection = (
     Option.fromUndefinedOr(targetVerification?.plan),
     integrationResources,
     targetPromotion !== undefined,
-    integrationFinalityConfigured
+    integrationFinalityConfigured,
+    completionTaskConfigured
   )

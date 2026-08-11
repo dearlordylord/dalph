@@ -106,11 +106,26 @@ const integrationResponsibilityFor = (
   )
 }
 
+const transitionsWithoutIntegrationTarget = new Set<RunnableFrontierTransition["_tag"]>([
+  "ReplacePromotedTaskClaim",
+  "CompletePromotedTask",
+  "ObserveFocusedTaskCompletion",
+  "DeleteCompletedTaskCompletionClaim"
+])
+
+const startedIntegrationTargetAccessFor = (
+  transition: RunnableFrontierTransition
+): Extract<IntegrationTargetResourceRequirement, { readonly _tag: "IntegrationTargetResourceRequired" }>["access"] => {
+  if (transition._tag === "AcquireStartedIntegrationTarget") return "Acquire"
+  if (transition._tag === "ReleaseStartedIntegrationTarget") return "Release"
+  return "UseHeld"
+}
+
 const integrationTargetFor = (
   transition: RunnableFrontierTransition,
   responsibilities: ReadonlyArray<IntegrationResponsibility>
 ): IntegrationTargetResourceRequirement => {
-  if (transition._tag === "ReplacePromotedTaskClaim" || transition._tag === "DeleteCompletedTaskCompletionClaim") {
+  if (transitionsWithoutIntegrationTarget.has(transition._tag)) {
     return { _tag: "NoIntegrationTargetResource" }
   }
   if (transition._tag === "StartQueuedIntegration") {
@@ -125,12 +140,7 @@ const integrationTargetFor = (
   if (started === undefined) return { _tag: "NoIntegrationTargetResource" }
   return {
     _tag: "IntegrationTargetResourceRequired",
-    access:
-      transition._tag === "AcquireStartedIntegrationTarget"
-        ? "Acquire"
-        : transition._tag === "ReleaseStartedIntegrationTarget"
-          ? "Release"
-          : "UseHeld",
+    access: startedIntegrationTargetAccessFor(transition),
     integrationTarget: started.integrationTarget,
     queuedAt: started.queuedAt
   }

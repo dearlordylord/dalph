@@ -241,6 +241,7 @@ it("does not terminate an empty frontier while completion settlement is pending"
           {
             _tag: "IntegrationFinalityTrackerSuccessWait",
             plannedAttempt: responsibility.plannedAttempt,
+            reason: { _tag: "FocusedConfirmationNotObserved" },
             wakeCondition: "TaskTrackerFactsObserved"
           }
         ],

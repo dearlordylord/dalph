@@ -1,5 +1,12 @@
 import { Schema } from "effect"
-import { GitCommitSha, IntegrationTarget, PlannedTaskAttempt, RunId, AttemptId } from "@dalph/contracts"
+import {
+  AttemptId,
+  EvidenceReference,
+  GitCommitSha,
+  IntegrationTarget,
+  PlannedTaskAttempt,
+  RunId
+} from "@dalph/contracts"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 
@@ -19,6 +26,7 @@ export type IntegrationCandidateResourceLocator = typeof IntegrationCandidateRes
 
 /** Intrinsically binds an agent report to the exact candidate construction responsibility. */
 export const IntegrationCandidateCorrelation = Schema.Struct({
+  acceptanceManifest: EvidenceReference,
   acceptedResultCommit: GitCommitSha,
   attemptId: AttemptId,
   candidateId: IntegrationCandidateId,
@@ -34,10 +42,23 @@ export type IntegrationCandidateCorrelation = typeof IntegrationCandidateCorrela
 export const IntegrationCandidateAgentReport = Schema.TaggedUnion({
   Conflict: { correlation: IntegrationCandidateCorrelation },
   ExitedWithoutCandidate: { correlation: IntegrationCandidateCorrelation },
-  Submitted: { candidateCommit: GitCommitSha, correlation: IntegrationCandidateCorrelation },
+  Submitted: {
+    candidateCommit: GitCommitSha,
+    correlation: IntegrationCandidateCorrelation,
+    reviewManifest: EvidenceReference
+  },
   Working: { correlation: IntegrationCandidateCorrelation }
 })
 export type IntegrationCandidateAgentReport = typeof IntegrationCandidateAgentReport.Type
+
+/** Immutable integration-agent proof that one exact candidate passed its review. */
+export const IntegrationReviewManifest = Schema.Struct({
+  candidateCommit: GitCommitSha,
+  correlation: IntegrationCandidateCorrelation,
+  formatVersion: Schema.Literal(1),
+  outcome: Schema.Literal("Passed")
+})
+export type IntegrationReviewManifest = typeof IntegrationReviewManifest.Type
 
 export const IntegrationCandidateAgentReportOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
   Schema.brand("IntegrationCandidateAgentReportOrdinal")
@@ -158,6 +179,7 @@ export const IntegrationCandidateConstructedEvent = Schema.TaggedStruct("Integra
   candidateCommit: GitCommitSha,
   correlation: IntegrationCandidateCorrelation,
   gitObservationAt: JournalPosition,
+  reviewManifest: EvidenceReference,
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
@@ -165,7 +187,8 @@ export const IntegrationCandidateConstructedEvent = Schema.TaggedStruct("Integra
 export const ConstructedIntegrationCandidateOccurrence = Schema.Struct({
   candidateCommit: GitCommitSha,
   constructedAt: JournalPosition,
-  correlation: IntegrationCandidateCorrelation
+  correlation: IntegrationCandidateCorrelation,
+  reviewManifest: EvidenceReference
 })
 export type ConstructedIntegrationCandidateOccurrence = typeof ConstructedIntegrationCandidateOccurrence.Type
 

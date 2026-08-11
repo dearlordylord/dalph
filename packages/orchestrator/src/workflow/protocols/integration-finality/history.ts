@@ -4,19 +4,23 @@ import { type JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { OperationId } from "../../identity.js"
 import type { WorkflowJournalEvent } from "../../registry/event.js"
+import type { FocusedTaskCompletionFactsObserved } from "../../task-tracker-facts/focused-completion-observation.js"
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
-import type { CompleteTaskTrackerFactsObserved } from "../../task-tracker-facts/observation.js"
 import {
   completionTaskClaimEquals,
-  freshCompletedTaskObservationEquals,
+  completionSuccessObservationEquals,
   completionClaimRequestLimit,
+  type CompletionClaimFinalityJournalEvent,
   type CompletionTaskClaim,
-  type FreshCompletedTaskObservation
+  type CompletionSuccessObservation
 } from "./events.js"
 import { targetPromotionCorrelationEquals } from "../target-promotion/events.js"
 import { causalPredecessorOperationIds } from "../../causal-history.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { isExactTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
+import { invalidCompletionTaskHistory } from "./completion-task-history.js"
+import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
 
 type ReplacementIntent = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimReplacementIntended" }>
 type ReplacementAttempt = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimReplacementAttemptIntended" }>
@@ -25,19 +29,7 @@ type DeletionIntent = Extract<WorkflowJournalEvent, { readonly _tag: "Completion
 type DeletionAttempt = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimDeletionAttemptIntended" }>
 type DeletionOutcome = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimDeleted" }>
 type Settlement = Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationFinalitySettled" }>
-type IntegrationFinalityEvent = Extract<
-  WorkflowJournalEvent,
-  {
-    readonly _tag:
-      | "CompletionClaimReplacementIntended"
-      | "CompletionClaimReplacementAttemptIntended"
-      | "CompletionClaimReplaced"
-      | "CompletionClaimDeletionIntended"
-      | "CompletionClaimDeletionAttemptIntended"
-      | "CompletionClaimDeleted"
-      | "IntegrationFinalitySettled"
-  }
->
+type IntegrationFinalityEvent = CompletionClaimFinalityJournalEvent
 
 export interface IntegrationFinalityHistoryIndexes {
   readonly replacementIntents: Map<OperationId, JournalRecord & { readonly event: ReplacementIntent }>
@@ -108,77 +100,58 @@ const exactPromotionPrior = (
       targetPromotionCorrelationEquals(event.correlation, claim.promotionCorrelation)
   )
 
-const taskCompletedSuccessfully = (
-  observation: CompleteTaskTrackerFactsObserved,
-  taskId: CompletionTaskClaim["plannedAttempt"]["taskId"]
-): boolean =>
-  observation.factFamilies[1].lifecycles.some(({ lifecycle, taskId: observedTaskId }) =>
-    [observedTaskId === taskId, lifecycle._tag === "CompletedSuccessfully"].every(Boolean)
-  )
-
-const completeObservationMatches = (
-  observation: CompleteTaskTrackerFactsObserved,
-  proof: FreshCompletedTaskObservation
-): boolean =>
-  [
-    observation.factFamilies.every(({ contentIdentity }) => contentIdentity === proof.trackerRevision),
-    taskCompletedSuccessfully(observation, proof.taskId)
-  ].every(Boolean)
-
-const trackerObservationFor = (
-  records: ReadonlyArray<JournalRecord>,
-  observation: FreshCompletedTaskObservation,
-  at: JournalPosition
-): Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }> | undefined => {
-  const observed = records.find((record) => record.position === observation.observedAt && record.position < at)
-  const observedEvent = observed?.event
-  if (observedEvent?._tag !== "TaskTrackerFactsObserved") return undefined
-  return observedEvent.operationId === observation.operationId ? observedEvent : undefined
+type FocusedFactsObservedEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }> & {
+  readonly observation: FocusedTaskCompletionFactsObserved
 }
 
-const completeObservationProofMatches = (
-  event: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>,
-  proof: FreshCompletedTaskObservation
-): boolean =>
-  event.observation._tag === "CompleteTaskTrackerFacts" &&
-  event.observation.operationId === event.operationId &&
-  completeObservationMatches(event.observation, proof)
+const focusedFactsMatchSuccessObservation = (
+  source: WorkflowJournalEvent | undefined,
+  observation: CompletionSuccessObservation
+): source is FocusedFactsObservedEvent => {
+  if (source?._tag !== "TaskTrackerFactsObserved" || source.observation._tag !== "FocusedTaskCompletionFacts") {
+    return false
+  }
+  const focused = source.observation
+  return [
+    source.operationId === observation.operationId,
+    focused.facts.operationId === observation.operationId,
+    completionTaskClaimEquals(focused.request.claim, observation.claim),
+    focused.request.taskId === observation.taskId,
+    focused.request.taskRevision === observation.taskRevision,
+    focused.facts.lifecycle === "CompletedSuccessfully",
+    focused.facts.targetMembership === "Member",
+    focused.facts.taskId === observation.taskId,
+    focused.facts.taskRevision === observation.taskRevision,
+    focused.facts.trackerRevision === observation.trackerRevision,
+    taskTrackerTargetKey(focused.target) === taskTrackerTargetKey(observation.target),
+    taskTrackerTargetKey(focused.facts.target) === taskTrackerTargetKey(observation.target)
+  ].every(Boolean)
+}
 
-const priorCompleteObservationFor = (
+const focusedTaskInObservation = (
   records: ReadonlyArray<JournalRecord>,
-  reconfirmation: Extract<
-    Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
-    { readonly _tag: "UnchangedTaskTrackerFactsReconfirmed" }
-  >,
-  before: JournalPosition
-): CompleteTaskTrackerFactsObserved | undefined => {
-  const priorFull = records.find(
-    (record) =>
-      record.position < before &&
-      record.event._tag === "TaskTrackerFactsObserved" &&
-      record.event.operationId === reconfirmation.priorFullObservationOperationId
+  observation: CompletionSuccessObservation,
+  at: JournalPosition
+): boolean => {
+  const source = records.find(({ position }) => position === observation.observedAt && position < at)
+  if (source === undefined || !focusedFactsMatchSuccessObservation(source.event, observation)) return false
+  const sourceEvent = source.event
+  return records.some(
+    ({ event, position }) =>
+      position < source.position &&
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadCompletionTaskFacts" &&
+      event.operation.operationId === sourceEvent.operationId &&
+      taskTrackerObservationMatchesRead(sourceEvent.observation, event.operation)
   )
-  const priorFullEvent = priorFull?.event
-  if (priorFullEvent?._tag !== "TaskTrackerFactsObserved") return undefined
-  /* v8 ignore next -- @preserve TaskTrackerFactsObserved's Schema already requires its outer and observation operation ids to match. */
-  if (priorFullEvent.operationId !== priorFullEvent.observation.operationId) return undefined
-  return priorFullEvent.observation._tag === "CompleteTaskTrackerFacts" ? priorFullEvent.observation : undefined
 }
 
 const completeTaskInObservation = (
   records: ReadonlyArray<JournalRecord>,
-  observation: FreshCompletedTaskObservation,
+  observation: CompletionSuccessObservation,
   at: JournalPosition
 ): boolean => {
-  const observedEvent = trackerObservationFor(records, observation, at)
-  if (observedEvent === undefined) return false
-  const observedObservation = observedEvent.observation
-  if (observedObservation._tag === "CompleteTaskTrackerFacts") {
-    return completeObservationProofMatches(observedEvent, observation)
-  }
-  if (observedObservation._tag !== "UnchangedTaskTrackerFactsReconfirmed") return false
-  const prior = priorCompleteObservationFor(records, observedObservation, observation.observedAt)
-  return prior === undefined ? false : completeObservationMatches(prior, observation)
+  return focusedTaskInObservation(records, observation, at)
 }
 
 const attemptsFor = <A extends ReplacementAttempt | DeletionAttempt>(
@@ -256,13 +229,16 @@ const invalidDeletionIntent = (
       candidate.event._tag === "CompletionClaimReplaced" &&
       completionTaskClaimEquals(candidate.event.claim, event.claim)
   )
-  return !duplicate &&
-    replacement !== undefined &&
-    replacementRecord !== undefined &&
-    replacementRecord.position < event.successObservation.observedAt &&
+  return [
+    !duplicate,
+    completionTaskClaimEquals(event.claim, event.successObservation.claim),
+    replacement !== undefined,
+    replacementRecord !== undefined,
+    replacementRecord !== undefined && replacementRecord.position < event.successObservation.observedAt,
     completeTaskInObservation(records, event.successObservation, record.position)
+  ].every(Boolean)
     ? undefined
-    : `completion-claim deletion intent ${event.operationId} lacks replacement and fresh tracker success`
+    : `completion-claim deletion intent ${event.operationId} lacks replacement and focused task-completion success`
 }
 
 const invalidDeletionAttempt = (
@@ -273,14 +249,17 @@ const invalidDeletionAttempt = (
   const intent = indexes.deletionIntents.get(event.operationId)
   const attempts = attemptsFor(indexes.deletionAttempts, event.operationId)
   const ordinal = Number(event.attemptOrdinal)
-  const valid =
+  const valid = [
+    intent !== undefined,
+    completionTaskClaimEquals(event.claim, event.successObservation.claim),
+    intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim),
     intent !== undefined &&
-    completionTaskClaimEquals(intent.event.claim, event.claim) &&
-    freshCompletedTaskObservationEquals(intent.event.successObservation, event.successObservation) &&
-    !indexes.deletionTerminals.has(event.operationId) &&
-    ordinal === attempts.size + 1 &&
-    ordinal <= completionClaimRequestLimit &&
+      completionSuccessObservationEquals(intent.event.successObservation, event.successObservation),
+    !indexes.deletionTerminals.has(event.operationId),
+    ordinal === attempts.size + 1,
+    ordinal <= completionClaimRequestLimit,
     !attempts.has(ordinal)
+  ].every(Boolean)
   attempts.set(ordinal, { ...record, event })
   return valid ? undefined : `completion-claim deletion attempt ${event.operationId} is not the next exact request`
 }
@@ -296,8 +275,9 @@ const invalidDeletionOutcome = (
   indexes.deletionTerminals.add(event.operationId)
   return !duplicate &&
     intent !== undefined &&
+    completionTaskClaimEquals(event.claim, event.successObservation.claim) &&
     completionTaskClaimEquals(intent.event.claim, event.claim) &&
-    freshCompletedTaskObservationEquals(intent.event.successObservation, event.successObservation) &&
+    completionSuccessObservationEquals(intent.event.successObservation, event.successObservation) &&
     completeTaskInObservation(records, event.successObservation, record.position)
     ? undefined
     : `completion-claim deletion outcome ${event.operationId} has no exact intent and fresh success`
@@ -317,7 +297,7 @@ const invalidSettlement = (
       candidate.event._tag === "CompletionClaimDeleted" &&
       candidate.event.operationId === event.deletionOperationId &&
       completionTaskClaimEquals(candidate.event.claim, event.claim) &&
-      freshCompletedTaskObservationEquals(candidate.event.successObservation, event.successObservation) &&
+      completionSuccessObservationEquals(candidate.event.successObservation, event.successObservation) &&
       completeTaskInObservation(records, event.successObservation, record.position)
   )
   const replaced = prior(records, record.position).some(
@@ -326,7 +306,7 @@ const invalidSettlement = (
       candidate.event.operationId === event.replacementOperationId &&
       completionTaskClaimEquals(candidate.event.claim, event.claim)
   )
-  return !duplicate && replaced && deleted
+  return !duplicate && completionTaskClaimEquals(event.claim, event.successObservation.claim) && replaced && deleted
     ? undefined
     : `integration finality settlement ${key} requires one exact deleted completion claim and fresh success`
 }
@@ -386,6 +366,9 @@ export const validateIntegrationFinalityHistoryRecord = (
   recordIdentityIssue: (detail: string) => void,
   recordSemanticIssue: (detail: string) => void
 ): void => {
+  const completionTaskIssue = invalidCompletionTaskHistory(record, records, runId)
+  if (completionTaskIssue?.kind === "Identity") recordIdentityIssue(completionTaskIssue.detail)
+  if (completionTaskIssue?.kind === "Semantic") recordSemanticIssue(completionTaskIssue.detail)
   const bindingIssue = invalidIntegrationFinalityRunBinding(record.event, runId)
   if (bindingIssue !== undefined) recordIdentityIssue(bindingIssue)
   const historyIssue = invalidIntegrationFinalityHistory(record, records, indexes)

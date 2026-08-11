@@ -21,6 +21,10 @@ import type { IntegrationCandidateConstructionState } from "../../workflow/proto
 import type { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import type { TargetPromotionState } from "../../workflow/protocols/target-promotion/protocol.js"
 import type { IntegrationFinalitySettledEvent } from "../../workflow/protocols/integration-finality/events.js"
+import type {
+  FocusedTaskCompletionFactsObserved,
+  TaskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
 import { RunFinalityDecision, type RunFinalityDecision as RunFinalityDecisionType } from "../frontier/run-finality.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
@@ -163,6 +167,10 @@ export type ExactWorkflowObligation =
 /** Process-local delivery standing derived from exact accepted protocol facts. */
 export type TicketDeliveryStanding =
   | { readonly _tag: "ProposedDelivery" }
+  | {
+      readonly _tag: "PromotedPrerequisiteReleasePending"
+      readonly prerequisiteTaskIds: readonly [TaskId, ...ReadonlyArray<TaskId>]
+    }
   | { readonly _tag: "ResponsibilitySituation"; readonly facts: ResponsibilityFreshFacts }
   | { readonly _tag: "ExactEvidenceConflict"; readonly evidenceIdentities: readonly [string, ...ReadonlyArray<string>] }
   | { readonly _tag: "AcceptedAwaitingIntegrationQueue"; readonly accepted: UnqueuedAcceptedResult }
@@ -221,6 +229,12 @@ export type ExactTicketDeliveryEvidence =
   | { readonly _tag: "AcceptedAwaitingIntegration"; readonly accepted: UnqueuedAcceptedResult }
   | { readonly _tag: "QueuedIntegration"; readonly responsibility: QueuedIntegrationResponsibility }
   | { readonly _tag: "StartedIntegration"; readonly responsibility: StartedIntegrationResponsibility }
+  /** One exact successful focused read and the position where its task-local facts became durable. */
+  | {
+      readonly _tag: "FocusedTaskCompletionSuccess"
+      readonly observed: TaskTrackerFactsObservedEvent & { readonly observation: FocusedTaskCompletionFactsObserved }
+      readonly recordedAt: JournalPosition
+    }
   | { readonly _tag: "IntegrationFinalitySettlement"; readonly settlement: IntegrationFinalitySettledEvent }
   | {
       readonly _tag: "IntegrationCandidate"

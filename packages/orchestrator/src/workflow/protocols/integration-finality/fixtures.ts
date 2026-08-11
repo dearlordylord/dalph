@@ -22,11 +22,17 @@ import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
+  makeFocusedTaskCompletionFactsObserved,
   makeCompleteTaskTrackerFactsObserved,
+  taskTrackerFactsObservedEvent,
   TaskTrackerFactsObservedEvent
 } from "../../task-tracker-facts/observation.js"
-import { makeTaskAttemptPlanOperation, makeTrackerGraphObservationOperation } from "../../registry/operation.js"
-import { TaskAttemptPlannedEvent, TaskClaimAcquiredEvent } from "../../registry/event.js"
+import {
+  makeCompletionTaskFactsObservationOperation,
+  makeTaskAttemptPlanOperation,
+  makeTrackerGraphObservationOperation
+} from "../../registry/operation.js"
+import { taskTrackerReadIntent, TaskAttemptPlannedEvent, TaskClaimAcquiredEvent } from "../../registry/event.js"
 import {
   IntegrationCandidateCorrelation,
   IntegrationCandidateId,
@@ -42,14 +48,22 @@ import {
 } from "../target-promotion/events.js"
 import { TargetVerificationPlanId, TargetVerificationRequestId } from "../target-verification/events.js"
 import { EvidenceDigest, EvidenceReference } from "../target-verification/evidence-store.js"
-import { CompletionTaskClaim, FreshCompletedTaskObservation } from "./events.js"
+import {
+  CompletionTaskClaim,
+  CompletionTaskConfirmationReadOrdinal,
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskRequestOrdinal,
+  completionTaskRequestFor,
+  FocusedCompletedTaskObservation,
+  FocusedTaskCompletionFacts
+} from "./events.js"
 
 /** Shared exact identities used by the focused completion-finality tests. */
 export const integrationFinalityFixture = (() => {
   const gitShaLength = 40
   const constructedPosition = 10
   const evidenceDigestLength = 64
-  const freshObservationPosition = 3
+  const focusedObservationPosition = 3
   const runId = RunId.make("integration-finality-test-run")
   const taskId = TaskId.make("integration-finality-task")
   const target = FixtureTarget.make("integration-finality-target")
@@ -60,7 +74,20 @@ export const integrationFinalityFixture = (() => {
   const expectedTargetHead = GitCommitSha.make("1".repeat(gitShaLength))
   const acceptedResultCommit = GitCommitSha.make("2".repeat(gitShaLength))
   const candidateCommit = GitCommitSha.make("3".repeat(gitShaLength))
+  const acceptanceManifest = EvidenceReference.make({
+    byteLength: 17,
+    digest: EvidenceDigest.make("b".repeat(evidenceDigestLength))
+  })
+  const reviewManifest = EvidenceReference.make({
+    byteLength: 18,
+    digest: EvidenceDigest.make("c".repeat(evidenceDigestLength))
+  })
+  const verificationManifest = EvidenceReference.make({
+    byteLength: 19,
+    digest: EvidenceDigest.make("a".repeat(evidenceDigestLength))
+  })
   const candidateCorrelation = IntegrationCandidateCorrelation.make({
+    acceptanceManifest,
     acceptedResultCommit,
     attemptId: AttemptId.make("integration-finality-attempt"),
     candidateId: IntegrationCandidateId.make("integration-finality-candidate"),
@@ -78,17 +105,16 @@ export const integrationFinalityFixture = (() => {
     requestId: TargetVerificationRequestId.make("integration-finality-verification")
   }
   const promotionCorrelation = TargetPromotionCorrelation.make({
+    acceptanceManifest,
     candidateCommit,
     candidateConstructedAt: JournalPosition.make(constructedPosition),
     candidateCorrelation,
     expectedTargetHead,
     integrationTarget,
+    reviewManifest,
     requestId: TargetPromotionRequestId.make(`target-promotion:${candidateCorrelation.candidateId}`),
     verificationCorrelation,
-    verificationManifest: EvidenceReference.make({
-      byteLength: 19,
-      digest: EvidenceDigest.make("a".repeat(evidenceDigestLength))
-    })
+    verificationManifest
   })
   const plannedAttempt = PlannedTaskAttempt.make({
     attemptId: candidateCorrelation.attemptId,
@@ -106,7 +132,14 @@ export const integrationFinalityFixture = (() => {
     taskId,
     token: ClaimToken.make("integration-finality-token")
   })
-  const claim = CompletionTaskClaim.make({ originalClaim: activeClaim, plannedAttempt, promotionCorrelation })
+  const claim = CompletionTaskClaim.make({
+    acceptanceManifest,
+    integrationReviewManifest: reviewManifest,
+    originalClaim: activeClaim,
+    plannedAttempt,
+    promotionCorrelation,
+    verificationManifest
+  })
   const promotionSuccess = TargetPromotionObservedSuccessEvent.make({
     basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
     correlation: promotionCorrelation,
@@ -137,11 +170,44 @@ export const integrationFinalityFixture = (() => {
   /* v8 ignore next -- @preserve The fixed acyclic single-task fixture is valid by construction; projection failure would be a fixture defect. */
   const snapshot = Option.getOrThrow(projected._tag === "Valid" ? Option.some(projected.snapshot) : Option.none())
   const graphObservation = makeCompleteTaskTrackerFactsObserved(graphOperation, snapshot)
-  const successObservation = FreshCompletedTaskObservation.make({
+  const completionRequest = completionTaskRequestFor(claim)
+  const focusedSuccessPurpose = CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
+    attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+    confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(1)
+  })
+  const focusedSuccessOperation = makeCompletionTaskFactsObservationOperation(
+    completionRequest,
+    target,
+    focusedSuccessPurpose
+  )
+  const focusedSuccessOperationId = focusedSuccessOperation.operationId
+  const focusedSuccessFacts = FocusedTaskCompletionFacts.make({
+    currentClaim: claim,
     lifecycle: "CompletedSuccessfully",
-    observedAt: JournalPosition.make(freshObservationPosition),
-    operationId: graphOperation.operationId,
+    operationId: focusedSuccessOperationId,
+    target,
+    targetMembership: "Member",
     taskId,
+    taskRevision: plannedAttempt.taskRevision,
+    trackerRevision,
+    unfinishedPrerequisiteTaskIds: []
+  })
+  const focusedSuccessFactsObservation = makeFocusedTaskCompletionFactsObserved(
+    focusedSuccessOperation,
+    focusedSuccessFacts
+  )
+  const focusedSuccessFactsEvent = {
+    ...taskTrackerFactsObservedEvent(focusedSuccessOperationId, focusedSuccessFactsObservation),
+    observation: focusedSuccessFactsObservation
+  }
+  const successObservation = FocusedCompletedTaskObservation.make({
+    claim,
+    lifecycle: "CompletedSuccessfully",
+    observedAt: JournalPosition.make(focusedObservationPosition),
+    operationId: focusedSuccessOperationId,
+    taskId,
+    taskRevision: plannedAttempt.taskRevision,
+    target,
     trackerRevision
   })
   return {
@@ -156,6 +222,9 @@ export const integrationFinalityFixture = (() => {
       version: workflowJournalEventVersion
     }),
     integrationTarget,
+    completionRequest,
+    focusedSuccessFactsReadIntentEvent: taskTrackerReadIntent(focusedSuccessOperation),
+    focusedSuccessFactsEvent,
     plannedAttempt,
     planOperation: makeTaskAttemptPlanOperation({
       operationId: OperationId.make("integration-finality-plan-attempt"),

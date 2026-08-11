@@ -1,5 +1,5 @@
 import { plannedAttemptExecutorCorrelation, type PlannedTaskAttempt } from "@dalph/contracts"
-import { Effect, Schema } from "effect"
+import { Effect, Match, Schema } from "effect"
 import { isExactTaskClaim, TaskClaimObservation } from "../../../authorities/task-tracker/claim-mutation.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { OperationId } from "../../identity.js"
@@ -96,19 +96,13 @@ const exactAbandonment = (
       sameAttemptChoiceSubject(record.event.subject, subject)
   )
 
-const evidenceProof = (evidence: PlannedAttemptExecutorEvidence): AttemptQuiescenceProof => {
-  switch (evidence.source._tag) {
-    case "CommandResponse":
-      return AttemptQuiescenceProof.cases.CommandResponse.make({ reportOrdinal: evidence.source.ordinal })
-    case "CommandProjection":
-      return AttemptQuiescenceProof.cases.CommandProjection.make({
-        commandOrdinal: evidence.source.commandOrdinal,
-        projectionOrdinal: evidence.source.projectionOrdinal
-      })
-    case "StateProjection":
-      return AttemptQuiescenceProof.cases.StateProjection.make({ observationOrdinal: evidence.source.ordinal })
-  }
-}
+const evidenceProof = (evidence: PlannedAttemptExecutorEvidence): AttemptQuiescenceProof =>
+  Match.valueTags(evidence.source, {
+    CommandResponse: ({ ordinal }) => AttemptQuiescenceProof.cases.CommandResponse.make({ reportOrdinal: ordinal }),
+    CommandProjection: ({ commandOrdinal, projectionOrdinal }) =>
+      AttemptQuiescenceProof.cases.CommandProjection.make({ commandOrdinal, projectionOrdinal }),
+    StateProjection: ({ ordinal }) => AttemptQuiescenceProof.cases.StateProjection.make({ observationOrdinal: ordinal })
+  })
 
 const unbrokenQuiescenceEvidence = (
   records: ReadonlyArray<JournalRecord>,

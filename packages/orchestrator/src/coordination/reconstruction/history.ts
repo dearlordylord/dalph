@@ -6,6 +6,7 @@ import { describeJournalEvent } from "../../workflow/registry/event-descriptor.j
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
+import { Match } from "effect"
 import {
   duplicateUnfinishedTaskAttemptIssue,
   type InvalidWorkflowJournalHistory,
@@ -457,20 +458,18 @@ const proofEvidenceFor = (
   prior: ReadonlyArray<JournalRecord>,
   event: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptImplementationAbandoned" }>
 ) =>
-  plannedAttemptExecutorEvidence(prior, event.subject.plannedAttempt).find((evidence) => {
-    switch (event.proof._tag) {
-      case "CommandResponse":
-        return evidence.source._tag === "CommandResponse" && evidence.source.ordinal === event.proof.reportOrdinal
-      case "CommandProjection":
-        return (
-          evidence.source._tag === "CommandProjection" &&
-          evidence.source.commandOrdinal === event.proof.commandOrdinal &&
-          evidence.source.projectionOrdinal === event.proof.projectionOrdinal
-        )
-      case "StateProjection":
-        return evidence.source._tag === "StateProjection" && evidence.source.ordinal === event.proof.observationOrdinal
-    }
-  })
+  plannedAttemptExecutorEvidence(prior, event.subject.plannedAttempt).find((evidence) =>
+    Match.valueTags(event.proof, {
+      CommandResponse: ({ reportOrdinal }) =>
+        evidence.source._tag === "CommandResponse" && evidence.source.ordinal === reportOrdinal,
+      CommandProjection: ({ commandOrdinal, projectionOrdinal }) =>
+        evidence.source._tag === "CommandProjection" &&
+        evidence.source.commandOrdinal === commandOrdinal &&
+        evidence.source.projectionOrdinal === projectionOrdinal,
+      StateProjection: ({ observationOrdinal }) =>
+        evidence.source._tag === "StateProjection" && evidence.source.ordinal === observationOrdinal
+    })
+  )
 
 const sameClaimObservation = (
   left: Extract<WorkflowJournalEvent, { readonly _tag: "StoppedAttemptClaimNoReleaseObserved" }>["observation"],

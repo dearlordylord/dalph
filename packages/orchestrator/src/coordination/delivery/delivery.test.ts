@@ -21,7 +21,8 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TaskLifecycle, TrackerRevision, TrackerSnapshot, type Task } from "../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
 import { OperationId } from "../../workflow/identity.js"
 import { delivery } from "./delivery.js"
 import { deliveryActionPlanning } from "./delivery-action-planning.js"
@@ -57,6 +58,16 @@ import {
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { frontierOf } from "./ticket-delivery-projection.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
+import { TargetPromotionState } from "../../workflow/protocols/target-promotion/state.js"
+import { journaledIntegrationEvidenceOf } from "./delivery-evidence.js"
+import { acceptedResultFixture } from "../../../test/support/evidence.js"
+import {
+  CompletionTaskIntendedEvent,
+  IntegrationFinalitySettledEvent
+} from "../../workflow/protocols/integration-finality/events.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 
 const policy = RunControlPolicy.make({
   revision: initialRunPolicyRevision,
@@ -155,6 +166,50 @@ const exactAttemptEvidence = (taskId: TaskId) => ({
     }
   }
 })
+
+const releaseChronologyEvidence = (focusedSuccessAt: number, settled = false) => {
+  const fixture = integrationFinalityFixture
+  const responsibility = StartedIntegrationResponsibility.make({
+    acceptedResult: acceptedResultFixture(fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit),
+    integrationTarget: fixture.integrationTarget,
+    plannedAttempt: fixture.plannedAttempt,
+    queuedAt: JournalPosition.make(2),
+    startedAt: JournalPosition.make(3)
+  })
+  const promotion = TargetPromotionState.cases.PromotionSucceeded.make({
+    basis: fixture.promotionSuccess.basis,
+    correlation: fixture.promotionCorrelation,
+    observation: fixture.promotionSuccess.observation
+  })
+  const focusedRecord: JournalRecord = {
+    event: fixture.focusedSuccessFactsEvent,
+    key: JournalRecordKey.make(`delivery-planning-focused-success:${focusedSuccessAt}`),
+    position: JournalPosition.make(focusedSuccessAt),
+    runId: fixture.runId
+  }
+  const completionIntentRecord: JournalRecord = {
+    event: CompletionTaskIntendedEvent.make({
+      request: fixture.completionRequest,
+      version: workflowJournalEventVersion
+    }),
+    key: JournalRecordKey.make(`delivery-planning-completion-intent:${focusedSuccessAt}`),
+    position: JournalPosition.make(focusedSuccessAt - 1),
+    runId: fixture.runId
+  }
+  const settlement = IntegrationFinalitySettledEvent.make({
+    claim: fixture.claim,
+    deletionOperationId: OperationId.make("issue-61-release-deletion"),
+    replacementOperationId: OperationId.make("issue-61-release-replacement"),
+    successObservation: fixture.successObservation,
+    version: workflowJournalEventVersion
+  })
+  return [
+    { _tag: "StartedIntegration" as const, responsibility },
+    { _tag: "TargetPromotion" as const, responsibility, state: promotion },
+    ...journaledIntegrationEvidenceOf([completionIntentRecord, focusedRecord]),
+    ...(settled ? [{ _tag: "IntegrationFinalitySettlement" as const, settlement }] : [])
+  ]
+}
 it.effect("assembles the literal delivery relation with honestly empty settlements", () =>
   Effect.gen(function* () {
     const layer = makeDeliveryRelationsLayer({
@@ -448,6 +503,93 @@ it.effect("derives one stable proposal from a persistent delivery consequence wi
     expect(first).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [lowerProposal] })
     expect(trackerProposals).toEqual([])
     expect(lowerProposal.actionIdentity._tag).toBe("FreshOperationIdRequired")
+  })
+)
+
+it.effect("keeps B out of actual proposals after settlement until focused A success precedes the releasing graph", () =>
+  Effect.gen(function* () {
+    const fixture = integrationFinalityFixture
+    const taskB = TaskId.make("issue-61-dependant-B")
+    const graphFor = (recordedAt: number) => {
+      const projected = TaskDagSnapshot.project(
+        TrackerSnapshot.make({
+          revision: TrackerRevision.make(`issue-61-release-graph:${recordedAt}`),
+          tasks: [
+            {
+              id: fixture.taskId,
+              lifecycle: TaskLifecycle.cases.CompletedSuccessfully.make({}),
+              parentTaskId: null,
+              prerequisiteIds: []
+            },
+            {
+              id: taskB,
+              lifecycle: TaskLifecycle.cases.Open.make({}),
+              parentTaskId: null,
+              prerequisiteIds: [fixture.taskId]
+            }
+          ]
+        })
+      )
+      if (projected._tag === "Invalid") return expect.fail("issue-61 proposal graph must be valid")
+      return TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make(`issue-61-release-graph:${recordedAt}`),
+          recordedAt: JournalPosition.make(recordedAt),
+          snapshot: projected.snapshot
+        })
+      })
+    }
+    const task: Task = {
+      id: taskB,
+      lifecycle: TaskLifecycle.cases.Open.make({}),
+      parentTaskId: null,
+      prerequisiteIds: [fixture.taskId]
+    }
+    const step = FreshWorkflowStep.AcquireTaskClaim({
+      predecessorOperationId: OperationId.make("issue-61-releasing-graph"),
+      task
+    })
+    const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+      taskId: taskB,
+      taskRevision: TaskRevision.make("issue-61-dependant-revision")
+    })
+    const proposal = deliveryProposalsOf({
+      acceptedOperationIds: new Set(),
+      fresh: [{ step, transition }],
+      runId: fixture.runId,
+      transitions: [transition]
+    }).ticketDelivery[0]
+    if (proposal === undefined) return yield* Effect.die("issue-61 fixture must derive B's fresh proposal")
+    const contributions = currentSignalOf({ deliverySettlement: [], issues: [], ticketDelivery: [proposal] })
+    const proposalsFor = (recordedAt: number, evidence: ReadonlyArray<TicketDeliveryEvidence>) => {
+      const layer = makeDeliveryRelationsLayer({
+        exactEvidence: currentSignalOf(evidence),
+        graph: currentSignalOf(graphFor(recordedAt)),
+        policy: currentSignalOf(policy),
+        proposalContributions: contributions
+      })
+      return Effect.gen(function* () {
+        const consequences = yield* delivery
+        return yield* (yield* deliveryActionPlanning(consequences)).get
+      }).pipe(Effect.provide(layer))
+    }
+
+    const exactEvidence = releaseChronologyEvidence(9)
+    const settledExactEvidence = releaseChronologyEvidence(9, true)
+    expect(yield* proposalsFor(8, exactEvidence)).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [] })
+    expect(yield* proposalsFor(8, settledExactEvidence)).toMatchObject({
+      _tag: "DeliveryProposalsAvailable",
+      proposals: []
+    })
+    expect(yield* proposalsFor(10, exactEvidence)).toMatchObject({
+      _tag: "DeliveryProposalsAvailable",
+      proposals: [proposal]
+    })
+    expect(yield* proposalsFor(10, settledExactEvidence)).toMatchObject({
+      _tag: "DeliveryProposalsAvailable",
+      proposals: [proposal]
+    })
+    expect(yield* proposalsFor(8, [])).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [proposal] })
   })
 )
 

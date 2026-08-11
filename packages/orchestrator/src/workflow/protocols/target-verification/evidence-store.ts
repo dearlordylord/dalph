@@ -1,21 +1,11 @@
+import { EvidenceDigest, EvidenceReference } from "@dalph/contracts"
 import { Context, Crypto, Effect, FileSystem, Layer, Ref, Schema } from "effect"
+
+export { EvidenceDigest, EvidenceReference } from "@dalph/contracts"
 
 /** Locates one evidence-store root, not a worktree or workflow journal. */
 export const EvidenceStoreLocator = Schema.NonEmptyString.pipe(Schema.brand("EvidenceStoreLocator"))
 export type EvidenceStoreLocator = typeof EvidenceStoreLocator.Type
-
-/** Identifies immutable bytes by their lowercase SHA-256 content digest. */
-export const EvidenceDigest = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)).pipe(
-  Schema.brand("EvidenceDigest")
-)
-export type EvidenceDigest = typeof EvidenceDigest.Type
-
-/** Describes one complete object accepted by the shared EvidenceStore boundary. */
-export const EvidenceReference = Schema.Struct({
-  byteLength: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  digest: EvidenceDigest
-})
-export type EvidenceReference = typeof EvidenceReference.Type
 
 /** Names the storage boundary operation that failed. */
 export const EvidenceStoreOperation = Schema.Literals(["EvidenceStore.put", "EvidenceStore.read"])

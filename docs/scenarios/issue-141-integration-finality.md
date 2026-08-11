@@ -156,12 +156,12 @@ tracker success.
 
 The maintainer sees A remain successful, KC removed, and no duplicate
 integration work. Dalph must not delete K or a foreign claim, settle before
-focused tracker success, infer dependant release from that focused fact, erase
-another task's responsibility, or record `RunTerminated`.
+a focused task read proves success, infer dependant release from that focused
+fact, erase another task's responsibility, or record `RunTerminated`.
 
 ### Acceptance tests and model checks
 
-- `deletes only the exact completion claim after fresh tracker success`
+- `deletes only the exact completion claim after focused task-completion success`
 - `settles only the promoted task and preserves unrelated responsibilities`
 - `does not terminate an empty frontier while completion settlement is pending`
 - `freshTrackerSuccessPrecedesCompletionClaimDeletion`
@@ -171,7 +171,7 @@ another task's responsibility, or record `RunTerminated`.
 
 ### Starting situation
 
-Fresh tracker authority already proves A completed successfully. The journal
+A focused task read already proves A completed successfully. The journal
 contains the exact KC deletion intent. The delete response is lost, the
 tracker rejects the request, or Dalph crashes before recording the outcome.
 

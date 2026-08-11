@@ -1,8 +1,8 @@
 import { Context, Effect, Layer, Ref } from "effect"
+import { acceptedResultFixture, evidenceReferenceFixture } from "../../../../test/support/evidence.js"
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import {
-  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -99,7 +99,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   taskRevision: TaskRevision.make("candidate-revision"),
   worktree: WorktreeLocator.make("/worktrees/candidate-attempt")
 })
-const acceptedResult = AcceptedResult.make({ commit: acceptedCommit })
+const acceptedResult = acceptedResultFixture(acceptedCommit)
 const started = StartedIntegrationResponsibility.make({
   acceptedResult,
   integrationTarget: target,
@@ -134,6 +134,7 @@ const runIntegrationCandidateConstruction = (
     : never
 ) => runIntegrationCandidateConstructionWithLimit(input[0], input[1], input[2], continuationLimit, input[3])
 const placeholderCorrelation = {
+  acceptanceManifest: acceptedResult.evidenceManifest,
   acceptedResultCommit: acceptedCommit,
   attemptId: plannedAttempt.attemptId,
   candidateId: IntegrationCandidateId.make("placeholder-candidate"),
@@ -268,7 +269,8 @@ const candidateBoundaryLayer = (
                 return report._tag === "Submitted"
                   ? IntegrationCandidateAgentReport.cases.Submitted.make({
                       candidateCommit: report.candidateCommit,
-                      correlation: request.correlation
+                      correlation: request.correlation,
+                      reviewManifest: report.reviewManifest
                     })
                   : report._tag === "Conflict"
                     ? IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: request.correlation })
@@ -334,6 +336,7 @@ it.effect("builds one candidate with current target first and accepted result se
         IntegrationCandidateAgentReport.cases.Submitted.make({
           candidateCommit: candidate,
           correlation: {
+            acceptanceManifest: acceptedResult.evidenceManifest,
             acceptedResultCommit: acceptedCommit,
             attemptId: plannedAttempt.attemptId,
             candidateId: IntegrationCandidateId.make("ignored-by-controlled-boundary"),
@@ -342,7 +345,8 @@ it.effect("builds one candidate with current target first and accepted result se
             integrationSessionId: IntegrationSessionId.make("ignored-by-controlled-boundary"),
             integrationTarget: target,
             runId
-          }
+          },
+          reviewManifest: evidenceReferenceFixture
         })
       ])
     ),
@@ -368,7 +372,8 @@ it.effect("does not verify or promote the constructed candidate", () =>
       candidateBoundaryLayer([
         IntegrationCandidateAgentReport.cases.Submitted.make({
           candidateCommit: candidate,
-          correlation: placeholderCorrelation
+          correlation: placeholderCorrelation,
+          reviewManifest: evidenceReferenceFixture
         })
       ])
     ),
@@ -402,6 +407,7 @@ it.effect("keeps the first submitted candidate when later commits appear", () =>
         IntegrationCandidateAgentReport.cases.Submitted.make({
           candidateCommit: candidate,
           correlation: {
+            acceptanceManifest: acceptedResult.evidenceManifest,
             acceptedResultCommit: acceptedCommit,
             attemptId: plannedAttempt.attemptId,
             candidateId: IntegrationCandidateId.make("ignored-by-controlled-boundary"),
@@ -410,11 +416,13 @@ it.effect("keeps the first submitted candidate when later commits appear", () =>
             integrationSessionId: IntegrationSessionId.make("ignored-by-controlled-boundary"),
             integrationTarget: target,
             runId
-          }
+          },
+          reviewManifest: evidenceReferenceFixture
         }),
         IntegrationCandidateAgentReport.cases.Submitted.make({
           candidateCommit: GitCommitSha.make("5".repeat(40)),
           correlation: {
+            acceptanceManifest: acceptedResult.evidenceManifest,
             acceptedResultCommit: acceptedCommit,
             attemptId: plannedAttempt.attemptId,
             candidateId: IntegrationCandidateId.make("ignored-by-controlled-boundary"),
@@ -423,7 +431,8 @@ it.effect("keeps the first submitted candidate when later commits appear", () =>
             integrationSessionId: IntegrationSessionId.make("ignored-by-controlled-boundary"),
             integrationTarget: target,
             runId
-          }
+          },
+          reviewManifest: evidenceReferenceFixture
         })
       ])
     ),
@@ -462,7 +471,8 @@ it.effect("reopens an ambiguously constructed candidate before retrying it", () 
       candidateBoundaryLayer([
         IntegrationCandidateAgentReport.cases.Submitted.make({
           candidateCommit: candidate,
-          correlation: placeholderCorrelation
+          correlation: placeholderCorrelation,
+          reviewManifest: evidenceReferenceFixture
         })
       ])
     ),
@@ -523,7 +533,8 @@ it.effect("keeps conflict edits bound to the same candidate and integration sess
         IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: placeholderCorrelation }),
         IntegrationCandidateAgentReport.cases.Submitted.make({
           candidateCommit: candidate,
-          correlation: placeholderCorrelation
+          correlation: placeholderCorrelation,
+          reviewManifest: evidenceReferenceFixture
         })
       ])
     ),
@@ -555,7 +566,8 @@ it.effect("continues the fixed session after a later target rewrite observation"
         IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: placeholderCorrelation }),
         IntegrationCandidateAgentReport.cases.Submitted.make({
           candidateCommit: candidate,
-          correlation: placeholderCorrelation
+          correlation: placeholderCorrelation,
+          reviewManifest: evidenceReferenceFixture
         })
       ])
     ),
@@ -614,7 +626,8 @@ it.effect("preserves conflicting candidate work across restart", () =>
         candidateBoundaryLayer([
           IntegrationCandidateAgentReport.cases.Submitted.make({
             candidateCommit: candidate,
-            correlation: placeholderCorrelation
+            correlation: placeholderCorrelation,
+            reviewManifest: evidenceReferenceFixture
           })
         ])
       )
@@ -685,11 +698,13 @@ it.effect(
           [
             IntegrationCandidateAgentReport.cases.Submitted.make({
               candidateCommit: candidate,
-              correlation: placeholderCorrelation
+              correlation: placeholderCorrelation,
+              reviewManifest: evidenceReferenceFixture
             }),
             IntegrationCandidateAgentReport.cases.Submitted.make({
               candidateCommit: GitCommitSha.make("5".repeat(40)),
-              correlation: placeholderCorrelation
+              correlation: placeholderCorrelation,
+              reviewManifest: evidenceReferenceFixture
             })
           ],
           [
@@ -722,7 +737,8 @@ it.effect("reconciles a limit-reaching Git observation after a crash before anot
         ordinal: correctedOrdinal,
         report: IntegrationCandidateAgentReport.cases.Submitted.make({
           candidateCommit: correctedCandidate,
-          correlation: intent.correlation
+          correlation: intent.correlation,
+          reviewManifest: evidenceReferenceFixture
         }),
         version: workflowJournalEventVersion
       })
@@ -755,7 +771,8 @@ it.effect("reconciles a limit-reaching Git observation after a crash before anot
         [
           IntegrationCandidateAgentReport.cases.Submitted.make({
             candidateCommit: candidate,
-            correlation: placeholderCorrelation
+            correlation: placeholderCorrelation,
+            reviewManifest: evidenceReferenceFixture
           })
         ],
         [IntegrationCandidateGitObservation.cases.Commit.make({ directParents: [] })]
@@ -786,7 +803,11 @@ it.effect("returns a missing or non-commit submission to the same integration ag
     Effect.provide(
       candidateBoundaryLayer(
         [candidate, GitCommitSha.make("5".repeat(40)), GitCommitSha.make("6".repeat(40))].map((candidateCommit) =>
-          IntegrationCandidateAgentReport.cases.Submitted.make({ candidateCommit, correlation: placeholderCorrelation })
+          IntegrationCandidateAgentReport.cases.Submitted.make({
+            candidateCommit,
+            correlation: placeholderCorrelation,
+            reviewManifest: evidenceReferenceFixture
+          })
         ),
         [
           IntegrationCandidateGitObservation.cases.Missing.make({}),
@@ -822,7 +843,8 @@ it.effect("fails closed before Git and preserves involved sessions without autom
             correlation: {
               ...placeholderCorrelation,
               candidateResource: IntegrationCandidateResourceLocator.make("/candidate-resources/foreign")
-            }
+            },
+            reviewManifest: evidenceReferenceFixture
           })
         ],
         undefined,
@@ -859,7 +881,8 @@ it.effect(
           [
             IntegrationCandidateAgentReport.cases.Submitted.make({
               candidateCommit: candidate,
-              correlation: placeholderCorrelation
+              correlation: placeholderCorrelation,
+              reviewManifest: evidenceReferenceFixture
             })
           ],
           [
@@ -892,7 +915,8 @@ it.effect("resolves a later readable invalid Git result through same-session cor
         [
           IntegrationCandidateAgentReport.cases.Submitted.make({
             candidateCommit: candidate,
-            correlation: placeholderCorrelation
+            correlation: placeholderCorrelation,
+            reviewManifest: evidenceReferenceFixture
           })
         ],
         [
@@ -927,7 +951,11 @@ it.effect("preserves non-convergent work and leaves the task incomplete after co
     Effect.provide(
       candidateBoundaryLayer(
         [candidate, GitCommitSha.make("5".repeat(40))].map((candidateCommit) =>
-          IntegrationCandidateAgentReport.cases.Submitted.make({ candidateCommit, correlation: placeholderCorrelation })
+          IntegrationCandidateAgentReport.cases.Submitted.make({
+            candidateCommit,
+            correlation: placeholderCorrelation,
+            reviewManifest: evidenceReferenceFixture
+          })
         ),
         [
           IntegrationCandidateGitObservation.cases.Missing.make({}),
@@ -960,7 +988,11 @@ it.effect("releases the integration target after non-convergence so unrelated wo
     Effect.provide(
       candidateBoundaryLayer(
         [candidate, GitCommitSha.make("5".repeat(40))].map((candidateCommit) =>
-          IntegrationCandidateAgentReport.cases.Submitted.make({ candidateCommit, correlation: placeholderCorrelation })
+          IntegrationCandidateAgentReport.cases.Submitted.make({
+            candidateCommit,
+            correlation: placeholderCorrelation,
+            reviewManifest: evidenceReferenceFixture
+          })
         ),
         [
           IntegrationCandidateGitObservation.cases.Missing.make({}),

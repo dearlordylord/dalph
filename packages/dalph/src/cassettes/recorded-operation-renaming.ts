@@ -1,5 +1,12 @@
+import { Match } from "effect"
 import type { AttemptId, PlannedTaskAttempt, RunId, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
-import type { ClaimToken, OperationId, WorkflowOperation } from "@dalph/orchestrator"
+import {
+  completionTaskFocusedReadOperationIdFor,
+  type ClaimToken,
+  type CompletionTaskRequest,
+  type OperationId,
+  type WorkflowOperation
+} from "@dalph/orchestrator"
 
 export interface RecordedOperationIdentityMaps {
   readonly attemptIds: ReadonlyMap<AttemptId, AttemptId>
@@ -29,11 +36,12 @@ export const renamePlannedAttempt = (
 // eslint-disable-next-line complexity -- Closed operation variants must explicitly declare which identities are renamed or preserved.
 export const renameWorkflowOperation = (
   operation: WorkflowOperation,
-  maps: RecordedOperationIdentityMaps
-): WorkflowOperation => {
-  switch (operation._tag) {
-    case "AcquireTaskClaim":
-      return {
+  maps: RecordedOperationIdentityMaps,
+  renameCompletionRequest: (request: CompletionTaskRequest) => CompletionTaskRequest
+): WorkflowOperation =>
+  Match.value(operation).pipe(
+    Match.tagsExhaustive({
+      AcquireTaskClaim: (operation) => ({
         ...operation,
         acquisition: {
           ...operation.acquisition,
@@ -41,9 +49,8 @@ export const renameWorkflowOperation = (
           token: renamed(operation.acquisition.token, maps.claimTokens)
         },
         predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
-      }
-    case "ReleaseTaskClaim":
-      return {
+      }),
+      ReleaseTaskClaim: (operation) => ({
         ...operation,
         predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps),
         release: {
@@ -54,24 +61,54 @@ export const renameWorkflowOperation = (
           },
           operationId: renamed(operation.release.operationId, maps.operationIds)
         }
-      }
-    case "ReadTaskClaim":
-    case "ReadTaskWorkSpecification":
-    case "ReadTrackerGraph":
-      return {
+      }),
+      ReadCompletionTaskFacts: (operation) => ({
+        ...operation,
+        operationId: completionTaskFocusedReadOperationIdFor(
+          renameCompletionRequest(operation.request),
+          operation.purpose
+        ),
+        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps),
+        request: renameCompletionRequest(operation.request)
+      }),
+      ReadTaskClaim: (operation) => ({
         ...operation,
         operationId: renamed(operation.operationId, maps.operationIds),
         predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
-      }
-    case "RecordTaskAttemptPlan":
-    case "ReadTargetLineage":
-    case "ReadTaskWorktree":
-    case "ReconcileTaskWorktree":
-      return {
+      }),
+      ReadTaskWorkSpecification: (operation) => ({
+        ...operation,
+        operationId: renamed(operation.operationId, maps.operationIds),
+        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
+      }),
+      ReadTrackerGraph: (operation) => ({
+        ...operation,
+        operationId: renamed(operation.operationId, maps.operationIds),
+        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
+      }),
+      RecordTaskAttemptPlan: (operation) => ({
         ...operation,
         operationId: renamed(operation.operationId, maps.operationIds),
         plannedAttempt: renamePlannedAttempt(operation.plannedAttempt, maps),
         predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
-      }
-  }
-}
+      }),
+      ReadTargetLineage: (operation) => ({
+        ...operation,
+        operationId: renamed(operation.operationId, maps.operationIds),
+        plannedAttempt: renamePlannedAttempt(operation.plannedAttempt, maps),
+        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
+      }),
+      ReadTaskWorktree: (operation) => ({
+        ...operation,
+        operationId: renamed(operation.operationId, maps.operationIds),
+        plannedAttempt: renamePlannedAttempt(operation.plannedAttempt, maps),
+        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
+      }),
+      ReconcileTaskWorktree: (operation) => ({
+        ...operation,
+        operationId: renamed(operation.operationId, maps.operationIds),
+        plannedAttempt: renamePlannedAttempt(operation.plannedAttempt, maps),
+        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
+      })
+    })
+  )

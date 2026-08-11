@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Match, Schema } from "effect"
 import { PlannedTaskAttempt, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import {
   CompetingWorktreeRegistrations,
@@ -34,30 +34,27 @@ export type PlannedAttemptWorktreeObservation = typeof PlannedAttemptWorktreeObs
 export const plannedAttemptWorktreeObservationMatchesPlan = (
   observation: PlannedAttemptWorktreeObservation,
   plannedAttempt: PlannedTaskAttempt
-): boolean => {
-  switch (observation._tag) {
-    case "AttemptWorktreeLost":
-      return plannedTaskAttemptEquivalence(observation.plannedAttempt, plannedAttempt)
-    case "CompetingWorktreeRegistrations":
-      return (
-        observation.plannedBranch === plannedAttempt.branch && observation.plannedWorktree === plannedAttempt.worktree
-      )
-    case "ConflictingWorktreeRegistration":
-      return observation.plannedBranch === plannedAttempt.branch && observation.worktree === plannedAttempt.worktree
-    case "ContradictoryWorktreeState":
-    case "UntrackedWorktreePath":
-      return observation.worktree === plannedAttempt.worktree
-    case "ForeignWorktreeRegistration":
-      return observation.branch === plannedAttempt.branch && observation.plannedWorktree === plannedAttempt.worktree
-    case "PlannedWorktreeReady":
-    case "WorktreeBaseMismatch":
-      return (
-        observation.baseSha === plannedAttempt.baseSha &&
-        observation.branch === plannedAttempt.branch &&
-        observation.worktree === plannedAttempt.worktree
-      )
-  }
-}
+): boolean =>
+  Match.valueTags(observation, {
+    AttemptWorktreeLost: ({ plannedAttempt: observedAttempt }) =>
+      plannedTaskAttemptEquivalence(observedAttempt, plannedAttempt),
+    CompetingWorktreeRegistrations: (observation) =>
+      observation.plannedBranch === plannedAttempt.branch && observation.plannedWorktree === plannedAttempt.worktree,
+    ConflictingWorktreeRegistration: (observation) =>
+      observation.plannedBranch === plannedAttempt.branch && observation.worktree === plannedAttempt.worktree,
+    ContradictoryWorktreeState: ({ worktree }) => worktree === plannedAttempt.worktree,
+    UntrackedWorktreePath: ({ worktree }) => worktree === plannedAttempt.worktree,
+    ForeignWorktreeRegistration: (observation) =>
+      observation.branch === plannedAttempt.branch && observation.plannedWorktree === plannedAttempt.worktree,
+    PlannedWorktreeReady: (observation) =>
+      observation.baseSha === plannedAttempt.baseSha &&
+      observation.branch === plannedAttempt.branch &&
+      observation.worktree === plannedAttempt.worktree,
+    WorktreeBaseMismatch: (observation) =>
+      observation.baseSha === plannedAttempt.baseSha &&
+      observation.branch === plannedAttempt.branch &&
+      observation.worktree === plannedAttempt.worktree
+  })
 
 export const observePlannedAttemptWorktree = Effect.fn("GitWorktree.observePlannedAttemptWorktree")(function* (
   git: GitWorktreeService,

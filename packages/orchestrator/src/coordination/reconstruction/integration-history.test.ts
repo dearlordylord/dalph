@@ -1,22 +1,39 @@
 import { describe, expect, it } from "vitest"
+import { acceptedResultFixture, evidenceReferenceFixture } from "../../../test/support/evidence.js"
 import {
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
-  RunId
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
 } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
+  CandidateContinuationLimit,
+  CandidateCorrectionLimit,
+  IntegrationCandidateAgentReport,
+  IntegrationCandidateAgentReportedEvent,
+  IntegrationCandidateAgentReportOrdinal,
+  IntegrationCandidateConstructionIntendedEvent,
   IntegrationCandidateConstructedEvent,
+  IntegrationCandidateCorrelation,
+  IntegrationCandidateGitObservation,
+  IntegrationCandidateGitObservedEvent,
   IntegrationCandidateId,
   IntegrationCandidateResourceLocator,
   IntegrationSessionId,
   type ConstructedIntegrationCandidateOccurrence
 } from "../../workflow/protocols/integration-candidate-construction/events.js"
+import { IntegrationStartedEvent } from "../../workflow/protocols/integration-admission/events.js"
 import { EvidenceDigest, EvidenceReference } from "../../workflow/protocols/target-verification/evidence-store.js"
 import {
   TargetVerificationEvidenceSealedEvent,
@@ -28,6 +45,7 @@ import {
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
   TargetPromotionAttemptReason,
+  TargetPromotionCorrelation,
   TargetPromotionIntendedEvent,
   TargetPromotionNonConvergenceEvent,
   TargetPromotionNonConvergenceObservation,
@@ -50,6 +68,7 @@ const candidate: ConstructedIntegrationCandidateOccurrence = {
   candidateCommit: GitCommitSha.make("4".repeat(40)),
   constructedAt: JournalPosition.make(11),
   correlation: {
+    acceptanceManifest: evidenceReferenceFixture,
     acceptedResultCommit: GitCommitSha.make("3".repeat(40)),
     attemptId: AttemptId.make("promotion-history-attempt"),
     candidateId: IntegrationCandidateId.make("promotion-history-candidate"),
@@ -61,18 +80,22 @@ const candidate: ConstructedIntegrationCandidateOccurrence = {
       repository: GitRepositoryLocator.make("/repositories/promotion-history.git")
     }),
     runId
-  }
+  },
+  reviewManifest: evidenceReferenceFixture
 }
 const verificationCorrelation = targetVerificationCorrelationFor(
   candidate,
   TargetVerificationPlanId.make("promotion-history-plan")
 )
 const manifest = EvidenceReference.make({ byteLength: 42, digest: EvidenceDigest.make("a".repeat(64)) })
+const changedByteLength = (reference: EvidenceReference): EvidenceReference =>
+  EvidenceReference.make({ byteLength: reference.byteLength + 1, digest: reference.digest })
 const promotionCorrelation = targetPromotionRequestFor(candidate, { correlation: verificationCorrelation, manifest })
 const constructed = IntegrationCandidateConstructedEvent.make({
   candidateCommit: candidate.candidateCommit,
   correlation: candidate.correlation,
   gitObservationAt: JournalPosition.make(10),
+  reviewManifest: candidate.reviewManifest,
   version: workflowJournalEventVersion
 })
 
@@ -151,6 +174,149 @@ const attempt = (ordinal: number, position: number) =>
       version: workflowJournalEventVersion
     })
   )
+
+describe("integration evidence history", () => {
+  const plannedAttempt = PlannedTaskAttempt.make({
+    attemptId: candidate.correlation.attemptId,
+    baseSha: GitCommitSha.make("1".repeat(40)),
+    branch: TaskBranchRef.make("refs/heads/dalph/promotion-history-attempt"),
+    executor: TaskExecutorLocator.make("executor:controlled-fake"),
+    runId,
+    taskId: TaskId.make("promotion-history-task"),
+    taskRevision: TaskRevision.make("promotion-history-revision"),
+    worktree: WorktreeLocator.make("/worktrees/promotion-history-attempt")
+  })
+  const acceptedResult = acceptedResultFixture(candidate.correlation.acceptedResultCommit)
+  const startedAt = JournalPosition.make(9)
+  const responsibilityBeganAt = JournalPosition.make(8)
+
+  const seedIntegrationStart = (historyIndexes: IntegrationHistoryIndexes) =>
+    historyIndexes.integrationStarted.set(
+      startedAt,
+      IntegrationStartedEvent.make({
+        acceptedResult,
+        integrationTarget: candidate.correlation.integrationTarget,
+        plannedAttempt,
+        responsibilityBeganAt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+  const candidateIntent = (correlation: IntegrationCandidateCorrelation) =>
+    IntegrationCandidateConstructionIntendedEvent.make({
+      continuationLimit: CandidateContinuationLimit.make(2),
+      correctionLimit: CandidateCorrectionLimit.make(2),
+      correlation,
+      plannedAttempt,
+      responsibilityBeganAt,
+      startedAt,
+      version: workflowJournalEventVersion
+    })
+
+  it("accepts the exact accepted and submitted evidence through candidate construction", () => {
+    const historyIndexes = indexes()
+    seedIntegrationStart(historyIndexes)
+    const submissionAt = JournalPosition.make(11)
+    const gitObservationAt = JournalPosition.make(12)
+    const result = validate(historyIndexes, [
+      record(10, candidateIntent(candidate.correlation)),
+      record(
+        11,
+        IntegrationCandidateAgentReportedEvent.make({
+          expectedCorrelation: candidate.correlation,
+          ordinal: IntegrationCandidateAgentReportOrdinal.make(1),
+          report: IntegrationCandidateAgentReport.cases.Submitted.make({
+            candidateCommit: candidate.candidateCommit,
+            correlation: candidate.correlation,
+            reviewManifest: candidate.reviewManifest
+          }),
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        12,
+        IntegrationCandidateGitObservedEvent.make({
+          candidateCommit: candidate.candidateCommit,
+          correlation: candidate.correlation,
+          observation: IntegrationCandidateGitObservation.cases.Commit.make({
+            directParents: [candidate.correlation.expectedTargetHead, candidate.correlation.acceptedResultCommit]
+          }),
+          submissionAt,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        13,
+        IntegrationCandidateConstructedEvent.make({
+          candidateCommit: candidate.candidateCommit,
+          correlation: candidate.correlation,
+          gitObservationAt,
+          reviewManifest: candidate.reviewManifest,
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+
+    expect(result).toEqual({ identityIssues: [], semanticIssues: [] })
+  })
+
+  it("rejects a candidate intent that substitutes the accepted evidence byte length", () => {
+    const historyIndexes = indexes()
+    seedIntegrationStart(historyIndexes)
+    const correlation = IntegrationCandidateCorrelation.make({
+      ...candidate.correlation,
+      acceptanceManifest: changedByteLength(acceptedResult.evidenceManifest)
+    })
+    const result = validate(historyIndexes, [record(10, candidateIntent(correlation))])
+
+    expect(result.semanticIssues).toEqual([expect.stringContaining("no exact earlier integration start")])
+  })
+
+  it("rejects a constructed candidate that substitutes the submitted review evidence byte length", () => {
+    const historyIndexes = indexes()
+    const submissionAt = JournalPosition.make(9)
+    const gitObservationAt = JournalPosition.make(10)
+    historyIndexes.integrationCandidateSubmissions.set(
+      submissionAt,
+      IntegrationCandidateAgentReportedEvent.make({
+        expectedCorrelation: candidate.correlation,
+        ordinal: IntegrationCandidateAgentReportOrdinal.make(1),
+        report: IntegrationCandidateAgentReport.cases.Submitted.make({
+          candidateCommit: candidate.candidateCommit,
+          correlation: candidate.correlation,
+          reviewManifest: candidate.reviewManifest
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
+    historyIndexes.integrationCandidateGitObservations.set(
+      gitObservationAt,
+      IntegrationCandidateGitObservedEvent.make({
+        candidateCommit: candidate.candidateCommit,
+        correlation: candidate.correlation,
+        observation: IntegrationCandidateGitObservation.cases.Commit.make({
+          directParents: [candidate.correlation.expectedTargetHead, candidate.correlation.acceptedResultCommit]
+        }),
+        submissionAt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const result = validate(historyIndexes, [
+      record(
+        11,
+        IntegrationCandidateConstructedEvent.make({
+          candidateCommit: candidate.candidateCommit,
+          correlation: candidate.correlation,
+          gitObservationAt,
+          reviewManifest: changedByteLength(candidate.reviewManifest),
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+
+    expect(result.semanticIssues).toEqual([expect.stringContaining("no exact Git observation")])
+  })
+})
 
 describe("target promotion history", () => {
   it("assigns stable registry keys to promotion chronology", () => {
@@ -243,6 +409,21 @@ describe("target promotion history", () => {
 
   it("rejects promotion without the exact earlier sealed Passed verification", () => {
     const result = validate(indexes(), [intentRecord])
+
+    expect(result.semanticIssues).toEqual([
+      expect.stringContaining("no exact constructed candidate and earlier sealed Passed verification")
+    ])
+  })
+
+  it("rejects a promotion that substitutes the constructed review evidence byte length", () => {
+    const substituted = TargetPromotionCorrelation.make({
+      ...promotionCorrelation,
+      reviewManifest: changedByteLength(candidate.reviewManifest)
+    })
+    const result = validate(indexes(), [
+      ...verificationRecords(),
+      record(14, TargetPromotionIntendedEvent.make({ correlation: substituted, version: workflowJournalEventVersion }))
+    ])
 
     expect(result.semanticIssues).toEqual([
       expect.stringContaining("no exact constructed candidate and earlier sealed Passed verification")

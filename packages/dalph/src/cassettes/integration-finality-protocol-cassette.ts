@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- The cassette seam keeps the exact boundary script and production protocol together. */
-import { Effect, Ref } from "effect"
+import { Effect, Match, Ref } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -26,6 +26,10 @@ import {
   CompletionClaimDeletionIntendedEvent,
   CompletionClaimDeletionFailure,
   CompletionClaimReplacementFailure,
+  CompletionTaskAuthorizationReadOrdinal,
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskIntendedEvent,
+  CompletionTaskRequestOrdinal,
   CompletionTaskClaim,
   controlledCompletionClaimBoundaryLayerFrom,
   completionClaimDeletionRequestFor,
@@ -35,7 +39,7 @@ import {
   describeJournalEvent,
   EvidenceDigest,
   EvidenceReference,
-  FreshCompletedTaskObservation,
+  FocusedCompletedTaskObservation,
   FrontierExplanation,
   FixtureTarget,
   InRunJournal,
@@ -45,11 +49,10 @@ import {
   IntegrationSessionId,
   JournalPosition,
   JournalRecord,
-  makeCompleteTaskTrackerFactsObserved,
   makeTaskAttemptPlanOperation,
-  makeTrackerGraphObservationOperation,
   OperationId,
-  projectTrackerSnapshot,
+  completionTaskRequestFor,
+  readCompletionFocusedFacts,
   deriveRunFinalityDecision,
   runCompletionClaimDeletionProtocol,
   runCompletionClaimReplacementProtocol,
@@ -63,9 +66,7 @@ import {
   TargetVerificationRequestId,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
-  TaskLifecycle,
-  taskTrackerReadIntent,
-  TaskTrackerFactsObservedEvent,
+  type CompletionTaskBoundaryService,
   type TrackerTarget,
   TrackerRevision,
   type WorkflowJournalEvent,
@@ -93,121 +94,111 @@ const initialAttemptPosition = 2
 const initialPromotionPosition = 3
 const noInitialRecords = (): ReadonlyArray<JournalRecord> | null => null
 
-const makePreparedFinality = Effect.fn("IntegrationFinalityProtocolCassette.makePreparedFinality")(function* () {
-  const runId = RunId.make("integration-finality-protocol-cassette-run")
-  const taskId = TaskId.make("integration-finality-protocol-cassette-task")
-  const target = FixtureTarget.make("integration-finality-protocol-cassette-target")
-  const integrationTarget = IntegrationTarget.make({
-    ref: IntegrationTargetRef.make("refs/heads/main"),
-    repository: GitRepositoryLocator.make("/repositories/integration-finality-protocol.git")
-  })
-  const expectedTargetHead = GitCommitSha.make("1".repeat(gitShaLength))
-  const candidateCommit = GitCommitSha.make("3".repeat(gitShaLength))
-  const candidateCorrelation = IntegrationCandidateCorrelation.make({
-    acceptedResultCommit: GitCommitSha.make("2".repeat(gitShaLength)),
-    attemptId: AttemptId.make("integration-finality-protocol-attempt"),
-    candidateId: IntegrationCandidateId.make("integration-finality-protocol-candidate"),
-    candidateResource: IntegrationCandidateResourceLocator.make("/candidate/integration-finality-protocol"),
-    expectedTargetHead,
-    integrationSessionId: IntegrationSessionId.make("integration-finality-protocol-session"),
-    integrationTarget,
-    runId
-  })
-  const verificationCorrelation = TargetVerificationCorrelation.make({
-    candidateCommit,
-    candidateCorrelation,
-    candidateConstructedAt: JournalPosition.make(candidateConstructedPosition),
-    planId: TargetVerificationPlanId.make("integration-finality-protocol-plan"),
-    requestId: TargetVerificationRequestId.make("integration-finality-protocol-verification")
-  })
-  const promotionCorrelation = TargetPromotionCorrelation.make({
-    candidateCommit,
-    candidateConstructedAt: JournalPosition.make(candidateConstructedPosition),
-    candidateCorrelation,
-    expectedTargetHead,
-    integrationTarget,
-    requestId: TargetPromotionRequestId.make(`target-promotion:${candidateCorrelation.candidateId}`),
-    verificationCorrelation,
-    verificationManifest: EvidenceReference.make({
+const makePreparedFinality = Effect.fn("IntegrationFinalityProtocolCassette.makePreparedFinality")(() =>
+  Effect.sync(() => {
+    const runId = RunId.make("integration-finality-protocol-cassette-run")
+    const taskId = TaskId.make("integration-finality-protocol-cassette-task")
+    const target = FixtureTarget.make("integration-finality-protocol-cassette-target")
+    const integrationTarget = IntegrationTarget.make({
+      ref: IntegrationTargetRef.make("refs/heads/main"),
+      repository: GitRepositoryLocator.make("/repositories/integration-finality-protocol.git")
+    })
+    const expectedTargetHead = GitCommitSha.make("1".repeat(gitShaLength))
+    const candidateCommit = GitCommitSha.make("3".repeat(gitShaLength))
+    const acceptanceManifest = EvidenceReference.make({
+      byteLength: 1,
+      digest: EvidenceDigest.make("a".repeat(evidenceDigestLength))
+    })
+    const reviewManifest = EvidenceReference.make({
+      byteLength: 1,
+      digest: EvidenceDigest.make("b".repeat(evidenceDigestLength))
+    })
+    const verificationManifest = EvidenceReference.make({
       byteLength: 1,
       digest: EvidenceDigest.make("d".repeat(evidenceDigestLength))
     })
+    const candidateCorrelation = IntegrationCandidateCorrelation.make({
+      acceptanceManifest,
+      acceptedResultCommit: GitCommitSha.make("2".repeat(gitShaLength)),
+      attemptId: AttemptId.make("integration-finality-protocol-attempt"),
+      candidateId: IntegrationCandidateId.make("integration-finality-protocol-candidate"),
+      candidateResource: IntegrationCandidateResourceLocator.make("/candidate/integration-finality-protocol"),
+      expectedTargetHead,
+      integrationSessionId: IntegrationSessionId.make("integration-finality-protocol-session"),
+      integrationTarget,
+      runId
+    })
+    const verificationCorrelation = TargetVerificationCorrelation.make({
+      candidateCommit,
+      candidateCorrelation,
+      candidateConstructedAt: JournalPosition.make(candidateConstructedPosition),
+      planId: TargetVerificationPlanId.make("integration-finality-protocol-plan"),
+      requestId: TargetVerificationRequestId.make("integration-finality-protocol-verification")
+    })
+    const promotionCorrelation = TargetPromotionCorrelation.make({
+      acceptanceManifest,
+      candidateCommit,
+      candidateConstructedAt: JournalPosition.make(candidateConstructedPosition),
+      candidateCorrelation,
+      expectedTargetHead,
+      integrationTarget,
+      reviewManifest,
+      requestId: TargetPromotionRequestId.make(`target-promotion:${candidateCorrelation.candidateId}`),
+      verificationCorrelation,
+      verificationManifest
+    })
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: candidateCorrelation.attemptId,
+      baseSha: expectedTargetHead,
+      branch: TaskBranchRef.make("refs/heads/dalph/integration-finality-protocol"),
+      executor: TaskExecutorLocator.make("executor:integration-finality-protocol"),
+      runId,
+      taskId,
+      taskRevision: TaskRevision.make("integration-finality-protocol-revision"),
+      worktree: WorktreeLocator.make("/worktrees/integration-finality-protocol")
+    })
+    const activeClaim = ActiveTaskClaim.make({
+      operationId: OperationId.make("integration-finality-protocol-active-claim"),
+      owner: ClaimOwner.make("dalph:integration-finality-protocol"),
+      taskId,
+      token: ClaimToken.make("integration-finality-protocol-token")
+    })
+    const claim = CompletionTaskClaim.make({
+      acceptanceManifest,
+      integrationReviewManifest: reviewManifest,
+      originalClaim: activeClaim,
+      plannedAttempt,
+      promotionCorrelation,
+      verificationManifest
+    })
+    const planOperation = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("integration-finality-protocol-plan-attempt"),
+      plannedAttempt,
+      predecessorOperationIds: [activeClaim.operationId]
+    })
+    const promotionSuccess = TargetPromotionObservedSuccessEvent.make({
+      basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
+      correlation: promotionCorrelation,
+      observation: TargetPromotionSuccessObservation.cases.CompareAndSetApplied.make({
+        candidateAncestry: "Current",
+        targetHeadSha: candidateCommit
+      }),
+      version: workflowJournalEventVersion
+    })
+    return {
+      activeClaim,
+      claim,
+      initialRecords: noInitialRecords(),
+      planOperation,
+      plannedAttempt,
+      promotionCorrelation,
+      promotionSuccess,
+      runId,
+      target,
+      taskId
+    }
   })
-  const plannedAttempt = PlannedTaskAttempt.make({
-    attemptId: candidateCorrelation.attemptId,
-    baseSha: expectedTargetHead,
-    branch: TaskBranchRef.make("refs/heads/dalph/integration-finality-protocol"),
-    executor: TaskExecutorLocator.make("executor:integration-finality-protocol"),
-    runId,
-    taskId,
-    taskRevision: TaskRevision.make("integration-finality-protocol-revision"),
-    worktree: WorktreeLocator.make("/worktrees/integration-finality-protocol")
-  })
-  const activeClaim = ActiveTaskClaim.make({
-    operationId: OperationId.make("integration-finality-protocol-active-claim"),
-    owner: ClaimOwner.make("dalph:integration-finality-protocol"),
-    taskId,
-    token: ClaimToken.make("integration-finality-protocol-token")
-  })
-  const claim = CompletionTaskClaim.make({ originalClaim: activeClaim, plannedAttempt, promotionCorrelation })
-  const planOperation = makeTaskAttemptPlanOperation({
-    operationId: OperationId.make("integration-finality-protocol-plan-attempt"),
-    plannedAttempt,
-    predecessorOperationIds: [activeClaim.operationId]
-  })
-  const promotionSuccess = TargetPromotionObservedSuccessEvent.make({
-    basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
-    correlation: promotionCorrelation,
-    observation: TargetPromotionSuccessObservation.cases.CompareAndSetApplied.make({
-      candidateAncestry: "Current",
-      targetHeadSha: candidateCommit
-    }),
-    version: workflowJournalEventVersion
-  })
-  const graphOperation = makeTrackerGraphObservationOperation(
-    OperationId.make("integration-finality-protocol-fresh-success"),
-    target,
-    [],
-    [taskId]
-  )
-  const trackerRevision = TrackerRevision.make("integration-finality-protocol-fresh-revision")
-  const projected = projectTrackerSnapshot({
-    revision: trackerRevision,
-    tasks: [
-      {
-        id: taskId,
-        lifecycle: TaskLifecycle.cases.CompletedSuccessfully.make({}),
-        parentTaskId: null,
-        prerequisiteIds: []
-      }
-    ]
-  })
-  /* v8 ignore next -- @preserve The fixture supplies one canonical complete task graph; invalid projection is a construction defect. */
-  if (projected._tag !== "Valid") {
-    return yield* Effect.die("integration-finality protocol fixture graph must be valid")
-  }
-  const graphObservation = makeCompleteTaskTrackerFactsObserved(graphOperation, projected.snapshot)
-  const graphEvent = TaskTrackerFactsObservedEvent.make({
-    observation: graphObservation,
-    operationId: graphOperation.operationId,
-    version: workflowJournalEventVersion
-  })
-  return {
-    activeClaim,
-    claim,
-    graphEvent,
-    graphOperation,
-    initialRecords: noInitialRecords(),
-    planOperation,
-    plannedAttempt,
-    promotionCorrelation,
-    promotionSuccess,
-    runId,
-    target,
-    taskId,
-    trackerRevision
-  }
-})
+)
 
 type PreparedFinality = Omit<Effect.Success<ReturnType<typeof makePreparedFinality>>, "target"> & {
   readonly target: TrackerTarget
@@ -279,40 +270,16 @@ const preparedFinalityFromPromotedRecords = Effect.fn(
   }
   const target = graph.observation.target
   const claim = CompletionTaskClaim.make({
+    acceptanceManifest: promotion.correlation.acceptanceManifest,
+    integrationReviewManifest: promotion.correlation.reviewManifest,
     originalClaim: activeClaim,
     plannedAttempt,
-    promotionCorrelation: promotion.correlation
-  })
-  const graphOperation = makeTrackerGraphObservationOperation(
-    OperationId.make(`integration-finality-protocol-fresh-success:${promotion.correlation.requestId}`),
-    target,
-    [],
-    [taskId]
-  )
-  const trackerRevision = TrackerRevision.make(`integration-finality-protocol-fresh:${promotion.correlation.requestId}`)
-  const projected = projectTrackerSnapshot({
-    revision: trackerRevision,
-    tasks: [
-      {
-        id: taskId,
-        lifecycle: TaskLifecycle.cases.CompletedSuccessfully.make({}),
-        parentTaskId: null,
-        prerequisiteIds: []
-      }
-    ]
-  })
-  /* v8 ignore next -- @preserve The snapshot is constructed immediately above from one well-formed task with no edges. */
-  if (projected._tag !== "Valid") return yield* Effect.die("promoted finality cassette graph must be valid")
-  const graphEvent = TaskTrackerFactsObservedEvent.make({
-    observation: makeCompleteTaskTrackerFactsObserved(graphOperation, projected.snapshot),
-    operationId: graphOperation.operationId,
-    version: workflowJournalEventVersion
+    promotionCorrelation: promotion.correlation,
+    verificationManifest: promotion.correlation.verificationManifest
   })
   return {
     activeClaim,
     claim,
-    graphEvent,
-    graphOperation,
     initialRecords: records,
     planOperation: planned.operation,
     plannedAttempt,
@@ -320,8 +287,7 @@ const preparedFinalityFromPromotedRecords = Effect.fn(
     promotionSuccess: promotion,
     runId,
     target,
-    taskId,
-    trackerRevision
+    taskId
   } satisfies PreparedFinality
 })
 
@@ -485,33 +451,48 @@ const scriptedBoundaryFor = Effect.fn("IntegrationFinalityProtocolCassette.scrip
   } satisfies ScriptedBoundary
 })
 
-const appendFreshSuccess = Effect.fn("IntegrationFinalityProtocolCassette.appendFreshSuccess")(function* (
+const appendFocusedSuccess = Effect.fn("IntegrationFinalityProtocolCassette.appendFocusedSuccess")(function* (
   prepared: PreparedFinality,
   journal: FinalityJournal
 ) {
-  yield* journal.service.append(
-    prepared.runId,
-    describeJournalEvent(taskTrackerReadIntent(prepared.graphOperation)).expectedKey,
-    taskTrackerReadIntent(prepared.graphOperation)
-  )
-  const records = yield* Ref.get(journal.records)
-  const event = prepared.graphEvent
-  const record = JournalRecord.make({
-    event,
-    key: describeJournalEvent(event).expectedKey,
-    position: JournalPosition.make(records.length + 1),
-    runId: prepared.runId
-  })
-  yield* Ref.update(journal.records, (current) =>
-    /* v8 ignore next -- @preserve Schema-closed stories record fresh success at most once. */
-    current.some(({ key }) => key === record.key) ? current : [...current, record]
-  )
-  return FreshCompletedTaskObservation.make({
+  const request = completionTaskRequestFor(prepared.claim)
+  const intent = CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion })
+  yield* journal.service.append(prepared.runId, describeJournalEvent(intent).expectedKey, intent)
+  const trackerRevision = TrackerRevision.make(`integration-finality-protocol-focused:${request.operationId}`)
+  const completionBoundary: CompletionTaskBoundaryService = {
+    readFocusedTaskCompletion: (taskId, target, operationId) =>
+      Effect.succeed({
+        currentClaim: prepared.claim,
+        lifecycle: "CompletedSuccessfully",
+        operationId,
+        target,
+        targetMembership: "Member",
+        taskId,
+        taskRevision: prepared.plannedAttempt.taskRevision,
+        trackerRevision,
+        unfinishedPrerequisiteTaskIds: []
+      }),
+    completeTask: () => Effect.die("focused-success cassette must not complete the task again"),
+    readCompletionRequest: () => Effect.die("focused-success cassette has no ambiguous completion request")
+  }
+  const focused = yield* readCompletionFocusedFacts(
+    completionBoundary,
+    request,
+    prepared.target,
+    CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+      attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+      authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(1)
+    })
+  ).pipe(Effect.provideService(InRunJournal, journal.service))
+  return FocusedCompletedTaskObservation.make({
+    claim: prepared.claim,
     lifecycle: "CompletedSuccessfully",
-    observedAt: record.position,
-    operationId: prepared.graphOperation.operationId,
+    observedAt: focused.observedAt,
+    operationId: focused.operationId,
     taskId: prepared.taskId,
-    trackerRevision: prepared.trackerRevision
+    taskRevision: prepared.plannedAttempt.taskRevision,
+    trackerRevision,
+    target: prepared.target
   })
 })
 
@@ -531,7 +512,7 @@ const runDeletion = Effect.fn("IntegrationFinalityProtocolCassette.runDeletion")
   prepared: PreparedFinality,
   boundary: CompletionClaimBoundaryService,
   journal: FinalityJournal,
-  successObservation: FreshCompletedTaskObservation
+  successObservation: FocusedCompletedTaskObservation
 ) {
   const result = yield* runCompletionClaimDeletionProtocol(
     boundary,
@@ -544,7 +525,7 @@ const runDeletion = Effect.fn("IntegrationFinalityProtocolCassette.runDeletion")
 interface StoryState {
   readonly failureTag: string | null
   readonly sawEmptyFrontierWhilePending: boolean
-  readonly successObservation: FreshCompletedTaskObservation | undefined
+  readonly successObservation: FocusedCompletedTaskObservation | undefined
 }
 
 interface ScriptedBoundary {
@@ -605,7 +586,11 @@ const appendRestartReplacementIntent = Effect.fn("IntegrationFinalityProtocolCas
 )
 
 const appendRestartDeletionIntent = Effect.fn("IntegrationFinalityProtocolCassette.appendRestartDeletionIntent")(
-  function* (prepared: PreparedFinality, journal: FinalityJournal, successObservation: FreshCompletedTaskObservation) {
+  function* (
+    prepared: PreparedFinality,
+    journal: FinalityJournal,
+    successObservation: FocusedCompletedTaskObservation
+  ) {
     const request = completionClaimDeletionRequestFor(prepared.claim, successObservation)
     const event = CompletionClaimDeletionIntendedEvent.make({
       claim: request.claim,
@@ -623,8 +608,9 @@ const interpretDeletionStep = Effect.fn("IntegrationFinalityProtocolCassette.int
   boundary: ScriptedBoundary,
   journal: FinalityJournal
 ) {
-  /* v8 ignore next -- @preserve Schema closure rejects deletion before RecordFreshSuccess. */
-  if (state.successObservation === undefined) return yield* Effect.die("deletion story has no fresh success proof")
+  /* v8 ignore next -- @preserve Schema closure rejects deletion before ObserveFocusedTaskCompletionSuccess. */
+  if (state.successObservation === undefined)
+    return yield* Effect.die("deletion story has no focused task-completion observation")
   return { ...state, failureTag: yield* runDeletion(prepared, boundary.service, journal, state.successObservation) }
 })
 
@@ -641,23 +627,27 @@ const interpretMutationStoryItem = Effect.fn("IntegrationFinalityProtocolCassett
     boundary: ScriptedBoundary,
     journal: FinalityJournal
   ) {
-    switch (item._tag) {
-      case "RunReplacement":
-        return yield* interpretReplacementStep(state, prepared, boundary, journal)
-      case "RestartReplacement":
-        yield* appendRestartReplacementIntent(prepared, journal)
-        return yield* interpretReplacementStep(state, prepared, boundary, journal)
-      case "RecordFreshSuccess":
-        return { ...state, successObservation: yield* appendFreshSuccess(prepared, journal) }
-      case "RunDeletion":
-        return yield* interpretDeletionStep(state, prepared, boundary, journal)
-      case "RestartDeletion":
-        /* v8 ignore next -- @preserve Schema ordering rejects deletion restart before RecordFreshSuccess. */
-        if (state.successObservation === undefined)
-          return yield* Effect.die("deletion restart has no fresh success proof")
-        yield* appendRestartDeletionIntent(prepared, journal, state.successObservation)
-        return yield* interpretDeletionStep(state, prepared, boundary, journal)
-    }
+    return yield* Match.valueTags(item, {
+      RunReplacement: () => interpretReplacementStep(state, prepared, boundary, journal),
+      RestartReplacement: () =>
+        Effect.gen(function* () {
+          yield* appendRestartReplacementIntent(prepared, journal)
+          return yield* interpretReplacementStep(state, prepared, boundary, journal)
+        }),
+      ObserveFocusedTaskCompletionSuccess: () =>
+        Effect.gen(function* () {
+          return { ...state, successObservation: yield* appendFocusedSuccess(prepared, journal) }
+        }),
+      RunDeletion: () => interpretDeletionStep(state, prepared, boundary, journal),
+      RestartDeletion: () =>
+        Effect.gen(function* () {
+          /* v8 ignore next -- @preserve Schema ordering rejects deletion restart before ObserveFocusedTaskCompletionSuccess. */
+          if (state.successObservation === undefined)
+            return yield* Effect.die("deletion restart has no focused task-completion observation")
+          yield* appendRestartDeletionIntent(prepared, journal, state.successObservation)
+          return yield* interpretDeletionStep(state, prepared, boundary, journal)
+        })
+    })
   }
 )
 

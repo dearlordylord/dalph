@@ -6,9 +6,14 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../identity.js"
-import { JournalStore } from "../../workflow-journal/store.js"
+import {
+  InRunJournal,
+  JournalStorageUnavailable,
+  JournalStore,
+  type JournalRecord
+} from "../../workflow-journal/store.js"
 import { taskTrackerReadIntent } from "../registry/event.js"
-import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import { completionTaskIntentRecordKey, intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { legacyMemoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { deriveRunRecoveryFrontier } from "../../coordination/frontier/recovery-frontier.js"
@@ -25,32 +30,43 @@ import {
 } from "../../authorities/task-tracker/task-work-specification.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../protocols/task-tracker-read/protocol.js"
 import {
+  reconstructedTaskGraphFromEvents,
   reconstructedTaskGraphFor,
   reconstructedTaskWorkSpecificationFor
 } from "../../coordination/reconstruction/graph-knowledge.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import {
   TestTrackerGraphReader,
+  TrackerReadError,
   TrackerGraphReader,
   trackerGraphReaderTestLayer
 } from "../../authorities/task-tracker/graph-reader.js"
 import {
+  makeCompletionTaskFactsObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../registry/operation.js"
 import { deterministicTestWorkflowInterpreterLayer } from "../interpretation/layers.js"
 import { WorkflowInterpreter } from "../interpretation/interpreter.js"
+import { integrationFinalityFixture } from "../protocols/integration-finality/fixtures.js"
+import { CompletionTaskIntendedEvent } from "../protocols/integration-finality/events.js"
+import { journaledIntegrationEvidenceOf } from "../../coordination/delivery/delivery-evidence.js"
+import { workflowJournalEventVersion } from "../kernel/event.js"
 
-const snapshot = (revision: string, aLifecycle: "Open" | "CompletedSuccessfully") => {
+const snapshot = (
+  revision: string,
+  aLifecycle: "Open" | "CompletedSuccessfully",
+  prerequisiteTaskId = TaskId.make("A")
+) => {
   const projected = projectTrackerSnapshot({
     revision: TrackerRevision.make(revision),
     tasks: [
-      { id: TaskId.make("A"), lifecycle: { _tag: aLifecycle }, parentTaskId: null, prerequisiteIds: [] },
+      { id: prerequisiteTaskId, lifecycle: { _tag: aLifecycle }, parentTaskId: null, prerequisiteIds: [] },
       {
         id: TaskId.make("B"),
         lifecycle: { _tag: "Open" },
-        parentTaskId: TaskId.make("A"),
-        prerequisiteIds: [TaskId.make("A")]
+        parentTaskId: prerequisiteTaskId,
+        prerequisiteIds: [prerequisiteTaskId]
       }
     ]
   })
@@ -709,6 +725,201 @@ it("appends one canonical observation for each logical provider read", async () 
   expect(events.at(1)).toMatchObject({ observation: { _tag: "CompleteTaskTrackerFacts" } })
   expect(events.at(3)).toMatchObject({ observation: { _tag: "UnchangedTaskTrackerFactsReconfirmed" } })
   expect(events.at(5)).toMatchObject({ observation: { _tag: "UnchangedTaskTrackerFactsReconfirmed" } })
+})
+
+it("a lost post-success graph response authorizes no dependant and resumes only that read", async () => {
+  const fixture = integrationFinalityFixture
+  const runId = fixture.runId
+  const target = fixture.target
+  const oldRead = makeTrackerGraphObservationOperation(OperationId.make("old-open-graph"), target)
+  const laterRead = makeTrackerGraphObservationOperation(OperationId.make("later-completed-graph"), target, [
+    oldRead.operationId
+  ])
+  const focusedRead = makeCompletionTaskFactsObservationOperation(
+    fixture.completionRequest,
+    target,
+    fixture.focusedSuccessFactsEvent.observation.purpose
+  )
+  const records = await Effect.runPromise(Ref.make<ReadonlyArray<JournalRecord>>([]))
+  const failNextOutcome = await Effect.runPromise(Ref.make(false))
+  const providerReads = await Effect.runPromise(Ref.make<ReadonlyArray<OperationId>>([]))
+  const journal = Layer.succeed(
+    InRunJournal,
+    InRunJournal.of({
+      append: (appendedRunId, key, event) =>
+        Effect.gen(function* () {
+          const existing = (yield* Ref.get(records)).find((record) => record.key === key)
+          if (existing !== undefined) return existing
+          if (event._tag === "TaskTrackerFactsObserved" && (yield* Ref.getAndSet(failNextOutcome, false))) {
+            return yield* new JournalStorageUnavailable({
+              detail: "controlled process loss before graph observation append",
+              operation: "JournalStore.append"
+            })
+          }
+          return yield* Ref.modify(records, (current) => {
+            const appended: JournalRecord = {
+              event,
+              key,
+              position: JournalPosition.make(current.length + 1),
+              runId: appendedRunId
+            }
+            return [appended, [...current, appended]] as const
+          })
+        }),
+      read: () => Ref.get(records)
+    })
+  )
+  const provider = Layer.succeed(
+    WorkflowInterpreter,
+    WorkflowInterpreter.of({
+      acquireTaskClaim: () => Effect.die("unused"),
+      readTaskClaim: () => Effect.die("unused"),
+      readTaskWorktree: () => Effect.die("unused"),
+      readTargetLineage: () => Effect.die("unused"),
+      readTrackerGraph: (operation) =>
+        Ref.update(providerReads, (current) => [...current, operation.operationId]).pipe(
+          Effect.as(
+            operation.operationId === oldRead.operationId
+              ? snapshot("old-open-graph", "Open", fixture.taskId)
+              : snapshot("later-completed-graph", "CompletedSuccessfully", fixture.taskId)
+          )
+        ),
+      readTaskWorkSpecification: () => Effect.die("unused"),
+      reconcileTaskWorktree: () => Effect.die("unused"),
+      recordTaskAttemptPlan: () => Effect.die("unused"),
+      releaseTaskClaim: () => Effect.die("unused")
+    })
+  )
+  const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(journal))
+
+  const result = await Effect.gen(function* () {
+    const interpreter = yield* WorkflowInterpreter
+    const inRunJournal = yield* InRunJournal
+    yield* interpreter.readTrackerGraph(oldRead)
+    yield* inRunJournal.append(
+      runId,
+      completionTaskIntentRecordKey(fixture.completionRequest),
+      CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
+    )
+    yield* inRunJournal.append(runId, intentRecordKey(focusedRead.operationId), taskTrackerReadIntent(focusedRead))
+    yield* inRunJournal.append(runId, outcomeRecordKey(focusedRead.operationId), fixture.focusedSuccessFactsEvent)
+    yield* Ref.set(failNextOutcome, true)
+    const beforeAppend = yield* interpreter.readTrackerGraph(laterRead).pipe(Effect.result)
+    const retainedPrefix = yield* Ref.get(records)
+    const beforeRestart = Option.getOrThrow(
+      reconstructedTaskGraphFromEvents(
+        retainedPrefix.map(({ event }) => event),
+        target
+      )
+    )
+    const retainedCompletion = journaledIntegrationEvidenceOf(retainedPrefix).find(
+      (evidence) => evidence._tag === "FocusedTaskCompletionSuccess"
+    )
+    yield* interpreter.readTrackerGraph(laterRead)
+    const afterRestart = Option.getOrThrow(
+      reconstructedTaskGraphFromEvents(
+        (yield* Ref.get(records)).map(({ event }) => event),
+        target
+      )
+    )
+    return { afterRestart, beforeAppend, beforeRestart, retainedCompletion }
+  }).pipe(Effect.provide(Layer.merge(journaled, journal)), Effect.runPromise)
+
+  expect(result.beforeAppend._tag).toBe("Failure")
+  expect(result.retainedCompletion).toMatchObject({
+    observed: { operationId: focusedRead.operationId },
+    recordedAt: JournalPosition.make(5)
+  })
+  expect(result.beforeRestart.eligibleTaskIds()).toEqual([fixture.taskId])
+  expect(result.afterRestart.eligibleTaskIds().map(String)).toEqual(["B"])
+  expect(await Effect.runPromise(Ref.get(providerReads))).toEqual([
+    oldRead.operationId,
+    laterRead.operationId,
+    laterRead.operationId
+  ])
+})
+
+it("an invalid post-success graph read keeps the focused success and B blocked without busy-looping", async () => {
+  const fixture = integrationFinalityFixture
+  const runId = fixture.runId
+  const target = fixture.target
+  const oldRead = makeTrackerGraphObservationOperation(OperationId.make("invalid-graph-old-open"), target)
+  const invalidRead = makeTrackerGraphObservationOperation(OperationId.make("invalid-post-success-graph"), target, [
+    oldRead.operationId
+  ])
+  const focusedRead = makeCompletionTaskFactsObservationOperation(
+    fixture.completionRequest,
+    target,
+    fixture.focusedSuccessFactsEvent.observation.purpose
+  )
+  const providerReads = await Effect.runPromise(Ref.make<ReadonlyArray<OperationId>>([]))
+  const provider = Layer.succeed(
+    WorkflowInterpreter,
+    WorkflowInterpreter.of({
+      acquireTaskClaim: () => Effect.die("unused"),
+      readTaskClaim: () => Effect.die("unused"),
+      readTaskWorktree: () => Effect.die("unused"),
+      readTargetLineage: () => Effect.die("unused"),
+      readTrackerGraph: (operation) =>
+        Ref.update(providerReads, (current) => [...current, operation.operationId]).pipe(
+          Effect.andThen(
+            operation.operationId === oldRead.operationId
+              ? Effect.succeed(snapshot("invalid-graph-old-open", "Open", fixture.taskId))
+              : Effect.fail(
+                  new TrackerReadError({
+                    detail: "controlled invalid post-success graph payload",
+                    operation: "TrackerGraphReader.decode"
+                  })
+                )
+          )
+        ),
+      readTaskWorkSpecification: () => Effect.die("unused"),
+      reconcileTaskWorktree: () => Effect.die("unused"),
+      recordTaskAttemptPlan: () => Effect.die("unused"),
+      releaseTaskClaim: () => Effect.die("unused")
+    })
+  )
+  const store = legacyMemoryJournalStoreLayer
+  const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(store))
+
+  const result = await Effect.gen(function* () {
+    const interpreter = yield* WorkflowInterpreter
+    const journal = yield* JournalStore
+    yield* interpreter.readTrackerGraph(oldRead)
+    yield* journal.append(
+      runId,
+      completionTaskIntentRecordKey(fixture.completionRequest),
+      CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(runId, intentRecordKey(focusedRead.operationId), taskTrackerReadIntent(focusedRead))
+    yield* journal.append(runId, outcomeRecordKey(focusedRead.operationId), fixture.focusedSuccessFactsEvent)
+    const failure = yield* interpreter.readTrackerGraph(invalidRead).pipe(Effect.flip)
+    const records = yield* journal.read(runId)
+    return {
+      failure,
+      focusedEvidence: journaledIntegrationEvidenceOf(records).filter(
+        (evidence) => evidence._tag === "FocusedTaskCompletionSuccess"
+      ),
+      graph: Option.getOrThrow(
+        reconstructedTaskGraphFromEvents(
+          records.map(({ event }) => event),
+          target
+        )
+      ),
+      outcomeCount: records.filter(
+        ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === invalidRead.operationId
+      ).length
+    }
+  }).pipe(Effect.provide(Layer.merge(journaled, store)), Effect.runPromise)
+
+  expect(result.failure).toMatchObject({
+    _tag: "TrackerGraphReader.TrackerReadError",
+    operation: "TrackerGraphReader.decode"
+  })
+  expect(result.focusedEvidence).toHaveLength(1)
+  expect(result.graph.eligibleTaskIds()).toEqual([fixture.taskId])
+  expect(result.outcomeCount).toBe(0)
+  expect(await Effect.runPromise(Ref.get(providerReads))).toEqual([oldRead.operationId, invalidRead.operationId])
 })
 
 it("fails replay with a typed error when recorded facts cannot reconstruct the promised knowledge", async () => {

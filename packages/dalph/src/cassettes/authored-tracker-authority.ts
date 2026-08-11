@@ -1,11 +1,16 @@
-import { Effect, Layer, Option, Ref } from "effect"
+import { Effect, Layer, Match, Option, Ref } from "effect"
 import type { TaskId } from "@dalph/contracts"
 import {
   CompletionClaimBoundary,
+  CompletionTaskAcknowledgement,
+  CompletionTaskBoundary,
+  CompletionTaskRequestFailure,
+  CompletionTaskRequestLookup,
   type CompletionClaimObservation,
   completionTaskClaimEquals,
   isExactTaskClaim,
   OperationId,
+  TrackerRevision,
   TaskClaimConflict,
   TaskClaimOwnershipConflict,
   TaskClaimReadFailure,
@@ -164,6 +169,7 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
         Ref.get(authoredObservations).pipe(
           Effect.flatMap((observations) => {
             const observation = observations.get(taskId)
+            /* v8 ignore next -- @preserve Completion-finality cassette reads follow the authored replacement that establishes the controlled observation. */
             return observation === undefined ? tracker.readTaskClaim(taskId) : Effect.succeed(observation)
           })
         )
@@ -223,9 +229,80 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
             yield* setObservation(taskId, UnclaimedTask.make({ taskId }))
           })
       })
+      const completionTaskBoundary = CompletionTaskBoundary.of({
+        readFocusedTaskCompletion: (taskId, target, operationId) =>
+          Effect.gen(function* () {
+            const returned = yield* cursor.consumeCompletionTaskFocusedReadReturned.pipe(Effect.orDie)
+            if (returned.taskId !== taskId) {
+              return yield* Effect.die(`authored focused completion read returned ${returned.taskId} for ${taskId}`)
+            }
+            const currentClaim = yield* currentCompletionObservation(taskId).pipe(Effect.orDie)
+            if (currentClaim._tag !== "CompletionTaskClaim") {
+              return yield* Effect.die(`authored focused completion read found ${currentClaim._tag} for ${taskId}`)
+            }
+            return {
+              currentClaim,
+              lifecycle: returned.lifecycle,
+              operationId,
+              target,
+              targetMembership: "Member",
+              taskId,
+              taskRevision: currentClaim.plannedAttempt.taskRevision,
+              trackerRevision: TrackerRevision.make(`authored-completion:${taskId}:${operationId}`),
+              unfinishedPrerequisiteTaskIds: returned.unfinishedPrerequisiteTaskIds
+            }
+          }),
+        completeTask: (request) =>
+          Effect.gen(function* () {
+            const returned = yield* cursor.consumeCompletionTaskRequestReturned.pipe(Effect.orDie)
+            if (returned.taskId !== request.taskId) {
+              return yield* Effect.die(`authored completion response returned ${returned.taskId} for ${request.taskId}`)
+            }
+            const current = yield* currentCompletionObservation(request.taskId).pipe(Effect.orDie)
+            if (current._tag !== "CompletionTaskClaim" || !completionTaskClaimEquals(current, request.claim)) {
+              return yield* Effect.die(`authored completion request lacked exact completion claim ${request.taskId}`)
+            }
+            return yield* Match.value(returned.outcome).pipe(
+              Match.when("Acknowledged", () =>
+                Effect.succeed(
+                  CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId: request.taskId })
+                )
+              ),
+              Match.when("DefinitelyRejected", () =>
+                Effect.fail(
+                  new CompletionTaskRequestFailure({
+                    detail: returned.outcome,
+                    outcome: "DefinitelyNotApplied",
+                    request
+                  })
+                )
+              ),
+              Match.when("ResponseLost", () =>
+                Effect.fail(new CompletionTaskRequestFailure({ detail: returned.outcome, outcome: "Unknown", request }))
+              ),
+              Match.exhaustive
+            )
+          }),
+        readCompletionRequest: (request) =>
+          Effect.gen(function* () {
+            const returned = yield* cursor.consumeCompletionTaskRequestLookupReturned.pipe(Effect.orDie)
+            if (returned.taskId !== request.taskId) {
+              return yield* Effect.die(`authored completion lookup returned ${returned.taskId} for ${request.taskId}`)
+            }
+            return Match.value(returned.outcome).pipe(
+              Match.when("Applied", () => CompletionTaskRequestLookup.cases.Applied.make({ request })),
+              Match.when("NotApplied", () => CompletionTaskRequestLookup.cases.NotApplied.make({ request })),
+              Match.when("Unreadable", () =>
+                CompletionTaskRequestLookup.cases.Unreadable.make({ detail: "authored unreadable lookup", request })
+              ),
+              Match.exhaustive
+            )
+          })
+      })
       return Layer.mergeAll(
         Layer.succeed(TrackerMutation, trackerMutation),
-        Layer.succeed(CompletionClaimBoundary, completionClaimBoundary)
+        Layer.succeed(CompletionClaimBoundary, completionClaimBoundary),
+        Layer.succeed(CompletionTaskBoundary, completionTaskBoundary)
       )
     })
   )

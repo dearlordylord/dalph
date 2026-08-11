@@ -1944,11 +1944,35 @@ const deliveryFinalityExpandedGraph = {
   ]
 } as const
 
-const deliveryFinalitySuccessfulGraph = {
+const deliveryFinalityReleasedGraph = {
   revision: "delivery-story-G6",
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
-    lifecycle: { _tag: "CompletedSuccessfully" as const }
+    lifecycle: { _tag: task.id === "B" ? ("Open" as const) : ("CompletedSuccessfully" as const) }
+  }))
+} as const
+
+const deliveryFinalityAdditionalPrerequisiteGraph = {
+  revision: "delivery-story-G7",
+  tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
+    ...task,
+    lifecycle: {
+      _tag:
+        task.id === "B"
+          ? ("Open" as const)
+          : task.id === "D"
+            ? ("TerminalWithoutSuccess" as const)
+            : ("CompletedSuccessfully" as const)
+    },
+    prerequisiteIds: task.id === "B" ? (["A", "D"] as const) : task.prerequisiteIds
+  }))
+} as const
+
+const deliveryFinalityAdditionalPrerequisiteSatisfiedGraph = {
+  revision: "delivery-story-G8",
+  tasks: deliveryFinalityAdditionalPrerequisiteGraph.tasks.map((task) => ({
+    ...task,
+    lifecycle: { _tag: task.id === "B" ? ("Open" as const) : ("CompletedSuccessfully" as const) }
   }))
 } as const
 
@@ -1963,29 +1987,68 @@ const deliveryFinalityBase = (() => {
     return [
       { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" },
       { _tag: "CompletionClaimReplacementApplied", taskId: "A" },
+      { _tag: "CompletionTaskFocusedReadReturned", lifecycle: "Open", taskId: "A", unfinishedPrerequisiteTaskIds: [] },
       {
-        _tag: "CoordinatorActivationReturned",
-        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+        _tag: "TargetPromotionGitReadReturned",
+        observation: { _tag: "CandidateCurrent", currentHeadSha: promotionCandidateCommit }
       },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalitySuccessfulGraph },
+      { _tag: "CompletionTaskRequestReturned", outcome: "Acknowledged", taskId: "A" },
+      {
+        _tag: "CompletionTaskFocusedReadReturned",
+        lifecycle: "CompletedSuccessfully",
+        taskId: "A",
+        unfinishedPrerequisiteTaskIds: []
+      },
       { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
       { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalitySuccessfulGraph },
       {
         _tag: "CoordinatorActivationReturned",
         decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
       },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalitySuccessfulGraph },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalityReleasedGraph },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalitySuccessfulGraph },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalityReleasedGraph },
+      { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "B" } },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalityReleasedGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } },
       {
-        _tag: "CoordinatorActivationReturned",
-        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+        _tag: "TaskWorkSpecificationReadReturned",
+        body: "Implement the released dependant.",
+        taskId: "B",
+        title: "Implement released dependant"
       },
-      item
+      { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:B:0", taskId: "B" } },
+      { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:B:0", taskId: "B" } },
+      {
+        _tag: "PlannedAttemptExecutorWorkReported",
+        report: { _tag: "Running", attemptId: "attempt:B:0" },
+        request: "StartOrContinue"
+      },
+      {
+        _tag: "PlannedAttemptExecutorWorkReported",
+        report: { _tag: "Terminal", attemptId: "attempt:B:0", result: { _tag: "Completed" } },
+        request: "StartOrContinue"
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: deliveryFinalityReleasedGraph },
+      {
+        ...item,
+        orchestration:
+          item.orchestration === null
+            ? null
+            : [
+                ...item.orchestration,
+                { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:B:0", taskId: "B" },
+                { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:0", report: "Running" },
+                { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:0", report: "TerminalCompleted" }
+              ],
+        taskWork: {
+          ...item.taskWork,
+          results: [...item.taskWork.results, { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }]
+        }
+      }
     ]
   })
 })()
@@ -1994,19 +2057,312 @@ const deliveryFinalityBase = (() => {
  * The executable spine linked from docs/DELIVERY-STORY.md. It exercises the
  * ordinary delivery runtime from a five-task graph through restart, a
  * seven-task graph, A's promotion, and A's exact completion-finality
- * settlement. The later tracker snapshot reports B through G externally
- * complete too, but only A crosses the production completion-finality
- * boundary in this cassette; it does not claim Dalph executed or settled the
- * other tasks, and it does not fabricate whole-Run termination.
+ * settlement. The later tracker snapshot reports A complete and B open, so
+ * the production delivery relation makes B eligible without claiming that
+ * Dalph has already executed B or fabricating whole-Run termination.
  */
 export const deliveryFinalitySpineAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...targetPromotionSuccessAuthoredCassette,
   name: "real A-finality spine (partial delivery-invariant story): five-to-seven task graph across restart",
   startingFacts: {
     ...targetPromotionSuccessAuthoredCassette.startingFacts,
+    taskWorkSpecifications: [
+      ...targetPromotionSuccessAuthoredCassette.startingFacts.taskWorkSpecifications,
+      { body: "Implement the released dependant.", taskId: "B", title: "Implement released dependant" }
+    ],
     trackerGraph: deliveryFinalityStartingGraph
   },
   story: deliveryFinalityBase
+})
+
+/** The same A-to-B story when the tracker applies Q but its direct response is lost. */
+export const ambiguousCompletionResponseAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...deliveryFinalitySpineAuthoredCassette,
+  name: "Dalph checks A after losing the tracker completion response",
+  story: deliveryFinalitySpineAuthoredCassette.story.map((item) =>
+    item._tag === "CompletionTaskRequestReturned" ? { ...item, outcome: "ResponseLost" as const } : item
+  )
+})
+
+const deliveryFinalityRecoveryStory = (() => {
+  let focusedSuccessSeen = false
+  let deathInserted = false
+  return deliveryFinalitySpineAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (item._tag === "CompletionTaskFocusedReadReturned" && item.lifecycle === "CompletedSuccessfully") {
+      focusedSuccessSeen = true
+    }
+    if (
+      focusedSuccessSeen &&
+      !deathInserted &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReadTrackerGraph"
+    ) {
+      deathInserted = true
+      return [{ _tag: "CoordinatorProcessDies" as const }, item]
+    }
+    return [item]
+  })
+})()
+
+/** Restart occurs after focused A success but before the complete graph that can release B. */
+export const completionGraphRefreshRecoveryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...deliveryFinalitySpineAuthoredCassette,
+  name: "Restart keeps B blocked between A's success confirmation and the later graph",
+  story: deliveryFinalityRecoveryStory
+})
+
+const prerequisiteBlockingGraphReadCount = 2
+
+type DeliveryFinalityStoryItem = (typeof deliveryFinalitySpineAuthoredCassette.story)[number]
+
+const shouldInsertPrerequisiteReleaseReads = (
+  item: DeliveryFinalityStoryItem,
+  laterGraphCount: number,
+  releaseReadsInserted: boolean
+): boolean =>
+  laterGraphCount === prerequisiteBlockingGraphReadCount &&
+  !releaseReadsInserted &&
+  item._tag === "DalphSelects" &&
+  item.operation._tag === "AcquireTaskClaim" &&
+  item.operation.taskId === "B"
+
+const isDeliveryFinalityReleasedGraphRead = (item: DeliveryFinalityStoryItem): boolean =>
+  item._tag === "TrackerGraphReadReturned" && String(item.graph.revision) === "delivery-story-G6"
+
+const deliveryFinalityCurrentGraphStory = (() => {
+  let laterGraphCount = 0
+  let releaseReadsInserted = false
+  return deliveryFinalitySpineAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (shouldInsertPrerequisiteReleaseReads(item, laterGraphCount, releaseReadsInserted)) {
+      releaseReadsInserted = true
+      return [
+        {
+          _tag: "CoordinatorActivationReturned" as const,
+          decision: { _tag: "RunMustRemainActive" as const, reason: "UnsettledResponsibility" as const }
+        },
+        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned" as const, graph: deliveryFinalityAdditionalPrerequisiteSatisfiedGraph },
+        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned" as const, graph: deliveryFinalityAdditionalPrerequisiteSatisfiedGraph },
+        item
+      ]
+    }
+    if (!isDeliveryFinalityReleasedGraphRead(item)) return [item]
+    laterGraphCount += 1
+    return [
+      {
+        ...item,
+        graph:
+          laterGraphCount <= prerequisiteBlockingGraphReadCount
+            ? deliveryFinalityAdditionalPrerequisiteGraph
+            : deliveryFinalityAdditionalPrerequisiteSatisfiedGraph
+      }
+    ]
+  })
+})()
+
+/** B remains excluded while current graph G7 reports unfinished D, then proceeds only after G8 completes D. */
+export const currentCompletionGraphAuthorityAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...deliveryFinalitySpineAuthoredCassette,
+  name: "The later complete graph gives the current reason B may proceed",
+  story: deliveryFinalityCurrentGraphStory
+})
+
+const completionTaskConflictStartingGraph = {
+  ...deliveryFinalityStartingGraph,
+  revision: "delivery-story-S3-start",
+  tasks: deliveryFinalityStartingGraph.tasks.map((task) => (task.id === "C" ? { ...task, prerequisiteIds: [] } : task))
+} as const
+
+const completionTaskConflictExpandedGraph = {
+  ...deliveryFinalityExpandedGraph,
+  revision: "delivery-story-S3-expanded",
+  tasks: deliveryFinalityExpandedGraph.tasks.map((task) => (task.id === "C" ? { ...task, prerequisiteIds: [] } : task))
+} as const
+
+const completionConflictStory = (() => {
+  let independentStartRefreshInserted = false
+  let independentClaimRefreshInserted = false
+  let independentSpecificationReadInserted = false
+  let independentPlanInserted = false
+  let restartSeen = false
+  let postRestartClaimObserved = false
+  let independentRunningInserted = false
+  let rejectionSeen = false
+  let terminalConflictSeen = false
+  // eslint-disable-next-line complexity -- This authored chronology keeps C's independent concurrent steps ordered around A's restart and conflict.
+  return deliveryFinalitySpineAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (item._tag === "CoordinatorProcessDies") restartSeen = true
+    if (restartSeen && item._tag === "TaskClaimCurrentReadReturned" && item.taskId === "A") {
+      postRestartClaimObserved = true
+    }
+    if (
+      !independentStartRefreshInserted &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "AcquireTaskClaim" &&
+      item.operation.taskId === "A"
+    ) {
+      independentStartRefreshInserted = true
+      return [
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: completionTaskConflictStartingGraph },
+        item,
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "C" } }
+      ]
+    }
+    if (
+      !independentClaimRefreshInserted &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReadTaskWorkSpecification" &&
+      item.operation.taskId === "A"
+    ) {
+      independentClaimRefreshInserted = true
+      return [
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: completionTaskConflictStartingGraph },
+        item
+      ]
+    }
+    if (
+      !independentSpecificationReadInserted &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "RecordTaskAttemptPlan" &&
+      item.operation.taskId === "A"
+    ) {
+      independentSpecificationReadInserted = true
+      return [
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Implement independent task C while A needs operator repair.",
+          taskId: "C",
+          title: "Implement independent C"
+        },
+        item
+      ]
+    }
+    if (
+      !independentPlanInserted &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReconcileTaskWorktree" &&
+      item.operation.taskId === "A"
+    ) {
+      independentPlanInserted = true
+      return [
+        { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:1", taskId: "C" } },
+        item,
+        { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:1", taskId: "C" } }
+      ]
+    }
+    if (
+      postRestartClaimObserved &&
+      !independentRunningInserted &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReadTrackerGraph"
+    ) {
+      independentRunningInserted = true
+      return [
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Running", attemptId: "attempt:C:1" },
+          request: "StartOrContinue"
+        },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "Terminal", attemptId: "attempt:C:1", result: { _tag: "Completed" } },
+          request: "StartOrContinue"
+        },
+        item
+      ]
+    }
+    if (!terminalConflictSeen && item._tag === "TrackerGraphReadReturned") {
+      return [
+        {
+          ...item,
+          graph:
+            String(item.graph.revision) === String(deliveryFinalityStartingGraph.revision)
+              ? completionTaskConflictStartingGraph
+              : completionTaskConflictExpandedGraph
+        }
+      ]
+    }
+    if (item._tag === "CompletionTaskRequestReturned") {
+      rejectionSeen = true
+      return [{ ...item, outcome: "DefinitelyRejected" as const }]
+    }
+    if (rejectionSeen && item._tag === "CompletionTaskFocusedReadReturned") {
+      terminalConflictSeen = true
+      return [{ ...item, lifecycle: "TerminalWithoutSuccess" as const }]
+    }
+    if (!terminalConflictSeen) return [item]
+    if (item._tag !== "ExpectedBehavior") return []
+    return [
+      {
+        ...item,
+        orchestration:
+          item.orchestration === null
+            ? null
+            : item.orchestration
+                .filter(
+                  (evidence) =>
+                    !("taskId" in evidence && evidence.taskId === "B") &&
+                    !("attemptId" in evidence && evidence.attemptId === "attempt:B:0")
+                )
+                .flatMap(
+                  (evidence): ReadonlyArray<unknown> =>
+                    evidence._tag === "AcceptedResultIntegrationResponsibilityBegan"
+                      ? [
+                          {
+                            _tag: "PlannedAttemptExecutorWorkResponsibilityBegan" as const,
+                            attemptId: "attempt:C:1",
+                            taskId: "C"
+                          },
+                          {
+                            _tag: "PlannedAttemptExecutorWorkReported" as const,
+                            attemptId: "attempt:C:1",
+                            report: "Running" as const
+                          },
+                          evidence,
+                          {
+                            _tag: "PlannedAttemptExecutorWorkReported" as const,
+                            attemptId: "attempt:C:1",
+                            report: "TerminalCompleted" as const
+                          }
+                        ]
+                      : [evidence]
+                ),
+        taskWork: {
+          absences: [
+            ...item.taskWork.absences.filter(({ taskId }) => taskId !== "B"),
+            { _tag: "NoPlannedWorkUndertakenForTask", taskId: "B" }
+          ],
+          results: [
+            ...item.taskWork.results.filter(({ taskId }) => taskId !== "B"),
+            { _tag: "PlannedWorkForTaskCompleted", taskId: "C" }
+          ]
+        }
+      }
+    ]
+  })
+})()
+
+/** A terminal-without-success tracker race remains local to A and preserves its promoted responsibility. */
+export const completionTaskConflictAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...deliveryFinalitySpineAuthoredCassette,
+  name: "A tracker client changes A while Dalph's completion request is pending",
+  startingFacts: {
+    ...deliveryFinalitySpineAuthoredCassette.startingFacts,
+    taskWorkSpecifications: [
+      ...deliveryFinalitySpineAuthoredCassette.startingFacts.taskWorkSpecifications,
+      {
+        body: "Implement independent task C while A needs operator repair.",
+        taskId: "C",
+        title: "Implement independent C"
+      }
+    ],
+    trackerGraph: completionTaskConflictStartingGraph
+  },
+  story: completionConflictStory
 })
 
 const doubleDiamondTaskIds = ["A", "B", "C", "D", "E", "F", "G"] as const
@@ -2329,6 +2685,10 @@ export const maintainedAuthoredCassetteCatalog = defineAuthoredCassetteCatalog({
   compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
   coordinatorProcessDeathContinues: coordinatorProcessDeathContinuesAuthoredCassette,
   contractedCapacityRetainsTwoAttempts: contractedCapacityRetainsTwoAttemptsAuthoredCassette,
+  ambiguousCompletionResponse: ambiguousCompletionResponseAuthoredCassette,
+  completionGraphRefreshRecovery: completionGraphRefreshRecoveryAuthoredCassette,
+  completionTaskConflict: completionTaskConflictAuthoredCassette,
+  currentCompletionGraphAuthority: currentCompletionGraphAuthorityAuthoredCassette,
   deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
   deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
   dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,

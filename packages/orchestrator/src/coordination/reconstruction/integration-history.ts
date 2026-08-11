@@ -1,5 +1,6 @@
 import {
   plannedTaskAttemptEquivalence,
+  evidenceReferenceEquals,
   type AcceptedResult,
   type AttemptId,
   type PlannedTaskAttempt,
@@ -8,7 +9,10 @@ import {
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
-import { integrationResponsibilityEquivalence } from "../../workflow/protocols/integration-admission/responsibility.js"
+import {
+  acceptedResultEquivalence,
+  integrationResponsibilityEquivalence
+} from "../../workflow/protocols/integration-admission/responsibility.js"
 import {
   integrationCandidateCorrelationEquals,
   integrationCandidateHasExactParents,
@@ -67,7 +71,6 @@ export interface IntegrationHistoryIndexes {
   readonly targetPromotionHistory: TargetPromotionHistoryIndexes
 }
 
-const sameAcceptedResult = (left: AcceptedResult, right: AcceptedResult): boolean => left.commit === right.commit
 const candidateKey = (correlation: IntegrationCandidateCorrelation): string =>
   JSON.stringify([correlation.runId, correlation.candidateId])
 const candidateCorrelatedEventTags: ReadonlySet<string> = new Set([
@@ -85,7 +88,7 @@ const invalidResponsibilityBeginning = (
   const accepted = indexes.acceptedExecutorResults.get(event.plannedAttempt.attemptId)
   const executorResponsibility = indexes.executorResponsibilitiesBegan.get(event.plannedAttempt.attemptId)
   return accepted === undefined ||
-    !sameAcceptedResult(accepted, event.acceptedResult) ||
+    !acceptedResultEquivalence(accepted, event.acceptedResult) ||
     executorResponsibility === undefined ||
     !plannedTaskAttemptEquivalence(executorResponsibility.plannedAttempt, event.plannedAttempt)
     ? `integration responsibility for attempt ${event.plannedAttempt.attemptId} has no prior matching accepted terminal result`
@@ -127,6 +130,7 @@ const invalidCandidateIntent = (
     event.correlation.attemptId !== event.plannedAttempt.attemptId ||
     !plannedTaskAttemptEquivalence(started.plannedAttempt, event.plannedAttempt) ||
     started.acceptedResult.commit !== event.correlation.acceptedResultCommit ||
+    !evidenceReferenceEquals(started.acceptedResult.evidenceManifest, event.correlation.acceptanceManifest) ||
     JSON.stringify(started.integrationTarget) !== JSON.stringify(event.correlation.integrationTarget) ||
     started.responsibilityBeganAt !== event.responsibilityBeganAt
     ? `candidate intent for attempt ${event.correlation.attemptId} has no exact earlier integration start at ${event.startedAt}`
@@ -166,17 +170,38 @@ const invalidCandidateGitResult = (
   return valid ? undefined : `candidate Git result has no exact submitted candidate at ${event.submissionAt}`
 }
 
+type ConstructedCandidateEvent = Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateConstructed" }>
+type CandidateGitObservationEvent = Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateGitObserved" }>
+type CandidateAgentReportEvent = Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateAgentReported" }>
+
+const isExactConstructedCandidateObservation = (
+  observed: CandidateGitObservationEvent | undefined,
+  event: ConstructedCandidateEvent
+): boolean =>
+  observed !== undefined &&
+  observed.observation._tag === "Commit" &&
+  observed.candidateCommit === event.candidateCommit &&
+  integrationCandidateCorrelationEquals(observed.correlation, event.correlation) &&
+  integrationCandidateHasExactParents(observed.observation, event.correlation)
+
+const isExactConstructedCandidateSubmission = (
+  submitted: CandidateAgentReportEvent | undefined,
+  event: ConstructedCandidateEvent
+): boolean =>
+  submitted !== undefined &&
+  submitted.report._tag === "Submitted" &&
+  evidenceReferenceEquals(submitted.report.reviewManifest, event.reviewManifest)
+
 const invalidConstructedCandidate = (
   position: JournalPosition,
-  event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateConstructed" }>,
+  event: ConstructedCandidateEvent,
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
   const observed = indexes.integrationCandidateGitObservations.get(event.gitObservationAt)
+  const submitted =
+    observed === undefined ? undefined : indexes.integrationCandidateSubmissions.get(observed.submissionAt)
   const exact =
-    observed?.observation._tag === "Commit" &&
-    observed.candidateCommit === event.candidateCommit &&
-    integrationCandidateCorrelationEquals(observed.correlation, event.correlation) &&
-    integrationCandidateHasExactParents(observed.observation, event.correlation)
+    isExactConstructedCandidateObservation(observed, event) && isExactConstructedCandidateSubmission(submitted, event)
   indexes.integrationCandidatesConstructed.set(position, event)
   return exact ? undefined : `constructed candidate has no exact Git observation at ${event.gitObservationAt}`
 }

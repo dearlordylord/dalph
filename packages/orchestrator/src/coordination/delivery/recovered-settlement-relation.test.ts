@@ -1,5 +1,5 @@
+import { acceptedResultFixture, evidenceReferenceFixture } from "../../../test/support/evidence.js"
 import {
-  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -121,7 +121,7 @@ const claim = ActiveTaskClaim.make({
   taskId,
   token: ClaimToken.make("recovered-settlement-token")
 })
-const acceptedResult = AcceptedResult.make({ commit: acceptedCommit })
+const acceptedResult = acceptedResultFixture(acceptedCommit)
 
 const seedTerminalAccepted = Effect.gen(function* () {
   const journal = yield* JournalStore
@@ -313,7 +313,8 @@ it.effect("releases a held target when constructed M has no selected verificatio
               Effect.succeed(
                 IntegrationCandidateAgentReport.cases.Submitted.make({
                   candidateCommit,
-                  correlation: request.correlation
+                  correlation: request.correlation,
+                  reviewManifest: evidenceReferenceFixture
                 })
               )
           })
@@ -373,7 +374,8 @@ it.effect(
                   Effect.as(
                     IntegrationCandidateAgentReport.cases.Submitted.make({
                       candidateCommit,
-                      correlation: request.correlation
+                      correlation: request.correlation,
+                      reviewManifest: evidenceReferenceFixture
                     })
                   )
                 )
@@ -435,7 +437,8 @@ it.effect("restart rereads the exact target head before offering candidate verif
               Effect.succeed(
                 IntegrationCandidateAgentReport.cases.Submitted.make({
                   candidateCommit,
-                  correlation: request.correlation
+                  correlation: request.correlation,
+                  reviewManifest: evidenceReferenceFixture
                 })
               )
           })

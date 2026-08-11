@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest"
+import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -153,7 +154,7 @@ const appendIntegrationCutoff = Effect.fn("AttemptChoiceTest.appendIntegrationCu
     repository: GitRepositoryLocator.make("/repositories/attempt-choice.git"),
     ref: IntegrationTargetRef.make("refs/heads/master")
   })
-  const acceptedResult = { commit: GitCommitSha.make("2".repeat(40)) }
+  const acceptedResult = acceptedResultFixture(GitCommitSha.make("2".repeat(40)))
   const began = yield* journal.append(
     runId,
     integrationResponsibilityBeganRecordKey(plannedAttempt.attemptId),
