@@ -292,11 +292,11 @@ Repeated bracket input reuses the already-derived landmark index and remains
 responsive at either end of the timeline; it does not repeatedly rescan every
 production frame or enqueue redundant graph renders.
 The exact selector retains every production publication. **Previous delivery
-landmark** and **Next delivery landmark** skip repeated and transient
-publications to the stable eligible-frontier waves, coordinator restart, and
-terminal publication, so the double-diamond cassette reaches A, B+C, restart,
-D, the later activation boundaries, E+F, G, and the empty frontier without
-scanning more than nine landmarks. The complete
+landmark** and **Next delivery landmark** skip repeated publications to the
+stable eligible-frontier waves, full-capacity overlaps, one-holder releases,
+coordinator restarts, and terminal publication. The staggered cassette reaches
+A, B+C, restart, B+C+X, C, D+X, X, E+F, F, H+I, I, G, and the empty frontier
+without scanning more than 24 landmarks. The complete
 per-task matrix is a secondary **All task delivery facts** disclosure; the
 graph and selected-task summary remain primary.
 
@@ -373,8 +373,8 @@ production frame replaced another.
   disclosure.
 - `browser-smoke` drives the real Orb page through more than ten live
   double-diamond publications, holds page scroll and graph position within two
-  pixels, traverses the six frontier waves and every activation boundary
-  through at most nine landmark
+  pixels, traverses the seven frontier waves, staggered held-position releases,
+  and every activation boundary through at most 24 landmark
   actions, preserves the graph summary and selected task across a frame change,
   and requires unique position/tag/context labels for raw journal events. It
   also pans and zooms the graph, checks that its rendered pixels change, and
@@ -514,7 +514,10 @@ before the coordinator process dies.
 
 While that coordinator process is dead, Alice adds tracker task X with A as its
 prerequisite and makes X another prerequisite of G. Alice changes the tracker;
-she does not add directly to Dalph's derived frontier. The Journal still
+she does not add directly to Dalph's derived frontier. Because this edit happens
+outside Dalph, there is no Dalph boundary call or journal event to author for
+the edit itself; the cassette's next complete tracker-read return is the first
+fact Dalph can observe and present. The Journal still
 contains the exact unfinished B and C executor-work responsibilities and no
 terminal or safe-suspension report for either attempt. No Git, integration, or
 cleanup boundary participates in this slice because none of these executor
@@ -550,13 +553,15 @@ protocol. A final complete tracker read produces an empty eligible frontier.
 The Lab shows this rolling consumption on the production-observed graph rather
 than making each pair look like one atomic batch. A represented task uses
 composable node styling for graph eligibility, desired placement, retained
-responsibility, and held position. If a retained responsibility's task is
-closed, absent from the latest complete graph, or the later activation has not
-yet established a graph, the Lab must not invent a tracker node. It keeps the
-graph dimensions stable and shows that exact responsibility in an off-graph
-responsibility rail beside an anonymous capacity-position summary. The rail
-names the exact task, Run, attempt, graph placement, obligation, and whether it
-currently occupies capacity.
+  responsibility, and held position. If a closed task remains in the complete
+  tracker graph, its terminal lifecycle and retained responsibility remain
+  composable facts on that real node. If the complete graph omits the task, or
+  the later activation has not yet established a graph, the Lab must not invent
+  a tracker node. It keeps the graph dimensions stable and shows that exact
+  responsibility in a mismatch rail beside an anonymous capacity-position
+  summary. For a held position the rail names the exact task, Run, attempt,
+  graph placement, obligation, and capacity occupancy; without a holder it says
+  explicitly that the responsibility does not occupy capacity.
 
 Retrying the cassette starts fresh controlled boundary state and repeats the
 same chronology. Within one run, restart must not plan replacement B or C
@@ -692,10 +697,17 @@ task whose exact facts are correlated below.
   has observed it and both reconstructed holders have reported Terminal.
 - `shows represented and off-graph responsibilities without inventing tracker nodes`
   drives established and graph-not-established frames through the Lab
-  presentation. It checks
-  represented responsibilities compose with node encodings while off-graph
-  exact obligations remain in the capacity/responsibility rail and never become
-  topology nodes.
+  presentation. It checks the mismatch rail names each exact held Run/attempt,
+  `GraphNotEstablished` placement, obligation, and occupancy without creating a
+  topology node. `composes simultaneous graph ticket held and delivery encodings`
+  separately checks represented responsibility styling composes on a real node.
+- `shows an absent responsibility in the mismatch rail without inventing a graph node`
+  renders an established-graph presentation fixture from an exact maintained
+  held-responsibility frame and checks `AbsentFromCurrentGraph` stays in the rail.
+  The production ticket-delivery projection test
+  `retains an exact attempt across outside-bound, closed, and absent graph placements`
+  proves that exact placement is produced when a complete tracker graph omits
+  the task; the presentation test does not replace that production proof.
 - `rejects a partial authored completion-finality boundary chronology` checks
   that once an authored story uses the controlled finality boundary, each task
   must declare exactly one Active read, replacement, Completion read, and

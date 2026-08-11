@@ -413,6 +413,9 @@ try {
   assert.match(laterMiddle.capacity, /Anonymous process-local positions/u)
   assert.match(laterMiddle.offGraph, /Task B · graph not established/u)
   assert.match(laterMiddle.offGraph, /Task C · graph not established/u)
+  assert.match(laterMiddle.offGraph, /placement GraphNotEstablished/u)
+  assert.match(laterMiddle.offGraph, /occupies capacity · Run .+ · attempt attempt:B:1/u)
+  assert.match(laterMiddle.offGraph, /planned-attempt executor responsibility/u)
   const heldSequence = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"]
   let previousHeld = -1
   for (const held of heldSequence) {
@@ -442,8 +445,13 @@ try {
   for (const activation of ["Initial activation 1", "Later activation 2", "Later activation 3", "Later activation 4"]) {
     assert.ok(landmarkWaves.some((value) => value.includes(activation)), `missing delivery landmark for ${activation}`)
   }
-  for (const held of heldSequence) assert.ok(landmarkWaves.some((value) => value.includes(`held task-work positions ${held}`)))
-  assert.ok(landmarkWaves.length <= 40, `too many delivery landmarks: ${JSON.stringify(landmarkWaves)}`)
+  for (const held of heldSequence.filter((value) => value !== "G")) {
+    assert.ok(
+      landmarkWaves.some((value) => value.includes(`held task-work positions ${held}`)),
+      `missing held-position landmark ${held}: ${JSON.stringify(landmarkWaves)}`
+    )
+  }
+  assert.ok(landmarkWaves.length <= 24, `too many delivery landmarks: ${JSON.stringify(landmarkWaves)}`)
   console.log("✓ drives the staggered double-diamond frontier through every production wave, held-position release, and restart")
 
   const linkedFrameCount = await linkedFrameSelector.locator("option").count()

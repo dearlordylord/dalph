@@ -602,6 +602,10 @@ await scenario("shows represented and off-graph responsibilities without inventi
   assert(capacity?.textContent?.toLowerCase().includes("anonymous") === true, "The capacity strip must not invent durable slot identities")
   assert(rail?.textContent?.includes("B") === true && rail.textContent.includes("C"), "The off-graph rail must retain both responsibilities")
   assert(rail?.textContent?.includes("graph not established") === true, "The rail must explain why the responsibilities are outside the graph")
+  assert(rail?.textContent?.includes(`Run ${result.runId}`) === true, "The rail must retain the exact Run correlation")
+  assert(rail?.textContent?.includes("placement GraphNotEstablished") === true, "The rail must name the exact delivery placement")
+  assert(rail?.textContent?.includes("planned-attempt executor responsibility") === true, "The rail must name the retained obligation")
+  assert(rail?.textContent?.includes("occupies capacity") === true, "The rail must state whether the responsibility holds capacity")
 
   const staggeredIndex = result.deliveryFrames.findIndex((frame) =>
     frame.graph._tag === "Established"
@@ -613,6 +617,57 @@ await scenario("shows represented and off-graph responsibilities without inventi
   assert(representedCapacity?.textContent?.includes("1 held of capacity 2") === true, "One released position must be visible before C finishes")
   assert(representedCapacity?.textContent?.includes("1 available anonymous position") === true, "Released capacity must remain anonymous and visible")
   assert(document.querySelector("[data-role='delivery-off-graph-responsibilities']") === null, "Graph-represented responsibilities must stay on their graph nodes")
+})
+
+await scenario("shows an absent responsibility in the mismatch rail without inventing a graph node", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The staggered delivery story is missing")
+  }
+  const heldFrame = result.deliveryFrames.find((frame) =>
+    frame.graph._tag === "NotEstablished"
+    && frame.heldPositions.some(({ taskId }) => taskId === "B")
+  )
+  const establishedFrame = result.deliveryFrames.find((frame) => frame.graph._tag === "Established")
+  if (heldFrame === undefined || establishedFrame?.graph._tag !== "Established") {
+    throw new Error("The exact responsibility and established graph fixtures are missing")
+  }
+  const establishedGraph = establishedFrame.graph
+  const absentFrame = {
+    ...heldFrame,
+    deliveries: heldFrame.deliveries.map((delivery) =>
+      delivery.taskId === "B"
+        ? {
+            ...delivery,
+            placement: {
+              exact: JSON.stringify({ _tag: "AbsentFromCurrentGraph", graphRevision: establishedGraph.revision }),
+              kind: "AbsentFromCurrentGraph"
+            }
+          }
+        : delivery
+    ),
+    graph: { ...establishedGraph, tasks: [] }
+  }
+  const absentResult = { ...result, deliveryFrames: [absentFrame] }
+  mountCassetteLab({
+    revision: "acceptance-revision",
+    root,
+    rows: [row],
+    runCassette: async () => absentResult
+  })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+    projection?: { readonly tasks: ReadonlyArray<{ readonly id: string }> }
+  }) | null
+  const rail = document.querySelector("[data-role='delivery-off-graph-responsibilities']")
+  assert(graph?.projection?.tasks.some(({ id }) => id === "B") === false, "An absent responsibility must not become a topology node")
+  assert(rail?.textContent?.includes("Task B · absent from current tracker graph") === true, "The rail must explain the exact graph mismatch")
+  assert(rail?.textContent?.includes("placement AbsentFromCurrentGraph") === true, "The rail must retain the production placement kind")
+  assert(rail?.textContent?.includes(`Run ${result.runId}`) === true, "The absent responsibility must retain its exact Run")
 })
 
 await scenario("does not fabricate a graph workbench for direct protocol cassettes", () => {

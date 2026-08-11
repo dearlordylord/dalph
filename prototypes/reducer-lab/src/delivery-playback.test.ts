@@ -14,6 +14,7 @@ import {
   makeDeliveryPlaybackModel,
   NextFrameRequested,
   NextLandmarkRequested,
+  PlaybackRunStarted,
   PreviousFrameRequested,
   PreviousLandmarkRequested,
   projectDeliveryPlayback,
@@ -28,6 +29,7 @@ const frame = (
   heldTaskIds: ReadonlyArray<string> = []
 ) => ({
   activationOrdinal: AuthoredRunActivationOrdinal.make(activationOrdinal),
+  capacity: 2,
   eligibleTaskIds: eligibleTaskIds.map((taskId) => TaskId.make(taskId)),
   heldTaskIds: heldTaskIds.map((taskId) => TaskId.make(taskId)),
   label
@@ -41,6 +43,28 @@ const frames = deliveryPlaybackFramesFrom([
 ], false)
 
 const following = makeDeliveryPlaybackModel(frames, false)
+
+{
+  const [reset] = updateDeliveryPlayback(following, PlaybackRunStarted.make({}))
+  assert.equal(reset._tag, "EmptyDeliveryPlayback")
+  assert.equal(reset.running, true)
+  assert.equal(projectDeliveryPlayback(reset).selectedTaskId, null)
+}
+
+{
+  const staggered = deliveryPlaybackFramesFrom([
+    frame(1, ["B", "C"], "B admitted", ["B"]),
+    frame(1, ["B", "C"], "B and C admitted", ["B", "C"]),
+    frame(1, ["B", "C"], "B released", ["C"]),
+    frame(1, ["B", "C"], "C released")
+  ], true)
+  assert.deepEqual(
+    staggered.map(({ landmarks }) => landmarks.flatMap((landmark) =>
+      landmark._tag === "HeldPositionsChanged" ? [landmark.taskIds.join("+")] : []
+    )),
+    [[], ["B+C"], ["C"], []]
+  )
+}
 
 assert.deepEqual(deliveryPlaybackViewContract, {
   groupLabel: "Delivery playback controls",

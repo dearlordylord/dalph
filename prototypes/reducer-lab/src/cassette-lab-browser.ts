@@ -19,7 +19,7 @@ import {
   makeDeliveryWorkbenchPlaybackRuntime,
   renderCassetteDeliveryWorkbench
 } from "./cassette-lab-workbench.ts"
-import { makeDeliveryPlaybackModel } from "./delivery-playback.ts"
+import { PlaybackRunStarted } from "./delivery-playback.ts"
 import { continuationAuthorizationProjectionOf } from "./continuation-authorization-lab.ts"
 
 export const singleCassetteSettledEvent = "dalph-cassette-lab:single-settled"
@@ -526,7 +526,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     for (const key of keys) {
       const row = rowByKey.get(key)
       const playback = playbackByKey.get(key) ?? makeDeliveryWorkbenchPlaybackRuntime()
-      playback.replace(makeDeliveryPlaybackModel([], true))
+      playback.dispatch(PlaybackRunStarted())
       playbackByKey.set(key, playback)
       states.set(key, {
         _tag: "Running",

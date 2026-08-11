@@ -2040,18 +2040,24 @@ const doubleDiamondGraph = (revision: string, completed: ReadonlySet<string>, xA
   )
 })
 
-const doubleDiamondGraphs = [
-  doubleDiamondGraph("double-diamond-G0", new Set(), false),
-  doubleDiamondGraph("double-diamond-G1", new Set(["A"]), false),
-  doubleDiamondGraph("double-diamond-G2-X-added", new Set(["A"]), true),
-  doubleDiamondGraph("double-diamond-G3", new Set(["A", "B", "C"]), true),
-  doubleDiamondGraph("double-diamond-G4", new Set(["A", "B", "C", "D", "X"]), true),
-  doubleDiamondGraph("double-diamond-G5", new Set(["A", "B", "C", "D", "E", "F", "X"]), true),
-  doubleDiamondGraph("double-diamond-G6", new Set(["A", "B", "C", "D", "E", "F", "H", "I", "X"]), true),
-  doubleDiamondGraph("double-diamond-G7", new Set(doubleDiamondTaskIds), true)
-] as const
+const doubleDiamondGraphs = {
+  initialAEligible: doubleDiamondGraph("double-diamond-G0", new Set(), false),
+  aCompleteBeforeX: doubleDiamondGraph("double-diamond-G1", new Set(["A"]), false),
+  xObservedDuringRestart: doubleDiamondGraph("double-diamond-G2-X-added", new Set(["A"]), true),
+  middlePairComplete: doubleDiamondGraph("double-diamond-G3", new Set(["A", "B", "C"]), true),
+  dAndXComplete: doubleDiamondGraph("double-diamond-G4", new Set(["A", "B", "C", "D", "X"]), true),
+  lowerPairComplete: doubleDiamondGraph("double-diamond-G5", new Set(["A", "B", "C", "D", "E", "F", "X"]), true),
+  deepPairComplete: doubleDiamondGraph(
+    "double-diamond-G6",
+    new Set(["A", "B", "C", "D", "E", "F", "H", "I", "X"]),
+    true
+  ),
+  allComplete: doubleDiamondGraph("double-diamond-G7", new Set(doubleDiamondTaskIds), true)
+} as const
 
-const doubleDiamondGraphRead = (graph: (typeof doubleDiamondGraphs)[number]) => [
+type DoubleDiamondGraph = (typeof doubleDiamondGraphs)[keyof typeof doubleDiamondGraphs]
+
+const doubleDiamondGraphRead = (graph: DoubleDiamondGraph) => [
   { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: "double-diamond-target" } },
   { _tag: "TrackerGraphReadReturned" as const, graph }
 ]
@@ -2063,7 +2069,7 @@ const doubleDiamondSpecification = (taskId: (typeof doubleDiamondTaskIds)[number
 })
 
 const doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems = (
-  graph: (typeof doubleDiamondGraphs)[number],
+  graph: DoubleDiamondGraph,
   tasks: ReadonlyArray<{ readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] }>
 ) => [
   ...Array.from({ length: tasks.length + 1 }, () => doubleDiamondGraphRead(graph)).flat(),
@@ -2119,19 +2125,19 @@ const doubleDiamondRecoveryReads = (
   }))
 ]
 
-const doubleDiamondAttempts = [
-  { attemptId: "attempt:A:0", taskId: "A" },
-  { attemptId: "attempt:B:1", taskId: "B" },
-  { attemptId: "attempt:C:2", taskId: "C" },
-  { attemptId: "attempt:D:0", taskId: "D" },
-  { attemptId: "attempt:X:1", taskId: "X" },
-  { attemptId: "attempt:E:0", taskId: "E" },
-  { attemptId: "attempt:F:1", taskId: "F" },
-  { attemptId: "attempt:H:2", taskId: "H" },
-  { attemptId: "attempt:I:3", taskId: "I" },
-  { attemptId: "attempt:G:0", taskId: "G" }
-] as const
-const doubleDiamondExecutionOrder = doubleDiamondAttempts.map(({ taskId }) => taskId)
+const doubleDiamondAttempts = {
+  a: { attemptId: "attempt:A:0", taskId: "A" },
+  b: { attemptId: "attempt:B:1", taskId: "B" },
+  c: { attemptId: "attempt:C:2", taskId: "C" },
+  d: { attemptId: "attempt:D:0", taskId: "D" },
+  x: { attemptId: "attempt:X:1", taskId: "X" },
+  e: { attemptId: "attempt:E:0", taskId: "E" },
+  f: { attemptId: "attempt:F:1", taskId: "F" },
+  h: { attemptId: "attempt:H:2", taskId: "H" },
+  i: { attemptId: "attempt:I:3", taskId: "I" },
+  g: { attemptId: "attempt:G:0", taskId: "G" }
+} as const
+const doubleDiamondExecutionOrder = ["A", "B", "C", "D", "X", "E", "F", "H", "I", "G"] as const
 
 /** The real delivery runtime consumes a staggered double diamond and reconstructs both middle positions before observing X. */
 export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
@@ -2143,7 +2149,7 @@ export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(A
     journal: "Empty",
     taskClaims: [],
     taskWorkSpecifications: doubleDiamondTaskIds.map(doubleDiamondSpecification),
-    trackerGraph: doubleDiamondGraphs[0],
+    trackerGraph: doubleDiamondGraphs.initialAEligible,
     worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
   },
   story: [
@@ -2159,57 +2165,61 @@ export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(A
       verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/double-diamond"
     },
-    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[0], [doubleDiamondAttempts[0]]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[0], "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[0], "Terminal"),
-    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[1], [
-      doubleDiamondAttempts[1],
-      doubleDiamondAttempts[2]
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.initialAEligible, [
+      doubleDiamondAttempts.a
     ]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[1], "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[2], "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.a, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.a, "Terminal"),
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.aCompleteBeforeX, [
+      doubleDiamondAttempts.b,
+      doubleDiamondAttempts.c
+    ]),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.b, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.c, "Running"),
     { _tag: "CoordinatorProcessDies" },
-    ...doubleDiamondGraphRead(doubleDiamondGraphs[2]),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs[2]),
-    ...doubleDiamondRecoveryReads([doubleDiamondAttempts[1], doubleDiamondAttempts[2]]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[1], "Terminal"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[2], "Terminal"),
-    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[3], [
-      doubleDiamondAttempts[3],
-      doubleDiamondAttempts[4]
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
+    ...doubleDiamondRecoveryReads([doubleDiamondAttempts.b, doubleDiamondAttempts.c]),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.b, "Terminal"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.c, "Terminal"),
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.middlePairComplete, [
+      doubleDiamondAttempts.d,
+      doubleDiamondAttempts.x
     ]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[3], "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[4], "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[3], "Terminal"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[4], "Terminal"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.d, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.x, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.d, "Terminal"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.x, "Terminal"),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
     },
-    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[4], [
-      doubleDiamondAttempts[5],
-      doubleDiamondAttempts[6]
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.dAndXComplete, [
+      doubleDiamondAttempts.e,
+      doubleDiamondAttempts.f
     ]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[5], "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[6], "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[5], "Terminal"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[6], "Terminal"),
-    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[5], [
-      doubleDiamondAttempts[7],
-      doubleDiamondAttempts[8]
+    doubleDiamondExecutorReport(doubleDiamondAttempts.e, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.f, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.e, "Terminal"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.f, "Terminal"),
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.lowerPairComplete, [
+      doubleDiamondAttempts.h,
+      doubleDiamondAttempts.i
     ]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[7], "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[8], "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[7], "Terminal"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[8], "Terminal"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.h, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.i, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.h, "Terminal"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.i, "Terminal"),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
     },
-    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs[6], [doubleDiamondAttempts[9]]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[9], "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts[9], "Terminal"),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs[7]),
+    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.deepPairComplete, [
+      doubleDiamondAttempts.g
+    ]),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.g, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.g, "Terminal"),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.allComplete),
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
     {
       _tag: "ExpectedBehavior",

@@ -43,6 +43,7 @@ export type DeliveryLandmark = typeof DeliveryLandmark.Type
 /** Framework-neutral facts needed to derive playback stops from production frames. */
 export interface DeliveryPlaybackFrameInput {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
+  readonly capacity: number
   readonly eligibleTaskIds: ReadonlyArray<TaskIdType>
   readonly heldTaskIds: ReadonlyArray<TaskIdType>
   readonly label: string
@@ -90,10 +91,13 @@ export const deliveryPlaybackFramesFrom = (
         lastFrontier = frontier
       }
     }
-    if (
-      previous !== undefined
+    const heldChanged = previous !== undefined
       && JSON.stringify(previous.heldTaskIds.toSorted()) !== JSON.stringify(input.heldTaskIds.toSorted())
-    ) {
+    const fullCapacityReached = input.capacity > 0 && input.heldTaskIds.length === input.capacity
+    const oneHolderRemainsAfterRelease = previous !== undefined
+      && input.heldTaskIds.length > 0
+      && input.heldTaskIds.length < previous.heldTaskIds.length
+    if (heldChanged && (fullCapacityReached || oneHolderRemainsAfterRelease)) {
       landmarks.push({ _tag: "HeldPositionsChanged", taskIds: input.heldTaskIds.toSorted() })
     }
     if (!running && index === inputs.length - 1) landmarks.push({ _tag: "TerminalPublication" })
@@ -155,6 +159,7 @@ export const NextLandmarkRequested = m("NextLandmarkRequested", {
 export const ExactFrameSelected = m("ExactFrameSelected", { frameIndex: DeliveryFrameIndex })
 export const FollowLiveRequested = m("FollowLiveRequested")
 export const TaskSelectedRequested = m("TaskSelectedRequested", { taskId: TaskId })
+export const PlaybackRunStarted = m("PlaybackRunStarted")
 export const FramesUpdated = m("FramesUpdated", {
   frames: Schema.Array(DeliveryPlaybackFrame),
   running: Schema.Boolean
@@ -167,6 +172,7 @@ export const DeliveryPlaybackMessage = Schema.Union([
   ExactFrameSelected,
   FollowLiveRequested,
   TaskSelectedRequested,
+  PlaybackRunStarted,
   FramesUpdated
 ])
 export type DeliveryPlaybackMessage = typeof DeliveryPlaybackMessage.Type
@@ -326,6 +332,8 @@ export const updateDeliveryPlayback = (
   const projection = projectDeliveryPlayback(model)
   const selectedIndex = projection.currentFrameIndex
   switch (message._tag) {
+    case "PlaybackRunStarted":
+      return [makeDeliveryPlaybackModel([], true), []]
     case "PreviousFrameRequested":
       return selectedIndex === null || !projection.previousFrameAvailable
         ? [model, []]

@@ -331,7 +331,7 @@ const renderTaskWorkCapacity = (parent: HTMLElement, frame: AuthoredDeliveryFram
   appendText(
     parent,
     "p",
-    "Anonymous process-local positions reconstructed from unfinished journal responsibilities; no position has a durable identity.",
+    "Anonymous process-local positions. Dalph admits them from selected responsibilities and reconstructs later-activation holders from unfinished journal responsibilities; no position has a durable identity.",
     "delivery-capacity-explanation"
   )
   const positions = document.createElement("ul")
@@ -363,6 +363,7 @@ const renderTaskWorkCapacity = (parent: HTMLElement, frame: AuthoredDeliveryFram
 
 const offGraphReason = (
   frame: AuthoredDeliveryFrame,
+  taskId: string,
   delivery: AuthoredDeliveryFrame["deliveries"][number] | undefined
 ): string => {
   if (frame.graph._tag === "NotEstablished") return "graph not established"
@@ -376,11 +377,13 @@ const offGraphReason = (
  */
 const renderOffGraphResponsibilities = (parent: HTMLElement, frame: AuthoredDeliveryFrame): void => {
   parent.replaceChildren()
-  const represented = new Set(frame.graph._tag === "Established" ? frame.graph.tasks.map(({ id }) => id) : [])
+  const responsibilitiesAlignedWithGraph = new Set(
+    frame.graph._tag === "Established" ? frame.graph.tasks.map(({ id }) => id) : []
+  )
   const taskIds = [...new Set([
     ...frame.deliveries.map(({ taskId }) => taskId),
     ...frame.heldPositions.map(({ taskId }) => taskId)
-  ])].filter((taskId) => !represented.has(taskId)).toSorted()
+  ])].filter((taskId) => !responsibilitiesAlignedWithGraph.has(taskId)).toSorted()
   if (taskIds.length === 0) {
     parent.removeAttribute("data-role")
     parent.hidden = true
@@ -388,7 +391,7 @@ const renderOffGraphResponsibilities = (parent: HTMLElement, frame: AuthoredDeli
   }
   parent.dataset.role = "delivery-off-graph-responsibilities"
   parent.hidden = false
-  appendText(parent, "h5", "Retained responsibilities outside the observed graph")
+  appendText(parent, "h5", "Responsibilities not aligned with the observed graph")
   appendText(
     parent,
     "p",
@@ -399,12 +402,13 @@ const renderOffGraphResponsibilities = (parent: HTMLElement, frame: AuthoredDeli
     const delivery = frame.deliveries.find(({ taskId: candidate }) => candidate === taskId)
     const held = frame.heldPositions.filter(({ taskId: candidate }) => candidate === taskId)
     const obligations = delivery?.obligations.map(({ summary }) => summary) ?? []
-    const correlations = held.map(({ attemptId }) => attemptId)
+    const correlations = held.map(({ attemptId, runId }) => `Run ${runId} · attempt ${attemptId}`)
+    const placement = delivery?.placement.kind ?? "NoDeliveryPlacement"
     appendText(
       list,
       "li",
-      `Task ${taskId} · ${offGraphReason(frame, delivery)}`
-        + `${correlations.length === 0 ? "" : ` · held ${correlations.join(", ")}`}`
+      `Task ${taskId} · ${offGraphReason(frame, taskId, delivery)} · placement ${placement}`
+        + `${correlations.length === 0 ? " · does not occupy capacity" : ` · occupies capacity · ${correlations.join(", ")}`}`
         + `${obligations.length === 0 ? "" : ` · ${obligations.join("; ")}`}`
     ).dataset.taskId = taskId
   }
@@ -548,7 +552,6 @@ export interface DeliveryWorkbenchPlaybackRuntime {
     readonly changed: boolean
     readonly commands: ReadonlyArray<DeliveryPlaybackCommand>
   }
-  readonly replace: (model: DeliveryPlaybackModel) => void
 }
 
 /**
@@ -566,9 +569,6 @@ export const makeDeliveryWorkbenchPlaybackRuntime = (): DeliveryWorkbenchPlaybac
       const [next, commands] = updateDeliveryPlayback(previous, message)
       current = next
       return { changed: next !== previous, commands }
-    },
-    replace: (model) => {
-      current = model
     }
   }
 }
@@ -797,6 +797,7 @@ const renderTimeline = (
     deliveryPlaybackFramesFrom(
       frames.map((frame, index) => ({
         activationOrdinal: frame.activationOrdinal,
+        capacity: frame.capacity,
         eligibleTaskIds: frame.graph._tag === "Established"
           ? frame.graph.tasks
             .filter(({ id }) => taskFacts(frame, id).frontierFact?.standing === "Eligible")
