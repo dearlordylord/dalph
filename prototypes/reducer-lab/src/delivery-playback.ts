@@ -178,16 +178,19 @@ export const DeliveryPlaybackMessage = Schema.Union([
 export type DeliveryPlaybackMessage = typeof DeliveryPlaybackMessage.Type
 
 /** One executable registry binds declared shortcuts to their pure messages. */
-export const deliveryPlaybackShortcutMessage = (key: string): DeliveryPlaybackMessage | null => {
+export const deliveryPlaybackShortcutMessage = (
+  key: string,
+  source: PlaybackNavigationSource = "WorkbenchShortcut"
+): DeliveryPlaybackMessage | null => {
   switch (key) {
     case deliveryPlaybackViewContract.previousFrame.shortcut:
-      return PreviousFrameRequested({ source: "WorkbenchShortcut" })
+      return PreviousFrameRequested({ source })
     case deliveryPlaybackViewContract.nextFrame.shortcut:
-      return NextFrameRequested({ source: "WorkbenchShortcut" })
+      return NextFrameRequested({ source })
     case deliveryPlaybackViewContract.previousLandmark.shortcut:
-      return PreviousLandmarkRequested({ source: "WorkbenchShortcut" })
+      return PreviousLandmarkRequested({ source })
     case deliveryPlaybackViewContract.nextLandmark.shortcut:
-      return NextLandmarkRequested({ source: "WorkbenchShortcut" })
+      return NextLandmarkRequested({ source })
     default:
       return null
   }

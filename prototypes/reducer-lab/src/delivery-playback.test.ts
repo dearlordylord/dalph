@@ -78,6 +78,10 @@ assert.deepEqual(deliveryPlaybackViewContract, {
   statusLabel: "Delivery playback position"
 })
 assert.equal(deliveryPlaybackShortcutMessage("ArrowLeft")?._tag, "PreviousFrameRequested")
+const playbackControlShortcut = deliveryPlaybackShortcutMessage("ArrowLeft", "PlaybackControl")
+assert.equal(playbackControlShortcut?._tag, "PreviousFrameRequested")
+if (playbackControlShortcut?._tag !== "PreviousFrameRequested") throw new Error("expected previous-frame shortcut")
+assert.equal(playbackControlShortcut.source, "PlaybackControl")
 assert.equal(deliveryPlaybackShortcutMessage("ArrowRight")?._tag, "NextFrameRequested")
 assert.equal(deliveryPlaybackShortcutMessage("[")?._tag, "PreviousLandmarkRequested")
 assert.equal(deliveryPlaybackShortcutMessage("]")?._tag, "NextLandmarkRequested")

@@ -1000,7 +1000,10 @@ const renderTimeline = (
   const handleKeyboard = (event: KeyboardEvent): void => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
     if (event.target instanceof HTMLSelectElement || event.target instanceof HTMLInputElement) return
-    const message = deliveryPlaybackShortcutMessage(event.key)
+    const source = event.target instanceof HTMLButtonElement && controls.contains(event.target)
+      ? "PlaybackControl"
+      : "WorkbenchShortcut"
+    const message = deliveryPlaybackShortcutMessage(event.key, source)
     if (message === null) return
     dispatchPlayback(message)
     event.preventDefault()

@@ -1066,7 +1066,9 @@ await scenario("counts one delivery settlement once across repeated production p
     "The workbench must separate tracker lifecycle observations from exact Dalph settlements"
   )
   assert(
-    (root.textContent ?? "").includes("tracker success for B through G is intentionally supplied outside Dalph"),
+    (root.textContent ?? "").includes(
+      "B remains open, while tracker success for C through G is intentionally supplied outside Dalph"
+    ),
     "The linked cassette must visibly state the exact scope it executes"
   )
 })
