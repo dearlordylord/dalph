@@ -512,8 +512,10 @@ becoming the human action label.
 The linked `authored:deliveryInvariantStory` is a focused scheduling and
 restart slice over the real production runtime, not the complete graph-delivery
 capstone owned by issue #167. Its typed delivery scope is
-`FocusedWorkflowSlice`. The Lab shows that scope before execution, so a
-maintainer does not have to infer scope from absent integration frames.
+`FocusedWorkflowSlice`, with A through I and X explicitly listed as externally
+completed tracker tasks. The Lab shows that corner-case scope before execution,
+so a maintainer does not have to infer provenance from absent integration
+frames or mistake this for the normal delivery path.
 
 The controlled executor reports coarse `Completed` results without accepted
 commits. Later complete tracker reads report successful tasks as outside facts;
@@ -524,6 +526,24 @@ not change that scope: restart reconstructs exact executor-work responsibility,
 not integration responsibility. Replaying the cassette repeats the same
 controlled chronology and must not reinterpret tracker success as Dalph
 delivery.
+
+This is a possible but exceptional chronology: an outside actor or system
+completes every tracker task while Dalph's coarse executor work is in flight or
+finished. A focused cassette may contain such a successful tracker observation
+only when its typed scope names that exact task in
+`externallyCompletedTaskIds`. Decoding fails when a successful tracker task has
+neither a complete Dalph delivery chain nor that explicit external provenance;
+it also fails when a task is declared externally completed without a successful
+tracker observation, or when the same task already has complete Dalph delivery
+evidence.
+
+Issue #167 changes the normal large-graph story: it must either replace these
+external declarations with accepted-result integration and finality for every
+task, or move the external-completion chronology into a separately named
+corner-case cassette. The primary large-graph Lab example must then show the
+integration order and finality rather than retaining an external-completion
+shortcut. Other maintained cassettes follow the same rule unless their accepted
+scenario is specifically about external completion.
 
 If a maintainer authors a cassette with the typed delivery scope
 `CompleteGraphDelivery`, decoding fails unless every task ever observed in its
@@ -600,7 +620,8 @@ removed its tracker task, or draw an absent responsibility as if it were a
 current tracker node.
 
 The separate `authored:deliveryFinalitySpine` crosses the ordinary production
-completion-finality boundary. After promotion, the controlled tracker returns
+completion-finality boundary for A while explicitly declaring B through G as
+externally completed tracker tasks. After A's promotion, the controlled tracker returns
 the exact active claim, applies the exact replacement, later publishes a
 complete successful graph, returns the exact completion claim, and applies its
 deletion. Dalph itself records `IntegrationFinalitySettled`; the next
@@ -737,6 +758,15 @@ task whose exact facts are correlated below.
   report, and duplicates a candidate stage. A two-task counterexample also tries
   to assign both tasks the same AttemptId. Each malformed or ambiguous chain
   fails schema decoding.
+- `requires focused cassettes to declare every externally completed tracker task`
+  proves the ten-task graph and the dependency-release slice decode only with
+  their exact externally completed task IDs and rejects an undeclared successful
+  tracker task.
+- `rejects contradictory external completion declarations`
+  rejects duplicate external task IDs, a declared task with no successful
+  tracker observation, a task simultaneously declared external and backed by a
+  complete Dalph integration/finality chain, and an accepted result relabelled
+  external before its integration/finality chain finishes.
 - `preserves the double-diamond middle positions across coordinator restart`
   checks B and C hold exact task-work positions before process loss, the first
   later-activation publications retain the same Run and attempt correlations,
@@ -755,10 +785,15 @@ task whose exact facts are correlated below.
   `retains an exact attempt across outside-bound, closed, and absent graph placements`
   proves that exact placement is produced when a complete tracker graph omits
   the task; the presentation test does not replace that production proof.
-- `rejects a partial authored completion-finality boundary chronology` checks
-  that once an authored story uses the controlled finality boundary, each task
-  must declare exactly one Active read, replacement, Completion read, and
-  deletion in that order; an incomplete story cannot look executable.
+- `rejects treating a partially finalized accepted result as external completion`
+  checks that removing the completion-claim deletion from A's accepted-result
+  path cannot be excused by classifying A as externally completed. A tracker
+  success after Dalph accepts a result still requires the exact integration and
+  finality chain.
+- `renders focused and complete delivery provenance in maintainer language`
+  checks the production presenter distinguishes a focused slice with no outside
+  success, an explicit external tracker-completion corner case with named task
+  IDs, and a complete graph delivery claim.
 - `counts one delivery settlement once across repeated production publications`
   checks repeated publications carrying A's exact settlement report one
   distinct settlement and separately report their publication count. It also

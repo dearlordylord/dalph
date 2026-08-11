@@ -114,7 +114,7 @@ const singletonExpectedBehavior = {
  */
 export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
-  deliveryScope: { _tag: "FocusedWorkflowSlice" },
+  deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [] },
   name: "one open task completes its coarse executor work",
   schemaVersion: 1,
   startingFacts: {
@@ -327,7 +327,7 @@ export const runPauseRestartsPassivelyAuthoredCassette = Schema.decodeUnknownSyn
 /** Alice's stale task Pause is rejected after a complete fresh target-closure read. */
 export const staleTaskPauseRejectedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
-  deliveryScope: { _tag: "FocusedWorkflowSlice" },
+  deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [] },
   name: "Alice's stale task Pause is rejected visibly after a fresh read",
   schemaVersion: 1,
   startingFacts: {
@@ -1350,8 +1350,8 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette = Schema.de
 /** The maintained dependency story proving one Run consumes a later complete graph observation. */
 export const dependentTasksCompleteInOneRunAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
-  deliveryScope: { _tag: "FocusedWorkflowSlice" },
-  name: "a later recorded tracker observation releases the dependant in the same run",
+  deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["A"] },
+  name: "external tracker completion of A releases dependant B in the same run",
   schemaVersion: 1,
   startingFacts: {
     executorWork: "NoPriorReport",
@@ -1542,7 +1542,7 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette = Schema.decod
 export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
   {
     _tag: "AuthoredScenarioCassette",
-    deliveryScope: { _tag: "FocusedWorkflowSlice" },
+    deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [] },
     name: "an accepted result starts its exact integration responsibility after coordinator restart",
     schemaVersion: 1,
     startingFacts: {
@@ -2005,7 +2005,8 @@ const deliveryFinalityBase = (() => {
  */
 export const deliveryFinalitySpineAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...targetPromotionSuccessAuthoredCassette,
-  name: "real A-finality spine (partial delivery-invariant story): five-to-seven task graph across restart",
+  deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["B", "C", "D", "E", "F", "G"] },
+  name: "A completes Dalph finality while B-G complete externally across a five-to-seven-task restart",
   startingFacts: {
     ...targetPromotionSuccessAuthoredCassette.startingFacts,
     trackerGraph: deliveryFinalityStartingGraph
@@ -2146,8 +2147,8 @@ const doubleDiamondExecutionOrder = ["A", "B", "C", "D", "X", "E", "F", "H", "I"
 /** The real delivery runtime consumes a staggered double diamond and reconstructs both middle positions before observing X. */
 export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
-  deliveryScope: { _tag: "FocusedWorkflowSlice" },
-  name: "scheduler and restart traversal consume a staggered double diamond while X waits for capacity",
+  deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [...doubleDiamondTaskIds] },
+  name: "external tracker-completion corner case consumes a staggered double diamond while X waits for capacity",
   schemaVersion: 1,
   startingFacts: {
     executorWork: "NoPriorReport",

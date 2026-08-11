@@ -394,11 +394,11 @@ try {
   await selector.selectOption(linkedDeliveryStoryCassette)
   assert.match(
     await page.locator("#selected-cassette .delivery-scope").textContent() ?? "",
-    /Focused workflow slice.*tracker success is not proof/u
+    /External tracker-completion corner case: A, B, C, D, E, F, G, H, I, X.*not the normal delivery path/u
   )
   assert.match(
     await page.locator("#selected-cassette .delivery-story-scope").textContent() ?? "",
-    /coarse Completed reports and later tracker-success facts intentionally do not claim accepted-result integration or complete graph delivery/u
+    /All ten later tracker-success facts are explicitly external.*Issue #167 must make the normal large-graph story show integration/u
   )
   await page.evaluate(() => {
     globalThis.__linkedDeliveryStoryTrace = []

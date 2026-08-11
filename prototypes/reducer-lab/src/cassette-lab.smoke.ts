@@ -99,13 +99,15 @@ await scenario("shows the staggered double-diamond frontier being consumed on on
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   assert(
     row?.surface._tag === "AuthoredDeliverySurface"
-      && row.surface.deliveryScope.includes("Focused workflow slice")
-      && row.surface.deliveryScope.includes("tracker success is not proof"),
-    "The linked graph story must expose its focused non-integration claim"
+      && row.surface.deliveryScope.includes("External tracker-completion corner case")
+      && row.surface.deliveryScope.includes("A, B, C, D, E, F, G, H, I, X")
+      && row.surface.deliveryScope.includes("not the normal delivery path"),
+    "The linked graph story must expose every externally completed tracker task"
   )
   assert(
-    row?.storyName === "scheduler and restart traversal consume a staggered double diamond while X waits for capacity",
-    "The linked graph story title must not claim complete production delivery"
+    row?.storyName ===
+      "external tracker-completion corner case consumes a staggered double diamond while X waits for capacity",
+    "The linked graph story title must name the exceptional completion provenance"
   )
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The linked story must complete with frames")
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
@@ -1065,7 +1067,7 @@ await scenario("counts one delivery settlement once across repeated production p
     "The workbench must separate tracker lifecycle observations from exact Dalph settlements"
   )
   assert(
-    (root.textContent ?? "").includes("the real A-finality spine, not the complete 22-beat one-Run target"),
+    (root.textContent ?? "").includes("B through G are explicitly externally completed tracker tasks"),
     "The linked cassette must visibly state the exact scope it executes"
   )
 })

@@ -3218,7 +3218,7 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
     ]
     const changedMembership = {
       _tag: "AuthoredScenarioCassette",
-      deliveryScope: { _tag: "FocusedWorkflowSlice" },
+      deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["A"] },
       name: "a complete refresh removes unstarted C and adds D",
       schemaVersion: 1,
       startingFacts: {
@@ -3410,8 +3410,74 @@ it("rejects a complete graph delivery scope backed only by coarse executor compl
     "complete graph delivery requires one accepted commit for every observed tracker task"
   )
   expect(maintainedAuthoredCassetteCatalog.deliveryInvariantStory.deliveryScope).toEqual({
-    _tag: "FocusedWorkflowSlice"
+    _tag: "FocusedWorkflowSlice",
+    externallyCompletedTaskIds: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X"]
   })
+})
+
+it("requires focused cassettes to declare every externally completed tracker task", () => {
+  expect(maintainedAuthoredCassetteCatalog.dependentTasksCompleteInOneRun.deliveryScope).toEqual({
+    _tag: "FocusedWorkflowSlice",
+    externallyCompletedTaskIds: ["A"]
+  })
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
+      deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [] }
+    })
+  ).toThrow(
+    "a focused cassette must explicitly and exactly declare every tracker-successful task without Dalph delivery evidence"
+  )
+})
+
+it("rejects contradictory external completion declarations", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice",
+        externallyCompletedTaskIds: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X", "A"]
+      }
+    })
+  ).toThrow("a focused cassette must declare each externally completed tracker task once")
+
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.singletonTaskCompletes,
+      deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["A"] }
+    })
+  ).toThrow(
+    "a focused cassette must explicitly and exactly declare every tracker-successful task without Dalph delivery evidence"
+  )
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...completeSingletonDeliveryCassette,
+      deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["A"] }
+    })
+  ).toThrow(
+    "a focused cassette must explicitly and exactly declare every tracker-successful task without Dalph delivery evidence"
+  )
+
+  const acceptedResultStory = maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration.story
+  const lastGraphIndex = acceptedResultStory.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
+  const acceptedResultWithPrematureTrackerSuccess = {
+    ...maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration,
+    deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["A"] },
+    story: acceptedResultStory.map((item, index) =>
+      index === lastGraphIndex && item._tag === "TrackerGraphReadReturned"
+        ? {
+            ...item,
+            graph: {
+              ...item.graph,
+              tasks: item.graph.tasks.map((task) => ({ ...task, lifecycle: { _tag: "CompletedSuccessfully" } }))
+            }
+          }
+        : item
+    )
+  }
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(acceptedResultWithPrematureTrackerSuccess)).toThrow(
+    "focused cassette task A reached tracker success before its accepted result completed Dalph integration and finality"
+  )
 })
 
 it("rejects a complete graph delivery scope when successful tracker tasks lack Dalph delivery evidence", () => {
@@ -4235,7 +4301,7 @@ it.effect(
       }
       const localizedCassette = {
         _tag: "AuthoredScenarioCassette",
-        deliveryScope: { _tag: "FocusedWorkflowSlice" },
+        deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [] },
         name: "A leaves the target while independent B continues",
         schemaVersion: 1,
         startingFacts: {
@@ -4427,6 +4493,7 @@ it.effect(
       )
       const externalSuccessCassette = {
         ...localizedCassette,
+        deliveryScope: { _tag: "FocusedWorkflowSlice" as const, externallyCompletedTaskIds: [TaskId.make("A")] },
         name: "A completes externally while its exact claim and WIP remain",
         story: [
           ...externalSuccessStory.slice(0, externalSuspensionAt + 1),
@@ -6536,6 +6603,10 @@ it.effect("labels the 100-task four-read encoding experiment as a baseline", () 
     const replaceTask = (value: string) => (value === "A" ? activeTaskId : value)
     const input = {
       ...singleton,
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice" as const,
+        externallyCompletedTaskIds: taskIds.filter((taskId) => taskId !== activeTaskId)
+      },
       name: "100-task four-read encoded-size baseline",
       startingFacts: {
         ...singleton.startingFacts,

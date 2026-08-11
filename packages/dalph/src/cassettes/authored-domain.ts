@@ -447,7 +447,10 @@ const authoredScenarioCassetteVersion = 1 as const
  * complete graph delivery must carry the accepted-result and finality evidence
  * that distinguishes Dalph delivery from an outside tracker completion.
  */
-export const AuthoredCassetteDeliveryScope = Schema.TaggedUnion({ FocusedWorkflowSlice: {}, CompleteGraphDelivery: {} })
+export const AuthoredCassetteDeliveryScope = Schema.TaggedUnion({
+  FocusedWorkflowSlice: { externallyCompletedTaskIds: Schema.Array(TaskId) },
+  CompleteGraphDelivery: {}
+})
 export type AuthoredCassetteDeliveryScope = typeof AuthoredCassetteDeliveryScope.Type
 
 const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCassette", {
@@ -752,6 +755,54 @@ const completeGraphDeliveryHasExactEvidence = Schema.makeFilter(
       acceptedResults.results,
       runCoordinator.integrationTarget
     )
+  }
+)
+
+const successfulGraphTaskIdsObservedIn = (cassette: typeof AuthoredScenarioCassetteShape.Type) => [
+  ...new Set(
+    graphTasksObservedIn(cassette).flatMap((task) => (task.lifecycle._tag === "CompletedSuccessfully" ? [task.id] : []))
+  )
+]
+
+const focusedExternalCompletionScopeIsExact = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    if (cassette.deliveryScope._tag !== "FocusedWorkflowSlice") return undefined
+    const declaredExternalTasks = cassette.deliveryScope.externallyCompletedTaskIds
+    if (new Set(declaredExternalTasks).size !== declaredExternalTasks.length) {
+      return "a focused cassette must declare each externally completed tracker task once"
+    }
+    const expected = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(
+      cassette.story.at(terminalStoryItemOffset)
+    )
+    const successfulTasks = successfulGraphTaskIdsObservedIn(cassette)
+    const acceptedResults = expected.taskWork.results.filter(
+      (result): result is AcceptedTaskWorkResult => result._tag === "PlannedWorkForTaskAccepted"
+    )
+    const runCoordinator = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.RunCoordinator)(cassette.story[1])
+    const acceptedTaskWithoutCompleteDelivery = acceptedResults.find(
+      (result) =>
+        successfulTasks.includes(result.taskId) &&
+        (expected.orchestration === null ||
+          exactDeliveryEvidenceIssue(
+            result.taskId,
+            result.commit,
+            expected.orchestration,
+            runCoordinator.integrationTarget
+          ) !== undefined ||
+          completionFinalityIssue(cassette, result.taskId) !== undefined)
+    )
+    if (acceptedTaskWithoutCompleteDelivery !== undefined) {
+      return `focused cassette task ${acceptedTaskWithoutCompleteDelivery.taskId} reached tracker success before its accepted result completed Dalph integration and finality`
+    }
+    const acceptedTaskIds = acceptedResults.map(({ taskId }) => taskId)
+    const externallyCompletedTasks = successfulTasks.filter((taskId) => !acceptedTaskIds.includes(taskId))
+    const declarationsAreExact = [
+      declaredExternalTasks.length === externallyCompletedTasks.length,
+      declaredExternalTasks.every((taskId) => externallyCompletedTasks.includes(taskId))
+    ].every(Boolean)
+    return declarationsAreExact
+      ? undefined
+      : "a focused cassette must explicitly and exactly declare every tracker-successful task without Dalph delivery evidence"
   }
 )
 
@@ -1072,6 +1123,7 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   .check(startingFactsAreConsistent)
   .check(behaviorAssertionsAreConsistent)
   .check(completeGraphDeliveryHasExactEvidence)
+  .check(focusedExternalCompletionScopeIsExact)
   .check(coordinatorLifecycleBoundariesHaveFollowingActivationWork)
   .check(finalTrackerReadClosesCurrentActivation)
   .check(ambiguousBoundaryLossesImmediatelyCrash)

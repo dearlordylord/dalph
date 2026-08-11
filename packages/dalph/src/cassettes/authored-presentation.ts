@@ -11,8 +11,10 @@ import type {
 /** Human meaning of the typed delivery-evidence scope carried by one authored cassette. */
 export const renderAuthoredCassetteDeliveryScope = Match.type<AuthoredCassetteDeliveryScope>().pipe(
   Match.tagsExhaustive({
-    FocusedWorkflowSlice: () =>
-      "Focused workflow slice: only the named behavior is asserted. Coarse executor completion or tracker success is not proof that Dalph integrated the whole graph.",
+    FocusedWorkflowSlice: ({ externallyCompletedTaskIds }) =>
+      externallyCompletedTaskIds.length === 0
+        ? "Focused workflow slice: only the named behavior is asserted; no externally completed tracker task is part of this chronology."
+        : `External tracker-completion corner case: ${externallyCompletedTaskIds.join(", ")} reach tracker success without Dalph integration. This is explicit outside provenance, not the normal delivery path.`,
     CompleteGraphDelivery: () =>
       "Complete graph delivery: every observed graph task reaches tracker success and carries one correlated accepted commit, attempt, integration, candidate, verification, promotion, and completion-finality chain."
   })
