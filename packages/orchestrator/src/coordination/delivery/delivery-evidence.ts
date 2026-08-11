@@ -13,9 +13,30 @@ import {
 import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
 import { deriveIntegrationFinalityStateFor } from "../../workflow/protocols/integration-finality/state.js"
+import { completionTaskConfirmationDisposition } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
+import { completionTaskRequestEquals } from "../../workflow/protocols/integration-finality/events.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import type { ExactTicketDeliveryEvidence, TicketDeliveryEvidence } from "./relations.js"
+
+const focusedTaskCompletionSuccessOf = (
+  { event, position }: JournalRecord,
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<ExactTicketDeliveryEvidence> => {
+  if (event._tag !== "TaskTrackerFactsObserved" || event.observation._tag !== "FocusedTaskCompletionFacts") return []
+  const focused = event.observation
+  const requestIntentPrecedesSuccess = records.some(
+    (candidate) =>
+      candidate.position < position &&
+      candidate.event._tag === "CompletionTaskIntended" &&
+      completionTaskRequestEquals(candidate.event.request, focused.request)
+  )
+  return requestIntentPrecedesSuccess &&
+    completionTaskConfirmationDisposition(focused.request, focused.target, event.operationId, focused.facts)._tag ===
+      "CompletedSuccessfully"
+    ? [{ _tag: "FocusedTaskCompletionSuccess", observed: { ...event, observation: focused }, recordedAt: position }]
+    : []
+}
 
 const targetVerificationEvidenceOf = (
   records: ReadonlyArray<JournalRecord>,
@@ -63,6 +84,7 @@ export const acceptedOperationIdsOf = (records: ReadonlyArray<JournalRecord>): R
 export const journaledIntegrationEvidenceOf = (
   records: ReadonlyArray<JournalRecord>
 ): ReadonlyArray<ExactTicketDeliveryEvidence> => {
+  const focusedCompletionSuccesses = records.flatMap((record) => focusedTaskCompletionSuccessOf(record, records))
   const finalitySettlements: ReadonlyArray<ExactTicketDeliveryEvidence> = records.flatMap(({ event }) =>
     event._tag === "IntegrationFinalitySettled" &&
     deriveIntegrationFinalityStateFor(records, event.claim)?._tag === "IntegrationFinalitySettled"
@@ -77,6 +99,7 @@ export const journaledIntegrationEvidenceOf = (
     ...deriveIntegrationAdmission(records).responsibilities.flatMap((responsibility) =>
       integrationEvidenceOf(records, responsibility)
     ),
+    ...focusedCompletionSuccesses,
     ...finalitySettlements
   ]
 }

@@ -520,9 +520,10 @@ from absent integration frames or mistake the current evidence for the finished
 normal path.
 
 The controlled executor reports coarse `Completed` results without accepted
-commits. Later complete tracker reads report successful tasks as outside facts;
+commits. Later complete tracker reads provisionally report successful tasks;
 they prove tracker lifecycle and release dependants, but do not prove Dalph
-integrated those tasks. No Git integration, verification, promotion, or
+integrated those tasks and do not classify the intended normal path as external
+completion. No Git integration, verification, promotion, or
 completion-finality boundary is called in this slice. A coordinator crash does
 not change that scope: restart reconstructs exact executor-work responsibility,
 not integration responsibility. Replaying the cassette repeats the same
@@ -538,8 +539,8 @@ integration and finality for every task while preserving this cassette's normal
 delivery intent and graph identity.
 
 Every focused cassette classifies every tracker-successful task exactly once as
-`DalphDeliveryDemonstrated`, `TrackerSuccessSuppliedOutsideDalph`, or
-`DalphDeliveryTargetPending`. An empty list explicitly means no task reaches
+`DalphDeliveryDemonstrated`, `DalphDeliveryInProgress`,
+`TrackerSuccessSuppliedOutsideDalph`, or `DalphDeliveryTargetPending`. An empty list explicitly means no task reaches
 tracker success in the chronology. Decoding fails for an omitted or duplicate
 task, outside completion backed by an accepted Dalph result, demonstrated Dalph
 delivery without the exact integration/finality chain, or a pending target that
@@ -679,6 +680,9 @@ task whose exact facts are correlated below.
   typed production presenter rather than the Lab's generic tag formatter. It
   also checks the production-authored activation-final tracker-read landmark
   remains distinct from an ordinary tracker graph return.
+- `renders an exact completion-request lookup in maintainer language` checks
+  the production-authored presenter explains the exact request-result lookup
+  and outcome without exposing only its raw story tag.
 - `keeps a dependant blocked after executor completion until a later tracker observation`
   checks the maintained dependent-task timeline rather than inferring release
   from the declared story.
@@ -764,13 +768,14 @@ task whose exact facts are correlated below.
 - `requires focused cassettes to classify every tracker-success intent`
   proves the ten-task graph classifies A through I and X as the normal Dalph
   delivery target pending #167, the dependency-release slice classifies A as
-  tracker success supplied outside Dalph, and an undeclared successful task
+  the same normal delivery target pending #167, and an undeclared successful task
   fails decoding.
 - `rejects contradictory tracker-success intents`
   rejects duplicate task classifications, a classification without a successful
   tracker observation, outside completion backed by an accepted Dalph result,
-  demonstrated delivery without the exact chain, and a pending normal target
-  without its blocking issue.
+  demonstrated delivery without the exact chain, in-progress delivery without
+  exact integration or after finality already completed, and a pending normal
+  target without its blocking issue.
 - `preserves the double-diamond middle positions across coordinator restart`
   checks B and C hold exact task-work positions before process loss, the first
   later-activation publications retain the same Run and attempt correlations,
@@ -789,11 +794,6 @@ task whose exact facts are correlated below.
   `retains an exact attempt across outside-bound, closed, and absent graph placements`
   proves that exact placement is produced when a complete tracker graph omits
   the task; the presentation test does not replace that production proof.
-- `rejects treating a partially finalized accepted result as outside completion`
-  checks that removing the completion-claim deletion from A's accepted-result
-  path cannot be excused by classifying A as supplied outside Dalph. A tracker
-  success after Dalph accepts a result still requires the exact integration and
-  finality chain.
 - `renders every tracker-success intent in maintainer language`
   checks the production presenter distinguishes no tracker success, demonstrated
   Dalph delivery, intentionally outside tracker success, a normal delivery target

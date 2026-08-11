@@ -149,13 +149,304 @@ module integrationFinalityTest {
       )
   }
 
+  // S1: the task-local focused success is enough to clean up A. The later
+  // complete graph read is a separate observation that can release B.
+  run s1FocusedSuccessThenLaterCompleteGraphTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(recordCompletionAttemptIntent)
+      .then(requestCompleteTask)
+      .then(observeCompleteTaskAcknowledgement)
+      .then(observeFocusedCompletionSuccess)
+      .expect(
+        focusedCompletionSuccessReached
+          and state.promoted.completeGraphObservation == NoCompleteGraph
+          and state.promoted.completeTaskAcknowledged
+          and state.promoted.completionRequests == 1
+          and state.completeTaskRequests == 1
+          and state.dependantReleases == 0
+          and focusedSuccessRequiresCompletionObservation
+      )
+      .then(recordCompletionClaimDeletionIntent)
+      .then(requestCompletionClaimDeletion)
+      .then(observeCompletionClaimDeleted)
+      .then(settlePromotedTask)
+      .then(observeLaterCompleteGraphBlocked)
+      .then(observeLaterCompleteGraphReleased)
+      .expect(
+        settledReached
+          and completeGraphReleasedReached
+          and state.promoted.dependantEligible
+          and dependantReleaseRequiresLaterCompleteGraph
+          and dependantReleaseBoundaryRemainsExternal
+      )
+  }
+
+  // S2: a successful focused read after a lost response finishes without a
+  // request lookup or second completion call.
+  run lostCompletionResponseFocusedSuccessNeedsNoLookupTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(recordCompletionAttemptIntent)
+      .then(requestCompleteTask)
+      .then(loseCompleteTaskResponse)
+      .then(observeFocusedCompletionSuccess)
+      .expect(
+        focusedCompletionSuccessReached
+          and state.promoted.completionRequests == 1
+          and state.promoted.completionReads == 0
+          and state.promoted.completionOutcome == NoCompletionOutcome
+          and not(state.promoted.completeTaskAcknowledged)
+          and focusedSuccessRequiresCompletionObservation
+      )
+  }
+
+  // When the focused read still reports Open, exact NotApplied reconciliation
+  // is required before one bounded retry.
+  run s2LostCompletionResponseReconcilesExactRequestBeforeRetryTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(recordCompletionAttemptIntent)
+      .then(requestCompleteTask)
+      .then(loseCompleteTaskResponse)
+      .then(observeFocusedCompletionOpenAfterLoss)
+      .then(lookupCompletionRequestNotApplied)
+      .then(refreshCompletionPremisesForRetry)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompletionAttemptIntent)
+      .then(requestCompleteTask)
+      .then(loseCompleteTaskResponse)
+      .then(observeFocusedCompletionOpenAfterLoss)
+      .then(lookupCompletionRequestApplied)
+      .then(observeFocusedCompletionSuccess)
+      .expect(
+        focusedCompletionSuccessReached
+          and state.promoted.completionRequests == 2
+          and state.promoted.completionReads == 2
+          and state.promoted.completionOutcome == Applied
+          and state.promoted.completionNotAppliedReads == 1
+          and completionRetryRequiresExactRequestLookup
+          and completionRequestsAreBoundedForIssue61
+          and completionRequestUsesExactPremises
+      )
+  }
+
+  run unreadableCompletionRequestKeepsTaskWaitingTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(recordCompletionAttemptIntent)
+      .then(requestCompleteTask)
+      .then(loseCompleteTaskResponse)
+      .then(observeFocusedCompletionOpenAfterLoss)
+      .then(lookupCompletionRequestUnreadable)
+      .expect(
+        completionWaitReached
+          and state.promoted.completionOutcome == UnreadableCompletionOutcome
+          and state.promoted.completionReads == 1
+          and not(state.promoted.focusedSuccessRecorded)
+          and state.promoted.completionRequests == 1
+      )
+  }
+
+  // S3: all task-local conflict reads stop this subject without mutating a
+  // foreign task or treating a revision/reopen observation as success.
+  run s3HumanCompletionWithAbsentClaimIsAcceptedTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(observeFocusedCompletionHumanSuccessWithAbsentClaim)
+      .expect(
+        humanSuccessWithAbsentClaimReached
+          and state.promoted.completionConflict == NoCompletionConflict
+          and state.promoted.completionRequests == 0
+          and state.completeTaskRequests == 0
+          and state.promoted.foreignMutationCount == 0
+          and humanFocusedSuccessIsAccepted
+      )
+  }
+
+  run s3HumanCompletionWithForeignClaimIsAcceptedWithoutMutationTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(observeFocusedCompletionHumanSuccessWithForeignClaim)
+      .expect(
+        humanSuccessWithForeignClaimReached
+          and state.promoted.completionConflict == NoCompletionConflict
+          and state.promoted.completionRequests == 0
+          and state.completeTaskRequests == 0
+          and state.promoted.foreignMutationCount == 0
+          and state.promoted.lastMutation != ForeignClaimMutation
+          and humanFocusedSuccessIsAccepted
+          and foreignClaimIsNeverMutated
+      )
+  }
+
+  run s3ForeignCompletionConflictIsTaskLocalTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observeFocusedCompletionForeignTaskConflict)
+      .expect(
+        completionWaitReached
+          and state.promoted.completionConflict == ForeignTask
+          and state.promoted.completionRequests == 0
+          and not(state.promoted.focusedSuccessRecorded)
+      )
+  }
+
+  run s3RevisionCompletionConflictIsTaskLocalTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observeFocusedCompletionRevisionConflict)
+      .expect(
+        completionWaitReached
+          and state.promoted.completionConflict == RevisionConflict
+          and state.promoted.completionRequests == 0
+          and not(state.promoted.focusedSuccessRecorded)
+      )
+  }
+
+  run s3ReopenedCompletionConflictIsTaskLocalTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observeFocusedCompletionReopenedConflict)
+      .expect(
+        completionWaitReached
+          and state.promoted.completionConflict == ReopenedTask
+          and state.promoted.completionRequests == 0
+          and not(state.promoted.focusedSuccessRecorded)
+      )
+  }
+
+  run s4FocusedSuccessSurvivesCleanupBeforeGraphRefreshTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(recordCompletionAttemptIntent)
+      .then(requestCompleteTask)
+      .then(observeCompleteTaskAcknowledgement)
+      .then(observeFocusedCompletionSuccess)
+      .then(recordCompletionClaimDeletionIntent)
+      .then(requestCompletionClaimDeletion)
+      .then(observeCompletionClaimDeleted)
+      .then(settlePromotedTask)
+      .expect(
+        settledReached
+          and focusedCompletionSuccessReached
+          and state.promoted.completeGraphObservation == NoCompleteGraph
+          and state.promoted.responsibilityHeld == false
+      )
+      .then(observeLaterCompleteGraphBlocked)
+      .expect(
+        settledReached
+          and completeGraphBlockedReached
+          and not(state.promoted.dependantEligible)
+          and successfulTaskNeverReopens
+      )
+  }
+
+  // S5: current blockers/membership in the later graph control dependant
+  // eligibility and do not create another completion request.
+  run s5CompleteGraphBlockerAndReleaseAreSeparateFromCompletionTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(recordCompletionAttemptIntent)
+      .then(requestCompleteTask)
+      .then(observeCompleteTaskAcknowledgement)
+      .then(observeFocusedCompletionSuccess)
+      .then(observeLaterCompleteGraphBlocked)
+      .expect(
+        completeGraphBlockedReached
+          and not(state.promoted.dependantEligible)
+          and state.promoted.completionRequests == 1
+      )
+      .then(observeLaterCompleteGraphReleased)
+      .expect(
+        completeGraphReleasedReached
+          and state.promoted.dependantEligible
+          and state.promoted.completionRequests == 1
+          and state.completeTaskRequests == 1
+          and state.dependantReleases == 0
+      )
+  }
+
   run freshTrackerSuccessPrecedesExactDeletionAndSettlementTest = {
     init
       .then(deriveCompletionClaim)
       .then(recordCompletionClaimReplacementIntent)
       .then(requestCompletionClaimReplacement)
       .then(observeCompletionClaimReplacement)
-      .then(observeFreshTrackerSuccess)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(observeFocusedCompletionHumanSuccessWithExactClaim)
       .then(recordCompletionClaimDeletionIntent)
       .then(requestCompletionClaimDeletion)
       .then(observeCompletionClaimDeleted)
@@ -167,7 +458,7 @@ module integrationFinalityTest {
           and completionClaimDeletionTargetsExactClaim
           and settledTaskRequiresExactCleanup
           and subjectSettlementIsLocal
-          and issue61BoundariesRemainExternal
+          and dependantReleaseBoundaryRemainsExternal
           and runTerminationRemainsOwnedByIssue102
       )
   }
@@ -178,7 +469,11 @@ module integrationFinalityTest {
       .then(recordCompletionClaimReplacementIntent)
       .then(requestCompletionClaimReplacement)
       .then(observeCompletionClaimReplacement)
-      .then(observeFreshTrackerSuccess)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(observeFocusedCompletionHumanSuccessWithExactClaim)
       .then(recordCompletionClaimDeletionIntent)
       .then(requestCompletionClaimDeletion)
       .then(loseCompletionClaimDeletionResponse)
@@ -201,7 +496,11 @@ module integrationFinalityTest {
       .then(recordCompletionClaimReplacementIntent)
       .then(requestCompletionClaimReplacement)
       .then(observeCompletionClaimReplacement)
-      .then(observeFreshTrackerSuccess)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(observeFocusedCompletionHumanSuccessWithExactClaim)
       .then(recordCompletionClaimDeletionIntent)
       .then(requestCompletionClaimDeletion)
       .then(rejectCompletionClaimDeletion)
@@ -222,7 +521,11 @@ module integrationFinalityTest {
       .then(recordCompletionClaimReplacementIntent)
       .then(requestCompletionClaimReplacement)
       .then(observeCompletionClaimReplacement)
-      .then(observeFreshTrackerSuccess)
+      .then(observeFocusedCompletionFacts)
+      .then(observePromotedCandidateAncestry)
+      .then(observeCompletionEvidence)
+      .then(recordCompleteTaskIntent)
+      .then(observeFocusedCompletionHumanSuccessWithExactClaim)
       .then(recordCompletionClaimDeletionIntent)
       .then(requestCompletionClaimDeletion)
       .then(loseCompletionClaimDeletionResponse)

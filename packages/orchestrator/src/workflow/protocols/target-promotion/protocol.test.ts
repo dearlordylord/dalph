@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest"
+import { acceptedResultFixture, evidenceReferenceFixture } from "../../../../test/support/evidence.js"
 import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import {
@@ -7,7 +8,6 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   AttemptId,
-  AcceptedResult,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -69,8 +69,10 @@ import type {
   DeliveryActionProposal,
   IdentityFreeDeliveryProposal
 } from "../../../coordination/delivery/delivery-action-proposal.js"
+import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 
 const runId = RunId.make("target-promotion-test-run")
+const trackerTarget = FixtureTarget.make("target-promotion-tracker-target")
 const target = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/promotion.git"),
   ref: IntegrationTargetRef.make("refs/heads/main")
@@ -83,6 +85,7 @@ const candidate = TargetVerificationCandidate.make({
   candidateCommit,
   constructedAt: JournalPosition.make(11),
   correlation: {
+    acceptanceManifest: evidenceReferenceFixture,
     acceptedResultCommit: acceptedResult,
     attemptId: AttemptId.make("target-promotion-attempt"),
     candidateId: IntegrationCandidateId.make("target-promotion-candidate"),
@@ -91,7 +94,8 @@ const candidate = TargetVerificationCandidate.make({
     integrationSessionId: IntegrationSessionId.make("target-promotion-session"),
     integrationTarget: target,
     runId
-  }
+  },
+  reviewManifest: evidenceReferenceFixture
 })
 const verificationCorrelation = targetVerificationCorrelationFor(
   candidate,
@@ -117,7 +121,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/target-promotion")
 })
 const responsibility = StartedIntegrationResponsibility.make({
-  acceptedResult: AcceptedResult.make({ commit: acceptedResult }),
+  acceptedResult: acceptedResultFixture(acceptedResult),
   integrationTarget: target,
   plannedAttempt,
   queuedAt: JournalPosition.make(8),
@@ -314,14 +318,19 @@ it.effect("reports a typed failure when target-promotion runtime services are un
       append: () => Effect.die("missing runtime must fail before appending"),
       read: () => Effect.die("missing runtime must fail before reading")
     })
-    const failure = yield* executeIntegrationAction(action, transition, {
-      acceptIntegrationTargetOwnership: Effect.void,
-      bindPlannedAttemptPosition: () => Effect.void,
-      integrationTargets: resources,
-      recordIntent: () => Effect.void,
-      releasePlannedAttemptPosition: () => Effect.void,
-      withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
-    }).pipe(Effect.provideService(InRunJournal, poisonJournal), Effect.flip)
+    const failure = yield* executeIntegrationAction(
+      action,
+      transition,
+      {
+        acceptIntegrationTargetOwnership: Effect.void,
+        bindPlannedAttemptPosition: () => Effect.void,
+        integrationTargets: resources,
+        recordIntent: () => Effect.void,
+        releasePlannedAttemptPosition: () => Effect.void,
+        withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
+      },
+      trackerTarget
+    ).pipe(Effect.provideService(InRunJournal, poisonJournal), Effect.flip)
     expect(failure).toBeInstanceOf(TargetPromotionRuntimeUnavailable)
   })
 )
@@ -347,14 +356,19 @@ it.effect("allows a different target while the exact promotion permit is active"
           )
       })
       const { action, transition } = promotionActionFor(responsibility)
-      const running = yield* executeIntegrationAction(action, transition, {
-        acceptIntegrationTargetOwnership: Effect.void,
-        bindPlannedAttemptPosition: () => Effect.void,
-        integrationTargets: resources,
-        recordIntent: () => Effect.void,
-        releasePlannedAttemptPosition: () => Effect.void,
-        withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
-      }).pipe(
+      const running = yield* executeIntegrationAction(
+        action,
+        transition,
+        {
+          acceptIntegrationTargetOwnership: Effect.void,
+          bindPlannedAttemptPosition: () => Effect.void,
+          integrationTargets: resources,
+          recordIntent: () => Effect.void,
+          releasePlannedAttemptPosition: () => Effect.void,
+          withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
+        },
+        trackerTarget
+      ).pipe(
         Effect.provide(makeJournalLayer(records)),
         Effect.provideService(TargetPromotionRuntime, TargetPromotionRuntime.of({ git })),
         Effect.forkScoped

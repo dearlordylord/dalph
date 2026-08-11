@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- The candidate state derivation and its intent/observation interpreter stay adjacent for auditability. */
 import { Context, Effect, Option, Schema } from "effect"
-import { GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
+import { AcceptedResult, EvidenceReference, GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
 import { type TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import {
   integrationCandidateAgentReportRecordKey,
@@ -94,10 +94,11 @@ export class IntegrationCandidateTargetLineageRejected extends Schema.TaggedErro
 
 export const IntegrationCandidateConstructionState = Schema.TaggedUnion({
   CandidateConstructed: {
-    acceptedResult: Schema.Struct({ commit: GitCommitSha }),
+    acceptedResult: AcceptedResult,
     candidateCommit: GitCommitSha,
     correlation: IntegrationCandidateCorrelation,
-    expectedTargetHead: GitCommitSha
+    expectedTargetHead: GitCommitSha,
+    reviewManifest: EvidenceReference
   },
   CandidateConstructionInProgress: { correlation: IntegrationCandidateCorrelation },
   CandidateCorrectionRequired: {
@@ -147,6 +148,7 @@ const correlationFor = (
   expectedTargetHead: GitCommitSha
 ): IntegrationCandidateCorrelation =>
   IntegrationCandidateCorrelation.make({
+    acceptanceManifest: responsibility.acceptedResult.evidenceManifest,
     acceptedResultCommit: responsibility.acceptedResult.commit,
     attemptId: responsibility.plannedAttempt.attemptId,
     candidateId: candidateIdFor(responsibility),
@@ -161,10 +163,14 @@ const constructedState = (
   event: typeof IntegrationCandidateConstructedEvent.Type
 ): IntegrationCandidateConstructionState =>
   IntegrationCandidateConstructionState.cases.CandidateConstructed.make({
-    acceptedResult: { commit: event.correlation.acceptedResultCommit },
+    acceptedResult: {
+      commit: event.correlation.acceptedResultCommit,
+      evidenceManifest: event.correlation.acceptanceManifest
+    },
     candidateCommit: event.candidateCommit,
     correlation: event.correlation,
-    expectedTargetHead: event.correlation.expectedTargetHead
+    expectedTargetHead: event.correlation.expectedTargetHead,
+    reviewManifest: event.reviewManifest
   })
 
 type CandidateIntent = typeof IntegrationCandidateConstructionIntendedEvent.Type
@@ -302,7 +308,12 @@ export const deriveConstructedIntegrationCandidateOccurrence = (
       )
     )
   )
-  return { candidateCommit: state.candidateCommit, constructedAt: constructed.position, correlation: state.correlation }
+  return {
+    candidateCommit: state.candidateCommit,
+    constructedAt: constructed.position,
+    correlation: state.correlation,
+    reviewManifest: state.reviewManifest
+  }
 }
 
 const stateAfterRecordedIntent = (
@@ -361,6 +372,7 @@ const recordConstructedCandidate = Effect.fn("IntegrationCandidateConstruction.r
       candidateCommit: report.candidateCommit,
       correlation: report.correlation,
       gitObservationAt,
+      reviewManifest: report.reviewManifest,
       version: workflowJournalEventVersion
     })
   )

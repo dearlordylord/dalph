@@ -34,11 +34,16 @@ import {
   CompletionClaimReplacedEvent,
   CompletionClaimReplacementIntendedEvent,
   CompletionTaskClaim,
+  CompletionTaskBoundary,
+  CompletionTaskRequestLookup,
+  CompletionTaskRequestOrdinal,
   completionClaimReplacementOperationIdFor,
   decodeFreshWorkflowRunIdForDiagnostics,
   deriveIntegrationFrontier,
   deriveRunnableFrontier,
   describeJournalEvent,
+  EvidenceDigest,
+  EvidenceReference,
   ForeignWorktreeRegistration,
   FixtureTarget,
   JournalPosition,
@@ -94,6 +99,7 @@ import {
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
   acceptedResultRestartsIntoIntegrationAuthoredCassette,
+  ambiguousCompletionResponseAuthoredCassette,
   AuthoredCassetteStoryItem,
   AuthoredScenarioCassette,
   CassetteIdentityRenaming,
@@ -107,10 +113,14 @@ import {
   changedAttemptStopsWithAbsentClaimAuthoredCassette,
   changedAttemptStopsWithForeignClaimAuthoredCassette,
   compareRecordedCassetteCheckpoints,
+  completionGraphRefreshRecoveryAuthoredCassette,
+  completionTaskConflictAuthoredCassette,
   compatibleTargetAdvanceContinuesAuthoredCassette,
   coordinatorProcessDeathContinuesAuthoredCassette,
   contractedCapacityRetainsTwoAttemptsAuthoredCassette,
+  currentCompletionGraphAuthorityAuthoredCassette,
   dependentTasksCompleteInOneRunAuthoredCassette,
+  deliveryFinalitySpineAuthoredCassette,
   foldRecordedCassette,
   invertCassetteIdentityRenaming,
   incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
@@ -158,6 +168,35 @@ import { controlledExecutorLayer } from "../../src/cassettes/authored-adapters.j
 import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
 import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
+
+const evidenceDigestHexLength = 64
+
+const expectFocusedCompletionReadCorrelation = (
+  records: ReadonlyArray<JournalRecord>,
+  observationPosition: number
+): void => {
+  const observed = records[observationPosition]?.event
+  if (observed?._tag !== "TaskTrackerFactsObserved" || observed.observation._tag !== "FocusedTaskCompletionFacts") {
+    return expect.fail("expected a canonical focused completion observation")
+  }
+  const intent = records.findLast(
+    ({ event }, index) =>
+      index < observationPosition &&
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadCompletionTaskFacts" &&
+      event.operation.operationId === observed.operationId
+  )?.event
+  if (intent?._tag !== "TaskTrackerReadIntentRecorded" || intent.operation._tag !== "ReadCompletionTaskFacts") {
+    return expect.fail("expected the exact canonical focused completion read intent")
+  }
+  expect(observed.operationId).toBe(observed.observation.operationId)
+  expect(intent.operation).toMatchObject({
+    operationId: observed.operationId,
+    purpose: observed.observation.purpose,
+    request: observed.observation.request,
+    target: observed.observation.target
+  })
+}
 
 it("renders every maintained authored cassette from its structured story", () => {
   for (const cassette of Object.values(maintainedAuthoredCassetteCatalog)) {
@@ -1096,6 +1135,284 @@ it.effect("accepts successful recovered completion at the terminal assertion bou
   })
 )
 
+it.effect("Dalph confirms A before a later graph read releases B", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(deliveryFinalitySpineAuthoredCassette)
+    const focusedSuccessAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskCompletionFacts" &&
+        event.observation.facts.lifecycle === "CompletedSuccessfully"
+    )
+    const laterGraphAt = run.records.findIndex(
+      ({ event }, index) =>
+        index > focusedSuccessAt &&
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "CompleteTaskTrackerFacts" &&
+        event.observation.factFamilies[0].contentIdentity === TrackerRevision.make("delivery-story-G6")
+    )
+    const dependantClaimAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+    )
+    expect(focusedSuccessAt).toBeGreaterThanOrEqual(0)
+    expectFocusedCompletionReadCorrelation(run.records, focusedSuccessAt)
+    expect(laterGraphAt).toBeGreaterThan(focusedSuccessAt)
+    expect(dependantClaimAt).toBeGreaterThan(laterGraphAt)
+    expect(
+      run.deliveryFrames.some(({ frontier }) =>
+        frontier.some(
+          ({ reasons, standing, taskId }) =>
+            taskId === "B" && standing === "Excluded" && reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
+        )
+      )
+    ).toBe(true)
+    expect(
+      run.deliveryFrames.some(
+        ({ actionPlanning, frontier, graph }) =>
+          graph._tag === "Established" &&
+          graph.revision === TrackerRevision.make("delivery-story-G6") &&
+          frontier.some(({ standing, taskId }) => taskId === "B" && standing === "Eligible") &&
+          actionPlanning._tag === "DeliveryProposalsAvailable" &&
+          actionPlanning.proposals.some(({ taskId }) => taskId === "B")
+      )
+    ).toBe(true)
+    expect(run.records.filter(({ event }) => event._tag === "CompletionTaskIntended")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        (checkpoint) => checkpoint.operationalStateEquivalent && checkpoint.workflowHistoryEquivalent
+      )
+    ).toBe(true)
+  })
+)
+
+it.effect("Dalph checks A after losing the tracker completion response", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(ambiguousCompletionResponseAuthoredCassette)
+    const responseLostAt = run.records.findIndex(({ event }) => event._tag === "CompletionTaskResponseLost")
+    const focusedSuccessAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskCompletionFacts" &&
+        event.observation.facts.lifecycle === "CompletedSuccessfully"
+    )
+    const laterGraphAt = run.records.findIndex(
+      ({ event }, index) =>
+        index > focusedSuccessAt &&
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "CompleteTaskTrackerFacts" &&
+        event.observation.factFamilies[0].contentIdentity === TrackerRevision.make("delivery-story-G6")
+    )
+    const dependantClaimAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+    )
+    expect(responseLostAt).toBeGreaterThanOrEqual(0)
+    expect(focusedSuccessAt).toBeGreaterThan(responseLostAt)
+    expectFocusedCompletionReadCorrelation(run.records, focusedSuccessAt)
+    expect(laterGraphAt).toBeGreaterThan(focusedSuccessAt)
+    expect(dependantClaimAt).toBeGreaterThan(laterGraphAt)
+    expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
+    expect(run.records.some(({ event }) => event._tag === "CompletionTaskRequestLookupIntended")).toBe(false)
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        (checkpoint) => checkpoint.operationalStateEquivalent && checkpoint.workflowHistoryEquivalent
+      )
+    ).toBe(true)
+  })
+)
+
+it.effect("Restart keeps B blocked between A's success confirmation and the later graph", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(completionGraphRefreshRecoveryAuthoredCassette)
+    const focusedSuccessAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskCompletionFacts" &&
+        event.observation.facts.lifecycle === "CompletedSuccessfully"
+    )
+    const laterGraphAt = run.records.findIndex(
+      ({ event }, index) =>
+        index > focusedSuccessAt &&
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "CompleteTaskTrackerFacts" &&
+        event.observation.factFamilies[0].contentIdentity === TrackerRevision.make("delivery-story-G6")
+    )
+    const dependantClaimAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+    )
+    expect(run.activationOrdinals.length).toBeGreaterThan(2)
+    expect(focusedSuccessAt).toBeGreaterThanOrEqual(0)
+    expectFocusedCompletionReadCorrelation(run.records, focusedSuccessAt)
+    expect(laterGraphAt).toBeGreaterThan(focusedSuccessAt)
+    expect(dependantClaimAt).toBeGreaterThan(laterGraphAt)
+    expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
+    expect(run.records.some(({ event }) => /Crash|Death|Recovery/.test(event._tag))).toBe(false)
+    expect(
+      run.deliveryFrames.some(
+        ({ activationOrdinal, frontier, graph }) =>
+          Number(activationOrdinal) < run.activationOrdinals.length &&
+          graph._tag === "Established" &&
+          graph.revision !== TrackerRevision.make("delivery-story-G6") &&
+          frontier.some(
+            ({ reasons, standing, taskId }) =>
+              taskId === "B" &&
+              standing === "Excluded" &&
+              reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
+          )
+      )
+    ).toBe(true)
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        (checkpoint) => checkpoint.operationalStateEquivalent && checkpoint.workflowHistoryEquivalent
+      )
+    ).toBe(true)
+  })
+)
+
+it.effect("The later complete graph gives the current reason B may proceed", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(currentCompletionGraphAuthorityAuthoredCassette)
+    const firstCurrentGraphAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "CompleteTaskTrackerFacts" &&
+        event.observation.factFamilies[0].contentIdentity === TrackerRevision.make("delivery-story-G7")
+    )
+    const releasingGraphAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "CompleteTaskTrackerFacts" &&
+        event.observation.factFamilies[0].contentIdentity === TrackerRevision.make("delivery-story-G8")
+    )
+    const dependantClaimAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+    )
+    expect(firstCurrentGraphAt).toBeGreaterThanOrEqual(0)
+    expect(releasingGraphAt).toBeGreaterThan(firstCurrentGraphAt)
+    expect(dependantClaimAt).toBeGreaterThan(releasingGraphAt)
+    expect(
+      run.deliveryFrames.some(
+        ({ frontier, graph }) =>
+          graph._tag === "Established" &&
+          graph.revision === TrackerRevision.make("delivery-story-G7") &&
+          frontier.some(
+            ({ reasons, standing, taskId }) =>
+              taskId === "B" &&
+              standing === "Excluded" &&
+              reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
+          )
+      )
+    ).toBe(true)
+    expect(
+      run.deliveryFrames.some(
+        ({ frontier, graph }) =>
+          graph._tag === "Established" &&
+          graph.revision === TrackerRevision.make("delivery-story-G8") &&
+          frontier.some(({ standing, taskId }) => taskId === "B" && standing === "Eligible")
+      )
+    ).toBe(true)
+    expect(run.records.some(({ event }) => /DependantRelease/.test(event._tag))).toBe(false)
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(recorded.entries.some((entry) => /DependantRelease/.test(entry._tag))).toBe(false)
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        (checkpoint) => checkpoint.operationalStateEquivalent && checkpoint.workflowHistoryEquivalent
+      )
+    ).toBe(true)
+  })
+)
+
+it.effect("A tracker client changes A while Dalph's completion request is pending", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(completionTaskConflictAuthoredCassette)
+    const rejection = run.records.find(({ event }) => event._tag === "CompletionTaskRejected")
+    const terminalRead = run.records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskCompletionFacts" &&
+        event.observation.purpose._tag === "Confirmation" &&
+        event.observation.facts.lifecycle === "TerminalWithoutSuccess"
+    )
+    expect(rejection).toBeDefined()
+    expect(terminalRead).toBeDefined()
+    expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
+    expect(run.records.some(({ event }) => event._tag === "CompletionClaimDeletionIntended")).toBe(false)
+    const issue61ConflictFrames = run.deliveryFrames.filter(
+      ({ graph }) => graph._tag === "Established" && String(graph.revision).startsWith("delivery-story-S3-")
+    )
+    expect(issue61ConflictFrames.length).toBeGreaterThan(0)
+    expect(
+      issue61ConflictFrames.every(
+        ({ graph }) =>
+          graph._tag === "Established" &&
+          graph.tasks.some(({ id, prerequisiteIds }) => id === TaskId.make("C") && prerequisiteIds.length === 0) &&
+          graph.tasks.some(
+            ({ id, prerequisiteIds }) => id === TaskId.make("B") && prerequisiteIds.includes(TaskId.make("A"))
+          )
+      )
+    ).toBe(true)
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      run.deliveryFrames.some(
+        ({ frontier, graph }) =>
+          graph._tag === "Established" &&
+          String(graph.revision).startsWith("delivery-story-S3-") &&
+          graph.tasks.some(
+            ({ id, prerequisiteIds }) => id === TaskId.make("B") && prerequisiteIds.includes(TaskId.make("A"))
+          ) &&
+          graph.tasks.some(({ id, prerequisiteIds }) => id === TaskId.make("C") && prerequisiteIds.length === 0) &&
+          frontier.some(
+            ({ reasons, standing, taskId }) =>
+              taskId === "B" &&
+              standing === "Excluded" &&
+              reasons.some((reason) => reason.kind === "PrerequisitesIncomplete")
+          ) &&
+          frontier.some(({ standing, taskId }) => taskId === "C" && standing === "Eligible")
+      )
+    ).toBe(true)
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("C")
+      )
+    ).toBe(true)
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          event.plannedAttempt.taskId === TaskId.make("C")
+      )
+    ).toBe(true)
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.attemptId === AttemptId.make("attempt:C:1") &&
+          event.report._tag === "Terminal" &&
+          event.report.result._tag === "Completed"
+      )
+    ).toBe(true)
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(
+      verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+        (checkpoint) => checkpoint.operationalStateEquivalent && checkpoint.workflowHistoryEquivalent
+      )
+    ).toBe(true)
+  })
+)
+
 it.effect("fails recovered verification promptly when terminal evidence cannot be recorded", () =>
   Effect.gen(function* () {
     const digestFailure = PlatformError.systemError({
@@ -1540,7 +1857,12 @@ it.effect("round-trips pending Git failure and correction-limit candidate eviden
           expectedCorrelation: intent.correlation,
           occurrenceClassification: "NonActionOccurrence",
           ordinal: IntegrationCandidateAgentReportOrdinal.make(2),
-          report: { _tag: "Submitted", candidateCommit: correctedCommit, correlation: intent.correlation }
+          report: {
+            _tag: "Submitted",
+            candidateCommit: correctedCommit,
+            correlation: intent.correlation,
+            reviewManifest: report.report.reviewManifest
+          }
         },
         { ...observed, candidateCommit: correctedCommit, observation: { _tag: "Commit", directParents: [] } },
         {
@@ -1870,9 +2192,18 @@ it.effect("records completion finality after valid candidate verification and pr
   Effect.gen(function* () {
     const promoted = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
     const finalized = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
-      maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFreshTrackerSuccess,
+      maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
       promoted.records
     )
+    const finalityRecords = finalized.records.slice(promoted.records.length)
+    const focusedSuccessAt = finalityRecords.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskCompletionFacts" &&
+        event.observation.facts.lifecycle === "CompletedSuccessfully"
+    )
+    expect(focusedSuccessAt).toBeGreaterThanOrEqual(0)
+    expectFocusedCompletionReadCorrelation(finalityRecords, focusedSuccessAt)
     expect(finalized.records.map(({ event }) => event._tag)).toContain("IntegrationFinalitySettled")
     const recorded = yield* projectRecordedCassette(finalized.records)
     expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
@@ -1918,13 +2249,30 @@ const completeSingletonDeliveryCassette = (() => {
               { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" },
               { _tag: "CompletionClaimReplacementApplied", taskId: "A" },
               {
+                _tag: "CompletionTaskFocusedReadReturned",
+                lifecycle: "Open",
+                taskId: "A",
+                unfinishedPrerequisiteTaskIds: []
+              },
+              {
+                _tag: "TargetPromotionGitReadReturned",
+                observation: { _tag: "CandidateCurrent", currentHeadSha: "cccccccccccccccccccccccccccccccccccccccc" }
+              },
+              { _tag: "CompletionTaskRequestReturned", outcome: "Acknowledged", taskId: "A" },
+              {
+                _tag: "CompletionTaskFocusedReadReturned",
+                lifecycle: "CompletedSuccessfully",
+                taskId: "A",
+                unfinishedPrerequisiteTaskIds: []
+              },
+              { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
+              { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
+              {
                 _tag: "CoordinatorActivationReturned",
                 decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
               },
               { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
               { _tag: "TrackerGraphReadReturned", graph: completedGraph },
-              { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
-              { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
               { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
               { _tag: "TrackerGraphReadReturned", graph: settledGraph },
               {
@@ -1947,28 +2295,174 @@ const completeSingletonDeliveryCassette = (() => {
 
 it.effect("settles a promoted authored task through the real completion-claim boundary", () =>
   Effect.gen(function* () {
+    const finalityStory = completeSingletonDeliveryCassette.story
     const run = yield* runAuthoredScenarioCassette(completeSingletonDeliveryCassette)
-    const tags = run.records.map(({ event }) => event._tag)
+    const withFirstMismatchedTask = (tag: string) => {
+      let changed = false
+      return finalityStory.map((item) => {
+        if (!changed && item._tag === tag) {
+          changed = true
+          return { ...item, taskId: "B" }
+        }
+        return item
+      })
+    }
+    for (const [tag, expected] of [
+      ["CompletionTaskFocusedReadReturned", "authored focused completion read returned B for A"],
+      ["CompletionTaskRequestReturned", "authored completion response returned B for A"]
+    ] as const) {
+      const hostile = yield* Effect.exit(
+        runAuthoredScenarioCassette({
+          ...completeSingletonDeliveryCassette,
+          deliveryScope: {
+            _tag: "FocusedWorkflowSlice",
+            trackerSuccessIntents: [{ _tag: "DalphDeliveryInProgress", taskId: "A" }]
+          },
+          story: withFirstMismatchedTask(tag)
+        })
+      )
+      expect(Exit.isFailure(hostile)).toBe(true)
+      if (Exit.isFailure(hostile)) expect(Cause.pretty(hostile.cause)).toContain(expected)
+    }
+    const completionIntent = run.records.find(({ event }) => event._tag === "CompletionTaskIntended")?.event
+    if (completionIntent?._tag !== "CompletionTaskIntended") {
+      return yield* Effect.die("authored finality run did not record the completion request")
+    }
+    const request = completionIntent.request
+    const tracker = yield* TrackerMutation.pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
+    const hostileBoundaryCases = [
+      {
+        expected: "authored focused completion read found UnclaimedTask for A",
+        invoke: (boundary: CompletionTaskBoundary["Service"]) =>
+          boundary.readFocusedTaskCompletion(
+            request.taskId,
+            FixtureTarget.make("cassette-target"),
+            OperationId.make("hostile-authored-focused-read")
+          ),
+        item: {
+          _tag: "CompletionTaskFocusedReadReturned",
+          lifecycle: "Open",
+          taskId: TaskId.make("A"),
+          unfinishedPrerequisiteTaskIds: []
+        } as const
+      },
+      {
+        expected: "authored completion request lacked exact completion claim A",
+        invoke: (boundary: CompletionTaskBoundary["Service"]) => boundary.completeTask(request),
+        item: { _tag: "CompletionTaskRequestReturned", outcome: "Acknowledged", taskId: TaskId.make("A") } as const
+      },
+      {
+        expected: "authored completion lookup returned B for A",
+        invoke: (boundary: CompletionTaskBoundary["Service"]) => boundary.readCompletionRequest(request),
+        item: { _tag: "CompletionTaskRequestLookupReturned", outcome: "NotApplied", taskId: TaskId.make("B") } as const
+      }
+    ]
+    for (const hostileCase of hostileBoundaryCases) {
+      const cursor = yield* makeStoryCursor([hostileCase.item])
+      const hostile = yield* Effect.gen(function* () {
+        return yield* hostileCase.invoke(yield* CompletionTaskBoundary)
+      }).pipe(Effect.provide(controlledTrackerAuthorityLayer(cursor, tracker)), Effect.exit)
+      expect(Exit.isFailure(hostile)).toBe(true)
+      if (Exit.isFailure(hostile)) expect(Cause.pretty(hostile.cause)).toContain(hostileCase.expected)
+    }
     const ordered = [
-      "TargetPromotionObservedSuccess",
-      "CompletionClaimReplacementIntended",
-      "CompletionClaimReplacementAttemptIntended",
-      "CompletionClaimReplaced",
-      "TaskTrackerFactsObserved",
-      "CompletionClaimDeletionIntended",
-      "CompletionClaimDeletionAttemptIntended",
-      "CompletionClaimDeleted",
-      "IntegrationFinalitySettled"
+      {
+        name: "TargetPromotionObservedSuccess",
+        matches: (event: WorkflowJournalEvent) => event._tag === "TargetPromotionObservedSuccess"
+      },
+      {
+        name: "CompletionClaimReplacementIntended",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionClaimReplacementIntended"
+      },
+      {
+        name: "CompletionClaimReplacementAttemptIntended",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionClaimReplacementAttemptIntended"
+      },
+      {
+        name: "CompletionClaimReplaced",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionClaimReplaced"
+      },
+      {
+        name: "authorization focused read intent",
+        matches: (event: WorkflowJournalEvent) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadCompletionTaskFacts" &&
+          event.operation.purpose._tag === "Authorization"
+      },
+      {
+        name: "authorization focused facts observation",
+        matches: (event: WorkflowJournalEvent) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskCompletionFacts" &&
+          event.observation.purpose._tag === "Authorization"
+      },
+      {
+        name: "CompletionTaskCandidateAncestryReadIntended",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionTaskCandidateAncestryReadIntended"
+      },
+      {
+        name: "CompletionTaskCandidateAncestryObserved",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionTaskCandidateAncestryObserved"
+      },
+      {
+        name: "CompletionTaskIntended",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionTaskIntended"
+      },
+      {
+        name: "CompletionTaskAttemptIntended",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionTaskAttemptIntended"
+      },
+      {
+        name: "CompletionTaskAcknowledged",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionTaskAcknowledged"
+      },
+      {
+        name: "confirmation focused read intent",
+        matches: (event: WorkflowJournalEvent) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadCompletionTaskFacts" &&
+          event.operation.purpose._tag === "Confirmation"
+      },
+      {
+        name: "confirmation focused facts observation",
+        matches: (event: WorkflowJournalEvent) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskCompletionFacts" &&
+          event.observation.purpose._tag === "Confirmation"
+      },
+      {
+        name: "CompletionClaimDeletionIntended",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionClaimDeletionIntended"
+      },
+      {
+        name: "CompletionClaimDeletionAttemptIntended",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionClaimDeletionAttemptIntended"
+      },
+      {
+        name: "CompletionClaimDeleted",
+        matches: (event: WorkflowJournalEvent) => event._tag === "CompletionClaimDeleted"
+      },
+      {
+        name: "IntegrationFinalitySettled",
+        matches: (event: WorkflowJournalEvent) => event._tag === "IntegrationFinalitySettled"
+      }
     ] as const
     let previousPosition = -1
-    const positions = ordered.map((tag) => {
-      previousPosition = tags.indexOf(tag, previousPosition + 1)
+    const positions = ordered.map(({ matches }) => {
+      previousPosition = run.records.findIndex(({ event }, index) => index > previousPosition && matches(event))
       return previousPosition
     })
 
-    expect(positions.every((position) => position >= 0)).toBe(true)
+    expect(ordered.filter((_, index) => positions[index] === -1).map(({ name }) => name)).toEqual([])
     expect(positions).toEqual(positions.toSorted((left, right) => left - right))
-    expect(tags).not.toContain("WorkflowRunTerminated")
+    const authorizationReadPosition = positions[4]
+    const confirmationReadPosition = positions[11]
+    if (authorizationReadPosition === undefined || confirmationReadPosition === undefined) {
+      return yield* Effect.die("completion chronology positions must be present")
+    }
+    expectFocusedCompletionReadCorrelation(run.records, positions[5] ?? -1)
+    expectFocusedCompletionReadCorrelation(run.records, positions[12] ?? -1)
+    expect(run.records.map(({ event }) => event._tag)).not.toContain("WorkflowRunTerminated")
     expect(run.deliveryFrames.some(({ settlements }) => settlements.some(({ taskId }) => taskId === "A"))).toBe(true)
     expect(run.deliveryFrames.some(({ trackerReflection }) => trackerReflection.settlementCount > 0)).toBe(true)
   })
@@ -2209,9 +2703,12 @@ it.effect("preserves promoted M across a post-promotion blocker and resumes its 
     )
 
     const claim = CompletionTaskClaim.make({
+      acceptanceManifest: promotion.correlation.acceptanceManifest,
+      integrationReviewManifest: promotion.correlation.reviewManifest,
       originalClaim: activeClaim.claim,
       plannedAttempt: plannedAttempt.operation.plannedAttempt,
-      promotionCorrelation: promotion.correlation
+      promotionCorrelation: promotion.correlation,
+      verificationManifest: promotion.correlation.verificationManifest
     })
     const replacementOperationId = completionClaimReplacementOperationIdFor(claim)
     const withReplacement = [
@@ -3222,7 +3719,7 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
         _tag: "FocusedWorkflowSlice",
         trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
       },
-      name: "a complete refresh removes unstarted C and adds D",
+      name: "an outside tracker-success refresh removes unstarted C and adds D",
       schemaVersion: 1,
       startingFacts: {
         executorWork: "NoPriorReport",
@@ -3425,7 +3922,7 @@ it("rejects a complete graph delivery scope backed only by coarse executor compl
 it("requires focused cassettes to classify every tracker-success intent", () => {
   expect(maintainedAuthoredCassetteCatalog.dependentTasksCompleteInOneRun.deliveryScope).toEqual({
     _tag: "FocusedWorkflowSlice",
-    trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
+    trackerSuccessIntents: [{ _tag: "DalphDeliveryTargetPending", blockingIssue: "#167", taskId: "A" }]
   })
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
@@ -3468,7 +3965,17 @@ it("rejects contradictory tracker-success intents", () => {
         trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
       }
     })
-  ).toThrow("focused cassette task A has an accepted Dalph result and cannot be classified as")
+  ).toThrow(/task A has an accepted Dalph result and cannot be classified as/u)
+
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...completeSingletonDeliveryCassette,
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice",
+        trackerSuccessIntents: [{ _tag: "DalphDeliveryTargetPending", blockingIssue: "#167", taskId: "A" }]
+      }
+    })
+  ).toThrow(/cannot be classified as DalphDeliveryTargetPending/u)
 
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
@@ -3478,7 +3985,28 @@ it("rejects contradictory tracker-success intents", () => {
         trackerSuccessIntents: [{ _tag: "DalphDeliveryDemonstrated", taskId: "A" }]
       }
     })
-  ).toThrow("focused cassette task A claims Dalph delivery without its exact integration and finality chain")
+  ).toThrow(/task A claims Dalph delivery without its exact integration and finality chain/u)
+
+  for (const cassette of [
+    {
+      ...maintainedAuthoredCassetteCatalog.dependentTasksCompleteInOneRun,
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice" as const,
+        trackerSuccessIntents: [{ _tag: "DalphDeliveryInProgress" as const, taskId: "A" }]
+      }
+    },
+    {
+      ...completeSingletonDeliveryCassette,
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice" as const,
+        trackerSuccessIntents: [{ _tag: "DalphDeliveryInProgress" as const, taskId: "A" }]
+      }
+    }
+  ]) {
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(cassette)).toThrow(
+      /claims in-progress Dalph delivery without exact integration or after finality is already complete/u
+    )
+  }
 
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
@@ -3516,15 +4044,36 @@ it("rejects contradictory tracker-success intents", () => {
     )
   }
   expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(acceptedResultWithPrematureTrackerSuccess)).toThrow(
-    "focused cassette task A has an accepted Dalph result and cannot be classified as"
+    /task A has an accepted Dalph result and cannot be classified as/u
   )
 })
 
 it("rejects a complete graph delivery scope when successful tracker tasks lack Dalph delivery evidence", () => {
+  const allTasksSuccessful = maintainedAuthoredCassetteCatalog.deliveryFinalitySpine.story.map((item) =>
+    item._tag === "TrackerGraphReadReturned" || item._tag === "RunActivationFinalTrackerGraphReadReturned"
+      ? {
+          ...item,
+          graph: {
+            ...item.graph,
+            tasks: item.graph.tasks.map((task) => ({ ...task, lifecycle: { _tag: "CompletedSuccessfully" as const } }))
+          }
+        }
+      : item
+  )
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
       ...maintainedAuthoredCassetteCatalog.deliveryFinalitySpine,
-      deliveryScope: { _tag: "CompleteGraphDelivery" }
+      deliveryScope: { _tag: "CompleteGraphDelivery" },
+      startingFacts: {
+        ...maintainedAuthoredCassetteCatalog.deliveryFinalitySpine.startingFacts,
+        trackerGraph: {
+          ...maintainedAuthoredCassetteCatalog.deliveryFinalitySpine.startingFacts.trackerGraph,
+          tasks: maintainedAuthoredCassetteCatalog.deliveryFinalitySpine.startingFacts.trackerGraph.tasks.map(
+            (task) => ({ ...task, lifecycle: { _tag: "CompletedSuccessfully" as const } })
+          )
+        }
+      },
+      story: allTasksSuccessful
     })
   ).toThrow("complete graph delivery requires one accepted commit for every observed tracker task")
 })
@@ -3568,7 +4117,7 @@ it("rejects a complete graph delivery scope before tracker success or exact fina
     story: completeSingletonDeliveryCassette.story.filter((item) => item._tag !== "CompletionClaimDeletionApplied")
   }
   expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutDeletion)).toThrow(
-    "complete graph delivery requires promotion-bound completion finality for task A"
+    "complete graph delivery requires promotion-bound completion, focused tracker success, and claim finality for task A"
   )
 })
 
@@ -5919,7 +6468,11 @@ it.effect(
         return yield* Effect.die("missing workflow run entry")
       }
       const acceptedResult = AcceptedResult.make({
-        commit: GitCommitSha.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        commit: GitCommitSha.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        evidenceManifest: EvidenceReference.make({
+          byteLength: 1,
+          digest: EvidenceDigest.make("f".repeat(evidenceDigestHexLength))
+        })
       })
       const integrationTarget = IntegrationTarget.make({
         repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
@@ -6250,6 +6803,15 @@ it.effect(
         CompletionClaimDeletionAttemptIntended: true,
         CompletionClaimDeleted: true,
         IntegrationFinalitySettled: true,
+        CompletionTaskIntended: true,
+        CompletionTaskAttemptIntended: true,
+        CompletionTaskAcknowledged: true,
+        CompletionTaskResponseLost: true,
+        CompletionTaskRejected: true,
+        CompletionTaskCandidateAncestryReadIntended: true,
+        CompletionTaskCandidateAncestryObserved: true,
+        CompletionTaskRequestLookupIntended: true,
+        CompletionTaskRequestLookupObserved: true,
         PlannedAttemptExecutorWorkReported: true,
         PlannedAttemptExecutorCommandIntended: true,
         PlannedAttemptExecutorCommandProjectionObserved: true,
@@ -6276,6 +6838,7 @@ it.effect(
       } satisfies Record<RecordedCassetteEntry["_tag"], true>
       const operationVariants = {
         AcquireTaskClaim: true,
+        ReadCompletionTaskFacts: true,
         ReadTaskClaim: true,
         ReadTargetLineage: true,
         ReadTaskWorktree: true,
@@ -6289,6 +6852,7 @@ it.effect(
         CompleteTaskTrackerFacts: true,
         FocusedTaskClaimFacts: true,
         FocusedTaskClaimFactsUnreadable: true,
+        FocusedTaskCompletionFacts: true,
         FocusedTaskWorkSpecificationFacts: true,
         UnchangedTaskTrackerFactsReconfirmed: true
       } satisfies Record<TaskTrackerFactsObservation["_tag"], true>
@@ -6402,6 +6966,151 @@ it.effect(
         return yield* Effect.die("a contradictory response must remain unsettled for the following exact projection")
       }
       expectRecordedRoundTrip(contradictoryResponseHistory.records, contradictoryResponseCassette)
+      const [completionRun, lostCompletionRun, rejectedCompletionRun] = yield* Effect.all([
+        runAuthoredScenarioCassette(deliveryFinalitySpineAuthoredCassette),
+        runAuthoredScenarioCassette(ambiguousCompletionResponseAuthoredCassette),
+        runAuthoredScenarioCassette(completionTaskConflictAuthoredCassette)
+      ])
+      const [completionRecorded, lostCompletionRecorded, rejectedCompletionRecorded] = yield* Effect.all([
+        projectRecordedCassette(completionRun.records),
+        projectRecordedCassette(lostCompletionRun.records),
+        projectRecordedCassette(rejectedCompletionRun.records)
+      ])
+      const responseLost = lostCompletionRecorded.entries.find((entry) => entry._tag === "CompletionTaskResponseLost")
+      if (responseLost?._tag !== "CompletionTaskResponseLost") {
+        return yield* Effect.die("completion alpha-renaming fixture requires a lost response")
+      }
+      const responseLostIndex = lostCompletionRecorded.entries.indexOf(responseLost)
+      const authoredLookupResults = yield* Effect.forEach(["Applied", "NotApplied", "Unreadable"] as const, (outcome) =>
+        Effect.gen(function* () {
+          const cursor = yield* makeStoryCursor([
+            { _tag: "CompletionTaskRequestLookupReturned", outcome, taskId: responseLost.request.taskId }
+          ])
+          const base = yield* TrackerMutation
+          return yield* Effect.gen(function* () {
+            const boundary = yield* CompletionTaskBoundary
+            return yield* boundary.readCompletionRequest(responseLost.request)
+          }).pipe(Effect.provide(controlledTrackerAuthorityLayer(cursor, base)))
+        }).pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
+      )
+      expect(authoredLookupResults.map(({ _tag }) => _tag)).toEqual(["Applied", "NotApplied", "Unreadable"])
+      const confirmationIntent = lostCompletionRecorded.entries
+        .slice(responseLostIndex + 1)
+        .find(
+          (entry) =>
+            entry._tag === "TaskTrackerReadInitiated" &&
+            entry.operation._tag === "ReadCompletionTaskFacts" &&
+            entry.operation.purpose._tag === "Confirmation"
+        )
+      const confirmationObservation = lostCompletionRecorded.entries
+        .slice(responseLostIndex + 1)
+        .find(
+          (entry) =>
+            entry._tag === "TaskTrackerFactsObserved" &&
+            entry.evidence._tag === "FocusedTaskCompletionFacts" &&
+            entry.evidence.purpose._tag === "Confirmation"
+        )
+      if (
+        confirmationIntent?._tag !== "TaskTrackerReadInitiated" ||
+        confirmationIntent.operation._tag !== "ReadCompletionTaskFacts" ||
+        confirmationObservation?._tag !== "TaskTrackerFactsObserved" ||
+        confirmationObservation.evidence._tag !== "FocusedTaskCompletionFacts"
+      ) {
+        return yield* Effect.die("completion alpha-renaming fixture requires a confirmation read")
+      }
+      expect(confirmationIntent.operation).toMatchObject({
+        operationId: confirmationObservation.originatingActionOperationId,
+        purpose: confirmationObservation.evidence.purpose,
+        request: confirmationObservation.evidence.request,
+        target: confirmationObservation.evidence.target
+      })
+      const openConfirmationObservation: RecordedCassetteEntry = {
+        ...confirmationObservation,
+        evidence: {
+          ...confirmationObservation.evidence,
+          facts: { ...confirmationObservation.evidence.facts, lifecycle: "Open" }
+        }
+      }
+      const lookupOperationId = OperationId.make(
+        `${responseLost.request.operationId}:lookup:${responseLost.attemptOrdinal}`
+      )
+      const lookupEntriesFor = (lookup: CompletionTaskRequestLookup): ReadonlyArray<RecordedCassetteEntry> => [
+        {
+          _tag: "CompletionTaskRequestLookupIntended",
+          attemptOrdinal: CompletionTaskRequestOrdinal.make(responseLost.attemptOrdinal),
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operationId: lookupOperationId,
+          request: responseLost.request
+        },
+        {
+          _tag: "CompletionTaskRequestLookupObserved",
+          attemptOrdinal: CompletionTaskRequestOrdinal.make(responseLost.attemptOrdinal),
+          lookup,
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: lookupOperationId,
+          request: responseLost.request
+        }
+      ]
+      const lookupEntries = lookupEntriesFor(
+        CompletionTaskRequestLookup.cases.NotApplied.make({ request: responseLost.request })
+      )
+      const lookupRecordings = [
+        CompletionTaskRequestLookup.cases.Applied.make({ request: responseLost.request }),
+        CompletionTaskRequestLookup.cases.NotApplied.make({ request: responseLost.request }),
+        CompletionTaskRequestLookup.cases.Unreadable.make({
+          detail: "authored unreadable lookup",
+          request: responseLost.request
+        })
+      ].map((lookup) =>
+        RecordedCassette.make({
+          _tag: "RecordedCassette",
+          entries: [
+            ...lostCompletionRecorded.entries.slice(0, responseLostIndex + 1),
+            confirmationIntent,
+            openConfirmationObservation,
+            ...lookupEntriesFor(lookup)
+          ],
+          runId: lostCompletionRecorded.runId,
+          schemaVersion: recordedCassetteVersion
+        })
+      )
+      yield* Effect.all([
+        renameRecordedCassette(completionRecorded, renaming),
+        renameRecordedCassette(lostCompletionRecorded, renaming),
+        renameRecordedCassette(rejectedCompletionRecorded, renaming),
+        ...lookupRecordings.map((recording) => renameRecordedCassette(recording, renaming)),
+        ...lookupRecordings.map((recording) =>
+          Effect.gen(function* () {
+            const history = foldRecordedCassette(recording)
+            if (history._tag !== "ValidWorkflowJournalHistory") {
+              return yield* Effect.die("completion lookup recording must fold into valid journal history")
+            }
+            expectRecordedRoundTrip(history.records, yield* projectRecordedCassette(history.records))
+          })
+        )
+      ])
+      const completionEntries = [
+        ...completionRecorded.entries,
+        ...lostCompletionRecorded.entries,
+        ...rejectedCompletionRecorded.entries,
+        ...lookupEntries
+      ].filter(
+        (entry) =>
+          entry._tag.startsWith("CompletionTask") ||
+          (entry._tag === "TaskTrackerReadInitiated" && entry.operation._tag === "ReadCompletionTaskFacts") ||
+          (entry._tag === "TaskTrackerFactsObserved" && entry.evidence._tag === "FocusedTaskCompletionFacts")
+      )
+      expect(renderRecordedCassetteLyrics(completionRecorded)).toContain(
+        "Dalph coordinator initiated ReadCompletionTaskFacts"
+      )
+      expect(renderRecordedCassetteLyrics(completionRecorded)).toContain("Dalph observed FocusedTaskCompletionFacts")
+      expect(renderRecordedCassetteLyrics(lostCompletionRecorded)).toContain("lost the response")
+      expect(renderRecordedCassetteLyrics(rejectedCompletionRecorded)).toContain("definitively rejected")
+      const appliedLookupRecording = lookupRecordings[0]
+      if (appliedLookupRecording === undefined) return yield* Effect.die("completion lookup fixture is empty")
+      expect(renderRecordedCassetteLyrics(appliedLookupRecording)).toContain("look up exact completion request")
+      expect(renderRecordedCassetteLyrics(executorObservationVariants)).toContain("kept the command unresolved")
       expect(
         new Set(
           [
@@ -6410,7 +7119,8 @@ it.effect(
             ...noReleaseRecorded.entries,
             ...foreignNoReleaseRecorded.entries,
             ...continuationRecorded.entries,
-            ...executorObservationVariants.entries
+            ...executorObservationVariants.entries,
+            ...completionEntries
           ].map(({ _tag }) => _tag)
         )
       ).toEqual(
@@ -6426,11 +7136,17 @@ it.effect(
         )
       )
       expect(
-        new Set(recorded.entries.flatMap((entry) => ("operation" in entry ? [entry.operation._tag] : [])))
+        new Set(
+          [...recorded.entries, ...completionEntries].flatMap((entry) =>
+            "operation" in entry ? [entry.operation._tag] : []
+          )
+        )
       ).toEqual(new Set(Object.keys(operationVariants)))
       expect(
         new Set(
-          recorded.entries.flatMap((entry) => (entry._tag === "TaskTrackerFactsObserved" ? [entry.evidence._tag] : []))
+          [...recorded.entries, ...completionEntries].flatMap((entry) =>
+            entry._tag === "TaskTrackerFactsObserved" ? [entry.evidence._tag] : []
+          )
         )
       ).toEqual(new Set(Object.keys(observationVariants)))
       expect(encodedAfter).toContain("1111111111111111111111111111111111111111")
@@ -6714,6 +7430,11 @@ const replayIntegrationFinalityCassette = (
     return first
   })
 
+const focusedCleanupTags = (journalTags: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const completionIntentAt = journalTags.lastIndexOf("CompletionTaskIntended")
+  return completionIntentAt < 0 ? [] : journalTags.slice(completionIntentAt)
+}
+
 it("rejects unclosed, unbounded, and misordered integration-finality protocol stories", () => {
   const valid =
     maintainedIntegrationFinalityProtocolCassetteCatalog.replacesTheExactActiveClaimWithAPromotionBoundCompletionClaim
@@ -6739,23 +7460,34 @@ it("rejects unclosed, unbounded, and misordered integration-finality protocol st
   ).toBe(false)
   expect(
     Schema.is(IntegrationFinalityProtocolCassette)({
-      ...maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFreshTrackerSuccess,
+      ...maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
       boundaryResults: [{ _tag: "ReadCompletionClaim" }, { _tag: "ReadCompletionClaim" }]
     })
   ).toBe(false)
   const deletion =
-    maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFreshTrackerSuccess
+    maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess
   expect(
     Schema.is(IntegrationFinalityProtocolCassette)({
       ...deletion,
-      story: deletion.story.filter(({ _tag }) => _tag !== "RecordFreshSuccess")
+      story: deletion.story.filter(({ _tag }) => _tag !== "ObserveFocusedTaskCompletionSuccess")
     })
   ).toBe(false)
   expect(
     Schema.is(IntegrationFinalityProtocolCassette)({
       ...deletion,
       boundaryResults: [{ _tag: "ReadCompletionClaim" }, { _tag: "DeletionApplied" }],
-      story: [{ _tag: "RecordFreshSuccess" }, { _tag: "RunDeletion" }, terminal]
+      story: [{ _tag: "ObserveFocusedTaskCompletionSuccess" }, { _tag: "RunDeletion" }, terminal]
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(IntegrationFinalityProtocolCassette)({
+      ...deletion,
+      story: [
+        { _tag: "ObserveFocusedTaskCompletionSuccess" },
+        { _tag: "RunReplacement" },
+        { _tag: "RunDeletion" },
+        terminal
+      ]
     })
   ).toBe(false)
   expect(
@@ -6778,8 +7510,8 @@ it("rejects unclosed, unbounded, and misordered integration-finality protocol st
       ...deletion,
       story: [
         { _tag: "RunReplacement" },
-        { _tag: "RecordFreshSuccess" },
-        { _tag: "RecordFreshSuccess" },
+        { _tag: "ObserveFocusedTaskCompletionSuccess" },
+        { _tag: "ObserveFocusedTaskCompletionSuccess" },
         { _tag: "RunDeletion" },
         terminal
       ]
@@ -6875,7 +7607,7 @@ it.effect("replays definite completion-claim boundary rejections as terminal typ
       name: "definite deletion rejection",
       story: [
         { _tag: "RunReplacement" },
-        { _tag: "RecordFreshSuccess" },
+        { _tag: "ObserveFocusedTaskCompletionSuccess" },
         { _tag: "RunDeletion" },
         {
           _tag: "AwaitSettlement",
@@ -6885,6 +7617,7 @@ it.effect("replays definite completion-claim boundary rejections as terminal typ
             journalTags: [
               "CompletionClaimReplacementIntended",
               "CompletionClaimReplaced",
+              "CompletionTaskIntended",
               "TaskTrackerReadIntentRecorded",
               "TaskTrackerFactsObserved",
               "CompletionClaimDeletionIntended",
@@ -6996,10 +7729,10 @@ it.effect("does not mutate a foreign claim while settling a promoted task", () =
   })
 )
 
-it.effect("deletes only the exact completion claim after fresh tracker success", () =>
+it.effect("deletes only the exact completion claim after focused task success", () =>
   Effect.gen(function* () {
     const run = yield* replayIntegrationFinalityCassette(
-      maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFreshTrackerSuccess
+      maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess
     )
     const replaced = run.records.find(({ event }) => event._tag === "CompletionClaimReplaced")?.event
     const deleted = run.records.find(({ event }) => event._tag === "CompletionClaimDeleted")?.event
@@ -7008,6 +7741,17 @@ it.effect("deletes only the exact completion claim after fresh tracker success",
     }
     expect(deleted.claim).toEqual(replaced.claim)
     expect(run.deletionCalls).toBe(1)
+    const cleanupTags = focusedCleanupTags(run.journalTags)
+    expect(cleanupTags).toContain("TaskTrackerReadIntentRecorded")
+    expect(cleanupTags).toContain("TaskTrackerFactsObserved")
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskCompletionFacts" &&
+          event.observation.facts.lifecycle === "CompletedSuccessfully"
+      )
+    ).toBe(true)
     expect(run.journalTags).toContain("IntegrationFinalitySettled")
   })
 )
@@ -7044,7 +7788,17 @@ it.effect("keeps successful work final when the completion claim cannot be read 
     expect(run.failureTag).toBe("IntegrationFinality.CompletionClaimReadFailure")
     expect(run.replacementCalls).toBe(0)
     expect(run.deletionCalls).toBe(0)
-    expect(run.journalTags).toContain("TaskTrackerFactsObserved")
+    const cleanupTags = focusedCleanupTags(run.journalTags)
+    expect(cleanupTags).toContain("TaskTrackerReadIntentRecorded")
+    expect(cleanupTags).toContain("TaskTrackerFactsObserved")
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskCompletionFacts" &&
+          event.observation.facts.lifecycle === "CompletedSuccessfully"
+      )
+    ).toBe(true)
     expect(run.journalTags).not.toContain("CompletionClaimDeleted")
   })
 )
@@ -7056,7 +7810,17 @@ it.effect("keeps successful work final when completion-claim deletion cannot con
     )
     expect(run.failureTag).toBe("IntegrationFinality.CompletionClaimDidNotConverge")
     expect(run.deletionCalls).toBe(3)
-    expect(run.journalTags).toContain("TaskTrackerFactsObserved")
+    const cleanupTags = focusedCleanupTags(run.journalTags)
+    expect(cleanupTags).toContain("TaskTrackerReadIntentRecorded")
+    expect(cleanupTags).toContain("TaskTrackerFactsObserved")
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskCompletionFacts" &&
+          event.observation.facts.lifecycle === "CompletedSuccessfully"
+      )
+    ).toBe(true)
     expect(run.journalTags).not.toContain("CompletionClaimDeleted")
     expect(run.journalTags).not.toContain("IntegrationFinalitySettled")
   })

@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Match } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
   OperationSelected,
@@ -67,44 +67,49 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
   const step = route.step
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
-  switch (step._tag) {
-    case "ReadCurrentTaskGraph": {
-      const operation = makeTrackerGraphObservationOperation(action.operationId, target, [], [step.task.id])
-      yield* executeTrackerGraphRead(operation)
-      return deliveryActionCompleted(action.proposal.id)
-    }
-    case "AcquireTaskClaim": {
-      yield* acquireTaskClaim(action, step, lease)
-      return deliveryActionCompleted(action.proposal.id)
-    }
-    case "ReadPostClaimGraph": {
-      const operation = makeTrackerGraphObservationOperation(
-        action.operationId,
-        target,
-        [step.predecessorOperationId],
-        [step.task.id]
-      )
-      const snapshot = yield* executeTrackerGraphRead(operation)
-      if (snapshot.eligibleTasks().some(({ id }) => id === step.task.id)) {
-        yield* trace.emit(
-          TrackerExecutionAdmitted.make({ claimOperation: step.claimOperation, observationOperation: operation })
+  return yield* Match.valueTags(step, {
+    ReadCurrentTaskGraph: (step) =>
+      Effect.gen(function* () {
+        const operation = makeTrackerGraphObservationOperation(action.operationId, target, [], [step.task.id])
+        yield* executeTrackerGraphRead(operation)
+        return deliveryActionCompleted(action.proposal.id)
+      }),
+    AcquireTaskClaim: (step) =>
+      Effect.gen(function* () {
+        yield* acquireTaskClaim(action, step, lease)
+        return deliveryActionCompleted(action.proposal.id)
+      }),
+    ReadPostClaimGraph: (step) =>
+      Effect.gen(function* () {
+        const operation = makeTrackerGraphObservationOperation(
+          action.operationId,
+          target,
+          [step.predecessorOperationId],
+          [step.task.id]
         )
-      }
-      return deliveryActionCompleted(action.proposal.id)
-    }
-    case "ReadTaskWorkSpecification": {
-      const operation = makeTaskWorkSpecificationObservationOperation(action.operationId, target, step.task.id, [
-        step.predecessorOperationId
-      ])
-      yield* trace.emit(OperationSelected.make({ operation }))
-      yield* interpreter.readTaskWorkSpecification(operation)
-      return deliveryActionCompleted(action.proposal.id)
-    }
-    case "ReconcileTaskWorktree": {
-      yield* reconcileTaskWorktree(action, step)
-      return deliveryActionCompleted(action.proposal.id)
-    }
-  }
+        const snapshot = yield* executeTrackerGraphRead(operation)
+        if (snapshot.eligibleTasks().some(({ id }) => id === step.task.id)) {
+          yield* trace.emit(
+            TrackerExecutionAdmitted.make({ claimOperation: step.claimOperation, observationOperation: operation })
+          )
+        }
+        return deliveryActionCompleted(action.proposal.id)
+      }),
+    ReadTaskWorkSpecification: (step) =>
+      Effect.gen(function* () {
+        const operation = makeTaskWorkSpecificationObservationOperation(action.operationId, target, step.task.id, [
+          step.predecessorOperationId
+        ])
+        yield* trace.emit(OperationSelected.make({ operation }))
+        yield* interpreter.readTaskWorkSpecification(operation)
+        return deliveryActionCompleted(action.proposal.id)
+      }),
+    ReconcileTaskWorktree: (step) =>
+      Effect.gen(function* () {
+        yield* reconcileTaskWorktree(action, step)
+        return deliveryActionCompleted(action.proposal.id)
+      })
+  })
 })
 
 export const executeFreshAttemptPlanning = Effect.fn("DeliveryAction.executeFreshAttemptPlanning")(function* (

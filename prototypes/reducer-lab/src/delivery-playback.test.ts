@@ -144,7 +144,7 @@ assert.throws(() => Schema.decodeUnknownSync(DeliveryPlaybackModel)({
   )
   const [endpoint, commands] = updateDeliveryPlayback(
     nearFirst,
-    PreviousFrameRequested()
+    PreviousFrameRequested({ source: "PlaybackControl" })
   )
   assert.equal(projectDeliveryPlayback(endpoint).currentFrameIndex, 0)
   assert.deepEqual(
@@ -154,7 +154,7 @@ assert.throws(() => Schema.decodeUnknownSync(DeliveryPlaybackModel)({
   )
   const [away, awayCommands] = updateDeliveryPlayback(
     endpoint,
-    NextFrameRequested()
+    NextFrameRequested({ source: "PlaybackControl" })
   )
   assert.equal(projectDeliveryPlayback(away).currentFrameIndex, 1)
   assert.deepEqual(awayCommands, [])
@@ -167,7 +167,7 @@ assert.throws(() => Schema.decodeUnknownSync(DeliveryPlaybackModel)({
   )
   const [endpoint, commands] = updateDeliveryPlayback(
     penultimate,
-    NextFrameRequested()
+    NextFrameRequested({ source: "PlaybackControl" })
   )
   assert.equal(projectDeliveryPlayback(endpoint).currentFrameIndex, 3)
   assert.deepEqual(
@@ -184,7 +184,7 @@ assert.throws(() => Schema.decodeUnknownSync(DeliveryPlaybackModel)({
   )
   const [nonEndpoint, commands] = updateDeliveryPlayback(
     middle,
-    PreviousFrameRequested()
+    PreviousFrameRequested({ source: "PlaybackControl" })
   )
   assert.equal(projectDeliveryPlayback(nonEndpoint).currentFrameIndex, 1)
   assert.deepEqual(commands, [], "A control that remains available must retain its own focus")
@@ -197,24 +197,24 @@ assert.throws(() => Schema.decodeUnknownSync(DeliveryPlaybackModel)({
   )
   const [nextLandmark] = updateDeliveryPlayback(
     first,
-    NextLandmarkRequested()
+    NextLandmarkRequested({ source: "PlaybackControl" })
   )
   assert.equal(projectDeliveryPlayback(nextLandmark).currentFrameIndex, 1)
   const [lastLandmark, commands] = updateDeliveryPlayback(
     nextLandmark,
-    NextLandmarkRequested()
+    NextLandmarkRequested({ source: "PlaybackControl" })
   )
   assert.equal(projectDeliveryPlayback(lastLandmark).currentFrameIndex, 3)
   assert.deepEqual(commands.map(({ _tag }) => _tag), ["FocusDeliveryPlaybackControls"])
   const [firstLandmark, reverseCommands] = updateDeliveryPlayback(
     lastLandmark,
-    PreviousLandmarkRequested()
+    PreviousLandmarkRequested({ source: "PlaybackControl" })
   )
   assert.equal(projectDeliveryPlayback(firstLandmark).currentFrameIndex, 1)
   assert.deepEqual(reverseCommands, [])
   const [initialLandmark, endpointCommands] = updateDeliveryPlayback(
     firstLandmark,
-    PreviousLandmarkRequested()
+    PreviousLandmarkRequested({ source: "PlaybackControl" })
   )
   assert.equal(projectDeliveryPlayback(initialLandmark).currentFrameIndex, 0)
   assert.deepEqual(endpointCommands.map(({ _tag }) => _tag), ["FocusDeliveryPlaybackControls"])
@@ -262,7 +262,7 @@ assert.throws(() => Schema.decodeUnknownSync(DeliveryPlaybackModel)({
   assert.equal(projectDeliveryPlayback(empty).status, "0 / 0 · running · waiting for first frame")
   const [unchanged, commands] = updateDeliveryPlayback(
     empty,
-    PreviousFrameRequested()
+    PreviousFrameRequested({ source: "PlaybackControl" })
   )
   assert.equal(unchanged, empty)
   assert.deepEqual(commands, [])

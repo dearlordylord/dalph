@@ -1,9 +1,11 @@
 import { it } from "@effect/vitest"
+import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { Effect, Option } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
   AttemptId,
+  EvidenceReference,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
@@ -123,8 +125,15 @@ const plannedAttempt = (taskId: "A" | "B" | "C", ordinal: number) =>
     worktree: WorktreeLocator.make(`/worktrees/${taskId}`)
   })
 
-const acceptedResult = (commitDigit: string) =>
-  AcceptedResult.make({ commit: GitCommitSha.make(commitDigit.repeat(40)) })
+const acceptedResult = (commitDigit: string) => acceptedResultFixture(GitCommitSha.make(commitDigit.repeat(40)))
+const substituteEvidenceByteLength = (result: AcceptedResult): AcceptedResult =>
+  AcceptedResult.make({
+    ...result,
+    evidenceManifest: EvidenceReference.make({
+      byteLength: result.evidenceManifest.byteLength + 1,
+      digest: result.evidenceManifest.digest
+    })
+  })
 
 it("does not offer an accepted report whose exact attempt responsibility is absent", () => {
   const attempt = plannedAttempt("A", 0)
@@ -267,6 +276,44 @@ it.effect("rejects a responsibility whose planned attempt differs from the durab
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
+it.effect("rejects an accepted-result evidence substitution before queue and at the integration cutoff", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("A", 0)
+    const durableResult = acceptedResult("a")
+    const substitutedResult = substituteEvidenceByteLength(durableResult)
+    yield* beginRun
+    yield* recordAcceptedTerminal(attempt, durableResult)
+
+    const failure = yield* Effect.flip(
+      queueAcceptedResultIntegrationResponsibility(attempt, substitutedResult, integrationTarget)
+    )
+    expect(failure).toEqual(new AcceptedResultNotDurable({ attemptId: attempt.attemptId, runId: attempt.runId }))
+
+    const queued = yield* queueAcceptedResultIntegrationResponsibility(attempt, durableResult, integrationTarget)
+    const journal = yield* JournalStore
+    yield* journal.append(
+      runId,
+      integrationStartedRecordKey(attempt.attemptId),
+      IntegrationStartedEvent.make({
+        acceptedResult: substitutedResult,
+        integrationTarget,
+        plannedAttempt: attempt,
+        responsibilityBeganAt: queued.queuedAt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
+    expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
+    if (reduction._tag !== "InvalidWorkflowJournalHistory") return
+    expect(reduction.issues).toContainEqual(
+      expect.objectContaining({
+        detail: `integration start for attempt ${attempt.attemptId} has no exact earlier responsibility at ${queued.queuedAt}`
+      })
+    )
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
 it.effect("rejects persisted integration responsibility without a prior accepted terminal result", () =>
   Effect.gen(function* () {
     const attempt = plannedAttempt("A", 0)
@@ -277,6 +324,36 @@ it.effect("rejects persisted integration responsibility without a prior accepted
       integrationResponsibilityBeganRecordKey(attempt.attemptId),
       IntegrationResponsibilityBeganEvent.make({
         acceptedResult: acceptedResult("a"),
+        integrationTarget,
+        plannedAttempt: attempt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
+
+    expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
+    if (reduction._tag !== "InvalidWorkflowJournalHistory") return
+    expect(reduction.issues).toContainEqual(
+      expect.objectContaining({
+        detail: `integration responsibility for attempt ${attempt.attemptId} has no prior matching accepted terminal result`
+      })
+    )
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects persisted integration responsibility with substituted accepted evidence", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("A", 0)
+    const durableResult = acceptedResult("a")
+    yield* beginRun
+    yield* recordAcceptedTerminal(attempt, durableResult)
+    const journal = yield* JournalStore
+    yield* journal.append(
+      runId,
+      integrationResponsibilityBeganRecordKey(attempt.attemptId),
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult: substituteEvidenceByteLength(durableResult),
         integrationTarget,
         plannedAttempt: attempt,
         version: workflowJournalEventVersion

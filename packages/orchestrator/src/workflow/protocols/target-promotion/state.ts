@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
   TargetPromotionAttemptLimit,
@@ -95,29 +95,20 @@ const isTerminalPromotionOccurrence = (
     record.event._tag
   )
 
-const stateFromTerminal = (event: TerminalPromotionEvent): TargetPromotionState => {
-  switch (event._tag) {
-    case "TargetPromotionObservedSuccess":
-      return TargetPromotionState.cases.PromotionSucceeded.make({
-        basis: event.basis,
-        correlation: event.correlation,
-        observation: event.observation
+const stateFromTerminal = (event: TerminalPromotionEvent): TargetPromotionState =>
+  Match.valueTags(event, {
+    TargetPromotionObservedSuccess: ({ basis, correlation, observation }) =>
+      TargetPromotionState.cases.PromotionSucceeded.make({ basis, correlation, observation }),
+    TargetPromotionStale: ({ basis, correlation, observation }) =>
+      TargetPromotionState.cases.PromotionStale.make({ basis, correlation, observation }),
+    TargetPromotionNonConvergence: ({ attemptLimit, attemptOrdinal, correlation, lastObservation }) =>
+      TargetPromotionState.cases.PromotionNonConvergent.make({
+        attemptLimit,
+        attemptOrdinal,
+        correlation,
+        lastObservation
       })
-    case "TargetPromotionStale":
-      return TargetPromotionState.cases.PromotionStale.make({
-        basis: event.basis,
-        correlation: event.correlation,
-        observation: event.observation
-      })
-    case "TargetPromotionNonConvergence":
-      return TargetPromotionState.cases.PromotionNonConvergent.make({
-        attemptLimit: event.attemptLimit,
-        attemptOrdinal: event.attemptOrdinal,
-        correlation: event.correlation,
-        lastObservation: event.lastObservation
-      })
-  }
-}
+  })
 
 /** Reconstructs promotion state without treating a journal row as Git authority. */
 export const deriveTargetPromotionState = (

@@ -21,13 +21,17 @@ import {
   type TrackerTask
 } from "../../authorities/task-tracker/task.js"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
 import { OperationId } from "../../workflow/identity.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
-import { makeTaskWorktreeReconciliationOperation } from "../../workflow/registry/operation.js"
+import {
+  makeCompletionTaskFactsObservationOperation,
+  makeTaskWorktreeReconciliationOperation
+} from "../../workflow/registry/operation.js"
 import {
   TrackerGraphState,
   type DeliveryGraphPublication,
@@ -42,9 +46,29 @@ import {
   selectedTicketIds,
   ticketDeliveriesOf
 } from "./ticket-delivery-projection.js"
-import { IntegrationFinalitySettledEvent } from "../../workflow/protocols/integration-finality/events.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
+import { TargetPromotionState } from "../../workflow/protocols/target-promotion/state.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import { acceptedResultFixture } from "../../../test/support/evidence.js"
+import {
+  CompletionTaskAuthorizationReadOrdinal,
+  CompletionTaskAcknowledgedEvent,
+  CompletionTaskAcknowledgement,
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskIntendedEvent,
+  CompletionTaskRequestOrdinal,
+  IntegrationFinalitySettledEvent
+} from "../../workflow/protocols/integration-finality/events.js"
+import {
+  makeFocusedTaskCompletionFactsObserved,
+  TaskTrackerFactsObservedEvent,
+  taskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
+import { journaledIntegrationEvidenceOf } from "./delivery-evidence.js"
+
+const completionIntentFor = (request: typeof integrationFinalityFixture.completionRequest) =>
+  CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion })
 
 const task = (
   id: string,
@@ -52,27 +76,23 @@ const task = (
   prerequisiteIds: ReadonlyArray<TaskId> = []
 ): TrackerTask => ({ id: TaskId.make(id), lifecycle, parentTaskId: null, prerequisiteIds })
 
-const graph = (tasks: ReadonlyArray<TrackerTask>, revision = "graph-1") => {
+const graph = (tasks: ReadonlyArray<TrackerTask>, revision = "graph-1", recordedAt = JournalPosition.make(1)) => {
   const projected = TaskDagSnapshot.project(TrackerSnapshot.make({ revision: TrackerRevision.make(revision), tasks }))
   if (projected._tag === "Invalid") return expect.fail(`invalid test graph: ${JSON.stringify(projected.issues)}`)
   const operationId = OperationId.make(`fixture:${revision}`)
   return TrackerGraphState.cases.GraphEstablished.make({
-    observation: makeTestJournaledTrackerGraphObservation({
-      snapshot: projected.snapshot,
-      operationId,
-      recordedAt: JournalPosition.make(1)
-    })
+    observation: makeTestJournaledTrackerGraphObservation({ snapshot: projected.snapshot, operationId, recordedAt })
   })
 }
 
 const policy = (capacity: number) =>
   RunControlPolicy.make({ revision: initialRunPolicyRevision, taskExecutionCapacity: TaskWorkCapacity.make(capacity) })
 
-const publication = (currentGraph: TrackerGraphState, currentPolicy: RunControlPolicy): DeliveryGraphPublication => ({
-  exactEvidence: [],
-  graph: currentGraph,
-  policy: currentPolicy
-})
+const publication = (
+  currentGraph: TrackerGraphState,
+  currentPolicy: RunControlPolicy,
+  exactEvidence: ReadonlyArray<TicketDeliveryEvidence> = []
+): DeliveryGraphPublication => ({ exactEvidence, graph: currentGraph, policy: currentPolicy })
 
 const boundedTickets = (currentGraph: TrackerGraphState, currentPolicy: RunControlPolicy) =>
   boundedParallelTicketsOf(frontierOf(publication(currentGraph, currentPolicy)))
@@ -81,7 +101,20 @@ const project = (
   tasks: ReadonlyArray<TrackerTask>,
   capacity: number,
   evidence: ReadonlyArray<TicketDeliveryEvidence> = []
-) => ticketDeliveriesOf(boundedTickets(graph(tasks), policy(capacity)), evidence)
+) =>
+  ticketDeliveriesOf(
+    boundedParallelTicketsOf(
+      frontierOf(publication(graph(tasks, "graph-1", JournalPosition.make(10)), policy(capacity), evidence))
+    ),
+    evidence
+  )
+
+const journalRecord = (event: JournalRecord["event"], position: number, key: string): JournalRecord => ({
+  event,
+  key: JournalRecordKey.make(key),
+  position: JournalPosition.make(position),
+  runId: integrationFinalityFixture.runId
+})
 
 const plannedAttempt = (taskId: TaskId) =>
   PlannedTaskAttempt.make({
@@ -177,6 +210,185 @@ describe("#181 graph and bounded projections", () => {
     ])
   })
 
+  it("releases B even while A's exact completion-claim cleanup remains recoverably pending", () => {
+    const fixture = integrationFinalityFixture
+    const responsibility = StartedIntegrationResponsibility.make({
+      acceptedResult: acceptedResultFixture(fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit),
+      integrationTarget: fixture.integrationTarget,
+      plannedAttempt: fixture.plannedAttempt,
+      queuedAt: JournalPosition.make(2),
+      startedAt: JournalPosition.make(3)
+    })
+    const promotion = TargetPromotionState.cases.PromotionSucceeded.make({
+      basis: fixture.promotionSuccess.basis,
+      correlation: fixture.promotionCorrelation,
+      observation: fixture.promotionSuccess.observation
+    })
+    const result = project(
+      [
+        task(fixture.taskId, TaskLifecycle.cases.CompletedSuccessfully.make({})),
+        task("B", TaskLifecycle.cases.Open.make({}), [fixture.taskId])
+      ],
+      1,
+      [
+        { _tag: "StartedIntegration", responsibility },
+        { _tag: "TargetPromotion", responsibility, state: promotion },
+        ...journaledIntegrationEvidenceOf([
+          journalRecord(completionIntentFor(fixture.completionRequest), 8, "cleanup-pending-completion-intent"),
+          journalRecord(fixture.focusedSuccessFactsEvent, 9, "cleanup-pending-focused-success")
+        ])
+      ]
+    )
+
+    expect(result.deliveries.find(({ taskId }) => taskId === fixture.taskId)).toMatchObject({
+      obligations: [{ _tag: "StartedIntegration" }],
+      placement: { _tag: "GraphExcluded", reasons: [{ _tag: "SuccessfulCompletion" }] }
+    })
+    expect(result.deliveries.find(({ taskId }) => taskId === TaskId.make("B"))).toMatchObject({
+      obligations: [],
+      placement: { _tag: "Selected" },
+      standings: [{ _tag: "ProposedDelivery" }]
+    })
+  })
+
+  it("releases B only when a graph reporting A successful is later than A's exact focused success", () => {
+    const fixture = integrationFinalityFixture
+    const responsibility = StartedIntegrationResponsibility.make({
+      acceptedResult: acceptedResultFixture(fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit),
+      integrationTarget: fixture.integrationTarget,
+      plannedAttempt: fixture.plannedAttempt,
+      queuedAt: JournalPosition.make(2),
+      startedAt: JournalPosition.make(3)
+    })
+    const promotion = TargetPromotionState.cases.PromotionSucceeded.make({
+      basis: fixture.promotionSuccess.basis,
+      correlation: fixture.promotionCorrelation,
+      observation: fixture.promotionSuccess.observation
+    })
+    const acknowledged = CompletionTaskAcknowledgedEvent.make({
+      acknowledgement: CompletionTaskAcknowledgement.make({
+        operationId: fixture.completionRequest.operationId,
+        taskId: fixture.taskId
+      }),
+      attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+      request: fixture.completionRequest,
+      version: workflowJournalEventVersion
+    })
+    const focusedOpen = TaskTrackerFactsObservedEvent.make({
+      ...fixture.focusedSuccessFactsEvent,
+      observation: {
+        ...fixture.focusedSuccessFactsEvent.observation,
+        facts: { ...fixture.focusedSuccessFactsEvent.observation.facts, lifecycle: "Open" }
+      }
+    })
+    const beforeSuccessRecords = [
+      journalRecord(completionIntentFor(fixture.completionRequest), 3, "completion-intent"),
+      journalRecord(acknowledged, 4, "completion-acknowledged"),
+      journalRecord(focusedOpen, 6, "focused-completion-open")
+    ]
+    const focusedSuccessRecords = [
+      ...beforeSuccessRecords,
+      journalRecord(fixture.focusedSuccessFactsEvent, 9, "focused-completion-success")
+    ]
+    const graphTasks = [
+      task(fixture.taskId, TaskLifecycle.cases.CompletedSuccessfully.make({})),
+      task("B", TaskLifecycle.cases.Open.make({}), [fixture.taskId])
+    ]
+    const beforeFocusedSuccess = graph(graphTasks, "graph-before-focused-success", JournalPosition.make(8))
+    const afterFocusedSuccess = graph(graphTasks, "graph-after-focused-success", JournalPosition.make(10))
+    const evidenceBeforeSuccess = [
+      { _tag: "StartedIntegration" as const, responsibility },
+      { _tag: "TargetPromotion" as const, responsibility, state: promotion },
+      ...journaledIntegrationEvidenceOf(beforeSuccessRecords)
+    ]
+    const evidenceAfterSuccess = [
+      { _tag: "StartedIntegration" as const, responsibility },
+      { _tag: "TargetPromotion" as const, responsibility, state: promotion },
+      ...journaledIntegrationEvidenceOf(focusedSuccessRecords)
+    ]
+    const projectPublication = (currentPublication: DeliveryGraphPublication) =>
+      ticketDeliveriesOf(boundedParallelTicketsOf(frontierOf(currentPublication)), currentPublication.exactEvidence)
+    const deliveryBeforeSuccess = projectPublication(
+      publication(beforeFocusedSuccess, policy(1), evidenceBeforeSuccess)
+    )
+    const deliveryWithPredatingGraph = projectPublication(
+      publication(beforeFocusedSuccess, policy(1), evidenceAfterSuccess)
+    )
+    const deliveryWithLaterGraph = projectPublication(publication(afterFocusedSuccess, policy(1), evidenceAfterSuccess))
+
+    for (const blocked of [deliveryBeforeSuccess, deliveryWithPredatingGraph]) {
+      expect(blocked.deliveries.find(({ taskId }) => taskId === TaskId.make("B"))).toMatchObject({
+        standings: [{ _tag: "PromotedPrerequisiteReleasePending", prerequisiteTaskIds: [fixture.taskId] }]
+      })
+    }
+    expect(deliveryWithLaterGraph.deliveries.find(({ taskId }) => taskId === TaskId.make("B"))).toMatchObject({
+      standings: [{ _tag: "ProposedDelivery" }]
+    })
+    expect(project(graphTasks, 1).deliveries.find(({ taskId }) => taskId === TaskId.make("B"))).toMatchObject({
+      standings: [{ _tag: "ProposedDelivery" }]
+    })
+  })
+
+  it("accepts exact Authorization or Confirmation success and rejects conflicting focused facts", () => {
+    const fixture = integrationFinalityFixture
+    const authorizationPurpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+      attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+      authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(1)
+    })
+    const authorizationOperation = makeCompletionTaskFactsObservationOperation(
+      fixture.completionRequest,
+      fixture.target,
+      authorizationPurpose
+    )
+    const authorizationObservation = makeFocusedTaskCompletionFactsObserved(authorizationOperation, {
+      ...fixture.focusedSuccessFactsEvent.observation.facts,
+      operationId: authorizationOperation.operationId
+    })
+    const authorizationSuccess = {
+      ...taskTrackerFactsObservedEvent(authorizationOperation.operationId, authorizationObservation),
+      observation: authorizationObservation
+    }
+    const conflictingEvents = [
+      {
+        ...authorizationSuccess,
+        observation: {
+          ...authorizationSuccess.observation,
+          facts: {
+            ...authorizationSuccess.observation.facts,
+            taskRevision: TaskRevision.make("changed-after-promotion")
+          }
+        }
+      },
+      {
+        ...authorizationSuccess,
+        observation: {
+          ...authorizationSuccess.observation,
+          facts: { ...authorizationSuccess.observation.facts, targetMembership: "NotMember" as const }
+        }
+      },
+      {
+        ...authorizationSuccess,
+        observation: {
+          ...authorizationSuccess.observation,
+          facts: { ...authorizationSuccess.observation.facts, operationId: OperationId.make("foreign-focused-read") }
+        }
+      }
+    ]
+    const successesIn = (events: ReadonlyArray<JournalRecord["event"]>) =>
+      journaledIntegrationEvidenceOf([
+        journalRecord(completionIntentFor(fixture.completionRequest), 1, "focused-success-completion-intent"),
+        ...events.map((event, index) => journalRecord(event, index + 2, `focused-success-${index}`))
+      ]).filter(({ _tag }) => _tag === "FocusedTaskCompletionSuccess")
+
+    expect(successesIn([authorizationSuccess, fixture.focusedSuccessFactsEvent])).toHaveLength(2)
+    expect(
+      journaledIntegrationEvidenceOf([journalRecord(authorizationSuccess, 1, "focused-success-without-q")]).filter(
+        ({ _tag }) => _tag === "FocusedTaskCompletionSuccess"
+      )
+    ).toEqual([])
+    for (const conflict of conflictingEvents) expect(successesIn([conflict])).toEqual([])
+  })
+
   it("keeps graph and policy in one publication value", () => {
     const currentGraph = graph([task("A")], "stage-graph")
     const currentPolicy = policy(1)
@@ -209,6 +421,37 @@ describe("#181 graph and bounded projections", () => {
       { _tag: "Excluded", reasons: [{ _tag: "TerminalWithoutSuccess" }], taskId: "D" },
       { _tag: "Excluded", reasons: [{ _tag: "TerminalWithoutSuccess" }], taskId: "P" }
     ])
+  })
+
+  it("keeps B blocked by changed A while independent C remains eligible", () => {
+    const currentGraph = graph([
+      task("A", TaskLifecycle.cases.TerminalWithoutSuccess.make({})),
+      task("B", TaskLifecycle.cases.Open.make({}), [TaskId.make("A")]),
+      task("C")
+    ])
+    const frontier = frontierOf(publication(currentGraph, policy(1)))
+    const tickets = boundedParallelTicketsOf(frontier)
+
+    expect(frontier.standings).toMatchObject([
+      { _tag: "Excluded", reasons: [{ _tag: "TerminalWithoutSuccess" }], taskId: "A" },
+      { _tag: "Excluded", reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: ["A"] }], taskId: "B" },
+      { _tag: "Eligible", taskId: "C" }
+    ])
+    expect(selectedTicketIds(tickets)).toEqual([TaskId.make("C")])
+  })
+
+  it("does not release B when the later graph reports A reopened", () => {
+    const frontier = frontierOf(
+      publication(
+        graph([task("A"), task("B", TaskLifecycle.cases.Open.make({}), [TaskId.make("A")])], "reopened-A"),
+        policy(2)
+      )
+    )
+
+    expect(frontier.standings.find(({ taskId }) => taskId === TaskId.make("B"))).toMatchObject({
+      _tag: "Excluded",
+      reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [TaskId.make("A")] }]
+    })
   })
 
   it("sorts multiple incomplete prerequisites into deterministic task order", () => {

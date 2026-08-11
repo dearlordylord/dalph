@@ -43,7 +43,9 @@ import {
 } from "../../workflow/protocols/target-promotion/runtime.js"
 import {
   CompletionClaimBoundary,
-  type CompletionClaimBoundaryService
+  type CompletionClaimBoundaryService,
+  CompletionTaskBoundary,
+  type CompletionTaskBoundaryService
 } from "../../workflow/protocols/integration-finality/events.js"
 
 export const StartupRecoveryIssue = Schema.Union([
@@ -103,7 +105,8 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   candidateContinuationLimit: CandidateContinuationLimit | undefined,
   targetVerification: TargetVerificationRuntimeInput | undefined,
   targetPromotion: TargetPromotionRuntimeInput | undefined,
-  integrationFinality: CompletionClaimBoundaryService | undefined
+  integrationFinality: CompletionClaimBoundaryService | undefined,
+  completionTask: CompletionTaskBoundaryService | undefined
 ) {
   yield* CoordinatorOwnership
   const inRunJournal = yield* InRunJournal
@@ -132,9 +135,10 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     integrationResources,
     targetVerification,
     targetPromotion,
-    integrationFinality !== undefined
+    integrationFinality !== undefined,
+    completionTask !== undefined
   )
-  let context = Context.empty().pipe(
+  return Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
     Context.add(RunRecoveryProjection, recovery),
     Context.add(OperationIdAllocator, operationIdAllocator),
@@ -146,22 +150,27 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     Context.add(TaskWorkCapacityControl, taskWorkCapacityControl),
     Context.add(TaskClaimReacquisitionControl, taskClaimReacquisitionControl),
     Context.add(WorkflowTrace, trace),
-    Context.add(DeliveryRuntimeResources, runtimeResources)
+    Context.add(DeliveryRuntimeResources, runtimeResources),
+    Context.addOrOmit(IntegrationCandidateAgent, candidateAgent),
+    Context.addOrOmit(IntegrationCandidateGit, candidateGit),
+    Context.addOrOmit(
+      TargetVerificationRuntime,
+      Option.fromUndefinedOr(targetVerification).pipe(Option.map(TargetVerificationRuntime.of))
+    ),
+    Context.addOrOmit(
+      TargetPromotionRuntime,
+      Option.fromUndefinedOr(targetPromotion).pipe(Option.map(TargetPromotionRuntime.of))
+    ),
+    Context.addOrOmit(
+      CompletionClaimBoundary,
+      Option.fromUndefinedOr(integrationFinality).pipe(Option.map(CompletionClaimBoundary.of))
+    ),
+    Context.addOrOmit(
+      CompletionTaskBoundary,
+      Option.fromUndefinedOr(completionTask).pipe(Option.map(CompletionTaskBoundary.of))
+    ),
+    Context.addOrOmit(IntegrationTargetSelection, Option.fromUndefinedOr(integrationTarget))
   )
-  if (candidateAgent._tag === "Some") context = Context.add(context, IntegrationCandidateAgent, candidateAgent.value)
-  if (candidateGit._tag === "Some") context = Context.add(context, IntegrationCandidateGit, candidateGit.value)
-  if (targetVerification !== undefined) {
-    context = Context.add(context, TargetVerificationRuntime, TargetVerificationRuntime.of(targetVerification))
-  }
-  if (targetPromotion !== undefined) {
-    context = Context.add(context, TargetPromotionRuntime, TargetPromotionRuntime.of(targetPromotion))
-  }
-  /* v8 ignore next -- @preserve Production supplies this service and planning flag from one input; the delivery-action route test exercises the configured boundary. */
-  if (integrationFinality !== undefined) {
-    context = Context.add(context, CompletionClaimBoundary, CompletionClaimBoundary.of(integrationFinality))
-  }
-  /* v8 ignore next -- @preserve Production activation installs its configured integration target; targetless composition is covered at frontier configuration wait. */
-  return integrationTarget === undefined ? context : Context.add(context, IntegrationTargetSelection, integrationTarget)
 })
 
 /** Builds ordinary in-Run services after bootstrap has already validated the complete accepted prefix. */
@@ -172,7 +181,8 @@ export const validatedRunActivationLayer = (
   candidateContinuationLimit?: CandidateContinuationLimit,
   targetVerification?: TargetVerificationRuntimeInput,
   targetPromotion?: TargetPromotionRuntimeInput,
-  integrationFinality?: CompletionClaimBoundaryService
+  integrationFinality?: CompletionClaimBoundaryService,
+  completionTask?: CompletionTaskBoundaryService
 ) =>
   Layer.effectContext(
     makeRunActivationContext(
@@ -182,6 +192,7 @@ export const validatedRunActivationLayer = (
       candidateContinuationLimit,
       targetVerification,
       targetPromotion,
-      integrationFinality
+      integrationFinality,
+      completionTask
     )
   )

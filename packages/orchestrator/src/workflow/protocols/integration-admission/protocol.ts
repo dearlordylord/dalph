@@ -15,7 +15,7 @@ import {
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
-import { integrationResponsibilityEquivalence } from "./responsibility.js"
+import { acceptedResultEquivalence, integrationResponsibilityEquivalence } from "./responsibility.js"
 import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
 
 /**
@@ -90,8 +90,6 @@ export class AcceptedResultNotDurable extends Schema.TaggedError<AcceptedResultN
   { attemptId: AttemptId, runId: RunId }
 ) {}
 
-const sameAcceptedResult = (left: AcceptedResult, right: AcceptedResult): boolean => left.commit === right.commit
-
 const hasDurableAcceptedResult = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
@@ -115,7 +113,7 @@ const hasDurableAcceptedResult = (
       event.report.correlation.attemptId === plannedAttempt.attemptId &&
       event.report.correlation.runId === plannedAttempt.runId &&
       event.report.result._tag === "Accepted" &&
-      sameAcceptedResult(event.report.result.acceptedResult, acceptedResult)
+      acceptedResultEquivalence(event.report.result.acceptedResult, acceptedResult)
   )
 }
 

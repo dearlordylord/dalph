@@ -1,6 +1,9 @@
 import {
   AcceptedResult,
+  AcceptedResultEvidenceManifest,
   AttemptId,
+  EvidenceDigest,
+  EvidenceReference,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
@@ -36,6 +39,7 @@ import {
 } from "../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
@@ -43,6 +47,7 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
 import {
+  makeCompletionTaskFactsObservationOperation,
   makeTargetLineageObservationOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
@@ -87,10 +92,37 @@ import {
   completionClaimDeletionRequestFor,
   CompletionClaimBoundary,
   CompletionClaimReadFailure,
+  CompletionClaimReplacedEvent,
   completionClaimReplacementOperationIdFor,
-  completionClaimReplacementRequestFor
+  completionClaimReplacementRequestFor,
+  completionTaskRequestFor,
+  CompletionTaskAcknowledgedEvent,
+  CompletionTaskAcknowledgement,
+  CompletionTaskBoundary,
+  CompletionTaskConfirmationReadOrdinal,
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskIntendedEvent,
+  CompletionTaskRequestFailure,
+  CompletionTaskRequestLookup,
+  CompletionTaskRequestLookupObservedEvent,
+  CompletionTaskRequestOrdinal,
+  FocusedTaskCompletionReadFailure
 } from "../../workflow/protocols/integration-finality/events.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import {
+  makeFocusedTaskCompletionFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
+import { IntegrationReviewManifest } from "../../workflow/protocols/integration-candidate-construction/events.js"
+import { TargetPromotionGitReadObservation } from "../../workflow/protocols/target-promotion/events.js"
+import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotion/runtime.js"
+import { type EvidenceStoreService } from "../../workflow/protocols/target-verification/evidence-store.js"
+import {
+  TargetVerificationPlan,
+  TargetVerificationPlanId
+} from "../../workflow/protocols/target-verification/events.js"
+import { TargetVerificationManifest } from "../../workflow/protocols/target-verification/manifest.js"
+import { TargetVerificationRuntime } from "../../workflow/protocols/target-verification/runtime.js"
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 
 const runId = RunId.make("route-matrix-run")
@@ -111,7 +143,10 @@ const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repo/.git"),
   ref: IntegrationTargetRef.make("refs/heads/main")
 })
-const acceptedResult = AcceptedResult.make({ commit: GitCommitSha.make("2".repeat(40)) })
+const acceptedResult = AcceptedResult.make({
+  commit: GitCommitSha.make("2".repeat(40)),
+  evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("2".repeat(64)) })
+})
 
 it("makes stopped and ordinary claim-release route authorities mutually unconstructible", () => {
   type StoppedRelease = Extract<Transition, { readonly _tag: "ReleaseStoppedAttemptClaim" }>["operation"]
@@ -199,6 +234,72 @@ const appendableJournalFor = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
       }).pipe(Effect.flatten),
     read: () => Ref.get(records)
   })
+
+const encodedEvidence = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
+
+const completionEvidenceStore: EvidenceStoreService = {
+  put: () => Effect.die("completion adapter tests never publish evidence"),
+  read: (reference) => {
+    if (reference.digest === integrationFinalityFixture.claim.acceptanceManifest.digest) {
+      return Effect.succeed(
+        encodedEvidence(
+          AcceptedResultEvidenceManifest.make({
+            commit: integrationFinalityFixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit,
+            correlation: {
+              attemptId: integrationFinalityFixture.plannedAttempt.attemptId,
+              runId: integrationFinalityFixture.runId
+            },
+            formatVersion: 1,
+            outcome: "Accepted"
+          })
+        )
+      )
+    }
+    if (reference.digest === integrationFinalityFixture.claim.integrationReviewManifest.digest) {
+      return Effect.succeed(
+        encodedEvidence(
+          IntegrationReviewManifest.make({
+            candidateCommit: integrationFinalityFixture.promotionCorrelation.candidateCommit,
+            correlation: integrationFinalityFixture.promotionCorrelation.candidateCorrelation,
+            formatVersion: 1,
+            outcome: "Passed"
+          })
+        )
+      )
+    }
+    return Effect.succeed(
+      encodedEvidence(
+        TargetVerificationManifest.make({
+          artifacts: [],
+          correlation: integrationFinalityFixture.verificationCorrelation,
+          formatVersion: 1,
+          outcome: "Passed"
+        })
+      )
+    )
+  }
+}
+
+const completionPromotionRuntime = TargetPromotionRuntime.of({
+  git: {
+    compareAndSet: () => Effect.die("task completion only rereads Git"),
+    read: () =>
+      Effect.succeed(
+        TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
+          currentHeadSha: integrationFinalityFixture.promotionCorrelation.candidateCommit
+        })
+      )
+  }
+})
+
+const completionVerificationRuntime = TargetVerificationRuntime.of({
+  boundary: { runOrResume: () => Effect.die("task completion only rereads sealed evidence") },
+  evidenceStore: completionEvidenceStore,
+  plan: TargetVerificationPlan.make({
+    planId: TargetVerificationPlanId.make("completion-adapter-plan"),
+    target: integrationFinalityFixture.integrationTarget
+  })
+})
 
 describe("delivery proposal route matrix", () => {
   it("reuses accepted identity for every operation-reconciliation route", () => {
@@ -492,6 +593,24 @@ describe("delivery proposal route matrix", () => {
         access: "NoIntegrationTargetResource",
         owner: "DeliverySettlement",
         position: null,
+        transition: RunnableFrontierTransition.CompletePromotedTask({
+          request: completionTaskRequestFor(integrationFinalityFixture.claim),
+          responsibility: started
+        })
+      },
+      {
+        access: "NoIntegrationTargetResource",
+        owner: "DeliverySettlement",
+        position: null,
+        transition: RunnableFrontierTransition.ObserveFocusedTaskCompletion({
+          request: completionTaskRequestFor(integrationFinalityFixture.claim),
+          responsibility: started
+        })
+      },
+      {
+        access: "NoIntegrationTargetResource",
+        owner: "DeliverySettlement",
+        position: null,
         transition: RunnableFrontierTransition.DeleteCompletedTaskCompletionClaim({
           replacementOperationId: completionClaimReplacementOperationIdFor(integrationFinalityFixture.claim),
           request: completionClaimDeletionRequestFor(
@@ -573,7 +692,8 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           { _tag: "IdentityFreeAction", proposal: acquireProposal },
           acquire,
-          inertLease
+          inertLease,
+          target
         ).pipe(Effect.provideService(InRunJournal, candidateJournal))
       ).toMatchObject({ _tag: "ActionCompleted", proposalId: acquireProposal.id })
 
@@ -594,13 +714,13 @@ describe("delivery proposal route matrix", () => {
         return yield* Effect.die("missing identity-free continuation proposal")
       }
       const action = { _tag: "IdentityFreeAction" as const, proposal: continuationProposal }
-      const missingAgent = yield* executeIntegrationAction(action, continuation, inertLease).pipe(
+      const missingAgent = yield* executeIntegrationAction(action, continuation, inertLease, target).pipe(
         Effect.provideService(InRunJournal, candidateJournal),
         Effect.flip
       )
       expect(missingAgent).toEqual(new IntegrationCandidateBoundaryUnavailable({ boundary: "Agent" }))
 
-      const missingGit = yield* executeIntegrationAction(action, continuation, inertLease).pipe(
+      const missingGit = yield* executeIntegrationAction(action, continuation, inertLease, target).pipe(
         Effect.provideService(
           IntegrationCandidateAgent,
           IntegrationCandidateAgent.of({ startOrContinue: () => Effect.die("candidate agent must not run") })
@@ -626,7 +746,7 @@ describe("delivery proposal route matrix", () => {
       let currentClaim: typeof integrationFinalityFixture.activeClaim | typeof integrationFinalityFixture.claim =
         integrationFinalityFixture.activeClaim
       const boundary = CompletionClaimBoundary.of({
-        deleteTaskClaim: () => Effect.sync(() => undefined),
+        deleteTaskClaim: () => Effect.void,
         readTaskClaim: () => Effect.succeed(currentClaim),
         replaceTaskClaim: (request) =>
           Effect.sync(() => {
@@ -644,25 +764,48 @@ describe("delivery proposal route matrix", () => {
       }
       const replacementAction = { _tag: "IdentityFreeAction" as const, proposal: replacementProposal }
       expect(
-        yield* executeIntegrationAction(replacementAction, replacement, inertLease).pipe(
+        yield* executeIntegrationAction(replacementAction, replacement, inertLease, target).pipe(
           Effect.provideService(InRunJournal, journal),
           Effect.flip
         )
       ).toEqual(new IntegrationFinalityRuntimeUnavailable())
       expect(
-        yield* executeIntegrationAction(replacementAction, replacement, inertLease).pipe(
+        yield* executeIntegrationAction(replacementAction, replacement, inertLease, target).pipe(
           Effect.provideService(CompletionClaimBoundary, boundary),
           Effect.provideService(InRunJournal, journal)
         )
       ).toMatchObject({ _tag: "ActionCompleted", proposalId: replacementProposal.id })
 
-      const graphPosition = JournalPosition.make((yield* Ref.get(records)).length + 1)
+      const completionIntent = CompletionTaskIntendedEvent.make({
+        request: integrationFinalityFixture.completionRequest,
+        version: workflowJournalEventVersion
+      })
       yield* journal.append(
         integrationFinalityFixture.runId,
-        outcomeRecordKey(integrationFinalityFixture.graphOperation.operationId),
-        integrationFinalityFixture.graphRecordEvent
+        describeJournalEvent(completionIntent).expectedKey,
+        completionIntent
       )
-      const successObservation = { ...integrationFinalityFixture.successObservation, observedAt: graphPosition }
+      const focusedFacts = integrationFinalityFixture.focusedSuccessFactsEvent
+      const focusedReadOperation = makeCompletionTaskFactsObservationOperation(
+        focusedFacts.observation.request,
+        focusedFacts.observation.target,
+        focusedFacts.observation.purpose
+      )
+      const focusedReadIntent = taskTrackerReadIntent(focusedReadOperation)
+      yield* journal.append(
+        integrationFinalityFixture.runId,
+        describeJournalEvent(focusedReadIntent).expectedKey,
+        focusedReadIntent
+      )
+      const focusedFactsRecord = yield* journal.append(
+        integrationFinalityFixture.runId,
+        describeJournalEvent(focusedFacts).expectedKey,
+        focusedFacts
+      )
+      const successObservation = {
+        ...integrationFinalityFixture.successObservation,
+        observedAt: focusedFactsRecord.position
+      }
       const deletion = RunnableFrontierTransition.DeleteCompletedTaskCompletionClaim({
         replacementOperationId: completionClaimReplacementOperationIdFor(integrationFinalityFixture.claim),
         request: completionClaimDeletionRequestFor(integrationFinalityFixture.claim, successObservation),
@@ -676,7 +819,8 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           { _tag: "IdentityFreeAction", proposal: deletionProposal },
           deletion,
-          inertLease
+          inertLease,
+          target
         ).pipe(Effect.provideService(CompletionClaimBoundary, boundary), Effect.provideService(InRunJournal, journal))
       ).toMatchObject({ _tag: "ActionCompleted", proposalId: deletionProposal.id })
       expect((yield* Ref.get(records)).at(-1)?.event._tag).toBe("IntegrationFinalitySettled")
@@ -700,7 +844,7 @@ describe("delivery proposal route matrix", () => {
         replaceTaskClaim: () => Effect.die("foreign wait must not replace")
       })
       expect(
-        yield* executeIntegrationAction(replacementAction, replacement, inertLease).pipe(
+        yield* executeIntegrationAction(replacementAction, replacement, inertLease, target).pipe(
           Effect.provideService(CompletionClaimBoundary, foreignBoundary),
           Effect.provideService(InRunJournal, waitingJournal)
         )
@@ -713,7 +857,7 @@ describe("delivery proposal route matrix", () => {
         replaceTaskClaim: () => Effect.die("unreadable claim must not be replaced")
       })
       expect(
-        yield* executeIntegrationAction(replacementAction, replacement, inertLease).pipe(
+        yield* executeIntegrationAction(replacementAction, replacement, inertLease, target).pipe(
           Effect.provideService(CompletionClaimBoundary, unreadableBoundary),
           Effect.provideService(InRunJournal, waitingJournal)
         )
@@ -727,12 +871,428 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           { _tag: "IdentityFreeAction", proposal: deletionProposal },
           deletion,
-          inertLease
+          inertLease,
+          target
         ).pipe(
           Effect.provideService(CompletionClaimBoundary, unreadableBoundary),
           Effect.provideService(InRunJournal, appendableJournalFor(deletionWaitingRecords))
         )
+      ).toMatchObject({ _tag: "ActionDeferred", reason: "FocusedTaskCompletionSuccessRequired" })
+
+      const readableSuccessPrefix = (yield* Ref.get(records)).filter(
+        ({ event }) =>
+          event._tag !== "CompletionClaimDeletionIntended" &&
+          event._tag !== "CompletionClaimDeletionAttemptIntended" &&
+          event._tag !== "CompletionClaimDeleted" &&
+          event._tag !== "IntegrationFinalitySettled"
+      )
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: deletionProposal },
+          deletion,
+          inertLease,
+          target
+        ).pipe(
+          Effect.provideService(CompletionClaimBoundary, unreadableBoundary),
+          Effect.provideService(
+            InRunJournal,
+            appendableJournalFor(yield* Ref.make<ReadonlyArray<JournalRecord>>(readableSuccessPrefix))
+          )
+        )
       ).toMatchObject({ _tag: "ActionDeferred", reason: "CompletionClaimReadUnavailable" })
+    })
+  )
+
+  effectIt.effect("keeps an exact-open confirmation pending and a later focused success completes it", () =>
+    Effect.gen(function* () {
+      const request = completionTaskRequestFor(integrationFinalityFixture.claim)
+      const acknowledgement = CompletionTaskAcknowledgement.make({
+        operationId: request.operationId,
+        taskId: request.taskId
+      })
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        {
+          event: CompletionClaimReplacedEvent.make({
+            claim: integrationFinalityFixture.claim,
+            operationId: completionClaimReplacementOperationIdFor(integrationFinalityFixture.claim),
+            version: workflowJournalEventVersion
+          }),
+          key: JournalRecordKey.make("integration-finality-action:focused-claim-replaced"),
+          position: JournalPosition.make(1),
+          runId: integrationFinalityFixture.runId
+        },
+        {
+          event: CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion }),
+          key: JournalRecordKey.make("integration-finality-action:completion-intended"),
+          position: JournalPosition.make(2),
+          runId: integrationFinalityFixture.runId
+        },
+        {
+          event: CompletionTaskAcknowledgedEvent.make({
+            acknowledgement,
+            attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+            request,
+            version: workflowJournalEventVersion
+          }),
+          key: JournalRecordKey.make("integration-finality-action:acknowledged"),
+          position: JournalPosition.make(3),
+          runId: integrationFinalityFixture.runId
+        }
+      ])
+      const journal = appendableJournalFor(records)
+      const lifecycle = yield* Ref.make<"CompletedSuccessfully" | "Open">("Open")
+      const boundary = CompletionTaskBoundary.of({
+        completeTask: () => Effect.die("focused observation never sends another completion request"),
+        readCompletionRequest: () => Effect.die("focused observation never performs request lookup"),
+        readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+          Ref.get(lifecycle).pipe(
+            Effect.map((currentLifecycle) => ({
+              ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
+              currentClaim: integrationFinalityFixture.claim,
+              lifecycle: currentLifecycle,
+              operationId,
+              target
+            }))
+          )
+      })
+      const transition = RunnableFrontierTransition.ObserveFocusedTaskCompletion({ request, responsibility: started })
+      const proposal = proposalsFor(transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing focused completion proposal")
+      }
+      const action = { _tag: "IdentityFreeAction" as const, proposal }
+      const pending = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+        Effect.provideService(CompletionTaskBoundary, boundary),
+        Effect.provideService(InRunJournal, journal)
+      )
+      expect(pending).toMatchObject({
+        _tag: "ActionDeferred",
+        reason: { _tag: "IntegrationFinality.CompletionTaskConfirmationWait" }
+      })
+
+      yield* Ref.set(lifecycle, "CompletedSuccessfully")
+      expect(
+        yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+          Effect.provideService(CompletionTaskBoundary, boundary),
+          Effect.provideService(InRunJournal, journal)
+        )
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+      expect(
+        (yield* Ref.get(records)).filter(
+          ({ event }) =>
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "FocusedTaskCompletionFacts" &&
+            event.observation.facts.lifecycle === "CompletedSuccessfully"
+        )
+      ).toHaveLength(1)
+    })
+  )
+
+  effectIt.effect("restart derives durable focused success without reading the tracker again", () =>
+    Effect.gen(function* () {
+      const request = completionTaskRequestFor(integrationFinalityFixture.claim)
+      const attemptOrdinal = CompletionTaskRequestOrdinal.make(1)
+      const purpose = CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
+        attemptOrdinal,
+        confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(1)
+      })
+      const focusedOperation = makeCompletionTaskFactsObservationOperation(request, target, purpose)
+      const focusedIntent = taskTrackerReadIntent(focusedOperation)
+      const focusedOutcome = taskTrackerFactsObservedEvent(
+        focusedOperation.operationId,
+        makeFocusedTaskCompletionFactsObserved(focusedOperation, {
+          ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
+          currentClaim: integrationFinalityFixture.claim,
+          operationId: focusedOperation.operationId,
+          target
+        })
+      )
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        {
+          event: CompletionClaimReplacedEvent.make({
+            claim: integrationFinalityFixture.claim,
+            operationId: completionClaimReplacementOperationIdFor(integrationFinalityFixture.claim),
+            version: workflowJournalEventVersion
+          }),
+          key: JournalRecordKey.make("integration-finality-restart:claim-replaced"),
+          position: JournalPosition.make(1),
+          runId: integrationFinalityFixture.runId
+        },
+        {
+          event: CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion }),
+          key: JournalRecordKey.make("integration-finality-restart:completion-intended"),
+          position: JournalPosition.make(2),
+          runId: integrationFinalityFixture.runId
+        },
+        {
+          event: CompletionTaskAcknowledgedEvent.make({
+            acknowledgement: CompletionTaskAcknowledgement.make({
+              operationId: request.operationId,
+              taskId: request.taskId
+            }),
+            attemptOrdinal,
+            request,
+            version: workflowJournalEventVersion
+          }),
+          key: JournalRecordKey.make("integration-finality-restart:acknowledged"),
+          position: JournalPosition.make(3),
+          runId: integrationFinalityFixture.runId
+        },
+        {
+          event: focusedIntent,
+          key: JournalRecordKey.make("integration-finality-restart:focused-intent"),
+          position: JournalPosition.make(4),
+          runId: integrationFinalityFixture.runId
+        },
+        {
+          event: focusedOutcome,
+          key: JournalRecordKey.make("integration-finality-restart:focused-outcome"),
+          position: JournalPosition.make(5),
+          runId: integrationFinalityFixture.runId
+        }
+      ])
+      const transition = RunnableFrontierTransition.ObserveFocusedTaskCompletion({ request, responsibility: started })
+      const proposal = proposalsFor(transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing restart focused-completion proposal")
+      }
+      const boundary = CompletionTaskBoundary.of({
+        completeTask: () => Effect.die("restart normalization never completes the task again"),
+        readCompletionRequest: () => Effect.die("restart normalization never looks up the request"),
+        readFocusedTaskCompletion: () => Effect.die("durable focused success must not be read again")
+      })
+
+      expect(
+        yield* executeIntegrationAction({ _tag: "IdentityFreeAction", proposal }, transition, inertLease, target).pipe(
+          Effect.provideService(CompletionTaskBoundary, boundary),
+          Effect.provideService(InRunJournal, appendableJournalFor(records))
+        )
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+      expect(
+        (yield* Ref.get(records)).filter(
+          ({ event }) =>
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "FocusedTaskCompletionFacts" &&
+            event.observation.facts.lifecycle === "CompletedSuccessfully"
+        )
+      ).toHaveLength(1)
+    })
+  )
+
+  effectIt.effect("requires an exact acknowledgement or Applied lookup before focused confirmation", () =>
+    Effect.gen(function* () {
+      const request = completionTaskRequestFor(integrationFinalityFixture.claim)
+      const transition = RunnableFrontierTransition.ObserveFocusedTaskCompletion({ request, responsibility: started })
+      const proposal = proposalsFor(transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing focused completion proposal")
+      }
+      const boundary = CompletionTaskBoundary.of({
+        completeTask: () => Effect.die("focused confirmation never completes the task"),
+        readCompletionRequest: () => Effect.die("focused confirmation never looks up the request"),
+        readFocusedTaskCompletion: () => Effect.die("missing confirmation basis must stop before the tracker read")
+      })
+
+      expect(
+        yield* executeIntegrationAction({ _tag: "IdentityFreeAction", proposal }, transition, inertLease, target).pipe(
+          Effect.provideService(CompletionTaskBoundary, boundary),
+          Effect.provideService(InRunJournal, appendableJournalFor(yield* Ref.make<ReadonlyArray<JournalRecord>>([])))
+        )
+      ).toMatchObject({
+        _tag: "ActionDeferred",
+        reason: {
+          _tag: "IntegrationFinality.CompletionTaskAuthorizationConflict",
+          reason: "RequestIdentityContradiction"
+        }
+      })
+    })
+  )
+
+  effectIt.effect("uses a durable Applied lookup as the focused confirmation basis", () =>
+    Effect.gen(function* () {
+      const request = completionTaskRequestFor(integrationFinalityFixture.claim)
+      const attemptOrdinal = CompletionTaskRequestOrdinal.make(1)
+      const lookup = CompletionTaskRequestLookupObservedEvent.make({
+        attemptOrdinal,
+        lookup: CompletionTaskRequestLookup.cases.Applied.make({ request }),
+        operationId: OperationId.make(`${request.operationId}:lookup:1`),
+        request,
+        version: workflowJournalEventVersion
+      })
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        {
+          event: lookup,
+          key: JournalRecordKey.make("integration-finality-action:applied-lookup"),
+          position: JournalPosition.make(1),
+          runId: integrationFinalityFixture.runId
+        }
+      ])
+      const boundary = CompletionTaskBoundary.of({
+        completeTask: () => Effect.die("focused confirmation never completes the task"),
+        readCompletionRequest: () => Effect.die("the Applied lookup is already durable"),
+        readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+          Effect.succeed({
+            ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
+            currentClaim: integrationFinalityFixture.claim,
+            lifecycle: "Open",
+            operationId,
+            target
+          })
+      })
+      const transition = RunnableFrontierTransition.ObserveFocusedTaskCompletion({ request, responsibility: started })
+      const proposal = proposalsFor(transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing focused completion proposal")
+      }
+
+      const appliedLookupResult = yield* executeIntegrationAction(
+        { _tag: "IdentityFreeAction", proposal },
+        transition,
+        inertLease,
+        target
+      ).pipe(
+        Effect.provideService(CompletionTaskBoundary, boundary),
+        Effect.provideService(InRunJournal, appendableJournalFor(records))
+      )
+      expect(appliedLookupResult).toMatchObject({
+        _tag: "ActionDeferred",
+        reason: { _tag: "IntegrationFinality.CompletionTaskConfirmationWait" }
+      })
+    })
+  )
+
+  effectIt.effect("translates task-completion protocol waits and conflicts into exact deferred actions", () =>
+    Effect.gen(function* () {
+      const request = completionTaskRequestFor(integrationFinalityFixture.claim)
+      const transition = RunnableFrontierTransition.CompletePromotedTask({ request, responsibility: started })
+      const proposal = proposalsFor(transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing task-completion proposal")
+      }
+      const action = { _tag: "IdentityFreeAction" as const, proposal }
+      const neverCalledBoundary = CompletionTaskBoundary.of({
+        completeTask: () => Effect.die("unavailable completion runtime must stop before the tracker call"),
+        readCompletionRequest: () => Effect.die("unavailable completion runtime must stop before lookup"),
+        readFocusedTaskCompletion: () => Effect.die("unavailable completion runtime must stop before reads")
+      })
+      expect(
+        yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+          Effect.provideService(CompletionTaskBoundary, neverCalledBoundary),
+          Effect.provideService(InRunJournal, appendableJournalFor(yield* Ref.make<ReadonlyArray<JournalRecord>>([])))
+        )
+      ).toMatchObject({ _tag: "ActionDeferred", reason: "CompletionTaskUnavailable" })
+
+      const scenarios = [
+        {
+          expected: { _tag: "IntegrationFinality.CompletionTaskAuthorizationWait" },
+          makeBoundary: () =>
+            CompletionTaskBoundary.of({
+              completeTask: () => Effect.die("authorization conflict must stop before completion"),
+              readCompletionRequest: () => Effect.die("authorization conflict must stop before lookup"),
+              readFocusedTaskCompletion: (taskId) =>
+                Effect.fail(new FocusedTaskCompletionReadFailure({ detail: "focused facts unavailable", taskId }))
+            })
+        },
+        {
+          expected: { _tag: "IntegrationFinality.CompletionTaskConfirmationWait" },
+          makeBoundary: () => {
+            let focusedReadCount = 0
+            return CompletionTaskBoundary.of({
+              completeTask: (received) =>
+                Effect.fail(
+                  new CompletionTaskRequestFailure({ detail: "response lost", outcome: "Unknown", request: received })
+                ),
+              readCompletionRequest: () => Effect.die("failed confirmation must stop before lookup"),
+              readFocusedTaskCompletion: (taskId, _target, operationId) => {
+                focusedReadCount += 1
+                return focusedReadCount === 1
+                  ? Effect.succeed({
+                      ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
+                      currentClaim: integrationFinalityFixture.claim,
+                      lifecycle: "Open" as const,
+                      operationId,
+                      target
+                    })
+                  : Effect.fail(new FocusedTaskCompletionReadFailure({ detail: "confirmation unavailable", taskId }))
+              }
+            })
+          }
+        },
+        {
+          expected: { _tag: "IntegrationFinality.CompletionTaskAmbiguousWait" },
+          makeBoundary: () =>
+            CompletionTaskBoundary.of({
+              completeTask: (received) =>
+                Effect.fail(
+                  new CompletionTaskRequestFailure({ detail: "response lost", outcome: "Unknown", request: received })
+                ),
+              readCompletionRequest: (received) =>
+                Effect.succeed(
+                  CompletionTaskRequestLookup.cases.Unreadable.make({ detail: "lookup unavailable", request: received })
+                ),
+              readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+                Effect.succeed({
+                  ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
+                  currentClaim: integrationFinalityFixture.claim,
+                  lifecycle: "Open" as const,
+                  operationId,
+                  target
+                })
+            })
+        },
+        {
+          expected: "CompletionTaskNonConvergent",
+          makeBoundary: () =>
+            CompletionTaskBoundary.of({
+              completeTask: (received) =>
+                Effect.fail(
+                  new CompletionTaskRequestFailure({ detail: "response lost", outcome: "Unknown", request: received })
+                ),
+              readCompletionRequest: (received) =>
+                Effect.succeed(CompletionTaskRequestLookup.cases.NotApplied.make({ request: received })),
+              readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+                Effect.succeed({
+                  ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
+                  currentClaim: integrationFinalityFixture.claim,
+                  lifecycle: "Open" as const,
+                  operationId,
+                  target
+                })
+            })
+        },
+        {
+          expected: { _tag: "IntegrationFinality.CompletionTaskPreconditionConflict" },
+          makeBoundary: () =>
+            CompletionTaskBoundary.of({
+              completeTask: (received) =>
+                Effect.succeed(
+                  CompletionTaskAcknowledgement.make({
+                    operationId: received.operationId,
+                    taskId: TaskId.make("another-task")
+                  })
+                ),
+              readCompletionRequest: () => Effect.die("mismatched acknowledgement must stop before lookup"),
+              readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+                Effect.succeed({
+                  ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
+                  currentClaim: integrationFinalityFixture.claim,
+                  lifecycle: "Open" as const,
+                  operationId,
+                  target
+                })
+            })
+        }
+      ] as const
+
+      for (const scenario of scenarios) {
+        const result = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+          Effect.provideService(CompletionTaskBoundary, scenario.makeBoundary()),
+          Effect.provideService(TargetPromotionRuntime, completionPromotionRuntime),
+          Effect.provideService(TargetVerificationRuntime, completionVerificationRuntime),
+          Effect.provideService(InRunJournal, appendableJournalFor(yield* Ref.make<ReadonlyArray<JournalRecord>>([])))
+        )
+        expect(result).toMatchObject({ _tag: "ActionDeferred", reason: scenario.expected })
+      }
     })
   )
 

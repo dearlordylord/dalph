@@ -102,7 +102,7 @@ const phaseForStoryItem = (item: CompletionClaimProtocolStoryItem): ProtocolPhas
 const storyCardinalityIsValid = (story: ReadonlyArray<CompletionClaimProtocolStoryItem>): boolean =>
   story.filter(isReplacementStep).length <= 1 &&
   story.filter(isDeletionStep).length <= 1 &&
-  story.filter(({ _tag }) => _tag === "RecordFreshSuccess").length <= 1
+  story.filter(({ _tag }) => _tag === "ObserveFocusedTaskCompletionSuccess").length <= 1
 
 export const boundaryScriptMatchesStory = (
   initialClaim: ClaimState,

@@ -1,5 +1,5 @@
 import type { RunId } from "@dalph/contracts"
-import { Effect, Option } from "effect"
+import { Effect, Match, Option } from "effect"
 import { OperationSelected } from "../../presentation/tracker-workflow-trace.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { makeTaskClaimReleaseOperation } from "../../workflow/registry/operation.js"
@@ -30,17 +30,13 @@ const isStoppedClaimReleaseRetryTransition = (
 ): transition is StoppedClaimReleaseRetryTransition =>
   acceptedTransitionExecutionOf(transition) === "StoppedClaimReleaseRetry"
 
-const executeAcceptedRecovery = (runId: RunId, transition: AcceptedRecoveryTransition) => {
-  switch (transition._tag) {
-    case "CheckTaskClaim":
-    case "ReconcileTaskClaim":
-      return recoverTaskClaimOperation(runId, transition.operationId)
-    case "ReconcileTaskClaimRelease":
-      return recoverTaskClaimReleaseOperation(runId, transition.operationId)
-    case "ReconcileTaskWorktree":
-      return recoverTaskWorktreeOperation(runId, transition.operationId)
-  }
-}
+const executeAcceptedRecovery = (runId: RunId, transition: AcceptedRecoveryTransition) =>
+  Match.valueTags(transition, {
+    CheckTaskClaim: ({ operationId }) => recoverTaskClaimOperation(runId, operationId),
+    ReconcileTaskClaim: ({ operationId }) => recoverTaskClaimOperation(runId, operationId),
+    ReconcileTaskClaimRelease: ({ operationId }) => recoverTaskClaimReleaseOperation(runId, operationId),
+    ReconcileTaskWorktree: ({ operationId }) => recoverTaskWorktreeOperation(runId, operationId)
+  })
 
 const executeRecoveredObservation = Effect.fn("DeliveryAction.executeRecoveredObservation")(function* (
   action: Exclude<
@@ -54,33 +50,38 @@ const executeRecoveredObservation = Effect.fn("DeliveryAction.executeRecoveredOb
 ) {
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
-  switch (action._tag) {
-    case "ReadTrackerGraph": {
-      const operation = { ...action.operation, operationId }
-      yield* trace.emit(OperationSelected.make({ operation }))
-      return yield* interpreter.readTrackerGraph(operation)
-    }
-    case "ReadTaskClaim": {
-      const operation = { ...action.operation, operationId }
-      yield* trace.emit(OperationSelected.make({ operation }))
-      return yield* interpreter.readTaskClaim(operation)
-    }
-    case "ReadTaskWorkSpecification": {
-      const operation = { ...action.operation, operationId }
-      yield* trace.emit(OperationSelected.make({ operation }))
-      return yield* interpreter.readTaskWorkSpecification(operation)
-    }
-    case "ReadTaskWorktree": {
-      const operation = { ...action.operation, operationId }
-      yield* trace.emit(OperationSelected.make({ operation }))
-      return yield* interpreter.readTaskWorktree(operation)
-    }
-    case "ReadTargetLineage": {
-      const operation = { ...action.operation, operationId }
-      yield* trace.emit(OperationSelected.make({ operation }))
-      return yield* interpreter.readTargetLineage(operation)
-    }
-  }
+  return yield* Match.valueTags(action, {
+    ReadTrackerGraph: (action) =>
+      Effect.gen(function* () {
+        const operation = { ...action.operation, operationId }
+        yield* trace.emit(OperationSelected.make({ operation }))
+        return yield* interpreter.readTrackerGraph(operation)
+      }),
+    ReadTaskClaim: (action) =>
+      Effect.gen(function* () {
+        const operation = { ...action.operation, operationId }
+        yield* trace.emit(OperationSelected.make({ operation }))
+        return yield* interpreter.readTaskClaim(operation)
+      }),
+    ReadTaskWorkSpecification: (action) =>
+      Effect.gen(function* () {
+        const operation = { ...action.operation, operationId }
+        yield* trace.emit(OperationSelected.make({ operation }))
+        return yield* interpreter.readTaskWorkSpecification(operation)
+      }),
+    ReadTaskWorktree: (action) =>
+      Effect.gen(function* () {
+        const operation = { ...action.operation, operationId }
+        yield* trace.emit(OperationSelected.make({ operation }))
+        return yield* interpreter.readTaskWorktree(operation)
+      }),
+    ReadTargetLineage: (action) =>
+      Effect.gen(function* () {
+        const operation = { ...action.operation, operationId }
+        yield* trace.emit(OperationSelected.make({ operation }))
+        return yield* interpreter.readTargetLineage(operation)
+      })
+  })
 })
 
 const executeAcceptedObservation = Effect.fn("DeliveryAction.executeAcceptedObservation")(function* (
@@ -89,20 +90,15 @@ const executeAcceptedObservation = Effect.fn("DeliveryAction.executeAcceptedObse
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
   yield* trace.emit(OperationSelected.make({ operation: transition.operation }))
-  switch (transition._tag) {
-    case "ObservePlannedAttemptContinuationClaim":
-    case "ObserveResponsibleTaskClaim":
-    case "ObserveStoppedAttemptClaim":
-      return yield* interpreter.readTaskClaim(transition.operation)
-    case "ObservePlannedAttemptContinuationGraph":
-      return yield* interpreter.readTrackerGraph(transition.operation)
-    case "ObservePlannedAttemptContinuationSpecification":
-      return yield* interpreter.readTaskWorkSpecification(transition.operation)
-    case "ObservePlannedAttemptContinuationTargetLineage":
-      return yield* interpreter.readTargetLineage(transition.operation)
-    case "ObservePlannedAttemptContinuationWorktree":
-      return yield* interpreter.readTaskWorktree(transition.operation)
-  }
+  return yield* Match.valueTags(transition, {
+    ObservePlannedAttemptContinuationClaim: ({ operation }) => interpreter.readTaskClaim(operation),
+    ObserveResponsibleTaskClaim: ({ operation }) => interpreter.readTaskClaim(operation),
+    ObserveStoppedAttemptClaim: ({ operation }) => interpreter.readTaskClaim(operation),
+    ObservePlannedAttemptContinuationGraph: ({ operation }) => interpreter.readTrackerGraph(operation),
+    ObservePlannedAttemptContinuationSpecification: ({ operation }) => interpreter.readTaskWorkSpecification(operation),
+    ObservePlannedAttemptContinuationTargetLineage: ({ operation }) => interpreter.readTargetLineage(operation),
+    ObservePlannedAttemptContinuationWorktree: ({ operation }) => interpreter.readTaskWorktree(operation)
+  })
 })
 
 export const executeNewRecoveredAction = Effect.fn("DeliveryAction.executeNewRecoveredAction")(function* (

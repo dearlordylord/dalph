@@ -70,6 +70,18 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.CompletionClaimReplacementApplied.Type,
     CursorFailure
   >
+  readonly consumeCompletionTaskFocusedReadReturned: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CompletionTaskFocusedReadReturned.Type,
+    CursorFailure
+  >
+  readonly consumeCompletionTaskRequestLookupReturned: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CompletionTaskRequestLookupReturned.Type,
+    CursorFailure
+  >
+  readonly consumeCompletionTaskRequestReturned: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CompletionTaskRequestReturned.Type,
+    CursorFailure
+  >
   readonly consumeAdmittedContinuationExecutorIntentHold: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsAdmittedContinuationBeforeExecutorIntent.Type>
   >
@@ -485,6 +497,25 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       )
     )
   )
+  const consumeCompletionTaskFocusedReadReturned = consume("CompletionTaskFocusedReadReturned").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionTaskFocusedReadReturned)(item).pipe(
+        Effect.orDie
+      )
+    )
+  )
+  const consumeCompletionTaskRequestLookupReturned = consume("CompletionTaskRequestLookupReturned").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionTaskRequestLookupReturned)(item).pipe(
+        Effect.orDie
+      )
+    )
+  )
+  const consumeCompletionTaskRequestReturned = consume("CompletionTaskRequestReturned").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionTaskRequestReturned)(item).pipe(Effect.orDie)
+    )
+  )
   const consumeTaskClaimReleaseResponseLost = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.TaskClaimReleaseResponseLost.Type =>
@@ -528,6 +559,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeCompletionClaimDeletionApplied,
     consumeCompletionClaimReadReturned,
     consumeCompletionClaimReplacementApplied,
+    consumeCompletionTaskFocusedReadReturned,
+    consumeCompletionTaskRequestLookupReturned,
+    consumeCompletionTaskRequestReturned,
     consumeAttemptChoice,
     consumeAttemptChoiceRace,
     consumeCapacityChange,

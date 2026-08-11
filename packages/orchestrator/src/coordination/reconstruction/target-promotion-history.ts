@@ -1,4 +1,5 @@
 /* eslint-disable functional/immutable-data -- Chronological validation owns one private per-fold causal index. */
+import { evidenceReferenceEquals } from "@dalph/contracts"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
@@ -52,11 +53,6 @@ export const rememberPassedTargetVerification = (
   indexes.passedVerification.set(event.correlation.requestId, { event, position: record.position })
 }
 
-const sameEvidenceReference = (
-  left: { readonly byteLength: number; readonly digest: string },
-  right: { readonly byteLength: number; readonly digest: string }
-): boolean => left.byteLength === right.byteLength && left.digest === right.digest
-
 // eslint-disable-next-line complexity -- Promotion intent binds candidate, verification, Git target, and deterministic request identity at once.
 const invalidTargetPromotionIntent = (
   record: JournalRecord,
@@ -74,6 +70,7 @@ const invalidTargetPromotionIntent = (
     correlation.candidateConstructedAt < record.position &&
     constructed.candidateCommit === correlation.candidateCommit &&
     integrationCandidateCorrelationEquals(constructed.correlation, correlation.candidateCorrelation) &&
+    evidenceReferenceEquals(constructed.reviewManifest, correlation.reviewManifest) &&
     correlation.expectedTargetHead === constructed.correlation.expectedTargetHead &&
     JSON.stringify(correlation.integrationTarget) === JSON.stringify(constructed.correlation.integrationTarget) &&
     correlation.requestId === targetPromotionRequestIdForCandidate(constructed.correlation.candidateId)
@@ -87,7 +84,7 @@ const invalidTargetPromotionIntent = (
       verification.event.correlation.candidateCorrelation,
       correlation.candidateCorrelation
     ) &&
-    sameEvidenceReference(verification.event.manifest, correlation.verificationManifest)
+    evidenceReferenceEquals(verification.event.manifest, correlation.verificationManifest)
   return !duplicate && exactCandidate && exactPassedVerification
     ? undefined
     : `target promotion intent has no exact constructed candidate and earlier sealed Passed verification for request ${correlation.requestId}`

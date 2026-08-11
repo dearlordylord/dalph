@@ -1,5 +1,5 @@
 import type { RunId } from "@dalph/contracts"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Match } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { deliveryActionCompleted, executeFreshTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import type { DeliveryActionAdapterEnvironment } from "./delivery-action-adapter-environment.js"
@@ -48,7 +48,8 @@ const executeAcceptedAction = Effect.fn("DeliveryAction.executeAccepted")(functi
 
 const executeIdentityFreeAction = Effect.fn("DeliveryAction.executeIdentityFree")(function* (
   action: IdentityFreeAction,
-  lease: DeliveryActionExecutionLease
+  lease: DeliveryActionExecutionLease,
+  target: TrackerTarget
 ) {
   const route = action.proposal.route
   if (route._tag === "FreshExecutorWorkflowRoute") return yield* executeFreshPlannedAttempt(action, route, lease)
@@ -56,7 +57,7 @@ const executeIdentityFreeAction = Effect.fn("DeliveryAction.executeIdentityFree"
   if (isPlannedAttemptTransition(transition)) {
     return yield* executePlannedAttemptTransition(action, transition, lease)
   }
-  return yield* executeIntegrationAction(action, transition, lease)
+  return yield* executeIntegrationAction(action, transition, lease, target)
 })
 
 const executeFreshOperationAction = Effect.fn("DeliveryAction.executeFreshOperation")(function* (
@@ -66,15 +67,14 @@ const executeFreshOperationAction = Effect.fn("DeliveryAction.executeFreshOperat
   target: TrackerTarget
 ) {
   const route = action.proposal.route
-  switch (route._tag) {
-    case "FreshWorkflowRoute":
-      return yield* executeFreshWorkflowOperation(action, route, lease, target)
-    case "RecoveredNewActionRoute":
-      yield* executeNewRecoveredAction(route.action, action.operationId, lease, runId)
-      return deliveryActionCompleted(action.proposal.id)
-    case "TrackerGraphReadRoute":
-      return yield* executeFreshTrackerGraphRead(action, route)
-  }
+  return yield* Match.valueTags(route, {
+    FreshWorkflowRoute: (route) => executeFreshWorkflowOperation(action, route, lease, target),
+    RecoveredNewActionRoute: (route) =>
+      executeNewRecoveredAction(route.action, action.operationId, lease, runId).pipe(
+        Effect.as(deliveryActionCompleted(action.proposal.id))
+      ),
+    TrackerGraphReadRoute: (route) => executeFreshTrackerGraphRead(action, route)
+  })
 })
 
 /** Exhaustively routes one materialized proposal; protocol work belongs to typed leaf adapters. */
@@ -84,16 +84,12 @@ const executeLiveAction = Effect.fn("DeliveryAction.executeLive")(function* (
   runId: RunId,
   target: TrackerTarget
 ): Effect.fn.Return<DeliveryActionResult, DeliveryActionExecutionError, DeliveryActionAdapterEnvironment> {
-  switch (action._tag) {
-    case "AcceptedOperationAction":
-      return yield* executeAcceptedAction(action, runId)
-    case "IdentityFreeAction":
-      return yield* executeIdentityFreeAction(action, lease)
-    case "FreshAttemptAction":
-      return yield* executeFreshAttemptPlanning(action)
-    case "FreshOperationAction":
-      return yield* executeFreshOperationAction(action, lease, runId, target)
-  }
+  return yield* Match.valueTags(action, {
+    AcceptedOperationAction: (action) => executeAcceptedAction(action, runId),
+    IdentityFreeAction: (action) => executeIdentityFreeAction(action, lease, target),
+    FreshAttemptAction: executeFreshAttemptPlanning,
+    FreshOperationAction: (action) => executeFreshOperationAction(action, lease, runId, target)
+  })
 })
 
 /** Builds the closed live adapter over existing typed protocols; it owns no scheduling decision. */

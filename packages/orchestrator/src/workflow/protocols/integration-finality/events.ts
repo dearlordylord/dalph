@@ -1,124 +1,193 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect"
-import { PlannedTaskAttempt, TaskId } from "@dalph/contracts"
-import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { Context, type Effect, Match, Schema } from "effect"
+import { evidenceReferenceEquals, TaskId, TaskRevision } from "@dalph/contracts"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
-  ActiveTaskClaim,
+  type ActiveTaskClaim,
   isExactTaskClaim,
-  type TaskClaimObservation,
-  UnclaimedTask
+  type TaskClaimObservation
 } from "../../../authorities/task-tracker/claim-mutation.js"
-import { TargetPromotionCorrelation, targetPromotionCorrelationEquals } from "../target-promotion/events.js"
+import {
+  TargetPromotionCorrelation,
+  TargetPromotionGitReadObservation,
+  targetPromotionCorrelationEquals
+} from "../target-promotion/events.js"
+import { EvidenceReference } from "../target-verification/evidence-store.js"
+import {
+  CompletionClaimDeletionRequest,
+  CompletionClaimReplacementRequest,
+  CompletionSuccessObservation,
+  completionTaskClaimEquals,
+  CompletionTaskClaim
+} from "./completion-claim.js"
+import type { FocusedTaskCompletionFacts } from "./focused-task-completion-facts.js"
 
-/** A temporary tracker record that binds task completion to one promoted attempt. */
-export const CompletionTaskClaim = Schema.TaggedStruct("CompletionTaskClaim", {
-  originalClaim: ActiveTaskClaim,
-  plannedAttempt: PlannedTaskAttempt,
-  promotionCorrelation: TargetPromotionCorrelation
+export * from "./completion-claim.js"
+export * from "./focused-task-completion-facts.js"
+
+/** Stable operation identity for the one task-completion request derived from promotion. */
+export const completionTaskOperationIdFor = (claim: CompletionTaskClaim): OperationId =>
+  OperationId.make(`completion-task:${claim.promotionCorrelation.requestId}`)
+
+/** The immutable completion request Q; retries retain this exact identity. */
+export const CompletionTaskRequest = Schema.Struct({
+  acceptanceManifest: EvidenceReference,
+  claim: CompletionTaskClaim,
+  integrationReviewManifest: EvidenceReference,
+  operationId: OperationId,
+  promotionCorrelation: TargetPromotionCorrelation,
+  taskId: TaskId,
+  taskRevision: TaskRevision,
+  verificationManifest: EvidenceReference
 }).check(
-  Schema.makeFilter((claim) => {
-    const promotionAttempt = claim.promotionCorrelation.candidateCorrelation.attemptId
-    const promotionRun = claim.promotionCorrelation.candidateCorrelation.runId
-    return claim.originalClaim.taskId === claim.plannedAttempt.taskId &&
-      promotionAttempt === claim.plannedAttempt.attemptId &&
-      promotionRun === claim.plannedAttempt.runId
+  Schema.makeFilter((request) => {
+    const exactBinding =
+      request.claim.plannedAttempt.taskId === request.taskId &&
+      request.claim.plannedAttempt.taskRevision === request.taskRevision &&
+      request.operationId === completionTaskOperationIdFor(request.claim) &&
+      targetPromotionCorrelationEquals(request.claim.promotionCorrelation, request.promotionCorrelation) &&
+      evidenceReferenceEquals(request.claim.acceptanceManifest, request.acceptanceManifest) &&
+      evidenceReferenceEquals(request.claim.integrationReviewManifest, request.integrationReviewManifest) &&
+      evidenceReferenceEquals(request.claim.verificationManifest, request.verificationManifest)
+    return exactBinding
       ? undefined
-      : "completion claim must bind its original claim, planned attempt, and promotion to one task attempt"
+      : "completion request must bind one exact task, revision, claim, promotion, and evidence"
   })
 )
-export type CompletionTaskClaim = typeof CompletionTaskClaim.Type
+export type CompletionTaskRequest = typeof CompletionTaskRequest.Type
 
-/** Compares every field of one exact temporary completion claim. */
-export const completionTaskClaimEquals = (left: CompletionTaskClaim, right: CompletionTaskClaim): boolean =>
-  [
-    isExactTaskClaim(left.originalClaim, right.originalClaim),
-    left.plannedAttempt.attemptId === right.plannedAttempt.attemptId,
-    left.plannedAttempt.runId === right.plannedAttempt.runId,
-    left.plannedAttempt.taskId === right.plannedAttempt.taskId,
-    left.plannedAttempt.taskRevision === right.plannedAttempt.taskRevision,
-    left.plannedAttempt.baseSha === right.plannedAttempt.baseSha,
-    left.plannedAttempt.branch === right.plannedAttempt.branch,
-    left.plannedAttempt.executor === right.plannedAttempt.executor,
-    left.plannedAttempt.worktree === right.plannedAttempt.worktree,
-    targetPromotionCorrelationEquals(left.promotionCorrelation, right.promotionCorrelation)
-  ].every(Boolean)
+/** Compares the complete immutable task-completion request Q. */
+export const completionTaskRequestEquals = (left: CompletionTaskRequest, right: CompletionTaskRequest): boolean =>
+  left.operationId === right.operationId &&
+  left.taskId === right.taskId &&
+  left.taskRevision === right.taskRevision &&
+  completionTaskClaimEquals(left.claim, right.claim) &&
+  targetPromotionCorrelationEquals(left.promotionCorrelation, right.promotionCorrelation) &&
+  evidenceReferenceEquals(left.acceptanceManifest, right.acceptanceManifest) &&
+  evidenceReferenceEquals(left.integrationReviewManifest, right.integrationReviewManifest) &&
+  evidenceReferenceEquals(left.verificationManifest, right.verificationManifest)
 
-/** The exact provider-neutral replacement request, including the operation identity. */
-export const CompletionClaimReplacementRequest = Schema.Struct({ claim: CompletionTaskClaim, operationId: OperationId })
-export type CompletionClaimReplacementRequest = typeof CompletionClaimReplacementRequest.Type
+/**
+ * Purely derives Q's immutable value from a promoted claim. This value carries
+ * no current authority and establishes no workflow occurrence; the completion
+ * protocol rereads every premise before it durably establishes Q's intent.
+ */
+export const completionTaskRequestFor = (claim: CompletionTaskClaim): CompletionTaskRequest =>
+  CompletionTaskRequest.make({
+    acceptanceManifest: claim.acceptanceManifest,
+    claim,
+    integrationReviewManifest: claim.integrationReviewManifest,
+    operationId: completionTaskOperationIdFor(claim),
+    promotionCorrelation: claim.promotionCorrelation,
+    taskId: claim.plannedAttempt.taskId,
+    taskRevision: claim.plannedAttempt.taskRevision,
+    verificationManifest: claim.verificationManifest
+  })
 
-/** The small proof that a later complete tracker read reported this task successful. */
-export const FreshCompletedTaskObservation = Schema.Struct({
-  lifecycle: Schema.Literal("CompletedSuccessfully"),
-  observedAt: JournalPosition,
-  operationId: OperationId,
-  taskId: TaskId,
-  trackerRevision: TrackerRevision
+/** The tracker acknowledged one exact completion request; this is not success evidence. */
+export const CompletionTaskAcknowledgement = Schema.Struct({ operationId: OperationId, taskId: TaskId })
+export type CompletionTaskAcknowledgement = typeof CompletionTaskAcknowledgement.Type
+
+/** Exact-request lookup outcomes are closed and never inferred from current lifecycle. */
+export const CompletionTaskRequestLookup = Schema.TaggedUnion({
+  Applied: { request: CompletionTaskRequest },
+  NotApplied: { request: CompletionTaskRequest },
+  Unreadable: { detail: Schema.String, request: CompletionTaskRequest }
 })
-export type FreshCompletedTaskObservation = typeof FreshCompletedTaskObservation.Type
+export type CompletionTaskRequestLookup = typeof CompletionTaskRequestLookup.Type
 
-/** The exact provider-neutral deletion request, authorized by one fresh success read. */
-export const CompletionClaimDeletionRequest = Schema.Struct({
-  claim: CompletionTaskClaim,
-  operationId: OperationId,
-  successObservation: FreshCompletedTaskObservation
-}).check(
-  Schema.makeFilter((request) =>
-    request.claim.plannedAttempt.taskId === request.successObservation.taskId
-      ? undefined
-      : "completion claim deletion success proof must name the claimed task"
-  )
-)
-export type CompletionClaimDeletionRequest = typeof CompletionClaimDeletionRequest.Type
+/** Tracker completion request boundary failure with an explicit ambiguity class. */
+export class CompletionTaskRequestFailure extends Schema.TaggedError<CompletionTaskRequestFailure>()(
+  "IntegrationFinality.CompletionTaskRequestFailure",
+  {
+    detail: Schema.String,
+    outcome: Schema.Literals(["DefinitelyNotApplied", "Unknown"]),
+    request: CompletionTaskRequest
+  }
+) {}
 
-/** A current task claim can be active, completion-bound, or absent. */
-export const CompletionClaimObservation = Schema.Union([ActiveTaskClaim, CompletionTaskClaim, UnclaimedTask])
-export type CompletionClaimObservation = typeof CompletionClaimObservation.Type
-
-const CompletionClaimRequestOutcome = Schema.Literals(["DefinitelyNotApplied", "Unknown"])
-export type CompletionClaimRequestOutcome = typeof CompletionClaimRequestOutcome.Type
-
-/** The task tracker could not return a complete current claim record. */
-export class CompletionClaimReadFailure extends Schema.TaggedError<CompletionClaimReadFailure>()(
-  "IntegrationFinality.CompletionClaimReadFailure",
+/** Focused task facts were incomplete, contradictory, or unreadable. */
+export class FocusedTaskCompletionReadFailure extends Schema.TaggedError<FocusedTaskCompletionReadFailure>()(
+  "IntegrationFinality.FocusedTaskCompletionReadFailure",
   { detail: Schema.String, taskId: TaskId }
 ) {}
 
-/** A replacement request failed; Unknown requires a fresh claim read before retry. */
-export class CompletionClaimReplacementFailure extends Schema.TaggedError<CompletionClaimReplacementFailure>()(
-  "IntegrationFinality.CompletionClaimReplacementFailure",
-  { detail: Schema.String, outcome: CompletionClaimRequestOutcome, request: CompletionClaimReplacementRequest }
+/** Exact-request lookup itself could not establish Applied or NotApplied. */
+export class CompletionTaskRequestLookupFailure extends Schema.TaggedError<CompletionTaskRequestLookupFailure>()(
+  "IntegrationFinality.CompletionTaskRequestLookupFailure",
+  { detail: Schema.String, request: CompletionTaskRequest }
 ) {}
 
-/** A deletion request failed; Unknown requires a fresh claim read before retry. */
-export class CompletionClaimDeletionFailure extends Schema.TaggedError<CompletionClaimDeletionFailure>()(
-  "IntegrationFinality.CompletionClaimDeletionFailure",
-  { detail: Schema.String, outcome: CompletionClaimRequestOutcome, request: CompletionClaimDeletionRequest }
-) {}
-
-/** A fresh read found a claim other than the exact claim Dalph is authorized to change. */
-export class CompletionClaimOwnershipConflict extends Schema.TaggedError<CompletionClaimOwnershipConflict>()(
-  "IntegrationFinality.CompletionClaimOwnershipConflict",
-  { attempted: CompletionTaskClaim, observed: CompletionClaimObservation }
-) {}
-
-/** Provider-neutral tracker boundary used by replacement and cleanup protocols. */
-export interface CompletionClaimBoundaryService {
-  readonly readTaskClaim: (taskId: TaskId) => Effect.Effect<CompletionClaimObservation, CompletionClaimReadFailure>
-  readonly replaceTaskClaim: (
-    request: CompletionClaimReplacementRequest
-  ) => Effect.Effect<CompletionTaskClaim, CompletionClaimReplacementFailure>
-  readonly deleteTaskClaim: (
-    request: CompletionClaimDeletionRequest
-  ) => Effect.Effect<void, CompletionClaimDeletionFailure>
+export interface CompletionTaskBoundaryService {
+  readonly readFocusedTaskCompletion: (
+    taskId: TaskId,
+    target: TrackerTarget,
+    operationId: OperationId
+  ) => Effect.Effect<FocusedTaskCompletionFacts, FocusedTaskCompletionReadFailure>
+  readonly completeTask: (
+    request: CompletionTaskRequest
+  ) => Effect.Effect<CompletionTaskAcknowledgement, CompletionTaskRequestFailure>
+  readonly readCompletionRequest: (
+    request: CompletionTaskRequest
+  ) => Effect.Effect<CompletionTaskRequestLookup, CompletionTaskRequestLookupFailure>
 }
 
-/** The ordinary Effect service for the task-tracker completion-claim boundary. */
-export class CompletionClaimBoundary extends Context.Service<CompletionClaimBoundary, CompletionClaimBoundaryService>()(
-  "@dalph/CompletionClaimBoundary"
+export class CompletionTaskBoundary extends Context.Service<CompletionTaskBoundary, CompletionTaskBoundaryService>()(
+  "@dalph/CompletionTaskBoundary"
 ) {}
+
+/** Positive ordinal for one bounded completion request. */
+export const CompletionTaskRequestOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand("CompletionTaskRequestOrdinal")
+)
+export type CompletionTaskRequestOrdinal = typeof CompletionTaskRequestOrdinal.Type
+
+/** Positive ordinal for one focused confirmation read of a numbered completion call. */
+export const CompletionTaskConfirmationReadOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand("CompletionTaskConfirmationReadOrdinal")
+)
+export type CompletionTaskConfirmationReadOrdinal = typeof CompletionTaskConfirmationReadOrdinal.Type
+
+/** Positive ordinal for one restart-distinct current-authorization read cycle before a numbered completion call. */
+export const CompletionTaskAuthorizationReadOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand("CompletionTaskAuthorizationReadOrdinal")
+)
+export type CompletionTaskAuthorizationReadOrdinal = typeof CompletionTaskAuthorizationReadOrdinal.Type
+
+/** Issue #61's fixed completion mutation bound. */
+export const completionTaskRequestLimit = 3 as const // eslint-disable-line no-magic-numbers
+export const CompletionTaskRequestLimit = Schema.Literal(completionTaskRequestLimit)
+export type CompletionTaskRequestLimit = typeof CompletionTaskRequestLimit.Type
+
+/** Why one task-local read is required in the bounded completion chronology. */
+export const CompletionTaskFocusedReadPurpose = Schema.TaggedUnion({
+  Authorization: {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal
+  },
+  Confirmation: {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    confirmationOrdinal: CompletionTaskConfirmationReadOrdinal
+  }
+})
+export type CompletionTaskFocusedReadPurpose = typeof CompletionTaskFocusedReadPurpose.Type
+
+/** Compares the complete variant and numbered call that one focused read serves. */
+export const completionTaskFocusedReadPurposeEquals = (
+  left: CompletionTaskFocusedReadPurpose,
+  right: CompletionTaskFocusedReadPurpose
+): boolean =>
+  Match.valueTags(left, {
+    Authorization: ({ attemptOrdinal, authorizationOrdinal }) =>
+      right._tag === "Authorization" &&
+      right.attemptOrdinal === attemptOrdinal &&
+      right.authorizationOrdinal === authorizationOrdinal,
+    Confirmation: ({ attemptOrdinal, confirmationOrdinal }) =>
+      right._tag === "Confirmation" &&
+      right.attemptOrdinal === attemptOrdinal &&
+      right.confirmationOrdinal === confirmationOrdinal
+  })
 
 /** Positive ordinal for one bounded replacement or deletion request. */
 export const CompletionClaimRequestOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
@@ -163,7 +232,7 @@ export type CompletionClaimReplacedEvent = typeof CompletionClaimReplacedEvent.T
 export const CompletionClaimDeletionIntendedEvent = Schema.TaggedStruct("CompletionClaimDeletionIntended", {
   claim: CompletionTaskClaim,
   operationId: OperationId,
-  successObservation: FreshCompletedTaskObservation,
+  successObservation: CompletionSuccessObservation,
   version: Schema.Literal(workflowJournalEventVersion)
 })
 export type CompletionClaimDeletionIntendedEvent = typeof CompletionClaimDeletionIntendedEvent.Type
@@ -175,7 +244,7 @@ export const CompletionClaimDeletionAttemptIntendedEvent = Schema.TaggedStruct(
     attemptOrdinal: CompletionClaimRequestOrdinal,
     claim: CompletionTaskClaim,
     operationId: OperationId,
-    successObservation: FreshCompletedTaskObservation,
+    successObservation: CompletionSuccessObservation,
     version: Schema.Literal(workflowJournalEventVersion)
   }
 )
@@ -185,7 +254,7 @@ export type CompletionClaimDeletionAttemptIntendedEvent = typeof CompletionClaim
 export const CompletionClaimDeletedEvent = Schema.TaggedStruct("CompletionClaimDeleted", {
   claim: CompletionTaskClaim,
   operationId: OperationId,
-  successObservation: FreshCompletedTaskObservation,
+  successObservation: CompletionSuccessObservation,
   version: Schema.Literal(workflowJournalEventVersion)
 })
 export type CompletionClaimDeletedEvent = typeof CompletionClaimDeletedEvent.Type
@@ -195,13 +264,102 @@ export const IntegrationFinalitySettledEvent = Schema.TaggedStruct("IntegrationF
   claim: CompletionTaskClaim,
   deletionOperationId: OperationId,
   replacementOperationId: OperationId,
-  successObservation: FreshCompletedTaskObservation,
+  successObservation: CompletionSuccessObservation,
   version: Schema.Literal(workflowJournalEventVersion)
 })
 export type IntegrationFinalitySettledEvent = typeof IntegrationFinalitySettledEvent.Type
 
-/** Closed completion-claim and task-settlement event vocabulary. */
-export const IntegrationFinalityJournalEvent = Schema.Union([
+/** Durable intent before constructing one exact task-completion request Q. */
+export const CompletionTaskIntendedEvent = Schema.TaggedStruct("CompletionTaskIntended", {
+  request: CompletionTaskRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type CompletionTaskIntendedEvent = typeof CompletionTaskIntendedEvent.Type
+
+/** Durable intent before one numbered tracker completion call. */
+export const CompletionTaskAttemptIntendedEvent = Schema.TaggedStruct("CompletionTaskAttemptIntended", {
+  attemptOrdinal: CompletionTaskRequestOrdinal,
+  focusedFactsOperationId: OperationId,
+  gitReadOperationId: OperationId,
+  request: CompletionTaskRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type CompletionTaskAttemptIntendedEvent = typeof CompletionTaskAttemptIntendedEvent.Type
+
+/** Tracker acknowledgement is retained separately from focused success. */
+export const CompletionTaskAcknowledgedEvent = Schema.TaggedStruct("CompletionTaskAcknowledged", {
+  acknowledgement: CompletionTaskAcknowledgement,
+  attemptOrdinal: CompletionTaskRequestOrdinal,
+  request: CompletionTaskRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type CompletionTaskAcknowledgedEvent = typeof CompletionTaskAcknowledgedEvent.Type
+
+/** A process or transport boundary lost the direct completion response. */
+export const CompletionTaskResponseLostEvent = Schema.TaggedStruct("CompletionTaskResponseLost", {
+  attemptOrdinal: CompletionTaskRequestOrdinal,
+  request: CompletionTaskRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type CompletionTaskResponseLostEvent = typeof CompletionTaskResponseLostEvent.Type
+
+/** The tracker definitively rejected one numbered Q call without applying it. */
+export const CompletionTaskRejectedEvent = Schema.TaggedStruct("CompletionTaskRejected", {
+  attemptOrdinal: CompletionTaskRequestOrdinal,
+  detail: Schema.String,
+  request: CompletionTaskRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type CompletionTaskRejectedEvent = typeof CompletionTaskRejectedEvent.Type
+
+/** Durable intent before asking the tracker for exact task-local completion facts. */
+/** Durable intent before asking Git whether the promoted candidate remains in target ancestry. */
+export const CompletionTaskCandidateAncestryReadIntendedEvent = Schema.TaggedStruct(
+  "CompletionTaskCandidateAncestryReadIntended",
+  {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    operationId: OperationId,
+    request: CompletionTaskRequest,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+export type CompletionTaskCandidateAncestryReadIntendedEvent =
+  typeof CompletionTaskCandidateAncestryReadIntendedEvent.Type
+
+/** Git's normalized current-head and candidate-ancestry result for one exact read intent. */
+export const CompletionTaskCandidateAncestryObservedEvent = Schema.TaggedStruct(
+  "CompletionTaskCandidateAncestryObserved",
+  {
+    attemptOrdinal: CompletionTaskRequestOrdinal,
+    observation: TargetPromotionGitReadObservation,
+    operationId: OperationId,
+    request: CompletionTaskRequest,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+export type CompletionTaskCandidateAncestryObservedEvent = typeof CompletionTaskCandidateAncestryObservedEvent.Type
+
+/** Durable intent before asking the tracker how it classified exact request Q. */
+export const CompletionTaskRequestLookupIntendedEvent = Schema.TaggedStruct("CompletionTaskRequestLookupIntended", {
+  attemptOrdinal: CompletionTaskRequestOrdinal,
+  operationId: OperationId,
+  request: CompletionTaskRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type CompletionTaskRequestLookupIntendedEvent = typeof CompletionTaskRequestLookupIntendedEvent.Type
+
+/** The exact-request lookup recorded Applied, NotApplied, or Unreadable. */
+export const CompletionTaskRequestLookupObservedEvent = Schema.TaggedStruct("CompletionTaskRequestLookupObserved", {
+  attemptOrdinal: CompletionTaskRequestOrdinal,
+  lookup: CompletionTaskRequestLookup,
+  operationId: OperationId,
+  request: CompletionTaskRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type CompletionTaskRequestLookupObservedEvent = typeof CompletionTaskRequestLookupObservedEvent.Type
+
+/** Closed claim-replacement, cleanup, and settlement event vocabulary. */
+export const CompletionClaimFinalityJournalEvent = Schema.Union([
   CompletionClaimReplacementIntendedEvent,
   CompletionClaimReplacementAttemptIntendedEvent,
   CompletionClaimReplacedEvent,
@@ -210,17 +368,38 @@ export const IntegrationFinalityJournalEvent = Schema.Union([
   CompletionClaimDeletedEvent,
   IntegrationFinalitySettledEvent
 ])
+export type CompletionClaimFinalityJournalEvent = typeof CompletionClaimFinalityJournalEvent.Type
+
+/** Closed completion-claim and task-settlement event vocabulary. */
+export const IntegrationFinalityJournalEvent = Schema.Union([
+  CompletionClaimFinalityJournalEvent,
+  CompletionTaskIntendedEvent,
+  CompletionTaskAttemptIntendedEvent,
+  CompletionTaskAcknowledgedEvent,
+  CompletionTaskResponseLostEvent,
+  CompletionTaskRejectedEvent,
+  CompletionTaskCandidateAncestryReadIntendedEvent,
+  CompletionTaskCandidateAncestryObservedEvent,
+  CompletionTaskRequestLookupIntendedEvent,
+  CompletionTaskRequestLookupObservedEvent
+])
 export type IntegrationFinalityJournalEvent = typeof IntegrationFinalityJournalEvent.Type
 
 /** Compares the exact proof used to authorize cleanup. */
-export const freshCompletedTaskObservationEquals = (
-  left: FreshCompletedTaskObservation,
-  right: FreshCompletedTaskObservation
-): boolean =>
-  left.observedAt === right.observedAt &&
-  left.operationId === right.operationId &&
-  left.taskId === right.taskId &&
-  left.trackerRevision === right.trackerRevision
+export const completionSuccessObservationEquals = (
+  left: CompletionSuccessObservation,
+  right: CompletionSuccessObservation
+): boolean => {
+  if (left.observedAt !== right.observedAt || left.operationId !== right.operationId || left.taskId !== right.taskId) {
+    return false
+  }
+  if (left.trackerRevision !== right.trackerRevision) return false
+  return (
+    completionTaskClaimEquals(left.claim, right.claim) &&
+    left.taskRevision === right.taskRevision &&
+    taskTrackerTargetKey(left.target) === taskTrackerTargetKey(right.target)
+  )
+}
 
 /** Derives stable operation identity for replacement of one promoted claim. */
 export const completionClaimReplacementOperationIdFor = (claim: CompletionTaskClaim): OperationId =>
@@ -239,69 +418,9 @@ export const completionClaimReplacementRequestFor = (
 /** Creates the exact deletion request from fresh task success evidence. */
 export const completionClaimDeletionRequestFor = (
   claim: CompletionTaskClaim,
-  successObservation: FreshCompletedTaskObservation,
+  successObservation: CompletionSuccessObservation,
   operationId: OperationId = completionClaimDeletionOperationIdFor(claim)
 ): CompletionClaimDeletionRequest => CompletionClaimDeletionRequest.make({ claim, operationId, successObservation })
-
-/** Minimal in-memory boundary for deterministic protocol tests. */
-export const controlledCompletionClaimBoundaryLayerFrom = (initial: ReadonlyArray<CompletionClaimObservation>) =>
-  Layer.effect(
-    CompletionClaimBoundary,
-    Effect.gen(function* () {
-      const taskIdOf = (claim: CompletionClaimObservation): TaskId =>
-        claim._tag === "CompletionTaskClaim" ? claim.plannedAttempt.taskId : claim.taskId
-      const claims = yield* Ref.make<ReadonlyMap<TaskId, CompletionClaimObservation>>(
-        new Map(initial.map((claim) => [taskIdOf(claim), claim] as const))
-      )
-      const readTaskClaim = Effect.fn("CompletionClaimBoundary.Controlled.readTaskClaim")(function* (taskId: TaskId) {
-        const current = (yield* Ref.get(claims)).get(taskId)
-        return current ?? UnclaimedTask.make({ taskId })
-      })
-      const replaceTaskClaim = Effect.fn("CompletionClaimBoundary.Controlled.replaceTaskClaim")(function* (
-        request: CompletionClaimReplacementRequest
-      ) {
-        const current = (yield* Ref.get(claims)).get(request.claim.plannedAttempt.taskId)
-        if (current === undefined || current._tag === "UnclaimedTask") {
-          return yield* new CompletionClaimReplacementFailure({
-            detail: "active claim is absent",
-            outcome: "DefinitelyNotApplied",
-            request
-          })
-        }
-        if (current._tag === "CompletionTaskClaim" && completionTaskClaimEquals(current, request.claim)) return current
-        if (current._tag !== "ActiveTaskClaim" || !isExactTaskClaim(current, request.claim.originalClaim)) {
-          return yield* new CompletionClaimReplacementFailure({
-            detail: "current claim is not the exact active claim",
-            outcome: "DefinitelyNotApplied",
-            request
-          })
-        }
-        yield* Ref.update(claims, (all) => new Map(all).set(request.claim.plannedAttempt.taskId, request.claim))
-        return request.claim
-      })
-      const deleteTaskClaim = Effect.fn("CompletionClaimBoundary.Controlled.deleteTaskClaim")(function* (
-        request: CompletionClaimDeletionRequest
-      ) {
-        const current = (yield* Ref.get(claims)).get(request.claim.plannedAttempt.taskId)
-        if (current === undefined || current._tag === "UnclaimedTask") return
-        if (current._tag !== "CompletionTaskClaim" || !completionTaskClaimEquals(current, request.claim)) {
-          return yield* new CompletionClaimDeletionFailure({
-            detail: "current claim is not the exact completion claim",
-            outcome: "DefinitelyNotApplied",
-            request
-          })
-        }
-        yield* Ref.update(claims, (all) => {
-          const next = new Map(all)
-          next.delete(request.claim.plannedAttempt.taskId)
-          return next
-        })
-      })
-      return CompletionClaimBoundary.of({ readTaskClaim, replaceTaskClaim, deleteTaskClaim })
-    })
-  )
-
-export const controlledCompletionClaimBoundaryLayer = controlledCompletionClaimBoundaryLayerFrom([])
 
 // Keep these imports in the module's public type surface without making callers
 // re-import the claim observation identities from the provider adapter.

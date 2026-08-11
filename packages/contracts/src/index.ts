@@ -1,4 +1,5 @@
 export * from "./executor.js"
+export * from "./evidence.js"
 export * from "./executor-locator.js"
 export * from "./git-locator.js"
 export * from "./planned-attempt.js"

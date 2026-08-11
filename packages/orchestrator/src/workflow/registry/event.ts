@@ -87,12 +87,13 @@ export const WorkflowRunTerminatedEvent = Schema.TaggedStruct("WorkflowRunTermin
 })
 
 const TaskTrackerReadOperation = Schema.Union([
+  WorkflowOperationSchema.cases.ReadCompletionTaskFacts,
   WorkflowOperationSchema.cases.ReadTaskClaim,
   WorkflowOperationSchema.cases.ReadTrackerGraph,
   WorkflowOperationSchema.cases.ReadTaskWorkSpecification
 ])
 
-const TaskTrackerReadIntentRecorded = Schema.TaggedStruct("TaskTrackerReadIntentRecorded", {
+export const TaskTrackerReadIntentRecordedEvent = Schema.TaggedStruct("TaskTrackerReadIntentRecorded", {
   operation: TaskTrackerReadOperation,
   version: Schema.Literal(workflowJournalEventVersion)
 })
@@ -179,7 +180,7 @@ export const WorkflowJournalEvent = Schema.Union([
   AttemptImplementationAbandonedEvent,
   StoppedAttemptClaimNoReleaseObservedEvent,
   TaskClaimReacquisitionDirectedEvent,
-  TaskTrackerReadIntentRecorded,
+  TaskTrackerReadIntentRecordedEvent,
   TaskTrackerFactsObservedEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquiredEvent,
@@ -205,5 +206,5 @@ export type WorkflowJournalEvent = typeof WorkflowJournalEvent.Type
 
 export const taskTrackerReadIntent = (
   operation: typeof TaskTrackerReadOperation.Type
-): typeof TaskTrackerReadIntentRecorded.Type =>
-  TaskTrackerReadIntentRecorded.make({ operation, version: workflowJournalEventVersion })
+): typeof TaskTrackerReadIntentRecordedEvent.Type =>
+  TaskTrackerReadIntentRecordedEvent.make({ operation, version: workflowJournalEventVersion })

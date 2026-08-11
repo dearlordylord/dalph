@@ -11,6 +11,8 @@ import { TrackerTarget as TrackerTargetSchema } from "../../authorities/task-tra
 import { TaskClaimAcquisition, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
 import { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
+import { CompletionTaskFocusedReadPurpose, CompletionTaskRequest } from "../protocols/integration-finality/events.js"
+import { completionTaskFocusedReadOperationIdFor } from "../protocols/integration-finality/completion-task-operation-identity.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(Schema.isUnique())
 
@@ -50,6 +52,26 @@ const ReadTaskClaimOperation = Schema.TaggedStruct("ReadTaskClaim", {
   target: TrackerTargetSchema,
   taskId: TaskIdSchema
 }).check(Schema.makeFilter(withoutSelfPredecessor))
+
+/** Reads every current tracker fact required to authorize or confirm one exact completion request. */
+const ReadCompletionTaskFactsOperation = Schema.TaggedStruct("ReadCompletionTaskFacts", {
+  operationId: OperationId,
+  predecessorOperationIds: CausalPredecessorOperationIds,
+  purpose: CompletionTaskFocusedReadPurpose,
+  request: CompletionTaskRequest,
+  target: TrackerTargetSchema
+}).check(
+  Schema.makeFilter(
+    (operation) =>
+      withoutSelfPredecessor(operation) ??
+      (operation.operationId === completionTaskFocusedReadOperationIdFor(operation.request, operation.purpose)
+        ? undefined
+        : {
+            issue: "a completion-task facts read must use its exact deterministic operation identity",
+            path: ["operationId"]
+          })
+  )
+)
 
 /**
  * The durable authority for one claim acquisition. Ordinary task selection and
@@ -144,6 +166,7 @@ const ReadTargetLineageOperation = Schema.TaggedStruct("ReadTargetLineage", {
  */
 export const WorkflowOperation = Object.assign(
   Schema.Union([
+    ReadCompletionTaskFactsOperation,
     ReadTrackerGraphOperation,
     ReadTaskWorkSpecificationOperation,
     ReadTaskClaimOperation,
@@ -160,6 +183,7 @@ export const WorkflowOperation = Object.assign(
       ReleaseTaskClaim: ReleaseTaskClaimOperation,
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
       ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
+      ReadCompletionTaskFacts: ReadCompletionTaskFactsOperation,
       ReadTaskClaim: ReadTaskClaimOperation,
       ReadTaskWorktree: ReadTaskWorktreeOperation,
       ReadTargetLineage: ReadTargetLineageOperation,
@@ -255,6 +279,20 @@ export const makeTaskClaimObservationOperation = (
     predecessorOperationIds: canonicalPredecessors(predecessorOperationIds),
     target,
     taskId
+  })
+
+export const makeCompletionTaskFactsObservationOperation = (
+  request: CompletionTaskRequest,
+  target: TrackerTarget,
+  purpose: CompletionTaskFocusedReadPurpose,
+  predecessorOperationIds: ReadonlyArray<OperationId> = []
+): typeof WorkflowOperation.cases.ReadCompletionTaskFacts.Type =>
+  WorkflowOperation.cases.ReadCompletionTaskFacts.make({
+    operationId: completionTaskFocusedReadOperationIdFor(request, purpose),
+    predecessorOperationIds: canonicalPredecessors(predecessorOperationIds),
+    purpose,
+    request,
+    target
   })
 
 export const makeTaskClaimAcquisitionOperation = (fields: {

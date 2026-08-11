@@ -1,3 +1,4 @@
+import { Match } from "effect"
 import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
@@ -86,22 +87,24 @@ export const lyricForGitObservationEntry = (entry: RecordedGitObservationEntry):
       ? `Git showed target ${entry.observation.targetHeadSha} descended from Base ${entry.observation.plannedBaseSha}.`
       : `Git showed target ${entry.observation.targetHeadSha} outside Base ${entry.observation.plannedBaseSha}.`
   }
-  switch (entry.observation._tag) {
-    case "AttemptWorktreeLost":
-      return `Git no longer registered planned worktree ${entry.observation.plannedAttempt.worktree}.`
-    case "CompetingWorktreeRegistrations":
-      return `Git showed competing registrations for planned branch ${entry.observation.plannedBranch} and worktree ${entry.observation.plannedWorktree}.`
-    case "ConflictingWorktreeRegistration":
-      return `Git showed branch ${entry.observation.observedBranch} at planned worktree ${entry.observation.worktree}.`
-    case "ContradictoryWorktreeState":
-      return `Git returned contradictory facts for planned worktree ${entry.observation.worktree}.`
-    case "ForeignWorktreeRegistration":
-      return `Git registered planned branch ${entry.observation.branch} at foreign worktree ${entry.observation.registeredWorktree}.`
-    case "PlannedWorktreeReady":
-      return `Git showed planned worktree ${entry.observation.worktree} ready at ${entry.observation.headSha}.`
-    case "UntrackedWorktreePath":
-      return `Git did not register existing planned path ${entry.observation.worktree} as a worktree.`
-    case "WorktreeBaseMismatch":
-      return `Git showed planned worktree ${entry.observation.worktree} outside Base ${entry.observation.baseSha}.`
-  }
+  return Match.value(entry.observation).pipe(
+    Match.tagsExhaustive({
+      AttemptWorktreeLost: (observation) =>
+        `Git no longer registered planned worktree ${observation.plannedAttempt.worktree}.`,
+      CompetingWorktreeRegistrations: (observation) =>
+        `Git showed competing registrations for planned branch ${observation.plannedBranch} and worktree ${observation.plannedWorktree}.`,
+      ConflictingWorktreeRegistration: (observation) =>
+        `Git showed branch ${observation.observedBranch} at planned worktree ${observation.worktree}.`,
+      ContradictoryWorktreeState: (observation) =>
+        `Git returned contradictory facts for planned worktree ${observation.worktree}.`,
+      ForeignWorktreeRegistration: (observation) =>
+        `Git registered planned branch ${observation.branch} at foreign worktree ${observation.registeredWorktree}.`,
+      PlannedWorktreeReady: (observation) =>
+        `Git showed planned worktree ${observation.worktree} ready at ${observation.headSha}.`,
+      UntrackedWorktreePath: (observation) =>
+        `Git did not register existing planned path ${observation.worktree} as a worktree.`,
+      WorktreeBaseMismatch: (observation) =>
+        `Git showed planned worktree ${observation.worktree} outside Base ${observation.baseSha}.`
+    })
+  )
 }

@@ -21,12 +21,26 @@ import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotio
 import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import type { IdentityFreeWorkflowTransition } from "./delivery-action-proposal.js"
-import { CompletionClaimBoundary } from "../../workflow/protocols/integration-finality/events.js"
 import {
   runCompletionClaimDeletionProtocol,
   runCompletionClaimReplacementProtocol
 } from "../../workflow/protocols/integration-finality/protocol.js"
+import {
+  CompletionClaimBoundary,
+  CompletionTaskBoundary
+} from "../../workflow/protocols/integration-finality/events.js"
+import {
+  authorizeCompletionTaskAttempt,
+  CompletionTaskAuthorizationConflict,
+  CompletionTaskConfirmationWait,
+  completionTaskConfirmationDisposition,
+  readCompletionConfirmation,
+  readCurrentCompletionConfirmation,
+  runCompletionTaskProtocol
+} from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
+import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
+import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -53,6 +67,13 @@ type DeleteCompletedTaskCompletionClaim = Extract<
   IntegrationTransition,
   { readonly _tag: "DeleteCompletedTaskCompletionClaim" }
 >
+type CompletePromotedTask = Extract<IntegrationTransition, { readonly _tag: "CompletePromotedTask" }>
+type ObserveFocusedTaskCompletion = Extract<IntegrationTransition, { readonly _tag: "ObserveFocusedTaskCompletion" }>
+type CompletionConfirmationBasis = Extract<
+  JournalRecord["event"],
+  { readonly _tag: "CompletionTaskAcknowledged" | "CompletionTaskRequestLookupObserved" }
+>
+type DurableCompletionConfirmation = Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
 type AdvancedIntegrationTransition = Exclude<
   IntegrationTransition,
   {
@@ -112,9 +133,143 @@ const deleteCompletedTaskCompletionClaim = Effect.fn("DeliveryAction.deleteCompl
         Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimConflict")),
       "IntegrationFinality.CompletionClaimReadFailure": () =>
         Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimReadUnavailable")),
-      /* v8 ignore next -- @preserve Fresh-success guarding is frontier/protocol tested before this tag translation. */
-      "IntegrationFinality.FreshTrackerSuccessRequired": () =>
-        Effect.succeed(deliveryActionDeferred(action.proposal.id, "FreshTrackerSuccessRequired"))
+      /* v8 ignore next -- @preserve Focused-success guarding is frontier/protocol tested before this tag translation. */
+      "IntegrationFinality.FocusedTaskCompletionSuccessRequired": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "FocusedTaskCompletionSuccessRequired"))
+    })
+  )
+})
+
+const completionTaskBoundary = Effect.fn("DeliveryAction.completionTaskBoundary")(function* () {
+  const boundary = Context.getOption(yield* Effect.context<never>(), CompletionTaskBoundary)
+  return Option.isSome(boundary) ? boundary.value : yield* new IntegrationFinalityRuntimeUnavailable()
+})
+
+const completePromotedTask = Effect.fn("DeliveryAction.completePromotedTask")(function* (
+  action: IdentityFreeAction,
+  transition: CompletePromotedTask,
+  target: TrackerTarget
+) {
+  const boundary = yield* completionTaskBoundary()
+  const context = yield* Effect.context<never>()
+  const promotionRuntime = Context.getOption(context, TargetPromotionRuntime)
+  const verificationRuntime = Context.getOption(context, TargetVerificationRuntime)
+  if (Option.isNone(promotionRuntime) || Option.isNone(verificationRuntime)) {
+    return deliveryActionDeferred(action.proposal.id, "CompletionTaskUnavailable")
+  }
+  return yield* runCompletionTaskProtocol(boundary, transition.request, target, (ordinal) =>
+    authorizeCompletionTaskAttempt(boundary, transition.request, target, ordinal).pipe(
+      Effect.provideService(TargetPromotionGit, promotionRuntime.value.git),
+      Effect.provideService(EvidenceStore, verificationRuntime.value.evidenceStore)
+    )
+  ).pipe(
+    Effect.as(deliveryActionCompleted(action.proposal.id)),
+    Effect.catchTags({
+      "IntegrationFinality.CompletionTaskAmbiguousWait": (failure) =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, failure)),
+      "IntegrationFinality.CompletionTaskAuthorizationConflict": (failure) =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, failure)),
+      "IntegrationFinality.CompletionTaskAuthorizationWait": (failure) =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, failure)),
+      "IntegrationFinality.CompletionTaskConfirmationWait": (failure) =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, failure)),
+      "IntegrationFinality.CompletionTaskDidNotConverge": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionTaskNonConvergent")),
+      "IntegrationFinality.CompletionTaskPreconditionConflict": (failure) =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, failure))
+    })
+  )
+})
+
+const completionConfirmationBasisFor = (
+  records: ReadonlyArray<JournalRecord>,
+  transition: ObserveFocusedTaskCompletion
+): CompletionConfirmationBasis | undefined => {
+  for (const { event } of records.toReversed()) {
+    if (event._tag === "CompletionTaskAcknowledged" && event.request.operationId === transition.request.operationId) {
+      return event
+    }
+    if (
+      event._tag === "CompletionTaskRequestLookupObserved" &&
+      event.lookup._tag === "Applied" &&
+      event.request.operationId === transition.request.operationId
+    ) {
+      return event
+    }
+  }
+  return undefined
+}
+
+const resumableDurableConfirmationFor = (
+  records: ReadonlyArray<JournalRecord>,
+  transition: ObserveFocusedTaskCompletion,
+  basis: CompletionConfirmationBasis
+): DurableCompletionConfirmation | undefined => {
+  const durable = records.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.observation._tag === "FocusedTaskCompletionFacts" &&
+      event.observation.request.operationId === transition.request.operationId &&
+      event.observation.purpose._tag === "Confirmation" &&
+      event.observation.purpose.attemptOrdinal === basis.attemptOrdinal
+  )?.event
+  if (durable?._tag !== "TaskTrackerFactsObserved" || durable.observation._tag !== "FocusedTaskCompletionFacts") {
+    return undefined
+  }
+  const focused = durable.observation
+  const disposition = completionTaskConfirmationDisposition(
+    transition.request,
+    focused.target,
+    durable.operationId,
+    focused.facts
+  )
+  return disposition._tag === "CompletedSuccessfully" ? durable : undefined
+}
+
+const observeFocusedTaskCompletion = Effect.fn("DeliveryAction.observeFocusedTaskCompletion")(function* (
+  action: IdentityFreeAction,
+  transition: ObserveFocusedTaskCompletion,
+  target: TrackerTarget
+) {
+  const boundary = yield* completionTaskBoundary()
+  const journal = yield* InRunJournal
+  const records = yield* journal.read(transition.request.claim.plannedAttempt.runId)
+  const confirmationBasis = completionConfirmationBasisFor(records, transition)
+  if (confirmationBasis === undefined) {
+    return deliveryActionDeferred(
+      action.proposal.id,
+      new CompletionTaskAuthorizationConflict({
+        detail: "focused confirmation has no exact prior tracker acknowledgement or applied request lookup",
+        reason: "RequestIdentityContradiction",
+        request: transition.request
+      })
+    )
+  }
+  const resumableDurableConfirmation = resumableDurableConfirmationFor(records, transition, confirmationBasis)
+  const confirmation =
+    resumableDurableConfirmation !== undefined
+      ? readCompletionConfirmation(boundary, transition.request, confirmationBasis.attemptOrdinal, target).pipe(
+          Effect.map((observation) => ({ observation, operationId: resumableDurableConfirmation.operationId }))
+        )
+      : readCurrentCompletionConfirmation(boundary, transition.request, confirmationBasis.attemptOrdinal, target)
+  return yield* confirmation.pipe(
+    Effect.map(({ observation, operationId }) =>
+      observation === undefined
+        ? deliveryActionDeferred(
+            action.proposal.id,
+            new CompletionTaskConfirmationWait({
+              detail: "focused confirmation still reports the exact task open under the completion claim",
+              operationId,
+              request: transition.request
+            })
+          )
+        : deliveryActionCompleted(action.proposal.id)
+    ),
+    Effect.catchTags({
+      "IntegrationFinality.CompletionTaskConfirmationWait": (failure) =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, failure)),
+      "IntegrationFinality.CompletionTaskPreconditionConflict": (failure) =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, failure))
     })
   )
 })
@@ -188,11 +343,16 @@ const continueIntegrationCandidate = Effect.fn("DeliveryAction.continueIntegrati
 const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvancedIntegration")(function* (
   action: IdentityFreeAction,
   transition: AdvancedIntegrationTransition,
-  lease: DeliveryActionExecutionLease
+  lease: DeliveryActionExecutionLease,
+  target: TrackerTarget
 ) {
   if (transition._tag === "RunTargetVerification") return yield* executeTargetVerification(action, transition, lease)
   if (transition._tag === "RunTargetPromotion") return yield* executeTargetPromotion(action, transition, lease)
   if (transition._tag === "ReplacePromotedTaskClaim") return yield* replacePromotedTaskClaim(action, transition)
+  if (transition._tag === "CompletePromotedTask") return yield* completePromotedTask(action, transition, target)
+  if (transition._tag === "ObserveFocusedTaskCompletion") {
+    return yield* observeFocusedTaskCompletion(action, transition, target)
+  }
   if (transition._tag === "DeleteCompletedTaskCompletionClaim") {
     return yield* deleteCompletedTaskCompletionClaim(action, transition)
   }
@@ -202,7 +362,8 @@ const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvanc
 export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegration")(function* (
   action: IdentityFreeAction,
   transition: IntegrationTransition,
-  lease: DeliveryActionExecutionLease
+  lease: DeliveryActionExecutionLease,
+  target: TrackerTarget
 ) {
   if (transition._tag === "QueueAcceptedResultIntegrationResponsibility") {
     yield* queueAcceptedResultIntegrationResponsibility(
@@ -225,5 +386,5 @@ export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegra
     yield* lease.integrationTargets.release(transition.responsibility)
     return deliveryActionCompleted(action.proposal.id)
   }
-  return yield* executeAdvancedIntegrationAction(action, transition, lease)
+  return yield* executeAdvancedIntegrationAction(action, transition, lease, target)
 })

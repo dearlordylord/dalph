@@ -5,6 +5,8 @@ import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AcceptedResult,
   AttemptId,
+  EvidenceDigest,
+  EvidenceReference,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
@@ -49,7 +51,7 @@ import {
   TrackerRevision,
   workflowJournalEventVersion
 } from "../../../orchestrator/src/index.js"
-import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Match, Option, Schema } from "effect"
 import { expect } from "vitest"
 import {
   makeDeliveryRuntimeAdmissionController,
@@ -129,7 +131,10 @@ const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/task-fact-model.git"),
   ref: IntegrationTargetRef.make("refs/heads/main")
 })
-const acceptedResult = AcceptedResult.make({ commit: GitCommitSha.make("3".repeat(40)) })
+const acceptedResult = AcceptedResult.make({
+  commit: GitCommitSha.make("3".repeat(40)),
+  evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("3".repeat(64)) })
+})
 const plannedSpecification = makeTaskWorkSpecification({ body: "F1", taskId, title: "F1" })
 const specificationF2 = makeTaskWorkSpecification({ body: "F2", taskId, title: "F2" })
 const specificationF3 = makeTaskWorkSpecification({ body: "F3", taskId, title: "F3" })
@@ -593,33 +598,37 @@ const taskFactReconciliationDriver = defineDriver(
         if (found === undefined) return yield* Effect.die(`missing production transition ${transitionTag}`)
         return found
       })
+    type Transition = Effect.Success<ReturnType<typeof transition>>
+    const readThroughTransitionTags = [
+      "ObservePlannedAttemptContinuationGraph",
+      "ObservePlannedAttemptContinuationSpecification",
+      "ObservePlannedAttemptContinuationClaim",
+      "ObserveStoppedAttemptClaim",
+      "ObservePlannedAttemptContinuationWorktree",
+      "ObservePlannedAttemptContinuationTargetLineage"
+    ] as const satisfies ReadonlyArray<Transition["_tag"]>
+    type ReadThroughTransitionTag = (typeof readThroughTransitionTags)[number]
+    type ReadThroughTransition = Extract<Transition, { readonly _tag: ReadThroughTransitionTag }>
+    const isReadThroughTransition = (selected: Transition): selected is ReadThroughTransition =>
+      readThroughTransitionTags.some((tag) => tag === selected._tag)
     const readThrough = (transitionTag: string) =>
       Effect.gen(function* () {
         const selected = yield* transition(transitionTag)
+        if (!isReadThroughTransition(selected)) {
+          return yield* Effect.die(`unsupported observation ${selected._tag}`)
+        }
         yield* provideInterpreter(
           Effect.gen(function* () {
             const interpreter = yield* WorkflowInterpreter
-            // oxlint-disable-next-line typescript/switch-exhaustiveness-check -- The default rejects non-observation transitions selected through the generic frontier helper.
-            switch (selected._tag) {
-              case "ObservePlannedAttemptContinuationGraph":
-                yield* interpreter.readTrackerGraph(selected.operation)
-                return
-              case "ObservePlannedAttemptContinuationSpecification":
-                yield* interpreter.readTaskWorkSpecification(selected.operation)
-                return
-              case "ObservePlannedAttemptContinuationClaim":
-              case "ObserveStoppedAttemptClaim":
-                yield* interpreter.readTaskClaim(selected.operation)
-                return
-              case "ObservePlannedAttemptContinuationWorktree":
-                yield* interpreter.readTaskWorktree(selected.operation)
-                return
-              case "ObservePlannedAttemptContinuationTargetLineage":
-                yield* interpreter.readTargetLineage(selected.operation)
-                return
-              default:
-                return yield* Effect.die(`unsupported observation ${selected._tag}`)
-            }
+            yield* Match.valueTags(selected, {
+              ObservePlannedAttemptContinuationGraph: (value) => interpreter.readTrackerGraph(value.operation),
+              ObservePlannedAttemptContinuationSpecification: (value) =>
+                interpreter.readTaskWorkSpecification(value.operation),
+              ObservePlannedAttemptContinuationClaim: (value) => interpreter.readTaskClaim(value.operation),
+              ObserveStoppedAttemptClaim: (value) => interpreter.readTaskClaim(value.operation),
+              ObservePlannedAttemptContinuationWorktree: (value) => interpreter.readTaskWorktree(value.operation),
+              ObservePlannedAttemptContinuationTargetLineage: (value) => interpreter.readTargetLineage(value.operation)
+            })
           })
         )
       })

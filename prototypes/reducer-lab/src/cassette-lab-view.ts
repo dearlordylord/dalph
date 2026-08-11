@@ -1,5 +1,6 @@
 import type { AuthoredDeliveryFrame } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import type { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import { Match } from "effect"
 import type { CassetteLabResult, MaintainedCassetteKey } from "./cassette-lab.ts"
 import type { ContinuationAuthorizationProjection } from "./continuation-authorization-lab.ts"
 
@@ -45,18 +46,17 @@ export const resultStatusText = (result: CassetteLabResult): string => {
 }
 
 export const cassetteStateStatusText = (state: CassetteState): string => {
-  switch (state._tag) {
-    case "LabDefect":
-      return "Lab defect · the browser runner rejected unexpectedly"
-    case "NotRun":
-      return "not run"
-    case "Running":
-      return state.deliveryFrames === null || state.deliveryFrames.length === 0
-        ? "running production code with controlled boundaries… waiting for its first delivery publication"
-        : `running production code with controlled boundaries · ${state.deliveryFrames.length} delivery frames captured`
-    case "Settled":
-      return resultStatusText(state.result)
-  }
+  return Match.value(state).pipe(
+    Match.tagsExhaustive({
+      LabDefect: () => "Lab defect · the browser runner rejected unexpectedly",
+      NotRun: () => "not run",
+      Running: ({ deliveryFrames }) =>
+        deliveryFrames === null || deliveryFrames.length === 0
+          ? "running production code with controlled boundaries… waiting for its first delivery publication"
+          : `running production code with controlled boundaries · ${deliveryFrames.length} delivery frames captured`,
+      Settled: ({ result }) => resultStatusText(result)
+    })
+  )
 }
 
 export const resultEvidenceText = (result: CassetteLabResult): string =>

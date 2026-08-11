@@ -418,7 +418,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       appendTextElement(
         article,
         "p",
-        "Delivery-story coverage: A demonstrates production graph, frontier, restart, promotion, completion-claim, settlement, and reflection layers; tracker success for B through G is intentionally supplied outside Dalph. This is not the complete 22-beat one-Run target. docs/DELIVERY-STORY.md links the remaining beats to exact maintained slices or explicit implementation gaps; this view does not simulate them.",
+        "Delivery-story coverage: A demonstrates production graph, frontier, restart, promotion, completion-claim, settlement, and reflection layers; B remains open, while tracker success for C through G is intentionally supplied outside Dalph. This is not the complete 22-beat one-Run target. docs/DELIVERY-STORY.md links the remaining beats to exact maintained slices or explicit implementation gaps; this view does not simulate them.",
         "delivery-story-scope"
       )
     }

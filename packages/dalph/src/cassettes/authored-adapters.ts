@@ -1,8 +1,11 @@
-import { Effect, Layer, Option, Ref, Schema } from "effect"
+import { Effect, Layer, Match, Option, Ref, Schema } from "effect"
 import {
   ControlledFakeExecutorMismatch,
+  EvidenceDigest,
+  EvidenceReference,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorReport,
+  PlannedAttemptExecutorResult,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   type PlannedTaskAttempt,
@@ -26,6 +29,8 @@ import {
   type AuthoredCassetteStoryItem
 } from "./authored-domain.js"
 import type { StoryCursor } from "./authored-cursor.js"
+
+const evidenceDigestHexLength = 64
 
 const trackerReadFailure = (detail: string) =>
   new TrackerAdapterReadError({
@@ -89,46 +94,47 @@ const isReadOperation = (operation: WorkflowOperation): operation is ReadOperati
   operation._tag === "ReadTaskWorktree" ||
   operation._tag === "ReadTrackerGraph"
 
-const actualReadDecision = (operation: ReadOperation): CassetteDecision => {
-  switch (operation._tag) {
-    case "ReadTaskClaim":
-      return AuthoredCassetteDecision.cases.ReadTaskClaim.make({ taskId: operation.taskId })
-    case "ReadTargetLineage":
-      return AuthoredCassetteDecision.cases.ReadTargetLineage.make({
+const actualReadDecision = Match.type<ReadOperation>().pipe(
+  Match.tagsExhaustive({
+    ReadTaskClaim: (operation) => AuthoredCassetteDecision.cases.ReadTaskClaim.make({ taskId: operation.taskId }),
+    ReadTargetLineage: (operation) =>
+      AuthoredCassetteDecision.cases.ReadTargetLineage.make({
         attemptId: operation.plannedAttempt.attemptId,
         taskId: operation.plannedAttempt.taskId
-      })
-    case "ReadTaskWorkSpecification":
-      return AuthoredCassetteDecision.cases.ReadTaskWorkSpecification.make({ taskId: operation.taskId })
-    case "ReadTaskWorktree":
-      return AuthoredCassetteDecision.cases.ReadTaskWorktree.make({
+      }),
+    ReadTaskWorkSpecification: (operation) =>
+      AuthoredCassetteDecision.cases.ReadTaskWorkSpecification.make({ taskId: operation.taskId }),
+    ReadTaskWorktree: (operation) =>
+      AuthoredCassetteDecision.cases.ReadTaskWorktree.make({
         attemptId: operation.plannedAttempt.attemptId,
         taskId: operation.plannedAttempt.taskId
-      })
-    case "ReadTrackerGraph":
-      return AuthoredCassetteDecision.cases.ReadTrackerGraph.make({ target: operation.target })
-  }
-}
+      }),
+    ReadTrackerGraph: (operation) => AuthoredCassetteDecision.cases.ReadTrackerGraph.make({ target: operation.target })
+  })
+)
 
 const actualDecision = (item: TraceItem): CassetteDecision | undefined => {
   if (item._tag !== "OperationSelected") return undefined
   if (isReadOperation(item.operation)) return actualReadDecision(item.operation)
-  switch (item.operation._tag) {
-    case "AcquireTaskClaim":
-      return AuthoredCassetteDecision.cases.AcquireTaskClaim.make({ taskId: item.operation.acquisition.taskId })
-    case "ReleaseTaskClaim":
-      return AuthoredCassetteDecision.cases.ReleaseTaskClaim.make({ taskId: item.operation.release.claim.taskId })
-    case "ReconcileTaskWorktree":
-      return AuthoredCassetteDecision.cases.ReconcileTaskWorktree.make({
-        attemptId: item.operation.plannedAttempt.attemptId,
-        taskId: item.operation.plannedAttempt.taskId
-      })
-    case "RecordTaskAttemptPlan":
-      return AuthoredCassetteDecision.cases.RecordTaskAttemptPlan.make({
-        attemptId: item.operation.plannedAttempt.attemptId,
-        taskId: item.operation.plannedAttempt.taskId
-      })
-  }
+  return Match.value(item.operation).pipe(
+    Match.tags({
+      AcquireTaskClaim: (operation) =>
+        AuthoredCassetteDecision.cases.AcquireTaskClaim.make({ taskId: operation.acquisition.taskId }),
+      ReleaseTaskClaim: (operation) =>
+        AuthoredCassetteDecision.cases.ReleaseTaskClaim.make({ taskId: operation.release.claim.taskId }),
+      ReconcileTaskWorktree: (operation) =>
+        AuthoredCassetteDecision.cases.ReconcileTaskWorktree.make({
+          attemptId: operation.plannedAttempt.attemptId,
+          taskId: operation.plannedAttempt.taskId
+        }),
+      RecordTaskAttemptPlan: (operation) =>
+        AuthoredCassetteDecision.cases.RecordTaskAttemptPlan.make({
+          attemptId: operation.plannedAttempt.attemptId,
+          taskId: operation.plannedAttempt.taskId
+        })
+    }),
+    Match.orElse(() => undefined)
+  )
 }
 
 const encodedDecision = (decision: CassetteDecision): string =>
@@ -174,14 +180,30 @@ const executorReport = (
   runId: RunId
 ): PlannedAttemptExecutorReport => {
   const correlation = { attemptId: item.report.attemptId, runId }
-  switch (item.report._tag) {
-    case "Running":
-      return PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-    case "SafelySuspended":
-      return PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-    case "Terminal":
-      return PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: item.report.result })
-  }
+  const provisionalEvidence = EvidenceReference.make({
+    byteLength: 0,
+    digest: EvidenceDigest.make("0".repeat(evidenceDigestHexLength))
+  })
+  return Match.value(item.report).pipe(
+    Match.tagsExhaustive({
+      Running: () => PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+      SafelySuspended: () => PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }),
+      Terminal: (report) =>
+        PlannedAttemptExecutorReport.cases.Terminal.make({
+          correlation,
+          result: Match.value(report.result).pipe(
+            Match.tagsExhaustive({
+              Accepted: ({ acceptedResult }) =>
+                PlannedAttemptExecutorResult.cases.Accepted.make({
+                  acceptedResult: { commit: acceptedResult.commit, evidenceManifest: provisionalEvidence }
+                }),
+              Completed: () => PlannedAttemptExecutorResult.cases.Completed.make({}),
+              Failed: () => PlannedAttemptExecutorResult.cases.Failed.make({})
+            })
+          )
+        })
+    })
+  )
 }
 
 export const controlledExecutorLayer = (
@@ -189,7 +211,8 @@ export const controlledExecutorLayer = (
   runId: RunId,
   beforeExecutorReport: Effect.Effect<void> = Effect.void,
   survivingReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
-  unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>
+  unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>,
+  prepareReport: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport> = Effect.succeed
 ) => {
   const reports = survivingReports
   const consume = Effect.fn("AuthoredCassette.PlannedAttemptExecutor.consume")(function* (
@@ -214,7 +237,7 @@ export const controlledExecutorLayer = (
         detail: `authored executor expected ${item.request} for ${item.report.attemptId}, received ${request} for ${correlation.attemptId}`
       })
     }
-    const report = executorReport(item, runId)
+    const report = yield* prepareReport(executorReport(item, runId))
     yield* Ref.update(
       reports,
       (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
@@ -255,7 +278,7 @@ export const controlledExecutorLayer = (
               )
             )
           }
-          const projectedReport = executorReport(projection.value, runId)
+          const projectedReport = yield* prepareReport(executorReport(projection.value, runId))
           yield* Ref.update(
             reports,
             (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), projectedReport]])

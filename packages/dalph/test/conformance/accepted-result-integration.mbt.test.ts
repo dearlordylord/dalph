@@ -88,7 +88,7 @@ import {
   type StartedIntegrationResponsibility,
   type TargetPromotionRequest
 } from "@dalph/orchestrator"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Match, Schema } from "effect"
 
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({
@@ -123,7 +123,14 @@ const attempts = new Map(
   ])
 )
 
-const acceptedResultOf = (id: bigint): AcceptedResult => AcceptedResult.make({ commit: commitOf(id + 20n) })
+const acceptedResultOf = (id: bigint): AcceptedResult =>
+  AcceptedResult.make({
+    commit: commitOf(id + 20n),
+    evidenceManifest: EvidenceReference.make({
+      byteLength: 1,
+      digest: EvidenceDigest.make(id.toString(16).padStart(64, "0"))
+    })
+  })
 
 const SpecResult = Schema.Struct({
   acceptedResultCommit: ITFBigInt,
@@ -356,23 +363,19 @@ const phaseFor = (
   if (queued._tag === "QueuedIntegrationResponsibility") return "Queued"
   if (dependencyWait) return "DependencyWait"
   if (contradictionReleased) return "CorrelationContradictionReleased"
-  switch (candidate?._tag) {
-    case undefined:
-    case "CandidateConstructionInProgress":
-      return "Started"
-    case "CandidateValidationPending":
-      return "CandidatePending"
-    case "CandidateCorrectionRequired":
-      return "CorrectionRequired"
-    case "CandidateConstructed":
-      return "CandidateReady"
-    case "CandidateCorrectionLimitReached":
-      return "CorrectionLimitReached"
-    case "CandidateContinuationLimitReached":
-      return "ContinuationLimitReached"
-    case "CandidateCorrelationContradiction":
-      return "CorrelationContradiction"
-  }
+  return Match.value(candidate).pipe(
+    Match.when(undefined, (): Phase => "Started"),
+    Match.tags({
+      CandidateConstructionInProgress: (): Phase => "Started",
+      CandidateValidationPending: (): Phase => "CandidatePending",
+      CandidateCorrectionRequired: (): Phase => "CorrectionRequired",
+      CandidateConstructed: (): Phase => "CandidateReady",
+      CandidateCorrectionLimitReached: (): Phase => "CorrectionLimitReached",
+      CandidateContinuationLimitReached: (): Phase => "ContinuationLimitReached",
+      CandidateCorrelationContradiction: (): Phase => "CorrelationContradiction"
+    }),
+    Match.exhaustive
+  )
 }
 
 type PromotionCasStep = TargetPromotionCompareAndSetResult | TargetPromotionCompareAndSetFailure
@@ -995,6 +998,7 @@ const acceptedResultIntegrationDriver = defineDriver(
           `integration-candidate:${responsibility.plannedAttempt.runId}:${responsibility.plannedAttempt.attemptId}:${responsibility.startedAt}`
         )
         return IntegrationCandidateCorrelation.make({
+          acceptanceManifest: responsibility.acceptedResult.evidenceManifest,
           acceptedResultCommit: responsibility.acceptedResult.commit,
           attemptId: responsibility.plannedAttempt.attemptId,
           candidateId,
@@ -1022,7 +1026,8 @@ const acceptedResultIntegrationDriver = defineDriver(
       return {
         candidateCommit: constructed.event.candidateCommit,
         constructedAt: constructed.position,
-        correlation: constructed.event.correlation
+        correlation: constructed.event.correlation,
+        reviewManifest: constructed.event.reviewManifest
       }
     }
     const verificationArtifact = {
@@ -1146,7 +1151,11 @@ const acceptedResultIntegrationDriver = defineDriver(
         const correlation = correlationFor(id)
         nextAgentReport = IntegrationCandidateAgentReport.cases.Submitted.make({
           candidateCommit: commitOf(candidate),
-          correlation
+          correlation,
+          reviewManifest: EvidenceReference.make({
+            byteLength: 1,
+            digest: EvidenceDigest.make(candidate.toString(16).padStart(64, "0"))
+          })
         })
         nextGitResult = new IntegrationCandidateGitReadFailure({
           candidateCommit: commitOf(candidate),
@@ -1583,7 +1592,8 @@ const acceptedResultIntegrationDriver = defineDriver(
       const candidate = {
         candidateCommit: candidateRecord.event.candidateCommit,
         constructedAt: candidateRecord.position,
-        correlation: candidateRecord.event.correlation
+        correlation: candidateRecord.event.correlation,
+        reviewManifest: candidateRecord.event.reviewManifest
       }
       const intent = records.findLast(
         ({ event }) =>
@@ -1662,7 +1672,8 @@ const acceptedResultIntegrationDriver = defineDriver(
       const candidate = {
         candidateCommit: candidateRecord.event.candidateCommit,
         constructedAt: candidateRecord.position,
-        correlation: candidateRecord.event.correlation
+        correlation: candidateRecord.event.correlation,
+        reviewManifest: candidateRecord.event.reviewManifest
       }
       const verification = deriveTargetVerificationState(records, candidate)
       if (verification?._tag !== "VerificationPassed") return {}

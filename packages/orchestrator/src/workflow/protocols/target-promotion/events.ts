@@ -1,5 +1,5 @@
 import { Context, type Effect, Schema } from "effect"
-import { GitCommitSha, IntegrationTarget } from "@dalph/contracts"
+import { evidenceReferenceEquals, GitCommitSha, IntegrationTarget } from "@dalph/contracts"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -37,11 +37,13 @@ export type TargetPromotionVerification = typeof TargetPromotionVerification.Typ
 
 /** Full immutable identity shared by every promotion request and outcome. */
 export const TargetPromotionCorrelation = Schema.Struct({
+  acceptanceManifest: EvidenceReference,
   candidateCommit: GitCommitSha,
   candidateConstructedAt: JournalPosition,
   candidateCorrelation: IntegrationCandidateCorrelation,
   expectedTargetHead: GitCommitSha,
   integrationTarget: IntegrationTarget,
+  reviewManifest: EvidenceReference,
   requestId: TargetPromotionRequestId,
   verificationCorrelation: TargetVerificationCorrelation,
   verificationManifest: EvidenceReference
@@ -49,14 +51,16 @@ export const TargetPromotionCorrelation = Schema.Struct({
   Schema.makeFilter((correlation) => {
     const candidate = correlation.candidateCorrelation
     const verification = correlation.verificationCorrelation
-    const isConsistent =
-      correlation.candidateCommit === verification.candidateCommit &&
-      correlation.candidateConstructedAt === verification.candidateConstructedAt &&
-      correlation.expectedTargetHead === candidate.expectedTargetHead &&
-      correlation.integrationTarget.repository === candidate.integrationTarget.repository &&
-      correlation.integrationTarget.ref === candidate.integrationTarget.ref &&
-      correlation.requestId === `target-promotion:${candidate.candidateId}` &&
+    const isConsistent = [
+      correlation.candidateCommit === verification.candidateCommit,
+      correlation.candidateConstructedAt === verification.candidateConstructedAt,
+      correlation.expectedTargetHead === candidate.expectedTargetHead,
+      correlation.integrationTarget.repository === candidate.integrationTarget.repository,
+      correlation.integrationTarget.ref === candidate.integrationTarget.ref,
+      correlation.requestId === `target-promotion:${candidate.candidateId}`,
+      evidenceReferenceEquals(correlation.acceptanceManifest, candidate.acceptanceManifest),
       integrationCandidateCorrelationEquals(candidate, verification.candidateCorrelation)
+    ].every(Boolean)
     return isConsistent ? undefined : "promotion correlation must describe one exact candidate and verification"
   })
 )
@@ -203,14 +207,15 @@ export const targetPromotionCorrelationEquals = (
   right: TargetPromotionCorrelation
 ): boolean =>
   [
+    evidenceReferenceEquals(left.acceptanceManifest, right.acceptanceManifest),
     left.requestId === right.requestId,
     left.candidateCommit === right.candidateCommit,
     left.candidateConstructedAt === right.candidateConstructedAt,
     left.expectedTargetHead === right.expectedTargetHead,
     left.integrationTarget.repository === right.integrationTarget.repository,
     left.integrationTarget.ref === right.integrationTarget.ref,
-    left.verificationManifest.digest === right.verificationManifest.digest,
-    left.verificationManifest.byteLength === right.verificationManifest.byteLength,
+    evidenceReferenceEquals(left.reviewManifest, right.reviewManifest),
+    evidenceReferenceEquals(left.verificationManifest, right.verificationManifest),
     integrationCandidateCorrelationEquals(left.candidateCorrelation, right.candidateCorrelation),
     targetVerificationCorrelationEquals(left.verificationCorrelation, right.verificationCorrelation)
   ].every(Boolean)
@@ -225,11 +230,13 @@ export const targetPromotionRequestFor = (
   verification: TargetPromotionVerification
 ): TargetPromotionRequest =>
   TargetPromotionRequest.make({
+    acceptanceManifest: candidate.correlation.acceptanceManifest,
     candidateCommit: candidate.candidateCommit,
     candidateConstructedAt: candidate.constructedAt,
     candidateCorrelation: candidate.correlation,
     expectedTargetHead: candidate.correlation.expectedTargetHead,
     integrationTarget: candidate.correlation.integrationTarget,
+    reviewManifest: candidate.reviewManifest,
     requestId: targetPromotionRequestIdForCandidate(candidate.correlation.candidateId),
     verificationCorrelation: verification.correlation,
     verificationManifest: verification.manifest

@@ -1,9 +1,10 @@
 // Models issue #141 after issue #60 has durably proved one exact promotion.
-// This subject-scoped slice owns only completion-claim replacement and the
-// promoted task's cleanup/settlement after a fresh tracker success. Issue #61
-// owns the complete-task request and dependant release. Issue #102 owns Run
-// termination. Git promotion, executor work, and candidate construction are
-// represented only by the exact proof that this protocol consumes.
+// This subject-scoped slice owns completion-claim replacement, issue #61's
+// exact completion request and focused tracker success, the later complete
+// graph read that may make a dependant eligible, and cleanup/settlement. Issue
+// #102 owns Run termination. Git promotion, executor work, and candidate
+// construction are represented only by the exact proof that this protocol
+// consumes.
 module integrationFinality {
   type Phase =
     | PromotedProof
@@ -17,6 +18,17 @@ module integrationFinality {
     | ReplacementWait
     | ReplacementExhausted
     | CompletionClaimCurrent
+    | CompletionFactsObserved
+    | CompletionAncestryObserved
+    | CompletionEvidenceObserved
+    | CompletionIntentRecorded
+    | CompletionAttemptIntentRecorded
+    | CompletionRequested
+    | CompletionResponseLost
+    | CompletionConfirmationObserved
+    | CompletionAcknowledged
+    | CompletionRetryReady
+    | CompletionWait
     | DeleteIntentPending
     | DeleteIntentRecorded
     | DeleteRequested
@@ -29,7 +41,12 @@ module integrationFinality {
 
   type ClaimState = OriginalClaim | CompletionClaim | ForeignClaim | AbsentClaim | UnreadableClaim
   type TrackerObservation = NoTrackerObservation | StaleSuccess | FreshSuccess
-  type MutationTarget = NoMutation | OriginalClaimMutation | CompletionClaimMutation | ForeignClaimMutation
+  type CompletionRequestOutcome = NoCompletionOutcome | Applied | NotApplied | UnreadableCompletionOutcome
+  type CandidateAncestry = NoCandidateAncestry | CandidateAncestor | CandidateNotAncestor | UnreadableAncestry
+  type CompleteGraphObservation = NoCompleteGraph | GraphBlocked | GraphReleased | UnreadableGraph
+  type SuccessSource = NoSuccess | ExternalFocusedSuccess | PostRequestFocusedSuccess
+  type CompletionConflict = NoCompletionConflict | ForeignTask | RevisionConflict | ReopenedTask
+  type MutationTarget = NoMutation | OriginalClaimMutation | CompletionClaimMutation | CompleteTaskMutation | ForeignClaimMutation
 
   // Git owns this proof. The #141 protocol may consume it but may not
   // reconstruct or weaken any of its bindings.
@@ -42,6 +59,9 @@ module integrationFinality {
     expectedTargetHead: int,
     integrationTarget: int,
     promotionCorrelation: int,
+    acceptanceManifest: int,
+    integrationReviewManifest: int,
+    verificationManifest: int,
   }
 
   // This is the one new tracker claim identity derived from the exact active
@@ -54,6 +74,9 @@ module integrationFinality {
     taskRevision: int,
     predecessorClaimId: int,
     promotionCorrelation: int,
+    acceptanceManifest: int,
+    integrationReviewManifest: int,
+    verificationManifest: int,
   }
 
   type SubjectState = {
@@ -84,6 +107,27 @@ module integrationFinality {
     trackerObservationRevision: int,
     freshTrackerSuccess: bool,
     trackerSuccessEver: bool,
+    focusedSuccessRecorded: bool,
+    successSource: SuccessSource,
+    focusedFactsRecorded: bool,
+    focusedFactsOpen: bool,
+    focusedFactsNoBlocker: bool,
+    completionAncestry: CandidateAncestry,
+    completionEvidenceRecorded: bool,
+    completionRequestId: int,
+    completionIntentRecorded: bool,
+    completionAttemptIntents: int,
+    completionOpenConfirmationRecorded: bool,
+    completionConfirmationViolationLookups: int,
+    completionRequests: int,
+    completionPremiseViolationCalls: int,
+    completionReads: int,
+    completionNotAppliedReads: int,
+    completionOutcome: CompletionRequestOutcome,
+    completeTaskAcknowledged: bool,
+    completionConflict: CompletionConflict,
+    completeGraphObservation: CompleteGraphObservation,
+    dependantEligible: bool,
     responsibilityHeld: bool,
     settled: bool,
     foreignMutationCount: int,
@@ -117,11 +161,17 @@ module integrationFinality {
   pure val EXPECTED_HEAD_A = 401
   pure val INTEGRATION_TARGET_A = 501
   pure val PROMOTION_CORRELATION_A = 601
+  pure val ACCEPTANCE_MANIFEST_A = 701
+  pure val INTEGRATION_REVIEW_MANIFEST_A = 702
+  pure val VERIFICATION_MANIFEST_A = 703
+  pure val COMPLETION_REQUEST_A = 801
   pure val TRACKER_COMPLETION_REQUEST_REVISION = 10
   pure val STALE_TRACKER_REVISION = 10
   pure val FRESH_TRACKER_REVISION = 11
+  pure val COMPLETE_GRAPH_REVISION = 12
   pure val REPLACEMENT_REQUEST_LIMIT = 3
   pure val DELETION_REQUEST_LIMIT = 3
+  pure val COMPLETE_TASK_REQUEST_LIMIT = 3
 
   var state: State
 
@@ -135,6 +185,9 @@ module integrationFinality {
     subject.proof.expectedTargetHead == EXPECTED_HEAD_A,
     subject.proof.integrationTarget == INTEGRATION_TARGET_A,
     subject.proof.promotionCorrelation == PROMOTION_CORRELATION_A,
+    subject.proof.acceptanceManifest == ACCEPTANCE_MANIFEST_A,
+    subject.proof.integrationReviewManifest == INTEGRATION_REVIEW_MANIFEST_A,
+    subject.proof.verificationManifest == VERIFICATION_MANIFEST_A,
   }
 
   pure def completionClaimExact(subject: SubjectState): bool = and {
@@ -145,6 +198,26 @@ module integrationFinality {
     subject.completionClaim.taskRevision == subject.proof.taskRevision,
     subject.completionClaim.predecessorClaimId == subject.originalClaimId,
     subject.completionClaim.promotionCorrelation == subject.proof.promotionCorrelation,
+    subject.completionClaim.acceptanceManifest == subject.proof.acceptanceManifest,
+    subject.completionClaim.integrationReviewManifest == subject.proof.integrationReviewManifest,
+    subject.completionClaim.verificationManifest == subject.proof.verificationManifest,
+  }
+
+  // Independent call-time measurement. The request transition keeps its
+  // fail-closed guard inline; this predicate is used only to record whether a
+  // crossed boundary actually carried every exact premise. Weakening the
+  // guard therefore turns the safety invariant red instead of making the
+  // transition certify itself.
+  pure def completionCallPremisesExact(subject: SubjectState): bool = and {
+    subject.completionRequestId == COMPLETION_REQUEST_A,
+    promotionProofExact(subject),
+    completionClaimExact(subject),
+    subject.focusedFactsRecorded,
+    subject.focusedFactsOpen,
+    subject.focusedFactsNoBlocker,
+    subject.completionAncestry == CandidateAncestor,
+    subject.completionEvidenceRecorded,
+    subject.completionConflict == NoCompletionConflict,
   }
 
   pure def replacementPhase(phase: Phase): bool = Set(
@@ -191,7 +264,34 @@ module integrationFinality {
   val replacementWaitReached: bool = state.promoted.phase == ReplacementWait
   val replacementExhaustedReached: bool = state.promoted.phase == ReplacementExhausted
   val completionClaimCurrentReached: bool = state.promoted.phase == CompletionClaimCurrent
+  val completionFactsReached: bool = state.promoted.phase == CompletionFactsObserved
+  val completionAncestryReached: bool = state.promoted.phase == CompletionAncestryObserved
+  val completionEvidenceReached: bool = state.promoted.phase == CompletionEvidenceObserved
+  val completionIntentReached: bool = state.promoted.phase == CompletionIntentRecorded
+  val completionAttemptIntentReached: bool = state.promoted.phase == CompletionAttemptIntentRecorded
+  val completionRequestedReached: bool = state.promoted.phase == CompletionRequested
+  val completionResponseLostReached: bool = state.promoted.phase == CompletionResponseLost
+  val completionConfirmationReached: bool = state.promoted.phase == CompletionConfirmationObserved
+  val completionAcknowledgedReached: bool = state.promoted.phase == CompletionAcknowledged
+  val completionRetryReadyReached: bool = state.promoted.phase == CompletionRetryReady
+  val completionWaitReached: bool = state.promoted.phase == CompletionWait
   val trackerSuccessReached: bool = state.promoted.phase == DeleteIntentPending
+  val focusedCompletionSuccessReached: bool = and {
+    state.promoted.focusedSuccessRecorded,
+    state.promoted.successSource == PostRequestFocusedSuccess,
+  }
+  val humanSuccessWithAbsentClaimReached: bool = and {
+    state.promoted.focusedSuccessRecorded,
+    state.promoted.successSource == ExternalFocusedSuccess,
+    state.promoted.claimState == AbsentClaim,
+  }
+  val humanSuccessWithForeignClaimReached: bool = and {
+    state.promoted.focusedSuccessRecorded,
+    state.promoted.successSource == ExternalFocusedSuccess,
+    state.promoted.claimState == ForeignClaim,
+  }
+  val completeGraphBlockedReached: bool = state.promoted.completeGraphObservation == GraphBlocked
+  val completeGraphReleasedReached: bool = state.promoted.completeGraphObservation == GraphReleased
   val deleteIntentReached: bool = state.promoted.phase == DeleteIntentRecorded
   val deleteRequestedReached: bool = state.promoted.phase == DeleteRequested
   val deleteResponseLostReached: bool = state.promoted.phase == DeleteResponseLost
@@ -202,14 +302,47 @@ module integrationFinality {
   val emptyFrontierReached: bool = state.frontierEmpty
   val unrelatedResponsibilityReached: bool = state.unrelated.responsibilityHeld
 
-  // The invariant repeats the proof comparison rather than calling the
-  // transition guard: mutating either the proof or the derived claim must be
-  // observable here.
+  // These comparisons deliberately do not call promotionProofExact or
+  // completionClaimExact. Those helpers guard transitions; the invariant is
+  // the independent measurement that must still turn red if a guard is
+  // weakened.
   val exactProofAndBinding: bool = and {
-    state.promoted.proofPresent implies promotionProofExact(state.promoted),
+    state.promoted.proofPresent implies and {
+      state.promoted.proof.runId == RUN_ID,
+      state.promoted.proof.taskId == TASK_A,
+      state.promoted.proof.attemptId == ATTEMPT_A,
+      state.promoted.proof.taskRevision == TASK_REVISION_A,
+      state.promoted.proof.candidateCommit == CANDIDATE_A,
+      state.promoted.proof.expectedTargetHead == EXPECTED_HEAD_A,
+      state.promoted.proof.integrationTarget == INTEGRATION_TARGET_A,
+      state.promoted.proof.promotionCorrelation == PROMOTION_CORRELATION_A,
+      state.promoted.proof.acceptanceManifest == ACCEPTANCE_MANIFEST_A,
+      state.promoted.proof.integrationReviewManifest == INTEGRATION_REVIEW_MANIFEST_A,
+      state.promoted.proof.verificationManifest == VERIFICATION_MANIFEST_A,
+    },
     state.promoted.completionClaimDerived implies and {
-      promotionProofExact(state.promoted),
-      completionClaimExact(state.promoted),
+      state.promoted.proofPresent,
+      state.promoted.proof.runId == RUN_ID,
+      state.promoted.proof.taskId == TASK_A,
+      state.promoted.proof.attemptId == ATTEMPT_A,
+      state.promoted.proof.taskRevision == TASK_REVISION_A,
+      state.promoted.proof.candidateCommit == CANDIDATE_A,
+      state.promoted.proof.expectedTargetHead == EXPECTED_HEAD_A,
+      state.promoted.proof.integrationTarget == INTEGRATION_TARGET_A,
+      state.promoted.proof.promotionCorrelation == PROMOTION_CORRELATION_A,
+      state.promoted.proof.acceptanceManifest == ACCEPTANCE_MANIFEST_A,
+      state.promoted.proof.integrationReviewManifest == INTEGRATION_REVIEW_MANIFEST_A,
+      state.promoted.proof.verificationManifest == VERIFICATION_MANIFEST_A,
+      state.promoted.completionClaim.claimId == COMPLETION_CLAIM_A,
+      state.promoted.completionClaim.runId == state.promoted.proof.runId,
+      state.promoted.completionClaim.taskId == state.promoted.proof.taskId,
+      state.promoted.completionClaim.attemptId == state.promoted.proof.attemptId,
+      state.promoted.completionClaim.taskRevision == state.promoted.proof.taskRevision,
+      state.promoted.completionClaim.predecessorClaimId == state.promoted.originalClaimId,
+      state.promoted.completionClaim.promotionCorrelation == state.promoted.proof.promotionCorrelation,
+      state.promoted.completionClaim.acceptanceManifest == state.promoted.proof.acceptanceManifest,
+      state.promoted.completionClaim.integrationReviewManifest == state.promoted.proof.integrationReviewManifest,
+      state.promoted.completionClaim.verificationManifest == state.promoted.proof.verificationManifest,
       state.promoted.completionClaim.claimId != state.promoted.originalClaimId,
     },
   }
@@ -217,8 +350,42 @@ module integrationFinality {
   val completionClaimRequiresExactPromotionProof: bool =
     not(state.promoted.completionClaimDerived)
       or and {
-        promotionProofExact(state.promoted),
-        completionClaimExact(state.promoted),
+        state.promoted.proofPresent,
+        state.promoted.proof.runId == RUN_ID,
+        state.promoted.proof.taskId == TASK_A,
+        state.promoted.proof.attemptId == ATTEMPT_A,
+        state.promoted.proof.taskRevision == TASK_REVISION_A,
+        state.promoted.proof.candidateCommit == CANDIDATE_A,
+        state.promoted.proof.expectedTargetHead == EXPECTED_HEAD_A,
+        state.promoted.proof.integrationTarget == INTEGRATION_TARGET_A,
+        state.promoted.proof.promotionCorrelation == PROMOTION_CORRELATION_A,
+        state.promoted.proof.acceptanceManifest == ACCEPTANCE_MANIFEST_A,
+        state.promoted.proof.integrationReviewManifest == INTEGRATION_REVIEW_MANIFEST_A,
+        state.promoted.proof.verificationManifest == VERIFICATION_MANIFEST_A,
+        state.promoted.completionClaim.claimId == COMPLETION_CLAIM_A,
+        state.promoted.completionClaim.runId == state.promoted.proof.runId,
+        state.promoted.completionClaim.taskId == state.promoted.proof.taskId,
+        state.promoted.completionClaim.attemptId == state.promoted.proof.attemptId,
+        state.promoted.completionClaim.taskRevision == state.promoted.proof.taskRevision,
+        state.promoted.completionClaim.predecessorClaimId == state.promoted.originalClaimId,
+        state.promoted.completionClaim.promotionCorrelation == state.promoted.proof.promotionCorrelation,
+        state.promoted.completionClaim.acceptanceManifest == state.promoted.proof.acceptanceManifest,
+        state.promoted.completionClaim.integrationReviewManifest == state.promoted.proof.integrationReviewManifest,
+        state.promoted.completionClaim.verificationManifest == state.promoted.proof.verificationManifest,
+      }
+
+  val completionProofCarriesThreeSealedManifests: bool =
+    not(state.promoted.proofPresent)
+      or and {
+        state.promoted.proof.acceptanceManifest == ACCEPTANCE_MANIFEST_A,
+        state.promoted.proof.integrationReviewManifest == INTEGRATION_REVIEW_MANIFEST_A,
+        state.promoted.proof.verificationManifest == VERIFICATION_MANIFEST_A,
+        not(state.promoted.completionClaimDerived)
+          or and {
+            state.promoted.completionClaim.acceptanceManifest == state.promoted.proof.acceptanceManifest,
+            state.promoted.completionClaim.integrationReviewManifest == state.promoted.proof.integrationReviewManifest,
+            state.promoted.completionClaim.verificationManifest == state.promoted.proof.verificationManifest,
+          },
       }
 
   // A request is the ambiguity-crossing effect. Its exact intent must already
@@ -242,6 +409,69 @@ module integrationFinality {
 
   val completionClaimDeletionRequestsAreBounded: bool =
     state.promoted.deleteRequests <= DELETION_REQUEST_LIMIT
+
+  val completionIntentPrecedesRequest: bool =
+    state.promoted.completionRequests == 0 or state.promoted.completionIntentRecorded
+
+  val completionAttemptIntentPrecedesRequest: bool =
+    state.promoted.completionRequests <= state.promoted.completionAttemptIntents
+
+  val completionRequestsAreBoundedForIssue61: bool =
+    state.promoted.completionRequests <= COMPLETE_TASK_REQUEST_LIMIT
+
+  val completionRetryRequiresExactRequestLookup: bool =
+    state.promoted.completionRequests <= state.promoted.completionNotAppliedReads + 1
+
+  val completionLookupRequiresPostLossConfirmation: bool =
+    state.promoted.completionConfirmationViolationLookups == 0
+
+  val completionRequestUsesExactPremises: bool =
+    state.promoted.completionPremiseViolationCalls == 0
+
+  val completionAcknowledgementIsApplied: bool =
+    not(state.promoted.completeTaskAcknowledged)
+      or state.promoted.completionOutcome == Applied
+
+  val focusedSuccessRequiresCompletionObservation: bool =
+    state.promoted.successSource != PostRequestFocusedSuccess
+      or and {
+        state.promoted.completionRequests > 0,
+        state.promoted.focusedSuccessRecorded,
+        or {
+          and {
+            state.promoted.completeTaskAcknowledged,
+            state.promoted.completionOutcome == Applied,
+          },
+          and {
+            not(state.promoted.completeTaskAcknowledged),
+            state.promoted.completionOutcome == NoCompletionOutcome,
+          },
+        },
+      }
+
+  val trackerSuccessRequiresFocusedObservation: bool =
+    not(state.promoted.trackerSuccessEver) or state.promoted.focusedSuccessRecorded
+
+  // A focused successful lifecycle is authoritative even when another tracker
+  // client has already removed or replaced KC. Dalph records success without
+  // mutating that absent/foreign claim or turning the human completion into a
+  // conflict.
+  val humanFocusedSuccessIsAccepted: bool =
+    state.promoted.successSource != ExternalFocusedSuccess
+      or and {
+        state.promoted.focusedSuccessRecorded,
+        state.promoted.trackerSuccessEver,
+        state.promoted.freshTrackerSuccess,
+        state.promoted.trackerObservation == FreshSuccess,
+        state.promoted.completionConflict == NoCompletionConflict,
+      }
+
+  val dependantReleaseRequiresLaterCompleteGraph: bool =
+    not(state.promoted.dependantEligible)
+      or and {
+        state.promoted.focusedSuccessRecorded,
+        state.promoted.completeGraphObservation == GraphReleased,
+      }
 
   val foreignClaimIsNeverMutated: bool = and {
     state.promoted.foreignMutationCount == 0,
@@ -318,8 +548,9 @@ module integrationFinality {
 
   val runTerminationRemainsOwnedByIssue102: bool = not(state.runTerminated)
 
-  val issue61BoundariesRemainExternal: bool = and {
-    state.completeTaskRequests == 0,
+  // This subject-scoped model never performs the external scheduler action
+  // that starts newly eligible dependant work.
+  val dependantReleaseBoundaryRemainsExternal: bool = and {
     state.dependantReleases == 0,
   }
 
@@ -343,6 +574,9 @@ module integrationFinality {
           expectedTargetHead: EXPECTED_HEAD_A,
           integrationTarget: INTEGRATION_TARGET_A,
           promotionCorrelation: PROMOTION_CORRELATION_A,
+          acceptanceManifest: ACCEPTANCE_MANIFEST_A,
+          integrationReviewManifest: INTEGRATION_REVIEW_MANIFEST_A,
+          verificationManifest: VERIFICATION_MANIFEST_A,
         },
         completionClaimDerived: false,
         completionClaim: {
@@ -353,6 +587,9 @@ module integrationFinality {
           taskRevision: 0,
           predecessorClaimId: 0,
           promotionCorrelation: 0,
+          acceptanceManifest: 0,
+          integrationReviewManifest: 0,
+          verificationManifest: 0,
         },
         replacementIntentRecorded: false,
         replacementRequests: 0,
@@ -370,6 +607,27 @@ module integrationFinality {
         trackerObservationRevision: 0,
         freshTrackerSuccess: false,
         trackerSuccessEver: false,
+        focusedSuccessRecorded: false,
+        successSource: NoSuccess,
+        focusedFactsRecorded: false,
+        focusedFactsOpen: false,
+        focusedFactsNoBlocker: false,
+        completionAncestry: NoCandidateAncestry,
+        completionEvidenceRecorded: false,
+        completionRequestId: 0,
+        completionIntentRecorded: false,
+        completionAttemptIntents: 0,
+        completionOpenConfirmationRecorded: false,
+        completionConfirmationViolationLookups: 0,
+        completionRequests: 0,
+        completionPremiseViolationCalls: 0,
+        completionReads: 0,
+        completionNotAppliedReads: 0,
+        completionOutcome: NoCompletionOutcome,
+        completeTaskAcknowledged: false,
+        completionConflict: NoCompletionConflict,
+        completeGraphObservation: NoCompleteGraph,
+        dependantEligible: false,
         responsibilityHeld: true,
         settled: false,
         foreignMutationCount: 0,
@@ -396,6 +654,9 @@ module integrationFinality {
           expectedTargetHead: 0,
           integrationTarget: 0,
           promotionCorrelation: 0,
+          acceptanceManifest: 0,
+          integrationReviewManifest: 0,
+          verificationManifest: 0,
         },
         completionClaimDerived: false,
         completionClaim: {
@@ -406,6 +667,9 @@ module integrationFinality {
           taskRevision: 0,
           predecessorClaimId: 0,
           promotionCorrelation: 0,
+          acceptanceManifest: 0,
+          integrationReviewManifest: 0,
+          verificationManifest: 0,
         },
         replacementIntentRecorded: false,
         replacementRequests: 0,
@@ -423,6 +687,27 @@ module integrationFinality {
         trackerObservationRevision: 0,
         freshTrackerSuccess: false,
         trackerSuccessEver: false,
+        focusedSuccessRecorded: false,
+        successSource: NoSuccess,
+        focusedFactsRecorded: false,
+        focusedFactsOpen: false,
+        focusedFactsNoBlocker: false,
+        completionAncestry: NoCandidateAncestry,
+        completionEvidenceRecorded: false,
+        completionRequestId: 0,
+        completionIntentRecorded: false,
+        completionAttemptIntents: 0,
+        completionOpenConfirmationRecorded: false,
+        completionConfirmationViolationLookups: 0,
+        completionRequests: 0,
+        completionPremiseViolationCalls: 0,
+        completionReads: 0,
+        completionNotAppliedReads: 0,
+        completionOutcome: NoCompletionOutcome,
+        completeTaskAcknowledged: false,
+        completionConflict: NoCompletionConflict,
+        completeGraphObservation: NoCompleteGraph,
+        dependantEligible: false,
         responsibilityHeld: true,
         settled: false,
         foreignMutationCount: 0,
@@ -484,6 +769,9 @@ module integrationFinality {
           taskRevision: state.promoted.proof.taskRevision,
           predecessorClaimId: state.promoted.originalClaimId,
           promotionCorrelation: state.promoted.proof.promotionCorrelation,
+          acceptanceManifest: state.promoted.proof.acceptanceManifest,
+          integrationReviewManifest: state.promoted.proof.integrationReviewManifest,
+          verificationManifest: state.promoted.proof.verificationManifest,
         },
       },
     },
@@ -637,8 +925,392 @@ module integrationFinality {
     },
   }
 
-  action observeFreshTrackerSuccess: bool = all {
+  action observeFocusedCompletionHumanSuccessWithExactClaim: bool = all {
+    state.promoted.phase == CompletionIntentRecorded,
+    state.promoted.claimState == CompletionClaim,
+    state.promoted.completionIntentRecorded,
+    state.promoted.focusedFactsRecorded,
+    state.promoted.replacementOutcomeRecorded,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: DeleteIntentPending,
+        trackerObservation: FreshSuccess,
+        trackerObservationRevision: FRESH_TRACKER_REVISION,
+        freshTrackerSuccess: true,
+        trackerSuccessEver: true,
+        focusedSuccessRecorded: true,
+        successSource: ExternalFocusedSuccess,
+      },
+    },
+  }
+
+  // Issue #61 first reads the task-local completion facts. This focused read
+  // is sufficient for the task's own cleanup and deliberately says nothing
+  // about the complete dependant graph.
+  action observeFocusedCompletionFacts: bool = all {
     state.promoted.phase == CompletionClaimCurrent,
+    state.promoted.claimState == CompletionClaim,
+    state.promoted.replacementOutcomeRecorded,
+    promotionProofExact(state.promoted),
+    completionClaimExact(state.promoted),
+    not(state.promoted.blockerPresent),
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionFactsObserved,
+        focusedFactsRecorded: true,
+        focusedFactsOpen: true,
+        focusedFactsNoBlocker: true,
+        completionConflict: NoCompletionConflict,
+      },
+    },
+  }
+
+  action observeFocusedCompletionHumanSuccessWithAbsentClaim: bool = all {
+    state.promoted.phase == CompletionIntentRecorded,
+    state.promoted.completionIntentRecorded,
+    state.promoted.focusedFactsRecorded,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: DeleteIntentPending,
+        claimState: AbsentClaim,
+        currentClaimId: 0,
+        trackerObservation: FreshSuccess,
+        trackerObservationRevision: FRESH_TRACKER_REVISION,
+        freshTrackerSuccess: true,
+        trackerSuccessEver: true,
+        focusedSuccessRecorded: true,
+        successSource: ExternalFocusedSuccess,
+        completionConflict: NoCompletionConflict,
+      },
+    },
+  }
+
+  action observeFocusedCompletionHumanSuccessWithForeignClaim: bool = all {
+    state.promoted.phase == CompletionIntentRecorded,
+    state.promoted.completionIntentRecorded,
+    state.promoted.focusedFactsRecorded,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: DeleteIntentPending,
+        claimState: ForeignClaim,
+        currentClaimId: 999,
+        trackerObservation: FreshSuccess,
+        trackerObservationRevision: FRESH_TRACKER_REVISION,
+        freshTrackerSuccess: true,
+        trackerSuccessEver: true,
+        focusedSuccessRecorded: true,
+        successSource: ExternalFocusedSuccess,
+        completionConflict: NoCompletionConflict,
+      },
+    },
+  }
+
+  action observeFocusedCompletionForeignTaskConflict: bool = all {
+    state.promoted.phase == CompletionFactsObserved,
+    state.promoted.focusedFactsRecorded,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionWait,
+        completionConflict: ForeignTask,
+      },
+    },
+  }
+
+  action observeFocusedCompletionRevisionConflict: bool = all {
+    state.promoted.phase == CompletionFactsObserved,
+    state.promoted.focusedFactsRecorded,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionWait,
+        completionConflict: RevisionConflict,
+      },
+    },
+  }
+
+  action observeFocusedCompletionReopenedConflict: bool = all {
+    state.promoted.phase == CompletionFactsObserved,
+    state.promoted.focusedFactsRecorded,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionWait,
+        completionConflict: ReopenedTask,
+      },
+    },
+  }
+
+  action observePromotedCandidateAncestry: bool = all {
+    state.promoted.phase == CompletionFactsObserved,
+    state.promoted.focusedFactsRecorded,
+    state.promoted.focusedFactsOpen,
+    state.promoted.focusedFactsNoBlocker,
+    state.promoted.completionConflict == NoCompletionConflict,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionAncestryObserved,
+        completionAncestry: CandidateAncestor,
+      },
+    },
+  }
+
+  action observePromotedCandidateNotAncestor: bool = all {
+    state.promoted.phase == CompletionFactsObserved,
+    state.promoted.focusedFactsRecorded,
+    state.promoted.completionConflict == NoCompletionConflict,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionWait,
+        completionAncestry: CandidateNotAncestor,
+      },
+    },
+  }
+
+  action observePromotedCandidateAncestryUnreadable: bool = all {
+    state.promoted.phase == CompletionFactsObserved,
+    state.promoted.focusedFactsRecorded,
+    state.promoted.completionConflict == NoCompletionConflict,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionWait,
+        completionAncestry: UnreadableAncestry,
+      },
+    },
+  }
+
+  action observeCompletionEvidence: bool = all {
+    state.promoted.phase == CompletionAncestryObserved,
+    state.promoted.completionAncestry == CandidateAncestor,
+    promotionProofExact(state.promoted),
+    completionClaimExact(state.promoted),
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionEvidenceObserved,
+        completionEvidenceRecorded: true,
+      },
+    },
+  }
+
+  action recordCompleteTaskIntent: bool = all {
+    state.promoted.phase == CompletionEvidenceObserved,
+    state.promoted.completionEvidenceRecorded,
+    state.promoted.completionAncestry == CandidateAncestor,
+    state.promoted.focusedFactsRecorded,
+    state.promoted.focusedFactsOpen,
+    state.promoted.focusedFactsNoBlocker,
+    state.promoted.completionConflict == NoCompletionConflict,
+    promotionProofExact(state.promoted),
+    completionClaimExact(state.promoted),
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionIntentRecorded,
+        completionIntentRecorded: true,
+        completionRequestId: COMPLETION_REQUEST_A,
+      },
+    },
+  }
+
+  action recordCompletionAttemptIntent: bool = all {
+    or {
+      state.promoted.phase == CompletionIntentRecorded,
+      state.promoted.phase == CompletionEvidenceObserved,
+    },
+    state.promoted.completionIntentRecorded,
+    state.promoted.completionAttemptIntents == state.promoted.completionRequests,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionAttemptIntentRecorded,
+        completionAttemptIntents: state.promoted.completionAttemptIntents + 1,
+      },
+    },
+  }
+
+  action requestCompleteTask: bool = all {
+    state.promoted.phase == CompletionAttemptIntentRecorded,
+    state.promoted.completionIntentRecorded,
+    state.promoted.completionAttemptIntents >= state.promoted.completionRequests + 1,
+    state.promoted.completionRequestId == COMPLETION_REQUEST_A,
+    state.promoted.completionRequests < COMPLETE_TASK_REQUEST_LIMIT,
+    promotionProofExact(state.promoted),
+    completionClaimExact(state.promoted),
+    state.promoted.focusedFactsRecorded,
+    state.promoted.focusedFactsOpen,
+    state.promoted.focusedFactsNoBlocker,
+    state.promoted.completionAncestry == CandidateAncestor,
+    state.promoted.completionEvidenceRecorded,
+    state.promoted.completionConflict == NoCompletionConflict,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionRequested,
+        completionRequests: state.promoted.completionRequests + 1,
+        completionPremiseViolationCalls:
+          if (completionCallPremisesExact(state.promoted))
+          state.promoted.completionPremiseViolationCalls
+          else
+          state.promoted.completionPremiseViolationCalls + 1,
+        completionOutcome: NoCompletionOutcome,
+        completeTaskAcknowledged: false,
+        lastMutation: CompleteTaskMutation,
+      },
+      completeTaskRequests: state.completeTaskRequests + 1,
+    },
+  }
+
+  action observeCompleteTaskAcknowledgement: bool = all {
+    state.promoted.phase == CompletionRequested,
+    state.promoted.completionRequestId == COMPLETION_REQUEST_A,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionAcknowledged,
+        completionOutcome: Applied,
+        completeTaskAcknowledged: true,
+      },
+    },
+  }
+
+  action loseCompleteTaskResponse: bool = all {
+    state.promoted.phase == CompletionRequested,
+    state.promoted.completionRequestId == COMPLETION_REQUEST_A,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionResponseLost,
+        completionOpenConfirmationRecorded: false,
+      },
+    },
+  }
+
+  action observeFocusedCompletionOpenAfterLoss: bool = all {
+    state.promoted.phase == CompletionResponseLost,
+    state.promoted.completionRequestId == COMPLETION_REQUEST_A,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionConfirmationObserved,
+        completionOpenConfirmationRecorded: true,
+      },
+    },
+  }
+
+  pure def completionConfirmationViolationLookupsAfterCurrentLookup(subject: SubjectState): int =
+    if (subject.phase == CompletionConfirmationObserved and subject.completionOpenConfirmationRecorded)
+      subject.completionConfirmationViolationLookups
+    else
+      subject.completionConfirmationViolationLookups + 1
+
+  action lookupCompletionRequestApplied: bool = all {
+    state.promoted.phase == CompletionConfirmationObserved,
+    state.promoted.completionOpenConfirmationRecorded,
+    state.promoted.completionRequestId == COMPLETION_REQUEST_A,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionAcknowledged,
+        completionReads: state.promoted.completionReads + 1,
+        completionConfirmationViolationLookups:
+          completionConfirmationViolationLookupsAfterCurrentLookup(state.promoted),
+        completionOutcome: Applied,
+        completeTaskAcknowledged: true,
+      },
+    },
+  }
+
+  action lookupCompletionRequestNotApplied: bool = all {
+    state.promoted.phase == CompletionConfirmationObserved,
+    state.promoted.completionOpenConfirmationRecorded,
+    state.promoted.completionRequestId == COMPLETION_REQUEST_A,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionRetryReady,
+        completionReads: state.promoted.completionReads + 1,
+        completionConfirmationViolationLookups:
+          completionConfirmationViolationLookupsAfterCurrentLookup(state.promoted),
+        completionOutcome: NotApplied,
+        completionNotAppliedReads: state.promoted.completionNotAppliedReads + 1,
+      },
+    },
+  }
+
+  action lookupCompletionRequestUnreadable: bool = all {
+    state.promoted.phase == CompletionConfirmationObserved,
+    state.promoted.completionOpenConfirmationRecorded,
+    state.promoted.completionRequestId == COMPLETION_REQUEST_A,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionWait,
+        completionReads: state.promoted.completionReads + 1,
+        completionConfirmationViolationLookups:
+          completionConfirmationViolationLookupsAfterCurrentLookup(state.promoted),
+        completionOutcome: UnreadableCompletionOutcome,
+      },
+    },
+  }
+
+  action refreshCompletionPremisesForRetry: bool = all {
+    state.promoted.phase == CompletionRetryReady,
+    state.promoted.completionOutcome == NotApplied,
+    state.promoted.completionNotAppliedReads > 0,
+    state.promoted.completionRequests < COMPLETE_TASK_REQUEST_LIMIT,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionFactsObserved,
+        completionOutcome: NoCompletionOutcome,
+        completeTaskAcknowledged: false,
+        completionOpenConfirmationRecorded: false,
+      },
+    },
+  }
+
+  action observeFocusedCompletionSuccess: bool = all {
+    or {
+      and {
+        state.promoted.phase == CompletionAcknowledged,
+        state.promoted.completionOutcome == Applied,
+        state.promoted.completeTaskAcknowledged,
+      },
+      and {
+        state.promoted.phase == CompletionResponseLost,
+        state.promoted.completionOutcome == NoCompletionOutcome,
+        not(state.promoted.completeTaskAcknowledged),
+      },
+    },
     state.promoted.claimState == CompletionClaim,
     state.promoted.replacementOutcomeRecorded,
     state' = {
@@ -650,6 +1322,49 @@ module integrationFinality {
         trackerObservationRevision: FRESH_TRACKER_REVISION,
         freshTrackerSuccess: true,
         trackerSuccessEver: true,
+        focusedSuccessRecorded: true,
+        successSource: PostRequestFocusedSuccess,
+      },
+    },
+  }
+
+  // The complete graph is a later tracker read. It can release a dependant
+  // only after the focused task-local success has already been observed.
+  action observeLaterCompleteGraphBlocked: bool = all {
+    state.promoted.focusedSuccessRecorded,
+    state.promoted.trackerSuccessEver,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        completeGraphObservation: GraphBlocked,
+        dependantEligible: false,
+      },
+    },
+  }
+
+  action observeLaterCompleteGraphReleased: bool = all {
+    state.promoted.focusedSuccessRecorded,
+    state.promoted.trackerSuccessEver,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        completeGraphObservation: GraphReleased,
+        dependantEligible: true,
+      },
+    },
+  }
+
+  action observeLaterCompleteGraphUnreadable: bool = all {
+    state.promoted.focusedSuccessRecorded,
+    state.promoted.trackerSuccessEver,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        completeGraphObservation: UnreadableGraph,
+        dependantEligible: false,
       },
     },
   }
@@ -842,7 +1557,31 @@ module integrationFinality {
     reconcileReplacementAsUnreadableClaim,
     retryCompletionClaimReplacement,
     observeStaleTrackerSuccess,
-    observeFreshTrackerSuccess,
+    observeFocusedCompletionHumanSuccessWithExactClaim,
+    observeFocusedCompletionFacts,
+    observeFocusedCompletionHumanSuccessWithAbsentClaim,
+    observeFocusedCompletionHumanSuccessWithForeignClaim,
+    observeFocusedCompletionForeignTaskConflict,
+    observeFocusedCompletionRevisionConflict,
+    observeFocusedCompletionReopenedConflict,
+    observePromotedCandidateAncestry,
+    observePromotedCandidateNotAncestor,
+    observePromotedCandidateAncestryUnreadable,
+    observeCompletionEvidence,
+    recordCompleteTaskIntent,
+    recordCompletionAttemptIntent,
+    requestCompleteTask,
+    observeCompleteTaskAcknowledgement,
+    loseCompleteTaskResponse,
+    observeFocusedCompletionOpenAfterLoss,
+    lookupCompletionRequestApplied,
+    lookupCompletionRequestNotApplied,
+    lookupCompletionRequestUnreadable,
+    refreshCompletionPremisesForRetry,
+    observeFocusedCompletionSuccess,
+    observeLaterCompleteGraphBlocked,
+    observeLaterCompleteGraphReleased,
+    observeLaterCompleteGraphUnreadable,
     recordCompletionClaimDeletionIntent,
     requestCompletionClaimDeletion,
     observeCompletionClaimDeleted,

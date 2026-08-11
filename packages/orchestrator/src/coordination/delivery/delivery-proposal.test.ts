@@ -1,5 +1,5 @@
+import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import {
-  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -192,7 +192,7 @@ describe("deliveryProposalsOf", () => {
       ref: IntegrationTargetRef.make("refs/heads/main")
     })
     const responsibility = StartedIntegrationResponsibility.make({
-      acceptedResult: AcceptedResult.make({ commit: GitCommitSha.make("2".repeat(40)) }),
+      acceptedResult: acceptedResultFixture(GitCommitSha.make("2".repeat(40))),
       integrationTarget,
       plannedAttempt,
       queuedAt: JournalPosition.make(5),

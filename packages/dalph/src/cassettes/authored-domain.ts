@@ -1,10 +1,9 @@
 /* eslint-disable max-lines -- One closed schema keeps every authored boundary tag and chronology invariant reviewable together. */
-import { Effect, Schema } from "effect"
+import { Effect, Match, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
   IntegrationTarget,
-  PlannedAttemptExecutorResult,
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
@@ -83,7 +82,14 @@ export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
 export const AuthoredPlannedAttemptExecutorReport = Schema.TaggedUnion({
   Running: { attemptId: AttemptId },
   SafelySuspended: { attemptId: AttemptId },
-  Terminal: { attemptId: AttemptId, result: PlannedAttemptExecutorResult }
+  Terminal: {
+    attemptId: AttemptId,
+    result: Schema.TaggedUnion({
+      Accepted: { acceptedResult: Schema.Struct({ commit: GitCommitSha }) },
+      Completed: {},
+      Failed: {}
+    })
+  }
 })
 export type AuthoredPlannedAttemptExecutorReport = typeof AuthoredPlannedAttemptExecutorReport.Type
 
@@ -245,6 +251,22 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   CompletionClaimReadReturned: { claim: Schema.Literals(["Active", "Completion"]), taskId: TaskId },
   /** The tracker applied replacement of the active claim with the exact completion claim. */
   CompletionClaimReplacementApplied: { taskId: TaskId },
+  /** One all-or-nothing task-local lifecycle, prerequisite, membership, revision, and claim read. */
+  CompletionTaskFocusedReadReturned: {
+    lifecycle: Schema.Literals(["Open", "CompletedSuccessfully", "TerminalWithoutSuccess"]),
+    taskId: TaskId,
+    unfinishedPrerequisiteTaskIds: Schema.Array(TaskId)
+  },
+  /** The tracker returned or lost the direct response to exact request Q. */
+  CompletionTaskRequestReturned: {
+    outcome: Schema.Literals(["Acknowledged", "DefinitelyRejected", "ResponseLost"]),
+    taskId: TaskId
+  },
+  /** The tracker classified exact request Q after an ambiguous response. */
+  CompletionTaskRequestLookupReturned: {
+    outcome: Schema.Literals(["Applied", "NotApplied", "Unreadable"]),
+    taskId: TaskId
+  },
   /** Harness synchronization: hold this exact admitted continuation before its durable executor command intent. */
   DalphHoldsAdmittedContinuationBeforeExecutorIntent: { attemptId: AttemptId, taskId: TaskId },
   DalphSelects: { operation: AuthoredCassetteDecision },
@@ -401,6 +423,9 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CompletionClaimDeletionApplied",
     "CompletionClaimReadReturned",
     "CompletionClaimReplacementApplied",
+    "CompletionTaskFocusedReadReturned",
+    "CompletionTaskRequestLookupReturned",
+    "CompletionTaskRequestReturned",
     "TaskClaimReadFailed",
     "TaskClaimCurrentReadReturned",
     "TaskClaimReadReturned",
@@ -451,6 +476,7 @@ const AuthoredImplementationIssue = Schema.NonEmptyString.pipe(Schema.brand("Aut
  */
 const AuthoredTrackerSuccessIntent = Schema.TaggedUnion({
   DalphDeliveryDemonstrated: { taskId: TaskId },
+  DalphDeliveryInProgress: { taskId: TaskId },
   DalphDeliveryTargetPending: { blockingIssue: AuthoredImplementationIssue, taskId: TaskId },
   TrackerSuccessSuppliedOutsideDalph: { taskId: TaskId }
 })
@@ -661,19 +687,40 @@ const completionFinalityIssue = (
   const replacementIndex = cassette.story.findIndex(
     (item) => item._tag === "CompletionClaimReplacementApplied" && item.taskId === taskId
   )
-  const successfulGraphIndex = cassette.story.findIndex(
+  const authorizationReadIndex = cassette.story.findIndex(
     (item, index) =>
       index > replacementIndex &&
-      (item._tag === "TrackerGraphReadReturned" || item._tag === "RunActivationFinalTrackerGraphReadReturned") &&
-      item.graph.tasks.some((task) => task.id === taskId && task.lifecycle._tag === "CompletedSuccessfully")
+      item._tag === "CompletionTaskFocusedReadReturned" &&
+      item.taskId === taskId &&
+      item.lifecycle === "Open"
+  )
+  const completionRequestIndex = cassette.story.findIndex(
+    (item, index) =>
+      index > authorizationReadIndex &&
+      item._tag === "CompletionTaskRequestReturned" &&
+      item.taskId === taskId &&
+      item.outcome !== "DefinitelyRejected"
+  )
+  const successfulFocusedReadIndex = cassette.story.findIndex(
+    (item, index) =>
+      index > completionRequestIndex &&
+      item._tag === "CompletionTaskFocusedReadReturned" &&
+      item.taskId === taskId &&
+      item.lifecycle === "CompletedSuccessfully"
   )
   const deletionIndex = cassette.story.findIndex(
     (item, index) =>
-      index > successfulGraphIndex && item._tag === "CompletionClaimDeletionApplied" && item.taskId === taskId
+      index > successfulFocusedReadIndex && item._tag === "CompletionClaimDeletionApplied" && item.taskId === taskId
   )
-  return replacementIndex >= 0 && successfulGraphIndex >= 0 && deletionIndex >= 0
+  return [
+    replacementIndex,
+    authorizationReadIndex,
+    completionRequestIndex,
+    successfulFocusedReadIndex,
+    deletionIndex
+  ].every((index) => index >= 0)
     ? undefined
-    : `complete graph delivery requires promotion-bound completion finality for task ${taskId}`
+    : `complete graph delivery requires promotion-bound completion, focused tracker success, and claim finality for task ${taskId}`
 }
 
 type CompleteGraphTaskScope =
@@ -778,50 +825,94 @@ const successfulGraphTaskIdsObservedIn = (cassette: typeof AuthoredScenarioCasse
   )
 ]
 
+type AuthoredTrackerSuccessIntent = Extract<
+  AuthoredCassetteDeliveryScope,
+  { readonly _tag: "FocusedWorkflowSlice" }
+>["trackerSuccessIntents"][number]
+
+const trackerSuccessClassificationIssue = (
+  intentTaskIds: ReadonlyArray<TaskId>,
+  successfulTaskIds: ReadonlyArray<TaskId>
+): string | undefined => {
+  if (new Set(intentTaskIds).size !== intentTaskIds.length) {
+    return "a focused cassette must classify each tracker-successful task once"
+  }
+  const classificationsAreExact = [
+    intentTaskIds.length === successfulTaskIds.length,
+    intentTaskIds.every((taskId) => successfulTaskIds.includes(taskId))
+  ].every(Boolean)
+  if (classificationsAreExact) return undefined
+  const missingTaskIds = successfulTaskIds.filter((taskId) => !intentTaskIds.includes(taskId))
+  const unexpectedTaskIds = intentTaskIds.filter((taskId) => !successfulTaskIds.includes(taskId))
+  return `a focused cassette must explicitly classify every tracker-successful task; missing ${JSON.stringify(
+    missingTaskIds
+  )}, unexpected ${JSON.stringify(unexpectedTaskIds)}`
+}
+
+const trackerSuccessIntentIsInvalid = (
+  cassette: typeof AuthoredScenarioCassetteShape.Type,
+  intent: AuthoredTrackerSuccessIntent,
+  acceptedResults: ReadonlyArray<AcceptedTaskWorkResult>,
+  orchestration: ExpectedAuthoredBehavior["orchestration"],
+  integrationTarget: IntegrationTarget
+): boolean => {
+  const acceptedResult = acceptedResults.find(({ taskId }) => taskId === intent.taskId)
+  const exactIntegrationIsPresent =
+    acceptedResult !== undefined &&
+    orchestration !== null &&
+    exactDeliveryEvidenceIssue(intent.taskId, acceptedResult.commit, orchestration, integrationTarget) === undefined
+  const finalityIsComplete = completionFinalityIssue(cassette, intent.taskId) === undefined
+  return Match.value(intent).pipe(
+    Match.tagsExhaustive({
+      DalphDeliveryDemonstrated: () => !exactIntegrationIsPresent || !finalityIsComplete,
+      DalphDeliveryInProgress: () => !exactIntegrationIsPresent || finalityIsComplete,
+      DalphDeliveryTargetPending: () => acceptedResult !== undefined,
+      TrackerSuccessSuppliedOutsideDalph: () => acceptedResult !== undefined
+    })
+  )
+}
+
+const invalidTrackerSuccessIntentIssue = (cassetteName: string, intent: AuthoredTrackerSuccessIntent): string =>
+  Match.value(intent).pipe(
+    Match.tagsExhaustive({
+      DalphDeliveryDemonstrated: ({ taskId }) =>
+        `focused cassette ${JSON.stringify(cassetteName)} task ${taskId} claims Dalph delivery without its exact integration and finality chain`,
+      DalphDeliveryInProgress: ({ taskId }) =>
+        `focused cassette ${JSON.stringify(cassetteName)} task ${taskId} claims in-progress Dalph delivery without exact integration or after finality is already complete`,
+      DalphDeliveryTargetPending: ({ taskId }) =>
+        `focused cassette ${JSON.stringify(cassetteName)} task ${taskId} has an accepted Dalph result and cannot be classified as DalphDeliveryTargetPending`,
+      TrackerSuccessSuppliedOutsideDalph: ({ taskId }) =>
+        `focused cassette ${JSON.stringify(cassetteName)} task ${taskId} has an accepted Dalph result and cannot be classified as TrackerSuccessSuppliedOutsideDalph`
+    })
+  )
+
 const focusedTrackerSuccessIntentsAreExact = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
     if (cassette.deliveryScope._tag !== "FocusedWorkflowSlice") return undefined
     const intents = cassette.deliveryScope.trackerSuccessIntents
     const intentTaskIds = intents.map(({ taskId }) => taskId)
-    if (new Set(intentTaskIds).size !== intentTaskIds.length) {
-      return "a focused cassette must classify each tracker-successful task once"
-    }
+    const classificationIssue = trackerSuccessClassificationIssue(
+      intentTaskIds,
+      successfulGraphTaskIdsObservedIn(cassette)
+    )
+    if (classificationIssue !== undefined) return classificationIssue
     const expected = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(
       cassette.story.at(terminalStoryItemOffset)
     )
-    const successfulTasks = successfulGraphTaskIdsObservedIn(cassette)
-    const classificationsAreExact = [
-      intentTaskIds.length === successfulTasks.length,
-      intentTaskIds.every((taskId) => successfulTasks.includes(taskId))
-    ].every(Boolean)
-    if (!classificationsAreExact) {
-      return "a focused cassette must explicitly classify every tracker-successful task"
-    }
     const acceptedResults = expected.taskWork.results.filter(
       (result): result is AcceptedTaskWorkResult => result._tag === "PlannedWorkForTaskAccepted"
     )
     const runCoordinator = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.RunCoordinator)(cassette.story[1])
-    const invalidIntent = intents.find((intent) => {
-      const acceptedResult = acceptedResults.find(({ taskId }) => taskId === intent.taskId)
-      if (intent._tag !== "DalphDeliveryDemonstrated") return acceptedResult !== undefined
-      return (
-        acceptedResult === undefined ||
-        expected.orchestration === null ||
-        exactDeliveryEvidenceIssue(
-          intent.taskId,
-          acceptedResult.commit,
-          expected.orchestration,
-          runCoordinator.integrationTarget
-        ) !== undefined ||
-        completionFinalityIssue(cassette, intent.taskId) !== undefined
+    const invalidIntent = intents.find((intent) =>
+      trackerSuccessIntentIsInvalid(
+        cassette,
+        intent,
+        acceptedResults,
+        expected.orchestration,
+        runCoordinator.integrationTarget
       )
-    })
-    if (invalidIntent?._tag === "DalphDeliveryDemonstrated") {
-      return `focused cassette task ${invalidIntent.taskId} claims Dalph delivery without its exact integration and finality chain`
-    }
-    return invalidIntent === undefined
-      ? undefined
-      : `focused cassette task ${invalidIntent.taskId} has an accepted Dalph result and cannot be classified as ${invalidIntent._tag}`
+    )
+    return invalidIntent === undefined ? undefined : invalidTrackerSuccessIntentIssue(cassette.name, invalidIntent)
   }
 )
 
@@ -956,11 +1047,11 @@ const completionFinalityStoryIsComplete = Schema.makeFilter((cassette: typeof Au
             ? "Replace"
             : "Delete"
       )
-    return JSON.stringify(actualSteps) !== JSON.stringify(expectedSteps)
+    return actualSteps.some((step, index) => step !== expectedSteps[index]) || actualSteps.length > expectedSteps.length
   })?.[0]
   return incompleteTaskId === undefined
     ? undefined
-    : `authored completion finality for ${incompleteTaskId} must read Active, replace, read Completion, and delete exactly once in order`
+    : `authored completion finality for ${incompleteTaskId} must be an exact prefix of read Active, replace, read Completion, and delete`
 })
 
 const heldPauseOffset = 1

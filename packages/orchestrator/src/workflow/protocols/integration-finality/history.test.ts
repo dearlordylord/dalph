@@ -1,5 +1,5 @@
 import { expect, it } from "vitest"
-import { RunId, TaskId } from "@dalph/contracts"
+import { RunId } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { outcomeRecordKey, targetPromotionObservedSuccessRecordKey } from "../../../workflow-journal/record-key.js"
@@ -13,6 +13,9 @@ import {
   CompletionClaimReplacementAttemptIntendedEvent,
   CompletionClaimReplacementIntendedEvent,
   CompletionClaimRequestOrdinal,
+  CompletionTaskClaim,
+  CompletionTaskIntendedEvent,
+  completionTaskRequestFor,
   IntegrationFinalitySettledEvent
 } from "./events.js"
 import {
@@ -21,18 +24,15 @@ import {
   makeIntegrationFinalityHistoryIndexes,
   validateIntegrationFinalityHistoryRecord
 } from "./history.js"
-import { deriveIntegrationFinalityStateFor, latestFreshCompletedTaskObservationFor } from "./state.js"
+import { deriveIntegrationFinalityStateFor, latestFocusedCompletedTaskObservationFor } from "./state.js"
 import { integrationFinalityFixture as fixture, prerequisiteRecordEvents } from "./fixtures.js"
-import { makeTaskAttemptPlanOperation, makeTrackerGraphObservationOperation } from "../../registry/operation.js"
-import { TaskAttemptPlannedEvent } from "../../registry/event.js"
-import { makeTaskTrackerFactsObservedFromRead } from "../task-tracker-read/protocol.js"
+import { makeCompletionTaskFactsObservationOperation, makeTaskAttemptPlanOperation } from "../../registry/operation.js"
+import { taskTrackerReadIntent, TaskAttemptPlannedEvent } from "../../registry/event.js"
 import { journaledIntegrationEvidenceOf } from "../../../coordination/delivery/delivery-evidence.js"
 import {
-  FocusedTaskClaimFactsObserved,
-  TaskTrackerFactsObservedEvent,
-  UnchangedTaskTrackerFactsReconfirmed
+  makeFocusedTaskCompletionFactsObserved,
+  taskTrackerFactsObservedEvent
 } from "../../task-tracker-facts/observation.js"
-import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 
 const replacementOperationId = OperationId.make("history-replacement-operation")
 const deletionOperationId = OperationId.make("history-deletion-operation")
@@ -44,7 +44,7 @@ const record = (position: number, event: JournalRecord["event"], key = `history:
   runId: fixture.runId
 })
 
-const successObservation = { ...fixture.successObservation, observedAt: JournalPosition.make(7) }
+const successObservation = { ...fixture.successObservation, observedAt: JournalPosition.make(9) }
 
 const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
   const promotion = record(
@@ -77,9 +77,14 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
       version: workflowJournalEventVersion
     })
   )
-  const graph = record(7, fixture.graphRecordEvent, outcomeRecordKey(fixture.graphOperation.operationId))
+  const completionIntent = record(
+    7,
+    CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
+  )
+  const focusedIntent = record(8, fixture.focusedSuccessFactsReadIntentEvent)
+  const focusedFacts = record(9, fixture.focusedSuccessFactsEvent)
   const deletionIntent = record(
-    8,
+    10,
     CompletionClaimDeletionIntendedEvent.make({
       claim: fixture.claim,
       operationId: deletionOperationId,
@@ -88,7 +93,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const deletionAttempt = record(
-    9,
+    11,
     CompletionClaimDeletionAttemptIntendedEvent.make({
       attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
       claim: fixture.claim,
@@ -98,7 +103,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const deleted = record(
-    10,
+    12,
     CompletionClaimDeletedEvent.make({
       claim: fixture.claim,
       operationId: deletionOperationId,
@@ -107,7 +112,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const settled = record(
-    11,
+    13,
     IntegrationFinalitySettledEvent.make({
       claim: fixture.claim,
       deletionOperationId,
@@ -123,7 +128,9 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     replacementIntent,
     replacementAttempt,
     replacement,
-    graph,
+    completionIntent,
+    focusedIntent,
+    focusedFacts,
     deletionIntent,
     deletionAttempt,
     deleted,
@@ -160,15 +167,15 @@ it("projects each phase from exact stored evidence without rescanning authority 
   const records = validFinalityRecords()
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 4), fixture.claim)?._tag).toBe("ReplacementPending")
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 6), fixture.claim)?._tag).toBe("CompletionClaimReplaced")
-  expect(deriveIntegrationFinalityStateFor(records.slice(0, 8), fixture.claim)?._tag).toBe("DeletionPending")
-  expect(deriveIntegrationFinalityStateFor(records.slice(0, 10), fixture.claim)?._tag).toBe("CompletionClaimDeleted")
+  expect(deriveIntegrationFinalityStateFor(records.slice(0, 10), fixture.claim)?._tag).toBe("DeletionPending")
+  expect(deriveIntegrationFinalityStateFor(records.slice(0, 12), fixture.claim)?._tag).toBe("CompletionClaimDeleted")
   expect(deriveIntegrationFinalityStateFor(records, fixture.claim)?._tag).toBe("IntegrationFinalitySettled")
 })
 
 it("does not settle from a terminal occurrence with different operation evidence", () => {
   const records = validFinalityRecords()
   const mismatchedSettlement = record(
-    11,
+    13,
     IntegrationFinalitySettledEvent.make({
       claim: fixture.claim,
       deletionOperationId: OperationId.make("foreign-deletion-operation"),
@@ -177,233 +184,145 @@ it("does not settle from a terminal occurrence with different operation evidence
       version: workflowJournalEventVersion
     })
   )
-  expect(deriveIntegrationFinalityStateFor([...records.slice(0, 10), mismatchedSettlement], fixture.claim)?._tag).toBe(
+  expect(deriveIntegrationFinalityStateFor([...records.slice(0, 12), mismatchedSettlement], fixture.claim)?._tag).toBe(
     "CompletionClaimDeleted"
   )
 })
 
-it("returns an exact success proof from a valid unchanged tracker reconfirmation", () => {
-  const laterOperation = makeTrackerGraphObservationOperation(
-    OperationId.make("integration-finality-reconfirmation"),
-    fixture.target,
-    [fixture.graphOperation.operationId],
-    [fixture.taskId]
-  )
-  const reconfirmation = makeTaskTrackerFactsObservedFromRead(
-    [{ event: fixture.graphRecordEvent }],
-    laterOperation,
-    fixture.graphSnapshot
-  )
-  const proof = latestFreshCompletedTaskObservationFor(
-    [record(2, fixture.graphRecordEvent), record(3, reconfirmation)],
-    fixture.taskId,
-    JournalPosition.make(1)
-  )
-  expect(proof).toEqual({
-    lifecycle: "CompletedSuccessfully",
-    observedAt: JournalPosition.make(3),
-    operationId: laterOperation.operationId,
-    taskId: fixture.taskId,
-    trackerRevision: fixture.trackerRevision
-  })
+it("uses only the exact focused task-local success as cleanup authority", () => {
+  const records = validFinalityRecords()
   expect(
-    latestFreshCompletedTaskObservationFor(
-      [record(2, fixture.graphRecordEvent), record(3, reconfirmation)],
-      TaskId.make("foreign-reconfirmed-task"),
-      JournalPosition.make(1)
+    latestFocusedCompletedTaskObservationFor(records, fixture.taskId, JournalPosition.make(6), fixture.claim)
+  ).toEqual(successObservation)
+  expect(
+    latestFocusedCompletedTaskObservationFor(
+      records.filter(({ event }) => event._tag !== "CompletionTaskIntended"),
+      fixture.taskId,
+      JournalPosition.make(6),
+      fixture.claim
     )
   ).toBeUndefined()
 })
 
-it("validates deletion from an exact unchanged tracker reconfirmation and rejects an ungrounded one", () => {
-  const laterOperation = makeTrackerGraphObservationOperation(
-    OperationId.make("integration-finality-history-reconfirmation"),
-    fixture.target,
-    [fixture.graphOperation.operationId],
-    [fixture.taskId]
-  )
-  const reconfirmation = makeTaskTrackerFactsObservedFromRead(
-    [{ event: fixture.graphRecordEvent }],
-    laterOperation,
-    fixture.graphSnapshot
-  )
-  const proof = { ...successObservation, observedAt: JournalPosition.make(8), operationId: laterOperation.operationId }
+it("does not treat a later complete graph as cleanup authority", () => {
   const prefix = validFinalityRecords().slice(0, 6)
-  expect(
-    validationErrors([
-      ...prefix,
-      record(7, fixture.graphRecordEvent),
-      record(8, reconfirmation),
-      deletionIntentRecord(9, proof)
-    ])
-  ).toEqual([])
-  expect(validationErrors([...prefix, record(8, reconfirmation), deletionIntentRecord(9, proof)])).toHaveLength(1)
-})
-
-it("rejects a focused claim read or mismatched reconfirmation as task-success proof", () => {
-  const prefix = validFinalityRecords().slice(0, 6)
-  const focusedOperationId = OperationId.make("integration-finality-focused-claim")
-  const focused = TaskTrackerFactsObservedEvent.make({
-    observation: FocusedTaskClaimFactsObserved.make({
-      completeness: "Complete",
-      consistency: "Atomic",
-      coverage: { taskId: fixture.taskId },
-      freshness: { _tag: "ObservedDuringLogicalRead", operationId: focusedOperationId },
-      observation: fixture.activeClaim,
-      operationId: focusedOperationId,
-      target: fixture.target
-    }),
-    operationId: focusedOperationId,
-    version: workflowJournalEventVersion
-  })
-  const focusedProof = { ...successObservation, observedAt: JournalPosition.make(7), operationId: focusedOperationId }
-  expect(validationErrors([...prefix, record(7, focused), deletionIntentRecord(8, focusedProof)])).toHaveLength(1)
-
-  const laterOperation = makeTrackerGraphObservationOperation(
-    OperationId.make("integration-finality-mismatched-reconfirmation"),
-    fixture.target,
-    [fixture.graphOperation.operationId],
-    [fixture.taskId]
-  )
-  const baseReconfirmation = makeTaskTrackerFactsObservedFromRead(
-    [{ event: fixture.graphRecordEvent }],
-    laterOperation,
-    fixture.graphSnapshot
-  )
-  if (baseReconfirmation.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed") {
-    return expect.fail("fixture must produce unchanged tracker facts")
-  }
-  const [identities, lifecycles, prerequisites, groupings, membership] = baseReconfirmation.observation.factFamilies
-  const differentRevision = TrackerRevision.make("different-finality-revision")
-  const mismatchedObservation = UnchangedTaskTrackerFactsReconfirmed.make({
-    ...baseReconfirmation.observation,
-    factFamilies: [
-      { ...identities, contentIdentity: differentRevision },
-      { ...lifecycles, contentIdentity: differentRevision },
-      { ...prerequisites, contentIdentity: differentRevision },
-      { ...groupings, contentIdentity: differentRevision },
-      { ...membership, contentIdentity: differentRevision }
-    ],
-    priorFullObservationOperationId: focusedOperationId
-  })
-  const mismatchedReconfirmation = TaskTrackerFactsObservedEvent.make({
-    ...baseReconfirmation,
-    observation: mismatchedObservation
-  })
-  const reconfirmedProof = {
+  const graphShapedFocusedProof = {
     ...successObservation,
-    observedAt: JournalPosition.make(8),
-    operationId: laterOperation.operationId
+    observedAt: JournalPosition.make(7),
+    operationId: fixture.graphOperation.operationId
   }
   expect(
     validationErrors([
       ...prefix,
-      record(7, focused),
-      record(8, mismatchedReconfirmation),
-      deletionIntentRecord(9, reconfirmedProof)
+      record(7, fixture.graphRecordEvent, outcomeRecordKey(fixture.graphOperation.operationId)),
+      deletionIntentRecord(8, graphShapedFocusedProof)
     ])
   ).toHaveLength(1)
   expect(
-    latestFreshCompletedTaskObservationFor(
-      [
-        record(7, fixture.graphRecordEvent),
-        record(
-          8,
-          TaskTrackerFactsObservedEvent.make({
-            ...mismatchedReconfirmation,
-            observation: UnchangedTaskTrackerFactsReconfirmed.make({
-              ...mismatchedObservation,
-              priorFullObservationOperationId: fixture.graphOperation.operationId
-            })
-          })
-        )
-      ],
+    latestFocusedCompletedTaskObservationFor(
+      [...prefix, record(7, fixture.graphRecordEvent)],
       fixture.taskId,
-      JournalPosition.make(6)
-    )?.operationId
-  ).toBe(fixture.graphOperation.operationId)
+      JournalPosition.make(6),
+      fixture.claim
+    )
+  ).toBeUndefined()
 })
 
-it("rejects deletion proofs that point at no read or at a mismatched graph operation", () => {
+it("accepts exact successful focused facts directly and rejects a cleanup proof without them", () => {
   const prefix = validFinalityRecords().slice(0, 6)
-  const absentProof = { ...successObservation, observedAt: JournalPosition.make(7) }
-  const mismatchedGraph = {
-    ...fixture.graphRecordEvent,
-    operationId: OperationId.make("history-mismatched-outer-operation")
-  } as JournalRecord["event"]
-  expect(validationErrors([...prefix, deletionIntentRecord(8, absentProof)])).toHaveLength(1)
-  expect(validationErrors([...prefix, record(7, mismatchedGraph), deletionIntentRecord(8, absentProof)])).toHaveLength(
-    1
-  )
-})
-
-it("does not accept a graph payload whose outer operation differs from its fact operation", () => {
-  const forged: unknown = { ...fixture.graphRecordEvent, operationId: OperationId.make("forged-outer-operation") }
+  expect(validationErrors([...prefix, deletionIntentRecord(8, successObservation)])).toHaveLength(1)
   expect(
-    latestFreshCompletedTaskObservationFor(
-      [{ event: forged, position: JournalPosition.make(2) }],
-      fixture.taskId,
-      JournalPosition.make(1)
-    )
-  ).toBeUndefined()
+    validationErrors([
+      ...prefix,
+      record(
+        7,
+        CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
+      ),
+      record(8, fixture.focusedSuccessFactsReadIntentEvent),
+      record(9, fixture.focusedSuccessFactsEvent),
+      deletionIntentRecord(10, successObservation)
+    ])
+  ).toEqual([])
 })
 
-it("rejects stale, unrelated, incomplete, and ungrounded tracker success observations", () => {
-  const laterOperation = makeTrackerGraphObservationOperation(
-    OperationId.make("integration-finality-invalid-reconfirmation"),
+it("rejects every cleanup and settlement occurrence whose success binds a different same-task claim", () => {
+  const records = validFinalityRecords()
+  const foreignClaim = CompletionTaskClaim.make({
+    ...fixture.claim,
+    originalClaim: { ...fixture.activeClaim, operationId: OperationId.make("history-foreign-same-task-claim") }
+  })
+  const foreignRequest = completionTaskRequestFor(foreignClaim)
+  const foreignOperation = makeCompletionTaskFactsObservationOperation(
+    foreignRequest,
     fixture.target,
-    [fixture.graphOperation.operationId],
-    [fixture.taskId]
+    fixture.focusedSuccessFactsEvent.observation.purpose
   )
-  const reconfirmation = makeTaskTrackerFactsObservedFromRead(
-    [{ event: fixture.graphRecordEvent }],
-    laterOperation,
-    fixture.graphSnapshot
+  const foreignRequestIntent = record(
+    7,
+    CompletionTaskIntendedEvent.make({ request: foreignRequest, version: workflowJournalEventVersion })
   )
-  const foreignTaskId = TaskId.make("foreign-finality-task")
-  const malformedReconfirmation = {
-    ...reconfirmation,
-    observation: {
-      ...reconfirmation.observation,
-      priorFullObservationOperationId: OperationId.make("missing-prior-full-observation")
-    }
+  const foreignIntent = record(8, taskTrackerReadIntent(foreignOperation))
+  const foreignObservation = makeFocusedTaskCompletionFactsObserved(foreignOperation, {
+    ...fixture.focusedSuccessFactsEvent.observation.facts,
+    currentClaim: foreignClaim,
+    operationId: foreignOperation.operationId
+  })
+  const foreignFocusedSuccess = record(
+    9,
+    taskTrackerFactsObservedEvent(foreignOperation.operationId, foreignObservation)
+  )
+  const foreignSuccessObservation = {
+    ...successObservation,
+    claim: foreignClaim,
+    observedAt: JournalPosition.make(9),
+    operationId: foreignOperation.operationId
   }
+  const mismatchedIntent = record(
+    10,
+    CompletionClaimDeletionIntendedEvent.make({
+      claim: fixture.claim,
+      operationId: deletionOperationId,
+      successObservation: foreignSuccessObservation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const mismatchedAttempt = record(
+    11,
+    CompletionClaimDeletionAttemptIntendedEvent.make({
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+      claim: fixture.claim,
+      operationId: deletionOperationId,
+      successObservation: foreignSuccessObservation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const mismatchedDeleted = record(
+    12,
+    CompletionClaimDeletedEvent.make({
+      claim: fixture.claim,
+      operationId: deletionOperationId,
+      successObservation: foreignSuccessObservation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const mismatchedSettlement = record(
+    13,
+    IntegrationFinalitySettledEvent.make({
+      claim: fixture.claim,
+      deletionOperationId,
+      replacementOperationId,
+      successObservation: foreignSuccessObservation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const prefix = [...records.slice(0, 6), foreignRequestIntent, foreignIntent, foreignFocusedSuccess]
 
+  expect(validationErrors([...prefix, mismatchedIntent])).toHaveLength(1)
+  expect(validationErrors([...prefix, mismatchedIntent, mismatchedAttempt])).toHaveLength(2)
+  expect(validationErrors([...prefix, mismatchedIntent, mismatchedAttempt, mismatchedDeleted])).toHaveLength(3)
   expect(
-    latestFreshCompletedTaskObservationFor(
-      [{ event: { _tag: "Other" }, position: JournalPosition.make(2) }],
-      fixture.taskId,
-      JournalPosition.make(1)
-    )
-  ).toBeUndefined()
-  expect(
-    latestFreshCompletedTaskObservationFor(
-      [record(1, fixture.graphRecordEvent)],
-      fixture.taskId,
-      JournalPosition.make(1)
-    )
-  ).toBeUndefined()
-  expect(
-    latestFreshCompletedTaskObservationFor(
-      [record(2, fixture.graphRecordEvent)],
-      foreignTaskId,
-      JournalPosition.make(1)
-    )
-  ).toBeUndefined()
-  expect(
-    latestFreshCompletedTaskObservationFor(
-      [record(2, malformedReconfirmation as JournalRecord["event"])],
-      fixture.taskId,
-      JournalPosition.make(1)
-    )
-  ).toBeUndefined()
-  expect(
-    latestFreshCompletedTaskObservationFor(
-      [record(1, fixture.graphRecordEvent), record(2, reconfirmation)],
-      fixture.taskId,
-      JournalPosition.make(2)
-    )
-  ).toBeUndefined()
+    validationErrors([...prefix, mismatchedIntent, mismatchedAttempt, mismatchedDeleted, mismatchedSettlement])
+  ).toHaveLength(4)
 })
 
 it("rejects a fourth replacement or deletion request beyond the production bound", () => {
@@ -428,7 +347,7 @@ it("rejects a fourth replacement or deletion request beyond the production bound
     })
   )
   expect(validationErrors([...records.slice(0, 5), replacementAttempt])).toHaveLength(1)
-  expect(validationErrors([...records.slice(0, 9), deletionAttempt])).toHaveLength(1)
+  expect(validationErrors([...records.slice(0, 10), deletionAttempt])).toHaveLength(1)
 })
 
 it("rejects deletion intent without an earlier replacement and fresh successful graph observation", () => {
@@ -485,7 +404,7 @@ it("rejects duplicate terminal outcomes and settlement without exact deletion pr
   expect(validationErrors([...records, duplicateSettlement])).toHaveLength(1)
   expect(
     validationErrors([
-      ...records.slice(0, 10),
+      ...records.slice(0, 11),
       record(
         11,
         IntegrationFinalitySettledEvent.make({
@@ -551,4 +470,29 @@ it("reports exact run binding and semantic issues through the reconstruction cal
   )
   expect(acceptedIdentities).toEqual([])
   expect(acceptedSemantics).toEqual([])
+
+  const completionIntent = record(
+    1,
+    CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
+  )
+  const completionIdentities: Array<string> = []
+  const completionSemantics: Array<string> = []
+  validateIntegrationFinalityHistoryRecord(
+    completionIntent,
+    fixture.runId,
+    [completionIntent],
+    makeIntegrationFinalityHistoryIndexes(),
+    (detail) => completionIdentities.push(detail),
+    (detail) => completionSemantics.push(detail)
+  )
+  expect(completionSemantics).toContainEqual(expect.stringContaining("lacks one exact prior claim replacement"))
+  validateIntegrationFinalityHistoryRecord(
+    { ...completionIntent, runId: RunId.make("foreign-completion-run") },
+    RunId.make("foreign-completion-run"),
+    [completionIntent],
+    makeIntegrationFinalityHistoryIndexes(),
+    (detail) => completionIdentities.push(detail),
+    (detail) => completionSemantics.push(detail)
+  )
+  expect(completionIdentities).toContainEqual(expect.stringContaining("binds another Run"))
 })

@@ -34,7 +34,7 @@ export type CompletionClaimProtocolTerminalExpectation = typeof CompletionClaimP
 export const CompletionClaimProtocolStoryItem = Schema.TaggedUnion({
   AwaitSettlement: { expected: CompletionClaimProtocolTerminalExpectation },
   ObserveEmptyFrontier: {},
-  RecordFreshSuccess: {},
+  ObserveFocusedTaskCompletionSuccess: {},
   RestartDeletion: {},
   RestartReplacement: {},
   RunDeletion: {},
@@ -71,18 +71,31 @@ const isReplacementStep = (item: CompletionClaimProtocolStoryItem): boolean =>
 const isDeletionStep = (item: CompletionClaimProtocolStoryItem): boolean =>
   item._tag === "RunDeletion" || item._tag === "RestartDeletion"
 
+const orderingIssueForStoryItem = (
+  item: CompletionClaimProtocolStoryItem,
+  replacementStarted: boolean,
+  focusedSuccessRecorded: boolean
+): string | undefined => {
+  if (item._tag === "ObserveFocusedTaskCompletionSuccess" && !replacementStarted) {
+    return "focused task-completion observation requires the completion-claim replacement first"
+  }
+  if (isDeletionStep(item) && !focusedSuccessRecorded) {
+    return "completion-claim deletion requires a recorded focused task success"
+  }
+  if (isDeletionStep(item) && !replacementStarted) {
+    return "completion-claim deletion requires the replacement protocol first"
+  }
+  return undefined
+}
+
 const storyOrderingIssue = (story: ReadonlyArray<CompletionClaimProtocolStoryItem>): string | undefined => {
-  let freshSuccessRecorded = false
+  let focusedSuccessRecorded = false
   let replacementStarted = false
   for (const item of story) {
     if (isReplacementStep(item)) replacementStarted = true
-    if (item._tag === "RecordFreshSuccess") freshSuccessRecorded = true
-    if (isDeletionStep(item) && !freshSuccessRecorded) {
-      return "completion-claim deletion requires a recorded fresh tracker success"
-    }
-    if (isDeletionStep(item) && !replacementStarted) {
-      return "completion-claim deletion requires the replacement protocol first"
-    }
+    const issue = orderingIssueForStoryItem(item, replacementStarted, focusedSuccessRecorded)
+    if (issue !== undefined) return issue
+    if (item._tag === "ObserveFocusedTaskCompletionSuccess") focusedSuccessRecorded = true
   }
   return undefined
 }
@@ -139,10 +152,16 @@ const completionSettlementStory = (
   readCalls = expected.readCalls
 ): ReadonlyArray<CompletionClaimProtocolStoryItem> => [
   CompletionClaimProtocolStoryItem.cases.RunReplacement.make({}),
-  CompletionClaimProtocolStoryItem.cases.RecordFreshSuccess.make({}),
+  CompletionClaimProtocolStoryItem.cases.ObserveFocusedTaskCompletionSuccess.make({}),
   CompletionClaimProtocolStoryItem.cases.RunDeletion.make({}),
   CompletionClaimProtocolStoryItem.cases.AwaitSettlement.make({ expected: { ...expected, readCalls } })
 ]
+
+const focusedSuccessJournalTags = [
+  "CompletionTaskIntended",
+  "TaskTrackerReadIntentRecorded",
+  "TaskTrackerFactsObserved"
+] as const
 
 const successfulSettlementExpectation: CompletionClaimProtocolTerminalExpectation = {
   deletionCalls: 1,
@@ -150,8 +169,7 @@ const successfulSettlementExpectation: CompletionClaimProtocolTerminalExpectatio
   journalTags: [
     "CompletionClaimReplacementIntended",
     "CompletionClaimReplaced",
-    "TaskTrackerReadIntentRecorded",
-    "TaskTrackerFactsObserved",
+    ...focusedSuccessJournalTags,
     "CompletionClaimDeletionIntended",
     "CompletionClaimDeletionAttemptIntended",
     "CompletionClaimDeleted",
@@ -221,14 +239,14 @@ export const doesNotMutateAForeignClaimWhileSettlingAPromotedTask = IntegrationF
   ]
 })
 
-export const deletesOnlyTheExactCompletionClaimAfterFreshTrackerSuccess = IntegrationFinalityProtocolCassette.make({
+export const deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess = IntegrationFinalityProtocolCassette.make({
   boundaryResults: [
     CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
     CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
     CompletionClaimBoundaryResult.cases.DeletionApplied.make({})
   ],
   initialClaim: "Completion",
-  name: "deletes only the exact completion claim after fresh tracker success",
+  name: "deletes only the exact completion claim after focused task success",
   story: completionSettlementStory(successfulSettlementExpectation)
 })
 
@@ -243,7 +261,7 @@ export const reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess = Int
   name: "reconciles a lost completion-claim deletion without reopening success",
   story: [
     CompletionClaimProtocolStoryItem.cases.RunReplacement.make({}),
-    CompletionClaimProtocolStoryItem.cases.RecordFreshSuccess.make({}),
+    CompletionClaimProtocolStoryItem.cases.ObserveFocusedTaskCompletionSuccess.make({}),
     CompletionClaimProtocolStoryItem.cases.RestartDeletion.make({}),
     CompletionClaimProtocolStoryItem.cases.AwaitSettlement.make({
       expected: { ...successfulSettlementExpectation, readCalls: reconciledDeletionReadCalls }
@@ -283,8 +301,7 @@ export const keepsSuccessfulWorkFinalWhenTheCompletionClaimCannotBeReadBeforeDel
       journalTags: [
         "CompletionClaimReplacementIntended",
         "CompletionClaimReplaced",
-        "TaskTrackerReadIntentRecorded",
-        "TaskTrackerFactsObserved",
+        ...focusedSuccessJournalTags,
         "CompletionClaimDeletionIntended"
       ],
       readCalls: 2,
@@ -298,8 +315,7 @@ const deletionCannotConvergeExpectation: CompletionClaimProtocolTerminalExpectat
   journalTags: [
     "CompletionClaimReplacementIntended",
     "CompletionClaimReplaced",
-    "TaskTrackerReadIntentRecorded",
-    "TaskTrackerFactsObserved",
+    ...focusedSuccessJournalTags,
     "CompletionClaimDeletionIntended",
     "CompletionClaimDeletionAttemptIntended",
     "CompletionClaimDeletionAttemptIntended",
@@ -352,7 +368,7 @@ export const maintainedIntegrationFinalityProtocolCassetteCatalog = {
   restartAfterPromotionResumesCompletionSettlementWithoutAnotherIntegrationAgent,
   reconcilesALostCompletionClaimReplacementWithoutAllocatingAnotherClaim,
   doesNotMutateAForeignClaimWhileSettlingAPromotedTask,
-  deletesOnlyTheExactCompletionClaimAfterFreshTrackerSuccess,
+  deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
   reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess,
   waitsWithoutReplacingWhenTheCurrentCompletionClaimCannotBeRead,
   keepsSuccessfulWorkFinalWhenTheCompletionClaimCannotBeReadBeforeDeletion,

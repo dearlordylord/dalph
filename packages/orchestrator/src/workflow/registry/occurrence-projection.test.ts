@@ -1,9 +1,9 @@
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
+import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { it } from "@effect/vitest"
 import {
   plannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorReport,
-  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -97,6 +97,7 @@ import {
   TaskClaimReacquisitionDirectedEvent,
   TaskClaimReacquisitionRequestId
 } from "../protocols/task-claim-reacquisition/events.js"
+import { integrationFinalityFixture } from "../protocols/integration-finality/fixtures.js"
 
 const runId = RunId.make("occurrence-run")
 const operation = makeTrackerGraphObservationOperation(
@@ -113,7 +114,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   taskRevision: TaskRevision.make("occurrence-revision"),
   worktree: WorktreeLocator.make("/worktrees/occurrence-attempt")
 })
-const acceptedResult = AcceptedResult.make({ commit: GitCommitSha.make("a".repeat(40)) })
+const acceptedResult = acceptedResultFixture(GitCommitSha.make("a".repeat(40)))
 const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repo/.git"),
   ref: IntegrationTargetRef.make("refs/heads/master")
@@ -171,7 +172,7 @@ it("projects both integration actions and rejects every inexact start relationsh
     { ...started, runId: RunId.make("other-run") },
     { ...started, recordedAt: JournalPosition.make(1) },
     { ...started, plannedAttempt: { ...started.plannedAttempt, attemptId: AttemptId.make("other-attempt") } },
-    { ...started, acceptedResult: AcceptedResult.make({ commit: GitCommitSha.make("b".repeat(40)) }) },
+    { ...started, acceptedResult: acceptedResultFixture(GitCommitSha.make("b".repeat(40))) },
     {
       ...started,
       integrationTarget: IntegrationTarget.make({
@@ -270,6 +271,37 @@ it.effect("classifies an initiated tracker read separately from its observed res
     const observed = projection.occurrences.at(1)
     if (observed === undefined) throw new Error("expected the tracker observation occurrence")
     expect("initiatedBy" in observed).toBe(false)
+  })
+)
+
+it.effect("projects focused completion facts as one canonical tracker read and its exact observation", () =>
+  Effect.gen(function* () {
+    const projection = yield* projectWorkflowOccurrences([
+      record(1, integrationFinalityFixture.focusedSuccessFactsReadIntentEvent),
+      record(2, integrationFinalityFixture.focusedSuccessFactsEvent)
+    ])
+
+    expect(projection.occurrences).toMatchObject([
+      {
+        _tag: "TaskTrackerReadInitiated",
+        occurrenceClassification: "InitiatedAction",
+        operation: { _tag: "ReadCompletionTaskFacts" }
+      },
+      {
+        _tag: "TaskTrackerFactsObserved",
+        evidence: { _tag: "FocusedTaskCompletionFacts" },
+        occurrenceClassification: "NonActionOccurrence"
+      }
+    ])
+    const observed = projection.occurrences.at(1)
+    if (observed?._tag !== "TaskTrackerFactsObserved") throw new Error("expected focused tracker facts")
+    expect(Option.getOrThrow(originatingActionForTrackerObservation(projection, observed))).toMatchObject({
+      _tag: "TaskTrackerReadInitiated",
+      operation: {
+        _tag: "ReadCompletionTaskFacts",
+        operationId: integrationFinalityFixture.focusedSuccessFactsEvent.operationId
+      }
+    })
   })
 )
 

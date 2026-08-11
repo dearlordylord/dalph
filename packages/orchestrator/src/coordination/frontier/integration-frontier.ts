@@ -58,6 +58,7 @@ export interface IntegrationFrontierRuntimeFacts {
   readonly taskClaimAuthorityByAttemptId: ReadonlyMap<AttemptId, CurrentTaskClaimAuthority>
   readonly activeClaimByAttemptId?: ReadonlyMap<AttemptId, ActiveTaskClaim>
   readonly integrationFinalityConfigured?: boolean
+  readonly completionTaskConfigured?: boolean
 }
 
 const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {

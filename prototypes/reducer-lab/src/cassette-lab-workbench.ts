@@ -2,6 +2,7 @@ import type { AuthoredDeliveryFrame } from "../../../packages/dalph/src/cassette
 import type { AttemptId } from "../../../packages/contracts/src/planned-attempt.ts"
 import { TaskId } from "../../../packages/contracts/src/task-identity.ts"
 import type { RunId } from "../../../packages/contracts/src/workflow-identity.ts"
+import { Match } from "effect"
 import {
   deliveryGraphEncoding,
   deliveryGraphInterpretationNotes,
@@ -970,11 +971,11 @@ const renderTimeline = (
     // Necessary imperative island: browsers drop focus when a focused button
     // becomes disabled. The pure update emits this command only at that edge.
     for (const command of commands) {
-      switch (command._tag) {
-        case "FocusDeliveryPlaybackControls":
-          controls.focus({ preventScroll: true })
-          break
-      }
+      Match.value(command).pipe(
+        Match.tagsExhaustive({
+          FocusDeliveryPlaybackControls: () => controls.focus({ preventScroll: true })
+        })
+      )
     }
   }
 
@@ -986,13 +987,13 @@ const renderTimeline = (
 
   follow.addEventListener("click", () => dispatchPlayback(FollowLiveRequested()))
   previous.addEventListener("click", () =>
-    dispatchPlayback(PreviousFrameRequested()))
+    dispatchPlayback(PreviousFrameRequested({ source: "PlaybackControl" })))
   next.addEventListener("click", () =>
-    dispatchPlayback(NextFrameRequested()))
+    dispatchPlayback(NextFrameRequested({ source: "PlaybackControl" })))
   previousLandmark.addEventListener("click", () =>
-    dispatchPlayback(PreviousLandmarkRequested()))
+    dispatchPlayback(PreviousLandmarkRequested({ source: "PlaybackControl" })))
   nextLandmark.addEventListener("click", () =>
-    dispatchPlayback(NextLandmarkRequested()))
+    dispatchPlayback(NextLandmarkRequested({ source: "PlaybackControl" })))
   select.addEventListener("change", () =>
     dispatchPlayback(ExactFrameSelected({ frameIndex: DeliveryFrameIndex.make(Number(select.value)) })))
   const keyboardSurface = parent.closest<HTMLElement>("[data-role='delivery-workbench']") ?? parent

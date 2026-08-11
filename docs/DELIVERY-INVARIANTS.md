@@ -493,6 +493,42 @@ fresh choice.
 tests reach exact redelivery, conflicting reuse, both race winners, and the new
 fingerprint choice; matching production cassette tests use those same cases.
 
+## Application Exit
+
+**Accepted, not yet implemented.** Issue 169 specifies the application-level
+cutoff and drain. Its focused model and production-backed adapter are required
+before these invariants describe shipped behavior.
+
+**D50 Exit closes forward-progress admission exactly once.** Accepting the
+first graceful application Exit request and closing the process-wide admission
+gate are one indivisible decision. Admission permission and live-owner
+registration cannot straddle that cutoff. Later requests join the same drain
+without resetting its clock; only enumerated fast Exit-drain actions may begin
+afterward.
+→ `applicationExit` must state cutoff uniqueness, no later forward owner,
+joined-request result agreement, and monotonic non-resetting ticks.
+
+**D51 Successful Exit proves recoverability, not work completion.** Success
+requires every running executor attempt to have an exact correlated safe-or-
+terminal report, every produced journal write to be acknowledged, and every
+process-local owner, reservation, fiber, task-work position, and coordinator
+lock to be released. An ambiguous outside effect may remain only behind its
+acknowledged exact intent and with no local owner able to send a successor.
+Exit never starts an LLM request, fresh reconciliation, stabilization,
+durable-resource cleanup, attempt replacement, or Run termination.
+→ `applicationExit` must state the typed owner-disposition and success guards;
+`plannedAttemptExecutor` retains exact suspension and position-release proof.
+
+**D52 Exit lifecycle is not Run workflow history.** Exit request, result,
+failure, timeout, signal, and process death are never appended to a Run journal
+or restored as an application mode. A conclusive failure force-terminates
+nonzero after useful quick drain work settles. The fifth monotonic drain tick
+force-terminates unresolved work nonzero. Neither path proves safe suspension,
+an outside result, cleanup disposition, Pause, cancellation, or Run
+termination; later startup uses ordinary Run establishment and reconciliation.
+→ `applicationExit` must state lifecycle non-persistence and forced-termination
+non-inference; `runActivation` retains ordinary process-loss reopening.
+
 ## Open questions
 
 Items below are unresolved and must not be read as settled behavior.

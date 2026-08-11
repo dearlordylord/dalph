@@ -7,15 +7,25 @@ import {
   CompletionClaimDeletionRequest,
   CompletionClaimReplacementFailure,
   CompletionTaskClaim,
+  CompletionTaskAuthorizationReadOrdinal,
+  CompletionTaskConfirmationReadOrdinal,
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskRequestOrdinal,
+  CompletionTaskRequest,
+  completionSuccessObservationEquals,
   completionClaimDeletionRequestFor,
   completionClaimReplacementRequestFor,
-  controlledCompletionClaimBoundaryLayerFrom
+  completionTaskFocusedReadPurposeEquals,
+  FocusedCompletedTaskObservation,
+  FocusedTaskCompletionFacts
 } from "./events.js"
+import { controlledCompletionClaimBoundaryLayerFrom } from "./controlled-boundaries.js"
 import { integrationFinalityFixture as fixture } from "./fixtures.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
+import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { OperationId } from "../../identity.js"
-import { TaskId } from "@dalph/contracts"
+import { EvidenceDigest, TaskId, TaskRevision } from "@dalph/contracts"
 
 const useBoundary = <A, E>(
   initial: ReadonlyArray<
@@ -38,6 +48,21 @@ it("uses stable default operation identities for replacement and deletion reques
   ).toBe("custom-deletion")
 })
 
+it("preserves focused completion evidence when constructing a deletion request", () => {
+  const focused = FocusedCompletedTaskObservation.make({
+    claim: fixture.claim,
+    lifecycle: "CompletedSuccessfully",
+    observedAt: fixture.successObservation.observedAt,
+    operationId: fixture.successObservation.operationId,
+    taskId: fixture.taskId,
+    taskRevision: fixture.plannedAttempt.taskRevision,
+    trackerRevision: fixture.trackerRevision,
+    target: fixture.target
+  })
+
+  expect(completionClaimDeletionRequestFor(fixture.claim, focused).successObservation).toEqual(focused)
+})
+
 it("rejects completion claims and deletion proofs that bind a different task", () => {
   const foreignTaskId = TaskId.make("foreign-finality-schema-task")
   expect(
@@ -52,6 +77,126 @@ it("rejects completion claims and deletion proofs that bind a different task", (
       successObservation: { ...fixture.successObservation, taskId: foreignTaskId }
     })
   ).toBe(false)
+})
+
+it("rejects a deletion proof bound to a different completion claim for the same task", () => {
+  const foreignActiveClaim = ActiveTaskClaim.make({
+    ...fixture.activeClaim,
+    operationId: OperationId.make("foreign-same-task-deletion-proof"),
+    owner: ClaimOwner.make("dalph:foreign-same-task-deletion-proof"),
+    token: ClaimToken.make("foreign-same-task-deletion-proof-token")
+  })
+  const foreignCompletionClaim = CompletionTaskClaim.make({ ...fixture.claim, originalClaim: foreignActiveClaim })
+  const foreignSuccessObservation = FocusedCompletedTaskObservation.make({
+    ...fixture.successObservation,
+    claim: foreignCompletionClaim
+  })
+
+  expect(
+    Schema.is(CompletionClaimDeletionRequest)({
+      ...completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation),
+      successObservation: foreignSuccessObservation
+    })
+  ).toBe(false)
+})
+
+it("rejects a completion claim whose evidence references differ from its promotion", () => {
+  const foreignManifest = { ...fixture.claim.acceptanceManifest, digest: EvidenceDigest.make("f".repeat(64)) }
+
+  expect(Schema.is(CompletionTaskClaim)({ ...fixture.claim, acceptanceManifest: foreignManifest })).toBe(false)
+  expect(Schema.is(CompletionTaskClaim)({ ...fixture.claim, integrationReviewManifest: foreignManifest })).toBe(false)
+  expect(Schema.is(CompletionTaskClaim)({ ...fixture.claim, verificationManifest: foreignManifest })).toBe(false)
+})
+
+it("rejects Q field substitution and compares every focused cleanup-proof identity", () => {
+  const foreignManifest = { ...fixture.claim.acceptanceManifest, digest: EvidenceDigest.make("e".repeat(64)) }
+  expect(Schema.is(CompletionTaskRequest)({ ...fixture.completionRequest, acceptanceManifest: foreignManifest })).toBe(
+    false
+  )
+  expect(
+    Schema.is(CompletionTaskRequest)({
+      ...fixture.completionRequest,
+      operationId: OperationId.make("forged-completion-request")
+    })
+  ).toBe(false)
+  expect(completionSuccessObservationEquals(fixture.successObservation, fixture.successObservation)).toBe(true)
+  expect(
+    completionSuccessObservationEquals(fixture.successObservation, {
+      ...fixture.successObservation,
+      taskId: TaskId.make("foreign-cleanup-proof-task")
+    })
+  ).toBe(false)
+  expect(
+    completionSuccessObservationEquals(fixture.successObservation, {
+      ...fixture.successObservation,
+      trackerRevision: TrackerRevision.make("foreign-cleanup-proof-revision")
+    })
+  ).toBe(false)
+})
+
+it("rejects focused success that names another task or task revision", () => {
+  const focused = FocusedCompletedTaskObservation.make({
+    claim: fixture.claim,
+    lifecycle: "CompletedSuccessfully",
+    observedAt: fixture.successObservation.observedAt,
+    operationId: fixture.successObservation.operationId,
+    taskId: fixture.taskId,
+    taskRevision: fixture.plannedAttempt.taskRevision,
+    trackerRevision: fixture.trackerRevision,
+    target: fixture.target
+  })
+
+  expect(
+    Schema.is(FocusedCompletedTaskObservation)({ ...focused, taskId: TaskId.make("foreign-focused-success-task") })
+  ).toBe(false)
+  expect(
+    Schema.is(FocusedCompletedTaskObservation)({
+      ...focused,
+      taskRevision: TaskRevision.make("foreign-focused-success-revision")
+    })
+  ).toBe(false)
+})
+
+it("represents target membership and non-membership as complete focused facts", () => {
+  expect(Schema.is(FocusedTaskCompletionFacts)(fixture.focusedSuccessFactsEvent.observation.facts)).toBe(true)
+  expect(
+    Schema.is(FocusedTaskCompletionFacts)({
+      ...fixture.focusedSuccessFactsEvent.observation.facts,
+      targetMembership: "NotMember"
+    })
+  ).toBe(true)
+})
+
+it("compares focused read purposes exhaustively by variant and ordinal", () => {
+  const first = CompletionTaskRequestOrdinal.make(1)
+  const second = CompletionTaskRequestOrdinal.make(2)
+  const firstAuthorization = CompletionTaskAuthorizationReadOrdinal.make(1)
+  const authorization = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+    attemptOrdinal: first,
+    authorizationOrdinal: firstAuthorization
+  })
+  const sameAuthorization = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+    attemptOrdinal: first,
+    authorizationOrdinal: firstAuthorization
+  })
+  const laterAuthorization = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+    attemptOrdinal: second,
+    authorizationOrdinal: firstAuthorization
+  })
+  const confirmation = CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
+    attemptOrdinal: first,
+    confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(1)
+  })
+  const sameConfirmation = CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
+    attemptOrdinal: first,
+    confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(1)
+  })
+
+  expect(completionTaskFocusedReadPurposeEquals(authorization, sameAuthorization)).toBe(true)
+  expect(completionTaskFocusedReadPurposeEquals(authorization, laterAuthorization)).toBe(false)
+  expect(completionTaskFocusedReadPurposeEquals(authorization, confirmation)).toBe(false)
+  expect(completionTaskFocusedReadPurposeEquals(confirmation, sameConfirmation)).toBe(true)
+  expect(completionTaskFocusedReadPurposeEquals(confirmation, authorization)).toBe(false)
 })
 
 effectIt.effect("fails closed for absent or foreign claims and preserves exact boundary ownership", () =>
@@ -86,9 +231,12 @@ effectIt.effect("fails closed for absent or foreign claims and preserves exact b
     expect(foreignReplacement).toBeInstanceOf(CompletionClaimReplacementFailure)
 
     const foreignClaim = CompletionTaskClaim.make({
+      acceptanceManifest: fixture.claim.acceptanceManifest,
+      integrationReviewManifest: fixture.claim.integrationReviewManifest,
       originalClaim: foreignActive,
       plannedAttempt: fixture.plannedAttempt,
-      promotionCorrelation: fixture.promotionCorrelation
+      promotionCorrelation: fixture.promotionCorrelation,
+      verificationManifest: fixture.claim.verificationManifest
     })
     const deletion = completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation)
     const foreignDeletion = yield* Effect.flip(

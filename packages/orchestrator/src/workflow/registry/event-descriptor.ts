@@ -54,6 +54,15 @@ import {
   completionClaimDeletionAttemptIntentRecordKey,
   completionClaimDeletedRecordKey,
   integrationFinalitySettledRecordKey,
+  completionTaskAcknowledgedRecordKey,
+  completionTaskAttemptIntentRecordKey,
+  completionTaskCandidateAncestryObservedRecordKey,
+  completionTaskCandidateAncestryReadIntentRecordKey,
+  completionTaskIntentRecordKey,
+  completionTaskRequestLookupIntentRecordKey,
+  completionTaskRequestLookupRecordKey,
+  completionTaskRejectedRecordKey,
+  completionTaskResponseLostRecordKey,
   plannedAttemptContinuationAuthorizedRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
@@ -396,6 +405,42 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     IntegrationFinalitySettled: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integrationFinalitySettledRecordKey(event.claim.promotionCorrelation.requestId)
+    }),
+    CompletionTaskIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionTaskIntentRecordKey(event.request)
+    }),
+    CompletionTaskAttemptIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionTaskAttemptIntentRecordKey(event.request, event.attemptOrdinal)
+    }),
+    CompletionTaskAcknowledged: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionTaskAcknowledgedRecordKey(event.request)
+    }),
+    CompletionTaskResponseLost: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionTaskResponseLostRecordKey(event.request, event.attemptOrdinal)
+    }),
+    CompletionTaskRejected: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionTaskRejectedRecordKey(event.request, event.attemptOrdinal)
+    }),
+    CompletionTaskCandidateAncestryReadIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionTaskCandidateAncestryReadIntentRecordKey(event.operationId)
+    }),
+    CompletionTaskCandidateAncestryObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionTaskCandidateAncestryObservedRecordKey(event.operationId)
+    }),
+    CompletionTaskRequestLookupIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionTaskRequestLookupIntentRecordKey(event.request, event.attemptOrdinal)
+    }),
+    CompletionTaskRequestLookupObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionTaskRequestLookupRecordKey(event.request, event.attemptOrdinal)
     }),
     TaskTrackerReadIntentRecorded: (event) =>
       operationEvent({

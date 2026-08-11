@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect"
+import { Effect, Match, Option, Schema } from "effect"
 import { type AttemptId, type PlannedAttemptExecutorReport, type TaskId } from "@dalph/contracts"
 import { type JournalRecord } from "@dalph/orchestrator"
 import {
@@ -217,26 +217,25 @@ const isAuthoredExecutorEvidenceEvent = (event: JournalRecord["event"]): event i
   event._tag === "PlannedAttemptExecutorWorkReported" ||
   event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
 
-const executorOrchestrationEvidenceFor = (
-  event: AuthoredExecutorEvidenceEvent
-): ReadonlyArray<OrchestrationEvidence> => {
-  switch (event._tag) {
-    case "PlannedAttemptExecutorWorkResponsibilityBegan":
-      return [
+const executorOrchestrationEvidenceFor = (event: AuthoredExecutorEvidenceEvent): ReadonlyArray<OrchestrationEvidence> =>
+  Match.value(event).pipe(
+    Match.tagsExhaustive({
+      PlannedAttemptExecutorWorkResponsibilityBegan: (event): ReadonlyArray<OrchestrationEvidence> => [
         {
           _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
           attemptId: event.plannedAttempt.attemptId,
           taskId: event.plannedAttempt.taskId
         }
-      ]
-    case "PlannedAttemptExecutorWorkReported":
-      return [orchestrationReportEvidence(event.report)]
-    case "PlannedAttemptExecutorCommandProjectionObserved":
-      return event.observation._tag === "ExactExecutorReport"
-        ? [orchestrationProjectionEvidence(event.observation.report)]
-        : []
-  }
-}
+      ],
+      PlannedAttemptExecutorWorkReported: (event): ReadonlyArray<OrchestrationEvidence> => [
+        orchestrationReportEvidence(event.report)
+      ],
+      PlannedAttemptExecutorCommandProjectionObserved: (event): ReadonlyArray<OrchestrationEvidence> =>
+        event.observation._tag === "ExactExecutorReport"
+          ? [orchestrationProjectionEvidence(event.observation.report)]
+          : []
+    })
+  )
 
 const orchestrationEvidenceFor = (
   event: JournalRecord["event"],
@@ -302,9 +301,9 @@ const targetPromotionEvidenceFor = (
   const taskId = Option.getOrThrow(
     Option.fromUndefinedOr(taskByAttempt.get(event.correlation.candidateCorrelation.attemptId))
   )
-  switch (event._tag) {
-    case "TargetPromotionObservedSuccess":
-      return [
+  return Match.value(event).pipe(
+    Match.tagsExhaustive({
+      TargetPromotionObservedSuccess: (event): ReadonlyArray<OrchestrationEvidence> => [
         {
           _tag: "TargetPromotionSucceeded",
           basis: event.basis,
@@ -314,9 +313,8 @@ const targetPromotionEvidenceFor = (
           observation: event.observation._tag,
           taskId
         }
-      ]
-    case "TargetPromotionNonConvergence":
-      return [
+      ],
+      TargetPromotionNonConvergence: (event): ReadonlyArray<OrchestrationEvidence> => [
         {
           _tag: "TargetPromotionNonConvergent",
           attemptOrdinal: event.attemptOrdinal,
@@ -324,9 +322,8 @@ const targetPromotionEvidenceFor = (
           lastObservation: event.lastObservation._tag,
           taskId
         }
-      ]
-    case "TargetPromotionStale":
-      return [
+      ],
+      TargetPromotionStale: (event): ReadonlyArray<OrchestrationEvidence> => [
         {
           _tag: "TargetPromotionStale",
           basis: event.basis,
@@ -337,7 +334,8 @@ const targetPromotionEvidenceFor = (
           taskId
         }
       ]
-  }
+    })
+  )
 }
 
 const taskWorkResultFor = (

@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
+import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import {
-  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -645,7 +645,7 @@ it.effect("does not repeat one started-integration lineage read after only its c
       ref: IntegrationTargetRef.make("refs/heads/main")
     })
     const responsibility = StartedIntegrationResponsibility.make({
-      acceptedResult: AcceptedResult.make({ commit: GitCommitSha.make("3".repeat(40)) }),
+      acceptedResult: acceptedResultFixture(GitCommitSha.make("3".repeat(40))),
       integrationTarget,
       plannedAttempt,
       queuedAt: JournalPosition.make(70),
@@ -737,7 +737,7 @@ it.effect("runs a stopped-attempt claim read after the distinct continuation-cla
     })
     const trace = DeliverySemanticTrace.of({
       emit: (event) =>
-        event._tag === "ActionOutcome" && event.proposalId === continuation.id
+        event._tag === "ActionOutcome" && event.result.proposalId === continuation.id
           ? Deferred.succeed(continuationSettled, undefined)
           : Effect.void
     })
@@ -939,7 +939,7 @@ it.effect("starts one live action while its proposal remains present", () =>
         DeliverySemanticTrace,
         DeliverySemanticTrace.of({
           emit: (event) =>
-            event._tag === "ActionOutcome" && event.proposalId === persistent.id
+            event._tag === "ActionOutcome" && event.result.proposalId === persistent.id
               ? Deferred.succeed(settled, undefined)
               : Effect.void
         })
@@ -1461,49 +1461,120 @@ it.effect("fails closed when a later evaluation introduces conflicting ownership
   }).pipe(Effect.scoped)
 )
 
-it.effect("releases a deferred owner, runs unrelated work, and retries only after a newer accepted fact", () =>
-  Effect.gen(function* () {
-    const deferredProposal = proposal(0, TaskId.make("deferred-finality-task"))
-    const unrelatedProposal = proposal(1, TaskId.make("unrelated-runnable-task"))
-    const initial = withProposals(yield* baseEvaluation, [deferredProposal, unrelatedProposal], 2)
-    const dynamic = yield* dynamicEvaluationSignal(initial)
-    const firstDeferred = yield* Deferred.make<void>()
-    const secondDeferred = yield* Deferred.make<void>()
-    const unrelatedCompleted = yield* Deferred.make<void>()
-    const deferredCalls = yield* Ref.make(0)
-    const executor = DeliveryActionExecutor.of({
-      execute: (action) => {
-        if (action.proposal.id === deferredProposal.id) {
-          return Ref.updateAndGet(deferredCalls, (count) => count + 1).pipe(
-            Effect.tap((count) => Deferred.succeed(count === 1 ? firstDeferred : secondDeferred, undefined)),
-            Effect.as({
-              _tag: "ActionDeferred",
-              proposalId: action.proposal.id,
-              reason: "CompletionClaimConflict"
-            } satisfies DeliveryActionResult)
-          )
-        }
-        return dynamic
-          .publish(withProposals(initial, [deferredProposal], 2))
-          .pipe(
-            Effect.andThen(Deferred.succeed(unrelatedCompleted, undefined)),
+it.effect(
+  "reaches tracker reconfirmation after cleanup defers and retries cleanup only after newer accepted facts",
+  () =>
+    Effect.gen(function* () {
+      const deferredProposal = proposal(0, TaskId.make("deferred-finality-task"))
+      const unrelatedProposal = proposal(1, TaskId.make("unrelated-runnable-task"))
+      const projected = projectTrackerSnapshot({ revision: "deferred-cleanup-reconfirmation", tasks: [] })
+      if (projected._tag === "Invalid") return yield* Effect.die("empty reconfirmation graph must be valid")
+      const acceptedAt = JournalPosition.make(99)
+      const base = yield* baseEvaluation
+      const initial: DeliveryRuntimeEvaluation = {
+        ...withProposals(base, [deferredProposal, unrelatedProposal], 2),
+        acceptedAt,
+        current: {
+          ...base.current,
+          trackerGraph: TrackerGraphState.cases.GraphEstablished.make({
+            observation: makeTestJournaledTrackerGraphObservation({
+              operationId: OperationId.make("deferred-cleanup-reconfirmation"),
+              recordedAt: acceptedAt,
+              snapshot: projected.snapshot
+            })
+          })
+        },
+        quiescence: { _tag: "TrackerReconfirmationAllowed" }
+      }
+      const dynamic = yield* dynamicEvaluationSignal(initial)
+      const deferredCalls = yield* Ref.make(0)
+      const unrelatedCalls = yield* Ref.make(0)
+      const actionOutcomes = yield* Ref.make<ReadonlyArray<DeliveryActionResult>>([])
+      const executor = DeliveryActionExecutor.of({
+        execute: (action) => {
+          if (action.proposal.id === deferredProposal.id) {
+            return Effect.gen(function* () {
+              const count = yield* Ref.updateAndGet(deferredCalls, (count) => count + 1)
+              if (count === 1) {
+                return {
+                  _tag: "ActionDeferred",
+                  proposalId: action.proposal.id,
+                  reason: "CompletionClaimConflict"
+                } satisfies DeliveryActionResult
+              }
+              const current = yield* dynamic.get
+              yield* dynamic.publish({
+                ...current,
+                proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
+              })
+              return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+            })
+          }
+          return Ref.update(unrelatedCalls, (count) => count + 1).pipe(
+            Effect.andThen(
+              dynamic.publish({
+                ...initial,
+                proposedActions: {
+                  _tag: "DeliveryProposalsAvailable",
+                  isolatedIssues: [],
+                  proposals: [deferredProposal]
+                }
+              })
+            ),
             Effect.as({ _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult)
           )
-      }
-    })
-    const runtime = yield* runDeliveryRuntimeDecision(dynamic).pipe(
-      Effect.provide(identityLayers),
-      Effect.provideService(DeliveryActionExecutor, executor),
-      Effect.forkChild
-    )
-    yield* Deferred.await(firstDeferred)
-    yield* Deferred.await(unrelatedCompleted)
-    yield* Effect.yieldNow
-    expect(yield* Ref.get(deferredCalls)).toBe(1)
+        }
+      })
+      const trace = DeliverySemanticTrace.of({
+        emit: (event) =>
+          event._tag === "ActionOutcome"
+            ? Ref.update(actionOutcomes, (current) => [...current, event.result])
+            : Effect.void
+      })
 
-    yield* dynamic.publish({ ...withProposals(initial, [deferredProposal], 2), acceptedAt: JournalPosition.make(100) })
-    yield* Deferred.await(secondDeferred)
-    expect(yield* Ref.get(deferredCalls)).toBe(2)
-    yield* Fiber.interrupt(runtime)
-  }).pipe(Effect.scoped)
+      const firstQuiescence = yield* runDeliveryRuntimeQuiescence(dynamic).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(DeliverySemanticTrace, trace)
+      )
+      expect(firstQuiescence._tag).toBe("TrackerReconfirmationQuiescence")
+      expect(firstQuiescence.acceptedAt).toBe(acceptedAt)
+      expect(firstQuiescence.proposedActions.proposals).toEqual([])
+      expect(yield* Ref.get(deferredCalls)).toBe(1)
+      expect(yield* Ref.get(unrelatedCalls)).toBe(1)
+      expect(yield* Ref.get(actionOutcomes)).toContainEqual({
+        _tag: "ActionDeferred",
+        proposalId: deferredProposal.id,
+        reason: "CompletionClaimConflict"
+      })
+
+      const newerAcceptedAt = JournalPosition.make(100)
+      yield* dynamic.publish({
+        ...initial,
+        acceptedAt: newerAcceptedAt,
+        current: {
+          ...initial.current,
+          trackerGraph: TrackerGraphState.cases.GraphEstablished.make({
+            observation: makeTestJournaledTrackerGraphObservation({
+              operationId: OperationId.make("deferred-cleanup-reconfirmation-later-graph"),
+              recordedAt: newerAcceptedAt,
+              snapshot: projected.snapshot
+            })
+          })
+        },
+        proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [deferredProposal] }
+      })
+      const secondQuiescence = yield* runDeliveryRuntimeQuiescence(dynamic).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(DeliverySemanticTrace, trace)
+      )
+      if (secondQuiescence._tag !== "TrackerReconfirmationQuiescence") {
+        return expect.fail("the later complete graph must reach tracker reconfirmation quiescence")
+      }
+      expect(secondQuiescence.acceptedAt).toBe(newerAcceptedAt)
+      expect(secondQuiescence.current.trackerGraph.observation.recordedAt).toBe(newerAcceptedAt)
+      expect(yield* Ref.get(deferredCalls)).toBe(2)
+      expect(yield* Ref.get(unrelatedCalls)).toBe(1)
+    }).pipe(Effect.scoped)
 )

@@ -205,6 +205,7 @@ export {
   TaskClaimAcquisitionRejectedEvent,
   TaskClaimReleaseIntendedEvent,
   TaskClaimReleasedEvent,
+  TaskTrackerReadIntentRecordedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TaskWorkCapacityChangedEvent,
@@ -288,6 +289,7 @@ export * from "./workflow/protocols/target-promotion/protocol.js"
 export * from "./workflow/protocols/target-promotion/runtime.js"
 export { TargetPromotionRuntimeUnavailable } from "./coordination/delivery/target-promotion-boundary.js"
 export * from "./workflow/protocols/integration-finality/events.js"
+export * from "./workflow/protocols/integration-finality/completion-task-operation-identity.js"
 export * from "./workflow/protocols/integration-finality/protocol.js"
 export * from "./workflow/protocols/integration-finality/history.js"
 export * from "./workflow/protocols/integration-finality/state.js"
@@ -404,6 +406,27 @@ export { IntegrationCandidateBoundaryUnavailable } from "./coordination/delivery
 export { IntegrationFinalityRuntimeUnavailable } from "./coordination/delivery/integration-finality-boundary.js"
 export {
   CompletionClaimBoundary,
+  CompletionTaskBoundary,
+  CompletionTaskAcknowledgement,
+  CompletionTaskAcknowledgedEvent,
+  CompletionTaskAttemptIntendedEvent,
+  CompletionTaskIntendedEvent,
+  CompletionTaskRequest,
+  CompletionTaskRequestLookup,
+  CompletionTaskRequestLookupObservedEvent,
+  CompletionTaskRequestFailure,
+  CompletionTaskRequestLookupFailure,
+  FocusedTaskCompletionReadFailure,
+  CompletionTaskRequestOrdinal,
+  CompletionTaskAuthorizationReadOrdinal,
+  CompletionTaskConfirmationReadOrdinal,
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskResponseLostEvent,
+  FocusedCompletedTaskObservation,
+  FocusedTaskCompletionFacts,
+  CompletionSuccessObservation,
+  completionTaskRequestLimit,
+  CompletionTaskRequestLimit,
   CompletionClaimDeletedEvent,
   CompletionClaimDeletionAttemptIntendedEvent,
   CompletionClaimDeletionFailure,
@@ -418,7 +441,6 @@ export {
   CompletionClaimReplacementRequest,
   CompletionClaimRequestOrdinal,
   CompletionTaskClaim,
-  FreshCompletedTaskObservation,
   IntegrationFinalitySettledEvent,
   completionClaimDeletionOperationIdFor,
   completionClaimDeletionRequestFor,
@@ -426,22 +448,44 @@ export {
   completionClaimReplacementRequestFor,
   completionClaimRequestLimit,
   completionTaskClaimEquals,
-  controlledCompletionClaimBoundaryLayerFrom,
-  type CompletionClaimBoundaryService
+  completionTaskRequestFor,
+  type CompletionClaimBoundaryService,
+  type CompletionTaskBoundaryService
 } from "./workflow/protocols/integration-finality/events.js"
+export {
+  controlledCompletionClaimBoundaryLayer,
+  controlledCompletionClaimBoundaryLayerFrom,
+  controlledCompletionTaskBoundaryLayerFrom
+} from "./workflow/protocols/integration-finality/controlled-boundaries.js"
 export {
   CompletionClaimDidNotConverge,
   CompletionClaimPremiseContradiction,
   CompletionClaimPromotionRequired,
   CompletionClaimReplacementRequired,
-  FreshTrackerSuccessRequired,
+  FocusedTaskCompletionSuccessRequired,
   runCompletionClaimDeletionProtocol,
   runCompletionClaimReplacementProtocol
 } from "./workflow/protocols/integration-finality/protocol.js"
 export {
+  CompletionTaskAmbiguousWait,
+  CompletionTaskAuthorization,
+  CompletionTaskAuthorizationConflict,
+  CompletionTaskAuthorizationWait,
+  CompletionTaskConfirmationWait,
+  CompletionTaskConflictReason,
+  CompletionTaskDidNotConverge,
+  CompletionTaskPreconditionConflict,
+  authorizeCompletionTaskAttempt,
+  candidateAncestryFor,
+  readCompletionCandidateAncestry,
+  readCompletionFocusedFacts,
+  readCurrentCompletionConfirmation,
+  rereadCompletionEvidence,
+  runCompletionTaskProtocol
+} from "./workflow/protocols/integration-finality/completion-task-protocol.js"
+export {
   deriveIntegrationFinalityStateFor,
-  IntegrationFinalityState,
-  latestFreshCompletedTaskObservationFor
+  IntegrationFinalityState
 } from "./workflow/protocols/integration-finality/state.js"
 export { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "./coordination/reconstruction/state.js"
 export { authorizedClaimForAttempt, causalClaimForAttempt } from "./workflow/claim-authority-history.js"
@@ -546,6 +590,7 @@ export {
 } from "./workflow/protocols/worktree-reconciliation/protocol.js"
 export {
   causalGraphProjection,
+  makeCompletionTaskFactsObservationOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
