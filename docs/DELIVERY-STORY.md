@@ -5,19 +5,19 @@ makes each beat's arithmetic checkable. The story is chosen to touch as many of
 `docs/DELIVERY-INVARIANTS.md` as one chronology can.
 
 Both registers are prose. The maintained cassette
-`authored:deliveryInvariantStory` is the executable normal-delivery
-graph-and-restart target with the typed delivery scope
-`FocusedWorkflowSlice`: one real Run consumes the staggered
+`authored:deliveryInvariantStory` is an executable graph-and-restart chronology:
+one real Run consumes the staggered
 graph A → B+C → D → E+F → H+I → G with X added
 during process loss between A and G, and reconstructs the exact B and C
-task-work positions before newly observed X can use capacity. Its scope
-classifies A through I and X as normal Dalph delivery targets whose integration
-is not yet demonstrated. Issue #167 must replace those provisional
-tracker-success returns with integration and finality without changing the
-scenario's intent. The separate
+task-work positions before newly observed X can use capacity. Its executor
+returns are coarse `Completed` reports; later controlled tracker reads report
+task success, and the chronology contains no accepted-result integration.
+Issue #167 must replace that test seam with integration and finality without
+changing the graph scenario. The separate
 `authored:deliveryFinalitySpine` retains the real A promotion and
-completion-finality chronology while B remains open and tracker success for C
-through G is intentionally supplied outside Dalph. Neither cassette pretends to execute all 22
+completion-finality chronology while B remains open. Later graph answers report
+C through G successful, but that cassette contains no executor or integration
+chronology for those tasks. Neither cassette pretends to execute all 22
 beats below. The checked-in manifest maps every beat either to exact maintained
 evidence or to an explicit implementation gap. Repository tests fail when the
 document, manifest, catalog key, or cited evidence changes without the others.

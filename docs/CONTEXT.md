@@ -432,40 +432,6 @@ result, constructed candidate, request acknowledgement, or tracker command is
 not a delivery settlement.
 _Avoid_: Executor completion, integration candidate, tracker completion request
 
-**Authored tracker-success intent**:
-The schema-checked meaning that a focused authored cassette assigns to each
-task it later observes as tracker-successful. It does not change or reinterpret
-the tracker-owned lifecycle fact. It makes the cassette state whether the exact
-Dalph delivery chain is demonstrated, still in progress, a normal target owned
-by a numbered implementation issue, or deliberately supplied by another
-tracker client.
-_Avoid_: Inferred delivery, unclassified tracker success, presentation label
-
-**Dalph delivery demonstrated**:
-An authored tracker-success intent backed by one exact accepted-result,
-integration, verification, promotion, tracker-completion, and completion-
-finality chain for that task.
-_Avoid_: Coarse executor completion, tracker success alone, pending target
-
-**Dalph delivery in progress**:
-An authored tracker-success intent whose exact accepted-result integration
-chain exists but whose completion-finality boundary has not settled. It is not
-an outside completion and cannot claim complete delivery.
-_Avoid_: Dalph delivery demonstrated, tracker success supplied outside Dalph
-
-**Dalph delivery target pending**:
-An authored tracker-success intent for a normal Dalph delivery scenario whose
-missing task-specific production chain is owned by one exact repository issue.
-It keeps a provisional controlled tracker response visible without relabeling
-the scenario as outside completion or complete delivery.
-_Avoid_: Permanent third completion mode, outside completion, complete delivery
-
-**Tracker success supplied outside Dalph**:
-An authored tracker-success intent used only when the cassette chronology
-explicitly says a person or another tracker client completed that task. It is
-invalid once the cassette contains an accepted Dalph result for the task.
-_Avoid_: Normal delivery shortcut, unexplained tracker success, Dalph settlement
-
 **Potentially mixed-time task-graph read**:
 A normalized task-graph read result assembled without a provider guarantee that
 all covered facts share one revision or instant; different facts may reflect

@@ -510,55 +510,26 @@ worktree, and integration responsibilities. Terms such as
 `IdentityFreeWorkflowRoute` stay in the secondary exact JSON rather than
 becoming the human action label.
 
-The linked `authored:deliveryInvariantStory` is a focused scheduling and
-restart slice over the real production runtime, not the complete graph-delivery
-capstone owned by issue #167. Its typed delivery scope is
-`FocusedWorkflowSlice`. Every tracker-successful task has an explicit intent:
-A through I and X are the normal Dalph-delivery target, but the current cassette
-does not yet demonstrate their integration. The Lab shows that provisional
-status before execution, so a maintainer does not infer successful delivery
-from absent integration frames or mistake the current evidence for the finished
-normal path.
+The linked `authored:deliveryInvariantStory` is a scheduling and restart
+chronology over the real production runtime, not the complete graph-delivery
+capstone owned by issue #167. The Lab states the boundary calls that are and are
+not present, so a maintainer does not infer accepted-result integration from a
+later tracker lifecycle or mistake this chronology for the finished normal path.
 
 The controlled executor reports coarse `Completed` results without accepted
-commits. Later complete tracker reads provisionally report successful tasks;
-they prove tracker lifecycle and release dependants, but do not prove Dalph
-integrated those tasks and do not classify the intended normal path as external
-completion. No Git integration, verification, promotion, or
-completion-finality boundary is called in this slice. A coordinator crash does
-not change that scope: restart reconstructs exact executor-work responsibility,
-not integration responsibility. Replaying the cassette repeats the same
-controlled chronology and must not reinterpret tracker success as Dalph
-delivery.
+commits. Later complete tracker reads report successful tasks; they prove
+tracker lifecycle and release dependants, but do not prove Dalph integrated
+those tasks. The cassette does not state who changed those tracker lifecycles,
+so the reader must not invent an outside actor or a Dalph action. No Git
+integration, verification, promotion, or completion-finality boundary is called
+in this slice. A coordinator crash does not change those facts: restart
+reconstructs exact executor-work responsibility, not integration responsibility.
 
-The current returned tracker graphs are a provisional test seam, not the
-scenario's completion intent: they supply successful lifecycle facts so the
-production frontier can continue while issue #167 remains open. Each successful
-task is therefore classified as `DalphDeliveryTargetPending` with #167 as its
-blocking issue. Issue #167 must replace that substitution with accepted-result
-integration and finality for every task while preserving this cassette's normal
-delivery intent and graph identity.
-
-Every focused cassette classifies every tracker-successful task exactly once as
-`DalphDeliveryDemonstrated`, `DalphDeliveryInProgress`,
-`TrackerSuccessSuppliedOutsideDalph`, or `DalphDeliveryTargetPending`. An empty list explicitly means no task reaches
-tracker success in the chronology. Decoding fails for an omitted or duplicate
-task, outside completion backed by an accepted Dalph result, demonstrated Dalph
-delivery without the exact integration/finality chain, or a pending target that
-does not name its blocking issue. This prevents the presence or absence of the
-word “outside” in one cassette title from silently defining all other cassette
-intents.
-The blocking issue is a native repository issue locator written as `#` plus a
-positive integer; arbitrary prose cannot satisfy that boundary.
-
-If a maintainer authors a cassette with the typed delivery scope
-`CompleteGraphDelivery`, decoding fails unless every task ever observed in its
-tracker graphs reaches tracker success and has exactly one correlated accepted
-commit, attempt, integration target, candidate, verification, promotion, and
-completion-finality chain. A coarse `Completed` result or an outside tracker
-success cannot pass under that scope. The future issue #167 capstone must use
-this stricter scope; changing the present scope label alone is
-therefore a failing negative control rather than a way to upgrade the story.
+The returned successful tracker graphs are a test seam that lets the production
+frontier continue while issue #167 remains open. Issue #167 must replace that
+substitution with an accepted executor result and the real integration,
+verification, promotion, tracker-completion, and completion-finality calls for
+every task while preserving this graph and restart chronology.
 
 The focused slice's initial tracker graph is
 `A -> {B, C} -> D -> {E -> H, F -> I} -> G`, and capacity is two. Production
@@ -626,9 +597,8 @@ removed its tracker task, or draw an absent responsibility as if it were a
 current tracker node.
 
 The separate `authored:deliveryFinalitySpine` crosses the ordinary production
-completion-finality boundary for A while classifying A as demonstrated Dalph
-delivery, leaving B open, and classifying tracker success for C through G as
-intentionally supplied outside Dalph. After A's promotion, the controlled tracker returns
+completion-finality boundary for A while leaving B open. After A's promotion,
+the controlled tracker returns
 the exact active claim, applies the exact replacement, later publishes a
 complete successful graph, returns the exact completion claim, and applies its
 deletion. Dalph itself records `IntegrationFinalitySettled`; the next
@@ -636,7 +606,9 @@ production delivery publication contains the task-scoped settlement and its
 descriptive tracker reflection. The Lab does not call the direct protocol
 runner, append a settlement, or infer one from executor completion. Tracker
 lifecycle remains outside authority and exact Dalph settlements are counted
-separately.
+separately. Later graph answers report C through G successful, but this cassette
+contains no executor or integration chronology for those tasks and does not
+invent who changed them.
 
 The Lab must not project a frontier from declared input, fabricate a privately
 branded journaled graph observation, infer missing topology from durable task
@@ -738,8 +710,8 @@ task whose exact facts are correlated below.
   task-work or integration-target resource requirement, and live-operation
   wait when present while retaining the raw proposal separately.
 - `settles a promoted authored task through the real completion-claim boundary`
-  uses the positive `CompleteGraphDelivery` scope and checks the exact accepted
-  result, promotion, replacement intent/attempt/outcome, later fresh
+  checks the exact accepted result, promotion, replacement
+  intent/attempt/outcome, later fresh
   successful tracker observation, deletion intent/attempt/outcome, and
   `IntegrationFinalitySettled` order, plus a non-empty production settlement
   and tracker-reflection frame. It also proves the cassette does not fabricate
@@ -751,35 +723,6 @@ task whose exact facts are correlated below.
   → G position chronology. It requires a later successful tracker observation
   before each deeper admission and real executor responsibility plus terminal
   evidence for every task.
-- `rejects a complete graph delivery scope backed only by coarse executor completion`
-  changes only the linked cassette's typed delivery scope and proves schema
-  decoding fails before execution because its coarse results carry neither
-  accepted commits nor exact integration evidence.
-- `rejects a complete graph delivery scope when successful tracker tasks lack Dalph delivery evidence`
-  relabels the seven-task A-finality spine and proves outside tracker success for
-  C through G cannot stand in for their missing accepted-result and finality chains;
-  B remains open and is not part of that outside-completion claim.
-- `rejects a complete graph delivery scope before tracker success or exact finality`
-  checks complete delivery cannot omit orchestration evidence, cannot be claimed
-  without an observed graph task or before that task reaches tracker success,
-  and cannot omit the exact post-success completion-claim deletion response.
-- `rejects broken exact lineage in a complete graph delivery scope`
-  independently breaks the accepted commit, attempt, candidate, and integration
-  target edges, removes the task-to-attempt responsibility or terminal accepted
-  report, and duplicates a candidate stage. A two-task counterexample also tries
-  to assign both tasks the same AttemptId. Each malformed or ambiguous chain
-  fails schema decoding.
-- `requires focused cassettes to classify every tracker-success intent`
-  proves the ten-task graph classifies A through I and X as the normal Dalph
-  delivery target pending #167, the dependency-release slice classifies A as
-  the same normal delivery target pending #167, and an undeclared successful task
-  fails decoding.
-- `rejects contradictory tracker-success intents`
-  rejects duplicate task classifications, a classification without a successful
-  tracker observation, outside completion backed by an accepted Dalph result,
-  demonstrated delivery without the exact chain, in-progress delivery without
-  exact integration or after finality already completed, and a pending normal
-  target without its blocking issue or with a non-issue prose locator.
 - `preserves the double-diamond middle positions across coordinator restart`
   checks B and C hold exact task-work positions before process loss, the first
   later-activation publications retain the same Run and attempt correlations,

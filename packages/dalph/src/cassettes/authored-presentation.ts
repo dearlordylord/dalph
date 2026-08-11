@@ -1,51 +1,11 @@
 import { Match } from "effect"
 import type {
-  AuthoredCassetteDeliveryScope,
   AuthoredCassetteStoryItem,
   AuthoredOrchestrationEvidence,
   AuthoredProtocolEvidence,
   AuthoredScenarioCassette,
   AuthoredTaskWorkResult
 } from "./authored-domain.js"
-
-/** Human meaning of the typed delivery-evidence scope carried by one authored cassette. */
-export const renderAuthoredCassetteDeliveryScope = Match.type<AuthoredCassetteDeliveryScope>().pipe(
-  Match.tagsExhaustive({
-    FocusedWorkflowSlice: ({ trackerSuccessIntents }) => {
-      if (trackerSuccessIntents.length === 0) {
-        return "Focused workflow slice: only the named behavior is asserted; no task reaches tracker success in this chronology."
-      }
-      const demonstrated = trackerSuccessIntents.flatMap((intent) =>
-        intent._tag === "DalphDeliveryDemonstrated" ? [intent.taskId] : []
-      )
-      const inProgress = trackerSuccessIntents.flatMap((intent) =>
-        intent._tag === "DalphDeliveryInProgress" ? [intent.taskId] : []
-      )
-      const suppliedOutside = trackerSuccessIntents.flatMap((intent) =>
-        intent._tag === "TrackerSuccessSuppliedOutsideDalph" ? [intent.taskId] : []
-      )
-      const pending = trackerSuccessIntents.flatMap((intent) =>
-        intent._tag === "DalphDeliveryTargetPending" ? [`${intent.taskId} (blocked by ${intent.blockingIssue})`] : []
-      )
-      return [
-        demonstrated.length === 0 ? undefined : `Dalph delivery demonstrated: ${demonstrated.join(", ")}.`,
-        inProgress.length === 0
-          ? undefined
-          : `Dalph delivery in progress: ${inProgress.join(", ")}. Exact accepted-result integration is present, but completion finality is unfinished.`,
-        suppliedOutside.length === 0
-          ? undefined
-          : `Tracker success intentionally supplied outside Dalph: ${suppliedOutside.join(", ")}.`,
-        pending.length === 0
-          ? undefined
-          : `Normal Dalph delivery target not yet demonstrated: ${pending.join(", ")}. Current tracker success is a provisional test seam.`
-      ]
-        .filter((part) => part !== undefined)
-        .join(" ")
-    },
-    CompleteGraphDelivery: () =>
-      "Complete graph delivery: Dalph delivery is demonstrated for every observed graph task through one correlated accepted commit, attempt, integration, candidate, verification, promotion, and completion-finality chain."
-  })
-)
 
 /**
  * One authored boundary occurrence worth exposing as a delivery-playback

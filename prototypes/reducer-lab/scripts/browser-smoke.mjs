@@ -393,12 +393,8 @@ try {
   await page.reload({ waitUntil: "networkidle" })
   await selector.selectOption(linkedDeliveryStoryCassette)
   assert.match(
-    await page.locator("#selected-cassette .delivery-scope").textContent() ?? "",
-    /Normal Dalph delivery target not yet demonstrated: A \(blocked by #167\).*X \(blocked by #167\).*provisional test seam/u
-  )
-  assert.match(
     await page.locator("#selected-cassette .delivery-story-scope").textContent() ?? "",
-    /current trace provisionally supplies all ten tracker-success facts.*Issue #167 must replace that test seam with the intended integration and finality path/u
+    /Each executor returns coarse Terminal Completed.*later controlled tracker graphs report task success.*contains no accepted-result integration.*issue #167 owns replacing that test seam/u
   )
   await page.evaluate(() => {
     globalThis.__linkedDeliveryStoryTrace = []

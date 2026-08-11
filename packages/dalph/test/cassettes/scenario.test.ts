@@ -2240,7 +2240,6 @@ const completeSingletonDeliveryCassette = (() => {
   const settledGraph = { revision: "authored-finality-settled", tasks: [] } as const
   return Schema.decodeUnknownSync(AuthoredScenarioCassette)({
     ...promoted,
-    deliveryScope: { _tag: "CompleteGraphDelivery" as const },
     story: promoted.story.flatMap(
       (item): ReadonlyArray<unknown> =>
         item._tag !== "ExpectedBehavior"
@@ -2312,14 +2311,7 @@ it.effect("settles a promoted authored task through the real completion-claim bo
       ["CompletionTaskRequestReturned", "authored completion response returned B for A"]
     ] as const) {
       const hostile = yield* Effect.exit(
-        runAuthoredScenarioCassette({
-          ...completeSingletonDeliveryCassette,
-          deliveryScope: {
-            _tag: "FocusedWorkflowSlice",
-            trackerSuccessIntents: [{ _tag: "DalphDeliveryInProgress", taskId: "A" }]
-          },
-          story: withFirstMismatchedTask(tag)
-        })
+        runAuthoredScenarioCassette({ ...completeSingletonDeliveryCassette, story: withFirstMismatchedTask(tag) })
       )
       expect(Exit.isFailure(hostile)).toBe(true)
       if (Exit.isFailure(hostile)) expect(Cause.pretty(hostile.cause)).toContain(expected)
@@ -3715,11 +3707,7 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
     ]
     const changedMembership = {
       _tag: "AuthoredScenarioCassette",
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice",
-        trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
-      },
-      name: "an outside tracker-success refresh removes unstarted C and adds D",
+      name: "a later tracker-success refresh removes unstarted C and adds D",
       schemaVersion: 1,
       startingFacts: {
         executorWork: "NoPriorReport",
@@ -3895,425 +3883,6 @@ it.effect("keeps the maintained singleton Run active while its tracker task rema
     )
   })
 )
-
-it("rejects a complete graph delivery scope backed only by coarse executor completion", () => {
-  const storyWithClaimedEvidence = maintainedAuthoredCassetteCatalog.deliveryInvariantStory.story.map((item) =>
-    item._tag === "ExpectedBehavior" ? { ...item, orchestration: [], protocol: [] } : item
-  )
-  const claimedCompleteDelivery = {
-    ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
-    deliveryScope: { _tag: "CompleteGraphDelivery" },
-    story: storyWithClaimedEvidence
-  }
-
-  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(claimedCompleteDelivery)).toThrow(
-    "complete graph delivery requires one accepted commit for every observed tracker task"
-  )
-  expect(maintainedAuthoredCassetteCatalog.deliveryInvariantStory.deliveryScope).toEqual({
-    _tag: "FocusedWorkflowSlice",
-    trackerSuccessIntents: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X"].map((taskId) => ({
-      _tag: "DalphDeliveryTargetPending",
-      blockingIssue: "#167",
-      taskId
-    }))
-  })
-})
-
-it("requires focused cassettes to classify every tracker-success intent", () => {
-  expect(maintainedAuthoredCassetteCatalog.dependentTasksCompleteInOneRun.deliveryScope).toEqual({
-    _tag: "FocusedWorkflowSlice",
-    trackerSuccessIntents: [{ _tag: "DalphDeliveryTargetPending", blockingIssue: "#167", taskId: "A" }]
-  })
-  expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-      ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
-      deliveryScope: { _tag: "FocusedWorkflowSlice", trackerSuccessIntents: [] }
-    })
-  ).toThrow("a focused cassette must explicitly classify every tracker-successful task")
-})
-
-it("rejects contradictory tracker-success intents", () => {
-  const doubleDiamondIntents = maintainedAuthoredCassetteCatalog.deliveryInvariantStory.deliveryScope
-  if (doubleDiamondIntents._tag !== "FocusedWorkflowSlice") throw new Error("expected focused delivery scope")
-  expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-      ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice",
-        trackerSuccessIntents: [
-          ...doubleDiamondIntents.trackerSuccessIntents,
-          { _tag: "DalphDeliveryTargetPending", blockingIssue: "#167", taskId: "A" }
-        ]
-      }
-    })
-  ).toThrow("a focused cassette must classify each tracker-successful task once")
-
-  expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-      ...maintainedAuthoredCassetteCatalog.singletonTaskCompletes,
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice",
-        trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
-      }
-    })
-  ).toThrow("a focused cassette must explicitly classify every tracker-successful task")
-  expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-      ...completeSingletonDeliveryCassette,
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice",
-        trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
-      }
-    })
-  ).toThrow(/task A has an accepted Dalph result and cannot be classified as/u)
-
-  expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-      ...completeSingletonDeliveryCassette,
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice",
-        trackerSuccessIntents: [{ _tag: "DalphDeliveryTargetPending", blockingIssue: "#167", taskId: "A" }]
-      }
-    })
-  ).toThrow(/cannot be classified as DalphDeliveryTargetPending/u)
-
-  expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-      ...maintainedAuthoredCassetteCatalog.dependentTasksCompleteInOneRun,
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice",
-        trackerSuccessIntents: [{ _tag: "DalphDeliveryDemonstrated", taskId: "A" }]
-      }
-    })
-  ).toThrow(/task A claims Dalph delivery without its exact integration and finality chain/u)
-
-  for (const cassette of [
-    {
-      ...maintainedAuthoredCassetteCatalog.dependentTasksCompleteInOneRun,
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice" as const,
-        trackerSuccessIntents: [{ _tag: "DalphDeliveryInProgress" as const, taskId: "A" }]
-      }
-    },
-    {
-      ...completeSingletonDeliveryCassette,
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice" as const,
-        trackerSuccessIntents: [{ _tag: "DalphDeliveryInProgress" as const, taskId: "A" }]
-      }
-    }
-  ]) {
-    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(cassette)).toThrow(
-      /claims in-progress Dalph delivery without exact integration or after finality is already complete/u
-    )
-  }
-
-  expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-      ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice",
-        trackerSuccessIntents: doubleDiamondIntents.trackerSuccessIntents.map((intent) =>
-          intent.taskId === "A" ? { _tag: "DalphDeliveryTargetPending", taskId: "A" } : intent
-        )
-      }
-    })
-  ).toThrow()
-
-  expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-      ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice",
-        trackerSuccessIntents: doubleDiamondIntents.trackerSuccessIntents.map((intent) =>
-          intent.taskId === "A"
-            ? { _tag: "DalphDeliveryTargetPending", blockingIssue: "issue 167", taskId: "A" }
-            : intent
-        )
-      }
-    })
-  ).toThrow()
-
-  const acceptedResultStory = maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration.story
-  const lastGraphIndex = acceptedResultStory.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
-  const acceptedResultWithPrematureTrackerSuccess = {
-    ...maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration,
-    deliveryScope: {
-      _tag: "FocusedWorkflowSlice",
-      trackerSuccessIntents: [
-        { _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" },
-        { _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "C" }
-      ]
-    },
-    story: acceptedResultStory.map((item, index) =>
-      index === lastGraphIndex && item._tag === "TrackerGraphReadReturned"
-        ? {
-            ...item,
-            graph: {
-              ...item.graph,
-              tasks: item.graph.tasks.map((task) => ({ ...task, lifecycle: { _tag: "CompletedSuccessfully" } }))
-            }
-          }
-        : item
-    )
-  }
-  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(acceptedResultWithPrematureTrackerSuccess)).toThrow(
-    /task A has an accepted Dalph result and cannot be classified as/u
-  )
-})
-
-it("rejects a complete graph delivery scope when successful tracker tasks lack Dalph delivery evidence", () => {
-  const allTasksSuccessful = maintainedAuthoredCassetteCatalog.deliveryFinalitySpine.story.map((item) =>
-    item._tag === "TrackerGraphReadReturned" || item._tag === "RunActivationFinalTrackerGraphReadReturned"
-      ? {
-          ...item,
-          graph: {
-            ...item.graph,
-            tasks: item.graph.tasks.map((task) => ({ ...task, lifecycle: { _tag: "CompletedSuccessfully" as const } }))
-          }
-        }
-      : item
-  )
-  expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-      ...maintainedAuthoredCassetteCatalog.deliveryFinalitySpine,
-      deliveryScope: { _tag: "CompleteGraphDelivery" },
-      startingFacts: {
-        ...maintainedAuthoredCassetteCatalog.deliveryFinalitySpine.startingFacts,
-        trackerGraph: {
-          ...maintainedAuthoredCassetteCatalog.deliveryFinalitySpine.startingFacts.trackerGraph,
-          tasks: maintainedAuthoredCassetteCatalog.deliveryFinalitySpine.startingFacts.trackerGraph.tasks.map(
-            (task) => ({ ...task, lifecycle: { _tag: "CompletedSuccessfully" as const } })
-          )
-        }
-      },
-      story: allTasksSuccessful
-    })
-  ).toThrow("complete graph delivery requires one accepted commit for every observed tracker task")
-})
-
-it("rejects a complete graph delivery scope before tracker success or exact finality", () => {
-  const withoutOrchestrationEvidence = {
-    ...completeSingletonDeliveryCassette,
-    story: completeSingletonDeliveryCassette.story.map((item) =>
-      item._tag === "ExpectedBehavior" ? { ...item, orchestration: null } : item
-    )
-  }
-  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutOrchestrationEvidence)).toThrow(
-    "complete graph delivery requires exact orchestration evidence"
-  )
-
-  const withoutObservedTasks = {
-    ...completeSingletonDeliveryCassette,
-    startingFacts: {
-      ...completeSingletonDeliveryCassette.startingFacts,
-      trackerGraph: { ...completeSingletonDeliveryCassette.startingFacts.trackerGraph, tasks: [] }
-    },
-    story: completeSingletonDeliveryCassette.story.map((item) =>
-      item._tag === "TrackerGraphReadReturned" || item._tag === "RunActivationFinalTrackerGraphReadReturned"
-        ? { ...item, graph: { ...item.graph, tasks: [] } }
-        : item
-    )
-  }
-  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutObservedTasks)).toThrow(
-    "complete graph delivery requires at least one observed tracker task"
-  )
-
-  expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-      ...maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration,
-      deliveryScope: { _tag: "CompleteGraphDelivery" }
-    })
-  ).toThrow("complete graph delivery requires tracker success for every observed task; task A never reached success")
-
-  const withoutDeletion = {
-    ...completeSingletonDeliveryCassette,
-    story: completeSingletonDeliveryCassette.story.filter((item) => item._tag !== "CompletionClaimDeletionApplied")
-  }
-  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutDeletion)).toThrow(
-    "complete graph delivery requires promotion-bound completion, focused tracker success, and claim finality for task A"
-  )
-})
-
-it("rejects broken exact lineage in a complete graph delivery scope", () => {
-  const brokenEvidenceCases = [
-    {
-      expected: "complete graph delivery requires an exact accepted-result integration responsibility for task A",
-      tag: "AcceptedResultIntegrationResponsibilityBegan",
-      update: { commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
-    },
-    {
-      expected:
-        "complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task A",
-      tag: "AcceptedResultIntegrationStarted",
-      update: { attemptId: "attempt:A:99" }
-    },
-    {
-      expected:
-        "complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task A",
-      tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
-      update: { attemptId: "attempt:A:99" }
-    },
-    {
-      expected:
-        "complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task A",
-      tag: "IntegrationCandidateConstructed",
-      update: { attemptId: "attempt:A:99" }
-    },
-    {
-      expected: "complete graph delivery requires exact candidate verification and promotion lineage for task A",
-      tag: "TargetVerificationPassed",
-      update: { candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
-    },
-    {
-      expected:
-        "complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task A",
-      tag: "AcceptedResultIntegrationStarted",
-      update: { integrationTarget: { repository: "/different.git", ref: "refs/heads/main" } }
-    }
-  ] as const
-
-  for (const broken of brokenEvidenceCases) {
-    const cassette = {
-      ...completeSingletonDeliveryCassette,
-      story: completeSingletonDeliveryCassette.story.map((item) =>
-        item._tag !== "ExpectedBehavior" || item.orchestration === null
-          ? item
-          : {
-              ...item,
-              orchestration: item.orchestration.map((evidence) =>
-                evidence._tag === broken.tag ? { ...evidence, ...broken.update } : evidence
-              )
-            }
-      )
-    }
-    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(cassette)).toThrow(broken.expected)
-  }
-
-  const withoutExecutorResponsibility = {
-    ...completeSingletonDeliveryCassette,
-    story: completeSingletonDeliveryCassette.story.map((item) =>
-      item._tag !== "ExpectedBehavior" || item.orchestration === null
-        ? item
-        : {
-            ...item,
-            orchestration: item.orchestration.filter(
-              (evidence) => evidence._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan"
-            )
-          }
-    )
-  }
-  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutExecutorResponsibility)).toThrow(
-    "complete graph delivery requires exactly one unambiguous delivery stage for task A"
-  )
-
-  const withoutTerminalAccepted = {
-    ...completeSingletonDeliveryCassette,
-    story: completeSingletonDeliveryCassette.story.map((item) =>
-      item._tag !== "ExpectedBehavior" || item.orchestration === null
-        ? item
-        : {
-            ...item,
-            orchestration: item.orchestration.filter(
-              (evidence) =>
-                evidence._tag !== "PlannedAttemptExecutorWorkReported" || evidence.report !== "TerminalAccepted"
-            )
-          }
-    )
-  }
-  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutTerminalAccepted)).toThrow(
-    "complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task A"
-  )
-
-  const withDuplicateCandidate = {
-    ...completeSingletonDeliveryCassette,
-    story: completeSingletonDeliveryCassette.story.map((item) => {
-      if (item._tag !== "ExpectedBehavior" || item.orchestration === null) return item
-      const candidate = item.orchestration.find((evidence) => evidence._tag === "IntegrationCandidateConstructed")
-      return candidate === undefined ? item : { ...item, orchestration: [...item.orchestration, candidate] }
-    })
-  }
-  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withDuplicateCandidate)).toThrow(
-    "complete graph delivery requires exactly one unambiguous delivery stage for task A"
-  )
-
-  const bCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  const bCandidate = "dddddddddddddddddddddddddddddddddddddddd"
-  const bEvidence = [
-    { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "B" },
-    {
-      _tag: "AcceptedResultIntegrationResponsibilityBegan",
-      attemptId: "attempt:A:0",
-      commit: bCommit,
-      integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
-      taskId: "B"
-    },
-    {
-      _tag: "AcceptedResultIntegrationStarted",
-      attemptId: "attempt:A:0",
-      commit: bCommit,
-      integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
-      taskId: "B"
-    },
-    {
-      _tag: "IntegrationCandidateConstructed",
-      acceptedResultCommit: bCommit,
-      attemptId: "attempt:A:0",
-      candidateCommit: bCandidate,
-      expectedTargetHead: "1111111111111111111111111111111111111111",
-      taskId: "B"
-    },
-    { _tag: "TargetVerificationPassed", candidateCommit: bCandidate, planId: "public-checks-v1", taskId: "B" },
-    {
-      _tag: "TargetPromotionSucceeded",
-      basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
-      candidateCommit: bCandidate,
-      expectedTargetHead: "1111111111111111111111111111111111111111",
-      observedTargetHead: bCandidate,
-      observation: "CompareAndSetApplied",
-      taskId: "B"
-    }
-  ] as const
-  const twoTasksSharingOneAttempt = {
-    ...completeSingletonDeliveryCassette,
-    story: completeSingletonDeliveryCassette.story.flatMap((item): ReadonlyArray<unknown> => {
-      if (item._tag === "CompletionClaimReplacementApplied") {
-        return [item, { _tag: "CompletionClaimReplacementApplied", taskId: "B" }]
-      }
-      if (item._tag === "CompletionClaimDeletionApplied") {
-        return [item, { _tag: "CompletionClaimDeletionApplied", taskId: "B" }]
-      }
-      if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === "authored-finality-success") {
-        return [
-          {
-            ...item,
-            graph: {
-              ...item.graph,
-              tasks: [
-                ...item.graph.tasks,
-                { id: "B", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }
-              ]
-            }
-          }
-        ]
-      }
-      if (item._tag !== "ExpectedBehavior" || item.orchestration === null) return [item]
-      return [
-        {
-          ...item,
-          orchestration: [...item.orchestration, ...bEvidence],
-          taskWork: {
-            ...item.taskWork,
-            results: [...item.taskWork.results, { _tag: "PlannedWorkForTaskAccepted", commit: bCommit, taskId: "B" }]
-          }
-        }
-      ]
-    })
-  }
-  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(twoTasksSharingOneAttempt)).toThrow(
-    "complete graph delivery requires one distinct planned attempt for every graph task"
-  )
-})
 
 it.effect("assigns a fresh exact run identity each time the same tracker target starts", () =>
   Effect.gen(function* () {
@@ -4904,7 +4473,6 @@ it.effect(
       }
       const localizedCassette = {
         _tag: "AuthoredScenarioCassette",
-        deliveryScope: { _tag: "FocusedWorkflowSlice", trackerSuccessIntents: [] },
         name: "A leaves the target while independent B continues",
         schemaVersion: 1,
         startingFacts: {
@@ -5065,7 +4633,7 @@ it.effect(
       )
       expect(run.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskCompleted", taskId: "B" }])
 
-      const externallyCompletedGraph = {
+      const trackerSuccessfulGraph = {
         revision: TrackerRevision.make("pipeline-A-completed-externally"),
         tasks: [
           {
@@ -5082,33 +4650,29 @@ it.effect(
           }
         ]
       }
-      const externalSuccessStory = localizedCassette.story.map((item) =>
+      const trackerSuccessStory = localizedCassette.story.map((item) =>
         item._tag === "TrackerGraphReadReturned" && item.graph === localizedGraph
-          ? { ...item, graph: externallyCompletedGraph }
+          ? { ...item, graph: trackerSuccessfulGraph }
           : item
       )
-      const externalSuspensionAt = externalSuccessStory.findIndex(
+      const trackerSuccessSuspensionAt = trackerSuccessStory.findIndex(
         (item) =>
           item._tag === "PlannedAttemptExecutorWorkReported" &&
           "report" in item &&
           item.report._tag === "SafelySuspended" &&
           item.report.attemptId === aAttemptId
       )
-      const externalSuccessCassette = {
+      const trackerSuccessCassette = {
         ...localizedCassette,
-        deliveryScope: {
-          _tag: "FocusedWorkflowSlice" as const,
-          trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph" as const, taskId: TaskId.make("A") }]
-        },
-        name: "A completes externally while its exact claim and WIP remain",
+        name: "the tracker reports A complete while its exact claim and WIP remain",
         story: [
-          ...externalSuccessStory.slice(0, externalSuspensionAt + 1),
+          ...trackerSuccessStory.slice(0, trackerSuccessSuspensionAt + 1),
           { _tag: "DalphSelects" as const, operation: { _tag: "ReleaseTaskClaim" as const, taskId: TaskId.make("A") } },
-          ...externalSuccessStory.slice(externalSuspensionAt + 1)
+          ...trackerSuccessStory.slice(trackerSuccessSuspensionAt + 1)
         ]
       }
-      const externalSuccessRun = yield* runAuthoredScenarioCassette(externalSuccessCassette)
-      const claimReleaseEvents = externalSuccessRun.records.filter(
+      const trackerSuccessRun = yield* runAuthoredScenarioCassette(trackerSuccessCassette)
+      const claimReleaseEvents = trackerSuccessRun.records.filter(
         ({ event }) => event._tag === "TaskClaimReleaseIntended" || event._tag === "TaskClaimReleased"
       )
       expect(claimReleaseEvents.map(({ event }) => event._tag)).toEqual([
@@ -5116,7 +4680,7 @@ it.effect(
         "TaskClaimReleased"
       ])
       expect(
-        externalSuccessRun.records.some(
+        trackerSuccessRun.records.some(
           ({ event }) =>
             event._tag === "PlannedAttemptExecutorWorkReported" &&
             event.report.correlation.attemptId === aAttemptId &&
@@ -5124,11 +4688,11 @@ it.effect(
         )
       ).toBe(false)
       expect(
-        externalSuccessRun.records.some(
+        trackerSuccessRun.records.some(
           ({ event }) => event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted"
         )
       ).toBe(false)
-      expect(externalSuccessRun.observedBehavior.taskWorkResults).toEqual([
+      expect(trackerSuccessRun.observedBehavior.taskWorkResults).toEqual([
         { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
       ])
 
@@ -7376,12 +6940,6 @@ it.effect("labels the 100-task four-read encoding experiment as a baseline", () 
     const replaceTask = (value: string) => (value === "A" ? activeTaskId : value)
     const input = {
       ...singleton,
-      deliveryScope: {
-        _tag: "FocusedWorkflowSlice" as const,
-        trackerSuccessIntents: taskIds
-          .filter((taskId) => taskId !== activeTaskId)
-          .map((taskId) => ({ _tag: "TrackerSuccessSuppliedOutsideDalph" as const, taskId }))
-      },
       name: "100-task four-read encoded-size baseline",
       startingFacts: {
         ...singleton.startingFacts,

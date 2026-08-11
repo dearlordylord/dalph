@@ -403,14 +403,11 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     const ownership = appendTextElement(article, "p", "Production runner: ", "group-facts")
     appendTextElement(ownership, "code", row.runnerName)
     ownership.append(` · Available controlled boundaries for this catalog: ${row.controlledBoundaries}`)
-    if (row.surface._tag === "AuthoredDeliverySurface") {
-      appendTextElement(article, "p", row.surface.deliveryScope, "delivery-scope")
-    }
     if (row.catalogKey === "authored:deliveryInvariantStory") {
       appendTextElement(
         article,
         "p",
-        "Normal-delivery scheduler/restart target: the production runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues. The current trace provisionally supplies all ten tracker-success facts without claiming accepted-result integration. Issue #167 must replace that test seam with the intended integration and finality path.",
+        "Production scheduler/restart chronology: the runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues. Each executor returns coarse Terminal Completed, and later controlled tracker graphs report task success. This chronology contains no accepted-result integration; issue #167 owns replacing that test seam.",
         "delivery-story-scope"
       )
     }
@@ -418,7 +415,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       appendTextElement(
         article,
         "p",
-        "Delivery-story coverage: A demonstrates production graph, frontier, restart, promotion, completion-claim, settlement, and reflection layers; B remains open, while tracker success for C through G is intentionally supplied outside Dalph. This is not the complete 22-beat one-Run target. docs/DELIVERY-STORY.md links the remaining beats to exact maintained slices or explicit implementation gaps; this view does not simulate them.",
+        "Delivery-story chronology: A crosses the production graph, frontier, restart, promotion, tracker-completion, completion-claim, settlement, and reflection boundaries. B remains open. Later graph answers report C through G successful, but this cassette contains no executor or integration chronology for those tasks. This is not the complete 22-beat one-Run target; docs/DELIVERY-STORY.md links the remaining beats to exact maintained slices or explicit implementation gaps.",
         "delivery-story-scope"
       )
     }

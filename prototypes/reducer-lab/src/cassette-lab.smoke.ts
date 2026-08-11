@@ -98,15 +98,8 @@ await scenario("shows the staggered double-diamond frontier being consumed on on
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   assert(
-    row?.surface._tag === "AuthoredDeliverySurface"
-      && row.surface.deliveryScope.includes("Normal Dalph delivery target not yet demonstrated")
-      && row.surface.deliveryScope.includes("A (blocked by #167)")
-      && row.surface.deliveryScope.includes("X (blocked by #167)"),
-    "The linked graph story must expose every provisional normal-delivery task"
-  )
-  assert(
-    row?.storyName === "normal delivery target consumes a staggered double diamond while X waits for capacity",
-    "The linked graph story title must preserve its normal delivery intent"
+    row?.storyName === "production delivery consumes a staggered double diamond while restart-delayed X waits for capacity",
+    "The linked graph story title must name its concrete production chronology"
   )
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The linked story must complete with frames")
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
@@ -1067,9 +1060,9 @@ await scenario("counts one delivery settlement once across repeated production p
   )
   assert(
     (root.textContent ?? "").includes(
-      "B remains open, while tracker success for C through G is intentionally supplied outside Dalph"
+      "B remains open. Later graph answers report C through G successful, but this cassette contains no executor or integration chronology for those tasks"
     ),
-    "The linked cassette must visibly state the exact scope it executes"
+    "The linked cassette must visibly state the exact chronology it executes"
   )
 })
 
