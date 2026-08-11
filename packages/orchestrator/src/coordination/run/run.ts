@@ -1,5 +1,5 @@
 import { type PlannedAttemptExecutor, RunId } from "@dalph/contracts"
-import { Context, Effect, Schema } from "effect"
+import { Context, Effect, Schema, type Stream } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
 import type { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
@@ -27,7 +27,17 @@ import { deliveryRuntimeFrom } from "../delivery/delivery-runtime-adapter.js"
 import { DeliveryActionExecutor, type DeliveryActionExecutorService } from "../delivery/delivery-action-executor.js"
 import { makeLiveDeliveryActionExecutor } from "../delivery/live-delivery-action-executor.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
-import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
+import {
+  DeliveryRuntimeResources,
+  type DeliveryRuntimeResourceCapabilityPair
+} from "../delivery/delivery-runtime-resources.js"
+import type { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
+import type {
+  PauseNotApplied,
+  PauseObservationRunMismatch,
+  PauseProgressProjectionConflict,
+  PauseProgressView
+} from "./pause-progress-observation.js"
 import type { RunFinalityDecision, RunFinalityProof } from "../frontier/frontier.js"
 import { runStabilizedDelivery } from "./run-stabilization.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
@@ -35,11 +45,16 @@ import type { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 
+export type JournaledRunProcessServices =
+  | DeliveryRuntimeResourceCapabilityPair
+  | DeliveryRuntimeResources
+  | DeliveryRuntimeObservationPublication
+
 export type JournaledRunServices =
   | Journal
   | AttemptChoiceControl
   | ControlDirectionApplication
-  | DeliveryRuntimeResources
+  | JournaledRunProcessServices
   | InRunJournal
   | OperationIdAllocator
   | PlannedAttemptExecutor
@@ -123,6 +138,21 @@ export interface JournaledRunBootstrapService {
     ) => Effect.Effect<
       Effect.Success<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>>,
       Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>> | JournaledRunNotActive
+    >
+    /**
+     * Alice passively observes the exact applied Pause through a transport-independent stream.
+     * Subscription lifetime never owns the active Run or a runtime control lease.
+     */
+    readonly observePause: (
+      input: unknown
+    ) => Stream.Stream<
+      PauseProgressView,
+      | Schema.SchemaError
+      | PauseNotApplied
+      | PauseObservationRunMismatch
+      | PauseProgressProjectionConflict
+      | JournalError
+      | JournaledRunNotActive
     >
   }
 }

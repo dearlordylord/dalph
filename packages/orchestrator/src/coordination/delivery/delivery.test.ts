@@ -106,6 +106,10 @@ const makeDeliveryRelationsLayer = (
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: null,
+          pauseCoverage: {
+            _tag: "PauseCoverageGraphNotEstablished",
+            applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+          },
           quiescence: { _tag: "TrackerReconfirmationAllowed" },
           taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [] }
         },
@@ -367,7 +371,11 @@ it.effect("keeps a settled journaled graph active while the Run is paused", () =
         {
           _tag: "DeliveryProposalOwnershipConflict",
           conflicts: [
-            { id: DeliveryProposalId.make("finality-owner-conflict"), owners: ["TrackerGraph", "TicketDelivery"] }
+            {
+              id: DeliveryProposalId.make("finality-owner-conflict"),
+              order: { _tag: "TrackerGraphOrder", acceptedAt: null },
+              owners: ["TrackerGraph", "TicketDelivery"]
+            }
           ]
         },
         { _tag: "TrackerReconfirmationAllowed" }
@@ -621,7 +629,9 @@ it.effect("fails closed when two owners claim one proposal identity", () =>
 
     expect(frontier).toEqual({
       _tag: "DeliveryProposalOwnershipConflict",
-      conflicts: [{ id: proposal.id, owners: ["TrackerGraph", "TicketDelivery", "DeliverySettlement"] }]
+      conflicts: [
+        { id: proposal.id, order: proposal.order, owners: ["TrackerGraph", "TicketDelivery", "DeliverySettlement"] }
+      ]
     })
     expect(runtimeFrontier).toEqual(frontier)
   })

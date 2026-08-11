@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- One exhaustive renderer keeps every authored story tag visible at its presentation boundary. */
 import { Match } from "effect"
 import type {
   AuthoredCassetteStoryItem,
@@ -22,60 +23,82 @@ const trackerGraphLandmark = (
   return `${readMeaning} ${graph.revision}${taskStates.length === 0 ? " with no tasks" : `: ${taskStates.join("; ")}`}`
 }
 
-export const renderAuthoredStoryItemLandmark = Match.type<AuthoredCassetteStoryItem>().pipe(
-  Match.tagsExhaustive({
-    CompletionClaimDeletionApplied: noLandmark,
-    CompletionClaimReadReturned: noLandmark,
-    CompletionClaimReplacementApplied: noLandmark,
-    CompletionTaskFocusedReadReturned: noLandmark,
-    CompletionTaskRequestLookupReturned: noLandmark,
-    CompletionTaskRequestReturned: noLandmark,
-    CoordinatorActivationReturned: noLandmark,
-    CoordinatorProcessDies: () =>
-      "The coordinator process died; the next activation reconstructs accepted journal history",
-    DalphHoldsAdmittedContinuationBeforeExecutorIntent: noLandmark,
-    DalphSelects: noLandmark,
-    ExpectedBehavior: noLandmark,
-    GitWorktreeObservationChanged: noLandmark,
-    InitialControlPolicy: noLandmark,
-    IntegrationCandidateAgentReported: noLandmark,
-    IntegrationCandidateGitValidationFailed: noLandmark,
-    IntegrationCandidateGitValidationReturned: noLandmark,
-    OperatorAppliesControlDirection: (item) => {
-      const target = item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
-      return `Operator ${item.direction.toLowerCase()}d ${target}`
-    },
-    OperatorAppliesControlDirectionWhileExecutorRequestInFlight: (item) => {
-      const target = item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
-      return `Operator ${item.direction.toLowerCase()}d ${target} while its executor request was in flight`
-    },
-    OperatorContinuesAttempt: noLandmark,
-    OperatorControlDirectionFailed: noLandmark,
-    OperatorDirectsTaskClaimReacquisition: noLandmark,
-    OperatorRacesContinueAndStop: noLandmark,
-    OperatorStopsAttempt: noLandmark,
-    PlannedAttemptExecutorProjectionReturned: noLandmark,
-    PlannedAttemptExecutorResponseLost: noLandmark,
-    PlannedAttemptExecutorWorkReported: (item) =>
-      `Attempt ${item.report.attemptId} reported ${item.report._tag}${item.report._tag === "SafelySuspended" ? "; its held position can now be released" : ""}`,
-    RunActivationFinalTrackerGraphReadReturned: (item) =>
-      trackerGraphLandmark(item.graph, "Activation-final tracker read returned graph"),
-    RunCoordinator: noLandmark,
-    SetTaskExecutionCapacity: noLandmark,
-    TargetPromotionCompareAndSetResponseLost: noLandmark,
-    TargetPromotionCompareAndSetReturned: noLandmark,
-    TargetPromotionGitReadFailed: noLandmark,
-    TargetPromotionGitReadReturned: noLandmark,
-    TargetVerificationReturned: noLandmark,
-    TaskClaimCurrentReadReturned: noLandmark,
-    TaskClaimReadFailed: noLandmark,
-    TaskClaimReadReturned: noLandmark,
-    TaskClaimReleaseResponseLost: noLandmark,
-    TaskWorkSpecificationReadReturned: noLandmark,
-    TrackerGraphReadFailed: noLandmark,
-    TrackerGraphReadReturned: (item) => trackerGraphLandmark(item.graph, "Tracker returned graph")
-  })
-)
+export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) => string | null =
+  Match.type<AuthoredCassetteStoryItem>().pipe(
+    Match.tagsExhaustive({
+      CompletionClaimDeletionApplied: noLandmark,
+      CompletionClaimReadReturned: noLandmark,
+      CompletionClaimReplacementApplied: noLandmark,
+      CompletionTaskFocusedReadReturned: noLandmark,
+      CompletionTaskRequestLookupReturned: noLandmark,
+      CompletionTaskRequestReturned: noLandmark,
+      CoordinatorActivationReturned: noLandmark,
+      CoordinatorProcessDies: () =>
+        "The coordinator process died; the next activation reconstructs accepted journal history",
+      DalphHoldsAdmittedContinuationBeforeExecutorIntent: noLandmark,
+      CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: noLandmark,
+      CassetteReleasesHeldPlannedAttemptContinuation: noLandmark,
+      DalphHoldsExecutorRequestThroughNextDeliveryPublication: noLandmark,
+      CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: noLandmark,
+      CassetteReleasesHeldPlannedAttemptSuspension: noLandmark,
+      CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary: noLandmark,
+      CassetteKillsCoordinatorAtTargetPromotionReconciliationRead: noLandmark,
+      CassetteReleasesHeldTargetPromotionReconciliationRead: noLandmark,
+      CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: noLandmark,
+      CassetteReleasesHeldTaskWorkSpecificationRead: noLandmark,
+      DalphSelects: noLandmark,
+      ExpectedBehavior: noLandmark,
+      GitWorktreeObservationChanged: noLandmark,
+      GitPlannedWorktreeCreateResponseLost: noLandmark,
+      InitialControlPolicy: noLandmark,
+      IntegrationCandidateAgentReported: noLandmark,
+      IntegrationCandidateGitValidationFailed: noLandmark,
+      IntegrationCandidateGitValidationReturned: noLandmark,
+      OperatorAppliesControlDirection: (item) => {
+        const target = item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
+        return `Operator ${item.direction.toLowerCase()}d ${target}`
+      },
+      OperatorAppliesControlDirectionBeforeDeliveryActionAdmission: (item) => {
+        const target = item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
+        return `Operator ${item.direction.toLowerCase()}d ${target} before delivery-action admission`
+      },
+      OperatorAppliesControlDirectionWhileExecutorRequestInFlight: (item) => {
+        const target = item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
+        return `Operator ${item.direction.toLowerCase()}d ${target} while its executor request was in flight`
+      },
+      OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting: noLandmark,
+      OperatorStartsPauseObservation: noLandmark,
+      OperatorSubscribesToPauseObservation: noLandmark,
+      OperatorAwaitsPauseProgress: noLandmark,
+      PauseProgressObserved: noLandmark,
+      PauseProgressObservedCancelledAndReconnected: noLandmark,
+      OperatorContinuesAttempt: noLandmark,
+      OperatorControlDirectionFailed: noLandmark,
+      OperatorDirectsTaskClaimReacquisition: noLandmark,
+      OperatorRacesContinueAndStop: noLandmark,
+      OperatorStopsAttempt: noLandmark,
+      PlannedAttemptExecutorProjectionReturned: noLandmark,
+      PlannedAttemptExecutorResponseLost: noLandmark,
+      PlannedAttemptExecutorWorkReported: (item) =>
+        `Attempt ${item.report.attemptId} reported ${item.report._tag}${item.report._tag === "SafelySuspended" ? "; its held position can now be released" : ""}`,
+      RunActivationFinalTrackerGraphReadReturned: (item) =>
+        trackerGraphLandmark(item.graph, "Activation-final tracker read returned graph"),
+      RunCoordinator: noLandmark,
+      SetTaskExecutionCapacity: noLandmark,
+      TargetPromotionCompareAndSetResponseLost: noLandmark,
+      TargetPromotionCompareAndSetReturned: noLandmark,
+      TargetPromotionGitReadFailed: noLandmark,
+      TargetPromotionGitReadReturned: noLandmark,
+      TargetVerificationReturned: noLandmark,
+      TaskClaimCurrentReadReturned: noLandmark,
+      TaskClaimReadFailed: noLandmark,
+      TaskClaimReadReturned: noLandmark,
+      TaskClaimReleaseResponseLost: noLandmark,
+      TaskWorkSpecificationReadReturned: noLandmark,
+      TrackerGraphReadFailed: noLandmark,
+      TrackerGraphReadReturned: (item) => trackerGraphLandmark(item.graph, "Tracker returned graph")
+    })
+  )
 
 const taskWorkResultLyric = Match.type<AuthoredTaskWorkResult>().pipe(
   Match.tagsExhaustive({
@@ -276,6 +299,7 @@ type OperatorStoryItem = Extract<
   {
     readonly _tag:
       | "OperatorAppliesControlDirection"
+      | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
       | "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
       | "OperatorControlDirectionFailed"
       | "OperatorContinuesAttempt"
@@ -286,15 +310,20 @@ type OperatorStoryItem = Extract<
   }
 >
 
+const operatorStoryItemTags: ReadonlySet<RemainingCoordinatorStoryItem["_tag"]> = new Set([
+  "OperatorAppliesControlDirection",
+  "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
+  "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+  "OperatorControlDirectionFailed",
+  "OperatorContinuesAttempt",
+  "OperatorDirectsTaskClaimReacquisition",
+  "OperatorRacesContinueAndStop",
+  "OperatorStopsAttempt",
+  "SetTaskExecutionCapacity"
+])
+
 const isOperatorStoryItem = (item: RemainingCoordinatorStoryItem): item is OperatorStoryItem =>
-  item._tag === "OperatorAppliesControlDirection" ||
-  item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" ||
-  item._tag === "OperatorControlDirectionFailed" ||
-  item._tag === "OperatorContinuesAttempt" ||
-  item._tag === "OperatorDirectsTaskClaimReacquisition" ||
-  item._tag === "OperatorRacesContinueAndStop" ||
-  item._tag === "OperatorStopsAttempt" ||
-  item._tag === "SetTaskExecutionCapacity"
+  operatorStoryItemTags.has(item._tag)
 
 type AttemptChoiceOperatorItem = Extract<
   OperatorStoryItem,
@@ -302,7 +331,12 @@ type AttemptChoiceOperatorItem = Extract<
 >
 type ControlDirectionOperatorItem = Extract<
   OperatorStoryItem,
-  { readonly _tag: "OperatorAppliesControlDirection" | "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" }
+  {
+    readonly _tag:
+      | "OperatorAppliesControlDirection"
+      | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+      | "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
+  }
 >
 
 const isAttemptChoiceOperatorItem = (item: OperatorStoryItem): item is AttemptChoiceOperatorItem =>
@@ -310,6 +344,7 @@ const isAttemptChoiceOperatorItem = (item: OperatorStoryItem): item is AttemptCh
 
 const isControlDirectionOperatorItem = (item: OperatorStoryItem): item is ControlDirectionOperatorItem =>
   item._tag === "OperatorAppliesControlDirection" ||
+  item._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission" ||
   item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
 
 const attemptChoiceOperatorLyric = (item: AttemptChoiceOperatorItem): string => {
@@ -324,9 +359,13 @@ const attemptChoiceOperatorLyric = (item: AttemptChoiceOperatorItem): string => 
 }
 
 const controlDirectionOperatorLyric = (item: ControlDirectionOperatorItem): string =>
-  `Operator applies ${item.direction} to ${
-    item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
-  }${item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" ? " while the executor request is in flight" : ""}.`
+  `Operator applies ${item.direction} to ${item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`}${
+    item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
+      ? ` while executor request ${item.duringAttemptId} is in flight`
+      : item._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+        ? " before delivery-action admission"
+        : ""
+  }.`
 
 const operatorLyric = (item: OperatorStoryItem): string => {
   if (item._tag === "SetTaskExecutionCapacity") {
@@ -350,6 +389,26 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
     Match.tagsExhaustive({
       DalphHoldsAdmittedContinuationBeforeExecutorIntent: (item) =>
         `Dalph holds the admitted continuation for attempt ${item.attemptId} before its executor command intent while Alice's Stop request is applied.`,
+      CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: (item) =>
+        `The cassette holds the already-running continuation for task ${item.taskId} attempt ${item.attemptId} before calling the executor.`,
+      CassetteReleasesHeldPlannedAttemptContinuation: (item) =>
+        `The cassette releases the held continuation for task ${item.taskId} attempt ${item.attemptId}.`,
+      DalphHoldsExecutorRequestThroughNextDeliveryPublication: (item) =>
+        `The cassette keeps ${item.request} for task ${item.taskId} attempt ${item.attemptId} in flight until the next ordinary delivery fact publishes.`,
+      CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: (item) =>
+        `The cassette holds Suspend for task ${item.taskId} attempt ${item.attemptId} before calling the executor.`,
+      CassetteReleasesHeldPlannedAttemptSuspension: (item) =>
+        `The cassette releases the held Suspend for task ${item.taskId} attempt ${item.attemptId}.`,
+      CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary: () =>
+        "The cassette holds the exact post-loss target-promotion reconciliation read before Git returns its observation.",
+      CassetteKillsCoordinatorAtTargetPromotionReconciliationRead: () =>
+        "The coordinator dies when the exact post-loss target-promotion reconciliation request reaches Git's read boundary.",
+      CassetteReleasesHeldTargetPromotionReconciliationRead: () =>
+        "The cassette releases the exact held target-promotion reconciliation read.",
+      CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: (item) =>
+        `The cassette holds task ${item.taskId}'s specification read before its boundary.`,
+      CassetteReleasesHeldTaskWorkSpecificationRead: (item) =>
+        `The cassette releases task ${item.taskId}'s held specification read.`,
       DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,
       GitWorktreeObservationChanged: (item) =>
         `Git changes the planned worktree observation to ${item.observation._tag}.`,
@@ -375,12 +434,27 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       TargetPromotionGitReadFailed: (item) =>
         `Git cannot complete the current-head candidate-ancestry read: ${item.detail}`,
       TaskWorkSpecificationReadReturned: (item) => `The task tracker returns "${item.title}" for task ${item.taskId}.`,
+      GitPlannedWorktreeCreateResponseLost: (item) =>
+        `Git creates the exact planned worktree, but Dalph loses the response: ${item.detail}`,
       PlannedAttemptExecutorWorkReported: (item) =>
         `The executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`,
       PlannedAttemptExecutorProjectionReturned: (item) =>
         `A read-only executor projection returns ${item.report._tag} for attempt ${item.report.attemptId}.`,
       PlannedAttemptExecutorResponseLost: (item) =>
         `The executor reaches ${item.report._tag} for attempt ${item.report.attemptId}, but Dalph loses the ${item.request} response: ${item.detail}`,
+      OperatorStartsPauseObservation: (item) =>
+        `Alice asks to observe Pause progress for ${
+          item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
+        }.`,
+      OperatorSubscribesToPauseObservation: (item) =>
+        `Alice subscribes to Pause progress for ${item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`} before the held boundary publishes.`,
+      OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting: (item) =>
+        `Alice unpauses ${item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`} during attempt ${item.duringAttemptId} after receiving the queued Waiting view.`,
+      OperatorAwaitsPauseProgress: (item) =>
+        `Alice awaits ${item.result._tag} from the following ordinary boundary result.`,
+      PauseProgressObserved: (item) => `Alice receives ${item.result._tag} from the process-local Pause observation.`,
+      PauseProgressObservedCancelledAndReconnected: (item) =>
+        `Alice receives ${item.result._tag}, ends only her process-local Pause observation subscription, then reconnects after the next delivery publication and receives ${item.reconnectResult._tag}.`,
       TaskClaimReleaseResponseLost: (item) =>
         `The task tracker applies the exact claim release for task ${item.taskId}, but Dalph loses the response: ${item.detail}`,
       ExpectedBehavior: expectedBehaviorLyric,

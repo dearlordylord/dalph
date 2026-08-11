@@ -25,10 +25,14 @@ describe("authored delivery landmarks", () => {
       }),
       AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.make({
         direction: "Unpause",
+        duringAttemptId: AttemptId.make("attempt:A:0"),
+        outcome: { _tag: "Applied" },
         subject: { _tag: "Task", taskId: TaskId.make("A") }
       }),
       AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.make({
         direction: "Pause",
+        duringAttemptId: AttemptId.make("attempt:A:0"),
+        outcome: { _tag: "Applied" },
         subject: { _tag: "Run" }
       }),
       AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.make({

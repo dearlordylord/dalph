@@ -1,7 +1,7 @@
 import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Context, Deferred, Effect, Fiber, Layer, Option, Ref } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Scope, Stream } from "effect"
 import { expect } from "vitest"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -13,11 +13,14 @@ import {
 } from "../../authorities/task-tracker/graph-reader.js"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
-import { InitialControlPolicy } from "../../control/policy.js"
+import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { Journal } from "../delivery/journal.js"
-import { deliveryRuntimeResourcesLayer } from "../delivery/delivery-runtime-resources.js"
+import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
+import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
+import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
+import { currentSignalOf, type DeliveryRelationInputBundle, TrackerGraphState } from "../delivery/relations.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
@@ -48,6 +51,10 @@ import { deterministicOperationIdAllocatorLayer } from "../../workflow/protocols
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+const runtimePolicy = RunControlPolicy.make({
+  revision: initialRunPolicyRevision,
+  taskExecutionCapacity: initialPolicy.taskExecutionCapacity
+})
 const finalityProof = (
   decision:
     | ReturnType<typeof RunFinalityDecision.RunMayTerminate>
@@ -65,6 +72,38 @@ if (emptyGraph._tag !== "Valid") throw new Error("bootstrap control fixture grap
 const defaultTrackerGraphReader = TrackerGraphReader.of({
   read: () => Effect.succeed(emptyGraph.snapshot),
   readTaskWorkSpecification: () => Effect.die("unused")
+})
+
+const unpausedRuntimeEvaluation = Effect.gen(function* () {
+  const runtime = yield* deliveryRuntime.pipe(
+    Effect.provide(
+      makeDeliveryRelationsLayer({
+        ...deterministicDeliveryRuntimeSupport(runtimePolicy),
+        coherent: currentSignalOf({
+          legacy: {
+            proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+            reflectionProposals: [],
+            runtimeFacts: {
+              acceptedAt: null,
+              pauseCoverage: {
+                _tag: "PauseCoverageGraphNotEstablished",
+                applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+              },
+              quiescence: { _tag: "TrackerReconfirmationAllowed" },
+              taskWork: { capacity: runtimePolicy.taskExecutionCapacity, held: [] }
+            },
+            trackerGraphProposals: []
+          },
+          publication: {
+            exactEvidence: [],
+            graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
+            policy: runtimePolicy
+          }
+        } satisfies DeliveryRelationInputBundle)
+      })
+    )
+  )
+  return yield* runtime.get
 })
 
 const runtimeLayer = (runId: RunId, trackerGraphReader: TrackerGraphReader["Service"] = defaultTrackerGraphReader) =>
@@ -85,7 +124,6 @@ const runtimeLayer = (runId: RunId, trackerGraphReader: TrackerGraphReader["Serv
     taskWorkCapacityControlLayer,
     taskClaimReacquisitionControlLayer,
     deterministicOperationIdAllocatorLayer(`bootstrap-control:${runId}`),
-    deliveryRuntimeResourcesLayer,
     plannedAttemptProtocolControllerLayer,
     journaledWorkflowInterpreterLayer(
       runId,
@@ -565,6 +603,83 @@ it.effect("publishes an Operator Pause through the active journal without exposi
           .applyControlDirection({ direction: "Unpause", subject: { _tag: "Run", runId } })
           .pipe(Effect.flip)
       ).toMatchObject({ _tag: "JournaledRunNotActive" })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("tells Alice that her exact Run Pause is not applied", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-observe-unpaused")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const bootstrap = yield* buildBootstrap(runId, Context.get(journalContext, JournalStore))
+      const ready = yield* Deferred.make<void>()
+      const finish = yield* Deferred.make<void>()
+      const running = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            const observation = yield* DeliveryRuntimeObservationPublication
+            const journal = yield* Journal
+            const acceptedAt = (yield* journal.state.get).position
+            yield* observation.publish({ ...(yield* unpausedRuntimeEvaluation), acceptedAt }, [])
+            yield* Deferred.succeed(ready, undefined)
+            yield* Deferred.await(finish)
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+          })
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+
+      const failure = yield* bootstrap.operatorControl
+        .observePause({ _tag: "Run", runId })
+        .pipe(Stream.runDrain, Effect.flip)
+
+      expect(failure).toMatchObject({ _tag: "PauseNotApplied", subject: { _tag: "Run", runId } })
+      yield* Deferred.succeed(finish, undefined)
+      yield* Fiber.join(running)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("does not keep the Run open for Alice's Pause subscription and ends it with the bootstrap scope", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-observe-disconnect")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const bootstrapScope = yield* Scope.make()
+      const bootstrap = yield* buildBootstrap(runId, Context.get(journalContext, JournalStore)).pipe(
+        Scope.provide(bootstrapScope)
+      )
+      const ready = yield* Deferred.make<void>()
+      const finish = yield* Deferred.make<void>()
+      const running = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(ready, undefined).pipe(
+            Effect.andThen(Deferred.await(finish)),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+
+      const observing = yield* bootstrap.operatorControl
+        .observePause({ _tag: "Run", runId })
+        .pipe(Stream.runDrain, Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(finish, undefined)
+
+      expect(yield* Fiber.join(running)).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+      expect(observing.pollUnsafe()).toBeUndefined()
+      yield* Scope.close(bootstrapScope, Exit.void)
+      yield* Fiber.join(observing)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

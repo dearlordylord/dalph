@@ -149,6 +149,9 @@ export const controlledTrace = (cursor: StoryCursor): WorkflowTrace["Service"] =
       if (item._tag === "OperationSelected") yield* cursor.pauseAtCoordinatorProcessDeath
       const actual = actualDecision(item)
       if (actual === undefined) return
+      if (actual._tag === "ReadTaskWorkSpecification") {
+        yield* cursor.awaitTaskWorkSpecificationReadBoundary(actual.taskId)
+      }
       const expected = yield* cursor.consumeDalphSelection.pipe(
         Effect.mapError(
           (failure) =>
@@ -160,8 +163,9 @@ export const controlledTrace = (cursor: StoryCursor): WorkflowTrace["Service"] =
         )
       )
       if (encodedDecision(actual) !== encodedDecision(expected.operation)) {
+        const storyPosition = (yield* cursor.storyPosition) - 1
         return yield* new TraceOutputError({
-          detail: `expected ${encodedDecision(expected.operation)}, received ${encodedDecision(actual)}`
+          detail: `at story position ${storyPosition}: expected ${encodedDecision(expected.operation)}, received ${encodedDecision(actual)}`
         })
       }
     })
@@ -209,7 +213,12 @@ const executorReport = (
 export const controlledExecutorLayer = (
   cursor: StoryCursor,
   runId: RunId,
-  beforeExecutorReport: Effect.Effect<void> = Effect.void,
+  beforeExecutorReport:
+    | Effect.Effect<void>
+    | ((
+        plannedAttempt: PlannedTaskAttempt,
+        request: "StartOrContinue" | "Suspend"
+      ) => Effect.Effect<void>) = Effect.void,
   survivingReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
   unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>,
   prepareReport: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport> = Effect.succeed
@@ -219,22 +228,28 @@ export const controlledExecutorLayer = (
     request: "StartOrContinue" | "Suspend",
     plannedAttempt: PlannedTaskAttempt
   ) {
-    yield* beforeExecutorReport
+    yield* typeof beforeExecutorReport === "function"
+      ? beforeExecutorReport(plannedAttempt, request)
+      : beforeExecutorReport
     yield* cursor.pauseAtCoordinatorProcessDeath
+    const storyPosition = yield* cursor.storyPosition
     const item = yield* cursor.consumeExecutorReport.pipe(
       Effect.mapError(
         (failure) =>
           new ControlledFakeExecutorMismatch({
             detail:
               `${failure._tag} at story position ${failure.storyPosition}: ` +
-              `expected ${failure.expected}, received ${failure.actual} while handling ${request}`
+              `expected ${failure.expected}, received ${failure.actual} while handling ${request} for ` +
+              `${plannedAttempt.taskId}/${plannedAttempt.attemptId}`
           })
       )
     )
     const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
     if (item.request !== request || item.report.attemptId !== correlation.attemptId) {
       return yield* new ControlledFakeExecutorMismatch({
-        detail: `authored executor expected ${item.request} for ${item.report.attemptId}, received ${request} for ${correlation.attemptId}`
+        detail:
+          `at story position ${storyPosition}: authored executor expected ${item.request} for ${item.report.attemptId}, ` +
+          `received ${request} for ${correlation.attemptId}`
       })
     }
     const report = yield* prepareReport(executorReport(item, runId))

@@ -14,7 +14,7 @@ import {
   TaskId,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Effect, Layer, Option, Ref } from "effect"
+import { Effect, Layer, Option, Ref, Stream } from "effect"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
@@ -60,6 +60,7 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
         applyTaskClaimReacquisition: () => Effect.die("unused"),
         readAttemptChoice: () => Effect.die("unused"),
         readTaskWorkCapacity: () => Effect.die("unused"),
+        observePause: () => Stream.empty,
         setTaskWorkCapacity: () => Effect.die("unused")
       }
     })

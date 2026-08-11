@@ -397,6 +397,29 @@ export {
   runWorkflowWithControlledDeliveryActionExecutor,
   runWorkflow
 } from "./coordination/run/run.js"
+export {
+  PauseNotApplied,
+  PauseObservationRunMismatch,
+  PauseProgressProjectionConflict,
+  pauseSafeBoundaryBlockersOf,
+  type PauseAcceptedIntegrationResponsibility,
+  type PauseDeliveryActionResponsibility,
+  type PauseDeliveryActionBlocker,
+  type PauseExecutorBlocker,
+  type PauseExecutorResponsibility,
+  type PauseIntegrationResourceBlocker,
+  type PauseProgressView,
+  type PauseQueuedIntegrationResponsibility,
+  type PauseResponsibility,
+  type PauseResponsibilityAtBoundary,
+  type PauseResponsibilityCoverage,
+  type PauseResponsibilityPreventingBoundary,
+  type PauseSafeBoundaryBlocker,
+  type PauseStartedIntegrationBlocker,
+  type PauseStartedIntegrationResponsibility,
+  type PauseWorkflowOperationResponsibility,
+  type PauseWorkflowResponsibility
+} from "./coordination/run/pause-progress-observation.js"
 export { runControlledWorkflow } from "./coordination/run/controlled-workflow.js"
 export {
   journaledRunBootstrapLayer,
@@ -503,6 +526,7 @@ export {
 } from "./coordination/delivery/journal.js"
 export { delivery } from "./coordination/delivery/delivery.js"
 export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-planning.js"
+export { DeliveryProposalId, deliveryProposalOrderTaskId } from "./coordination/delivery/delivery-action-proposal.js"
 export { deliveryRuntime } from "./coordination/delivery/delivery-runtime-adapter.js"
 export {
   DeliveryActionExecutor,

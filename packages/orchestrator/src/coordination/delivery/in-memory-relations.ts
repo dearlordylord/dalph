@@ -266,6 +266,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
                 _tag: "DeliveryRuntimeEvaluation",
                 acceptedAt: facts.acceptedAt,
                 current,
+                pauseCoverage: facts.pauseCoverage,
                 proposedActions,
                 quiescence: facts.quiescence,
                 taskWork: facts.taskWork

@@ -8,9 +8,10 @@ import {
 } from "@dalph/contracts"
 import { Context, Effect, Schema, Stream } from "effect"
 import type { TrackerRevision } from "../../authorities/task-tracker/task.js"
+import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { JournaledTrackerGraphObservation } from "./journal.js"
 import type { RunControlPolicy } from "../../control/policy.js"
-import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
+import type { ReconstructedPauseState, WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type {
   QueuedIntegrationResponsibility,
@@ -34,6 +35,7 @@ import type {
   DeliveryProposalContributions,
   DeliveryProposalDerivationIssue,
   DeliveryProposalId,
+  DeliveryProposalOrderEvidence,
   DeliveryProposalOwner,
   TrackerGraphActionProposal
 } from "./delivery-proposal.js"
@@ -441,6 +443,7 @@ export interface DeliveryReflectionRelation<E = DeliveryReflectionError> {
 /** Two lower relations claimed ownership of the same exact proposed action. */
 export interface DeliveryProposalOwnershipConflict {
   readonly id: DeliveryProposalId
+  readonly order: DeliveryProposalOrderEvidence
   readonly owners: readonly [DeliveryProposalOwner, DeliveryProposalOwner, ...ReadonlyArray<DeliveryProposalOwner>]
 }
 
@@ -479,9 +482,20 @@ export type DeliveryQuiescenceDisposition =
   | { readonly _tag: "TrackerReconfirmationAllowed" }
   | { readonly _tag: "QuiescencePassive"; readonly reason: "RunPaused" }
 
+/** Durable Pause direction plus the latest complete grouping coverage used to explain its current scope. */
+export type PauseCoverageFacts =
+  | {
+      readonly _tag: "PauseCoverageGraphEstablished"
+      readonly applied: ReconstructedPauseState
+      readonly observedAt: JournalPosition
+      readonly snapshot: TaskDagSnapshot
+    }
+  | { readonly _tag: "PauseCoverageGraphNotEstablished"; readonly applied: ReconstructedPauseState }
+
 /** Runtime facts are descriptive inputs; the runtime never reconstructs them from route tags. */
 export interface DeliveryRuntimeFacts {
   readonly acceptedAt: JournalPosition | null
+  readonly pauseCoverage: PauseCoverageFacts
   readonly quiescence: DeliveryQuiescenceDisposition
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
 }
@@ -515,6 +529,7 @@ export interface DeliveryRuntimeEvaluation {
   readonly _tag: "DeliveryRuntimeEvaluation"
   readonly acceptedAt: JournalPosition | null
   readonly current: DeliveryRuntimeSnapshot
+  readonly pauseCoverage: PauseCoverageFacts
   readonly proposedActions: DeliveryProposalFrontier
   readonly quiescence: DeliveryQuiescenceDisposition
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
@@ -588,8 +603,8 @@ export const deliveryProposalFrontierOf = (
     conflictsById.set(
       proposal.id,
       conflict === undefined
-        ? { id: proposal.id, owners: [first.owner, proposal.owner] }
-        : { id: proposal.id, owners: [...conflict.owners, proposal.owner] }
+        ? { id: proposal.id, order: first.order, owners: [first.owner, proposal.owner] }
+        : { id: proposal.id, order: conflict.order, owners: [...conflict.owners, proposal.owner] }
     )
   }
   const conflicts = [...conflictsById.values()]

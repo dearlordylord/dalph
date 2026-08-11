@@ -2,11 +2,40 @@
 import { TaskId } from "@dalph/contracts"
 import { makeTaskWorkSpecification } from "@dalph/orchestrator"
 import { Option, Schema } from "effect"
-import { AuthoredScenarioCassette } from "./authored.js"
+import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
 import { AuthoredCassetteStoryItem } from "./authored-domain.js"
 
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)
 const terminalStoryItemOffset = -1
+
+const authoredReconcileProposal = (taskId: "A" | "B", attemptId: "attempt:A:0" | "attempt:B:1") => ({
+  _tag: "FreshWorkflowRoute" as const,
+  correlation: { _tag: "Attempt" as const, attemptId },
+  proposalId: JSON.stringify(["FreshWorkflowRoute", "ReconcileTaskWorktree", attemptId, taskId]),
+  taskId
+})
+
+const authoredSuspendProposal = (taskId: "A" | "D", attemptId: "attempt:A:0" | "attempt:D:1") => ({
+  _tag: "IdentityFreeWorkflowRoute" as const,
+  correlation: { _tag: "PlannedAttempt" as const, attemptId },
+  proposalId: JSON.stringify([
+    "IdentityFreeWorkflowRoute",
+    "SuspendPlannedAttemptExecutorWork",
+    attemptId,
+    null,
+    taskId
+  ]),
+  taskId
+})
+
+const authoredStartExecutorProposal = (taskId: "A", attemptId: "attempt:A:0") => ({
+  _tag: "FreshExecutorWorkflowRoute" as const,
+  attemptId,
+  proposalId: JSON.stringify(["FreshExecutorWorkflowRoute", "StartPlannedAttemptExecutorWork", attemptId, taskId]),
+  taskId
+})
+
+const authoredAdmittedOwner = <Proposal>(proposal: Proposal) => ({ _tag: "AdmittedDeliveryAction" as const, proposal })
 
 const singletonGraph = {
   revision: "singleton-revision",
@@ -50,6 +79,22 @@ const groupingChildTasksGraph = {
   tasks: [
     { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
     { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: "A", prerequisiteIds: [] }
+  ]
+}
+
+const pauseGroupingIndependentG1 = {
+  revision: "pause-grouping-independent-G1",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "D", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+  ]
+}
+
+const pauseGroupingAddedG2 = {
+  revision: "pause-grouping-added-G2",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "D", lifecycle: { _tag: "Open" }, parentTaskId: "A", prerequisiteIds: [] }
   ]
 }
 
@@ -112,7 +157,9 @@ const singletonExpectedBehavior = {
  * The maintained manually authored singleton story. Its schema version is
  * provisional; this catalog intentionally makes no released-data promise yet.
  */
-export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const singletonTaskCompletesAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   _tag: "AuthoredScenarioCassette",
   name: "one open task completes its coarse executor work",
   schemaVersion: 1,
@@ -204,23 +251,19 @@ const twoEligibleStoryBeforeRunningExecutorReport = singletonStoryBeforeRunningE
   .flatMap((item) => [
     item,
     ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim"
-      ? [{ _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "B" } }]
-      : [])
-  ])
-  .flatMap((item) => [
-    ...(item._tag === "DalphSelects" && item.operation._tag === "ReadTaskWorkSpecification"
       ? [
+          { _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "B" } },
           {
             _tag: "DalphSelects" as const,
             operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" }
           },
           { _tag: "TrackerGraphReadReturned" as const, graph: twoEligibleTasksGraph }
         ]
-      : []),
-    item
+      : [])
   ])
   .flatMap((item) => [
-    ...(item._tag === "DalphSelects" && item.operation._tag === "RecordTaskAttemptPlan"
+    item,
+    ...(item._tag === "TaskWorkSpecificationReadReturned" && item.taskId === "A"
       ? [
           { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: "B" } },
           {
@@ -230,18 +273,20 @@ const twoEligibleStoryBeforeRunningExecutorReport = singletonStoryBeforeRunningE
             title: "Implement second task"
           }
         ]
-      : []),
-    item
+      : [])
   ])
   .flatMap((item) => [
-    ...(item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
+    item,
+    ...(item._tag === "DalphSelects" && item.operation._tag === "RecordTaskAttemptPlan"
       ? [
           {
             _tag: "DalphSelects" as const,
             operation: { _tag: "RecordTaskAttemptPlan" as const, attemptId: "attempt:B:1", taskId: "B" }
           }
         ]
-      : []),
+      : [])
+  ])
+  .flatMap((item) => [
     item,
     ...(item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
       ? [
@@ -273,7 +318,9 @@ const runPauseExpectedBehavior = {
 } as const
 
 /** A live Run finishes the exact executor suspension selected after Alice applies Pause. */
-export const runPauseSafelySuspendsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const runPauseSafelySuspendsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "Alice pauses the Run while its exact executor work is running",
   startingFacts: {
@@ -289,6 +336,8 @@ export const runPauseSafelySuspendsAuthoredCassette = Schema.decodeUnknownSync(A
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
+      duringAttemptId: "attempt:A:0",
+      outcome: { _tag: "Applied" },
       subject: { _tag: "Run" }
     },
     singletonRunningExecutorReport,
@@ -301,8 +350,103 @@ export const runPauseSafelySuspendsAuthoredCassette = Schema.decodeUnknownSync(A
   ]
 })
 
+const singletonReconcileWorktreeAt = singletonTaskCompletesAuthoredCassette.story.findIndex(
+  (item) => item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
+)
+
+/** Alice disconnects while an unresolved planned-worktree request reaches its ordinary Git reread boundary. */
+export const runPauseObservationDisconnectsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "Alice disconnects while Run R reaches its existing safe boundary",
+  story: [
+    ...singletonTaskCompletesAuthoredCassette.story.slice(0, singletonReconcileWorktreeAt + 1),
+    { _tag: "OperatorAppliesControlDirection", direction: "Pause", subject: { _tag: "Run" } },
+    { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Run" } },
+    {
+      _tag: "PauseProgressObservedCancelledAndReconnected",
+      subject: { _tag: "Run" },
+      reconnectResult: {
+        _tag: "PauseConfirmed",
+        atBoundary: [
+          {
+            _tag: "WorkflowOperation",
+            beganAt: 5,
+            coverage: { _tag: "RunPauseCoverage" },
+            operationId: "cassette:$authored-run:activation:1:operation:5",
+            responsibilityTag: "TaskWorktreeResponsibility",
+            taskId: "A"
+          }
+        ]
+      },
+      reconnectSubject: { _tag: "Run" },
+      result: {
+        _tag: "PauseWaiting",
+        atBoundary: [],
+        preventing: [
+          {
+            blockers: [
+              {
+                _tag: "ProposedDeliveryAction",
+                proposal: {
+                  _tag: "AcceptedWorkflowRoute",
+                  operationId: "cassette:$authored-run:activation:1:operation:6",
+                  proposalId: JSON.stringify([
+                    "AcceptedWorkflowRoute",
+                    "ReconcileTaskWorktree",
+                    "cassette:$authored-run:activation:1:operation:6",
+                    "A"
+                  ]),
+                  taskId: "A"
+                }
+              }
+            ],
+            responsibility: {
+              _tag: "WorkflowOperation",
+              beganAt: 13,
+              coverage: { _tag: "RunPauseCoverage" },
+              operationId: "cassette:$authored-run:activation:1:operation:6",
+              responsibilityTag: "TaskWorktreeResponsibility",
+              taskId: "A"
+            }
+          },
+          {
+            blockers: [
+              {
+                _tag: "LiveDeliveryAction",
+                owner: {
+                  _tag: "MaterializedDeliveryAction",
+                  intent: "IntentNotRecorded",
+                  operationId: "cassette:$authored-run:activation:1:operation:6",
+                  proposal: authoredReconcileProposal("A", "attempt:A:0")
+                }
+              }
+            ],
+            responsibility: {
+              _tag: "DeliveryAction",
+              coverage: { _tag: "RunPauseCoverage" },
+              proposal: authoredReconcileProposal("A", "attempt:A:0"),
+              taskId: "A"
+            }
+          }
+        ]
+      }
+    },
+    { _tag: "GitPlannedWorktreeCreateResponseLost", detail: "Git applied OW but Dalph lost the response" },
+    {
+      _tag: "ExpectedBehavior",
+      orchestration: null,
+      protocol: null,
+      taskWork: { absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "A" }], results: [] }
+    }
+  ]
+})
+
 /** Restart reconstructs Run Pause, safely suspends prior work, and performs no tracker read. */
-export const runPauseRestartsPassivelyAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const runPauseRestartsPassivelyAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...runPauseSafelySuspendsAuthoredCassette,
   name: "a confirmed paused Run restarts without run-specific polling",
   story: [
@@ -310,6 +454,8 @@ export const runPauseRestartsPassivelyAuthoredCassette = Schema.decodeUnknownSyn
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
+      duringAttemptId: "attempt:A:0",
+      outcome: { _tag: "Applied" },
       subject: { _tag: "Run" }
     },
     singletonRunningExecutorReport,
@@ -324,7 +470,9 @@ export const runPauseRestartsPassivelyAuthoredCassette = Schema.decodeUnknownSyn
 })
 
 /** Alice's stale task Pause is rejected after a complete fresh target-closure read. */
-export const staleTaskPauseRejectedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const staleTaskPauseRejectedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   _tag: "AuthoredScenarioCassette",
   name: "Alice's stale task Pause is rejected visibly after a fresh read",
   schemaVersion: 1,
@@ -357,6 +505,8 @@ export const staleTaskPauseRejectedAuthoredCassette = Schema.decodeUnknownSync(A
       reason: "OutsideCurrentTargetClosure",
       subject: { _tag: "Task", taskId: "A" }
     },
+    { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
+    { _tag: "PauseProgressObserved", result: { _tag: "PauseNotApplied" }, subject: { _tag: "Task", taskId: "A" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: emptyTaskControlGraph },
     {
@@ -376,7 +526,9 @@ const staleTaskMembershipReturnedAt = staleTaskPauseRejectedAuthoredCassette.sto
         (candidate) => candidate._tag === "OperatorAppliesControlDirection"
       ) && item._tag === "TrackerGraphReadReturned"
 )
-export const unreadableTaskUnpauseRejectedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const unreadableTaskUnpauseRejectedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...staleTaskPauseRejectedAuthoredCassette,
   name: "Alice's task Unpause remains unapplied when the fresh read is incomplete",
   story: staleTaskPauseRejectedAuthoredCassette.story.flatMap((item, index) => {
@@ -397,7 +549,9 @@ export const unreadableTaskUnpauseRejectedAuthoredCassette = Schema.decodeUnknow
 })
 
 /** Pausing A suspends its running attempt, then independent B uses the released task-work position. */
-export const taskPauseLetsIndependentTaskContinueAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const taskPauseLetsIndependentTaskContinueAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "Alice pauses task A while independent B continues after confirmed suspension",
   startingFacts: {
@@ -412,6 +566,8 @@ export const taskPauseLetsIndependentTaskContinueAuthoredCassette = Schema.decod
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
+      duringAttemptId: "attempt:A:0",
+      outcome: { _tag: "Applied" },
       subject: { _tag: "Task", taskId: "A" }
     },
     ...taskControlMembershipRead(twoEligibleTasksGraph),
@@ -472,7 +628,9 @@ export const taskPauseLetsIndependentTaskContinueAuthoredCassette = Schema.decod
 })
 
 /** One task direction covers B through current grouping without recording a direction for B. */
-export const taskPauseCoversGroupingChildAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const taskPauseCoversGroupingChildAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...runPauseSafelySuspendsAuthoredCassette,
   name: "Alice pauses task A and current grouping child B",
   startingFacts: { ...runPauseSafelySuspendsAuthoredCassette.startingFacts, trackerGraph: groupingChildTasksGraph },
@@ -483,17 +641,52 @@ export const taskPauseCoversGroupingChildAuthoredCassette = Schema.decodeUnknown
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
+      duringAttemptId: "attempt:A:0",
+      outcome: { _tag: "Applied" },
       subject: { _tag: "Task", taskId: "A" }
     },
     ...taskControlMembershipRead(groupingChildTasksGraph),
+    {
+      _tag: "DalphHoldsExecutorRequestThroughNextDeliveryPublication",
+      attemptId: "attempt:A:0",
+      request: "StartOrContinue",
+      taskId: "A"
+    },
     singletonRunningExecutorReport,
+    { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
+    {
+      _tag: "PauseProgressObserved",
+      result: {
+        _tag: "PauseWaiting",
+        atBoundary: [],
+        preventing: [
+          {
+            blockers: [
+              { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" },
+              {
+                _tag: "LiveDeliveryAction",
+                owner: authoredAdmittedOwner(authoredStartExecutorProposal("A", "attempt:A:0"))
+              }
+            ],
+            responsibility: {
+              _tag: "PlannedAttemptExecutorWork",
+              attemptId: "attempt:A:0",
+              beganAt: 26,
+              coverage: { _tag: "ExactTaskPauseCoverage" },
+              taskId: "A"
+            }
+          }
+        ]
+      },
+      subject: { _tag: "Task", taskId: "A" }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: groupingChildTasksGraph },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
       request: "Suspend"
     },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: groupingChildTasksGraph },
     {
       ...runPauseExpectedBehavior,
       protocol: [
@@ -509,6 +702,401 @@ export const taskPauseCoversGroupingChildAuthoredCassette = Schema.decodeUnknown
   ]
 })
 
+/** Alice withdraws task A's Pause while the exact executor suspension remains unresolved. */
+const twoStoryItemsBefore = 2
+type ExpectedBehaviorStoryItem = Extract<AuthoredCassetteStoryItem, { readonly _tag: "ExpectedBehavior" }>
+
+const unpauseTerminalStory = (item: ExpectedBehaviorStoryItem): ReadonlyArray<AuthoredCassetteStoryItem> => [
+  decodeStoryItem({
+    _tag: "PlannedAttemptExecutorWorkReported",
+    report: { _tag: "Terminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } },
+    request: "StartOrContinue"
+  }),
+  decodeStoryItem({
+    ...item,
+    orchestration:
+      item.orchestration === null
+        ? null
+        : [
+            ...item.orchestration,
+            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" },
+            { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:B:1", taskId: "B" },
+            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:1", report: "TerminalCompleted" }
+          ],
+    protocol:
+      item.protocol === null
+        ? null
+        : [
+            { _tag: "TaskClaimAcquired", taskId: "A" },
+            { _tag: "TaskClaimAcquired", taskId: "B" },
+            { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
+            { _tag: "TaskAttemptPlanned", attemptId: "attempt:B:1", taskId: "B" },
+            { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+            { _tag: "TaskWorktreeReady", attemptId: "attempt:B:1", taskId: "B" },
+            { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
+            { _tag: "ControlDirectionApplied", direction: "Unpause", subject: { _tag: "Task", taskId: "A" } }
+          ],
+    taskWork: {
+      ...item.taskWork,
+      absences: [],
+      results: [
+        { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
+        { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
+      ]
+    }
+  })
+]
+
+const unpauseAfterSafeStory: ReadonlyArray<AuthoredCassetteStoryItem> = [
+  decodeStoryItem({
+    _tag: "PlannedAttemptExecutorWorkReported",
+    report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+    request: "StartOrContinue"
+  }),
+  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
+  decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: groupingChildTasksGraph })
+]
+
+const graphSelectionFollowsBasePauseObservation = (
+  item: AuthoredCassetteStoryItem,
+  index: number,
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): boolean =>
+  item._tag === "DalphSelects" &&
+  item.operation._tag === "ReadTrackerGraph" &&
+  story[index - 1]?._tag === "PauseProgressObserved"
+
+const graphReturnFollowsBasePauseObservation = (
+  item: AuthoredCassetteStoryItem,
+  index: number,
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): boolean =>
+  item._tag === "TrackerGraphReadReturned" &&
+  story[index - 1]?._tag === "DalphSelects" &&
+  story[index - twoStoryItemsBefore]?._tag === "PauseProgressObserved"
+
+const followsBasePauseObservation = (
+  item: AuthoredCassetteStoryItem,
+  index: number,
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): boolean =>
+  graphSelectionFollowsBasePauseObservation(item, index, story) ||
+  graphReturnFollowsBasePauseObservation(item, index, story)
+
+const unpauseWaitingStory = (): ReadonlyArray<AuthoredCassetteStoryItem> => [
+  decodeStoryItem({
+    _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
+    attemptId: "attempt:A:0",
+    taskId: "A"
+  }),
+  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
+  decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: groupingChildTasksGraph }),
+  decodeStoryItem({ _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:A:0", taskId: "A" }),
+  decodeStoryItem({ _tag: "OperatorSubscribesToPauseObservation", subject: { _tag: "Task", taskId: "A" } }),
+  decodeStoryItem({
+    _tag: "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting",
+    duringAttemptId: "attempt:A:0",
+    queued: ["ProposedDeliveryAction", "LiveDeliveryAction"].map((blockerTag) => ({
+      _tag: "PauseWaiting" as const,
+      atBoundary: [],
+      preventing: [
+        {
+          blockers: [
+            { _tag: "ExecutorSafeSuspensionRequired" as const, attemptId: "attempt:A:0" },
+            blockerTag === "ProposedDeliveryAction"
+              ? { _tag: "ProposedDeliveryAction" as const, proposal: authoredSuspendProposal("A", "attempt:A:0") }
+              : {
+                  _tag: "LiveDeliveryAction" as const,
+                  owner: authoredAdmittedOwner(authoredSuspendProposal("A", "attempt:A:0"))
+                }
+          ],
+          responsibility: {
+            _tag: "PlannedAttemptExecutorWork" as const,
+            attemptId: "attempt:A:0",
+            beganAt: 26,
+            coverage: { _tag: "ExactTaskPauseCoverage" as const },
+            taskId: "A"
+          }
+        }
+      ]
+    })),
+    subject: { _tag: "Task", taskId: "A" }
+  }),
+  ...taskControlMembershipRead(groupingChildTasksGraph)
+]
+
+const unpauseStoryItem = (
+  item: AuthoredCassetteStoryItem,
+  index: number,
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): ReadonlyArray<AuthoredCassetteStoryItem> => {
+  if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "SafelySuspended") {
+    return [item, ...unpauseAfterSafeStory]
+  }
+  if (item._tag === "ExpectedBehavior") return unpauseTerminalStory(item)
+  if (item._tag === "OperatorStartsPauseObservation" || followsBasePauseObservation(item, index, story)) return []
+  return item._tag === "PauseProgressObserved" && item.result._tag === "PauseWaiting" ? unpauseWaitingStory() : [item]
+}
+
+export const taskPauseObservationUnpausedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...taskPauseCoversGroupingChildAuthoredCassette,
+  name: "Alice unpauses task A before its Pause observation confirms",
+  story: taskPauseCoversGroupingChildAuthoredCassette.story.flatMap(unpauseStoryItem)
+})
+
+/** G2 newly covers D, so only a post-G2 exact executor report can settle its Pause obligation. */
+const groupingPauseAExecutor = {
+  _tag: "PlannedAttemptExecutorWork" as const,
+  attemptId: "attempt:A:0",
+  beganAt: 21,
+  coverage: { _tag: "ExactTaskPauseCoverage" as const },
+  taskId: "A"
+}
+const groupingPauseDExecutor = {
+  _tag: "PlannedAttemptExecutorWork" as const,
+  attemptId: "attempt:D:1",
+  beganAt: 2,
+  coverage: { _tag: "GroupingDescendantPauseCoverage" as const, groupingObservedAt: 3, pausedTaskId: "A" },
+  taskId: "D"
+}
+const groupingFactsAddedBeforeRunningA = [
+  { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: 2 } },
+  {
+    _tag: "RunCoordinator",
+    baseSha: "1111111111111111111111111111111111111111",
+    claimOwner: "cassette-owner",
+    claimTokenPrefix: "cassette-claim",
+    executor: "executor:cassette",
+    integrationTarget: { repository: "/dalph/cassettes/repository.git", ref: "refs/heads/master" },
+    target: "cassette-target",
+    verificationPlanId: null,
+    worktreeRoot: "/dalph/cassettes"
+  },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
+  { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+  { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "D" } },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
+  { _tag: "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary", taskId: "D" },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+  {
+    _tag: "TaskWorkSpecificationReadReturned",
+    body: "Implement the accepted singleton behavior.",
+    taskId: "A",
+    title: "Implement singleton"
+  },
+  { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" } },
+  { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } }
+].map((item) => decodeStoryItem(item))
+
+export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...runPauseSafelySuspendsAuthoredCassette,
+  name: "Alice sees current grouping facts add D to task A's Pause",
+  startingFacts: {
+    ...runPauseSafelySuspendsAuthoredCassette.startingFacts,
+    taskWorkSpecifications: [
+      { body: "Implement the accepted singleton behavior.", taskId: "A", title: "Implement singleton" },
+      { body: "Implement the grouping descendant behavior.", taskId: "D", title: "Implement grouping descendant" }
+    ],
+    targetLineageObservation: {
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: "1111111111111111111111111111111111111111",
+      targetHeadSha: "2222222222222222222222222222222222222222"
+    },
+    trackerGraph: pauseGroupingIndependentG1
+  },
+  story: [
+    ...groupingFactsAddedBeforeRunningA,
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "StartOrContinue"
+    },
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Pause",
+      duringAttemptId: "attempt:A:0",
+      outcome: { _tag: "Applied" },
+      subject: { _tag: "Task", taskId: "A" }
+    },
+    ...taskControlMembershipRead(pauseGroupingIndependentG1),
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "StartOrContinue"
+    },
+    { _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary", attemptId: "attempt:A:0", taskId: "A" },
+    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "D" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the grouping descendant behavior.",
+      taskId: "D",
+      title: "Implement grouping descendant"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:1", taskId: "D" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } },
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Pause",
+      duringAttemptId: "attempt:D:1",
+      outcome: { _tag: "Applied" },
+      subject: { _tag: "Task", taskId: "D" }
+    },
+    ...taskControlMembershipRead(pauseGroupingIndependentG1),
+    {
+      _tag: "DalphHoldsExecutorRequestThroughNextDeliveryPublication",
+      attemptId: "attempt:D:1",
+      request: "StartOrContinue",
+      taskId: "D"
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:D:1" },
+      request: "StartOrContinue"
+    },
+    { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:A:0", taskId: "A" },
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Unpause",
+      duringAttemptId: "attempt:A:0",
+      outcome: { _tag: "Applied" },
+      subject: { _tag: "Task", taskId: "A" }
+    },
+    ...taskControlMembershipRead(pauseGroupingIndependentG1),
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the prerequisite behavior.",
+      taskId: "A",
+      title: "Implement prerequisite"
+    },
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Unpause",
+      duringAttemptId: "attempt:D:1",
+      outcome: { _tag: "Applied" },
+      subject: { _tag: "Task", taskId: "D" }
+    },
+    ...taskControlMembershipRead(pauseGroupingIndependentG1),
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:D:1" },
+      request: "Suspend"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the grouping descendant behavior.",
+      taskId: "D",
+      title: "Implement grouping descendant"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "D" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:1", taskId: "D" } },
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Pause",
+      duringAttemptId: "attempt:D:1",
+      outcome: { _tag: "Applied" },
+      subject: { _tag: "Task", taskId: "A" }
+    },
+    ...taskControlMembershipRead(pauseGroupingIndependentG1),
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:D:1" },
+      request: "StartOrContinue"
+    },
+    { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Pause",
+      duringAttemptId: "attempt:D:1",
+      outcome: { _tag: "Rejected", reason: "OutsideCurrentTargetClosure" },
+      subject: { _tag: "Task", taskId: "X" }
+    },
+    ...taskControlMembershipRead(pauseGroupingAddedG2),
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:D:1" },
+      request: "StartOrContinue"
+    },
+    {
+      _tag: "OperatorAwaitsPauseProgress",
+      subject: { _tag: "Task", taskId: "A" },
+      result: {
+        _tag: "PauseWaiting",
+        atBoundary: [],
+        preventing: [
+          {
+            blockers: [{ _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" }],
+            responsibility: groupingPauseAExecutor
+          }
+        ]
+      }
+    },
+    {
+      _tag: "OperatorAwaitsPauseProgress",
+      subject: { _tag: "Task", taskId: "A" },
+      result: {
+        _tag: "PauseWaiting",
+        atBoundary: [],
+        preventing: [
+          {
+            blockers: [{ _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" }],
+            responsibility: groupingPauseAExecutor
+          },
+          {
+            blockers: [
+              { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:D:1" },
+              {
+                _tag: "LiveDeliveryAction",
+                owner: {
+                  _tag: "AdmittedDeliveryAction",
+                  proposal: {
+                    _tag: "FreshExecutorWorkflowRoute",
+                    attemptId: "attempt:D:1",
+                    proposalId: '["FreshExecutorWorkflowRoute","ContinuePlannedAttemptExecutorWork","attempt:D:1","D"]',
+                    taskId: "D"
+                  }
+                }
+              }
+            ],
+            responsibility: groupingPauseDExecutor
+          }
+        ]
+      }
+    },
+    {
+      _tag: "OperatorAwaitsPauseProgress",
+      subject: { _tag: "Task", taskId: "A" },
+      result: { _tag: "PauseConfirmed", atBoundary: [groupingPauseAExecutor, groupingPauseDExecutor] }
+    },
+    { _tag: "ExpectedBehavior", orchestration: null, protocol: null, taskWork: { absences: [], results: [] } }
+  ]
+})
+
 const lostWorktreeStoryBeforeAssertions = singletonTaskCompletesAuthoredCassette.story.flatMap((item) => {
   if (item._tag === "ExpectedBehavior") return []
   return item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal"
@@ -517,7 +1105,9 @@ const lostWorktreeStoryBeforeAssertions = singletonTaskCompletesAuthoredCassette
 })
 
 /** After process death, the same running attempt records its disappeared worktree and suspends without repair. */
-export const lostPlannedWorktreeSafelySuspendsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const lostPlannedWorktreeSafelySuspendsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "a disappeared planned worktree safely suspends only the same attempt after process death",
   story: [
@@ -581,7 +1171,9 @@ const targetLineageProtocolPrefix = [
 ] as const
 
 /** A fresh activation keeps the same Run/attempt after a typed death immediately before the first report. */
-export const coordinatorProcessDeathContinuesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const coordinatorProcessDeathContinuesAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "a fresh activation continues the same planned attempt after coordinator death before its first report",
   startingFacts: {
@@ -656,7 +1248,9 @@ const attemptChoiceExpectedBehavior = {
 } as const
 
 /** Alice keeps P immutable, then Dalph rereads every continuation authority before resuming it. */
-export const changedAttemptContinuesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const changedAttemptContinuesAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "Alice continues the exact changed attempt only after fresh authority reads",
   startingFacts: attemptChoiceStartingFacts,
@@ -713,7 +1307,9 @@ const changedAttemptContinueRestartAt = changedAttemptContinuesAuthoredCassette.
 )
 
 /** A later F3 observation invalidates F2's Continue authority and exposes one new F1/F3 choice. */
-export const changedAgainAttemptRequiresNewChoiceAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const changedAgainAttemptRequiresNewChoiceAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...changedAttemptContinuesAuthoredCassette,
   name: "Alice must choose again when the continued attempt changes from F2 to F3",
   story: [
@@ -737,7 +1333,9 @@ export const changedAgainAttemptRequiresNewChoiceAuthoredCassette = Schema.decod
 })
 
 /** Alice stops P after its exact safe report and Dalph releases only the freshly reread exact claim. */
-export const changedAttemptStopsAndReleasesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const changedAttemptStopsAndReleasesAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "Alice stops the exact changed attempt and releases only its current exact claim",
   startingFacts: attemptChoiceStartingFacts,
@@ -791,7 +1389,9 @@ const changedAttemptStopStoryThroughApplication = changedAttemptStopsAndReleases
 )
 
 /** Concurrent valid Continue and Stop requests cross the public boundary; the first journal append wins. */
-export const changedAttemptChoiceRaceAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const changedAttemptChoiceRaceAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...changedAttemptStopsAndReleasesAuthoredCassette,
   name: "Alice races Continue and Stop for the same exposed F1 and F2 choice",
   story: [
@@ -837,7 +1437,7 @@ const stoppedAttemptWithoutClaimMutationCassette = (
       {
         _tag: "OperatorStopsAttempt",
         attemptId: "attempt:A:0",
-        expected: { _tag: "Applied", status: "SettledNoRelease" },
+        expected: { _tag: "Applied", status: "ImplementationAbandonedClaimDispositionPending" },
         observedTaskRevision: changedAttemptRevision,
         requestNonce,
         taskId: "A"
@@ -847,88 +1447,92 @@ const stoppedAttemptWithoutClaimMutationCassette = (
   })
 
 /** Stop records the missing claim as a distinct terminal no-release disposition. */
-export const changedAttemptStopsWithAbsentClaimAuthoredCassette = stoppedAttemptWithoutClaimMutationCassette(
-  "Alice stops the exact changed attempt while its tracker claim is absent",
-  "stop-changed-attempt-A-absent",
-  { _tag: "UnclaimedTask", taskId: "A" }
-)
+export const changedAttemptStopsWithAbsentClaimAuthoredCassette: ScenarioCassette =
+  stoppedAttemptWithoutClaimMutationCassette(
+    "Alice stops the exact changed attempt while its tracker claim is absent",
+    "stop-changed-attempt-A-absent",
+    { _tag: "UnclaimedTask", taskId: "A" }
+  )
 
 /** Stop preserves a replacement claim owned by another actor. */
-export const changedAttemptStopsWithForeignClaimAuthoredCassette = stoppedAttemptWithoutClaimMutationCassette(
-  "Alice stops the exact changed attempt without mutating its replacement claim",
-  "stop-changed-attempt-A-foreign",
-  {
-    _tag: "ActiveTaskClaim",
-    operationId: "replacement-claim-A",
-    owner: "another-owner",
-    taskId: "A",
-    token: "replacement-token-A"
-  }
-)
+export const changedAttemptStopsWithForeignClaimAuthoredCassette: ScenarioCassette =
+  stoppedAttemptWithoutClaimMutationCassette(
+    "Alice stops the exact changed attempt without mutating its replacement claim",
+    "stop-changed-attempt-A-foreign",
+    {
+      _tag: "ActiveTaskClaim",
+      operationId: "replacement-claim-A",
+      owner: "another-owner",
+      taskId: "A",
+      token: "replacement-token-A"
+    }
+  )
 
 const stoppedAttemptReleaseSelectedAt = changedAttemptStopsAndReleasesAuthoredCassette.story.findIndex(
   (item) => item._tag === "DalphSelects" && item.operation._tag === "ReleaseTaskClaim"
 )
 
 /** The tracker applies K1's release, loses the response, survives an unreadable activation, then settles absent. */
-export const changedAttemptStopReleaseResponseLostAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
-  {
-    ...changedAttemptStopsAndReleasesAuthoredCassette,
-    name: "Alice sees Stop settle after Dalph loses the exact claim-release response",
-    story: [
-      ...changedAttemptStopsAndReleasesAuthoredCassette.story.slice(0, stoppedAttemptReleaseSelectedAt + 1),
-      {
-        _tag: "TaskClaimReleaseResponseLost",
-        detail: "tracker removed K1 but the coordinator did not receive the response",
-        taskId: "A"
-      },
-      { _tag: "CoordinatorProcessDies" },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
-      { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
-      { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
-      { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
-      {
-        _tag: "OperatorStopsAttempt",
-        attemptId: "attempt:A:0",
-        expected: { _tag: "Applied", status: "ImplementationAbandonedClaimReleasePending" },
-        observedTaskRevision: changedAttemptRevision,
-        requestNonce: "stop-changed-attempt-A",
-        taskId: "A"
-      },
-      { _tag: "CoordinatorProcessDies" },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
-      { _tag: "TaskClaimReadReturned", observation: { _tag: "UnclaimedTask", taskId: "A" } },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      {
-        _tag: "CoordinatorActivationReturned",
-        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-      },
-      {
-        _tag: "OperatorStopsAttempt",
-        attemptId: "attempt:A:0",
-        expected: { _tag: "Applied", status: "SettledNoRelease" },
-        observedTaskRevision: changedAttemptRevision,
-        requestNonce: "stop-changed-attempt-A",
-        taskId: "A"
-      },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      {
-        _tag: "CoordinatorActivationReturned",
-        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-      },
-      attemptChoiceExpectedBehavior
-    ]
-  }
-)
+export const changedAttemptStopReleaseResponseLostAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...changedAttemptStopsAndReleasesAuthoredCassette,
+  name: "Alice sees Stop settle after Dalph loses the exact claim-release response",
+  story: [
+    ...changedAttemptStopsAndReleasesAuthoredCassette.story.slice(0, stoppedAttemptReleaseSelectedAt + 1),
+    {
+      _tag: "TaskClaimReleaseResponseLost",
+      detail: "tracker removed K1 but the coordinator did not receive the response",
+      taskId: "A"
+    },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+    { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+    { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+    {
+      _tag: "OperatorStopsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Applied", status: "ImplementationAbandonedClaimReleasePending" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "stop-changed-attempt-A",
+      taskId: "A"
+    },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimReadReturned", observation: { _tag: "UnclaimedTask", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    {
+      _tag: "OperatorStopsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Applied", status: "SettledNoRelease" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "stop-changed-attempt-A",
+      taskId: "A"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    attemptChoiceExpectedBehavior
+  ]
+})
 
 /** Unpause during suspension finishes that request, then freshly rereads every continuation authority. */
-export const runUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const runUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "Alice unpauses the Run while exact executor suspension is in flight",
   startingFacts: {
@@ -944,12 +1548,16 @@ export const runUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnknow
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
+      duringAttemptId: "attempt:A:0",
+      outcome: { _tag: "Applied" },
       subject: { _tag: "Run" }
     },
     singletonRunningExecutorReport,
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Unpause",
+      duringAttemptId: "attempt:A:0",
+      outcome: { _tag: "Applied" },
       subject: { _tag: "Run" }
     },
     {
@@ -1004,112 +1612,109 @@ const runUnpauseContinuationReportAt = runUnpauseAfterSafeSuspensionAuthoredCass
  * Alice stops after F2 while an already admitted continuation is held before intent;
  * later activations settle its lost response and the lost third Suspend without a duplicate command.
  */
-export const changedAttemptStopLostThirdSuspensionAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
-  {
-    ...runUnpauseAfterSafeSuspensionAuthoredCassette,
-    name: "Alice stops an admitted continuation and Dalph reconciles the lost third suspension response",
-    story: [
-      ...runUnpauseAfterSafeSuspensionAuthoredCassette.story.slice(0, runUnpauseContinuationReportAt),
-      { _tag: "DalphHoldsAdmittedContinuationBeforeExecutorIntent", attemptId: "attempt:A:0", taskId: "A" },
-      { _tag: "OperatorAppliesControlDirection", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "OperatorAppliesControlDirection", direction: "Unpause", subject: { _tag: "Task", taskId: "A" } },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
-      { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
-      {
-        _tag: "OperatorStopsAttempt",
-        attemptId: "attempt:A:0",
-        expected: { _tag: "Applied", status: "AwaitingQuiescence" },
-        observedTaskRevision: changedAttemptRevision,
-        requestNonce: "stop-admitted-continuation-A",
-        taskId: "A"
-      },
-      {
-        _tag: "PlannedAttemptExecutorResponseLost",
-        detail: "the admitted continuation reached Running after Stop, but its response was lost",
-        report: { _tag: "Running", attemptId: "attempt:A:0" },
-        request: "StartOrContinue"
-      },
-      { _tag: "CoordinatorProcessDies" },
-      { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "Running", attemptId: "attempt:A:0" } },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      {
-        _tag: "CoordinatorActivationReturned",
-        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-      },
-      {
-        _tag: "PlannedAttemptExecutorWorkReported",
-        report: { _tag: "Running", attemptId: "attempt:A:0" },
-        request: "Suspend"
-      },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      {
-        _tag: "CoordinatorActivationReturned",
-        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-      },
-      {
-        _tag: "PlannedAttemptExecutorWorkReported",
-        report: { _tag: "Running", attemptId: "attempt:A:0" },
-        request: "Suspend"
-      },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      {
-        _tag: "CoordinatorActivationReturned",
-        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-      },
-      {
-        _tag: "PlannedAttemptExecutorResponseLost",
-        detail: "the third suspension request reached Running, but its response was lost",
-        report: { _tag: "Running", attemptId: "attempt:A:0" },
-        request: "Suspend"
-      },
-      { _tag: "CoordinatorProcessDies" },
-      { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "Running", attemptId: "attempt:A:0" } },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      {
-        _tag: "CoordinatorActivationReturned",
-        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-      },
-      {
-        _tag: "PlannedAttemptExecutorProjectionReturned",
-        report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" }
-      },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
-      { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
-      { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
-      {
-        _tag: "OperatorStopsAttempt",
-        attemptId: "attempt:A:0",
-        expected: { _tag: "Applied", status: "SettledReleased" },
-        observedTaskRevision: changedAttemptRevision,
-        requestNonce: "stop-admitted-continuation-A",
-        taskId: "A"
-      },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      attemptChoiceExpectedBehavior
-    ]
-  }
-)
+export const changedAttemptStopLostThirdSuspensionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...runUnpauseAfterSafeSuspensionAuthoredCassette,
+  name: "Alice stops an admitted continuation and Dalph reconciles the lost third suspension response",
+  story: [
+    ...runUnpauseAfterSafeSuspensionAuthoredCassette.story.slice(0, runUnpauseContinuationReportAt),
+    { _tag: "DalphHoldsAdmittedContinuationBeforeExecutorIntent", attemptId: "attempt:A:0", taskId: "A" },
+    { _tag: "OperatorAppliesControlDirection", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "OperatorAppliesControlDirection", direction: "Unpause", subject: { _tag: "Task", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
+    {
+      _tag: "OperatorStopsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Applied", status: "AwaitingQuiescence" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "stop-admitted-continuation-A",
+      taskId: "A"
+    },
+    {
+      _tag: "PlannedAttemptExecutorResponseLost",
+      detail: "the admitted continuation reached Running after Stop, but its response was lost",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "StartOrContinue"
+    },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "Running", attemptId: "attempt:A:0" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    {
+      _tag: "PlannedAttemptExecutorResponseLost",
+      detail: "the third suspension request reached Running, but its response was lost",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "Running", attemptId: "attempt:A:0" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
+    {
+      _tag: "OperatorStopsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Applied", status: "SettledReleased" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "stop-admitted-continuation-A",
+      taskId: "A"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    attemptChoiceExpectedBehavior
+  ]
+})
 
 const admittedContinuationResponseLostAt = changedAttemptStopLostThirdSuspensionAuthoredCassette.story.findIndex(
   (item) => item._tag === "PlannedAttemptExecutorResponseLost" && item.request === "StartOrContinue"
@@ -1119,7 +1724,9 @@ const unprovedStoppageActivationReturnAt = changedAttemptStopLostThirdSuspension
 )
 
 /** A projected Running writer leaves Stop visibly pending and preserves every exact attempt resource. */
-export const changedAttemptStopRemainsUnprovedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const changedAttemptStopRemainsUnprovedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
   name: "Alice sees exact Stop remain pending while the projected executor writer may still be Running",
   story: [
@@ -1172,7 +1779,9 @@ const suspensionResponseLostAcrossRestart = (
   })
 
 /** The next activation reconciles the lost suspension response before ordinary work resumes after Unpause. */
-export const runUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const runUnpauseDuringSuspensionRestartsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...runUnpauseAfterSafeSuspensionAuthoredCassette,
   name: "Alice unpauses while exact suspension succeeds but its response is lost before restart",
   story: suspensionResponseLostAcrossRestart(
@@ -1182,7 +1791,9 @@ export const runUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decodeU
 })
 
 /** Task Unpause finishes its in-flight suspension, then rereads the preserved attempt's authorities. */
-export const taskUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const taskUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...runUnpauseAfterSafeSuspensionAuthoredCassette,
   name: "Alice unpauses task A while its exact executor suspension is in flight",
   story: runUnpauseAfterSafeSuspensionAuthoredCassette.story.flatMap(
@@ -1209,7 +1820,9 @@ export const taskUnpauseAfterSafeSuspensionAuthoredCassette = Schema.decodeUnkno
 })
 
 /** The next activation reconciles the lost task suspension response before ordinary work resumes after Unpause. */
-export const taskUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const taskUnpauseDuringSuspensionRestartsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...taskUnpauseAfterSafeSuspensionAuthoredCassette,
   name: "Alice unpauses task A while exact suspension succeeds but its response is lost before restart",
   story: suspensionResponseLostAcrossRestart(
@@ -1219,7 +1832,9 @@ export const taskUnpauseDuringSuspensionRestartsAuthoredCassette = Schema.decode
 })
 
 /** After process death, the same attempt continues when Git proves the target advanced from its immutable Base. */
-export const compatibleTargetAdvanceContinuesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const compatibleTargetAdvanceContinuesAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "a compatible target advance keeps the same attempt eligible after process death",
   startingFacts: {
@@ -1261,7 +1876,7 @@ export const compatibleTargetAdvanceContinuesAuthoredCassette = Schema.decodeUnk
 })
 
 /** After process death, the same attempt safely suspends when Git proves the target left its immutable Base lineage. */
-export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette = Schema.decodeUnknownSync(
+export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...singletonTaskCompletesAuthoredCassette,
@@ -1346,7 +1961,9 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette = Schema.de
 })
 
 /** The maintained dependency story proving one Run consumes a later complete graph observation. */
-export const dependentTasksCompleteInOneRunAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   _tag: "AuthoredScenarioCassette",
   name: "a later recorded tracker observation releases the dependant in the same run",
   schemaVersion: 1,
@@ -1435,7 +2052,9 @@ export const dependentTasksCompleteInOneRunAuthoredCassette = Schema.decodeUnkno
  * A capacity contraction retains two already-running attempts across process
  * death and admits C only after both exact responsibilities settle.
  */
-export const contractedCapacityRetainsTwoAttemptsAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "capacity contraction retains A and B across process death before C starts",
   startingFacts: {
@@ -1536,98 +2155,100 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette = Schema.decod
 })
 
 /** Accepted executor output remains ordered by journal position and starts integration in the next activation. */
-export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
-  {
-    _tag: "AuthoredScenarioCassette",
-    name: "an accepted result starts its exact integration responsibility after coordinator restart",
-    schemaVersion: 1,
-    startingFacts: {
-      executorWork: "NoPriorReport",
-      journal: "Empty",
-      taskClaims: [],
-      taskWorkSpecifications: [{ body: "Produce an accepted commit.", taskId: "A", title: "Produce accepted result" }],
-      trackerGraph: singletonGraph,
-      worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
+export const acceptedResultRestartsIntoIntegrationAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  _tag: "AuthoredScenarioCassette",
+  name: "an accepted result starts its exact integration responsibility after coordinator restart",
+  schemaVersion: 1,
+  startingFacts: {
+    executorWork: "NoPriorReport",
+    journal: "Empty",
+    taskClaims: [],
+    taskWorkSpecifications: [{ body: "Produce an accepted commit.", taskId: "A", title: "Produce accepted result" }],
+    trackerGraph: singletonGraph,
+    worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
+  },
+  story: [
+    { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: 1 } },
+    {
+      _tag: "RunCoordinator",
+      baseSha: "1111111111111111111111111111111111111111",
+      claimOwner: "integration-cassette-owner",
+      claimTokenPrefix: "integration-cassette-claim",
+      executor: "executor:cassette",
+      integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
+      target: "cassette-target",
+      verificationPlanId: null,
+      worktreeRoot: "/dalph/cassettes/integration"
     },
-    story: [
-      { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: 1 } },
-      {
-        _tag: "RunCoordinator",
-        baseSha: "1111111111111111111111111111111111111111",
-        claimOwner: "integration-cassette-owner",
-        claimTokenPrefix: "integration-cassette-claim",
-        executor: "executor:cassette",
-        integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
-        target: "cassette-target",
-        verificationPlanId: null,
-        worktreeRoot: "/dalph/cassettes/integration"
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Produce an accepted commit.",
+      taskId: "A",
+      title: "Produce accepted result"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: {
+        _tag: "Terminal",
+        attemptId: "attempt:A:0",
+        result: { _tag: "Accepted", acceptedResult: { commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }
       },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
-      {
-        _tag: "TaskWorkSpecificationReadReturned",
-        body: "Produce an accepted commit.",
-        taskId: "A",
-        title: "Produce accepted result"
-      },
-      { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" } },
-      { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
-      {
-        _tag: "PlannedAttemptExecutorWorkReported",
-        report: {
-          _tag: "Terminal",
+      request: "StartOrContinue"
+    },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: acceptedResultBlockedGraph },
+    {
+      _tag: "ExpectedBehavior",
+      orchestration: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalAccepted" },
+        {
+          _tag: "AcceptedResultIntegrationResponsibilityBegan",
           attemptId: "attempt:A:0",
-          result: { _tag: "Accepted", acceptedResult: { commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }
+          commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
+          taskId: "A"
         },
-        request: "StartOrContinue"
-      },
-      { _tag: "CoordinatorProcessDies" },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
-      { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
-      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: acceptedResultBlockedGraph },
-      {
-        _tag: "ExpectedBehavior",
-        orchestration: [
-          { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-          { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalAccepted" },
-          {
-            _tag: "AcceptedResultIntegrationResponsibilityBegan",
-            attemptId: "attempt:A:0",
-            commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
-            taskId: "A"
-          },
-          {
-            _tag: "AcceptedResultIntegrationStarted",
-            attemptId: "attempt:A:0",
-            commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
-            taskId: "A"
-          }
-        ],
-        protocol: null,
-        taskWork: {
-          absences: [],
-          results: [
-            { _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "A" }
-          ]
+        {
+          _tag: "AcceptedResultIntegrationStarted",
+          attemptId: "attempt:A:0",
+          commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
+          taskId: "A"
         }
+      ],
+      protocol: null,
+      taskWork: {
+        absences: [],
+        results: [
+          { _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "A" }
+        ]
       }
-    ]
-  }
-)
+    }
+  ]
+})
 
 /** Alice cannot apply a stale pre-integration direction after integration has consumed the exact attempt. */
-export const postIntegrationAttemptChoiceRejectedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const postIntegrationAttemptChoiceRejectedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
   name: "Alice's stale Continue and Stop directions cannot cross the exact integration cutoff",
   story: [
@@ -1760,7 +2381,7 @@ const candidateScenarioFrom = (
 }
 
 /** Conflict edits stay in one isolated candidate resource until an explicit exact submission. */
-export const candidateConflictRecoveryAuthoredCassette = candidateScenarioFrom(
+export const candidateConflictRecoveryAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
   "candidate conflict recovery stays in one isolated integration resource",
   [
     { _tag: "IntegrationCandidateAgentReported", report: { _tag: "Conflict" } },
@@ -1780,7 +2401,9 @@ export const candidateConflictRecoveryAuthoredCassette = candidateScenarioFrom(
 )
 
 /** A task paused after a recoverable candidate conflict finishes the held integration boundary without cleanup. */
-export const taskPauseFinishesHeldIntegrationAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const taskPauseFinishesHeldIntegrationAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...candidateConflictRecoveryAuthoredCassette,
   name: "Alice pauses task A after its integration target is held",
   story: candidateConflictRecoveryAuthoredCassette.story.flatMap((item) =>
@@ -1799,7 +2422,7 @@ export const taskPauseFinishesHeldIntegrationAuthoredCassette = Schema.decodeUnk
 })
 
 /** A definitive invalid submission is corrected, while unreadable Git causes a reread without another agent call. */
-export const candidateCorrectionAfterUnreadableGitAuthoredCassette = candidateScenarioFrom(
+export const candidateCorrectionAfterUnreadableGitAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
   "candidate correction rereads unreadable Git without charging the agent",
   [
     {
@@ -1825,7 +2448,7 @@ export const candidateCorrectionAfterUnreadableGitAuthoredCassette = candidateSc
 )
 
 /** A selected public verification plan reports failure and leaves the exact candidate unpromoted. */
-export const candidateVerificationFailureAuthoredCassette = candidateScenarioFrom(
+export const candidateVerificationFailureAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
   "selected public verification fails without promotion",
   [
     {
@@ -1851,7 +2474,7 @@ export const candidateVerificationFailureAuthoredCassette = candidateScenarioFro
 )
 
 /** A foreign wrapper correlation is durably contradicted before any evidence can authorize M. */
-export const candidateVerificationContradictionAuthoredCassette = candidateScenarioFrom(
+export const candidateVerificationContradictionAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
   "foreign public verification correlation fails closed",
   [
     {
@@ -1879,6 +2502,407 @@ export const candidateVerificationContradictionAuthoredCassette = candidateScena
 const promotionCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
 const promotionExpectedHead = "1111111111111111111111111111111111111111"
 
+const pauseExecutorAndPromotionG1 = {
+  revision: "pause-executor-promotion-G1",
+  tasks: [
+    { id: "P", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["P"] },
+    { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["A"] },
+    { id: "C", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "D", lifecycle: { _tag: "Open" }, parentTaskId: "A", prerequisiteIds: [] }
+  ]
+} as const
+
+const pauseExecutorAndPromotionG0 = {
+  revision: "pause-executor-promotion-G0",
+  tasks: [{ id: "D", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+} as const
+
+const pauseExecutorAndPromotionRequestD = {
+  acceptanceManifest: { byteLength: 254, digest: "1111111111111111111111111111111111111111111111111111111111111111" },
+  candidateCommit: promotionCandidateCommit,
+  candidateConstructedAt: 31,
+  candidateCorrelation: {
+    acceptanceManifest: { byteLength: 254, digest: "1111111111111111111111111111111111111111111111111111111111111111" },
+    acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    attemptId: "attempt:D:0",
+    candidateId: "integration-candidate:$authored-run:attempt:D:0:23",
+    candidateResource: "integration-candidate-resource:integration-candidate:$authored-run:attempt:D:0:23",
+    expectedTargetHead: promotionExpectedHead,
+    integrationSessionId: "integration-session:$authored-run:attempt:D:0:23",
+    integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
+    runId: "$authored-run"
+  },
+  expectedTargetHead: promotionExpectedHead,
+  integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
+  reviewManifest: { byteLength: 1141, digest: "2222222222222222222222222222222222222222222222222222222222222222" },
+  requestId: "target-promotion:integration-candidate:$authored-run:attempt:D:0:23",
+  verificationCorrelation: {
+    candidateCommit: promotionCandidateCommit,
+    candidateCorrelation: {
+      acceptanceManifest: {
+        byteLength: 254,
+        digest: "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      attemptId: "attempt:D:0",
+      candidateId: "integration-candidate:$authored-run:attempt:D:0:23",
+      candidateResource: "integration-candidate-resource:integration-candidate:$authored-run:attempt:D:0:23",
+      expectedTargetHead: promotionExpectedHead,
+      integrationSessionId: "integration-session:$authored-run:attempt:D:0:23",
+      integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
+      runId: "$authored-run"
+    },
+    candidateConstructedAt: 31,
+    planId: "public-checks-v1",
+    requestId: "target-verification:integration-candidate:$authored-run:attempt:D:0:23"
+  },
+  verificationManifest: { byteLength: 1554, digest: "3333333333333333333333333333333333333333333333333333333333333333" }
+} as const
+
+const pauseExecutorAndPromotionSuspendA = {
+  _tag: "IdentityFreeWorkflowRoute",
+  correlation: { _tag: "PlannedAttempt", attemptId: "attempt:A:0" },
+  proposalId: '["IdentityFreeWorkflowRoute","SuspendPlannedAttemptExecutorWork","attempt:A:0",null,"A"]',
+  taskId: "A"
+} as const
+
+const pauseExecutorAndPromotionContinueA = {
+  _tag: "FreshExecutorWorkflowRoute",
+  attemptId: "attempt:A:0",
+  proposalId: '["FreshExecutorWorkflowRoute","ContinuePlannedAttemptExecutorWork","attempt:A:0","A"]',
+  taskId: "A"
+} as const
+
+const pauseExecutorAndPromotionRunD = {
+  _tag: "IdentityFreeWorkflowRoute",
+  correlation: {
+    _tag: "TargetPromotion",
+    attemptId: "attempt:D:0",
+    queuedAt: 22,
+    request: pauseExecutorAndPromotionRequestD
+  },
+  proposalId: '["IdentityFreeWorkflowRoute","RunTargetPromotion",null,22,"D"]',
+  taskId: "D"
+} as const
+
+const pauseExecutorResponsibilityA = {
+  _tag: "PlannedAttemptExecutorWork",
+  attemptId: "attempt:A:0",
+  beganAt: 66,
+  coverage: { _tag: "ExactTaskPauseCoverage" },
+  taskId: "A"
+} as const
+
+const pausePromotionResponsibilityD = {
+  _tag: "StartedIntegration",
+  attemptId: "attempt:D:0",
+  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 73, pausedTaskId: "A" },
+  queuedAt: 22,
+  startedAt: 23,
+  taskId: "D"
+} as const
+
+const pauseExecutorSafeA = { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" } as const
+const pauseContinueLiveA = {
+  _tag: "LiveDeliveryAction",
+  owner: { _tag: "AdmittedDeliveryAction", proposal: pauseExecutorAndPromotionContinueA }
+} as const
+const pauseContinuePendingA = {
+  _tag: "AcceptedOutcomePublicationPending",
+  proposal: pauseExecutorAndPromotionContinueA
+} as const
+const pauseSuspendProposedA = { _tag: "ProposedDeliveryAction", proposal: pauseExecutorAndPromotionSuspendA } as const
+const pauseSuspendLiveA = {
+  _tag: "LiveDeliveryAction",
+  owner: { _tag: "AdmittedDeliveryAction", proposal: pauseExecutorAndPromotionSuspendA }
+} as const
+const pauseSuspendPendingA = {
+  _tag: "AcceptedOutcomePublicationPending",
+  proposal: pauseExecutorAndPromotionSuspendA
+} as const
+const pausePromotionRequiredD = {
+  _tag: "TargetPromotionResultRequired",
+  request: pauseExecutorAndPromotionRequestD
+} as const
+const pausePromotionHeldD = { _tag: "HeldIntegrationTarget", queuedAt: 22 } as const
+const pausePromotionActiveD = { _tag: "ActiveIntegrationTarget", queuedAt: 22 } as const
+const pausePromotionLiveD = {
+  _tag: "LiveDeliveryAction",
+  owner: { _tag: "AdmittedDeliveryAction", proposal: pauseExecutorAndPromotionRunD }
+} as const
+const pausePromotionPendingD = {
+  _tag: "AcceptedOutcomePublicationPending",
+  proposal: pauseExecutorAndPromotionRunD
+} as const
+
+const pauseExecutorAndPromotionWaiting = (
+  executorBlockers: ReadonlyArray<unknown>,
+  promotionBlockers: ReadonlyArray<unknown>
+) => ({
+  _tag: "PauseProgressObserved" as const,
+  result: {
+    _tag: "PauseWaiting" as const,
+    atBoundary: [],
+    preventing: [
+      { blockers: executorBlockers, responsibility: pauseExecutorResponsibilityA },
+      { blockers: promotionBlockers, responsibility: pausePromotionResponsibilityD }
+    ]
+  },
+  subject: { _tag: "Task" as const, taskId: "A" }
+})
+
+const pauseExecutorAtBoundaryAndPromotionWaiting = (promotionBlockers: ReadonlyArray<unknown>) => ({
+  _tag: "PauseProgressObserved" as const,
+  result: {
+    _tag: "PauseWaiting" as const,
+    atBoundary: [pauseExecutorResponsibilityA],
+    preventing: [{ blockers: promotionBlockers, responsibility: pausePromotionResponsibilityD }]
+  },
+  subject: { _tag: "Task" as const, taskId: "A" }
+})
+
+const targetPromotionSuccessTailForD = [
+  { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:0", taskId: "D" } },
+  {
+    _tag: "IntegrationCandidateAgentReported",
+    report: { _tag: "Submitted", candidateCommit: promotionCandidateCommit }
+  },
+  {
+    _tag: "IntegrationCandidateGitValidationReturned",
+    observation: { _tag: "Commit", directParents: [promotionExpectedHead, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] }
+  },
+  {
+    _tag: "TargetVerificationReturned",
+    result: { _tag: "Passed", artifacts: [{ name: "verification-report", content: "all selected checks passed" }] }
+  },
+  {
+    _tag: "TargetPromotionGitReadReturned",
+    observation: { _tag: "CandidateNotInAncestry", currentHeadSha: promotionExpectedHead }
+  },
+  { _tag: "TargetPromotionCompareAndSetResponseLost", detail: "Git may have applied MD before its response was lost" }
+] as const
+
+/** Alice observes A's executor and grouping child D's promotion reach their exact Pause boundaries. */
+export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  _tag: "AuthoredScenarioCassette",
+  name: "Alice sees task A and grouping child D reach their exact Pause boundaries",
+  schemaVersion: 1,
+  startingFacts: {
+    executorWork: "NoPriorReport",
+    journal: "Empty",
+    taskClaims: [],
+    taskWorkSpecifications: [
+      { body: "Complete prerequisite P.", taskId: "P", title: "Complete prerequisite" },
+      { body: "Keep executor A running.", taskId: "A", title: "Run A" },
+      { body: "Wait for A.", taskId: "B", title: "Blocked dependant" },
+      { body: "Keep independent C running.", taskId: "C", title: "Run C" },
+      { body: "Produce D's accepted commit.", taskId: "D", title: "Integrate D" }
+    ],
+    trackerGraph: pauseExecutorAndPromotionG0,
+    worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
+  },
+  story: [
+    { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: 4 } },
+    {
+      _tag: "RunCoordinator",
+      baseSha: promotionExpectedHead,
+      claimOwner: "pause-boundaries-owner",
+      claimTokenPrefix: "pause-boundaries-claim",
+      executor: "executor:cassette",
+      integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
+      target: "cassette-target",
+      verificationPlanId: "public-checks-v1",
+      worktreeRoot: "/dalph/cassettes/pause-boundaries"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG0 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG0 },
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "D" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG0 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Produce D's accepted commit.",
+      taskId: "D",
+      title: "Integrate D"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:0", taskId: "D" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:0", taskId: "D" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: {
+        _tag: "Terminal",
+        attemptId: "attempt:D:0",
+        result: { _tag: "Accepted", acceptedResult: { commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }
+      },
+      request: "StartOrContinue"
+    },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG0 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "D" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG0 },
+    ...targetPromotionSuccessTailForD,
+    { _tag: "CassetteKillsCoordinatorAtTargetPromotionReconciliationRead", request: pauseExecutorAndPromotionRequestD },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "D" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
+    { _tag: "OperatorAppliesControlDirection", direction: "Pause", subject: { _tag: "Task", taskId: "X" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
+    {
+      _tag: "OperatorControlDirectionFailed",
+      direction: "Pause",
+      reason: "OutsideCurrentTargetClosure",
+      subject: { _tag: "Task", taskId: "X" }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:0", taskId: "D" } },
+    {
+      _tag: "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary",
+      request: pauseExecutorAndPromotionRequestD
+    },
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    { _tag: "TaskWorkSpecificationReadReturned", body: "Keep executor A running.", taskId: "A", title: "Run A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
+    { _tag: "TaskWorkSpecificationReadReturned", body: "Keep independent C running.", taskId: "C", title: "Run C" },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:1", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:1", taskId: "C" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "StartOrContinue"
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:C:1" },
+      request: "StartOrContinue"
+    },
+    {
+      _tag: "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
+      direction: "Pause",
+      subject: { _tag: "Task", taskId: "A" }
+    },
+    ...taskControlMembershipRead(pauseExecutorAndPromotionG1),
+    { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
+    { _tag: "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary", attemptId: "attempt:C:1", taskId: "C" },
+    { _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary", attemptId: "attempt:A:0", taskId: "A" },
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseSuspendProposedA, pauseContinueLiveA],
+      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
+    ),
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "StartOrContinue"
+    },
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseContinueLiveA],
+      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
+    ),
+    { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:A:0", taskId: "A" },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseContinuePendingA],
+      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
+    ),
+    { _tag: "CassetteReleasesHeldTargetPromotionReconciliationRead", request: pauseExecutorAndPromotionRequestD },
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      observation: { _tag: "CandidateCurrent", currentHeadSha: promotionCandidateCommit }
+    },
+    { _tag: "CassetteReleasesHeldPlannedAttemptContinuation", attemptId: "attempt:C:1", taskId: "C" },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Terminal", attemptId: "attempt:C:1", result: { _tag: "Completed" } },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA],
+      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
+    ),
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseSuspendProposedA],
+      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
+    ),
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseSuspendLiveA],
+      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
+    ),
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseSuspendLiveA],
+      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionLiveD]
+    ),
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseSuspendLiveA],
+      [pausePromotionRequiredD, pausePromotionLiveD]
+    ),
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseSuspendPendingA],
+      [pausePromotionRequiredD, pausePromotionLiveD]
+    ),
+    pauseExecutorAndPromotionWaiting([pauseExecutorSafeA], [pausePromotionRequiredD, pausePromotionLiveD]),
+    pauseExecutorAndPromotionWaiting([pauseExecutorSafeA], [pausePromotionRequiredD, pausePromotionPendingD]),
+    pauseExecutorAtBoundaryAndPromotionWaiting([
+      pausePromotionRequiredD,
+      pausePromotionHeldD,
+      pausePromotionActiveD,
+      pausePromotionLiveD
+    ]),
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    {
+      _tag: "PauseProgressObserved",
+      result: { _tag: "PauseConfirmed", atBoundary: [pauseExecutorResponsibilityA, pausePromotionResponsibilityD] },
+      subject: { _tag: "Task", taskId: "A" }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
+    {
+      _tag: "ExpectedBehavior",
+      orchestration: null,
+      protocol: null,
+      taskWork: {
+        absences: [],
+        results: [
+          { _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "D" },
+          { _tag: "PlannedWorkForTaskCompleted", taskId: "C" }
+        ]
+      }
+    }
+  ]
+})
+
 const promotionScenarioFrom = (name: string, promotionStory: ReadonlyArray<unknown>, promotionEvidence: unknown) =>
   Schema.decodeUnknownSync(AuthoredScenarioCassette)({
     ...candidateCorrectionAfterUnreadableGitAuthoredCassette,
@@ -1898,7 +2922,7 @@ const promotionScenarioFrom = (name: string, promotionStory: ReadonlyArray<unkno
   })
 
 /** Git accepts the one exact H -> M update after the verified candidate is sealed. */
-export const targetPromotionSuccessAuthoredCassette = promotionScenarioFrom(
+export const targetPromotionSuccessAuthoredCassette: ScenarioCassette = promotionScenarioFrom(
   "promotes verified M by exact compare-and-set and records exact ancestry",
   [
     {
@@ -2061,7 +3085,9 @@ const deliveryFinalityBase = (() => {
  * the production delivery relation makes B eligible without claiming that
  * Dalph has already executed B or fabricating whole-Run termination.
  */
-export const deliveryFinalitySpineAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const deliveryFinalitySpineAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...targetPromotionSuccessAuthoredCassette,
   name: "real A-finality spine (partial delivery-invariant story): five-to-seven task graph across restart",
   startingFacts: {
@@ -2076,7 +3102,9 @@ export const deliveryFinalitySpineAuthoredCassette = Schema.decodeUnknownSync(Au
 })
 
 /** The same A-to-B story when the tracker applies Q but its direct response is lost. */
-export const ambiguousCompletionResponseAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const ambiguousCompletionResponseAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...deliveryFinalitySpineAuthoredCassette,
   name: "Dalph checks A after losing the tracker completion response",
   story: deliveryFinalitySpineAuthoredCassette.story.map((item) =>
@@ -2105,7 +3133,9 @@ const deliveryFinalityRecoveryStory = (() => {
 })()
 
 /** Restart occurs after focused A success but before the complete graph that can release B. */
-export const completionGraphRefreshRecoveryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const completionGraphRefreshRecoveryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...deliveryFinalitySpineAuthoredCassette,
   name: "Restart keeps B blocked between A's success confirmation and the later graph",
   story: deliveryFinalityRecoveryStory
@@ -2162,7 +3192,9 @@ const deliveryFinalityCurrentGraphStory = (() => {
 })()
 
 /** B remains excluded while current graph G7 reports unfinished D, then proceeds only after G8 completes D. */
-export const currentCompletionGraphAuthorityAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const currentCompletionGraphAuthorityAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...deliveryFinalitySpineAuthoredCassette,
   name: "The later complete graph gives the current reason B may proceed",
   story: deliveryFinalityCurrentGraphStory
@@ -2347,7 +3379,9 @@ const completionConflictStory = (() => {
 })()
 
 /** A terminal-without-success tracker race remains local to A and preserves its promoted responsibility. */
-export const completionTaskConflictAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const completionTaskConflictAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   ...deliveryFinalitySpineAuthoredCassette,
   name: "A tracker client changes A while Dalph's completion request is pending",
   startingFacts: {
@@ -2496,7 +3530,9 @@ const doubleDiamondAttempts = {
 const doubleDiamondExecutionOrder = ["A", "B", "C", "D", "X", "E", "F", "H", "I", "G"] as const
 
 /** The real delivery runtime consumes a staggered double diamond and reconstructs both middle positions before observing X. */
-export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
   _tag: "AuthoredScenarioCassette",
   name: "coarse executor reports and later tracker observations consume a staggered double diamond while restart-delayed X waits for capacity",
   schemaVersion: 1,
@@ -2590,7 +3626,7 @@ export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(A
 })
 
 /** Three lost mutation responses are each reconciled against H; exhaustion sends no fourth request. */
-export const targetPromotionAmbiguityExhaustionAuthoredCassette = promotionScenarioFrom(
+export const targetPromotionAmbiguityExhaustionAuthoredCassette: ScenarioCassette = promotionScenarioFrom(
   "reconciles a lost promotion response and never sends a fourth request",
   [
     {
@@ -2623,7 +3659,7 @@ export const targetPromotionAmbiguityExhaustionAuthoredCassette = promotionScena
 )
 
 /** The post-intent Git read sees H2, records stale evidence, and sends no compare-and-set. */
-export const targetPromotionStaleBeforeCompareAndSetAuthoredCassette = promotionScenarioFrom(
+export const targetPromotionStaleBeforeCompareAndSetAuthoredCassette: ScenarioCassette = promotionScenarioFrom(
   "records stale H2 and never overwrites it",
   [
     {
@@ -2643,32 +3679,33 @@ export const targetPromotionStaleBeforeCompareAndSetAuthoredCassette = promotion
 )
 
 /** Git applied M but lost the response; the required read discovers M and sends no retry. */
-export const targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassette = promotionScenarioFrom(
-  "discovers M in current target ancestry after losing the promotion response",
-  [
+export const targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassette: ScenarioCassette =
+  promotionScenarioFrom(
+    "discovers M in current target ancestry after losing the promotion response",
+    [
+      {
+        _tag: "TargetPromotionGitReadReturned",
+        observation: { _tag: "CandidateNotInAncestry", currentHeadSha: promotionExpectedHead }
+      },
+      { _tag: "TargetPromotionCompareAndSetResponseLost", detail: "Git applied M but the response was lost" },
+      {
+        _tag: "TargetPromotionGitReadReturned",
+        observation: { _tag: "CandidateCurrent", currentHeadSha: promotionCandidateCommit }
+      }
+    ],
     {
-      _tag: "TargetPromotionGitReadReturned",
-      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: promotionExpectedHead }
-    },
-    { _tag: "TargetPromotionCompareAndSetResponseLost", detail: "Git applied M but the response was lost" },
-    {
-      _tag: "TargetPromotionGitReadReturned",
-      observation: { _tag: "CandidateCurrent", currentHeadSha: promotionCandidateCommit }
+      _tag: "TargetPromotionSucceeded",
+      basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+      candidateCommit: promotionCandidateCommit,
+      expectedTargetHead: promotionExpectedHead,
+      observedTargetHead: promotionCandidateCommit,
+      observation: "ReconciledCandidateCurrent",
+      taskId: "A"
     }
-  ],
-  {
-    _tag: "TargetPromotionSucceeded",
-    basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
-    candidateCommit: promotionCandidateCommit,
-    expectedTargetHead: promotionExpectedHead,
-    observedTargetHead: promotionCandidateCommit,
-    observation: "ReconciledCandidateCurrent",
-    taskId: "A"
-  }
-)
+  )
 
 /** Two definitive invalid submissions exhaust the accepted one-correction cassette policy. */
-export const candidateCorrectionExhaustionAuthoredCassette = candidateScenarioFrom(
+export const candidateCorrectionExhaustionAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
   "candidate correction exhaustion preserves non-convergent work",
   [
     {
@@ -2686,7 +3723,7 @@ export const candidateCorrectionExhaustionAuthoredCassette = candidateScenarioFr
 )
 
 /** A misrouted response is preserved as a correlation contradiction and never reaches Git. */
-export const candidateCorrelationContradictionAuthoredCassette = candidateScenarioFrom(
+export const candidateCorrelationContradictionAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
   "candidate correlation contradiction fails closed before Git",
   [{ _tag: "IntegrationCandidateAgentReported", report: { _tag: "CorrelationContradiction" } }],
   undefined
@@ -2697,52 +3734,109 @@ const defineAuthoredCassetteCatalog = <const Name extends string>(
   catalog: Readonly<Record<Name, AuthoredScenarioCassette>>
 ): Readonly<Record<Name, AuthoredScenarioCassette>> => catalog
 
-export const maintainedAuthoredCassetteCatalog = defineAuthoredCassetteCatalog({
-  acceptedResultRestartsIntoIntegration: acceptedResultRestartsIntoIntegrationAuthoredCassette,
-  postIntegrationAttemptChoiceRejected: postIntegrationAttemptChoiceRejectedAuthoredCassette,
-  candidateConflictRecovery: candidateConflictRecoveryAuthoredCassette,
-  candidateCorrectionAfterUnreadableGit: candidateCorrectionAfterUnreadableGitAuthoredCassette,
-  candidateCorrectionExhaustion: candidateCorrectionExhaustionAuthoredCassette,
-  candidateCorrelationContradiction: candidateCorrelationContradictionAuthoredCassette,
-  candidateVerificationFailure: candidateVerificationFailureAuthoredCassette,
-  candidateVerificationContradiction: candidateVerificationContradictionAuthoredCassette,
-  candidateVerificationPassed: candidateCorrectionAfterUnreadableGitAuthoredCassette,
-  targetPromotionSuccess: targetPromotionSuccessAuthoredCassette,
-  targetPromotionAmbiguityExhaustion: targetPromotionAmbiguityExhaustionAuthoredCassette,
-  targetPromotionStaleBeforeCompareAndSet: targetPromotionStaleBeforeCompareAndSetAuthoredCassette,
-  targetPromotionLostResponseDiscoversCurrentCandidate:
-    targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassette,
-  changedAttemptContinues: changedAttemptContinuesAuthoredCassette,
-  changedAttemptChoiceRace: changedAttemptChoiceRaceAuthoredCassette,
-  changedAgainAttemptRequiresNewChoice: changedAgainAttemptRequiresNewChoiceAuthoredCassette,
-  changedAttemptStopLostThirdSuspension: changedAttemptStopLostThirdSuspensionAuthoredCassette,
-  changedAttemptStopRemainsUnproved: changedAttemptStopRemainsUnprovedAuthoredCassette,
-  changedAttemptStopsAndReleases: changedAttemptStopsAndReleasesAuthoredCassette,
-  changedAttemptStopReleaseResponseLost: changedAttemptStopReleaseResponseLostAuthoredCassette,
-  changedAttemptStopsWithAbsentClaim: changedAttemptStopsWithAbsentClaimAuthoredCassette,
-  changedAttemptStopsWithForeignClaim: changedAttemptStopsWithForeignClaimAuthoredCassette,
-  compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
-  coordinatorProcessDeathContinues: coordinatorProcessDeathContinuesAuthoredCassette,
-  contractedCapacityRetainsTwoAttempts: contractedCapacityRetainsTwoAttemptsAuthoredCassette,
-  ambiguousCompletionResponse: ambiguousCompletionResponseAuthoredCassette,
-  completionGraphRefreshRecovery: completionGraphRefreshRecoveryAuthoredCassette,
-  completionTaskConflict: completionTaskConflictAuthoredCassette,
-  currentCompletionGraphAuthority: currentCompletionGraphAuthorityAuthoredCassette,
-  deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
-  deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
-  dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
-  incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
-  lostPlannedWorktreeSafelySuspends: lostPlannedWorktreeSafelySuspendsAuthoredCassette,
-  runPauseRestartsPassively: runPauseRestartsPassivelyAuthoredCassette,
-  runPauseSafelySuspends: runPauseSafelySuspendsAuthoredCassette,
-  runUnpauseAfterSafeSuspension: runUnpauseAfterSafeSuspensionAuthoredCassette,
-  runUnpauseDuringSuspensionRestarts: runUnpauseDuringSuspensionRestartsAuthoredCassette,
-  staleTaskPauseRejected: staleTaskPauseRejectedAuthoredCassette,
-  unreadableTaskUnpauseRejected: unreadableTaskUnpauseRejectedAuthoredCassette,
-  taskPauseCoversGroupingChild: taskPauseCoversGroupingChildAuthoredCassette,
-  taskPauseFinishesHeldIntegration: taskPauseFinishesHeldIntegrationAuthoredCassette,
-  taskPauseLetsIndependentTaskContinue: taskPauseLetsIndependentTaskContinueAuthoredCassette,
-  taskUnpauseAfterSafeSuspension: taskUnpauseAfterSafeSuspensionAuthoredCassette,
-  taskUnpauseDuringSuspensionRestarts: taskUnpauseDuringSuspensionRestartsAuthoredCassette,
-  singletonTaskCompletes: singletonTaskCompletesAuthoredCassette
-})
+type MaintainedAuthoredCassetteName =
+  | "acceptedResultRestartsIntoIntegration"
+  | "postIntegrationAttemptChoiceRejected"
+  | "candidateConflictRecovery"
+  | "candidateCorrectionAfterUnreadableGit"
+  | "candidateCorrectionExhaustion"
+  | "candidateCorrelationContradiction"
+  | "candidateVerificationFailure"
+  | "candidateVerificationContradiction"
+  | "candidateVerificationPassed"
+  | "targetPromotionSuccess"
+  | "targetPromotionAmbiguityExhaustion"
+  | "targetPromotionStaleBeforeCompareAndSet"
+  | "targetPromotionLostResponseDiscoversCurrentCandidate"
+  | "changedAttemptContinues"
+  | "changedAttemptChoiceRace"
+  | "changedAgainAttemptRequiresNewChoice"
+  | "changedAttemptStopLostThirdSuspension"
+  | "changedAttemptStopRemainsUnproved"
+  | "changedAttemptStopsAndReleases"
+  | "changedAttemptStopReleaseResponseLost"
+  | "changedAttemptStopsWithAbsentClaim"
+  | "changedAttemptStopsWithForeignClaim"
+  | "compatibleTargetAdvanceContinues"
+  | "coordinatorProcessDeathContinues"
+  | "contractedCapacityRetainsTwoAttempts"
+  | "ambiguousCompletionResponse"
+  | "completionGraphRefreshRecovery"
+  | "completionTaskConflict"
+  | "currentCompletionGraphAuthority"
+  | "deliveryFinalitySpine"
+  | "deliveryInvariantStory"
+  | "dependentTasksCompleteInOneRun"
+  | "incompatibleTargetRewriteSafelySuspends"
+  | "lostPlannedWorktreeSafelySuspends"
+  | "runPauseRestartsPassively"
+  | "runPauseObservationDisconnects"
+  | "runPauseSafelySuspends"
+  | "runUnpauseAfterSafeSuspension"
+  | "runUnpauseDuringSuspensionRestarts"
+  | "staleTaskPauseRejected"
+  | "unreadableTaskUnpauseRejected"
+  | "taskPauseCoversGroupingChild"
+  | "taskPauseObservationUnpaused"
+  | "taskPauseGroupingFactsAdded"
+  | "taskPauseExecutorAndPromotionBoundaries"
+  | "taskPauseFinishesHeldIntegration"
+  | "taskPauseLetsIndependentTaskContinue"
+  | "taskUnpauseAfterSafeSuspension"
+  | "taskUnpauseDuringSuspensionRestarts"
+  | "singletonTaskCompletes"
+
+export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthoredCassetteName, ScenarioCassette>> =
+  defineAuthoredCassetteCatalog({
+    acceptedResultRestartsIntoIntegration: acceptedResultRestartsIntoIntegrationAuthoredCassette,
+    postIntegrationAttemptChoiceRejected: postIntegrationAttemptChoiceRejectedAuthoredCassette,
+    candidateConflictRecovery: candidateConflictRecoveryAuthoredCassette,
+    candidateCorrectionAfterUnreadableGit: candidateCorrectionAfterUnreadableGitAuthoredCassette,
+    candidateCorrectionExhaustion: candidateCorrectionExhaustionAuthoredCassette,
+    candidateCorrelationContradiction: candidateCorrelationContradictionAuthoredCassette,
+    candidateVerificationFailure: candidateVerificationFailureAuthoredCassette,
+    candidateVerificationContradiction: candidateVerificationContradictionAuthoredCassette,
+    candidateVerificationPassed: candidateCorrectionAfterUnreadableGitAuthoredCassette,
+    targetPromotionSuccess: targetPromotionSuccessAuthoredCassette,
+    targetPromotionAmbiguityExhaustion: targetPromotionAmbiguityExhaustionAuthoredCassette,
+    targetPromotionStaleBeforeCompareAndSet: targetPromotionStaleBeforeCompareAndSetAuthoredCassette,
+    targetPromotionLostResponseDiscoversCurrentCandidate:
+      targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassette,
+    changedAttemptContinues: changedAttemptContinuesAuthoredCassette,
+    changedAttemptChoiceRace: changedAttemptChoiceRaceAuthoredCassette,
+    changedAgainAttemptRequiresNewChoice: changedAgainAttemptRequiresNewChoiceAuthoredCassette,
+    changedAttemptStopLostThirdSuspension: changedAttemptStopLostThirdSuspensionAuthoredCassette,
+    changedAttemptStopRemainsUnproved: changedAttemptStopRemainsUnprovedAuthoredCassette,
+    changedAttemptStopsAndReleases: changedAttemptStopsAndReleasesAuthoredCassette,
+    changedAttemptStopReleaseResponseLost: changedAttemptStopReleaseResponseLostAuthoredCassette,
+    changedAttemptStopsWithAbsentClaim: changedAttemptStopsWithAbsentClaimAuthoredCassette,
+    changedAttemptStopsWithForeignClaim: changedAttemptStopsWithForeignClaimAuthoredCassette,
+    compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
+    coordinatorProcessDeathContinues: coordinatorProcessDeathContinuesAuthoredCassette,
+    contractedCapacityRetainsTwoAttempts: contractedCapacityRetainsTwoAttemptsAuthoredCassette,
+    ambiguousCompletionResponse: ambiguousCompletionResponseAuthoredCassette,
+    completionGraphRefreshRecovery: completionGraphRefreshRecoveryAuthoredCassette,
+    completionTaskConflict: completionTaskConflictAuthoredCassette,
+    currentCompletionGraphAuthority: currentCompletionGraphAuthorityAuthoredCassette,
+    deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
+    deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
+    dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
+    incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
+    lostPlannedWorktreeSafelySuspends: lostPlannedWorktreeSafelySuspendsAuthoredCassette,
+    runPauseRestartsPassively: runPauseRestartsPassivelyAuthoredCassette,
+    runPauseObservationDisconnects: runPauseObservationDisconnectsAuthoredCassette,
+    runPauseSafelySuspends: runPauseSafelySuspendsAuthoredCassette,
+    runUnpauseAfterSafeSuspension: runUnpauseAfterSafeSuspensionAuthoredCassette,
+    runUnpauseDuringSuspensionRestarts: runUnpauseDuringSuspensionRestartsAuthoredCassette,
+    staleTaskPauseRejected: staleTaskPauseRejectedAuthoredCassette,
+    unreadableTaskUnpauseRejected: unreadableTaskUnpauseRejectedAuthoredCassette,
+    taskPauseCoversGroupingChild: taskPauseCoversGroupingChildAuthoredCassette,
+    taskPauseObservationUnpaused: taskPauseObservationUnpausedAuthoredCassette,
+    taskPauseGroupingFactsAdded: taskPauseGroupingFactsAddedAuthoredCassette,
+    taskPauseExecutorAndPromotionBoundaries: taskPauseExecutorAndPromotionBoundariesAuthoredCassette,
+    taskPauseFinishesHeldIntegration: taskPauseFinishesHeldIntegrationAuthoredCassette,
+    taskPauseLetsIndependentTaskContinue: taskPauseLetsIndependentTaskContinueAuthoredCassette,
+    taskUnpauseAfterSafeSuspension: taskUnpauseAfterSafeSuspensionAuthoredCassette,
+    taskUnpauseDuringSuspensionRestarts: taskUnpauseDuringSuspensionRestartsAuthoredCassette,
+    singletonTaskCompletes: singletonTaskCompletesAuthoredCassette
+  })

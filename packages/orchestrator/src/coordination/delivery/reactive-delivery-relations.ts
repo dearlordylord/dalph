@@ -10,6 +10,7 @@ import { runnableTransitionTaskId, transitionTrackerGraphRequirement } from "../
 import type { RunRecoveryProjectionSource } from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
+import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import { deriveFreshWorkflowDecisions } from "../run/fresh-workflow.js"
 import {
   acceptedOperationIdsOf,
@@ -41,6 +42,24 @@ type ReactiveDeliveryBundle = DeliveryRelationInputBundle
 
 type JournalProjection = Effect.Success<JournalService["state"]["get"]>
 type RecoveredDeliveryProjection = Effect.Success<RunRecoveryProjectionSource["readDeliveryProjection"]>
+
+const pauseCoverageFactsOf = (journal: JournalProjection) => {
+  const latestGraphRecord = journal.records.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      (event.observation._tag === "CompleteTaskTrackerFacts" ||
+        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+  )
+  const snapshot = Option.getOrUndefined(latestReconstructedTaskGraph(journal.reconstructed.graphKnowledge))
+  return latestGraphRecord === undefined || snapshot === undefined
+    ? ({ _tag: "PauseCoverageGraphNotEstablished", applied: journal.reconstructed.pause } as const)
+    : ({
+        _tag: "PauseCoverageGraphEstablished",
+        applied: journal.reconstructed.pause,
+        observedAt: latestGraphRecord.position,
+        snapshot
+      } as const)
+}
 
 const eligibleRecoveredTransitions = (
   journal: JournalProjection,
@@ -149,6 +168,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: journal.position,
+          pauseCoverage: pauseCoverageFactsOf(journal),
           quiescence: runIsPaused
             ? { _tag: "QuiescencePassive", reason: "RunPaused" }
             : { _tag: "TrackerReconfirmationAllowed" },

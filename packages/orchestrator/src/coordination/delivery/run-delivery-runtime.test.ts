@@ -72,11 +72,12 @@ import {
   type DeliveryRuntimeInput
 } from "./run-delivery-runtime.js"
 import {
-  DeliveryRuntimeResources,
-  type DeliveryRuntimeResourcesService,
-  deliveryRuntimeResourcesLayer,
-  deliveryRuntimeResourcesOf
+  type DeliveryRuntimeResourceCapabilities,
+  deliveryRuntimeResourceCapabilitiesLayer,
+  deliveryRuntimeResourceCapabilitiesOf,
+  deliveryRuntimeResourcesLayer
 } from "./delivery-runtime-resources.js"
+import type { DeliveryRuntimeObservationState } from "./delivery-runtime-observation.js"
 import {
   makePlannedAttemptProtocolController,
   PlannedAttemptProtocolController,
@@ -193,6 +194,10 @@ const baseEvaluation = Effect.gen(function* () {
             reflectionProposals: [],
             runtimeFacts: {
               acceptedAt: null,
+              pauseCoverage: {
+                _tag: "PauseCoverageGraphNotEstablished",
+                applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+              },
               quiescence: { _tag: "QuiescencePassive", reason: "RunPaused" },
               taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
             },
@@ -239,7 +244,7 @@ const assertCausalRouteChangeDoesNotRepeat = Effect.fn("Test.assertCausalRouteCh
   first: DeliveryActionProposal,
   superseding: DeliveryActionProposal,
   independentTaskId: TaskId,
-  resources?: DeliveryRuntimeResourcesService
+  capabilities?: DeliveryRuntimeResourceCapabilities
 ) {
   const independent = proposal(1, independentTaskId)
   expect(superseding.id).not.toBe(first.id)
@@ -278,13 +283,13 @@ const assertCausalRouteChangeDoesNotRepeat = Effect.fn("Test.assertCausalRouteCh
     Effect.provideService(DeliverySemanticTrace, trace)
   )
   const configuredRuntime =
-    resources === undefined
+    capabilities === undefined
       ? runtimeEffect.pipe(Effect.provide(identityLayers))
       : runtimeEffect.pipe(
           Effect.provide(plannerLayer),
           Effect.provide(deterministicOperationIdAllocatorLayer("runtime-causal-route-change")),
           Effect.provide(plannedAttemptProtocolControllerLayer),
-          Effect.provideService(DeliveryRuntimeResources, DeliveryRuntimeResources.of(resources))
+          Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities))
         )
   const runtime = yield* configuredRuntime.pipe(Effect.forkChild)
   yield* Deferred.await(firstStarted)
@@ -312,7 +317,11 @@ it.effect("finds exact proposal identities in available and conflicting frontier
     const conflicts = (
       ids: readonly [DeliveryProposalId, ...ReadonlyArray<DeliveryProposalId>]
     ): DeliveryProposalFrontier => {
-      const conflict = (id: DeliveryProposalId) => ({ id, owners: ["TrackerGraph", "TicketDelivery"] as const })
+      const conflict = (id: DeliveryProposalId) => ({
+        id,
+        order: a.order,
+        owners: ["TrackerGraph", "TicketDelivery"] as const
+      })
       return { _tag: "DeliveryProposalOwnershipConflict", conflicts: [conflict(ids[0]), ...ids.slice(1).map(conflict)] }
     }
 
@@ -323,6 +332,104 @@ it.effect("finds exact proposal identities in available and conflicting frontier
     expect(liveActionIsPresent(conflicts([a.id]), a)).toBe(true)
     expect(liveActionIsPresent(conflicts([a.id]), b)).toBe(false)
   })
+)
+
+it.effect("publishes current-first exact live-owner observations until standalone runtime quiescence", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const admitted = proposal(0, TaskId.make("runtime-observation-task"))
+      const initial = withProposals(yield* baseEvaluation, [admitted], 1)
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+      const resources = capabilities.resources
+      const observations = yield* Ref.make<ReadonlyArray<DeliveryRuntimeObservationState>>([])
+      const observationStarted = yield* Deferred.make<void>()
+      const actionStarted = yield* Deferred.make<void>()
+      const finishAction = yield* Deferred.make<void>()
+
+      const observer = yield* resources.runtimeObservation.changes.pipe(
+        Stream.runForEach((state) =>
+          Ref.update(observations, (current) => [...current, state]).pipe(
+            Effect.andThen(Deferred.succeed(observationStarted, undefined))
+          )
+        ),
+        Effect.forkChild
+      )
+      yield* Deferred.await(observationStarted)
+      expect((yield* resources.runtimeObservation.get)._tag).toBe("NotReady")
+
+      const executor = DeliveryActionExecutor.of({
+        execute: (_action, lease) =>
+          Effect.gen(function* () {
+            yield* lease.recordIntent(OperationId.make("runtime-observation:0"))
+            yield* Deferred.succeed(actionStarted, undefined)
+            yield* Deferred.await(finishAction)
+            yield* relation.publish(withProposals(initial, [], 1))
+            return { _tag: "ActionCompleted", proposalId: admitted.id } satisfies DeliveryActionResult
+          })
+      })
+      const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(deterministicOperationIdAllocatorLayer("runtime-observation")),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(actionStarted)
+      const active = yield* resources.runtimeObservation.get
+      if (active._tag !== "Ready") return expect.fail("the admitted action must be observable")
+      expect(active.liveOwners).toEqual([
+        {
+          _tag: "MaterializedDeliveryAction",
+          intent: "IntentRecorded",
+          operationId: OperationId.make("runtime-observation:0"),
+          proposal: admitted
+        }
+      ])
+
+      yield* Deferred.succeed(finishAction, undefined)
+      yield* Fiber.join(runtime)
+      yield* Fiber.join(observer)
+
+      const published = yield* Ref.get(observations)
+      const ready = published.filter(
+        (state): state is Extract<DeliveryRuntimeObservationState, { readonly _tag: "Ready" }> => state._tag === "Ready"
+      )
+      expect(published[0]?._tag).toBe("NotReady")
+      expect(ready[0]?.liveOwners).toEqual([])
+      expect(
+        ready.some(({ liveOwners }) =>
+          liveOwners.some((owner) => owner.proposal.id === admitted.id && owner._tag === "AdmittedDeliveryAction")
+        )
+      ).toBe(true)
+      expect(
+        ready.some(({ liveOwners }) =>
+          liveOwners.some(
+            (owner) =>
+              owner.proposal.id === admitted.id &&
+              owner._tag === "MaterializedDeliveryAction" &&
+              owner.intent === "IntentNotRecorded"
+          )
+        )
+      ).toBe(true)
+      expect(
+        ready.some(({ liveOwners }) =>
+          liveOwners.some(
+            (owner) => owner.proposal.id === admitted.id && owner._tag === "SettledMaterializedDeliveryAction"
+          )
+        )
+      ).toBe(true)
+      expect(ready.at(-1)?.liveOwners).toEqual([])
+      expect(ready.at(-1)?.evaluation.proposedActions).toEqual({
+        _tag: "DeliveryProposalsAvailable",
+        isolatedIssues: [],
+        proposals: []
+      })
+    })
+  )
 )
 
 it("keeps exact proposal identity for routes outside semantic recovered-read ownership", () => {
@@ -683,7 +790,7 @@ it.effect("does not repeat one started-integration lineage read after only its c
       first,
       superseding,
       TaskId.make("independent-after-integration-lineage-route"),
-      deliveryRuntimeResourcesOf(integrationTargets)
+      yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
     )
   }).pipe(Effect.scoped)
 )
@@ -784,6 +891,10 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: null,
+          pauseCoverage: {
+            _tag: "PauseCoverageGraphNotEstablished",
+            applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+          },
           quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const },
           taskWork: {
             capacity: TaskWorkCapacity.make(2),
@@ -1008,14 +1119,15 @@ const assertInterruptedAdmissionHandoffReleases = Effect.fn("Test.assertInterrup
           Effect.andThen(underlyingIntegrationTargets.release(responsibility))
         )
     }
-    const baseResources = deliveryRuntimeResourcesOf(integrationTargets)
-    const resources = DeliveryRuntimeResources.of({
-      ...baseResources,
-      makeAdmissionController: (initial) =>
-        baseResources
+    const baseCapabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+    const resources = {
+      ...baseCapabilities.resources,
+      makeAdmissionController: (initial: Parameters<typeof baseCapabilities.resources.makeAdmissionController>[0]) =>
+        baseCapabilities.resources
           .makeAdmissionController(initial)
           .pipe(Effect.tap((controller) => Deferred.succeed(admissionCreated, controller)))
-    })
+    }
+    const capabilities = { ...baseCapabilities, resources }
     const protocol = yield* makePlannedAttemptProtocolController()
     const trace = DeliverySemanticTrace.of({
       emit: (event) =>
@@ -1027,7 +1139,7 @@ const assertInterruptedAdmissionHandoffReleases = Effect.fn("Test.assertInterrup
       Effect.provide(plannerLayer),
       Effect.provide(deterministicOperationIdAllocatorLayer(`admission-handoff-${gap}`)),
       Effect.provideService(PlannedAttemptProtocolController, protocol),
-      Effect.provideService(DeliveryRuntimeResources, resources),
+      Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
       Effect.provideService(DeliverySemanticTrace, trace),
       Effect.provideService(
         DeliveryActionExecutor,
@@ -1107,14 +1219,12 @@ it.effect("releases acquired integration ownership and its relation subscriber o
         )
     })
     const integrationTargets = yield* makeIntegrationTargetResourceController()
+    const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
     const fiber = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(plannerLayer),
       Effect.provide(deterministicOperationIdAllocatorLayer("interrupt-cleanup")),
       Effect.provide(plannedAttemptProtocolControllerLayer),
-      Effect.provideService(
-        DeliveryRuntimeResources,
-        DeliveryRuntimeResources.of(deliveryRuntimeResourcesOf(integrationTargets))
-      ),
+      Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
       Effect.provideService(DeliveryActionExecutor, executor),
       Effect.forkChild
     )
@@ -1131,6 +1241,11 @@ it.effect("releases acquired integration ownership and its relation subscriber o
       heldResponsibilityPositions: new Set()
     })
     expect(yield* Ref.get(subscribers)).toBe(0)
+    const afterRollback = yield* capabilities.resources.runtimeObservation.get
+    if (afterRollback._tag !== "Closed" || afterRollback.final === null) {
+      return expect.fail("interrupted owner rollback must be observable")
+    }
+    expect(afterRollback.final.liveOwners).toEqual([])
   }).pipe(Effect.scoped)
 )
 
@@ -1155,16 +1270,14 @@ it.effect("rolls back acquired integration ownership when the action fails", () 
     const relation = yield* dynamicEvaluationSignal(withProposals(yield* baseEvaluation, [acquired]))
     const actionFailure = new IntegrationCandidateBoundaryUnavailable({ boundary: "Agent" })
     const integrationTargets = yield* makeIntegrationTargetResourceController()
+    const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
 
     expect(
       yield* runDeliveryRuntimeDecision(relation).pipe(
         Effect.provide(plannerLayer),
         Effect.provide(deterministicOperationIdAllocatorLayer("failed-integration-action")),
         Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provideService(
-          DeliveryRuntimeResources,
-          DeliveryRuntimeResources.of(deliveryRuntimeResourcesOf(integrationTargets))
-        ),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
         Effect.provideService(
           DeliveryActionExecutor,
           DeliveryActionExecutor.of({ execute: () => Effect.fail(actionFailure) })
@@ -1205,7 +1318,13 @@ it.effect("fails closed when the assembled relation reports conflicting proposal
       ...(yield* baseEvaluation),
       proposedActions: {
         _tag: "DeliveryProposalOwnershipConflict" as const,
-        conflicts: [{ id: conflictedId, owners: ["TrackerGraph" as const, "TicketDelivery" as const] }] as const
+        conflicts: [
+          {
+            id: conflictedId,
+            order: proposal(0, TaskId.make("runtime-owner-conflict")).order,
+            owners: ["TrackerGraph" as const, "TicketDelivery" as const]
+          }
+        ] as const
       }
     }
     const relation = yield* dynamicEvaluationSignal(conflicted)
@@ -1441,7 +1560,9 @@ it.effect("fails closed when a later evaluation introduces conflicting ownership
       ...initial,
       proposedActions: {
         _tag: "DeliveryProposalOwnershipConflict" as const,
-        conflicts: [{ id: conflictedId, owners: ["TrackerGraph", "TicketDelivery"] }] as const
+        conflicts: [
+          { id: conflictedId, order: actionProposal.order, owners: ["TrackerGraph", "TicketDelivery"] }
+        ] as const
       }
     }
     const executor = DeliveryActionExecutor.of({

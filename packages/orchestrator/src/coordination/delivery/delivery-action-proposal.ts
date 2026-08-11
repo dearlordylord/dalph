@@ -5,7 +5,7 @@ import type {
   RunId,
   TaskId
 } from "@dalph/contracts"
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -63,6 +63,16 @@ export type DeliveryProposalOrderEvidence =
       readonly terminalAt: JournalPosition
     }
   | { readonly _tag: "TrackerGraphOrder"; readonly acceptedAt: JournalPosition | null }
+
+/** The exact task region ordered by a proposal, or null for the Run-wide tracker graph read. */
+export const deliveryProposalOrderTaskId = (order: DeliveryProposalOrderEvidence): TaskId | null =>
+  Match.valueTags(order, {
+    FreshWorkflowOrder: ({ taskId }) => taskId,
+    IntegrationOrder: ({ taskId }) => taskId,
+    RecoveredWorkflowOrder: ({ taskId }) => taskId,
+    TrackerGraphOrder: () => null,
+    UnqueuedAcceptedResultOrder: ({ taskId }) => taskId
+  })
 
 /** The task-work position the runtime must prove before it may perform this action. */
 export type TaskWorkPositionRequirement =

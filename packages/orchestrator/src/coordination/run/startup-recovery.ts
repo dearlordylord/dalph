@@ -31,7 +31,12 @@ import {
 } from "../reconstruction/history-result.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { IntegrationTargetSelection } from "../../workflow/protocols/integration-admission/protocol.js"
-import { DeliveryRuntimeResources, deliveryRuntimeResourcesOf } from "../delivery/delivery-runtime-resources.js"
+import {
+  DeliveryRuntimeResourceCapabilityPair,
+  DeliveryRuntimeResources,
+  deliveryRuntimeResourceCapabilitiesOf
+} from "../delivery/delivery-runtime-resources.js"
+import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import {
   TargetVerificationRuntime,
@@ -122,10 +127,17 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   const ambient = yield* Effect.context<never>()
   const candidateAgent = Context.getOption(ambient, IntegrationCandidateAgent)
   const candidateGit = Context.getOption(ambient, IntegrationCandidateGit)
-  const deliveryRuntimeResources = Context.getOption(ambient, DeliveryRuntimeResources)
-  const runtimeResources = Option.isSome(deliveryRuntimeResources)
-    ? deliveryRuntimeResources.value
-    : DeliveryRuntimeResources.of(deliveryRuntimeResourcesOf(yield* makeIntegrationTargetResourceController()))
+  const ambientRuntimeCapabilities = Context.getOption(ambient, DeliveryRuntimeResourceCapabilityPair)
+  /* v8 ignore start -- @preserve Production bootstrap always supplies the process-owned capability pair; the fallback only keeps isolated validated-activation adapters self-contained, while the pair factory and close behavior have focused tests. */
+  const runtimeCapabilityOwnership = Option.isSome(ambientRuntimeCapabilities)
+    ? { ownedByActivation: false as const, value: ambientRuntimeCapabilities.value }
+    : yield* deliveryRuntimeResourceCapabilitiesOf(yield* makeIntegrationTargetResourceController()).pipe(
+        Effect.map((value) => ({ ownedByActivation: true as const, value }))
+      )
+  const runtimeResources = DeliveryRuntimeResources.of(runtimeCapabilityOwnership.value.resources)
+  const observationPublication = DeliveryRuntimeObservationPublication.of(runtimeCapabilityOwnership.value.observation)
+  if (runtimeCapabilityOwnership.ownedByActivation) yield* Effect.addFinalizer(() => observationPublication.close)
+  /* v8 ignore stop -- @preserve */
   const integrationResources = runtimeResources.integrationTargets
   const recovery = yield* makeRunRecoveryProjection(
     runId,
@@ -151,6 +163,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     Context.add(TaskClaimReacquisitionControl, taskClaimReacquisitionControl),
     Context.add(WorkflowTrace, trace),
     Context.add(DeliveryRuntimeResources, runtimeResources),
+    Context.add(DeliveryRuntimeObservationPublication, observationPublication),
     Context.addOrOmit(IntegrationCandidateAgent, candidateAgent),
     Context.addOrOmit(IntegrationCandidateGit, candidateGit),
     Context.addOrOmit(

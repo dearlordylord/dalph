@@ -124,6 +124,10 @@ const coherentBundle = (
     reflectionProposals: [],
     runtimeFacts: {
       acceptedAt: null,
+      pauseCoverage: {
+        _tag: "PauseCoverageGraphNotEstablished",
+        applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+      },
       quiescence: { _tag: "TrackerReconfirmationAllowed" },
       taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [] }
     },

@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- One cursor atomically owns every authored story interaction and optional boundary probe. */
 import { Deferred, Effect, Option, Schema, Stream, SubscriptionRef } from "effect"
+import type { AttemptId, TaskId } from "@dalph/contracts"
 import {
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
@@ -50,8 +51,12 @@ type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
   | { readonly _tag: "Mismatch"; readonly index: number; readonly item: StoryItem | undefined }
 export interface StoryCursor {
+  /** Release the exact pre-admission control latch after its production application has completed. */
+  readonly completeControlDirectionBeforeDeliveryActionAdmission: Effect.Effect<void>
   /** Current zero-based position after all successfully consumed authored items. */
   readonly storyPosition: Effect.Effect<number>
+  /** Current unconsumed authored item for the one sequential harness driver. */
+  readonly currentStoryItem: Effect.Effect<StoryItem | undefined>
   readonly atTerminalAssertions: Effect.Effect<boolean>
   readonly awaitTerminalAssertions: Effect.Effect<void>
   readonly consumeCoordinatorActivationReturned: Effect.Effect<
@@ -85,6 +90,45 @@ export interface StoryCursor {
   readonly consumeAdmittedContinuationExecutorIntentHold: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsAdmittedContinuationBeforeExecutorIntent.Type>
   >
+  readonly consumePlannedAttemptSuspensionExecutorBoundaryHold: Effect.Effect<
+    Option.Option<
+      typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary.Type
+    >
+  >
+  readonly consumePlannedAttemptContinuationExecutorBoundaryHold: Effect.Effect<
+    Option.Option<
+      typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary.Type
+    >
+  >
+  readonly consumePlannedAttemptContinuationExecutorBoundaryRelease: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldPlannedAttemptContinuation.Type>
+  >
+  readonly consumePlannedAttemptSuspensionExecutorBoundaryRelease: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldPlannedAttemptSuspension.Type>
+  >
+  readonly consumeTargetPromotionReconciliationReadBoundaryHold: Effect.Effect<
+    Option.Option<
+      typeof AuthoredCassetteStoryItem.cases.CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary.Type
+    >
+  >
+  readonly consumeTargetPromotionReconciliationReadBoundaryDeath: Effect.Effect<
+    Option.Option<
+      typeof AuthoredCassetteStoryItem.cases.CassetteKillsCoordinatorAtTargetPromotionReconciliationRead.Type
+    >
+  >
+  readonly consumeTargetPromotionReconciliationReadBoundaryRelease: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTargetPromotionReconciliationRead.Type>
+  >
+  readonly consumeTaskWorkSpecificationReadBoundaryHold: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteHoldsTaskWorkSpecificationReadBeforeBoundary.Type>
+  >
+  readonly consumeTaskWorkSpecificationReadBoundaryRelease: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTaskWorkSpecificationRead.Type>
+  >
+  readonly awaitTaskWorkSpecificationReadBoundary: (taskId: TaskId) => Effect.Effect<void>
+  readonly consumeExecutorRequestPublicationHold: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type>
+  >
   readonly consumeCapacityChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
   >
@@ -97,6 +141,11 @@ export interface StoryCursor {
   readonly consumeGitWorktreeObservationChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.GitWorktreeObservationChanged.Type>
   >
+  readonly consumeGitPlannedWorktreeCreateResponseLost: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.GitPlannedWorktreeCreateResponseLost.Type>
+  >
+  /** A boundary already in flight lets authored Operator/client items arm before its response item is consumed. */
+  readonly awaitInFlightOperatorItems: Effect.Effect<void>
   readonly consumeInitialPolicy: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.InitialControlPolicy.Type,
     CursorFailure
@@ -120,15 +169,40 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadReturned.Type,
     CursorFailure | AuthoredTargetPromotionGitReadFailure
   >
-  readonly consumeControlDirection: Effect.Effect<
-    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type>
+  readonly consumeControlDirection: (
+    expected:
+      | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type
+      | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type
+  ) => Effect.Effect<
+    Option.Option<
+      | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type
+      | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type
+    >
+  >
+  readonly consumePauseObservationStart: Effect.Effect<
+    Option.Option<
+      | typeof AuthoredCassetteStoryItem.cases.OperatorStartsPauseObservation.Type
+      | typeof AuthoredCassetteStoryItem.cases.OperatorSubscribesToPauseObservation.Type
+    >
+  >
+  readonly consumePauseProgressAwait: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAwaitsPauseProgress.Type>
+  >
+  readonly consumePauseProgressObservedCancelledAndReconnected: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.PauseProgressObservedCancelledAndReconnected.Type>
+  >
+  readonly consumePauseProgressObserved: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.PauseProgressObserved.Type>
   >
   readonly consumeControlDirectionFailure: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorControlDirectionFailed.Type>
   >
-  readonly consumeInFlightExecutorControlDirection: Effect.Effect<
+  readonly consumeInFlightExecutorControlDirection: (
+    attemptId?: AttemptId
+  ) => Effect.Effect<
     Option.Option<
-      typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.Type
+      | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.Type
+      | typeof AuthoredCassetteStoryItem.cases.OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting.Type
     >
   >
   readonly consumeClaimReacquisitionDirection: Effect.Effect<
@@ -165,30 +239,83 @@ export interface StoryCursor {
   readonly storyItems: Stream.Stream<StoryItem | undefined>
 }
 
-export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(function* (
-  story: ReadonlyArray<StoryItem>
-): Effect.fn.Return<StoryCursor> {
+export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect<StoryCursor> = Effect.fn(
+  "AuthoredCassette.makeStoryCursor"
+)(function* (story: ReadonlyArray<StoryItem>): Effect.fn.Return<StoryCursor> {
   const position = yield* SubscriptionRef.make(0)
+  const controlDirectionBeforeAdmission = yield* SubscriptionRef.make<Option.Option<Deferred.Deferred<void>>>(
+    Option.none()
+  )
   const terminalAssertionsReached = yield* Deferred.make<void>()
-  const claimNext = <A extends StoryItem>(
-    predicate: (item: StoryItem | undefined) => item is A
-  ): Effect.Effect<ClaimedStoryItem<A>> =>
-    SubscriptionRef.modify(position, (index): readonly [ClaimedStoryItem<A>, number] => {
-      const item = story[index]
-      return predicate(item)
-        ? [{ _tag: "Claimed" as const, index, item }, index + 1]
-        : [{ _tag: "Mismatch" as const, index, item }, index]
-    }).pipe(
-      Effect.tap(() =>
-        SubscriptionRef.get(position).pipe(
-          Effect.flatMap((index) =>
-            story[index]?._tag === "ExpectedBehavior"
-              ? Deferred.succeed(terminalAssertionsReached, undefined)
-              : Effect.void
-          )
-        )
-      )
+  const taskWorkSpecificationReadBoundaries = yield* SubscriptionRef.make<ReadonlyMap<TaskId, Deferred.Deferred<void>>>(
+    new Map()
+  )
+  const cursorDriverBarrierTags: ReadonlySet<StoryItem["_tag"]> = new Set([
+    "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
+    "CassetteReleasesHeldPlannedAttemptSuspension",
+    "CassetteReleasesHeldTargetPromotionReconciliationRead",
+    "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
+    "CassetteReleasesHeldTaskWorkSpecificationRead",
+    "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
+    "OperatorAwaitsPauseProgress",
+    "OperatorStartsPauseObservation",
+    "OperatorSubscribesToPauseObservation",
+    "PauseProgressObserved",
+    "PauseProgressObservedCancelledAndReconnected"
+  ])
+  const controlBoundaryResultTags: ReadonlySet<StoryItem["_tag"]> = new Set([
+    "TrackerGraphReadFailed",
+    "TrackerGraphReadReturned",
+    "OperatorControlDirectionFailed"
+  ])
+  const isControlBoundaryRead = (item: StoryItem | undefined): boolean => {
+    if (item?._tag === "DalphSelects") return item.operation._tag === "ReadTrackerGraph"
+    return item !== undefined && controlBoundaryResultTags.has(item._tag)
+  }
+
+  const awaitControlBoundary = Effect.fn("AuthoredCassette.awaitControlBoundary")(function* () {
+    const activeControl = yield* SubscriptionRef.get(controlDirectionBeforeAdmission)
+    if (Option.isNone(activeControl)) return false
+    const index = yield* SubscriptionRef.get(position)
+    if (isControlBoundaryRead(story[index])) return false
+    yield* Deferred.await(activeControl.value)
+    return true
+  })
+
+  const announceTerminalAssertions = SubscriptionRef.get(position).pipe(
+    Effect.flatMap((index) =>
+      story[index]?._tag === "ExpectedBehavior" ? Deferred.succeed(terminalAssertionsReached, undefined) : Effect.void
     )
+  )
+
+  const awaitBarrierAdvance = <A extends StoryItem>(claimed: ClaimedStoryItem<A>): Effect.Effect<boolean> => {
+    if (claimed._tag === "Claimed" || claimed.item === undefined || !cursorDriverBarrierTags.has(claimed.item._tag)) {
+      return Effect.succeed(false)
+    }
+    return SubscriptionRef.changes(position).pipe(
+      Stream.filter((next) => next > claimed.index),
+      Stream.take(1),
+      Stream.runDrain,
+      Effect.as(true)
+    )
+  }
+
+  function claimNext<A extends StoryItem>(
+    predicate: (item: StoryItem | undefined) => item is A
+  ): Effect.Effect<ClaimedStoryItem<A>> {
+    return Effect.gen(function* () {
+      if (yield* awaitControlBoundary()) return yield* claimNext(predicate)
+      const claimed = yield* SubscriptionRef.modify(position, (index): readonly [ClaimedStoryItem<A>, number] => {
+        const item = story[index]
+        return predicate(item)
+          ? [{ _tag: "Claimed" as const, index, item }, index + 1]
+          : [{ _tag: "Mismatch" as const, index, item }, index]
+      })
+      yield* announceTerminalAssertions
+      const advanced = yield* awaitBarrierAdvance(claimed)
+      return advanced ? yield* claimNext(predicate) : claimed
+    })
+  }
   const consume = (tag: StoryItem["_tag"]) =>
     Effect.gen(function* () {
       const claimed = yield* claimNext((item): item is StoryItem => item?._tag === tag)
@@ -223,6 +350,126 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         AuthoredCassetteStoryItem.cases.DalphHoldsAdmittedContinuationBeforeExecutorIntent
       )(claimed.item).pipe(Effect.orDie)
     )
+  })
+  const consumePlannedAttemptSuspensionExecutorBoundaryHold = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary.Type =>
+        item?._tag === "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current hold tag. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(claimed.item)
+  })
+  const consumePlannedAttemptContinuationExecutorBoundaryHold = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary.Type =>
+        item?._tag === "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current continuation-hold tag. */
+    return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
+  })
+  const consumePlannedAttemptContinuationExecutorBoundaryRelease = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldPlannedAttemptContinuation.Type =>
+        item?._tag === "CassetteReleasesHeldPlannedAttemptContinuation"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current continuation-release tag. */
+    return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
+  })
+  const consumePlannedAttemptSuspensionExecutorBoundaryRelease = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldPlannedAttemptSuspension.Type =>
+        item?._tag === "CassetteReleasesHeldPlannedAttemptSuspension"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current release tag. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(claimed.item)
+  })
+  const consumeTargetPromotionReconciliationReadBoundaryHold = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary.Type =>
+        item?._tag === "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary"
+    )
+    return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
+  })
+  const consumeTargetPromotionReconciliationReadBoundaryDeath = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.CassetteKillsCoordinatorAtTargetPromotionReconciliationRead.Type =>
+        item?._tag === "CassetteKillsCoordinatorAtTargetPromotionReconciliationRead"
+    )
+    return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
+  })
+  const consumeTargetPromotionReconciliationReadBoundaryRelease = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTargetPromotionReconciliationRead.Type =>
+        item?._tag === "CassetteReleasesHeldTargetPromotionReconciliationRead"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current request-correlated release tag. */
+    return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
+  })
+  const consumeTaskWorkSpecificationReadBoundaryHold = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.CassetteHoldsTaskWorkSpecificationReadBeforeBoundary.Type =>
+        item?._tag === "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary"
+    )
+    /* v8 ignore start -- @preserve The direct-item dispatcher and paired-hold closure guarantee this exact single hold. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    const gates = yield* SubscriptionRef.get(taskWorkSpecificationReadBoundaries)
+    if (gates.has(claimed.item.taskId)) {
+      return yield* Effect.die(`a task-work specification read hold is already armed for ${claimed.item.taskId}`)
+    }
+    /* v8 ignore stop -- @preserve */
+    const release = yield* Deferred.make<void>()
+    yield* SubscriptionRef.set(taskWorkSpecificationReadBoundaries, new Map(gates).set(claimed.item.taskId, release))
+    return Option.some(claimed.item)
+  })
+  const consumeTaskWorkSpecificationReadBoundaryRelease = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTaskWorkSpecificationRead.Type =>
+        item?._tag === "CassetteReleasesHeldTaskWorkSpecificationRead"
+    )
+    /* v8 ignore start -- @preserve The direct-item dispatcher and paired-hold closure guarantee this exact release. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    const gates = yield* SubscriptionRef.get(taskWorkSpecificationReadBoundaries)
+    const release = gates.get(claimed.item.taskId)
+    if (release === undefined) {
+      return yield* Effect.die(`no held task-work specification read matches ${claimed.item.taskId}`)
+    }
+    /* v8 ignore stop -- @preserve */
+    yield* Deferred.succeed(release, undefined)
+    const remaining = new Map(gates)
+    remaining.delete(claimed.item.taskId)
+    yield* SubscriptionRef.set(taskWorkSpecificationReadBoundaries, remaining)
+    return Option.some(claimed.item)
+  })
+  const awaitTaskWorkSpecificationReadBoundary = (taskId: TaskId) =>
+    SubscriptionRef.get(taskWorkSpecificationReadBoundaries).pipe(
+      Effect.flatMap((gates) => {
+        const release = gates.get(taskId)
+        return release === undefined ? Effect.void : Deferred.await(release)
+      })
+    )
+  const consumeExecutorRequestPublicationHold = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type =>
+        item?._tag === "DalphHoldsExecutorRequestThroughNextDeliveryPublication"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(claimed.item)
   })
   const consumeExecutorReport = Effect.gen(function* () {
     const claimed = yield* claimNext(isAuthoredPlannedAttemptExecutorOutcomeItem)
@@ -381,17 +628,74 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       ).pipe(Effect.orDie)
     )
   })
-  const consumeControlDirection = Effect.gen(function* () {
+  const consumeControlDirection = (
+    expected:
+      | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type
+      | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type
+  ) =>
+    Effect.gen(function* () {
+      const gate =
+        expected._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+          ? Option.some(yield* Deferred.make<void>())
+          : Option.none()
+      const claimed = yield* claimNext(
+        (
+          item
+        ): item is
+          | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type
+          | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type =>
+          (item?._tag === "OperatorAppliesControlDirection" ||
+            item?._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission") &&
+          JSON.stringify(item) === JSON.stringify(expected)
+      )
+      /* v8 ignore next -- @preserve Operator directions are optional story probes; maintained control stories exercise the request path and ordinary stories exercise absence through the runner. */
+      if (claimed._tag === "Mismatch") {
+        return Option.none()
+      }
+      if (Option.isSome(gate)) yield* SubscriptionRef.set(controlDirectionBeforeAdmission, gate)
+      return Option.some(claimed.item)
+    })
+  const consumePauseObservationStart = Effect.gen(function* () {
     const claimed = yield* claimNext(
-      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type =>
-        item?._tag === "OperatorAppliesControlDirection"
+      (
+        item
+      ): item is
+        | typeof AuthoredCassetteStoryItem.cases.OperatorStartsPauseObservation.Type
+        | typeof AuthoredCassetteStoryItem.cases.OperatorSubscribesToPauseObservation.Type =>
+        item?._tag === "OperatorStartsPauseObservation" || item?._tag === "OperatorSubscribesToPauseObservation"
     )
-    /* v8 ignore next -- @preserve Operator directions are optional story probes; maintained control stories exercise the request path and ordinary stories exercise absence through the runner. */
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for a current observation-start tag. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(claimed.item)
+  })
+  const consumePauseProgressAwait = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAwaitsPauseProgress.Type =>
+        item?._tag === "OperatorAwaitsPauseProgress"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(claimed.item)
+  })
+  const consumePauseProgressObservedCancelledAndReconnected = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.PauseProgressObservedCancelledAndReconnected.Type =>
+        item?._tag === "PauseProgressObservedCancelledAndReconnected"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for the current cancel/reconnect tag. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(claimed.item)
+  })
+  const consumePauseProgressObserved = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.PauseProgressObserved.Type =>
+        item?._tag === "PauseProgressObserved"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for the current Pause result tag. */
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(
-      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection)(
-        claimed.item
-      ).pipe(Effect.orDie)
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.PauseProgressObserved)(claimed.item).pipe(
+        Effect.orDie
+      )
     )
   })
   const consumeControlDirectionFailure = Effect.gen(function* () {
@@ -408,20 +712,21 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       ).pipe(Effect.orDie)
     )
   })
-  const consumeInFlightExecutorControlDirection = Effect.gen(function* () {
-    const claimed = yield* claimNext(
-      (
-        item
-      ): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.Type =>
-        item?._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
-    )
-    if (claimed._tag === "Mismatch") return Option.none()
-    return Option.some(
-      yield* Schema.decodeUnknownEffect(
-        AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight
-      )(claimed.item).pipe(Effect.orDie)
-    )
-  })
+  const consumeInFlightExecutorControlDirection = (attemptId?: AttemptId) =>
+    Effect.gen(function* () {
+      const claimed = yield* claimNext(
+        (
+          item
+        ): item is
+          | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.Type
+          | typeof AuthoredCassetteStoryItem.cases.OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting.Type =>
+          (item?._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" ||
+            item?._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting") &&
+          (attemptId === undefined || item.duringAttemptId === attemptId)
+      )
+      if (claimed._tag === "Mismatch") return Option.none()
+      return Option.some(claimed.item)
+    })
   const consumeClaimReacquisitionDirection = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorDirectsTaskClaimReacquisition.Type =>
@@ -446,6 +751,40 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         claimed.item
       ).pipe(Effect.orDie)
     )
+  })
+  const consumeGitPlannedWorktreeCreateResponseLost = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.GitPlannedWorktreeCreateResponseLost.Type =>
+        item?._tag === "GitPlannedWorktreeCreateResponseLost"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.GitPlannedWorktreeCreateResponseLost)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
+  })
+  const inFlightOperatorTags: ReadonlySet<StoryItem["_tag"]> = new Set([
+    "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
+    "CassetteReleasesHeldPlannedAttemptSuspension",
+    "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
+    "CassetteReleasesHeldTaskWorkSpecificationRead",
+    "OperatorAppliesControlDirection",
+    "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
+    "OperatorStartsPauseObservation",
+    "PauseProgressObserved",
+    "PauseProgressObservedCancelledAndReconnected"
+  ])
+  const awaitInFlightOperatorItems: Effect.Effect<void> = Effect.gen(function* () {
+    const index = yield* SubscriptionRef.get(position)
+    const item = story[index]
+    if (item === undefined || !inFlightOperatorTags.has(item._tag)) return
+    yield* SubscriptionRef.changes(position).pipe(
+      Stream.filter((next) => next > index),
+      Stream.take(1),
+      Stream.runDrain
+    )
+    return yield* awaitInFlightOperatorItems
   })
   const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
     const claimed = yield* claimNext(
@@ -551,10 +890,29 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(claimed.item).pipe(Effect.orDie)
   })
   return {
+    completeControlDirectionBeforeDeliveryActionAdmission: Effect.gen(function* () {
+      const gate = yield* SubscriptionRef.get(controlDirectionBeforeAdmission)
+      /* v8 ignore next -- @preserve Closure pairs this completion with the exact earlier before-admission control item. */
+      if (Option.isNone(gate)) return
+      yield* SubscriptionRef.set(controlDirectionBeforeAdmission, Option.none())
+      yield* Deferred.succeed(gate.value, undefined)
+    }),
     storyPosition: SubscriptionRef.get(position),
+    currentStoryItem: SubscriptionRef.get(position).pipe(Effect.map((index) => story[index])),
     atTerminalAssertions,
+    awaitInFlightOperatorItems,
     awaitTerminalAssertions: Deferred.await(terminalAssertionsReached),
     consumeAdmittedContinuationExecutorIntentHold,
+    consumePlannedAttemptSuspensionExecutorBoundaryHold,
+    consumePlannedAttemptContinuationExecutorBoundaryHold,
+    consumePlannedAttemptContinuationExecutorBoundaryRelease,
+    consumePlannedAttemptSuspensionExecutorBoundaryRelease,
+    consumeTargetPromotionReconciliationReadBoundaryHold,
+    consumeTargetPromotionReconciliationReadBoundaryDeath,
+    consumeTargetPromotionReconciliationReadBoundaryRelease,
+    consumeTaskWorkSpecificationReadBoundaryHold,
+    consumeTaskWorkSpecificationReadBoundaryRelease,
+    awaitTaskWorkSpecificationReadBoundary,
     consumeCoordinatorActivationReturned,
     consumeCompletionClaimDeletionApplied,
     consumeCompletionClaimReadReturned,
@@ -567,12 +925,18 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeCapacityChange,
     consumeControlDirection,
     consumeControlDirectionFailure,
+    consumePauseObservationStart,
+    consumePauseProgressAwait,
+    consumePauseProgressObservedCancelledAndReconnected,
+    consumePauseProgressObserved,
     consumeInFlightExecutorControlDirection,
     consumeClaimReacquisitionDirection,
     consumeDalphSelection,
     consumeExecutorProjection,
+    consumeExecutorRequestPublicationHold,
     consumeExecutorReport,
     consumeGitWorktreeObservationChange,
+    consumeGitPlannedWorktreeCreateResponseLost,
     consumeInitialPolicy,
     consumeIntegrationCandidateAgentReport,
     consumeIntegrationCandidateGitValidation,

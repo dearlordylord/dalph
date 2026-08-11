@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- One closed schema keeps every authored boundary tag and chronology invariant reviewable together. */
-import { Effect, Schema } from "effect"
+import { Effect, Match, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -27,9 +27,12 @@ import {
   TargetVerificationArtifactName,
   TargetVerificationPlanId,
   TargetPromotionAttemptOrdinal,
+  TargetPromotionRequest,
   TargetPromotionTerminalBasis,
   TrackerRevision,
-  TrackerTarget
+  TrackerTarget,
+  JournalPosition,
+  OperationId
 } from "@dalph/orchestrator"
 import { AuthoredContinueAttemptResult, AuthoredStopAttemptResult } from "./authored-attempt-choice.js"
 import { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
@@ -228,12 +231,432 @@ const AuthoredTargetVerificationResult = Schema.TaggedUnion({
   TimedOut: { artifacts: Schema.Array(AuthoredTargetVerificationArtifact) }
 })
 
+const AuthoredPauseCoverage = Schema.TaggedUnion({
+  ExactTaskPauseCoverage: {},
+  GroupingDescendantPauseCoverage: { groupingObservedAt: JournalPosition, pausedTaskId: TaskId },
+  RunPauseCoverage: {}
+})
+
+/** Stable cassette-local identity of one exact proposal, independent of the generated RunId. */
+export const AuthoredDeliveryProposalId = Schema.NonEmptyString.pipe(Schema.brand("AuthoredDeliveryProposalId"))
+export type AuthoredDeliveryProposalId = typeof AuthoredDeliveryProposalId.Type
+
+const AuthoredTaskOrAttemptCorrelation = Schema.TaggedUnion({ Attempt: { attemptId: AttemptId }, Task: {} })
+
+/** Exact promotion request retained in authored output without expanding its nested evidence schema at every story tag. */
+export type AuthoredTargetPromotionRequest = TargetPromotionRequest
+export const AuthoredTargetPromotionRequest: Schema.Codec<AuthoredTargetPromotionRequest, unknown, never, never> =
+  TargetPromotionRequest
+
+/** Every task-bearing production proposal route; the taskless graph-read route is structurally excluded. */
+const AuthoredPauseProposal = Schema.TaggedUnion({
+  AcceptedWorkflowRoute: { operationId: OperationId, proposalId: AuthoredDeliveryProposalId, taskId: TaskId },
+  FreshExecutorWorkflowRoute: { attemptId: AttemptId, proposalId: AuthoredDeliveryProposalId, taskId: TaskId },
+  FreshWorkflowRoute: {
+    correlation: AuthoredTaskOrAttemptCorrelation,
+    proposalId: AuthoredDeliveryProposalId,
+    taskId: TaskId
+  },
+  IdentityFreeWorkflowRoute: {
+    correlation: Schema.TaggedUnion({
+      Integration: { attemptId: AttemptId, queuedAt: JournalPosition },
+      PlannedAttempt: { attemptId: AttemptId },
+      TargetPromotion: { attemptId: AttemptId, queuedAt: JournalPosition, request: AuthoredTargetPromotionRequest },
+      Task: {}
+    }),
+    proposalId: AuthoredDeliveryProposalId,
+    taskId: TaskId
+  },
+  RecoveredNewActionRoute: {
+    correlation: AuthoredTaskOrAttemptCorrelation,
+    proposalId: AuthoredDeliveryProposalId,
+    taskId: TaskId
+  }
+})
+
+const AuthoredPauseLiveOwner = Schema.TaggedUnion({
+  AdmittedDeliveryAction: { proposal: AuthoredPauseProposal },
+  MaterializedDeliveryAction: {
+    intent: Schema.Literals(["IntentNotRecorded", "IntentRecorded"]),
+    operationId: OperationId,
+    proposal: AuthoredPauseProposal
+  },
+  SettledBeforeMaterialization: { proposal: AuthoredPauseProposal },
+  SettledMaterializedDeliveryAction: {
+    intent: Schema.Literals(["IntentNotRecorded", "IntentRecorded"]),
+    operationId: OperationId,
+    proposal: AuthoredPauseProposal
+  }
+})
+
+const AuthoredPauseResponsibility = Schema.TaggedUnion({
+  AcceptedAwaitingIntegration: {
+    terminalAt: JournalPosition,
+    attemptId: AttemptId,
+    coverage: AuthoredPauseCoverage,
+    taskId: TaskId
+  },
+  DeliveryAction: { proposal: AuthoredPauseProposal, coverage: AuthoredPauseCoverage, taskId: TaskId },
+  PlannedAttemptExecutorWork: {
+    attemptId: AttemptId,
+    beganAt: JournalPosition,
+    coverage: AuthoredPauseCoverage,
+    taskId: TaskId
+  },
+  QueuedIntegration: {
+    attemptId: AttemptId,
+    coverage: AuthoredPauseCoverage,
+    queuedAt: JournalPosition,
+    taskId: TaskId
+  },
+  StartedIntegration: {
+    attemptId: AttemptId,
+    coverage: AuthoredPauseCoverage,
+    queuedAt: JournalPosition,
+    startedAt: JournalPosition,
+    taskId: TaskId
+  },
+  WorkflowOperation: {
+    beganAt: JournalPosition,
+    coverage: AuthoredPauseCoverage,
+    operationId: OperationId,
+    responsibilityTag: Schema.Literals([
+      "TaskClaimResponsibility",
+      "TaskClaimReleaseResponsibility",
+      "TaskWorktreeResponsibility"
+    ]),
+    taskId: TaskId
+  }
+})
+
+const AuthoredPauseBlocker = Schema.TaggedUnion({
+  AcceptedOutcomePublicationPending: { proposal: AuthoredPauseProposal },
+  ActiveIntegrationTarget: { queuedAt: JournalPosition },
+  ExecutorSafeSuspensionRequired: { attemptId: AttemptId },
+  HeldIntegrationTarget: { queuedAt: JournalPosition },
+  LiveDeliveryAction: { owner: AuthoredPauseLiveOwner },
+  ProposedDeliveryAction: { proposal: AuthoredPauseProposal },
+  TargetPromotionResultRequired: { request: AuthoredTargetPromotionRequest }
+})
+
+const AuthoredPauseResponsibilityAtBoundary = Schema.Union([
+  AuthoredPauseResponsibility.cases.AcceptedAwaitingIntegration,
+  AuthoredPauseResponsibility.cases.PlannedAttemptExecutorWork,
+  AuthoredPauseResponsibility.cases.QueuedIntegration,
+  AuthoredPauseResponsibility.cases.StartedIntegration,
+  AuthoredPauseResponsibility.cases.WorkflowOperation
+])
+
+const AuthoredPauseDeliveryActionBlocker = Schema.Union([
+  AuthoredPauseBlocker.cases.AcceptedOutcomePublicationPending,
+  AuthoredPauseBlocker.cases.LiveDeliveryAction,
+  AuthoredPauseBlocker.cases.ProposedDeliveryAction
+])
+const AuthoredPauseExecutorBlocker = Schema.Union([
+  AuthoredPauseBlocker.cases.ExecutorSafeSuspensionRequired,
+  AuthoredPauseDeliveryActionBlocker
+])
+const AuthoredPauseIntegrationResourceBlocker = Schema.Union([
+  AuthoredPauseBlocker.cases.ActiveIntegrationTarget,
+  AuthoredPauseBlocker.cases.HeldIntegrationTarget
+])
+const AuthoredPauseStartedIntegrationBlocker = Schema.Union([
+  AuthoredPauseBlocker.cases.TargetPromotionResultRequired,
+  AuthoredPauseIntegrationResourceBlocker,
+  AuthoredPauseDeliveryActionBlocker
+])
+
+const AuthoredPauseResponsibilityPreventingBoundary = Schema.Union([
+  Schema.Struct({
+    blockers: Schema.NonEmptyArray(AuthoredPauseExecutorBlocker),
+    responsibility: AuthoredPauseResponsibility.cases.PlannedAttemptExecutorWork
+  }),
+  Schema.Struct({
+    blockers: Schema.NonEmptyArray(AuthoredPauseDeliveryActionBlocker),
+    responsibility: Schema.Union([
+      AuthoredPauseResponsibility.cases.DeliveryAction,
+      AuthoredPauseResponsibility.cases.WorkflowOperation
+    ])
+  }),
+  Schema.Struct({
+    blockers: Schema.NonEmptyArray(
+      Schema.Union([AuthoredPauseIntegrationResourceBlocker, AuthoredPauseDeliveryActionBlocker])
+    ),
+    responsibility: AuthoredPauseResponsibility.cases.QueuedIntegration
+  }),
+  Schema.Struct({
+    blockers: Schema.NonEmptyArray(AuthoredPauseStartedIntegrationBlocker),
+    responsibility: AuthoredPauseResponsibility.cases.StartedIntegration
+  })
+])
+
+type AuthoredPauseResponsibilityAtBoundary = typeof AuthoredPauseResponsibilityAtBoundary.Type
+type AuthoredPauseResponsibilityPreventingBoundary = typeof AuthoredPauseResponsibilityPreventingBoundary.Type
+
+export interface AuthoredPauseConfirmed {
+  readonly _tag: "PauseConfirmed"
+  readonly atBoundary: ReadonlyArray<AuthoredPauseResponsibilityAtBoundary>
+}
+export const AuthoredPauseConfirmed: Schema.Codec<AuthoredPauseConfirmed, unknown, never, never> = Schema.TaggedStruct(
+  "PauseConfirmed",
+  { atBoundary: Schema.Array(AuthoredPauseResponsibilityAtBoundary) }
+)
+export interface AuthoredPauseNoLongerApplied {
+  readonly _tag: "PauseNoLongerApplied"
+}
+export const AuthoredPauseNoLongerApplied: Schema.Codec<AuthoredPauseNoLongerApplied, unknown, never, never> =
+  Schema.TaggedStruct("PauseNoLongerApplied", {})
+export interface AuthoredPauseNotApplied {
+  readonly _tag: "PauseNotApplied"
+}
+export const AuthoredPauseNotApplied: Schema.Codec<AuthoredPauseNotApplied, unknown, never, never> =
+  Schema.TaggedStruct("PauseNotApplied", {})
+export interface AuthoredPauseWaiting {
+  readonly _tag: "PauseWaiting"
+  readonly atBoundary: ReadonlyArray<AuthoredPauseResponsibilityAtBoundary>
+  readonly preventing: readonly [
+    AuthoredPauseResponsibilityPreventingBoundary,
+    ...Array<AuthoredPauseResponsibilityPreventingBoundary>
+  ]
+}
+export const AuthoredPauseWaiting: Schema.Codec<AuthoredPauseWaiting, unknown, never, never> = Schema.TaggedStruct(
+  "PauseWaiting",
+  {
+    atBoundary: Schema.Array(AuthoredPauseResponsibilityAtBoundary),
+    preventing: Schema.NonEmptyArray(AuthoredPauseResponsibilityPreventingBoundary)
+  }
+)
+
+const AuthoredPauseProgressResultShape = Schema.Union([
+  AuthoredPauseConfirmed,
+  AuthoredPauseNoLongerApplied,
+  AuthoredPauseNotApplied,
+  AuthoredPauseWaiting
+])
+
+type AuthoredPauseProgressResultShape = typeof AuthoredPauseProgressResultShape.Type
+type AuthoredPauseResponsibilityShape =
+  | Extract<AuthoredPauseProgressResultShape, { readonly _tag: "PauseConfirmed" }>["atBoundary"][number]
+  | Extract<AuthoredPauseProgressResultShape, { readonly _tag: "PauseWaiting" }>["preventing"][number]["responsibility"]
+
+const pauseResponsibilityKey = (responsibility: AuthoredPauseResponsibilityShape): string => {
+  return Match.valueTags(responsibility, {
+    AcceptedAwaitingIntegration: ({ attemptId, taskId, terminalAt }) =>
+      `AcceptedAwaitingIntegration:${taskId}:${attemptId}:${terminalAt}`,
+    DeliveryAction: ({ proposal }) => `DeliveryAction:${proposal.proposalId}`,
+    PlannedAttemptExecutorWork: ({ attemptId, beganAt, taskId }) =>
+      `PlannedAttemptExecutorWork:${taskId}:${attemptId}:${beganAt}`,
+    QueuedIntegration: ({ attemptId, queuedAt, taskId }) => `QueuedIntegration:${taskId}:${attemptId}:${queuedAt}`,
+    StartedIntegration: ({ attemptId, queuedAt, startedAt, taskId }) =>
+      `StartedIntegration:${taskId}:${attemptId}:${queuedAt}:${startedAt}`,
+    WorkflowOperation: ({ beganAt, operationId, responsibilityTag, taskId }) =>
+      `WorkflowOperation:${responsibilityTag}:${taskId}:${operationId}:${beganAt}`
+  })
+}
+
+type AuthoredPausePreventing = Extract<
+  AuthoredPauseProgressResultShape,
+  { readonly _tag: "PauseWaiting" }
+>["preventing"][number]
+type AuthoredPauseBlockerShape = AuthoredPausePreventing["blockers"][number]
+type AuthoredPauseProposalShape = Extract<
+  AuthoredPauseBlockerShape,
+  { readonly _tag: "ProposedDeliveryAction" }
+>["proposal"]
+
+const authoredBlockerProposal = (blocker: AuthoredPauseBlockerShape): AuthoredPauseProposalShape | undefined =>
+  Match.valueTags(blocker, {
+    AcceptedOutcomePublicationPending: ({ proposal }) => proposal,
+    ActiveIntegrationTarget: () => undefined,
+    ExecutorSafeSuspensionRequired: () => undefined,
+    HeldIntegrationTarget: () => undefined,
+    LiveDeliveryAction: ({ owner }) => owner.proposal,
+    ProposedDeliveryAction: ({ proposal }) => proposal,
+    TargetPromotionResultRequired: () => undefined
+  })
+
+const proposalIdentityIssue = (
+  proposals: ReadonlyArray<AuthoredPauseProposalShape>,
+  detail: string
+): string | undefined =>
+  proposals.some((proposal) =>
+    proposals.some(
+      (candidate) =>
+        candidate.proposalId === proposal.proposalId && JSON.stringify(candidate) !== JSON.stringify(proposal)
+    )
+  )
+    ? detail
+    : undefined
+
+const responsibilityIdentityIssue = (responsibility: AuthoredPauseResponsibilityShape): string | undefined => {
+  const coverage = responsibility.coverage
+  if (coverage._tag === "GroupingDescendantPauseCoverage" && coverage.pausedTaskId === responsibility.taskId) {
+    return "grouping descendant coverage cannot identify the paused task as its own descendant"
+  }
+  return responsibility._tag === "DeliveryAction" && responsibility.proposal.taskId !== responsibility.taskId
+    ? "a delivery responsibility must carry the same exact proposal task identity"
+    : undefined
+}
+
+const integrationActionIssue = (
+  proposal: AuthoredPauseProposalShape,
+  responsibility: Extract<
+    AuthoredPauseResponsibilityShape,
+    { readonly _tag: "QueuedIntegration" | "StartedIntegration" }
+  >
+): string | undefined =>
+  proposal._tag !== "IdentityFreeWorkflowRoute" ||
+  (proposal.correlation._tag !== "Integration" && proposal.correlation._tag !== "TargetPromotion") ||
+  proposal.correlation.attemptId !== responsibility.attemptId ||
+  proposal.correlation.queuedAt !== responsibility.queuedAt ||
+  proposal.taskId !== responsibility.taskId
+    ? "promotion action blocker identity must equal its integration responsibility"
+    : undefined
+
+const executorActionMatches = (proposal: AuthoredPauseProposalShape, attemptId: string, taskId: string): boolean =>
+  proposal.taskId === taskId &&
+  Match.valueTags(proposal, {
+    AcceptedWorkflowRoute: () => false,
+    FreshExecutorWorkflowRoute: ({ attemptId: candidate }) => candidate === attemptId,
+    FreshWorkflowRoute: ({ correlation }) => correlation._tag === "Attempt" && correlation.attemptId === attemptId,
+    IdentityFreeWorkflowRoute: ({ correlation }) =>
+      correlation._tag === "PlannedAttempt" && correlation.attemptId === attemptId,
+    RecoveredNewActionRoute: ({ correlation }) => correlation._tag === "Attempt" && correlation.attemptId === attemptId
+  })
+
+const actionBlockerIssue = (
+  proposal: AuthoredPauseProposalShape,
+  responsibility: AuthoredPauseResponsibilityShape
+): string | undefined =>
+  Match.valueTags(responsibility, {
+    AcceptedAwaitingIntegration: () => "accepted integration cannot carry an action blocker",
+    DeliveryAction: ({ proposal: expected }) =>
+      JSON.stringify(proposal) === JSON.stringify(expected)
+        ? undefined
+        : "delivery-action blocker identity must equal its delivery responsibility",
+    PlannedAttemptExecutorWork: ({ attemptId, taskId }) =>
+      executorActionMatches(proposal, attemptId, taskId)
+        ? undefined
+        : "executor action blocker identity must equal its planned executor responsibility",
+    QueuedIntegration: (integration) => integrationActionIssue(proposal, integration),
+    StartedIntegration: (integration) => integrationActionIssue(proposal, integration),
+    WorkflowOperation: ({ operationId, taskId }) =>
+      proposal._tag === "AcceptedWorkflowRoute" && proposal.operationId === operationId && proposal.taskId === taskId
+        ? undefined
+        : "workflow action blocker identity must equal its exact workflow responsibility"
+  })
+
+const promotionResultIssue = (
+  request: AuthoredTargetPromotionRequest,
+  blockers: ReadonlyArray<AuthoredPauseBlockerShape>,
+  responsibility: AuthoredPauseResponsibilityShape
+): string | undefined => {
+  const exactPromotionActionExists = blockers.some((candidate) => {
+    const proposal = authoredBlockerProposal(candidate)
+    return (
+      proposal?._tag === "IdentityFreeWorkflowRoute" &&
+      proposal.correlation._tag === "TargetPromotion" &&
+      JSON.stringify(proposal.correlation.request) === JSON.stringify(request)
+    )
+  })
+  return (responsibility._tag !== "QueuedIntegration" && responsibility._tag !== "StartedIntegration") ||
+    request.candidateCorrelation.attemptId !== responsibility.attemptId ||
+    !exactPromotionActionExists
+    ? "promotion-result blocker must equal its exact integration responsibility and promotion action"
+    : undefined
+}
+
+const blockerCorrelationIssue = (
+  blocker: AuthoredPauseBlockerShape,
+  blockers: ReadonlyArray<AuthoredPauseBlockerShape>,
+  responsibility: AuthoredPauseResponsibilityShape
+): string | undefined =>
+  Match.valueTags(blocker, {
+    AcceptedOutcomePublicationPending: ({ proposal }) => actionBlockerIssue(proposal, responsibility),
+    ActiveIntegrationTarget: ({ queuedAt }) =>
+      (responsibility._tag === "QueuedIntegration" || responsibility._tag === "StartedIntegration") &&
+      queuedAt === responsibility.queuedAt
+        ? undefined
+        : "integration-target blocker position must equal its integration responsibility",
+    ExecutorSafeSuspensionRequired: ({ attemptId }) =>
+      responsibility._tag === "PlannedAttemptExecutorWork" && attemptId === responsibility.attemptId
+        ? undefined
+        : "safe-suspension blocker identity must equal its planned executor responsibility",
+    HeldIntegrationTarget: ({ queuedAt }) =>
+      (responsibility._tag === "QueuedIntegration" || responsibility._tag === "StartedIntegration") &&
+      queuedAt === responsibility.queuedAt
+        ? undefined
+        : "integration-target blocker position must equal its integration responsibility",
+    LiveDeliveryAction: ({ owner }) => actionBlockerIssue(owner.proposal, responsibility),
+    ProposedDeliveryAction: ({ proposal }) => actionBlockerIssue(proposal, responsibility),
+    TargetPromotionResultRequired: ({ request }) => promotionResultIssue(request, blockers, responsibility)
+  })
+
+const preventingIdentityIssue = ({ blockers, responsibility }: AuthoredPausePreventing): string | undefined => {
+  if (new Set(blockers.map((blocker) => JSON.stringify(blocker))).size !== blockers.length) {
+    return "one exact Pause blocker cannot be duplicated for a responsibility"
+  }
+  return blockers.map((blocker) => blockerCorrelationIssue(blocker, blockers, responsibility)).find(Boolean)
+}
+
+const pauseProgressIsExactlyCorrelated = Schema.makeFilter((result: AuthoredPauseProgressResultShape) => {
+  if (result._tag === "PauseNoLongerApplied" || result._tag === "PauseNotApplied") return undefined
+  const responsibilities = [
+    ...result.atBoundary,
+    ...(result._tag === "PauseWaiting" ? result.preventing.map(({ responsibility }) => responsibility) : [])
+  ]
+  if (new Set(responsibilities.map(pauseResponsibilityKey)).size !== responsibilities.length) {
+    return "one exact Pause responsibility cannot be duplicated or listed at and before the boundary"
+  }
+  const responsibilityIssue = responsibilities.map(responsibilityIdentityIssue).find(Boolean)
+  if (responsibilityIssue !== undefined) return responsibilityIssue
+  const responsibilityProposals = responsibilities.flatMap((responsibility) =>
+    responsibility._tag === "DeliveryAction" ? [responsibility.proposal] : []
+  )
+  if (result._tag !== "PauseWaiting") {
+    return proposalIdentityIssue(
+      responsibilityProposals,
+      "one authored proposal identity cannot describe different exact proposal routes"
+    )
+  }
+  const blockerProposals = result.preventing.flatMap(({ blockers }) =>
+    blockers.flatMap((blocker) => {
+      const proposal = authoredBlockerProposal(blocker)
+      return proposal === undefined ? [] : [proposal]
+    })
+  )
+  return (
+    proposalIdentityIssue(
+      [...responsibilityProposals, ...blockerProposals],
+      "one authored proposal identity cannot describe different responsibility or blocker routes"
+    ) ?? result.preventing.map(preventingIdentityIssue).find(Boolean)
+  )
+})
+
+const AuthoredPauseProgressResult = Schema.suspend(
+  (): Schema.Codec<AuthoredPauseProgressResultShape, unknown, never, never> =>
+    AuthoredPauseProgressResultShape.check(pauseProgressIsExactlyCorrelated)
+)
+export type AuthoredPauseProgressResult = typeof AuthoredPauseProgressResult.Type
+export const decodeAuthoredPauseProgressResult: (input: unknown) => AuthoredPauseProgressResult =
+  Schema.decodeUnknownSync(AuthoredPauseProgressResult)
+const AuthoredPauseSubject = Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
+
+const AuthoredPauseObservationFields = { result: AuthoredPauseProgressResult, subject: AuthoredPauseSubject }
+const AuthoredPauseObservationStartFields = { subject: AuthoredPauseSubject }
+const AuthoredPauseObservationReconnectFields = {
+  reconnectResult: AuthoredPauseProgressResult,
+  reconnectSubject: AuthoredPauseSubject,
+  result: AuthoredPauseProgressResult,
+  subject: AuthoredPauseSubject
+}
+
 /**
  * One chronological authored story. Schema version 1 is provisional until the
  * project owner explicitly removes this comment; adding tags does not imply a
  * released compatibility promise.
  */
-export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
+const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   /** Harness lifecycle: one bounded coordinator activation returns this exact public finality decision. */
   CoordinatorActivationReturned: {
     decision: Schema.TaggedUnion({
@@ -269,12 +692,38 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   },
   /** Harness synchronization: hold this exact admitted continuation before its durable executor command intent. */
   DalphHoldsAdmittedContinuationBeforeExecutorIntent: { attemptId: AttemptId, taskId: TaskId },
+  /** Harness synchronization: hold this exact already-running continuation before calling the executor boundary. */
+  CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: { attemptId: AttemptId, taskId: TaskId },
+  /** Harness synchronization: release the exact already-running continuation named by its paired hold. */
+  CassetteReleasesHeldPlannedAttemptContinuation: { attemptId: AttemptId, taskId: TaskId },
+  /** Harness synchronization: hold this exact admitted Suspend before calling the execution substrate. */
+  CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: { attemptId: AttemptId, taskId: TaskId },
+  /** Harness synchronization: release the exact admitted Suspend named by its paired hold. */
+  CassetteReleasesHeldPlannedAttemptSuspension: { attemptId: AttemptId, taskId: TaskId },
+  /** Harness synchronization: hold the exact post-loss Git reconciliation read before it consumes an observation. */
+  CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary: { request: TargetPromotionRequest },
+  /** Harness lifecycle: kill the coordinator when this exact post-loss Git reconciliation request reaches its read boundary. */
+  CassetteKillsCoordinatorAtTargetPromotionReconciliationRead: { request: TargetPromotionRequest },
+  /** Harness synchronization: release the exact post-loss Git reconciliation read named by its paired hold. */
+  CassetteReleasesHeldTargetPromotionReconciliationRead: { request: TargetPromotionRequest },
+  /** Harness synchronization: hold this task's exact specification read while another real preparation path advances. */
+  CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: { taskId: TaskId },
+  /** Harness synchronization: release the exact task specification read named by its paired hold. */
+  CassetteReleasesHeldTaskWorkSpecificationRead: { taskId: TaskId },
+  /** Harness synchronization: keep this exact executor request in flight while the next ordinary delivery fact publishes. */
+  DalphHoldsExecutorRequestThroughNextDeliveryPublication: {
+    attemptId: AttemptId,
+    request: Schema.Literals(["StartOrContinue", "Suspend"]),
+    taskId: TaskId
+  },
   DalphSelects: { operation: AuthoredCassetteDecision },
   /** Task-work assertions with optional complete lower-level evidence projections. */
   ExpectedBehavior: AuthoredExpectedBehavior.fields,
   GitWorktreeObservationChanged: {
     observation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   },
+  /** Git applies the planned-worktree create, but Dalph loses the response before the ordinary reread. */
+  GitPlannedWorktreeCreateResponseLost: { detail: Schema.String },
   IntegrationCandidateAgentReported: {
     report: Schema.TaggedUnion({
       Conflict: {},
@@ -319,10 +768,38 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
     direction: ControlDirection,
     subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
   },
+  /** Harness synchronization: apply this direction before any currently-runnable delivery action is admitted. */
+  OperatorAppliesControlDirectionBeforeDeliveryActionAdmission: {
+    direction: ControlDirection,
+    subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
+  },
+  /** Alice starts one process-local subscription; this is not a workflow occurrence or journal event. */
+  OperatorStartsPauseObservation: AuthoredPauseObservationStartFields,
+  /** Alice subscribes now without awaiting a value so an exact held boundary may publish afterward. */
+  OperatorSubscribesToPauseObservation: { subject: AuthoredPauseSubject },
+  /** Alice arms the existing subscription before the following ordinary boundary publishes its result. */
+  OperatorAwaitsPauseProgress: AuthoredPauseObservationFields,
+  /** The public observation stream produces this visible result without persisting a projection. */
+  PauseProgressObserved: AuthoredPauseObservationFields,
+  /** Alice receives this result and ends only the same process-local subscription atomically in the story. */
+  /** Alice cancels this subscription, then starts a new one only after the next ordinary delivery publication. */
+  PauseProgressObservedCancelledAndReconnected: AuthoredPauseObservationReconnectFields,
   /** Harness timing: the Operator applies this direction after the executor request crossed its boundary. */
   OperatorAppliesControlDirectionWhileExecutorRequestInFlight: {
     direction: ControlDirection,
+    duringAttemptId: AttemptId,
+    outcome: Schema.TaggedUnion({
+      Applied: {},
+      AppliedAndPauseObservationEnds: { result: AuthoredPauseProgressResult },
+      Rejected: { reason: Schema.Literals(["IncompleteSnapshot", "OutsideCurrentTargetClosure"]) }
+    }),
     subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
+  },
+  /** Alice withdraws Pause during this exact request after observing one already-queued Waiting view. */
+  OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting: {
+    duringAttemptId: AttemptId,
+    queued: Schema.NonEmptyArray(AuthoredPauseWaiting),
+    subject: AuthoredPauseSubject
   },
   /** The visible non-durable result returned after an authored Operator control request fails. */
   OperatorControlDirectionFailed: {
@@ -368,6 +845,7 @@ export const AuthoredCassetteStoryItem = Schema.TaggedUnion({
   TrackerGraphReadFailed: { reason: Schema.Literal("IncompleteSnapshot") },
   TrackerGraphReadReturned: { graph: AuthoredTrackerGraph }
 })
+export const AuthoredCassetteStoryItem: typeof AuthoredCassetteStoryItemSchema = AuthoredCassetteStoryItemSchema
 export type AuthoredCassetteStoryItem = typeof AuthoredCassetteStoryItem.Type
 
 export const AuthoredTrackerGraphReadResult = Schema.Union([
@@ -389,7 +867,12 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   CassetteControl: [
     "InitialControlPolicy",
     "OperatorAppliesControlDirection",
+    "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
     "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+    "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting",
+    "OperatorStartsPauseObservation",
+    "OperatorSubscribesToPauseObservation",
+    "OperatorAwaitsPauseProgress",
     "OperatorControlDirectionFailed",
     "OperatorContinuesAttempt",
     "OperatorDirectsTaskClaimReacquisition",
@@ -399,9 +882,22 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "SetTaskExecutionCapacity"
   ],
   CassetteLifecycle: ["CoordinatorActivationReturned", "CoordinatorProcessDies"],
-  DeliverySynchronization: ["DalphHoldsAdmittedContinuationBeforeExecutorIntent"],
+  CassetteObservation: ["PauseProgressObserved", "PauseProgressObservedCancelledAndReconnected"],
+  DeliverySynchronization: [
+    "DalphHoldsAdmittedContinuationBeforeExecutorIntent",
+    "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
+    "CassetteReleasesHeldPlannedAttemptContinuation",
+    "DalphHoldsExecutorRequestThroughNextDeliveryPublication",
+    "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
+    "CassetteReleasesHeldPlannedAttemptSuspension",
+    "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary",
+    "CassetteKillsCoordinatorAtTargetPromotionReconciliationRead",
+    "CassetteReleasesHeldTargetPromotionReconciliationRead",
+    "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
+    "CassetteReleasesHeldTaskWorkSpecificationRead"
+  ],
   DalphOperationTrace: ["DalphSelects"],
-  Git: ["GitWorktreeObservationChanged"],
+  Git: ["GitPlannedWorktreeCreateResponseLost", "GitWorktreeObservationChanged"],
   IntegrationCandidateConstruction: [
     "IntegrationCandidateAgentReported",
     "IntegrationCandidateGitValidationFailed",
@@ -782,7 +1278,7 @@ const admittedContinuationHoldHasExactStopClosure = Schema.makeFilter(
   }
 )
 
-export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
+const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   exactlyOneAt("InitialControlPolicy", () => 0, "one InitialControlPolicy must be the first story item")
 )
   .check(exactlyOneAt("RunCoordinator", () => 1, "one RunCoordinator must follow InitialControlPolicy"))
@@ -801,4 +1297,5 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   .check(lostExecutorResponsesRequireExplicitProjection)
   .check(completionFinalityStoryIsComplete)
   .check(admittedContinuationHoldHasExactStopClosure)
+export const AuthoredScenarioCassette: typeof AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteSchema
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type

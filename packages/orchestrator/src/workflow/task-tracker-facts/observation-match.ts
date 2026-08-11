@@ -1,4 +1,5 @@
 import type { TaskTrackerFactsObservation } from "./observation.js"
+import { Match } from "effect"
 import {
   factFamilyCoverageMatchesExplicitTaskIds,
   taskTrackerTargetKey
@@ -51,16 +52,12 @@ export const taskTrackerObservationMatchesRead = (
   operation: TaskTrackerReadOperation
 ): boolean => {
   if (taskTrackerTargetKey(operation.target) !== taskTrackerTargetKey(observation.target)) return false
-  switch (observation._tag) {
-    case "FocusedTaskCompletionFacts":
-      return focusedCompletionMatchesRead(observation, operation)
-    case "FocusedTaskWorkSpecificationFacts":
-      return focusedWorkSpecificationMatchesRead(observation, operation)
-    case "FocusedTaskClaimFacts":
-    case "FocusedTaskClaimFactsUnreadable":
-      return focusedClaimMatchesRead(observation, operation)
-    case "CompleteTaskTrackerFacts":
-    case "UnchangedTaskTrackerFactsReconfirmed":
-      return completeGraphMatchesRead(observation, operation)
-  }
+  return Match.valueTags(observation, {
+    CompleteTaskTrackerFacts: (facts) => completeGraphMatchesRead(facts, operation),
+    FocusedTaskClaimFacts: (facts) => focusedClaimMatchesRead(facts, operation),
+    FocusedTaskClaimFactsUnreadable: (facts) => focusedClaimMatchesRead(facts, operation),
+    FocusedTaskCompletionFacts: (facts) => focusedCompletionMatchesRead(facts, operation),
+    FocusedTaskWorkSpecificationFacts: (facts) => focusedWorkSpecificationMatchesRead(facts, operation),
+    UnchangedTaskTrackerFactsReconfirmed: (facts) => completeGraphMatchesRead(facts, operation)
+  })
 }

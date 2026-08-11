@@ -89,6 +89,38 @@ accepted and applied to one exact run or task subject. Receiving or durably
 recording a command request is not this event.
 _Avoid_: Control command receipt, pause phase, operator identity
 
+**Pause progress observation**:
+Alice's process-local, current-first subscription to the derived progress of
+one exact applied Run Pause or Task Pause. It reads current delivery and
+live-action projections, performs no tracker, Git, executor, or journal call,
+and ends when the Pause is confirmed, is no longer applied, or the subscriber
+disconnects. A new process or subscriber derives a fresh result rather than
+recovering an observer cursor.
+_Avoid_: Persisted drain phase, workflow responsibility, polling loop, Pause command
+
+**Pause progress view**:
+One derived explanation of every outstanding responsibility covered by the
+observed Pause, the exact responsibilities already at their ordinary safe
+boundaries, and the exact boundary facts or live actions still preventing
+confirmation. It is process-local descriptive state and never authority to
+cancel, release, clean, resume, or retry work.
+_Avoid_: Pausing state, confirmed-paused record, cleanup disposition, ETA
+
+**Pause-covered responsibility**:
+One exact outstanding workflow responsibility included by a Run Pause, by the
+paused task itself, or by that task's descendants in the latest accepted
+complete grouping graph. Coverage explains why the responsibility appears in
+the view; it does not copy a Pause direction onto a grouping descendant.
+_Avoid_: Paused task list, dependency coverage, persisted observer item
+
+**Pause safe-boundary blocker**:
+The exact executor correlation, workflow operation, integration resource,
+promotion request, proposed action, or live action that currently prevents one
+Pause-covered responsibility from being classified at its ordinary safe
+boundary. A blocker belongs only to that correlated responsibility and cannot
+be inferred from another obligation on the same ticket.
+_Avoid_: Generic draining reason, ticket-level blocker, progress percentage
+
 **Planned-attempt executor work**:
 The selected executor's complete course of work for one planned task attempt.
 Dalph may start, continue, ask to suspend, or receive the outcome of that work
@@ -416,6 +448,15 @@ fact publication removes the proposal. It is discarded on process loss and is
 never durable evidence that the boundary request did or did not happen.
 _Avoid_: Workflow responsibility, accepted action result, persisted owner,
 relation revision
+
+**Delivery runtime observation**:
+The process-local current signal that combines one coherent accepted delivery
+evaluation with sanitized snapshots of its exact live action owners. It lets a
+passive observer distinguish proposed, admitted, materialized, intent-recorded,
+and settled action boundaries without exposing fibers, reservations, mutable
+controllers, or new workflow authority. The bootstrap process owns its signal
+across ordinary Run activations; process loss discards it.
+_Avoid_: Delivery relation authority, persisted runtime state, workflow history
 
 **Run quiescence**:
 The process-local condition for one Run in which no delivery action is currently

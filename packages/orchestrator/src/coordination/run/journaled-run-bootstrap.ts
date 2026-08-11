@@ -1,5 +1,5 @@
 import { type RunId } from "@dalph/contracts"
-import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Semaphore } from "effect"
+import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Semaphore, Stream } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
@@ -14,6 +14,13 @@ import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-cla
 import { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
 import { Journal, journalLayer } from "../delivery/journal.js"
 import {
+  DeliveryRuntimeResources,
+  deliveryRuntimeResourceCapabilitiesLayer,
+  deliveryRuntimeResourceCapabilitiesOf,
+  type DeliveryRuntimeResourcesService
+} from "../delivery/delivery-runtime-resources.js"
+import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import {
   RunFinalityDecision,
   type RunFinalityDecision as RunFinalityDecisionType,
   type RunFinalityProof
@@ -25,9 +32,11 @@ import {
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
   type JournaledRunBootstrapService,
+  type JournaledRunProcessServices,
   type JournaledRunServices
 } from "./run.js"
 import { inspectStartupRecovery, StartupRecoveryBlocked } from "./startup-recovery.js"
+import { observePauseProgress } from "./pause-progress-observer.js"
 import {
   type InRunJournal,
   type JournalReadError,
@@ -40,7 +49,7 @@ export interface JournaledRuntimeLayerInput {
 }
 
 export type JournaledRuntimeLayer = Layer.Layer<
-  Exclude<JournaledRunServices, Journal>,
+  Exclude<JournaledRunServices, Journal | JournaledRunProcessServices>,
   InvalidWorkflowJournalHistory | JournalReadError | StartupRecoveryBlocked,
   CoordinatorOwnership | InRunJournal
 >
@@ -48,6 +57,8 @@ export type JournaledRuntimeLayer = Layer.Layer<
 interface RuntimeControls {
   readonly attemptChoice: AttemptChoiceControl["Service"]
   readonly controlDirection: ControlDirectionApplication["Service"]
+  readonly deliveryRuntimeResources: DeliveryRuntimeResourcesService
+  readonly journal: Journal["Service"]
   readonly operationIdAllocator: OperationIdAllocatorService
   readonly runId: RunId
   readonly target: TrackerTarget
@@ -100,6 +111,11 @@ export const journaledRunBootstrapLayer = (
       const lifecycle = yield* RunLifecycleJournal
       const runtimeState = yield* Ref.make<RuntimeControlState>({ _tag: "RuntimeInactive" })
       const activation = yield* Semaphore.make(1)
+      const processRuntimeCapabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
+        yield* makeIntegrationTargetResourceController()
+      )
+      yield* Effect.addFinalizer(() => processRuntimeCapabilities.observation.close)
+      const processRuntimeLayer = deliveryRuntimeResourceCapabilitiesLayer(processRuntimeCapabilities)
 
       const acquireControlLease = Effect.fn("JournaledRunBootstrap.acquireControlLease")(function* () {
         const controls = yield* Ref.modify(runtimeState, (current) =>
@@ -157,6 +173,7 @@ export const journaledRunBootstrapLayer = (
           Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
               const downstream = runtimeLayer({ runId }).pipe(
+                Layer.provideMerge(processRuntimeLayer),
                 Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
               )
               const runtime = downstream.pipe(Layer.provideMerge(journalLayer(runId, target, initial, storage)))
@@ -165,6 +182,8 @@ export const journaledRunBootstrapLayer = (
               const controls: RuntimeControls = {
                 attemptChoice: Context.get(context, AttemptChoiceControl),
                 controlDirection: Context.get(context, ControlDirectionApplication),
+                deliveryRuntimeResources: Context.get(context, DeliveryRuntimeResources),
+                journal,
                 operationIdAllocator: Context.get(context, OperationIdAllocator),
                 runId,
                 target,
@@ -251,6 +270,16 @@ export const journaledRunBootstrapLayer = (
           withRuntimeControls(({ taskClaimReacquisition }) => taskClaimReacquisition.apply(input)),
         readAttemptChoice: (input) => withRuntimeControls(({ attemptChoice }) => attemptChoice.read(input)),
         readTaskWorkCapacity: (runId) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.read(runId)),
+        observePause: (input) =>
+          Stream.unwrap(
+            withRuntimeControls(({ deliveryRuntimeResources, journal, runId }) =>
+              journal.state.get.pipe(
+                Effect.map(({ position }) =>
+                  observePauseProgress(deliveryRuntimeResources, runId, { latestAcceptedAt: position }, input)
+                )
+              )
+            )
+          ),
         setTaskWorkCapacity: (input) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.apply(input))
       }
 

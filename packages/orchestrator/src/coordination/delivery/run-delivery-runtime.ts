@@ -9,20 +9,14 @@ import type { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   DeliveryActionExecutor,
-  DeliveryActionProtocolAdmissionMissing,
   type DeliveryActionExecutionError,
   DeliverySemanticTrace,
-  type DeliveryActionExecutionLease,
   type DeliveryActionResult,
   type DeliverySemanticTraceEvent
 } from "./delivery-action-executor.js"
-import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
-import { DeliveryProposalId } from "./delivery-action-proposal.js"
+import { type DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
-import {
-  type DeliveryAdmissionReservation,
-  type DeliveryRuntimeAdmissionController
-} from "./delivery-runtime-admission.js"
+import type { DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
 import {
   type CurrentSignal,
   type DeliveryProposalFrontier,
@@ -32,10 +26,8 @@ import {
   type TrackerGraphState
 } from "./relations.js"
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
-import {
-  type PlannedAttemptProtocolController,
-  withPlannedAttemptProtocolPermit
-} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import * as RuntimeObservation from "./delivery-runtime-observation.js"
+import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
 import {
   liveActionIsPresent,
@@ -59,13 +51,7 @@ export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedErro
   }
 ) {}
 
-interface LiveOwner {
-  readonly intentRecorded: Ref.Ref<boolean>
-  readonly operationId: Ref.Ref<OperationId | null>
-  readonly proposal: DeliveryActionProposal
-  readonly reservation: DeliveryAdmissionReservation
-  readonly settled: Ref.Ref<boolean>
-}
+type LiveOwner = RuntimeObservation.DeliveryRuntimeLiveOwnerSource
 
 interface Completion {
   readonly acknowledged: Deferred.Deferred<void>
@@ -82,35 +68,6 @@ export const proposalIsPresent = (frontier: DeliveryProposalFrontier, proposalId
   frontier._tag === "DeliveryProposalsAvailable"
     ? frontier.proposals.some(({ id }) => id === proposalId)
     : frontier.conflicts.some(({ id }) => id === proposalId)
-
-const proposalTaskId = (proposal: DeliveryActionProposal) => {
-  const requirement = proposal.admission.taskWorkPosition
-  return requirement._tag === "TaskWorkPositionRequired" ? requirement.taskId : undefined
-}
-
-const makeLease = (
-  admission: DeliveryRuntimeAdmissionController,
-  integrationTargets: DeliveryActionExecutionLease["integrationTargets"],
-  owner: LiveOwner
-): DeliveryActionExecutionLease => ({
-  acceptIntegrationTargetOwnership:
-    owner.reservation.acquiredIntegrationResponsibility === null
-      ? Effect.void
-      : integrationTargets.publishAcceptedOwnership(owner.reservation.acquiredIntegrationResponsibility),
-  bindPlannedAttemptPosition: (correlation) => {
-    const taskId = proposalTaskId(owner.proposal)
-    return taskId === undefined ? Effect.void : admission.bindPlannedAttemptPosition(taskId, correlation)
-  },
-  integrationTargets,
-  recordIntent: () => Ref.set(owner.intentRecorded, true),
-  releasePlannedAttemptPosition: admission.releasePlannedAttemptPosition,
-  withPlannedAttemptProtocol: (correlation, effect) => {
-    const reservation = owner.reservation
-    return reservation._tag === "NoPlannedAttemptProtocolAdmission"
-      ? Effect.fail(new DeliveryActionProtocolAdmissionMissing({ correlation, proposalId: reservation.proposal.id }))
-      : withPlannedAttemptProtocolPermit(reservation.permit, correlation, effect(reservation.permit))
-  }
-})
 
 /**
  * The runtime consumes one coherent current-first evaluation signal. Authority
@@ -168,6 +125,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
   | DeliveryRuntimeReconfirmationStateInvalid
   | PlannedTaskAttemptError,
   | DeliveryActionExecutor
+  | RuntimeObservation.DeliveryRuntimeObservationPublication
   | DeliveryRuntimeResources
   | OperationIdAllocator
   | PlannedAttemptProtocolController
@@ -178,6 +136,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const scope = yield* Effect.scope
       const executor = yield* DeliveryActionExecutor
       const resources = yield* DeliveryRuntimeResources
+      const runtimeObservation = yield* RuntimeObservation.DeliveryRuntimeObservationPublication
       const operationAllocator = yield* OperationIdAllocator
       const attemptPlanner = yield* PlannedTaskAttemptPlanner
       const ambient = yield* Effect.context<never>()
@@ -192,6 +151,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const integrationTargets = resources.integrationTargets
       const first = yield* relation.get
       yield* Ref.set(latest, Option.some(first))
+      yield* runtimeObservation.publish(first, [])
       const admission = yield* resources.makeAdmissionController(first.taskWork)
       const evaluationsSubscribed = yield* Deferred.make<void>()
 
@@ -208,24 +168,47 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       yield* Ref.set(latest, Option.some(subscribedCurrent))
       yield* admission.synchronize(subscribedCurrent.taskWork)
 
+      const publishRuntimeObservationInsideGate = Effect.fn("DeliveryRuntime.publishObservationInsideGate")(
+        function* () {
+          const evaluation = Option.getOrThrow(yield* Ref.get(latest))
+          yield* runtimeObservation.publish(
+            evaluation,
+            yield* RuntimeObservation.deliveryRuntimeLiveOwnerSnapshots(yield* Ref.get(owners))
+          )
+        }
+      )
+      const publishRuntimeObservation = Effect.fn("DeliveryRuntime.publishObservation")(() =>
+        selectionGate.withPermit(publishRuntimeObservationInsideGate())
+      )
+
+      yield* publishRuntimeObservation()
+
       const start = Effect.fn("DeliveryRuntime.startProposal")(function* (reservation: DeliveryAdmissionReservation) {
         const proposal = reservation.proposal
-        const intentRecorded = yield* Ref.make(false)
-        const operationId = yield* Ref.make<OperationId | null>(null)
-        const settled = yield* Ref.make(false)
-        const owner: LiveOwner = { intentRecorded, operationId, proposal, reservation, settled }
+        const owner = yield* RuntimeObservation.makeDeliveryRuntimeLiveOwner(reservation)
         yield* Ref.update(owners, (current) => new Map(current).set(proposal.id, owner))
+        yield* publishRuntimeObservationInsideGate()
         yield* emit({ _tag: "ProposalAdmitted", proposalId: proposal.id })
         const run = Effect.gen(function* () {
           const action = yield* materializeDeliveryAction(proposal).pipe(
             Effect.provideService(OperationIdAllocator, operationAllocator),
             Effect.provideService(PlannedTaskAttemptPlanner, attemptPlanner)
           )
-          yield* Ref.set(operationId, materializedOperationId(action))
-          return yield* executor.execute(action, makeLease(admission, integrationTargets, owner))
+          const operationId = materializedOperationId(action)
+          if (operationId !== null) yield* owner.materialize(operationId)
+          yield* publishRuntimeObservation()
+          return yield* executor.execute(
+            action,
+            RuntimeObservation.makeObservedDeliveryActionLease(
+              admission,
+              integrationTargets,
+              owner,
+              publishRuntimeObservation()
+            )
+          )
         })
         const releaseInterruptedOwner = selectionGate.withPermit(
-          Ref.get(settled).pipe(
+          owner.isSettled.pipe(
             Effect.flatMap((isSettled) =>
               isSettled
                 ? Effect.void
@@ -234,7 +217,8 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                     .pipe(
                       Effect.andThen(
                         Ref.update(owners, (current) => new Map([...current].filter(([id]) => id !== proposal.id)))
-                      )
+                      ),
+                      Effect.andThen(publishRuntimeObservationInsideGate())
                     )
             )
           )
@@ -297,9 +281,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             const deferred = yield* Ref.get(deferredAt)
             const liveActionKeys = new Set([...live.values()].map(({ proposal }) => liveActionKeyOf(proposal)))
             const liveOperationIds = new Set(
-              (yield* Effect.forEach(live.values(), ({ operationId }) => Ref.get(operationId))).filter(
-                (operationId): operationId is OperationId => operationId !== null
-              )
+              (yield* Effect.forEach(live.values(), ({ operationId }) => operationId)).flatMap(Option.toArray)
             )
             const proposal = proposedActions.proposals.find((candidate) =>
               proposalIsAvailable(candidate, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)
@@ -330,49 +312,58 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const current = yield* Ref.get(owners)
         const removable: Array<LiveOwner> = []
         for (const owner of current.values()) {
-          if ((yield* Ref.get(owner.settled)) && !liveActionIsPresent(frontier, owner.proposal)) {
+          if ((yield* owner.isSettled) && !liveActionIsPresent(frontier, owner.proposal)) {
             removable.push(owner)
           }
         }
         if (removable.length === 0) return
         const removableIds = new Set(removable.map(({ proposal }) => proposal.id))
         yield* Ref.update(owners, (current) => new Map([...current].filter(([id]) => !removableIds.has(id))))
+        yield* publishRuntimeObservationInsideGate()
       })
 
       const applyEvaluation = Effect.fn("DeliveryRuntime.applyEvaluation")(function* (
         evaluation: DeliveryRuntimeEvaluation
       ) {
-        yield* Ref.set(latest, Option.some(evaluation))
-        yield* Ref.update(
-          deferredAt,
-          (current) =>
-            new Map(
-              [...current].filter(
-                ([proposalId, acceptedAt]) =>
-                  acceptedAt === evaluation.acceptedAt && proposalIsPresent(evaluation.proposedActions, proposalId)
-              )
+        yield* selectionGate.withPermit(
+          Effect.gen(function* () {
+            yield* Ref.set(latest, Option.some(evaluation))
+            yield* Ref.update(
+              deferredAt,
+              (current) =>
+                new Map(
+                  [...current].filter(
+                    ([proposalId, acceptedAt]) =>
+                      acceptedAt === evaluation.acceptedAt && proposalIsPresent(evaluation.proposedActions, proposalId)
+                  )
+                )
             )
+            yield* admission.synchronize(evaluation.taskWork)
+            yield* pruneSettledOwners(evaluation.proposedActions)
+            yield* publishRuntimeObservationInsideGate()
+          })
         )
-        yield* admission.synchronize(evaluation.taskWork)
-        yield* selectionGate.withPermit(pruneSettledOwners(evaluation.proposedActions))
       })
 
       const applyCompletion = Effect.fn("DeliveryRuntime.applyCompletion")(function* (completion: Completion) {
         const result = yield* selectionGate.withPermit(
           Effect.gen(function* () {
             const owner = Option.getOrThrow(Option.fromUndefinedOr((yield* Ref.get(owners)).get(completion.proposalId)))
-            const intentRecorded = yield* Ref.get(owner.intentRecorded)
+            const intentRecorded = yield* owner.intentRecorded
             if (Exit.isFailure(completion.exit)) {
               yield* admission.rollback(owner.reservation, intentRecorded)
-              yield* Ref.set(owner.settled, true)
+              yield* owner.settle
+              yield* publishRuntimeObservationInsideGate()
               yield* Ref.update(
                 owners,
                 (current) => new Map([...current].filter(([id]) => id !== completion.proposalId))
               )
+              yield* publishRuntimeObservationInsideGate()
             } else {
               yield* admission.complete(owner.reservation)
               yield* emit({ _tag: "ActionOutcome", result: completion.exit.value })
-              yield* Ref.set(owner.settled, true)
+              yield* owner.settle
+              yield* publishRuntimeObservationInsideGate()
               const current = Option.getOrThrow(yield* Ref.get(latest))
               if (completion.exit.value._tag === "ActionDeferred") {
                 yield* Ref.update(deferredAt, (deferred) =>
@@ -382,11 +373,13 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                   owners,
                   (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))
                 )
+                yield* publishRuntimeObservationInsideGate()
               } else if (!liveActionIsPresent(current.proposedActions, owner.proposal)) {
                 yield* Ref.update(
                   owners,
                   (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))
                 )
+                yield* publishRuntimeObservationInsideGate()
               }
             }
             return completion.exit
@@ -459,7 +452,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const current = Option.getOrThrow(yield* Ref.get(latest))
         const live = yield* Ref.get(owners)
         const quiescence = yield* runtimeQuiescence(current, live)
-        if (Option.isSome(quiescence)) return quiescence.value
+        if (Option.isSome(quiescence)) {
+          yield* publishRuntimeObservation()
+          return quiescence.value
+        }
 
         yield* applyRuntimeEvent(yield* Queue.take(events))
       }
@@ -470,5 +466,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 /** Runs one standalone runtime phase and releases its process-local resources at the phase boundary. */
 export const runDeliveryRuntime = <E>(relation: DeliveryRuntimeInput<E>) =>
   runDeliveryRuntimePhase(relation).pipe(
-    Effect.ensuring(Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll))
+    Effect.ensuring(
+      Effect.gen(function* () {
+        yield* Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll)
+        yield* Effect.flatMap(RuntimeObservation.DeliveryRuntimeObservationPublication, ({ close }) => close)
+      })
+    )
   )

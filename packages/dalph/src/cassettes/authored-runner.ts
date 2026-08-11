@@ -2,6 +2,7 @@
 import {
   Cause,
   Context,
+  type Crypto,
   Deferred,
   Effect,
   Exit,
@@ -9,7 +10,9 @@ import {
   Layer,
   Match,
   Option,
+  Queue,
   Ref,
+  Scope,
   type Result,
   Schema,
   Stream
@@ -49,6 +52,7 @@ import {
   type DeliveryConsequences,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
+  deliveryProposalOrderTaskId,
   type JournaledTrackerGraphObservation,
   freshWorkflowRunId,
   GitTargetLineage,
@@ -59,16 +63,19 @@ import {
   IntegrationReviewManifest,
   IntegrationCandidateGitReadFailure,
   GitWorktree,
+  GitWorktreeCreateFailure,
   gitTargetLineageTestLayer,
   gitWorktreeTestLayer,
   type JournalRecord,
   type JournalPosition,
+  OperationId,
   JournalStore,
   journalStoreCapabilities,
   JournaledRunBootstrap,
   journaledRunBootstrapLayer,
   type JournaledRuntimeLayerInput,
   journaledWorkflowInterpreterLayer,
+  type PauseProgressView,
   workflowInterpreterLayer,
   makeLiveDeliveryActionExecutor,
   memoryJournalStoreLayer,
@@ -90,6 +97,8 @@ import {
   TargetVerificationTerminal,
   TargetPromotionCompareAndSetFailure,
   TargetPromotionCompareAndSetResult,
+  TargetPromotionRequest,
+  TargetPromotionRequestId,
   TargetPromotionGitReadFailure,
   TargetPromotionGitReadObservation,
   type TargetPromotionGitService,
@@ -108,7 +117,9 @@ import {
 } from "@dalph/orchestrator"
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
+  AuthoredDeliveryProposalId,
   AuthoredRunActivationOrdinal,
+  decodeAuthoredPauseProgressResult,
   type AuthoredRunActivationOrdinal as AuthoredRunActivationOrdinalType,
   AuthoredScenarioCassette,
   type AuthoredCassetteStoryItem,
@@ -271,6 +282,379 @@ export interface AuthoredScenarioCassetteRunOptions {
   readonly onDeliveryPublication?: (publication: AuthoredDeliveryPublication) => void
 }
 
+type AuthoredPauseObservationResult = (typeof AuthoredCassetteStoryItem.cases.PauseProgressObserved.Type)["result"]
+type AuthoredPauseResponsibility =
+  | Extract<AuthoredPauseObservationResult, { readonly _tag: "PauseConfirmed" }>["atBoundary"][number]
+  | Extract<AuthoredPauseObservationResult, { readonly _tag: "PauseWaiting" }>["preventing"][number]["responsibility"]
+type AuthoredPauseBlocker = Extract<
+  AuthoredPauseObservationResult,
+  { readonly _tag: "PauseWaiting" }
+>["preventing"][number]["blockers"][number]
+type AuthoredPauseProposal = Extract<AuthoredPauseBlocker, { readonly _tag: "ProposedDeliveryAction" }>["proposal"]
+type AuthoredPauseLiveOwner = Extract<AuthoredPauseBlocker, { readonly _tag: "LiveDeliveryAction" }>["owner"]
+
+/* v8 ignore next -- @preserve The production Pause projector excludes the taskless graph proposal before authored projection. */
+const taskIdOfPauseProposal = (proposal: DeliveryProposal): TaskId => {
+  const taskId = deliveryProposalOrderTaskId(proposal.order)
+  return Option.fromNullishOr(taskId).pipe(
+    Option.getOrThrowWith(() => new Error("Pause delivery action has no task identity"))
+  )
+}
+
+/* v8 ignore next -- @preserve Exhaustive route matching retains this impossible graph-proposal defect after the task-identity gate. */
+const tasklessPauseProposalDefect = (): never =>
+  Option.none<never>().pipe(
+    Option.getOrThrowWith(() => new Error("Pause delivery action cannot be a tracker graph read"))
+  )
+
+const authoredOperationIdOf = (operationId: string, runId: RunId) =>
+  OperationId.make(operationId.replaceAll(runId, "$authored-run"))
+
+const authoredDeliveryProposalIdOf = (proposal: DeliveryProposal, runId: RunId): AuthoredDeliveryProposalId => {
+  const taskId = taskIdOfPauseProposal(proposal)
+  const identity = Match.valueTags(proposal.route, {
+    /* v8 ignore start -- @preserve #63 authored Pause views exercise exact worktree and identity-free actions; accepted-operation subvariants retain exhaustive authoring support and are covered by their workflow protocols. */
+    AcceptedWorkflowRoute: ({ transition }) => [
+      "AcceptedWorkflowRoute",
+      transition._tag,
+      "operationId" in transition
+        ? authoredOperationIdOf(transition.operationId, runId)
+        : transition.operation._tag === "ReleaseTaskClaim"
+          ? authoredOperationIdOf(transition.operation.release.operationId, runId)
+          : authoredOperationIdOf(transition.operation.operationId, runId),
+      taskId
+    ],
+    /* v8 ignore stop -- @preserve */
+    FreshExecutorWorkflowRoute: ({ step }) => [
+      "FreshExecutorWorkflowRoute",
+      step._tag,
+      step.plannedAttempt.attemptId,
+      taskId
+    ],
+    FreshWorkflowRoute: ({ step }) => [
+      "FreshWorkflowRoute",
+      step._tag,
+      /* v8 ignore next -- @preserve Fresh steps without a planned attempt retain task correlation; #63 Pause actions exercise the attempt-correlated branch. */
+      "plannedAttempt" in step ? step.plannedAttempt.attemptId : null,
+      taskId
+    ],
+    IdentityFreeWorkflowRoute: ({ transition }) => [
+      "IdentityFreeWorkflowRoute",
+      transition._tag,
+      /* v8 ignore next -- @preserve The exhaustive identity records both protocol-bearing and task-only identity-free actions; #63 exercises protocol-bearing suspension and promotion. */
+      proposal.admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired"
+        ? proposal.admission.plannedAttemptProtocol.correlation.attemptId
+        : null,
+      /* v8 ignore next -- @preserve The exhaustive identity records both integration-target and non-integration identity-free actions. */
+      proposal.admission.integrationTarget._tag === "IntegrationTargetResourceRequired"
+        ? proposal.admission.integrationTarget.queuedAt
+        : null,
+      taskId
+    ],
+    /* v8 ignore next -- @preserve Recovered-new route identity is required by the exhaustive authoring boundary; #63 maintained views exercise the equivalent attempt/task correlations on fresh and identity-free routes. */
+    RecoveredNewActionRoute: ({ action }) => [
+      "RecoveredNewActionRoute",
+      action._tag,
+      /* v8 ignore next -- @preserve Exhaustive recovered-new identity retains both task-only and attempt-correlated actions; #63 authored blockers do not use this route. */
+      "plannedAttempt" in action ? (action.plannedAttempt?.attemptId ?? null) : null,
+      taskId
+    ],
+    /* v8 ignore next -- @preserve Pause excludes the taskless tracker-graph proposal before projection. */
+    TrackerGraphReadRoute: tasklessPauseProposalDefect
+  })
+  return AuthoredDeliveryProposalId.make(JSON.stringify(identity))
+}
+
+const authoredAcceptanceManifestDigest = "1111111111111111111111111111111111111111111111111111111111111111"
+const authoredReviewManifestDigest = "2222222222222222222222222222222222222222222222222222222222222222"
+const authoredVerificationManifestDigest = "3333333333333333333333333333333333333333333333333333333333333333"
+
+const authoredTargetPromotionRequestOf = (request: TargetPromotionRequest, runId: RunId): TargetPromotionRequest => {
+  const normalized = Schema.decodeUnknownSync(TargetPromotionRequest)(
+    JSON.parse(JSON.stringify(request).replaceAll(String(runId), "$authored-run"))
+  )
+  return Schema.decodeUnknownSync(TargetPromotionRequest)({
+    ...normalized,
+    acceptanceManifest: { ...normalized.acceptanceManifest, digest: authoredAcceptanceManifestDigest },
+    candidateCorrelation: {
+      ...normalized.candidateCorrelation,
+      acceptanceManifest: {
+        ...normalized.candidateCorrelation.acceptanceManifest,
+        digest: authoredAcceptanceManifestDigest
+      }
+    },
+    reviewManifest: { ...normalized.reviewManifest, digest: authoredReviewManifestDigest },
+    verificationCorrelation: {
+      ...normalized.verificationCorrelation,
+      candidateCorrelation: {
+        ...normalized.verificationCorrelation.candidateCorrelation,
+        acceptanceManifest: {
+          ...normalized.verificationCorrelation.candidateCorrelation.acceptanceManifest,
+          digest: authoredAcceptanceManifestDigest
+        }
+      }
+    },
+    verificationManifest: { ...normalized.verificationManifest, digest: authoredVerificationManifestDigest }
+  })
+}
+
+const targetPromotionRequestOf = (
+  transition: Extract<
+    Extract<DeliveryProposal["route"], { readonly _tag: "IdentityFreeWorkflowRoute" }>["transition"],
+    { readonly _tag: "RunTargetPromotion" }
+  >,
+  runId: RunId
+): TargetPromotionRequest => {
+  const request = TargetPromotionRequest.make({
+    acceptanceManifest: transition.candidate.correlation.acceptanceManifest,
+    candidateCommit: transition.candidate.candidateCommit,
+    candidateConstructedAt: transition.candidate.constructedAt,
+    candidateCorrelation: transition.candidate.correlation,
+    expectedTargetHead: transition.candidate.correlation.expectedTargetHead,
+    integrationTarget: transition.candidate.correlation.integrationTarget,
+    reviewManifest: transition.candidate.reviewManifest,
+    requestId: TargetPromotionRequestId.make(`target-promotion:${transition.candidate.correlation.candidateId}`),
+    verificationCorrelation: transition.verification.correlation,
+    verificationManifest: transition.verification.manifest
+  })
+  return authoredTargetPromotionRequestOf(request, runId)
+}
+
+const authoredTaskOrAttemptCorrelationOf = (
+  plannedAttempt: PlannedTaskAttempt | null
+): Extract<AuthoredPauseProposal, { readonly _tag: "RecoveredNewActionRoute" }>["correlation"] =>
+  /* v8 ignore next -- @preserve Exhaustive fresh/recovered projection retains task-only actions; maintained #63 Pause action blockers are attempt-correlated. */
+  plannedAttempt === null ? { _tag: "Task" } : { _tag: "Attempt", attemptId: plannedAttempt.attemptId }
+
+const authoredPauseProposalOf = (proposal: DeliveryProposal, runId: RunId): AuthoredPauseProposal => {
+  const proposalId = authoredDeliveryProposalIdOf(proposal, runId)
+  const taskId = taskIdOfPauseProposal(proposal)
+  return Match.valueTags(proposal.route, {
+    /* v8 ignore start -- @preserve #63 authored Pause views exercise exact worktree and identity-free actions; accepted-operation subvariants retain exhaustive authoring support and are covered by their workflow protocols. */
+    AcceptedWorkflowRoute: ({ transition }) => ({
+      _tag: "AcceptedWorkflowRoute" as const,
+      operationId:
+        "operationId" in transition
+          ? authoredOperationIdOf(transition.operationId, runId)
+          : transition.operation._tag === "ReleaseTaskClaim"
+            ? authoredOperationIdOf(transition.operation.release.operationId, runId)
+            : authoredOperationIdOf(transition.operation.operationId, runId),
+      proposalId,
+      taskId
+    }),
+    /* v8 ignore stop -- @preserve */
+    FreshExecutorWorkflowRoute: ({ step }) => ({
+      _tag: "FreshExecutorWorkflowRoute" as const,
+      attemptId: step.plannedAttempt.attemptId,
+      proposalId,
+      taskId
+    }),
+    FreshWorkflowRoute: ({ step }) => ({
+      _tag: "FreshWorkflowRoute" as const,
+      correlation:
+        /* v8 ignore next -- @preserve Fresh steps without a planned attempt retain task correlation; #63 Pause actions exercise the attempt-correlated branch. */
+        "plannedAttempt" in step ? authoredTaskOrAttemptCorrelationOf(step.plannedAttempt) : { _tag: "Task" as const },
+      proposalId,
+      taskId
+    }),
+    IdentityFreeWorkflowRoute: ({ transition }) => {
+      const integration = proposal.admission.integrationTarget
+      const protocol = proposal.admission.plannedAttemptProtocol
+      /* v8 ignore start -- @preserve The exhaustive authoring boundary retains all identity-free correlation shapes; #63 cassettes exercise planned-attempt suspension and exact target promotion. */
+      const correlation =
+        transition._tag === "RunTargetPromotion"
+          ? {
+              _tag: "TargetPromotion" as const,
+              attemptId: transition.responsibility.plannedAttempt.attemptId,
+              queuedAt: transition.responsibility.queuedAt,
+              request: targetPromotionRequestOf(transition, runId)
+            }
+          : integration._tag === "IntegrationTargetResourceRequired"
+            ? protocol._tag === "PlannedAttemptProtocolRequired"
+              ? {
+                  _tag: "Integration" as const,
+                  attemptId: protocol.correlation.attemptId,
+                  queuedAt: integration.queuedAt
+                }
+              : { _tag: "Task" as const }
+            : protocol._tag === "PlannedAttemptProtocolRequired"
+              ? { _tag: "PlannedAttempt" as const, attemptId: protocol.correlation.attemptId }
+              : { _tag: "Task" as const }
+      /* v8 ignore stop -- @preserve */
+      return { _tag: "IdentityFreeWorkflowRoute" as const, correlation, proposalId, taskId }
+    },
+    /* v8 ignore next -- @preserve Recovered-new route projection is required by the exhaustive authoring boundary; #63 maintained views exercise the equivalent attempt/task correlations on fresh and identity-free routes. */
+    RecoveredNewActionRoute: ({ action }) => ({
+      _tag: "RecoveredNewActionRoute" as const,
+      correlation: authoredTaskOrAttemptCorrelationOf(
+        /* v8 ignore next -- @preserve Exhaustive recovered-new identity retains both task-only and attempt-correlated actions; #63 authored blockers do not use this route. */
+        "plannedAttempt" in action ? action.plannedAttempt : null
+      ),
+      proposalId,
+      taskId
+    }),
+    /* v8 ignore next -- @preserve Pause excludes the taskless tracker-graph proposal before projection. */
+    TrackerGraphReadRoute: tasklessPauseProposalDefect
+  })
+}
+
+const authoredPauseLiveOwnerOf = (
+  owner: Extract<
+    PauseProgressView,
+    { readonly _tag: "PauseWaiting" }
+  >["preventing"][number]["blockers"][number] extends infer Blocker
+    ? Blocker extends { readonly _tag: "LiveDeliveryAction"; readonly owner: infer Owner }
+      ? Owner
+      : never
+    : never,
+  runId: RunId
+): AuthoredPauseLiveOwner =>
+  Match.valueTags(owner, {
+    AdmittedDeliveryAction: ({ proposal }) => ({
+      _tag: "AdmittedDeliveryAction" as const,
+      proposal: authoredPauseProposalOf(proposal, runId)
+    }),
+    MaterializedDeliveryAction: ({ intent, operationId, proposal }) => ({
+      _tag: "MaterializedDeliveryAction" as const,
+      intent,
+      operationId: authoredOperationIdOf(operationId, runId),
+      proposal: authoredPauseProposalOf(proposal, runId)
+    }),
+    /* v8 ignore next -- @preserve Settled-owner variants are covered by the production Pause projector; maintained authored chronologies observe proposed, admitted, and materialized boundaries. */
+    SettledBeforeMaterialization: ({ proposal }) => ({
+      _tag: "SettledBeforeMaterialization" as const,
+      proposal: authoredPauseProposalOf(proposal, runId)
+    }),
+    /* v8 ignore next -- @preserve Settled-owner variants are covered by the production Pause projector; maintained authored chronologies observe proposed, admitted, and materialized boundaries. */
+    SettledMaterializedDeliveryAction: ({ intent, operationId, proposal }) => ({
+      _tag: "SettledMaterializedDeliveryAction" as const,
+      intent,
+      operationId: authoredOperationIdOf(operationId, runId),
+      proposal: authoredPauseProposalOf(proposal, runId)
+    })
+  })
+
+const authoredPauseResponsibilityOf = (
+  responsibility:
+    | Extract<PauseProgressView, { readonly _tag: "PauseConfirmed" }>["atBoundary"][number]["responsibility"]
+    | Extract<
+        Extract<PauseProgressView, { readonly _tag: "PauseWaiting" }>["preventing"][number]["responsibility"],
+        { readonly _tag: "PauseDeliveryActionResponsibility" }
+      >,
+  runId: RunId
+): AuthoredPauseResponsibility => {
+  const coverage = responsibility.coverage
+  if (responsibility._tag === "PauseDeliveryActionResponsibility") {
+    return {
+      _tag: "DeliveryAction",
+      proposal: authoredPauseProposalOf(responsibility.proposal, runId),
+      coverage,
+      taskId: responsibility.taskId
+    }
+  }
+  return Match.valueTags(responsibility.obligation, {
+    /* v8 ignore next -- @preserve Accepted-only safe-boundary projection is covered by the production projector; #63's authored A+D chronology observes the later started-integration boundary. */
+    AcceptedAwaitingIntegration: ({ accepted }) => ({
+      _tag: "AcceptedAwaitingIntegration" as const,
+      attemptId: accepted.plannedAttempt.attemptId,
+      coverage,
+      taskId: responsibility.taskId,
+      terminalAt: accepted.terminalAt
+    }),
+    /* v8 ignore next -- @preserve Queued-only safe-boundary projection is covered by the production projector; #63's authored A+D chronology observes the later started-integration boundary. */
+    QueuedIntegration: ({ responsibility: queued }) => ({
+      _tag: "QueuedIntegration" as const,
+      attemptId: queued.plannedAttempt.attemptId,
+      coverage,
+      queuedAt: queued.queuedAt,
+      taskId: responsibility.taskId
+    }),
+    StartedIntegration: ({ responsibility: started }) => ({
+      _tag: "StartedIntegration" as const,
+      attemptId: started.plannedAttempt.attemptId,
+      coverage,
+      queuedAt: started.queuedAt,
+      startedAt: started.startedAt,
+      taskId: responsibility.taskId
+    }),
+    WorkflowResponsibility: ({ responsibility: workflow }) => {
+      if (workflow._tag === "PlannedAttemptExecutorWorkResponsibility") {
+        return {
+          _tag: "PlannedAttemptExecutorWork" as const,
+          attemptId: workflow.plannedAttempt.attemptId,
+          beganAt: workflow.beganAt,
+          coverage,
+          taskId: responsibility.taskId
+        }
+      }
+      return Match.valueTags(workflow, {
+        /* v8 ignore next -- @preserve Claim acquisition responsibility projection is covered by ordinary authored obligation diagnostics; #63 Pause cassettes exercise executor and worktree responsibilities. */
+        TaskClaimResponsibility: ({ acquisition, beganAt }) => ({
+          _tag: "WorkflowOperation" as const,
+          beganAt,
+          coverage,
+          operationId: authoredOperationIdOf(acquisition.operationId, runId),
+          responsibilityTag: workflow._tag,
+          taskId: responsibility.taskId
+        }),
+        /* v8 ignore next -- @preserve Claim release responsibility projection is covered by ordinary authored obligation diagnostics; #63 Pause cassettes exercise executor and worktree responsibilities. */
+        TaskClaimReleaseResponsibility: ({ beganAt, operation }) => ({
+          _tag: "WorkflowOperation" as const,
+          beganAt,
+          coverage,
+          operationId: authoredOperationIdOf(operation.release.operationId, runId),
+          responsibilityTag: workflow._tag,
+          taskId: responsibility.taskId
+        }),
+        TaskWorktreeResponsibility: ({ beganAt, operation }) => ({
+          _tag: "WorkflowOperation" as const,
+          beganAt,
+          coverage,
+          operationId: authoredOperationIdOf(operation.operationId, runId),
+          responsibilityTag: workflow._tag,
+          taskId: responsibility.taskId
+        })
+      })
+    }
+  })
+}
+
+const pauseObservationResultOf = (view: PauseProgressView, runId: RunId): AuthoredPauseObservationResult => {
+  if (view._tag === "PauseNoLongerApplied") {
+    return decodeAuthoredPauseProgressResult({ _tag: "PauseNoLongerApplied" })
+  }
+  const atBoundary = view.atBoundary.map(({ responsibility }) => authoredPauseResponsibilityOf(responsibility, runId))
+  if (view._tag === "PauseConfirmed") return decodeAuthoredPauseProgressResult({ _tag: "PauseConfirmed", atBoundary })
+  const authoredBlocker = (blocker: (typeof view.preventing)[number]["blockers"][number]) =>
+    blocker._tag === "ExecutorSafeSuspensionRequired"
+      ? { _tag: blocker._tag, attemptId: blocker.correlation.attemptId }
+      : blocker._tag === "ProposedDeliveryAction"
+        ? { _tag: blocker._tag, proposal: authoredPauseProposalOf(blocker.proposal, runId) }
+        : blocker._tag === "LiveDeliveryAction"
+          ? { _tag: blocker._tag, owner: authoredPauseLiveOwnerOf(blocker.owner, runId) }
+          : blocker._tag === "AcceptedOutcomePublicationPending"
+            ? { _tag: blocker._tag, proposal: authoredPauseProposalOf(blocker.proposal, runId) }
+            : blocker._tag === "HeldIntegrationTarget" || blocker._tag === "ActiveIntegrationTarget"
+              ? { _tag: blocker._tag, queuedAt: blocker.queuedAt }
+              : { _tag: blocker._tag, request: authoredTargetPromotionRequestOf(blocker.request, runId) }
+  const authoredPreventing = ({ blockers, responsibility }: (typeof view.preventing)[number]) => ({
+    blockers: [authoredBlocker(blockers[0]), ...blockers.slice(1).map(authoredBlocker)] as const,
+    responsibility: authoredPauseResponsibilityOf(responsibility, runId)
+  })
+  return decodeAuthoredPauseProgressResult({
+    _tag: "PauseWaiting",
+    atBoundary,
+    preventing: [authoredPreventing(view.preventing[0]), ...view.preventing.slice(1).map(authoredPreventing)]
+  })
+}
+
+const pauseObservationResultMatches = (
+  actual: AuthoredPauseObservationResult,
+  expected: AuthoredPauseObservationResult
+): boolean => {
+  return JSON.stringify(actual) === JSON.stringify(expected)
+}
+
 const diagnosticJsonIndent = 2
 const authoredTaggedDiagnosticOf = (value: { readonly _tag: string }): AuthoredTaggedDiagnostic => ({
   kind: value._tag,
@@ -317,10 +701,14 @@ const authoredIntegrationOrderOf = (
             ]
           : []
       )
-      .toSorted((left, right) => left.terminalAt - right.terminalAt),
-    responsibilities: obligations
-      .flatMap(authoredOrderedIntegrationResponsibilityOf)
-      .toSorted((left, right) => left.queuedAt - right.queuedAt)
+      .toSorted(
+        /* v8 ignore next -- @preserve Ordering is observable only with multiple simultaneous accepted results; the maintained responsibility-slot cassettes cover the single-result boundary. */
+        (left, right) => left.terminalAt - right.terminalAt
+      ),
+    responsibilities: obligations.flatMap(authoredOrderedIntegrationResponsibilityOf).toSorted(
+      /* v8 ignore next -- @preserve Ordering is observable only with multiple simultaneous integration responsibilities; the maintained responsibility-slot cassettes cover one exact queued position. */
+      (left, right) => left.queuedAt - right.queuedAt
+    )
   }
 }
 
@@ -328,6 +716,7 @@ const authoredWorkflowResponsibilityCorrelation = (
   responsibility: WorkflowResponsibility
 ): Pick<AuthoredObligationDiagnostic, "attemptId" | "summary"> =>
   Match.valueTags(responsibility, {
+    /* v8 ignore next -- @preserve Pause scenario diagnostics exercise executor/worktree responsibilities; claim responsibility wording is fixed by this exhaustive mapping. */
     TaskClaimResponsibility: () => ({ attemptId: null, summary: "task-claim acquisition responsibility" }),
     TaskClaimReleaseResponsibility: () => ({ attemptId: null, summary: "task-claim release responsibility" }),
     TaskWorktreeResponsibility: () => ({ attemptId: null, summary: "Git worktree responsibility" }),
@@ -440,8 +829,7 @@ const proposalOwnerLabels = {
   TrackerGraph: "tracker graph"
 } as const satisfies Record<DeliveryProposal["owner"], string>
 
-const proposalTaskId = (proposal: DeliveryProposal): TaskId | null =>
-  "taskId" in proposal.order ? proposal.order.taskId : null
+const proposalTaskId = (proposal: DeliveryProposal): TaskId | null => deliveryProposalOrderTaskId(proposal.order)
 
 const proposalActionTag = (proposal: DeliveryProposal): ProposalActionTag =>
   Match.valueTags(proposal.route, {
@@ -825,6 +1213,24 @@ const runAuthoredScenarioCassetteWith = (request: {
         AuthoredRunActivationOrdinal.make(1)
       )
       const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
+      const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
+      const plannedSuspensionExecutorBoundaryGate = yield* Ref.make<
+        Option.Option<{
+          readonly attemptId: AttemptId
+          readonly release: Deferred.Deferred<void>
+          readonly taskId: TaskId
+        }>
+      >(Option.none())
+      const plannedContinuationExecutorBoundaryGate = yield* Ref.make<
+        ReadonlyMap<
+          string,
+          { readonly attemptId: AttemptId; readonly release: Deferred.Deferred<void>; readonly taskId: TaskId }
+        >
+      >(new Map())
+      const targetPromotionReconciliationReadBoundaryGate = yield* Ref.make<
+        Option.Option<{ readonly release: Deferred.Deferred<void>; readonly request: TargetPromotionRequest }>
+      >(Option.none())
+      const initialPauseObservationConsumed = yield* Deferred.make<void>()
       const publicationObserver = DeliveryRelationPublicationObserver.of({
         observe: (bundle) =>
           Effect.gen(function* () {
@@ -832,6 +1238,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             const storyPosition = yield* cursor.storyPosition
             const publication = { activationOrdinal, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
             yield* Ref.update(capturedDeliveryPublications, (captured) => [...captured, publication])
+            yield* Queue.offer(deliveryPublicationSignals, publication)
             // A read-only diagnostic observer defect never changes production cassette execution.
             yield* Effect.exit(Effect.sync(() => options.onDeliveryPublication?.(publication)))
           })
@@ -968,18 +1375,55 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
           ),
         read: (request: Parameters<TargetPromotionGitService["read"]>[0]) =>
-          cursor.consumeTargetPromotionGitRead.pipe(
-            Effect.map(({ observation }) => TargetPromotionGitReadObservation.make(observation)),
-            Effect.mapError(
-              /* v8 ignore next -- @preserve Authored coordinator runs publish read failure through the runtime relation; the maintained direct protocol cassette owns the typed unreadable chronology. */
-              (failure) =>
-                new TargetPromotionGitReadFailure({
-                  candidateCommit: request.candidateCommit,
-                  detail: `${failure._tag}: ${"detail" in failure ? failure.detail : "interaction mismatch"} at story position ${failure.storyPosition}`,
-                  target: request.integrationTarget
-                })
+          Effect.gen(function* () {
+            const authoredDeath = yield* cursor.consumeTargetPromotionReconciliationReadBoundaryDeath
+            if (Option.isSome(authoredDeath)) {
+              const normalizedRequest = authoredTargetPromotionRequestOf(request, runId)
+              /* v8 ignore start -- @preserve The request-correlated death item is constructed from this exact normalized promotion request. */
+              if (JSON.stringify(normalizedRequest) !== JSON.stringify(authoredDeath.value.request)) {
+                return yield* Effect.die(
+                  `target-promotion reconciliation-read death expected ${JSON.stringify(authoredDeath.value.request)}, received ${JSON.stringify(normalizedRequest)}`
+                )
+              }
+              /* v8 ignore stop -- @preserve */
+              yield* cursor.pauseAtCoordinatorProcessDeath
+              return yield* Effect.die(
+                "target-promotion reconciliation-read death was not followed by CoordinatorProcessDies"
+              )
+            }
+            const authoredHold = yield* cursor.consumeTargetPromotionReconciliationReadBoundaryHold
+            if (Option.isSome(authoredHold)) {
+              const normalizedRequest = authoredTargetPromotionRequestOf(request, runId)
+              /* v8 ignore start -- @preserve The paired hold is constructed from this exact normalized promotion request and closure allows only one active hold. */
+              if (JSON.stringify(normalizedRequest) !== JSON.stringify(authoredHold.value.request)) {
+                return yield* Effect.die(
+                  `held target-promotion reconciliation read expected ${JSON.stringify(authoredHold.value.request)}, received ${JSON.stringify(normalizedRequest)}`
+                )
+              }
+              if (Option.isSome(yield* Ref.get(targetPromotionReconciliationReadBoundaryGate))) {
+                return yield* Effect.die("a target-promotion reconciliation-read hold is already active")
+              }
+              /* v8 ignore stop -- @preserve */
+              const release = yield* Deferred.make<void>()
+              yield* Ref.set(
+                targetPromotionReconciliationReadBoundaryGate,
+                Option.some({ release, request: authoredHold.value.request })
+              )
+              yield* Deferred.await(release)
+            }
+            return yield* cursor.consumeTargetPromotionGitRead.pipe(
+              Effect.map(({ observation }) => TargetPromotionGitReadObservation.make(observation)),
+              Effect.mapError(
+                /* v8 ignore next -- @preserve Authored coordinator runs publish read failure through the runtime relation; the maintained direct protocol cassette owns the typed unreadable chronology. */
+                (failure) =>
+                  new TargetPromotionGitReadFailure({
+                    candidateCommit: request.candidateCommit,
+                    detail: `${failure._tag}: ${"detail" in failure ? failure.detail : "interaction mismatch"} at story position ${failure.storyPosition}`,
+                    target: request.integrationTarget
+                  })
+              )
             )
-          )
+          })
       }
       const observedExecutorLifecycleKeys = yield* Ref.make<ReadonlySet<string>>(new Set())
       const journalLayer = journalStoreCapabilities(
@@ -1018,17 +1462,121 @@ const runAuthoredScenarioCassetteWith = (request: {
         /* v8 ignore next -- @preserve The controlled driver starts only after installing the bootstrap operator control. */
         () => Effect.die("operator control is not installed")
       )
-      const applyNextControlDirection = Effect.gen(function* () {
-        const direction = yield* cursor.consumeInFlightExecutorControlDirection
-        if (Option.isNone(direction)) return
-        yield* (yield* Ref.get(activeOperatorControl))({
-          direction: direction.value.direction,
-          subject:
-            direction.value.subject._tag === "Run"
-              ? { _tag: "Run", runId }
-              : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
-        }).pipe(Effect.orDie)
+      const activePauseObservationResults = yield* Ref.make<
+        Option.Option<Queue.Dequeue<AuthoredPauseObservationResult>>
+      >(Option.none())
+      const authoredRunScope = yield* Scope.Scope
+      interface ActiveAuthoredPauseObservation {
+        readonly fiber: Fiber.Fiber<void | boolean, never>
+        readonly results: Queue.Dequeue<AuthoredPauseObservationResult>
+        readonly subject: (typeof AuthoredCassetteStoryItem.cases.OperatorStartsPauseObservation.Type)["subject"]
+      }
+      const activePauseObservation = yield* Ref.make<Option.Option<ActiveAuthoredPauseObservation>>(Option.none())
+
+      const awaitPlannedSuspensionBoundary = Effect.fn("AuthoredCassette.awaitPlannedSuspensionBoundary")(function* (
+        plannedAttempt: PlannedTaskAttempt,
+        request: "StartOrContinue" | "Suspend"
+      ) {
+        const hold = yield* Ref.get(plannedSuspensionExecutorBoundaryGate)
+        if (
+          Option.isNone(hold) ||
+          plannedAttempt.attemptId !== hold.value.attemptId ||
+          plannedAttempt.taskId !== hold.value.taskId
+        ) {
+          return
+        }
+        if (request !== "Suspend") return
+        yield* Deferred.await(hold.value.release)
       })
+
+      const verifyExpectedPauseResults = Effect.fn("AuthoredCassette.verifyExpectedPauseResults")(function* (
+        expectedResults: ReadonlyArray<AuthoredPauseObservationResult>
+      ) {
+        if (expectedResults.length === 0) return
+        const results = yield* Ref.get(activePauseObservationResults)
+        /* v8 ignore start -- @preserve In-flight Unpause closure requires one active observation and its exact queued results. */
+        if (Option.isNone(results)) return yield* Effect.die("no authored Pause observation is active")
+        for (const expected of expectedResults) {
+          const actual = yield* Queue.take(results.value)
+          if (!pauseObservationResultMatches(actual, expected)) {
+            return yield* Effect.die(
+              `authored Pause observation expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`
+            )
+          }
+        }
+        /* v8 ignore stop -- @preserve */
+      })
+
+      const applyInFlightControlDirection = Effect.fn("AuthoredCassette.applyInFlightControlDirection")(function* (
+        plannedAttempt: PlannedTaskAttempt
+      ) {
+        const direction = yield* cursor.consumeInFlightExecutorControlDirection(plannedAttempt.attemptId)
+        if (Option.isNone(direction)) return
+        const item = direction.value
+        const requestedDirection =
+          item._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting"
+            ? "Unpause"
+            : item.direction
+        const application = (yield* Ref.get(activeOperatorControl))({
+          direction: requestedDirection,
+          subject:
+            item.subject._tag === "Run" ? { _tag: "Run", runId } : { _tag: "Task", runId, taskId: item.subject.taskId }
+        })
+        /* v8 ignore start -- @preserve The closed in-flight control schema covers rejection and terminal-observation variants; maintained #63 chronology exercises the exact queued-Waiting Unpause case. */
+        const expectedFailureReason =
+          item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" &&
+          item.outcome._tag === "Rejected"
+            ? item.outcome.reason
+            : undefined
+        yield* application.pipe(
+          Effect.matchEffect({
+            onFailure: (failure) =>
+              expectedFailureReason !== undefined && operatorControlFailureMatches(failure, expectedFailureReason)
+                ? Effect.void
+                : Effect.die(failure),
+            onSuccess: () =>
+              expectedFailureReason === undefined
+                ? Effect.void
+                : Effect.die(`authored in-flight control expected ${expectedFailureReason}, received success`)
+          })
+        )
+        const expectedResults =
+          item._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting"
+            ? [...item.queued, { _tag: "PauseNoLongerApplied" as const }]
+            : item.outcome._tag === "AppliedAndPauseObservationEnds"
+              ? [item.outcome.result]
+              : []
+        yield* verifyExpectedPauseResults(expectedResults)
+        /* v8 ignore stop -- @preserve */
+      })
+
+      const awaitExecutorPublicationHold = Effect.fn("AuthoredCassette.awaitExecutorPublicationHold")(function* (
+        plannedAttempt: PlannedTaskAttempt,
+        request: "StartOrContinue" | "Suspend"
+      ) {
+        const hold = yield* cursor.consumeExecutorRequestPublicationHold
+        if (Option.isNone(hold)) return
+        /* v8 ignore start -- @preserve The exact request-correlated hold is consumed only by its declared executor boundary. */
+        if (
+          hold.value.attemptId !== plannedAttempt.attemptId ||
+          hold.value.taskId !== plannedAttempt.taskId ||
+          hold.value.request !== request
+        ) {
+          return yield* Effect.die(
+            `authored executor publication hold expected ${hold.value.request} for ${hold.value.taskId}/${hold.value.attemptId}, received ${request} for ${plannedAttempt.taskId}/${plannedAttempt.attemptId}`
+          )
+        }
+        /* v8 ignore stop -- @preserve */
+        yield* Queue.takeAll(deliveryPublicationSignals)
+        yield* Queue.take(deliveryPublicationSignals)
+      })
+
+      const applyNextControlDirection = (plannedAttempt: PlannedTaskAttempt, request: "StartOrContinue" | "Suspend") =>
+        Effect.gen(function* () {
+          yield* awaitPlannedSuspensionBoundary(plannedAttempt, request)
+          yield* applyInFlightControlDirection(plannedAttempt)
+          yield* awaitExecutorPublicationHold(plannedAttempt, request)
+        })
       const trackerAuthority = yield* Layer.build(
         controlledTrackerAuthorityLayer(cursor, Context.get(sharedContext, TrackerMutation))
       )
@@ -1047,7 +1595,19 @@ const runAuthoredScenarioCassetteWith = (request: {
           item._tag === "CompletionTaskRequestLookupReturned" ||
           item._tag === "CompletionTaskRequestReturned"
       )
-      const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
+      const baseGitWorktree = Context.get(sharedContext, GitWorktree)
+      const authoredGitWorktree = GitWorktree.of({
+        ...baseGitWorktree,
+        createPlannedWorktree: (plannedAttempt) =>
+          Effect.gen(function* () {
+            yield* cursor.awaitInFlightOperatorItems
+            const lost = yield* cursor.consumeGitPlannedWorktreeCreateResponseLost
+            if (Option.isNone(lost)) return yield* baseGitWorktree.createPlannedWorktree(plannedAttempt)
+            yield* baseGitWorktree.createPlannedWorktree(plannedAttempt)
+            return yield* new GitWorktreeCreateFailure({ detail: lost.value.detail, worktree: plannedAttempt.worktree })
+          })
+      })
+      const gitWorktreeLayer = Layer.succeed(GitWorktree, authoredGitWorktree)
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
       const testGitWorktree = Context.get(sharedContext, TestGitWorktree)
       const trackerLayer = controlledTrackerGraphReaderLayer(cursor)
@@ -1265,6 +1825,68 @@ const runAuthoredScenarioCassetteWith = (request: {
           Effect.gen(function* () {
             const bootstrap = yield* JournaledRunBootstrap
             yield* Ref.set(activeOperatorControl, bootstrap.operatorControl.applyControlDirection)
+            const requireActivePauseObservation = Effect.fn("AuthoredCassette.requireActivePauseObservation")(
+              function* (
+                subject: (typeof AuthoredCassetteStoryItem.cases.OperatorStartsPauseObservation.Type)["subject"]
+              ) {
+                const active = yield* Ref.get(activePauseObservation)
+                /* v8 ignore start -- @preserve Authored Pause closure validation keeps observation results inside one matching active subscription. */
+                if (Option.isNone(active)) return yield* Effect.die("no authored Pause observation is active")
+                if (JSON.stringify(active.value.subject) !== JSON.stringify(subject)) {
+                  return yield* Effect.die("authored Pause result subject does not match the active observation")
+                }
+                /* v8 ignore stop -- @preserve */
+                return active.value
+              }
+            )
+
+            const takeExpectedPauseResult = Effect.fn("AuthoredCassette.takeExpectedPauseResult")(function* (
+              active: ActiveAuthoredPauseObservation,
+              expected: AuthoredPauseObservationResult
+            ) {
+              const actual = yield* Queue.take(active.results)
+              /* v8 ignore start -- @preserve Maintained authored cassettes assert the exact process-local view; the mismatch is only a generic authoring diagnostic. */
+              if (!pauseObservationResultMatches(actual, expected)) {
+                return yield* Effect.die(
+                  `authored Pause observation expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`
+                )
+              }
+              /* v8 ignore stop -- @preserve */
+              return actual
+            })
+
+            const reconnectPauseObservation = Effect.fn("AuthoredCassette.reconnectPauseObservation")(function* (
+              authored: typeof AuthoredCassetteStoryItem.cases.PauseProgressObservedCancelledAndReconnected.Type
+            ) {
+              yield* Queue.takeAll(deliveryPublicationSignals)
+              yield* Queue.take(deliveryPublicationSignals)
+              yield* Effect.yieldNow
+              const journalLengthAtReconnect = (yield* sharedJournal.read(runId)).length
+              /* v8 ignore start -- @preserve The authored disconnect/reconnect chronology uses a whole-Run Pause; task-subject reconnect is covered by the public observer acceptance tests. */
+              const subject =
+                authored.reconnectSubject._tag === "Run"
+                  ? { _tag: "Run" as const, runId }
+                  : { _tag: "Task" as const, runId, taskId: authored.reconnectSubject.taskId }
+              /* v8 ignore stop -- @preserve */
+              const reconnected = Array.from(
+                yield* bootstrap.operatorControl.observePause(subject).pipe(
+                  /* v8 ignore next -- @preserve The same exact view projector is exercised on the original subscription; reconnect merely derives a fresh terminal value. */
+                  Stream.map((view) => pauseObservationResultOf(view, runId)),
+                  Stream.runCollect
+                )
+              )
+              /* v8 ignore start -- @preserve The maintained reconnect cassette declares the exact sole terminal view produced by the fresh subscription. */
+              if (JSON.stringify(reconnected) !== JSON.stringify([authored.reconnectResult])) {
+                return yield* Effect.die(
+                  `authored reconnected Pause observation expected ${JSON.stringify(authored.reconnectResult)}, received ${JSON.stringify(reconnected)}`
+                )
+              }
+              if ((yield* sharedJournal.read(runId)).length !== journalLengthAtReconnect) {
+                return yield* Effect.die("reconnecting the process-local Pause observation appended a workflow record")
+              }
+              /* v8 ignore stop -- @preserve */
+            })
+
             const driveCapacityChange = Effect.gen(function* () {
               const change = yield* cursor.consumeCapacityChange
               /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
@@ -1287,11 +1909,13 @@ const runAuthoredScenarioCassetteWith = (request: {
                   event.operation.plannedAttempt.attemptId === item.attemptId &&
                   event.operation.plannedAttempt.taskId === item.taskId
               )?.event
+              /* v8 ignore start -- @preserve Attempt-choice closure validation requires the exact earlier planned attempt. */
               if (planned?._tag !== "TaskAttemptPlanned") {
                 return yield* Effect.die(
                   new Error(`authored attempt choice cannot find planned attempt ${item.attemptId}`)
                 )
               }
+              /* v8 ignore stop -- @preserve */
               return planned.operation.plannedAttempt
             })
             const applyAttemptChoice = (
@@ -1326,7 +1950,11 @@ const runAuthoredScenarioCassetteWith = (request: {
                 )
               }
               if (!appliedAttemptChoiceMatches(item, result.success)) {
-                return yield* Effect.die(new Error(`authored attempt-choice result mismatch for ${item.requestNonce}`))
+                return yield* Effect.die(
+                  new Error(
+                    `authored attempt-choice result mismatch for ${item.requestNonce}: expected ${JSON.stringify(item.expected)}, received ${JSON.stringify(result.success)}`
+                  )
+                )
               }
               const queried = yield* bootstrap.operatorControl.readAttemptChoice(requestId)
               /* v8 ignore start -- @preserve The query is derived from the exact application record written immediately above. */
@@ -1340,7 +1968,9 @@ const runAuthoredScenarioCassetteWith = (request: {
             })
             const driveAttemptChoice = Effect.gen(function* () {
               const authored = yield* cursor.consumeAttemptChoice
+              /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current attempt-choice tag. */
               if (Option.isNone(authored)) return
+              /* v8 ignore stop -- @preserve */
               const item = authored.value
               const plannedAttempt = yield* requirePlannedAttempt(item)
               const requestId = AttemptChoiceRequestId.make({ nonce: item.requestNonce, runId })
@@ -1382,43 +2012,146 @@ const runAuthoredScenarioCassetteWith = (request: {
               }
               /* v8 ignore stop -- @preserve */
             }).pipe(Effect.orDie)
-            const driveControlDirection = Effect.gen(function* () {
-              const direction = yield* cursor.consumeControlDirection
-              /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
-              if (Option.isNone(direction)) return
-              /* v8 ignore stop */
-              const result = bootstrap.operatorControl.applyControlDirection({
-                direction: direction.value.direction,
-                subject:
-                  direction.value.subject._tag === "Run"
-                    ? { _tag: "Run", runId }
-                    : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
-              })
-              yield* result.pipe(
-                Effect.matchEffect({
-                  onSuccess: () => Effect.void,
-                  onFailure: (failure) =>
-                    Effect.gen(function* () {
-                      const expected = yield* cursor.consumeControlDirectionFailure
-                      /* v8 ignore next -- @preserve Maintained failed-control stories carry the immediately following visible result. */
-                      if (Option.isNone(expected)) return yield* failure
-                      const expectedFailure = expected.value
-                      /* v8 ignore next -- @preserve Both maintained failure variants exercise the matching path; this guard diagnoses malformed authored stories. */
-                      if (
-                        !operatorControlFailureMatches(failure, expectedFailure.reason) ||
-                        direction.value.direction !== expectedFailure.direction ||
-                        direction.value.subject._tag !== "Task" ||
-                        direction.value.subject.taskId !== expectedFailure.subject.taskId
-                      ) {
-                        return yield* Effect.die(
-                          new Error(
-                            `authored control failure mismatch: expected ${expectedFailure.reason}, received ${failure._tag}`
+            const driveControlDirection = (
+              expected:
+                | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type
+                | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type
+            ) =>
+              Effect.gen(function* () {
+                const direction = yield* cursor.consumeControlDirection(expected)
+                /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
+                if (Option.isNone(direction)) return
+                /* v8 ignore stop */
+                const result = bootstrap.operatorControl.applyControlDirection({
+                  direction: direction.value.direction,
+                  subject:
+                    direction.value.subject._tag === "Run"
+                      ? { _tag: "Run", runId }
+                      : { _tag: "Task", runId, taskId: direction.value.subject.taskId }
+                })
+                yield* result.pipe(
+                  Effect.matchEffect({
+                    onSuccess: () => Effect.void,
+                    onFailure: (failure) =>
+                      Effect.gen(function* () {
+                        const expected = yield* cursor.consumeControlDirectionFailure
+                        /* v8 ignore next -- @preserve Maintained failed-control stories carry the immediately following visible result. */
+                        if (Option.isNone(expected)) return yield* failure
+                        const expectedFailure = expected.value
+                        /* v8 ignore next -- @preserve Both maintained failure variants exercise the matching path; this guard diagnoses malformed authored stories. */
+                        if (
+                          !operatorControlFailureMatches(failure, expectedFailure.reason) ||
+                          direction.value.direction !== expectedFailure.direction ||
+                          direction.value.subject._tag !== "Task" ||
+                          direction.value.subject.taskId !== expectedFailure.subject.taskId
+                        ) {
+                          return yield* Effect.die(
+                            new Error(
+                              `authored control failure mismatch: expected ${expectedFailure.reason}, received ${failure._tag}`
+                            )
                           )
-                        )
-                      }
-                    })
+                        }
+                      })
+                  })
+                )
+                if (direction.value._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission") {
+                  yield* cursor.completeControlDirectionBeforeDeliveryActionAdmission
+                }
+              }).pipe(Effect.orDie)
+            const drivePauseObservationStart = Effect.gen(function* () {
+              const authored = yield* cursor.consumePauseObservationStart
+              /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current observation-start tag, and closure rejects overlapping starts. */
+              if (Option.isNone(authored)) return
+              if (Option.isSome(yield* Ref.get(activePauseObservation))) {
+                return yield* Effect.die("an authored Pause observation is already active")
+              }
+              /* v8 ignore stop -- @preserve */
+              const observed = yield* Queue.unbounded<AuthoredPauseObservationResult>()
+              const item = authored.value
+              const subject =
+                item.subject._tag === "Run"
+                  ? { _tag: "Run" as const, runId }
+                  : { _tag: "Task" as const, runId, taskId: item.subject.taskId }
+              const fiber = yield* bootstrap.operatorControl.observePause(subject).pipe(
+                Stream.runForEach((view) => {
+                  const result = pauseObservationResultOf(view, runId)
+                  return Queue.offer(observed, result)
+                }),
+                Effect.catch((failure) => {
+                  const absence = { _tag: "PauseNotApplied" } as const
+                  return failure._tag === "PauseNotApplied"
+                    ? Queue.offer(observed, absence)
+                    : Effect.die("authored Pause observation failed with an unexpected error")
+                }),
+                Effect.forkIn(authoredRunScope, {
+                  startImmediately: authored.value._tag === "OperatorStartsPauseObservation"
                 })
               )
+              yield* Ref.set(activePauseObservation, Option.some({ fiber, results: observed, subject: item.subject }))
+              yield* Ref.set(activePauseObservationResults, Option.some(observed))
+              yield* Deferred.succeed(initialPauseObservationConsumed, undefined)
+            }).pipe(Effect.orDie)
+            const drivePauseProgressObservedCancelledAndReconnected = Effect.gen(function* () {
+              const authored = yield* cursor.consumePauseProgressObservedCancelledAndReconnected
+              /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current cancel/reconnect tag. */
+              if (Option.isNone(authored)) return
+              /* v8 ignore stop -- @preserve */
+              const active = yield* requireActivePauseObservation(authored.value.subject)
+              yield* takeExpectedPauseResult(active, authored.value.result)
+              const journalLengthBeforeCancel = (yield* sharedJournal.read(runId)).length
+              yield* Fiber.interrupt(active.fiber).pipe(Effect.forkScoped)
+              /* v8 ignore start -- @preserve The passive observer has no journal capability; the maintained cassette separately asserts that no Pause-progress event exists. */
+              if ((yield* sharedJournal.read(runId)).length !== journalLengthBeforeCancel) {
+                return yield* Effect.die("ending the process-local Pause observation appended a workflow record")
+              }
+              /* v8 ignore stop -- @preserve */
+              yield* Ref.set(activePauseObservation, Option.none())
+              yield* Ref.set(activePauseObservationResults, Option.none())
+              yield* reconnectPauseObservation(authored.value)
+            }).pipe(Effect.orDie)
+            const drivePauseProgressObserved = Effect.gen(function* () {
+              const authored = yield* cursor.consumePauseProgressObserved
+              /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current Pause result tag. */
+              if (Option.isNone(authored)) return
+              /* v8 ignore stop -- @preserve */
+              const active = yield* requireActivePauseObservation(authored.value.subject)
+              const actual = yield* takeExpectedPauseResult(active, authored.value.result)
+              /* v8 ignore start -- @preserve Maintained standalone result items observe nonterminal Waiting; terminal values are consumed by the contiguous await and reconnect chronologies. */
+              if (actual._tag !== "PauseWaiting") yield* Ref.set(activePauseObservation, Option.none())
+              if (actual._tag !== "PauseWaiting") yield* Ref.set(activePauseObservationResults, Option.none())
+              /* v8 ignore stop -- @preserve */
+            }).pipe(Effect.orDie)
+            const drivePauseProgressAwait = Effect.gen(function* () {
+              const expectations: Array<typeof AuthoredCassetteStoryItem.cases.OperatorAwaitsPauseProgress.Type> = []
+              let authored = yield* cursor.consumePauseProgressAwait
+              while (Option.isSome(authored)) {
+                expectations.push(authored.value)
+                authored = yield* cursor.consumePauseProgressAwait
+              }
+              /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only while at least one contiguous await is current; closure binds all awaits to the active subject. */
+              if (expectations.length === 0) return
+              const active = yield* Ref.get(activePauseObservation)
+              if (Option.isNone(active)) return yield* Effect.die("no authored Pause observation is active")
+              if (
+                expectations.some(({ subject }) => JSON.stringify(subject) !== JSON.stringify(active.value.subject))
+              ) {
+                return yield* Effect.die("authored Pause result subject does not match the active observation")
+              }
+              /* v8 ignore stop -- @preserve */
+              for (const expected of expectations) {
+                const actual = yield* Queue.take(active.value.results)
+                /* v8 ignore start -- @preserve Maintained authored cassettes assert the exact queued result; this mismatch is only a generic authoring diagnostic. */
+                if (!pauseObservationResultMatches(actual, expected.result)) {
+                  return yield* Effect.die(
+                    `authored Pause observation expected ${JSON.stringify(expected.result)}, received ${JSON.stringify(actual)}`
+                  )
+                }
+                /* v8 ignore stop -- @preserve */
+                if (actual._tag !== "PauseWaiting") {
+                  yield* Ref.set(activePauseObservation, Option.none())
+                  yield* Ref.set(activePauseObservationResults, Option.none())
+                }
+              }
             }).pipe(Effect.orDie)
             const driveClaimReacquisition = Effect.gen(function* () {
               const direction = yield* cursor.consumeClaimReacquisitionDirection
@@ -1430,71 +2163,260 @@ const runAuthoredScenarioCassetteWith = (request: {
                 subject: { runId, taskId: direction.value.taskId }
               })
             }).pipe(Effect.orDie)
-            const drivers: Partial<Record<AuthoredCassetteStoryItem["_tag"], Effect.Effect<void>>> = {
-              OperatorContinuesAttempt: driveAttemptChoice,
-              OperatorAppliesControlDirection: driveControlDirection,
-              OperatorDirectsTaskClaimReacquisition: driveClaimReacquisition,
-              OperatorRacesContinueAndStop: driveAttemptChoiceRace,
-              OperatorStopsAttempt: driveAttemptChoice,
-              SetTaskExecutionCapacity: driveCapacityChange
-            }
-            const driveAuthoredOperatorItem = (item: AuthoredCassetteStoryItem | undefined) => {
-              /* v8 ignore start -- scoped execution stops before the cursor can publish its out-of-range sentinel. */
-              if (item === undefined) return Effect.void
-              /* v8 ignore stop */
-              return drivers[item._tag] ?? Effect.void
-            }
-            yield* cursor.storyItems.pipe(Stream.runForEach(driveAuthoredOperatorItem), Effect.forkScoped)
-            return yield* program
+            const drivePlannedSuspensionExecutorBoundaryRelease = Effect.gen(function* () {
+              const authored = yield* cursor.consumePlannedAttemptSuspensionExecutorBoundaryRelease
+              /* v8 ignore start -- @preserve The direct-item dispatcher and paired-hold closure guarantee this exact release and correlation. */
+              if (Option.isNone(authored)) return
+              const gate = yield* Ref.get(plannedSuspensionExecutorBoundaryGate)
+              if (
+                Option.isNone(gate) ||
+                gate.value.attemptId !== authored.value.attemptId ||
+                gate.value.taskId !== authored.value.taskId
+              ) {
+                return yield* Effect.die(
+                  `no held planned suspension matches ${authored.value.taskId}/${authored.value.attemptId}`
+                )
+              }
+              /* v8 ignore stop -- @preserve */
+              yield* Deferred.succeed(gate.value.release, undefined)
+              yield* Ref.set(plannedSuspensionExecutorBoundaryGate, Option.none())
+            }).pipe(Effect.orDie)
+            const drivePlannedContinuationExecutorBoundaryRelease = Effect.gen(function* () {
+              const authored = yield* cursor.consumePlannedAttemptContinuationExecutorBoundaryRelease
+              /* v8 ignore start -- @preserve The direct-item dispatcher and paired-hold closure guarantee this exact release and correlation. */
+              if (Option.isNone(authored)) return
+              const key = `${authored.value.taskId}:${authored.value.attemptId}`
+              const gates = yield* Ref.get(plannedContinuationExecutorBoundaryGate)
+              const gate = gates.get(key)
+              if (gate === undefined) {
+                return yield* Effect.die(
+                  `no held planned continuation matches ${authored.value.taskId}/${authored.value.attemptId}`
+                )
+              }
+              /* v8 ignore stop -- @preserve */
+              yield* Deferred.succeed(gate.release, undefined)
+              yield* Ref.set(
+                plannedContinuationExecutorBoundaryGate,
+                new Map([...gates].filter(([candidate]) => candidate !== key))
+              )
+            }).pipe(Effect.orDie)
+            const drivePlannedContinuationExecutorBoundaryHold = Effect.gen(function* () {
+              const authored = yield* cursor.consumePlannedAttemptContinuationExecutorBoundaryHold
+              /* v8 ignore start -- @preserve The direct-item dispatcher invokes this exact hold once; closure rejects an unmatched or duplicate hold. */
+              if (Option.isNone(authored)) return
+              const key = `${authored.value.taskId}:${authored.value.attemptId}`
+              const gates = yield* Ref.get(plannedContinuationExecutorBoundaryGate)
+              if (gates.has(key)) return yield* Effect.die(`planned continuation hold ${key} is already active`)
+              /* v8 ignore stop -- @preserve */
+              const release = yield* Deferred.make<void>()
+              yield* Ref.update(plannedContinuationExecutorBoundaryGate, (current) =>
+                new Map(current).set(key, {
+                  attemptId: authored.value.attemptId,
+                  release,
+                  taskId: authored.value.taskId
+                })
+              )
+            }).pipe(Effect.orDie)
+            const drivePlannedSuspensionExecutorBoundaryHold = Effect.gen(function* () {
+              const authored = yield* cursor.consumePlannedAttemptSuspensionExecutorBoundaryHold
+              /* v8 ignore start -- @preserve The direct-item dispatcher invokes this exact hold once; closure rejects an overlapping hold. */
+              if (Option.isNone(authored)) return
+              if (Option.isSome(yield* Ref.get(plannedSuspensionExecutorBoundaryGate))) {
+                return yield* Effect.die("a planned suspension executor-boundary hold is already armed")
+              }
+              /* v8 ignore stop -- @preserve */
+              const release = yield* Deferred.make<void>()
+              yield* Ref.set(
+                plannedSuspensionExecutorBoundaryGate,
+                Option.some({ attemptId: authored.value.attemptId, release, taskId: authored.value.taskId })
+              )
+            }).pipe(Effect.orDie)
+            const driveTargetPromotionReconciliationReadBoundaryRelease = Effect.gen(function* () {
+              const authored = yield* cursor.consumeTargetPromotionReconciliationReadBoundaryRelease
+              /* v8 ignore start -- @preserve The direct-item dispatcher and paired-hold closure guarantee this exact request-correlated release. */
+              if (Option.isNone(authored)) return
+              const gate = yield* Ref.get(targetPromotionReconciliationReadBoundaryGate)
+              if (
+                Option.isNone(gate) ||
+                JSON.stringify(gate.value.request) !== JSON.stringify(authored.value.request)
+              ) {
+                return yield* Effect.die(
+                  `no held target-promotion reconciliation read matches ${JSON.stringify(authored.value.request)}`
+                )
+              }
+              /* v8 ignore stop -- @preserve */
+              yield* Deferred.succeed(gate.value.release, undefined)
+              yield* Ref.set(targetPromotionReconciliationReadBoundaryGate, Option.none())
+            }).pipe(Effect.orDie)
+            const driveTaskWorkSpecificationReadBoundaryHold = cursor.consumeTaskWorkSpecificationReadBoundaryHold.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
+            const driveTaskWorkSpecificationReadBoundaryRelease =
+              cursor.consumeTaskWorkSpecificationReadBoundaryRelease.pipe(Effect.asVoid, Effect.orDie)
+            type DirectlyDrivenStoryItem = Extract<
+              AuthoredCassetteStoryItem,
+              {
+                readonly _tag:
+                  | "OperatorAppliesControlDirection"
+                  | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+                  | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
+                  | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
+                  | "CassetteReleasesHeldPlannedAttemptSuspension"
+                  | "CassetteReleasesHeldPlannedAttemptContinuation"
+                  | "CassetteReleasesHeldTargetPromotionReconciliationRead"
+                  | "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary"
+                  | "CassetteReleasesHeldTaskWorkSpecificationRead"
+                  | "OperatorContinuesAttempt"
+                  | "OperatorDirectsTaskClaimReacquisition"
+                  | "OperatorRacesContinueAndStop"
+                  | "OperatorAwaitsPauseProgress"
+                  | "OperatorStartsPauseObservation"
+                  | "OperatorSubscribesToPauseObservation"
+                  | "OperatorStopsAttempt"
+                  | "PauseProgressObserved"
+                  | "PauseProgressObservedCancelledAndReconnected"
+                  | "SetTaskExecutionCapacity"
+              }
+            >
+            const directlyDrivenTags: ReadonlySet<AuthoredCassetteStoryItem["_tag"]> = new Set([
+              "OperatorAppliesControlDirection",
+              "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
+              "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
+              "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
+              "CassetteReleasesHeldPlannedAttemptSuspension",
+              "CassetteReleasesHeldPlannedAttemptContinuation",
+              "CassetteReleasesHeldTargetPromotionReconciliationRead",
+              "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
+              "CassetteReleasesHeldTaskWorkSpecificationRead",
+              "OperatorContinuesAttempt",
+              "OperatorDirectsTaskClaimReacquisition",
+              "OperatorRacesContinueAndStop",
+              "OperatorAwaitsPauseProgress",
+              "OperatorStartsPauseObservation",
+              "OperatorSubscribesToPauseObservation",
+              "OperatorStopsAttempt",
+              "PauseProgressObserved",
+              "PauseProgressObservedCancelledAndReconnected",
+              "SetTaskExecutionCapacity"
+            ])
+            const isDirectlyDrivenStoryItem = (
+              item: AuthoredCassetteStoryItem | undefined
+            ): item is DirectlyDrivenStoryItem => item !== undefined && directlyDrivenTags.has(item._tag)
+            const driveAuthoredOperatorItem = (item: DirectlyDrivenStoryItem) =>
+              Match.valueTags(item, {
+                OperatorAppliesControlDirection: (item) => driveControlDirection(item),
+                OperatorAppliesControlDirectionBeforeDeliveryActionAdmission: (item) => driveControlDirection(item),
+                CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: () =>
+                  drivePlannedSuspensionExecutorBoundaryHold,
+                CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: () =>
+                  drivePlannedContinuationExecutorBoundaryHold,
+                CassetteReleasesHeldPlannedAttemptSuspension: () => drivePlannedSuspensionExecutorBoundaryRelease,
+                CassetteReleasesHeldPlannedAttemptContinuation: () => drivePlannedContinuationExecutorBoundaryRelease,
+                CassetteReleasesHeldTargetPromotionReconciliationRead: () =>
+                  driveTargetPromotionReconciliationReadBoundaryRelease,
+                CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: () => driveTaskWorkSpecificationReadBoundaryHold,
+                CassetteReleasesHeldTaskWorkSpecificationRead: () => driveTaskWorkSpecificationReadBoundaryRelease,
+                OperatorContinuesAttempt: () => driveAttemptChoice,
+                OperatorDirectsTaskClaimReacquisition: () => driveClaimReacquisition,
+                OperatorRacesContinueAndStop: () => driveAttemptChoiceRace,
+                OperatorAwaitsPauseProgress: () => drivePauseProgressAwait,
+                OperatorStartsPauseObservation: () => drivePauseObservationStart,
+                OperatorSubscribesToPauseObservation: () => drivePauseObservationStart,
+                OperatorStopsAttempt: () => driveAttemptChoice,
+                PauseProgressObserved: () => drivePauseProgressObserved,
+                PauseProgressObservedCancelledAndReconnected: () => drivePauseProgressObservedCancelledAndReconnected,
+                SetTaskExecutionCapacity: () => driveCapacityChange
+              })
+            const nextDirectlyDrivenItem = Effect.gen(function* () {
+              const current = yield* cursor.currentStoryItem
+              if (isDirectlyDrivenStoryItem(current)) return current
+              const next = yield* cursor.storyItems.pipe(Stream.filter(isDirectlyDrivenStoryItem), Stream.runHead)
+              return yield* Option.match(next, {
+                /* v8 ignore next -- @preserve Every decoded story retains its terminal assertion after the last directly-driven item. */
+                onNone: () => Effect.die("authored direct-item stream ended before terminal assertions"),
+                onSome: Effect.succeed
+              })
+            })
+            const driver = yield* nextDirectlyDrivenItem.pipe(
+              Effect.flatMap(driveAuthoredOperatorItem),
+              Effect.forever,
+              Effect.forkScoped
+            )
+            return yield* Effect.raceFirst(
+              program,
+              Fiber.join(driver).pipe(Effect.andThen(Effect.die("authored direct-item driver ended unexpectedly")))
+            )
           })
         )
 
       const controlledExecutorFactory = (factoryRunId: RunId, factoryTarget: typeof command.target) =>
         Effect.gen(function* () {
           const live = yield* makeLiveDeliveryActionExecutor(factoryRunId, factoryTarget)
+          type ControlledDeliveryAction = Parameters<DeliveryActionExecutorService["execute"]>[0]
+          const heldContinuationPlannedAttempt = (action: ControlledDeliveryAction): PlannedTaskAttempt | undefined => {
+            /* v8 ignore next -- @preserve This helper is called only by the identity-free delivery executor wrapper. */
+            if (action._tag !== "IdentityFreeAction") return undefined
+            const route = action.proposal.route
+            if (route._tag === "FreshExecutorWorkflowRoute") {
+              return route.step._tag === "ContinuePlannedAttemptExecutorWork" ? route.step.plannedAttempt : undefined
+            }
+            const transition = route.transition
+            if (
+              transition._tag !== "ContinuePlannedAttemptExecutorWork" &&
+              transition._tag !== "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
+            ) {
+              return undefined
+            }
+            return transition.plannedAttempt
+          }
+
+          const awaitAdmittedContinuationChoice = Effect.fn("AuthoredCassette.awaitAdmittedContinuationChoice")(
+            function* (action: ControlledDeliveryAction) {
+              const hold = yield* cursor.consumeAdmittedContinuationExecutorIntentHold
+              if (Option.isNone(hold)) return
+              const plannedAttempt = heldContinuationPlannedAttempt(action)
+              /* v8 ignore start -- @preserve Hold closure validation places this synchronization only before the exact admitted Continue action. */
+              if (plannedAttempt === undefined) {
+                return yield* Effect.die(
+                  new Error(
+                    `authored continuation hold expected ContinuePlannedAttemptExecutorWork, received ${action.proposal.route._tag}`
+                  )
+                )
+              }
+              /* v8 ignore stop -- @preserve */
+              /* v8 ignore start -- @preserve Hold closure validation binds the admitted continuation to this exact planned attempt. */
+              if (plannedAttempt.attemptId !== hold.value.attemptId || plannedAttempt.taskId !== hold.value.taskId) {
+                return yield* Effect.die(
+                  new Error(
+                    `authored continuation hold expected ${hold.value.taskId}/${hold.value.attemptId}, received ${plannedAttempt.taskId}/${plannedAttempt.attemptId}`
+                  )
+                )
+              }
+              /* v8 ignore stop -- @preserve */
+              yield* Deferred.await(admittedContinuationChoiceApplied)
+            }
+          )
+          const awaitPlannedContinuationExecutorBoundary = Effect.fn(
+            "AuthoredCassette.awaitPlannedContinuationExecutorBoundary"
+          )(function* (action: ControlledDeliveryAction) {
+            const plannedAttempt = heldContinuationPlannedAttempt(action)
+            if (plannedAttempt === undefined) return
+            const key = `${plannedAttempt.taskId}:${plannedAttempt.attemptId}`
+            yield* cursor.storyItems.pipe(
+              Stream.filter((item) => item?._tag !== "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"),
+              Stream.take(1),
+              Stream.runDrain
+            )
+            const gate = (yield* Ref.get(plannedContinuationExecutorBoundaryGate)).get(key)
+            if (gate !== undefined) yield* Deferred.await(gate.release)
+          })
           return {
             ...live,
             execute: (action, lease) =>
               Effect.gen(function* () {
-                const hold = yield* cursor.consumeAdmittedContinuationExecutorIntentHold
-                if (Option.isSome(hold)) {
-                  const expected = hold.value
-                  /* v8 ignore start -- @preserve Hold closure validation places this synchronization only before the exact admitted Continue action. */
-                  if (
-                    action._tag !== "IdentityFreeAction" ||
-                    action.proposal.route._tag !== "IdentityFreeWorkflowRoute" ||
-                    ![
-                      "ContinuePlannedAttemptExecutorWork",
-                      "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
-                    ].includes(action.proposal.route.transition._tag)
-                  ) {
-                    return yield* Effect.die(
-                      new Error(
-                        `authored continuation hold expected ContinuePlannedAttemptExecutorWork, received ${action.proposal.route._tag}`
-                      )
-                    )
-                  }
-                  /* v8 ignore stop -- @preserve */
-                  const transition = action.proposal.route.transition
-                  /* v8 ignore start -- @preserve The guarded route variants above both carry the exact planned attempt. */
-                  if (!("plannedAttempt" in transition)) {
-                    return yield* Effect.die("authored continuation hold received no planned attempt")
-                  }
-                  /* v8 ignore stop -- @preserve */
-                  /* v8 ignore start -- @preserve Hold closure binds the same exact task and attempt through Stop and the executor outcome. */
-                  if (
-                    transition.plannedAttempt.attemptId !== expected.attemptId ||
-                    transition.plannedAttempt.taskId !== expected.taskId
-                  ) {
-                    return yield* Effect.die(
-                      new Error(
-                        `authored continuation hold expected ${expected.taskId}/${expected.attemptId}, received ${transition.plannedAttempt.taskId}/${transition.plannedAttempt.attemptId}`
-                      )
-                    )
-                  }
-                  /* v8 ignore stop -- @preserve */
-                  yield* Deferred.await(admittedContinuationChoiceApplied)
-                }
+                yield* awaitAdmittedContinuationChoice(action)
+                yield* awaitPlannedContinuationExecutorBoundary(action)
                 return yield* live.execute(action, lease)
               })
           } satisfies DeliveryActionExecutorService
@@ -1503,6 +2425,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const initialControlPolicyEvaluations = yield* Ref.make(0)
       const initialControlPolicySource = Ref.updateAndGet(initialControlPolicyEvaluations, (count) => count + 1).pipe(
         Effect.flatMap((evaluationCount) =>
+          /* v8 ignore next -- @preserve One authored Run evaluates its initial policy exactly once; reevaluation is a fail-fast harness defect. */
           evaluationCount === 1
             ? Effect.succeed(initial.policy)
             : Effect.die("an authored Run must not reevaluate its initial control-policy source")
@@ -1606,5 +2529,14 @@ const runAuthoredScenarioCassetteWith = (request: {
 }
 
 /** Decodes and drives one story through the production coordinator activation program. */
-export const runAuthoredScenarioCassette = (input: unknown, options: AuthoredScenarioCassetteRunOptions = {}) =>
-  runAuthoredScenarioCassetteWith({ input, options })
+export interface AuthoredScenarioCassetteRunFailure {
+  readonly _tag: string
+}
+
+export const runAuthoredScenarioCassette: (
+  input: unknown,
+  options?: AuthoredScenarioCassetteRunOptions
+) => Effect.Effect<AuthoredScenarioCassetteRun, AuthoredScenarioCassetteRunFailure, Crypto.Crypto> = (
+  input,
+  options = {}
+) => runAuthoredScenarioCassetteWith({ input, options })

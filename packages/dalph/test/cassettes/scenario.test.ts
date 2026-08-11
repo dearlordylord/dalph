@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Crypto, Effect, Exit, Option, PlatformError, Ref, Schema } from "effect"
+import { Cause, Crypto, Effect, Exit, Fiber, Option, PlatformError, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -142,11 +142,14 @@ import {
   runIntegrationFinalityProtocolCassette,
   runIntegrationFinalityProtocolCassetteFromPromotedRecords,
   runPauseRestartsPassivelyAuthoredCassette,
+  runPauseObservationDisconnectsAuthoredCassette,
   runPauseSafelySuspendsAuthoredCassette,
   runUnpauseAfterSafeSuspensionAuthoredCassette,
   runUnpauseDuringSuspensionRestartsAuthoredCassette,
   taskPauseCoversGroupingChildAuthoredCassette,
   taskPauseFinishesHeldIntegrationAuthoredCassette,
+  taskPauseGroupingFactsAddedAuthoredCassette,
+  taskPauseObservationUnpausedAuthoredCassette,
   taskPauseLetsIndependentTaskContinueAuthoredCassette,
   taskUnpauseAfterSafeSuspensionAuthoredCassette,
   taskUnpauseDuringSuspensionRestartsAuthoredCassette,
@@ -359,6 +362,27 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
     if (Exit.isFailure(contradictoryExit)) {
       expect(Cause.pretty(contradictoryExit.cause)).toContain("another-projected-attempt")
     }
+  })
+)
+
+it.effect("holds a delivery claim until the earlier operator control boundary completes", () =>
+  Effect.gen(function* () {
+    const taskId = TaskId.make("coverage-control-before-admission")
+    const direction = {
+      _tag: "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission" as const,
+      direction: "Pause" as const,
+      subject: { _tag: "Task" as const, taskId }
+    }
+    const claimRead = { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
+    const cursor = yield* makeStoryCursor([direction, claimRead])
+
+    expect(yield* cursor.consumeControlDirection(direction)).toEqual(Option.some(direction))
+    const claimant = yield* cursor.consumeTaskClaimRead.pipe(Effect.forkScoped)
+    yield* Effect.yieldNow
+    expect(claimant.pollUnsafe()).toBeUndefined()
+
+    yield* cursor.completeControlDirectionBeforeDeliveryActionAdmission
+    expect(yield* Fiber.join(claimant)).toEqual(Option.some(claimRead))
   })
 )
 
@@ -887,10 +911,13 @@ it.effect("durably reconciles an unresolved claim release through bounded later 
   })
 )
 
-it.effect("rejects a stale task after a fresh read without selecting task work", () =>
+it.effect("does not create a Pause view after Alice's stale task request is rejected", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(staleTaskPauseRejectedAuthoredCassette)
     const tags = run.records.map(({ event }) => event._tag)
+    const observationStory = staleTaskPauseRejectedAuthoredCassette.story.filter(
+      ({ _tag }) => _tag === "OperatorStartsPauseObservation" || _tag === "PauseProgressObserved"
+    )
 
     expect(tags).toContain("TaskTrackerReadIntentRecorded")
     expect(tags).toContain("TaskTrackerFactsObserved")
@@ -900,10 +927,22 @@ it.effect("rejects a stale task after a fresh read without selecting task work",
     expect(renderAuthoredCassetteLyrics(staleTaskPauseRejectedAuthoredCassette)).toContain(
       "Dalph rejects Operator Pause for task A: OutsideCurrentTargetClosure."
     )
+    expect(observationStory).toEqual([
+      { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
+      { _tag: "PauseProgressObserved", result: { _tag: "PauseNotApplied" }, subject: { _tag: "Task", taskId: "A" } }
+    ])
+    expect(renderAuthoredCassetteLyrics(staleTaskPauseRejectedAuthoredCassette)).toContain(
+      "Alice asks to observe Pause progress for task A."
+    )
+    expect(renderAuthoredCassetteLyrics(staleTaskPauseRejectedAuthoredCassette)).toContain(
+      "Alice receives PauseNotApplied from the process-local Pause observation."
+    )
 
     const recorded = yield* projectRecordedCassette(run.records)
     expect(recorded.entries.some(({ _tag }) => _tag === "ControlDirectionApplied")).toBe(false)
     expect(recorded.entries.some(({ _tag }) => _tag === "TaskTrackerFactsObserved")).toBe(true)
+    expect(recorded.entries).toHaveLength(run.records.length)
+    expectRecordedRoundTrip(run.records, recorded)
   })
 )
 
@@ -924,6 +963,9 @@ it.effect("shows an incomplete control read without recording a direction", () =
 it.effect("pauses A and its grouping child while recording only A's direction", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(taskPauseCoversGroupingChildAuthoredCassette)
+    const waiting = taskPauseCoversGroupingChildAuthoredCassette.story.find(
+      (item) => item._tag === "PauseProgressObserved"
+    )
 
     expect(
       run.records.flatMap(({ event }) =>
@@ -931,11 +973,50 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
       )
     ).toEqual([{ direction: "Pause", subject: { _tag: "Task", runId: run.runId, taskId: "A" } }])
     expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A"])
+    expect(waiting).toEqual({
+      _tag: "PauseProgressObserved",
+      result: {
+        _tag: "PauseWaiting",
+        atBoundary: [],
+        preventing: [
+          {
+            blockers: [
+              { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" },
+              {
+                _tag: "LiveDeliveryAction",
+                owner: {
+                  _tag: "AdmittedDeliveryAction",
+                  proposal: {
+                    _tag: "FreshExecutorWorkflowRoute",
+                    attemptId: "attempt:A:0",
+                    proposalId: '["FreshExecutorWorkflowRoute","StartPlannedAttemptExecutorWork","attempt:A:0","A"]',
+                    taskId: "A"
+                  }
+                }
+              }
+            ],
+            responsibility: {
+              _tag: "PlannedAttemptExecutorWork",
+              attemptId: "attempt:A:0",
+              beganAt: 26,
+              coverage: { _tag: "ExactTaskPauseCoverage" },
+              taskId: "A"
+            }
+          }
+        ]
+      },
+      subject: { _tag: "Task", taskId: "A" }
+    })
+    expect(renderAuthoredCassetteLyrics(taskPauseCoversGroupingChildAuthoredCassette)).toContain(
+      "Alice receives PauseWaiting from the process-local Pause observation."
+    )
     expect(run.observedBehavior.orchestrationEvidence).toContainEqual({
       _tag: "PlannedAttemptExecutorWorkReported",
       attemptId: "attempt:A:0",
       report: "SafelySuspended"
     })
+    const recorded = yield* projectRecordedCassette(run.records)
+    expectRecordedRoundTrip(run.records, recorded)
   })
 )
 
@@ -1092,6 +1173,107 @@ it.effect("stops before the next forward operation after Alice pauses the Run", 
           checkpoint.pureSelectionEquivalent
       )
     ).toBe(true)
+  })
+)
+
+it.effect("cancelling Alice's Pause observation does not cancel delivery or authorize cleanup", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runPauseObservationDisconnectsAuthoredCassette)
+    const views = runPauseObservationDisconnectsAuthoredCassette.story.flatMap((item) =>
+      item._tag === "PauseProgressObserved" || item._tag === "PauseProgressObservedCancelledAndReconnected"
+        ? [item.result._tag]
+        : []
+    )
+
+    expect(views).toEqual(["PauseWaiting"])
+    expect(
+      runPauseObservationDisconnectsAuthoredCassette.story.some(
+        ({ _tag }) => _tag === "PauseProgressObservedCancelledAndReconnected"
+      )
+    ).toBe(true)
+    expect(
+      runPauseObservationDisconnectsAuthoredCassette.story.find(
+        ({ _tag }) => _tag === "PauseProgressObservedCancelledAndReconnected"
+      )
+    ).toMatchObject({ reconnectResult: { _tag: "PauseConfirmed" }, reconnectSubject: { _tag: "Run" } })
+    expect(run.records.filter(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "TaskWorktreeReady")).toHaveLength(1)
+    expect(run.records.some(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")).toBe(false)
+    expect(
+      runPauseObservationDisconnectsAuthoredCassette.story.some(
+        ({ _tag }) => _tag === "GitPlannedWorktreeCreateResponseLost"
+      )
+    ).toBe(true)
+    expect(
+      run.records.filter(({ event }) => event._tag === "ControlDirectionApplied" && event.direction === "Unpause")
+    ).toHaveLength(0)
+    expect(run.records.some(({ event }) => event._tag.includes("Cleanup"))).toBe(false)
+    expect(run.records.some(({ event }) => event._tag.includes("PauseProgress"))).toBe(false)
+    expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
+  })
+)
+
+it.effect("Alice unpauses task A before its Pause observation confirms", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(taskPauseObservationUnpausedAuthoredCassette)
+    expect(taskPauseObservationUnpausedAuthoredCassette.name).toBe(
+      "Alice unpauses task A before its Pause observation confirms"
+    )
+    expect(
+      run.records
+        .filter(({ event }) => event._tag === "ControlDirectionApplied")
+        .map(({ event }) => (event._tag === "ControlDirectionApplied" ? event.direction : null))
+    ).toEqual(["Pause", "Unpause"])
+    expect(taskPauseObservationUnpausedAuthoredCassette.story).toContainEqual(
+      expect.objectContaining({
+        _tag: "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting",
+        duringAttemptId: "attempt:A:0",
+        subject: { _tag: "Task", taskId: "A" }
+      })
+    )
+    expect(run.records.some(({ event }) => event._tag.includes("PauseProgress"))).toBe(false)
+    expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
+  })
+)
+
+it.effect("Alice sees current grouping facts add D to task A's Pause", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(taskPauseGroupingFactsAddedAuthoredCassette)
+    const dSafe = run.records.filter(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" &&
+        event.report.correlation.attemptId === "attempt:D:1" &&
+        event.report._tag === "SafelySuspended"
+    )
+    expect(taskPauseGroupingFactsAddedAuthoredCassette.name).toBe(
+      "Alice sees current grouping facts add D to task A's Pause"
+    )
+    expect(dSafe).toHaveLength(2)
+    expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
+  })
+)
+
+it.effect("Alice sees task A and grouping child D reach their exact Pause boundaries", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(
+      maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries
+    )
+    const recorded = yield* projectRecordedCassette(run.records)
+
+    expect(run.records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+    expect(
+      run.records.filter(
+        ({ event }) =>
+          event._tag === "ControlDirectionApplied" &&
+          event.direction === "Pause" &&
+          event.subject._tag === "Task" &&
+          event.subject.taskId === "A"
+      )
+    ).toHaveLength(1)
+    expect(run.records.some(({ event }) => event._tag === "AttemptImplementationAbandoned")).toBe(false)
+    expect(run.records.some(({ event }) => event._tag.includes("Cleanup"))).toBe(false)
+    expect(run.records.some(({ event }) => event._tag.includes("PauseProgress"))).toBe(false)
+    expectRecordedRoundTrip(run.records, recorded)
   })
 )
 

@@ -31,6 +31,10 @@ const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): Del
     reflectionProposals: [],
     runtimeFacts: {
       acceptedAt: graph._tag === "GraphEstablished" ? graph.observation.recordedAt : null,
+      pauseCoverage: {
+        _tag: "PauseCoverageGraphNotEstablished",
+        applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+      },
       quiescence: { _tag: "TrackerReconfirmationAllowed" },
       taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
     },
@@ -70,6 +74,10 @@ it.effect("publishes graph and planned frontier as one coherent runtime evaluati
 
       expect(before?.current.trackerGraph._tag).toBe("GraphNotEstablished")
       expect(before?.proposedActions).toMatchObject({ proposals: [{ id: proposal.id }] })
+      expect(before?.pauseCoverage).toEqual({
+        _tag: "PauseCoverageGraphNotEstablished",
+        applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+      })
       expect(after?.current.trackerGraph).toEqual(established)
       expect(after?.proposedActions).toEqual({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
     })
