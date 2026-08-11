@@ -986,13 +986,13 @@ const renderTimeline = (
 
   follow.addEventListener("click", () => dispatchPlayback(FollowLiveRequested()))
   previous.addEventListener("click", () =>
-    dispatchPlayback(PreviousFrameRequested({ source: "PlaybackControl" })))
+    dispatchPlayback(PreviousFrameRequested()))
   next.addEventListener("click", () =>
-    dispatchPlayback(NextFrameRequested({ source: "PlaybackControl" })))
+    dispatchPlayback(NextFrameRequested()))
   previousLandmark.addEventListener("click", () =>
-    dispatchPlayback(PreviousLandmarkRequested({ source: "PlaybackControl" })))
+    dispatchPlayback(PreviousLandmarkRequested()))
   nextLandmark.addEventListener("click", () =>
-    dispatchPlayback(NextLandmarkRequested({ source: "PlaybackControl" })))
+    dispatchPlayback(NextLandmarkRequested()))
   select.addEventListener("change", () =>
     dispatchPlayback(ExactFrameSelected({ frameIndex: DeliveryFrameIndex.make(Number(select.value)) })))
   const keyboardSurface = parent.closest<HTMLElement>("[data-role='delivery-workbench']") ?? parent

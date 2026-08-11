@@ -284,6 +284,9 @@ When a button reaches the first or last frame and becomes unavailable, focus
 moves to the persistent delivery-playback control group instead of falling out
 of the workbench. The maintainer can immediately press the opposite Arrow key
 to move away from that endpoint without clicking the graph or another control.
+The same focus handoff occurs when repeated Left or Right Arrow presses reach
+an endpoint while focus is anywhere in the workbench, including on the frame
+button that becomes unavailable.
 An enabled playback button keeps its native focus, so repeated Space or Enter
 activation continues moving in the same direction before the endpoint.
 Rerunning the selected cassette replaces the old timeline handler, so one key
@@ -381,7 +384,8 @@ production frame replaced another.
   uses **Reset graph view** to restore the deterministic fitted layout. With
   graph focus it drives Left/Right Arrow for exact frames and `[`/`]` for
   delivery landmarks, then reruns the cassette and proves one Arrow press still
-  advances exactly one frame. It clicks into both exact-frame endpoints and
+  advances exactly one frame. It drives both click and Arrow navigation into
+  exact-frame endpoints and
   proves focus remains on the persistent playback group so the opposite Arrow
   key moves away immediately, while an enabled intermediate button keeps focus
   for a second keyboard activation. A repeated-bracket stress check remains bounded

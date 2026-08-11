@@ -141,21 +141,10 @@ const PopulatedDeliveryPlayback = PopulatedDeliveryPlaybackShape.check(
 export const DeliveryPlaybackModel = Schema.Union([EmptyDeliveryPlayback, PopulatedDeliveryPlayback])
 export type DeliveryPlaybackModel = typeof DeliveryPlaybackModel.Type
 
-export const PlaybackNavigationSource = Schema.Literals(["PlaybackControl", "WorkbenchShortcut"])
-export type PlaybackNavigationSource = typeof PlaybackNavigationSource.Type
-
-export const PreviousFrameRequested = m("PreviousFrameRequested", {
-  source: PlaybackNavigationSource
-})
-export const NextFrameRequested = m("NextFrameRequested", {
-  source: PlaybackNavigationSource
-})
-export const PreviousLandmarkRequested = m("PreviousLandmarkRequested", {
-  source: PlaybackNavigationSource
-})
-export const NextLandmarkRequested = m("NextLandmarkRequested", {
-  source: PlaybackNavigationSource
-})
+export const PreviousFrameRequested = m("PreviousFrameRequested")
+export const NextFrameRequested = m("NextFrameRequested")
+export const PreviousLandmarkRequested = m("PreviousLandmarkRequested")
+export const NextLandmarkRequested = m("NextLandmarkRequested")
 export const ExactFrameSelected = m("ExactFrameSelected", { frameIndex: DeliveryFrameIndex })
 export const FollowLiveRequested = m("FollowLiveRequested")
 export const TaskSelectedRequested = m("TaskSelectedRequested", { taskId: TaskId })
@@ -181,13 +170,13 @@ export type DeliveryPlaybackMessage = typeof DeliveryPlaybackMessage.Type
 export const deliveryPlaybackShortcutMessage = (key: string): DeliveryPlaybackMessage | null => {
   switch (key) {
     case deliveryPlaybackViewContract.previousFrame.shortcut:
-      return PreviousFrameRequested({ source: "WorkbenchShortcut" })
+      return PreviousFrameRequested()
     case deliveryPlaybackViewContract.nextFrame.shortcut:
-      return NextFrameRequested({ source: "WorkbenchShortcut" })
+      return NextFrameRequested()
     case deliveryPlaybackViewContract.previousLandmark.shortcut:
-      return PreviousLandmarkRequested({ source: "WorkbenchShortcut" })
+      return PreviousLandmarkRequested()
     case deliveryPlaybackViewContract.nextLandmark.shortcut:
-      return NextLandmarkRequested({ source: "WorkbenchShortcut" })
+      return NextLandmarkRequested()
     default:
       return null
   }
@@ -307,21 +296,19 @@ const inspect = (
   position: InspectingFrame({ frameIndex })
 })
 
-const focusWhenControlBecameUnavailable = (
-  source: PlaybackNavigationSource,
+const focusAtUnavailableEndpoint = (
   available: boolean
 ): ReadonlyArray<DeliveryPlaybackCommand> =>
-  source === "PlaybackControl" && !available ? [FocusDeliveryPlaybackControls()] : []
+  available ? [] : [FocusDeliveryPlaybackControls()]
 
 const moveTo = (
   model: DeliveryPlaybackModel,
   target: DeliveryFrameIndex | undefined,
-  source: PlaybackNavigationSource,
   remainsAvailable: (projection: DeliveryPlaybackProjection) => boolean
 ): DeliveryPlaybackUpdate => {
   if (target === undefined || model._tag === "EmptyDeliveryPlayback") return [model, []]
   const next = inspect(model, target)
-  return [next, focusWhenControlBecameUnavailable(source, remainsAvailable(projectDeliveryPlayback(next)))]
+  return [next, focusAtUnavailableEndpoint(remainsAvailable(projectDeliveryPlayback(next)))]
 }
 
 /** Pure Elm-style transition. Commands describe effects; this function never touches the DOM. */
@@ -337,22 +324,22 @@ export const updateDeliveryPlayback = (
     case "PreviousFrameRequested":
       return selectedIndex === null || !projection.previousFrameAvailable
         ? [model, []]
-        : moveTo(model, DeliveryFrameIndex.make(selectedIndex - 1), message.source, (next) => next.previousFrameAvailable)
+        : moveTo(model, DeliveryFrameIndex.make(selectedIndex - 1), (next) => next.previousFrameAvailable)
     case "NextFrameRequested":
       return selectedIndex === null || !projection.nextFrameAvailable
         ? [model, []]
-        : moveTo(model, DeliveryFrameIndex.make(selectedIndex + 1), message.source, (next) => next.nextFrameAvailable)
+        : moveTo(model, DeliveryFrameIndex.make(selectedIndex + 1), (next) => next.nextFrameAvailable)
     case "PreviousLandmarkRequested": {
       const target = selectedIndex === null
         ? undefined
         : projection.landmarkIndexes.filter((index) => index < selectedIndex).at(-1)
-      return moveTo(model, target, message.source, (next) => next.previousLandmarkAvailable)
+      return moveTo(model, target, (next) => next.previousLandmarkAvailable)
     }
     case "NextLandmarkRequested": {
       const target = selectedIndex === null
         ? undefined
         : projection.landmarkIndexes.find((index) => index > selectedIndex)
-      return moveTo(model, target, message.source, (next) => next.nextLandmarkAvailable)
+      return moveTo(model, target, (next) => next.nextLandmarkAvailable)
     }
     case "ExactFrameSelected":
       return model._tag === "EmptyDeliveryPlayback" || message.frameIndex >= model.frames.length
