@@ -410,7 +410,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       appendTextElement(
         article,
         "p",
-        "External-completion scheduler/restart corner case: the production runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues. All ten later tracker-success facts are explicitly external and intentionally do not claim accepted-result integration. Issue #167 must make the normal large-graph story show integration or move this chronology into a separately named corner-case cassette.",
+        "Normal-delivery scheduler/restart target: the production runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues. The current trace provisionally supplies all ten tracker-success facts without claiming accepted-result integration. Issue #167 must replace that test seam with the intended integration and finality path.",
         "delivery-story-scope"
       )
     }
@@ -418,7 +418,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       appendTextElement(
         article,
         "p",
-        "Delivery-story coverage: A crosses production graph, frontier, restart, promotion, completion-claim, settlement, and reflection layers; B through G are explicitly externally completed tracker tasks. This is not the complete 22-beat one-Run target. docs/DELIVERY-STORY.md links the remaining beats to exact maintained slices or explicit implementation gaps; this view does not simulate them.",
+        "Delivery-story coverage: A demonstrates production graph, frontier, restart, promotion, completion-claim, settlement, and reflection layers; tracker success for B through G is intentionally supplied outside Dalph. This is not the complete 22-beat one-Run target. docs/DELIVERY-STORY.md links the remaining beats to exact maintained slices or explicit implementation gaps; this view does not simulate them.",
         "delivery-story-scope"
       )
     }

@@ -3218,7 +3218,10 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
     ]
     const changedMembership = {
       _tag: "AuthoredScenarioCassette",
-      deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["A"] },
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice",
+        trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
+      },
       name: "a complete refresh removes unstarted C and adds D",
       schemaVersion: 1,
       startingFacts: {
@@ -3411,58 +3414,95 @@ it("rejects a complete graph delivery scope backed only by coarse executor compl
   )
   expect(maintainedAuthoredCassetteCatalog.deliveryInvariantStory.deliveryScope).toEqual({
     _tag: "FocusedWorkflowSlice",
-    externallyCompletedTaskIds: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X"]
+    trackerSuccessIntents: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X"].map((taskId) => ({
+      _tag: "DalphDeliveryTargetPending",
+      blockingIssue: "#167",
+      taskId
+    }))
   })
 })
 
-it("requires focused cassettes to declare every externally completed tracker task", () => {
+it("requires focused cassettes to classify every tracker-success intent", () => {
   expect(maintainedAuthoredCassetteCatalog.dependentTasksCompleteInOneRun.deliveryScope).toEqual({
     _tag: "FocusedWorkflowSlice",
-    externallyCompletedTaskIds: ["A"]
+    trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
   })
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
       ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
-      deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [] }
+      deliveryScope: { _tag: "FocusedWorkflowSlice", trackerSuccessIntents: [] }
     })
-  ).toThrow(
-    "a focused cassette must explicitly and exactly declare every tracker-successful task without Dalph delivery evidence"
-  )
+  ).toThrow("a focused cassette must explicitly classify every tracker-successful task")
 })
 
-it("rejects contradictory external completion declarations", () => {
+it("rejects contradictory tracker-success intents", () => {
+  const doubleDiamondIntents = maintainedAuthoredCassetteCatalog.deliveryInvariantStory.deliveryScope
+  if (doubleDiamondIntents._tag !== "FocusedWorkflowSlice") throw new Error("expected focused delivery scope")
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
       ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
       deliveryScope: {
         _tag: "FocusedWorkflowSlice",
-        externallyCompletedTaskIds: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X", "A"]
+        trackerSuccessIntents: [
+          ...doubleDiamondIntents.trackerSuccessIntents,
+          { _tag: "DalphDeliveryTargetPending", blockingIssue: "#167", taskId: "A" }
+        ]
       }
     })
-  ).toThrow("a focused cassette must declare each externally completed tracker task once")
+  ).toThrow("a focused cassette must classify each tracker-successful task once")
 
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
       ...maintainedAuthoredCassetteCatalog.singletonTaskCompletes,
-      deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["A"] }
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice",
+        trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
+      }
     })
-  ).toThrow(
-    "a focused cassette must explicitly and exactly declare every tracker-successful task without Dalph delivery evidence"
-  )
+  ).toThrow("a focused cassette must explicitly classify every tracker-successful task")
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
       ...completeSingletonDeliveryCassette,
-      deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["A"] }
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice",
+        trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
+      }
     })
-  ).toThrow(
-    "a focused cassette must explicitly and exactly declare every tracker-successful task without Dalph delivery evidence"
-  )
+  ).toThrow("focused cassette task A has an accepted Dalph result and cannot be classified as")
+
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.dependentTasksCompleteInOneRun,
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice",
+        trackerSuccessIntents: [{ _tag: "DalphDeliveryDemonstrated", taskId: "A" }]
+      }
+    })
+  ).toThrow("focused cassette task A claims Dalph delivery without its exact integration and finality chain")
+
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice",
+        trackerSuccessIntents: doubleDiamondIntents.trackerSuccessIntents.map((intent) =>
+          intent.taskId === "A" ? { _tag: "DalphDeliveryTargetPending", taskId: "A" } : intent
+        )
+      }
+    })
+  ).toThrow()
 
   const acceptedResultStory = maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration.story
   const lastGraphIndex = acceptedResultStory.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
   const acceptedResultWithPrematureTrackerSuccess = {
     ...maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration,
-    deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["A"] },
+    deliveryScope: {
+      _tag: "FocusedWorkflowSlice",
+      trackerSuccessIntents: [
+        { _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" },
+        { _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "C" }
+      ]
+    },
     story: acceptedResultStory.map((item, index) =>
       index === lastGraphIndex && item._tag === "TrackerGraphReadReturned"
         ? {
@@ -3476,7 +3516,7 @@ it("rejects contradictory external completion declarations", () => {
     )
   }
   expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(acceptedResultWithPrematureTrackerSuccess)).toThrow(
-    "focused cassette task A reached tracker success before its accepted result completed Dalph integration and finality"
+    "focused cassette task A has an accepted Dalph result and cannot be classified as"
   )
 })
 
@@ -4301,7 +4341,7 @@ it.effect(
       }
       const localizedCassette = {
         _tag: "AuthoredScenarioCassette",
-        deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [] },
+        deliveryScope: { _tag: "FocusedWorkflowSlice", trackerSuccessIntents: [] },
         name: "A leaves the target while independent B continues",
         schemaVersion: 1,
         startingFacts: {
@@ -4493,7 +4533,10 @@ it.effect(
       )
       const externalSuccessCassette = {
         ...localizedCassette,
-        deliveryScope: { _tag: "FocusedWorkflowSlice" as const, externallyCompletedTaskIds: [TaskId.make("A")] },
+        deliveryScope: {
+          _tag: "FocusedWorkflowSlice" as const,
+          trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph" as const, taskId: TaskId.make("A") }]
+        },
         name: "A completes externally while its exact claim and WIP remain",
         story: [
           ...externalSuccessStory.slice(0, externalSuspensionAt + 1),
@@ -6605,7 +6648,9 @@ it.effect("labels the 100-task four-read encoding experiment as a baseline", () 
       ...singleton,
       deliveryScope: {
         _tag: "FocusedWorkflowSlice" as const,
-        externallyCompletedTaskIds: taskIds.filter((taskId) => taskId !== activeTaskId)
+        trackerSuccessIntents: taskIds
+          .filter((taskId) => taskId !== activeTaskId)
+          .map((taskId) => ({ _tag: "TrackerSuccessSuppliedOutsideDalph" as const, taskId }))
       },
       name: "100-task four-read encoded-size baseline",
       startingFacts: {

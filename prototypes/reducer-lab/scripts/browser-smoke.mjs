@@ -394,11 +394,11 @@ try {
   await selector.selectOption(linkedDeliveryStoryCassette)
   assert.match(
     await page.locator("#selected-cassette .delivery-scope").textContent() ?? "",
-    /External tracker-completion corner case: A, B, C, D, E, F, G, H, I, X.*not the normal delivery path/u
+    /Normal Dalph delivery target not yet demonstrated: A \(blocked by #167\).*X \(blocked by #167\).*provisional test seam/u
   )
   assert.match(
     await page.locator("#selected-cassette .delivery-story-scope").textContent() ?? "",
-    /All ten later tracker-success facts are explicitly external.*Issue #167 must make the normal large-graph story show integration/u
+    /current trace provisionally supplies all ten tracker-success facts.*Issue #167 must replace that test seam with the intended integration and finality path/u
   )
   await page.evaluate(() => {
     globalThis.__linkedDeliveryStoryTrace = []

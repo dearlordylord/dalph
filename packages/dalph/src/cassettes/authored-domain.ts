@@ -440,15 +440,29 @@ export const assertExactlyOneAuthoredCassetteStoryItemOwner = Effect.fn(
 
 const authoredScenarioCassetteVersion = 1 as const
 
+/** Repository issue that owns the missing evidence for one provisional cassette intent. */
+const AuthoredImplementationIssue = Schema.NonEmptyString.pipe(Schema.brand("AuthoredImplementationIssue"))
+
+/**
+ * What one focused cassette intends each tracker-successful task to mean.
+ * Tracker lifecycle remains tracker-owned; this value classifies only the
+ * relationship between that outside fact and the delivery evidence asserted
+ * by the cassette.
+ */
+const AuthoredTrackerSuccessIntent = Schema.TaggedUnion({
+  DalphDeliveryDemonstrated: { taskId: TaskId },
+  DalphDeliveryTargetPending: { blockingIssue: AuthoredImplementationIssue, taskId: TaskId },
+  TrackerSuccessSuppliedOutsideDalph: { taskId: TaskId }
+})
+
 /**
  * States what the authored chronology is allowed to claim about delivery.
- * A focused slice may demonstrate scheduling, recovery, or one protocol seam
- * without claiming that Dalph integrated every tracker-successful task. A
- * complete graph delivery must carry the accepted-result and finality evidence
- * that distinguishes Dalph delivery from an outside tracker completion.
+ * A focused slice classifies each tracker success independently. A complete
+ * graph delivery must carry the accepted-result and finality evidence that
+ * distinguishes Dalph delivery from tracker success alone.
  */
 export const AuthoredCassetteDeliveryScope = Schema.TaggedUnion({
-  FocusedWorkflowSlice: { externallyCompletedTaskIds: Schema.Array(TaskId) },
+  FocusedWorkflowSlice: { trackerSuccessIntents: Schema.Array(AuthoredTrackerSuccessIntent) },
   CompleteGraphDelivery: {}
 })
 export type AuthoredCassetteDeliveryScope = typeof AuthoredCassetteDeliveryScope.Type
@@ -764,45 +778,50 @@ const successfulGraphTaskIdsObservedIn = (cassette: typeof AuthoredScenarioCasse
   )
 ]
 
-const focusedExternalCompletionScopeIsExact = Schema.makeFilter(
+const focusedTrackerSuccessIntentsAreExact = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
     if (cassette.deliveryScope._tag !== "FocusedWorkflowSlice") return undefined
-    const declaredExternalTasks = cassette.deliveryScope.externallyCompletedTaskIds
-    if (new Set(declaredExternalTasks).size !== declaredExternalTasks.length) {
-      return "a focused cassette must declare each externally completed tracker task once"
+    const intents = cassette.deliveryScope.trackerSuccessIntents
+    const intentTaskIds = intents.map(({ taskId }) => taskId)
+    if (new Set(intentTaskIds).size !== intentTaskIds.length) {
+      return "a focused cassette must classify each tracker-successful task once"
     }
     const expected = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(
       cassette.story.at(terminalStoryItemOffset)
     )
     const successfulTasks = successfulGraphTaskIdsObservedIn(cassette)
+    const classificationsAreExact = [
+      intentTaskIds.length === successfulTasks.length,
+      intentTaskIds.every((taskId) => successfulTasks.includes(taskId))
+    ].every(Boolean)
+    if (!classificationsAreExact) {
+      return "a focused cassette must explicitly classify every tracker-successful task"
+    }
     const acceptedResults = expected.taskWork.results.filter(
       (result): result is AcceptedTaskWorkResult => result._tag === "PlannedWorkForTaskAccepted"
     )
     const runCoordinator = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.RunCoordinator)(cassette.story[1])
-    const acceptedTaskWithoutCompleteDelivery = acceptedResults.find(
-      (result) =>
-        successfulTasks.includes(result.taskId) &&
-        (expected.orchestration === null ||
-          exactDeliveryEvidenceIssue(
-            result.taskId,
-            result.commit,
-            expected.orchestration,
-            runCoordinator.integrationTarget
-          ) !== undefined ||
-          completionFinalityIssue(cassette, result.taskId) !== undefined)
-    )
-    if (acceptedTaskWithoutCompleteDelivery !== undefined) {
-      return `focused cassette task ${acceptedTaskWithoutCompleteDelivery.taskId} reached tracker success before its accepted result completed Dalph integration and finality`
+    const invalidIntent = intents.find((intent) => {
+      const acceptedResult = acceptedResults.find(({ taskId }) => taskId === intent.taskId)
+      if (intent._tag !== "DalphDeliveryDemonstrated") return acceptedResult !== undefined
+      return (
+        acceptedResult === undefined ||
+        expected.orchestration === null ||
+        exactDeliveryEvidenceIssue(
+          intent.taskId,
+          acceptedResult.commit,
+          expected.orchestration,
+          runCoordinator.integrationTarget
+        ) !== undefined ||
+        completionFinalityIssue(cassette, intent.taskId) !== undefined
+      )
+    })
+    if (invalidIntent?._tag === "DalphDeliveryDemonstrated") {
+      return `focused cassette task ${invalidIntent.taskId} claims Dalph delivery without its exact integration and finality chain`
     }
-    const acceptedTaskIds = acceptedResults.map(({ taskId }) => taskId)
-    const externallyCompletedTasks = successfulTasks.filter((taskId) => !acceptedTaskIds.includes(taskId))
-    const declarationsAreExact = [
-      declaredExternalTasks.length === externallyCompletedTasks.length,
-      declaredExternalTasks.every((taskId) => externallyCompletedTasks.includes(taskId))
-    ].every(Boolean)
-    return declarationsAreExact
+    return invalidIntent === undefined
       ? undefined
-      : "a focused cassette must explicitly and exactly declare every tracker-successful task without Dalph delivery evidence"
+      : `focused cassette task ${invalidIntent.taskId} has an accepted Dalph result and cannot be classified as ${invalidIntent._tag}`
   }
 )
 
@@ -1123,7 +1142,7 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   .check(startingFactsAreConsistent)
   .check(behaviorAssertionsAreConsistent)
   .check(completeGraphDeliveryHasExactEvidence)
-  .check(focusedExternalCompletionScopeIsExact)
+  .check(focusedTrackerSuccessIntentsAreExact)
   .check(coordinatorLifecycleBoundariesHaveFollowingActivationWork)
   .check(finalTrackerReadClosesCurrentActivation)
   .check(ambiguousBoundaryLossesImmediatelyCrash)

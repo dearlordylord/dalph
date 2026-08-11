@@ -99,15 +99,14 @@ await scenario("shows the staggered double-diamond frontier being consumed on on
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   assert(
     row?.surface._tag === "AuthoredDeliverySurface"
-      && row.surface.deliveryScope.includes("External tracker-completion corner case")
-      && row.surface.deliveryScope.includes("A, B, C, D, E, F, G, H, I, X")
-      && row.surface.deliveryScope.includes("not the normal delivery path"),
-    "The linked graph story must expose every externally completed tracker task"
+      && row.surface.deliveryScope.includes("Normal Dalph delivery target not yet demonstrated")
+      && row.surface.deliveryScope.includes("A (blocked by #167)")
+      && row.surface.deliveryScope.includes("X (blocked by #167)"),
+    "The linked graph story must expose every provisional normal-delivery task"
   )
   assert(
-    row?.storyName ===
-      "external tracker-completion corner case consumes a staggered double diamond while X waits for capacity",
-    "The linked graph story title must name the exceptional completion provenance"
+    row?.storyName === "normal delivery target consumes a staggered double diamond while X waits for capacity",
+    "The linked graph story title must preserve its normal delivery intent"
   )
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The linked story must complete with frames")
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
@@ -1067,7 +1066,7 @@ await scenario("counts one delivery settlement once across repeated production p
     "The workbench must separate tracker lifecycle observations from exact Dalph settlements"
   )
   assert(
-    (root.textContent ?? "").includes("B through G are explicitly externally completed tracker tasks"),
+    (root.textContent ?? "").includes("tracker success for B through G is intentionally supplied outside Dalph"),
     "The linked cassette must visibly state the exact scope it executes"
   )
 })

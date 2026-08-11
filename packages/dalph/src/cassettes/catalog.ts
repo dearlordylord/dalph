@@ -114,7 +114,7 @@ const singletonExpectedBehavior = {
  */
 export const singletonTaskCompletesAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
-  deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [] },
+  deliveryScope: { _tag: "FocusedWorkflowSlice", trackerSuccessIntents: [] },
   name: "one open task completes its coarse executor work",
   schemaVersion: 1,
   startingFacts: {
@@ -327,7 +327,7 @@ export const runPauseRestartsPassivelyAuthoredCassette = Schema.decodeUnknownSyn
 /** Alice's stale task Pause is rejected after a complete fresh target-closure read. */
 export const staleTaskPauseRejectedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
-  deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [] },
+  deliveryScope: { _tag: "FocusedWorkflowSlice", trackerSuccessIntents: [] },
   name: "Alice's stale task Pause is rejected visibly after a fresh read",
   schemaVersion: 1,
   startingFacts: {
@@ -1350,8 +1350,11 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette = Schema.de
 /** The maintained dependency story proving one Run consumes a later complete graph observation. */
 export const dependentTasksCompleteInOneRunAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
-  deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["A"] },
-  name: "external tracker completion of A releases dependant B in the same run",
+  deliveryScope: {
+    _tag: "FocusedWorkflowSlice",
+    trackerSuccessIntents: [{ _tag: "TrackerSuccessSuppliedOutsideDalph", taskId: "A" }]
+  },
+  name: "tracker success supplied outside Dalph for A releases dependant B in the same run",
   schemaVersion: 1,
   startingFacts: {
     executorWork: "NoPriorReport",
@@ -1542,7 +1545,7 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette = Schema.decod
 export const acceptedResultRestartsIntoIntegrationAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
   {
     _tag: "AuthoredScenarioCassette",
-    deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [] },
+    deliveryScope: { _tag: "FocusedWorkflowSlice", trackerSuccessIntents: [] },
     name: "an accepted result starts its exact integration responsibility after coordinator restart",
     schemaVersion: 1,
     startingFacts: {
@@ -2005,7 +2008,16 @@ const deliveryFinalityBase = (() => {
  */
 export const deliveryFinalitySpineAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...targetPromotionSuccessAuthoredCassette,
-  deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: ["B", "C", "D", "E", "F", "G"] },
+  deliveryScope: {
+    _tag: "FocusedWorkflowSlice",
+    trackerSuccessIntents: [
+      { _tag: "DalphDeliveryDemonstrated", taskId: "A" },
+      ...["B", "C", "D", "E", "F", "G"].map((taskId) => ({
+        _tag: "TrackerSuccessSuppliedOutsideDalph" as const,
+        taskId
+      }))
+    ]
+  },
   name: "A completes Dalph finality while B-G complete externally across a five-to-seven-task restart",
   startingFacts: {
     ...targetPromotionSuccessAuthoredCassette.startingFacts,
@@ -2147,8 +2159,15 @@ const doubleDiamondExecutionOrder = ["A", "B", "C", "D", "X", "E", "F", "H", "I"
 /** The real delivery runtime consumes a staggered double diamond and reconstructs both middle positions before observing X. */
 export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
-  deliveryScope: { _tag: "FocusedWorkflowSlice", externallyCompletedTaskIds: [...doubleDiamondTaskIds] },
-  name: "external tracker-completion corner case consumes a staggered double diamond while X waits for capacity",
+  deliveryScope: {
+    _tag: "FocusedWorkflowSlice",
+    trackerSuccessIntents: doubleDiamondTaskIds.map((taskId) => ({
+      _tag: "DalphDeliveryTargetPending" as const,
+      blockingIssue: "#167",
+      taskId
+    }))
+  },
+  name: "normal delivery target consumes a staggered double diamond while X waits for capacity",
   schemaVersion: 1,
   startingFacts: {
     executorWork: "NoPriorReport",

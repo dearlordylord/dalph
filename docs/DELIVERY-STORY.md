@@ -5,19 +5,19 @@ makes each beat's arithmetic checkable. The story is chosen to touch as many of
 `docs/DELIVERY-INVARIANTS.md` as one chronology can.
 
 Both registers are prose. The maintained cassette
-`authored:deliveryInvariantStory` is an executable external-completion
-graph-and-restart corner case with the typed delivery scope
+`authored:deliveryInvariantStory` is the executable normal-delivery
+graph-and-restart target with the typed delivery scope
 `FocusedWorkflowSlice`: one real Run consumes the staggered
 graph A → B+C → D → E+F → H+I → G with X added
 during process loss between A and G, and reconstructs the exact B and C
 task-work positions before newly observed X can use capacity. Its scope
-explicitly declares A through I and X externally completed: this is possible,
-but is not the normal Dalph delivery path. Issue #167 must replace those
-declarations with integration/finality in the normal large-graph example or
-split this chronology into a separately named corner case. The separate
+classifies A through I and X as normal Dalph delivery targets whose integration
+is not yet demonstrated. Issue #167 must replace those provisional
+tracker-success returns with integration and finality without changing the
+scenario's intent. The separate
 `authored:deliveryFinalitySpine` retains the real A promotion and
-completion-finality chronology while explicitly declaring B through G externally
-completed. Neither cassette pretends to execute all 22
+completion-finality chronology while classifying tracker success for B through
+G as intentionally supplied outside Dalph. Neither cassette pretends to execute all 22
 beats below. The checked-in manifest maps every beat either to exact maintained
 evidence or to an explicit implementation gap. Repository tests fail when the
 document, manifest, catalog key, or cited evidence changes without the others.
