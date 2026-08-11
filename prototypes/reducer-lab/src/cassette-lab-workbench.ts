@@ -331,7 +331,7 @@ const renderTaskWorkCapacity = (parent: HTMLElement, frame: AuthoredDeliveryFram
   appendText(
     parent,
     "p",
-    "Anonymous process-local positions. Dalph admits them from selected responsibilities and reconstructs later-activation holders from unfinished journal responsibilities; no position has a durable identity.",
+    "Anonymous process-local positions. An unheld position is capacity, not permission: a frontier task occupies it only after production selects and admits its responsibility. Dalph reconstructs later-activation holders from unfinished journal responsibilities; no position has a durable identity.",
     "delivery-capacity-explanation"
   )
   const positions = document.createElement("ul")
@@ -346,7 +346,7 @@ const renderTaskWorkCapacity = (parent: HTMLElement, frame: AuthoredDeliveryFram
     appendText(
       positions,
       "li",
-      `${available} available anonymous ${available === 1 ? "position" : "positions"}`,
+      `${available} unheld ${available === 1 ? "position" : "positions"}`,
       "available-capacity-position"
     )
   }
@@ -747,7 +747,7 @@ const renderTimeline = (
   frameHost.dataset.role = "delivery-frame"
   const graphViewControls = document.createElement("div")
   graphViewControls.className = "delivery-graph-view-controls"
-  appendText(graphViewControls, "span", "Drag to pan · wheel or trackpad to zoom")
+  appendText(graphViewControls, "span", "Drag to pan · pinch, wheel, or trackpad to zoom")
   const resetGraphView = appendText(graphViewControls, "button", "Reset graph view")
   resetGraphView.type = "button"
   const graph = document.createElement(deliveryGraphTag) as DeliveryGraphElement

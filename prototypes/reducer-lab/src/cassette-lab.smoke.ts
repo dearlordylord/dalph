@@ -615,7 +615,8 @@ await scenario("shows represented and off-graph responsibilities without inventi
   selectFrame(staggeredIndex)
   const representedCapacity = document.querySelector("[data-role='delivery-capacity-positions']")
   assert(representedCapacity?.textContent?.includes("1 held of capacity 2") === true, "One released position must be visible before C finishes")
-  assert(representedCapacity?.textContent?.includes("1 available anonymous position") === true, "Released capacity must remain anonymous and visible")
+  assert(representedCapacity?.textContent?.includes("1 unheld position") === true, "Released capacity must remain anonymous and visible")
+  assert(representedCapacity?.textContent?.includes("capacity, not permission") === true, "Unheld capacity must not imply that eligible work is already admitted")
   assert(document.querySelector("[data-role='delivery-off-graph-responsibilities']") === null, "Graph-represented responsibilities must stay on their graph nodes")
 })
 
@@ -818,7 +819,7 @@ await scenario("keeps graph-not-established frames dimensionally stable and trut
   const reset = document.querySelector<HTMLButtonElement>(".delivery-graph-view-controls button")
   assert(reset?.disabled === true, "An absent production graph must not offer a no-op reset")
   assert(
-    document.querySelector(".delivery-graph-view-controls")?.textContent?.includes("Drag to pan · wheel or trackpad to zoom")
+    document.querySelector(".delivery-graph-view-controls")?.textContent?.includes("Drag to pan · pinch, wheel, or trackpad to zoom")
       === true,
     "The graph must visibly explain its pointer gestures"
   )

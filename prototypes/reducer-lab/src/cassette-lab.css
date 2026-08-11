@@ -230,6 +230,11 @@ dd {
   padding: 0.55rem 0.75rem;
 }
 
+.delivery-restart-boundary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .delivery-graph-view-controls {
   align-items: center;
   display: flex;
@@ -280,6 +285,8 @@ dd {
   border: 2px double #355a78;
   border-radius: 999px;
   font-size: 0.78rem;
+  max-width: 100%;
+  min-width: 0;
   overflow-wrap: anywhere;
   padding: 0.35rem 0.6rem;
 }

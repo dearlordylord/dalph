@@ -300,7 +300,7 @@ without scanning more than 24 landmarks. The complete
 per-task matrix is a secondary **All task delivery facts** disclosure; the
 graph and selected-task summary remain primary.
 
-The maintainer may drag the graph as one canvas and zoom with ordinary pointer
+The maintainer may drag the graph as one canvas and zoom with pinch, wheel, or trackpad
 or trackpad gestures; a compact visible hint names both gestures. **Reset graph view**
 reruns the deterministic graph layout and restores its fitted pan and zoom
 without changing the selected cassette, delivery frame, or task correlation.
@@ -531,8 +531,9 @@ complete tracker read observes X and the changed G prerequisites. X becomes
 graph-eligible, but B and C occupy both positions, so no X executor work begins
 and no X attempt is planned yet.
 
-The executor then reports B Terminal while C remains Running. B's report makes
-one position available but does not itself prove B complete; the graph keeps B
+The executor then reports B Terminal while C remains Running. B's report leaves
+one position unheld but does not itself permit another frontier task to start or
+prove B complete; the graph keeps B
 open and the Lab separately shows C as the remaining holder. C then reports
 Terminal in a later production publication. Only after no current executable
 responsibility remains does an ordinary complete tracker read report B and C
@@ -750,7 +751,8 @@ task whose exact facts are correlated below.
   still Running, traverses its exact prerequisite edges and rolling parallel
   states, checks X appears only after the later tracker observation, and checks
   the B/C attempt correlations and anonymous occupied positions on both sides
-  of restart through the actual served application.
+  of restart through the actual served application. At phone width it also
+  proves the exact restart correlations wrap without widening the document.
 - `does not fabricate a graph workbench for direct protocol cassettes` checks
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.

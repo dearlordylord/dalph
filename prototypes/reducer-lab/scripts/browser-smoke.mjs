@@ -283,7 +283,7 @@ try {
     /Select a task in the graph summary/u
   )
   assert.equal(await resetGraphView.isDisabled(), true)
-  assert.match(await workbench.locator(".delivery-graph-view-controls").textContent() ?? "", /Drag to pan · wheel or trackpad to zoom/u)
+  assert.match(await workbench.locator(".delivery-graph-view-controls").textContent() ?? "", /Drag to pan · pinch, wheel, or trackpad to zoom/u)
   console.log("✓ keeps graph-not-established frames dimensionally stable and truthful")
   await frameSelector.selectOption(String(frameCount - 2))
   assert.equal(await resetGraphView.isEnabled(), true)
@@ -367,10 +367,11 @@ try {
     const select = document.querySelector('[data-role="delivery-workbench"] select')
     const graph = document.querySelector("dalph-delivery-graph")
     if (!(select instanceof HTMLSelectElement) || graph === null) return []
-    return [...select.options].map((option) => {
+    return [...select.options].map((option, index) => {
       select.value = option.value
       select.dispatchEvent(new Event("change"))
       return {
+        index,
         facts: document.querySelector('[data-role="delivery-frame"]')?.textContent ?? "",
         edges: (graph.projection?.edges ?? []).map(({ from, to }) => `${from}->${to}`).sort(),
         eligible: [...document.querySelectorAll('tr[data-task-id]')]
@@ -416,6 +417,20 @@ try {
   assert.match(laterMiddle.offGraph, /placement GraphNotEstablished/u)
   assert.match(laterMiddle.offGraph, /occupies capacity · Run .+ · attempt attempt:B:1/u)
   assert.match(laterMiddle.offGraph, /planned-attempt executor responsibility/u)
+  await linkedFrameSelector.selectOption(String(laterMiddle.index))
+  await page.setViewportSize({ width: 390, height: 844 })
+  const restartNarrowTruth = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    restartWidth: document.querySelector(".delivery-restart-boundary")?.scrollWidth ?? 0,
+    viewportWidth: globalThis.innerWidth,
+    workbenchWidth: document.querySelector('[data-role="delivery-workbench"]')?.getBoundingClientRect().width ?? 0
+  }))
+  assert.ok(
+    restartNarrowTruth.documentWidth <= restartNarrowTruth.viewportWidth,
+    `restart correlations overflow the mobile viewport: ${JSON.stringify(restartNarrowTruth)}`
+  )
+  assert.ok(restartNarrowTruth.restartWidth <= restartNarrowTruth.workbenchWidth)
+  await page.setViewportSize({ width: 1440, height: 900 })
   const heldSequence = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"]
   let previousHeld = -1
   for (const held of heldSequence) {
