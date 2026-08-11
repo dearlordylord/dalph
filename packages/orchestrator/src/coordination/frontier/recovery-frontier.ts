@@ -136,10 +136,10 @@ const unclaimedEntriesForRecord = (
     )
 }
 
-const recoveryEntryForAttempt = (
+const worktreeRecoveryEntry = (
   records: ReadonlyArray<JournalRecord>,
   planOperation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
-): RunRecoveryFrontierEntry => {
+): RunRecoveryFrontierEntry | undefined => {
   const plannedAttempt = planOperation.plannedAttempt
   const worktreeIntent = records.find(
     ({ event }) =>
@@ -156,7 +156,14 @@ const recoveryEntryForAttempt = (
       operation: worktreeIntent.operation
     })
   }
+  return undefined
+}
 
+const executorRecoveryEntry = (
+  records: ReadonlyArray<JournalRecord>,
+  planOperation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
+): RunRecoveryFrontierEntry => {
+  const plannedAttempt = planOperation.plannedAttempt
   const responsibilityBegan = records.some(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
@@ -175,6 +182,12 @@ const recoveryEntryForAttempt = (
     ? RunRecoveryFrontierEntry.cases.Terminal.make({ plannedAttempt })
     : RunRecoveryFrontierEntry.cases.PlannedAttemptExecutorWorkUnresolved.make({ planOperation })
 }
+
+const recoveryEntryForAttempt = (
+  records: ReadonlyArray<JournalRecord>,
+  planOperation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
+): RunRecoveryFrontierEntry =>
+  worktreeRecoveryEntry(records, planOperation) ?? executorRecoveryEntry(records, planOperation)
 
 const taskPreparationEntry = (
   records: ReadonlyArray<JournalRecord>,
@@ -213,6 +226,72 @@ const taskPreparationEntry = (
       })
 }
 
+const graphReadIntents = (
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<typeof WorkflowOperation.cases.ReadTrackerGraph.Type> =>
+  records.flatMap(({ event }) =>
+    event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+      ? [event.operation]
+      : []
+  )
+
+const eligibilityRefreshEntry = (
+  records: ReadonlyArray<JournalRecord>,
+  claimOperation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type
+): ReadonlyArray<RunRecoveryFrontierEntry> => {
+  const priorObservation = graphReadIntents(records).findLast((operation) =>
+    claimOperation.predecessorOperationIds.includes(operation.operationId)
+  )
+  if (priorObservation === undefined) return []
+  return [
+    RunRecoveryFrontierEntry.cases.TaskEligibilityRefreshNeeded.make({
+      claimOperation,
+      observationOperation: priorObservation
+    })
+  ]
+}
+
+const acquiredClaimRecoveryEntry = (
+  records: ReadonlyArray<JournalRecord>,
+  claimOperation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type
+): ReadonlyArray<RunRecoveryFrontierEntry> => {
+  const admission = graphReadIntents(records).findLast((operation) =>
+    operation.predecessorOperationIds.includes(claimOperation.acquisition.operationId)
+  )
+  if (admission === undefined) return eligibilityRefreshEntry(records, claimOperation)
+  const observedIndex = records.findLastIndex(
+    ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === admission.operationId
+  )
+  const reconstructed =
+    observedIndex < 0 ? Option.none() : reconstructedGraphThrough(records, observedIndex, admission.target)
+  const admitted = Option.exists(reconstructed, (snapshot) =>
+    snapshot.eligibleTasks().some(({ id }) => id === claimOperation.acquisition.taskId)
+  )
+  return admitted
+    ? [taskPreparationEntry(records, claimOperation, admission)]
+    : [RunRecoveryFrontierEntry.cases.TaskEligibilityRefreshUnresolved.make({ claimOperation, operation: admission })]
+}
+
+const unplannedClaimRecoveryEntry = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedTaskIds: ReadonlySet<TaskId>,
+  event: JournalRecord["event"]
+): ReadonlyArray<RunRecoveryFrontierEntry> => {
+  if (event._tag !== "TaskClaimAcquisitionIntended") return []
+  if (plannedTaskIds.has(event.operation.acquisition.taskId)) return []
+  const operationId = event.operation.acquisition.operationId
+  const rejected = records.some(
+    ({ event: candidate }) => candidate._tag === "TaskClaimAcquisitionRejected" && candidate.operationId === operationId
+  )
+  if (rejected) return []
+  const acquired = records.some(
+    ({ event: candidate }) => candidate._tag === "TaskClaimAcquired" && candidate.claim.operationId === operationId
+  )
+  return acquired
+    ? acquiredClaimRecoveryEntry(records, event.operation)
+    : [RunRecoveryFrontierEntry.cases.TaskClaimAcquisitionUnresolved.make({ operation: event.operation })]
+}
+
 /** Reduces immutable workflow-journal history into one total run-level recovery frontier. */
 export const deriveRunRecoveryFrontier = (records: ReadonlyArray<JournalRecord>): RunRecoveryFrontier => {
   const plannedStages = records.flatMap(({ event }) =>
@@ -221,64 +300,9 @@ export const deriveRunRecoveryFrontier = (records: ReadonlyArray<JournalRecord>)
   const plannedTaskIds = new Set(
     records.flatMap(({ event }) => (event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt.taskId] : []))
   )
-  const unplannedClaims = records.flatMap<RunRecoveryFrontierEntry>(({ event }) => {
-    if (event._tag !== "TaskClaimAcquisitionIntended" || plannedTaskIds.has(event.operation.acquisition.taskId))
-      return []
-    const rejected = records.some(
-      ({ event: candidate }) =>
-        candidate._tag === "TaskClaimAcquisitionRejected" &&
-        candidate.operationId === event.operation.acquisition.operationId
-    )
-    if (rejected) return []
-    const acquired = records.some(
-      ({ event: candidate }) =>
-        candidate._tag === "TaskClaimAcquired" &&
-        candidate.claim.operationId === event.operation.acquisition.operationId
-    )
-    if (!acquired) {
-      return [RunRecoveryFrontierEntry.cases.TaskClaimAcquisitionUnresolved.make({ operation: event.operation })]
-    }
-    const admission = records.findLast(
-      ({ event: candidate }) =>
-        candidate._tag === "TaskTrackerReadIntentRecorded" &&
-        candidate.operation._tag === "ReadTrackerGraph" &&
-        candidate.operation.predecessorOperationIds.includes(event.operation.acquisition.operationId)
-    )?.event
-    if (admission?._tag !== "TaskTrackerReadIntentRecorded" || admission.operation._tag !== "ReadTrackerGraph") {
-      const priorObservation = records.findLast(
-        ({ event: candidate }) =>
-          candidate._tag === "TaskTrackerReadIntentRecorded" &&
-          candidate.operation._tag === "ReadTrackerGraph" &&
-          event.operation.predecessorOperationIds.includes(candidate.operation.operationId)
-      )?.event
-      return priorObservation?._tag === "TaskTrackerReadIntentRecorded" &&
-        priorObservation.operation._tag === "ReadTrackerGraph"
-        ? [
-            RunRecoveryFrontierEntry.cases.TaskEligibilityRefreshNeeded.make({
-              claimOperation: event.operation,
-              observationOperation: priorObservation.operation
-            })
-          ]
-        : []
-    }
-    const observedIndex = records.findLastIndex(
-      ({ event: candidate }) =>
-        candidate._tag === "TaskTrackerFactsObserved" && candidate.operationId === admission.operation.operationId
-    )
-    const reconstructed =
-      observedIndex < 0 ? Option.none() : reconstructedGraphThrough(records, observedIndex, admission.operation.target)
-    const admitted = Option.exists(reconstructed, (snapshot) =>
-      snapshot.eligibleTasks().some(({ id }) => id === event.operation.acquisition.taskId)
-    )
-    return admitted
-      ? [taskPreparationEntry(records, event.operation, admission.operation)]
-      : [
-          RunRecoveryFrontierEntry.cases.TaskEligibilityRefreshUnresolved.make({
-            claimOperation: event.operation,
-            operation: admission.operation
-          })
-        ]
-  })
+  const unplannedClaims = records.flatMap<RunRecoveryFrontierEntry>(({ event }) =>
+    unplannedClaimRecoveryEntry(records, plannedTaskIds, event)
+  )
   const claimedTaskIds = new Set(
     records.flatMap(({ event }) =>
       event._tag === "TaskClaimAcquisitionIntended" ? [event.operation.acquisition.taskId] : []

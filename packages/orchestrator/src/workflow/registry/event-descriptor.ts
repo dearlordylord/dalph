@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- The closed event vocabulary and its exact durable-key descriptors stay exhaustive. */
+import { Match } from "effect"
 import {
   type AttemptId,
   type PlannedAttemptExecutorCorrelation,
@@ -184,82 +185,79 @@ const plannedAttemptExecutorEvent = (
 })
 
 /** Derives canonical storage identity and causal facts from one generic event. */
-export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventDescriptor => {
-  switch (event._tag) {
-    case "WorkflowRunBegan":
-      return { _tag: "WorkflowRunLifecycleEventDescriptor", expectedKey: workflowRunBeganRecordKey }
-    case "WorkflowRunTerminated":
-      return { _tag: "WorkflowRunLifecycleEventDescriptor", expectedKey: workflowRunTerminatedRecordKey }
-    case "TaskWorkCapacityChanged":
-      return { _tag: "RunPolicyEventDescriptor", expectedKey: taskWorkCapacityPolicyRecordKey(event.revision) }
-    case "ControlDirectionApplied":
-      return {
-        _tag: "ControlDirectionEventDescriptor",
-        expectedKey: controlDirectionAppliedRecordKey(event.ordinal),
-        ordinal: event.ordinal,
-        runId: event.subject.runId
-      }
-    case "AttemptChoiceApplied":
-      return {
-        _tag: "AttemptChoiceEventDescriptor",
-        expectedKey: attemptChoiceAppliedRecordKey(event.requestId),
-        requestId: event.requestId,
-        runId: event.subject.plannedAttempt.runId
-      }
-    case "AttemptStoppageIntended":
-      return {
-        _tag: "AttemptChoiceEventDescriptor",
-        expectedKey: attemptStoppageIntentRecordKey(event.requestId),
-        requestId: event.requestId,
-        runId: event.subject.plannedAttempt.runId
-      }
-    case "AttemptImplementationAbandoned":
-      return {
-        _tag: "AttemptChoiceEventDescriptor",
-        expectedKey: attemptImplementationAbandonedRecordKey(event.requestId),
-        requestId: event.requestId,
-        runId: event.subject.plannedAttempt.runId
-      }
-    case "StoppedAttemptClaimNoReleaseObserved":
-      return {
-        _tag: "AttemptChoiceEventDescriptor",
-        expectedKey: stoppedAttemptClaimNoReleaseRecordKey(event.requestId),
-        requestId: event.requestId,
-        runId: event.subject.plannedAttempt.runId
-      }
-    case "TaskClaimReacquisitionDirected":
-      return {
-        _tag: "TaskClaimReacquisitionDirectionEventDescriptor",
-        expectedKey: taskClaimReacquisitionDirectedRecordKey(event.requestId),
-        requestId: event.requestId,
-        runId: event.subject.runId
-      }
-    case "PlannedAttemptExecutorWorkResponsibilityBegan":
-      return plannedAttemptExecutorEvent(
+export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
+  Match.withReturnType<JournalEventDescriptor>(),
+  Match.tagsExhaustive({
+    WorkflowRunBegan: () => ({ _tag: "WorkflowRunLifecycleEventDescriptor", expectedKey: workflowRunBeganRecordKey }),
+    WorkflowRunTerminated: () => ({
+      _tag: "WorkflowRunLifecycleEventDescriptor",
+      expectedKey: workflowRunTerminatedRecordKey
+    }),
+    TaskWorkCapacityChanged: (event) => ({
+      _tag: "RunPolicyEventDescriptor",
+      expectedKey: taskWorkCapacityPolicyRecordKey(event.revision)
+    }),
+    ControlDirectionApplied: (event) => ({
+      _tag: "ControlDirectionEventDescriptor",
+      expectedKey: controlDirectionAppliedRecordKey(event.ordinal),
+      ordinal: event.ordinal,
+      runId: event.subject.runId
+    }),
+    AttemptChoiceApplied: (event) => ({
+      _tag: "AttemptChoiceEventDescriptor",
+      expectedKey: attemptChoiceAppliedRecordKey(event.requestId),
+      requestId: event.requestId,
+      runId: event.subject.plannedAttempt.runId
+    }),
+    AttemptStoppageIntended: (event) => ({
+      _tag: "AttemptChoiceEventDescriptor",
+      expectedKey: attemptStoppageIntentRecordKey(event.requestId),
+      requestId: event.requestId,
+      runId: event.subject.plannedAttempt.runId
+    }),
+    AttemptImplementationAbandoned: (event) => ({
+      _tag: "AttemptChoiceEventDescriptor",
+      expectedKey: attemptImplementationAbandonedRecordKey(event.requestId),
+      requestId: event.requestId,
+      runId: event.subject.plannedAttempt.runId
+    }),
+    StoppedAttemptClaimNoReleaseObserved: (event) => ({
+      _tag: "AttemptChoiceEventDescriptor",
+      expectedKey: stoppedAttemptClaimNoReleaseRecordKey(event.requestId),
+      requestId: event.requestId,
+      runId: event.subject.plannedAttempt.runId
+    }),
+    TaskClaimReacquisitionDirected: (event) => ({
+      _tag: "TaskClaimReacquisitionDirectionEventDescriptor",
+      expectedKey: taskClaimReacquisitionDirectedRecordKey(event.requestId),
+      requestId: event.requestId,
+      runId: event.subject.runId
+    }),
+    PlannedAttemptExecutorWorkResponsibilityBegan: (event) =>
+      plannedAttemptExecutorEvent(
         { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
         plannedAttemptExecutorWorkResponsibilityBeganRecordKey(event.plannedAttempt.attemptId),
         event.plannedAttempt,
         undefined
-      )
-    case "PlannedAttemptContinuationAuthorized":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: plannedAttemptContinuationAuthorizedRecordKey(event.plannedAttempt.attemptId, [
-          event.witness.activeTaskContinuationRead.graphObservationOperationId,
-          event.witness.activeTaskContinuationRead.taskClaimObservationOperationId,
-          event.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
-          event.witness.worktreeObservationOperationId
-        ])
-      }
-    case "PlannedAttemptExecutorCommandIntended":
-      return plannedAttemptExecutorEvent(
+      ),
+    PlannedAttemptContinuationAuthorized: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: plannedAttemptContinuationAuthorizedRecordKey(event.plannedAttempt.attemptId, [
+        event.witness.activeTaskContinuationRead.graphObservationOperationId,
+        event.witness.activeTaskContinuationRead.taskClaimObservationOperationId,
+        event.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
+        event.witness.worktreeObservationOperationId
+      ])
+    }),
+    PlannedAttemptExecutorCommandIntended: (event) =>
+      plannedAttemptExecutorEvent(
         { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
         plannedAttemptExecutorCommandIntendedRecordKey(event.plannedAttempt.attemptId, event.ordinal),
         event.plannedAttempt,
         event.ordinal
-      )
-    case "PlannedAttemptExecutorCommandProjectionObserved":
-      return plannedAttemptExecutorEvent(
+      ),
+    PlannedAttemptExecutorCommandProjectionObserved: (event) =>
+      plannedAttemptExecutorEvent(
         { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
         plannedAttemptExecutorCommandProjectionObservedRecordKey(
           event.plannedAttempt.attemptId,
@@ -268,9 +266,9 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
         ),
         event.plannedAttempt,
         event.commandOrdinal
-      )
-    case "PlannedAttemptExecutorCommandResponseContradicted":
-      return plannedAttemptExecutorEvent(
+      ),
+    PlannedAttemptExecutorCommandResponseContradicted: (event) =>
+      plannedAttemptExecutorEvent(
         { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
         plannedAttemptExecutorCommandResponseContradictedRecordKey(
           event.plannedAttempt.attemptId,
@@ -278,242 +276,230 @@ export const describeJournalEvent = (event: WorkflowJournalEvent): JournalEventD
         ),
         event.plannedAttempt,
         event.commandOrdinal
-      )
-    case "PlannedAttemptExecutorStateObserved":
-      return plannedAttemptExecutorEvent(
+      ),
+    PlannedAttemptExecutorStateObserved: (event) =>
+      plannedAttemptExecutorEvent(
         { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
         plannedAttemptExecutorStateObservedRecordKey(event.plannedAttempt.attemptId, event.ordinal),
         event.plannedAttempt,
         undefined
-      )
-    case "PlannedAttemptExecutorWorkReported":
-      return plannedAttemptExecutorEvent(
+      ),
+    PlannedAttemptExecutorWorkReported: (event) =>
+      plannedAttemptExecutorEvent(
         event.report.correlation,
         plannedAttemptExecutorWorkReportedRecordKey(event.report.correlation.attemptId, event.ordinal),
         undefined,
         event.ordinal
+      ),
+    IntegrationResponsibilityBegan: (event) => ({
+      _tag: "IntegrationEventDescriptor",
+      attemptId: event.plannedAttempt.attemptId,
+      expectedKey: integrationResponsibilityBeganRecordKey(event.plannedAttempt.attemptId),
+      responsibilityBeganAt: undefined,
+      runId: event.plannedAttempt.runId
+    }),
+    IntegrationStarted: (event) => ({
+      _tag: "IntegrationEventDescriptor",
+      attemptId: event.plannedAttempt.attemptId,
+      expectedKey: integrationStartedRecordKey(event.plannedAttempt.attemptId),
+      responsibilityBeganAt: event.responsibilityBeganAt,
+      runId: event.plannedAttempt.runId
+    }),
+    IntegrationCandidateConstructionIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationCandidateConstructionIntentRecordKey(event.correlation)
+    }),
+    IntegrationCandidateAgentReported: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationCandidateAgentReportRecordKey(event.expectedCorrelation, event.ordinal)
+    }),
+    IntegrationCandidateGitObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationCandidateGitObservationRecordKey(event.correlation, event.submissionAt)
+    }),
+    IntegrationCandidateConstructed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationCandidateConstructedRecordKey(event.correlation)
+    }),
+    IntegrationCandidateGitValidationFailed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationCandidateGitValidationFailureRecordKey(
+        event.correlation,
+        event.submissionAt,
+        event.attemptOrdinal
       )
-    case "IntegrationResponsibilityBegan":
-      return {
-        _tag: "IntegrationEventDescriptor",
-        attemptId: event.plannedAttempt.attemptId,
-        expectedKey: integrationResponsibilityBeganRecordKey(event.plannedAttempt.attemptId),
-        responsibilityBeganAt: undefined,
-        runId: event.plannedAttempt.runId
-      }
-    case "IntegrationStarted":
-      return {
-        _tag: "IntegrationEventDescriptor",
-        attemptId: event.plannedAttempt.attemptId,
-        expectedKey: integrationStartedRecordKey(event.plannedAttempt.attemptId),
-        responsibilityBeganAt: event.responsibilityBeganAt,
-        runId: event.plannedAttempt.runId
-      }
-    case "IntegrationCandidateConstructionIntended":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: integrationCandidateConstructionIntentRecordKey(event.correlation)
-      }
-    case "IntegrationCandidateAgentReported":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: integrationCandidateAgentReportRecordKey(event.expectedCorrelation, event.ordinal)
-      }
-    case "IntegrationCandidateGitObserved":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: integrationCandidateGitObservationRecordKey(event.correlation, event.submissionAt)
-      }
-    case "IntegrationCandidateConstructed":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: integrationCandidateConstructedRecordKey(event.correlation)
-      }
-    case "IntegrationCandidateGitValidationFailed":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: integrationCandidateGitValidationFailureRecordKey(
-          event.correlation,
-          event.submissionAt,
-          event.attemptOrdinal
-        )
-      }
-    case "IntegrationCandidateCorrectionLimitReached":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: integrationCandidateCorrectionLimitReachedRecordKey(event.correlation)
-      }
-    case "IntegrationCandidateContinuationLimitReached":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: integrationCandidateContinuationLimitReachedRecordKey(event.correlation)
-      }
-    case "TargetVerificationIntended":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: targetVerificationIntentRecordKey(event.correlation.requestId)
-      }
-    case "TargetVerificationEvidenceSealed":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: targetVerificationEvidenceSealedRecordKey(event.correlation.requestId)
-      }
-    case "TargetVerificationCorrelationContradicted":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: targetVerificationCorrelationContradictedRecordKey(event.expected.requestId)
-      }
-    case "TargetPromotionIntended":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: targetPromotionIntentRecordKey(event.correlation.requestId)
-      }
-    case "TargetPromotionAttemptIntended":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: targetPromotionAttemptIntentRecordKey(event.correlation.requestId, event.attemptOrdinal)
-      }
-    case "TargetPromotionObservedSuccess":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: targetPromotionObservedSuccessRecordKey(event.correlation.requestId)
-      }
-    case "TargetPromotionStale":
-      return { _tag: "GenericEventDescriptor", expectedKey: targetPromotionStaleRecordKey(event.correlation.requestId) }
-    case "TargetPromotionNonConvergence":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: targetPromotionNonConvergenceRecordKey(event.correlation.requestId)
-      }
-    case "CompletionClaimReplacementIntended":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: completionClaimReplacementIntentRecordKey(event.operationId)
-      }
-    case "CompletionClaimReplacementAttemptIntended":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: completionClaimReplacementAttemptIntentRecordKey(event.operationId, event.attemptOrdinal)
-      }
-    case "CompletionClaimReplaced":
-      return { _tag: "GenericEventDescriptor", expectedKey: completionClaimReplacedRecordKey(event.operationId) }
-    case "CompletionClaimDeletionIntended":
-      return { _tag: "GenericEventDescriptor", expectedKey: completionClaimDeletionIntentRecordKey(event.operationId) }
-    case "CompletionClaimDeletionAttemptIntended":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: completionClaimDeletionAttemptIntentRecordKey(event.operationId, event.attemptOrdinal)
-      }
-    case "CompletionClaimDeleted":
-      return { _tag: "GenericEventDescriptor", expectedKey: completionClaimDeletedRecordKey(event.operationId) }
-    case "IntegrationFinalitySettled":
-      return {
-        _tag: "GenericEventDescriptor",
-        expectedKey: integrationFinalitySettledRecordKey(event.claim.promotionCorrelation.requestId)
-      }
-    case "TaskTrackerReadIntentRecorded":
-      return operationEvent({
+    }),
+    IntegrationCandidateCorrectionLimitReached: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationCandidateCorrectionLimitReachedRecordKey(event.correlation)
+    }),
+    IntegrationCandidateContinuationLimitReached: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationCandidateContinuationLimitReachedRecordKey(event.correlation)
+    }),
+    TargetVerificationIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: targetVerificationIntentRecordKey(event.correlation.requestId)
+    }),
+    TargetVerificationEvidenceSealed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: targetVerificationEvidenceSealedRecordKey(event.correlation.requestId)
+    }),
+    TargetVerificationCorrelationContradicted: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: targetVerificationCorrelationContradictedRecordKey(event.expected.requestId)
+    }),
+    TargetPromotionIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: targetPromotionIntentRecordKey(event.correlation.requestId)
+    }),
+    TargetPromotionAttemptIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: targetPromotionAttemptIntentRecordKey(event.correlation.requestId, event.attemptOrdinal)
+    }),
+    TargetPromotionObservedSuccess: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: targetPromotionObservedSuccessRecordKey(event.correlation.requestId)
+    }),
+    TargetPromotionStale: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: targetPromotionStaleRecordKey(event.correlation.requestId)
+    }),
+    TargetPromotionNonConvergence: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: targetPromotionNonConvergenceRecordKey(event.correlation.requestId)
+    }),
+    CompletionClaimReplacementIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionClaimReplacementIntentRecordKey(event.operationId)
+    }),
+    CompletionClaimReplacementAttemptIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionClaimReplacementAttemptIntentRecordKey(event.operationId, event.attemptOrdinal)
+    }),
+    CompletionClaimReplaced: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionClaimReplacedRecordKey(event.operationId)
+    }),
+    CompletionClaimDeletionIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionClaimDeletionIntentRecordKey(event.operationId)
+    }),
+    CompletionClaimDeletionAttemptIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionClaimDeletionAttemptIntentRecordKey(event.operationId, event.attemptOrdinal)
+    }),
+    CompletionClaimDeleted: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionClaimDeletedRecordKey(event.operationId)
+    }),
+    IntegrationFinalitySettled: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationFinalitySettledRecordKey(event.claim.promotionCorrelation.requestId)
+    }),
+    TaskTrackerReadIntentRecorded: (event) =>
+      operationEvent({
         expectedKey: intentRecordKey(event.operation.operationId),
         operationId: event.operation.operationId,
         requiredOperationIds: event.operation.predecessorOperationIds
-      })
-    case "GitReadIntentRecorded":
-      return operationEvent({
+      }),
+    GitReadIntentRecorded: (event) =>
+      operationEvent({
         expectedKey: intentRecordKey(event.operation.operationId),
         operationId: event.operation.operationId,
         plannedAttempt: event.operation.plannedAttempt,
         requiredOperationIds: event.operation.predecessorOperationIds
-      })
-    case "PlannedAttemptWorktreeObserved":
-      return operationEvent({
+      }),
+    PlannedAttemptWorktreeObserved: (event) =>
+      operationEvent({
         expectedKey: outcomeRecordKey(event.operationId),
         operationId: event.operationId,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
         requiredPredecessorKinds: ["GitReadIntentRecorded"]
-      })
-    case "TargetLineageObserved":
-      return operationEvent({
+      }),
+    TargetLineageObserved: (event) =>
+      operationEvent({
         expectedKey: outcomeRecordKey(event.operationId),
         operationId: event.operationId,
         plannedAttempt: event.plannedAttempt,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
         requiredPredecessorKinds: ["GitReadIntentRecorded"]
-      })
-    case "TaskTrackerFactsObserved":
-      return operationEvent({
+      }),
+    TaskTrackerFactsObserved: (event) =>
+      operationEvent({
         expectedKey: outcomeRecordKey(event.operationId),
         operationId: event.operationId,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
         requiredPredecessorKinds: ["TaskTrackerReadIntentRecorded"]
-      })
-    case "TaskClaimAcquisitionIntended":
-      return operationEvent({
+      }),
+    TaskClaimAcquisitionIntended: (event) =>
+      operationEvent({
         expectedKey: intentRecordKey(event.operation.acquisition.operationId),
         operationId: event.operation.acquisition.operationId,
         relatedOperationIds: [event.operation.acquisition.operationId],
         requiredOperationIds: event.operation.predecessorOperationIds
-      })
-    case "TaskClaimAcquired":
-      return operationEvent({
+      }),
+    TaskClaimAcquired: (event) =>
+      operationEvent({
         expectedKey: outcomeRecordKey(event.claim.operationId),
         operationId: event.claim.operationId,
         relatedOperationIds: [event.claim.operationId],
         requiredOperationIds: [event.claim.operationId],
         requiredPredecessorKey: intentRecordKey(event.claim.operationId),
         requiredPredecessorKinds: ["TaskClaimAcquisitionIntended"]
-      })
-    case "TaskClaimAcquisitionRejected":
-      return operationEvent({
+      }),
+    TaskClaimAcquisitionRejected: (event) =>
+      operationEvent({
         expectedKey: outcomeRecordKey(event.operationId),
         operationId: event.operationId,
         relatedOperationIds: [event.operationId, event.observed.operationId],
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
         requiredPredecessorKinds: ["TaskClaimAcquisitionIntended"]
-      })
-    case "TaskClaimReleaseIntended":
-      return operationEvent({
+      }),
+    TaskClaimReleaseIntended: (event) =>
+      operationEvent({
         expectedKey: intentRecordKey(event.operation.release.operationId),
         operationId: event.operation.release.operationId,
         relatedOperationIds: [event.operation.release.operationId, event.operation.release.claim.operationId],
         requiredOperationIds: event.operation.predecessorOperationIds
-      })
-    case "TaskClaimReleased":
-      return operationEvent({
+      }),
+    TaskClaimReleased: (event) =>
+      operationEvent({
         expectedKey: outcomeRecordKey(event.release.operationId),
         operationId: event.release.operationId,
         relatedOperationIds: [event.release.operationId, event.release.claim.operationId],
         requiredOperationIds: [event.release.operationId],
         requiredPredecessorKey: intentRecordKey(event.release.operationId),
         requiredPredecessorKinds: ["TaskClaimReleaseIntended"]
-      })
-    case "TaskAttemptPlanned":
-      return operationEvent({
+      }),
+    TaskAttemptPlanned: (event) =>
+      operationEvent({
         expectedKey: attemptPlanRecordKey(event.operation.plannedAttempt.attemptId),
         operationId: event.operation.operationId,
         plannedAttempt: event.operation.plannedAttempt,
         requiredOperationIds: event.operation.predecessorOperationIds
-      })
-    case "TaskWorktreeReconciliationIntended":
-      return operationEvent({
+      }),
+    TaskWorktreeReconciliationIntended: (event) =>
+      operationEvent({
         expectedKey: intentRecordKey(event.operation.operationId),
         operationId: event.operation.operationId,
         plannedAttempt: event.operation.plannedAttempt,
         requiredOperationIds: event.operation.predecessorOperationIds
-      })
-    case "TaskWorktreeReady":
-      return operationEvent({
+      }),
+    TaskWorktreeReady: (event) =>
+      operationEvent({
         expectedKey: outcomeRecordKey(event.operationId),
         operationId: event.operationId,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
         requiredPredecessorKinds: ["TaskWorktreeReconciliationIntended"]
       })
-  }
-}
+  })
+)
 
 /** Operation identity whose initiating journal fact has already been accepted. */
 export const acceptedOperationIdOf = (event: WorkflowJournalEvent): OperationId | undefined => {

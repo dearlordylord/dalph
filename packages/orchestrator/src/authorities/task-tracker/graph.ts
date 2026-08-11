@@ -112,6 +112,17 @@ const stronglyConnectedComponents = (
   const onStack = new Set<TaskId>()
   const components: Array<ReadonlyArray<TaskId>> = []
 
+  const recordComponent = (rootTaskId: TaskId): void => {
+    const component: Array<TaskId> = []
+    while (stack.length > 0) {
+      const member = Option.getOrThrow(Option.fromUndefinedOr(stack.pop()))
+      onStack.delete(member)
+      component.push(member)
+      if (member === rootTaskId) break
+    }
+    if (component.length > 1) components.push(sorted(component))
+  }
+
   const visit = (taskId: TaskId): void => {
     const index = nextIndex++
     indexes.set(taskId, index)
@@ -138,14 +149,7 @@ const stronglyConnectedComponents = (
 
     if (getMapValueOrThrow(lowLinks, taskId) !== getMapValueOrThrow(indexes, taskId)) return
 
-    const component: Array<TaskId> = []
-    while (stack.length > 0) {
-      const member = Option.getOrThrow(Option.fromUndefinedOr(stack.pop()))
-      onStack.delete(member)
-      component.push(member)
-      if (member === taskId) break
-    }
-    if (component.length > 1) components.push(sorted(component))
+    recordComponent(taskId)
   }
 
   for (const taskId of sorted(HashMap.keys(tasks))) {
@@ -155,6 +159,64 @@ const stronglyConnectedComponents = (
   return components
 }
 
+const collectTaskRecords = (
+  records: ReadonlyArray<TrackerTask>,
+  issues: Array<ProjectionIssue>
+): Map<TaskId, TrackerTask> => {
+  const recordsById = new Map<TaskId, TrackerTask>()
+  for (const record of records) {
+    if (recordsById.has(record.id)) {
+      issues.push(ProjectionIssue.cases.DuplicateTask.make({ taskId: record.id }))
+    } else {
+      recordsById.set(record.id, record)
+    }
+  }
+  return recordsById
+}
+
+const validatePrerequisites = (
+  record: TrackerTask,
+  recordsById: ReadonlyMap<TaskId, TrackerTask>,
+  issues: Array<ProjectionIssue>
+): void => {
+  const prerequisiteIds = [...record.prerequisiteIds].sort(compareTaskIds)
+  for (const [index, prerequisite] of prerequisiteIds.entries()) {
+    if (prerequisite === prerequisiteIds[index - 1]) {
+      issues.push(ProjectionIssue.cases.DuplicatePrerequisite.make({ dependant: record.id, prerequisite }))
+      continue
+    }
+    if (prerequisite === record.id) {
+      issues.push(ProjectionIssue.cases.SelfPrerequisite.make({ taskId: record.id }))
+    } else if (!recordsById.has(prerequisite)) {
+      issues.push(ProjectionIssue.cases.MissingPrerequisite.make({ dependant: record.id, prerequisite }))
+    }
+  }
+}
+
+const validateParent = (
+  record: TrackerTask,
+  recordsById: ReadonlyMap<TaskId, TrackerTask>,
+  issues: Array<ProjectionIssue>
+): void => {
+  if (record.parentTaskId === record.id) {
+    issues.push(ProjectionIssue.cases.SelfParent.make({ taskId: record.id }))
+  } else if (record.parentTaskId !== null && !recordsById.has(record.parentTaskId)) {
+    issues.push(ProjectionIssue.cases.MissingParent.make({ child: record.id, parent: record.parentTaskId }))
+  }
+}
+
+const taskProjectionsFrom = (recordsById: ReadonlyMap<TaskId, TrackerTask>): HashMap.HashMap<TaskId, TaskProjection> =>
+  HashMap.fromIterable(
+    [...recordsById].map(([taskId, record]) => [
+      taskId,
+      {
+        lifecycle: record.lifecycle,
+        parentTaskId: record.parentTaskId,
+        prerequisiteIds: HashSet.fromIterable(record.prerequisiteIds)
+      }
+    ])
+  )
+
 export class TaskDagSnapshot {
   private constructor(
     readonly revision: TrackerRevision,
@@ -163,53 +225,18 @@ export class TaskDagSnapshot {
 
   static project(decoded: TrackerSnapshot): ProjectionResult {
     const issues: Array<ProjectionIssue> = []
-    const recordsById = new Map<TaskId, TrackerTask>()
     const records = [...decoded.tasks].sort((left, right) => {
       const idOrder = compareTaskIds(left.id, right.id)
       return idOrder === 0 ? compareTrackerTasks(left, right) : idOrder
     })
+    const recordsById = collectTaskRecords(records, issues)
 
     for (const record of records) {
-      if (recordsById.has(record.id)) {
-        issues.push(ProjectionIssue.cases.DuplicateTask.make({ taskId: record.id }))
-      } else {
-        recordsById.set(record.id, record)
-      }
+      validatePrerequisites(record, recordsById, issues)
+      validateParent(record, recordsById, issues)
     }
 
-    for (const record of records) {
-      const taskId = record.id
-      const prerequisiteIds = [...record.prerequisiteIds].sort(compareTaskIds)
-      let previous: TaskId | undefined
-
-      for (const prerequisite of prerequisiteIds) {
-        if (prerequisite === previous) {
-          issues.push(ProjectionIssue.cases.DuplicatePrerequisite.make({ dependant: taskId, prerequisite }))
-          continue
-        }
-        previous = prerequisite
-        if (prerequisite === taskId) {
-          issues.push(ProjectionIssue.cases.SelfPrerequisite.make({ taskId }))
-        } else if (!recordsById.has(prerequisite)) {
-          issues.push(ProjectionIssue.cases.MissingPrerequisite.make({ dependant: taskId, prerequisite }))
-        }
-      }
-
-      if (record.parentTaskId === taskId) {
-        issues.push(ProjectionIssue.cases.SelfParent.make({ taskId }))
-      } else if (record.parentTaskId !== null && !recordsById.has(record.parentTaskId)) {
-        issues.push(ProjectionIssue.cases.MissingParent.make({ child: taskId, parent: record.parentTaskId }))
-      }
-    }
-
-    let tasks = HashMap.empty<TaskId, TaskProjection>()
-    for (const [taskId, record] of recordsById) {
-      tasks = HashMap.set(tasks, taskId, {
-        lifecycle: record.lifecycle,
-        parentTaskId: record.parentTaskId,
-        prerequisiteIds: HashSet.fromIterable(record.prerequisiteIds)
-      })
-    }
+    const tasks = taskProjectionsFrom(recordsById)
 
     issues.push(
       ...stronglyConnectedComponents(tasks, (_taskId, projection) => projection.prerequisiteIds).map((taskIds) =>
