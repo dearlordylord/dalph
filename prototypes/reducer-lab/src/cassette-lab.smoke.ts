@@ -751,6 +751,55 @@ await scenario("explains restart continuity at the first later activation bounda
   )
 })
 
+await scenario("shows integration order separately from task-work capacity", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) =>
+    catalogKey === "authored:acceptedResultRestartsIntoIntegration"
+  )
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The accepted-result integration fixture is missing")
+  }
+  const awaitingIndex = result.deliveryFrames.findIndex(({ integrationOrder }) =>
+    integrationOrder.awaitingResponsibility.length === 1
+  )
+  const queuedIndex = result.deliveryFrames.findIndex(({ integrationOrder }) =>
+    integrationOrder.responsibilities.some(({ state }) => state === "QueuedBeforeCutoff")
+  )
+  const startedIndex = result.deliveryFrames.findIndex(({ integrationOrder }) =>
+    integrationOrder.responsibilities.some(({ state }) => state === "StartedPastCutoff")
+  )
+  if (awaitingIndex < 0 || queuedIndex < 0 || startedIndex < 0) {
+    throw new Error("The accepted, queued, and started integration frames are incomplete")
+  }
+
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
+  if (timeline === null) throw new Error("The integration delivery timeline is missing")
+
+  chooseOption(timeline, String(awaitingIndex))
+  const order = document.querySelector("[data-role='delivery-integration-order']")
+  assert(order?.textContent?.includes("0 ordered · 1 awaiting responsibility") === true, "An accepted result must remain outside integration order until its responsibility is durable")
+  assert(order?.textContent?.includes("Accepted results not ordered yet") === true, "The waiting result must not receive an invented position")
+  assert(order?.textContent?.includes("accepted commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") === true, "The waiting result must retain its exact commit")
+
+  chooseOption(timeline, String(queuedIndex))
+  assert(order?.textContent?.includes("#1 · Task A · queued before integration cutoff") === true, "The durable responsibility must expose its target-relative position")
+  assert(order?.textContent?.includes("/dalph/cassettes/integration.git · refs/heads/master") === true, "Integration order must be scoped to the exact repository/ref target")
+  assert(order?.textContent?.includes(`Run ${result.runId} · attempt attempt:A:0`) === true, "Integration order must retain its exact Run and attempt")
+
+  chooseOption(timeline, String(startedIndex))
+  assert(order?.textContent?.includes("started past integration cutoff at journal") === true, "The durable cutoff must replace the queued state")
+  assert(order?.textContent?.includes("not a persisted queue row or proof that this process holds") === true, "Integration order must not claim process-local ownership")
+  assert(
+    document.querySelector("[data-role='delivery-capacity-positions']")?.textContent?.includes("held of capacity") === true,
+    "Task-work capacity must remain a separate visible resource"
+  )
+})
+
 await scenario("separates every coordinator activation in a multi-restart delivery timeline", async () => {
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) =>

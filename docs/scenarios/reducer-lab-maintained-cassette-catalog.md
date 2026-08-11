@@ -757,6 +757,73 @@ task whose exact facts are correlated below.
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.
 
+## A maintainer reads the journal-derived integration order beside task-work capacity
+
+### Starting situation and trigger
+
+A Dalph maintainer selects the maintained authored cassette whose executor
+returns an accepted Git commit and whose production runner carries that result
+across coordinator process loss. The exact executor report is already durable
+before Dalph records an integration responsibility for the configured
+repository/ref target. In later frames the same responsibility crosses the
+durable integration-start cutoff. Another production FIFO test supplies two
+same-target responsibilities so their relative order is not inferred from a
+single-item example.
+
+The maintainer runs the cassette and inspects delivery publications beside the
+task-work capacity strip. No person asks Git or the tracker to change anything
+merely by opening this view. The Lab receives the same immutable production
+publication it already uses for graph, ticket, responsibility, and settlement
+evidence.
+
+### Projection and visible result
+
+For each frame, the Lab projects every exact queued or started integration
+responsibility while its production value remains typed. It groups entries by
+exact repository/ref target and orders each group by the responsibility's
+journal position. Each entry names its target-relative position, task, Run,
+attempt, accepted commit, durable queued position, and whether it is still
+queued before the cutoff or has started past the cutoff. An accepted result
+whose durable integration responsibility has not yet been recorded is shown
+separately as awaiting order and receives no invented queue position.
+
+This **integration order** is the maintainer-facing merge-queue view. It is a
+pure projection, not a second queue authority: Dalph writes no queue row,
+ordinal, timestamp, or completed-ID set. The process-local integration-target
+position is also not reconstructed from this order. A started responsibility
+therefore does not claim that the current process holds the target resource;
+the existing action-planning evidence remains the place to inspect acquire,
+use-held, and release requirements.
+
+When no accepted result or integration responsibility exists, the compact
+empty state says so instead of presenting task-work capacity as if it were the
+whole delivery pipeline. When the coordinator dies and the cassette is rerun,
+the journal-derived order remains the same; the browser performs no external
+mutation and has no ambiguous response to retry.
+
+The Lab must not sort by graph order, task ID, DOM arrival, or a fabricated
+queue ordinal; put an accepted-but-not-journaled result into the ordered list;
+equate integration order with task-work capacity; or display a started item as
+proof of current process-local target ownership.
+
+### Acceptance-test mapping
+
+- Existing production test `preserves same-target order while a blocker wait
+  leaves another target usable` proves that the journal-derived admission
+  order prevents same-target leapfrogging while another target may proceed.
+- `projects exact integration order from typed delivery obligations` checks
+  queued, started, and accepted-awaiting-responsibility frame evidence without
+  reparsing diagnostic JSON or inventing an ordinal.
+- `shows integration order separately from task-work capacity` renders the
+  maintained cassette's accepted-but-not-ordered, queued, and started frames,
+  proves their journal positions and exact correlations, and keeps the
+  process-local ownership disclaimer visible. The production FIFO test above
+  owns the multiple-same-target ordering claim.
+- The real-browser checkpoint `shows the accepted result enter and start its
+  journal-derived integration order` drives the maintained accepted-result
+  cassette through the served application and checks the waiting, queued, and
+  started visible states.
+
 ## A maintainer inspects continuation authorization in the selected recovery cassette
 
 ### Starting situation and trigger

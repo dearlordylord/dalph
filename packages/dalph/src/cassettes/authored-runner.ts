@@ -3,6 +3,7 @@ import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, type
 import {
   type AttemptId,
   GitCommitSha,
+  type IntegrationTarget,
   type PlannedAttemptExecutorReport,
   type PlannedTaskAttempt,
   type RunId,
@@ -129,6 +130,34 @@ interface AuthoredObligationDiagnostic extends AuthoredTaggedDiagnostic {
   readonly summary: string
 }
 
+export interface AuthoredIntegrationOrder {
+  /** Accepted executor results whose durable integration responsibility has not yet been recorded. */
+  readonly awaitingResponsibility: ReadonlyArray<{
+    readonly taskId: TaskId
+    readonly runId: RunId
+    readonly attemptId: AttemptId
+    readonly acceptedCommit: GitCommitSha
+    readonly terminalAt: JournalPosition
+  }>
+  /** Outstanding durable responsibilities in their exact journal order. */
+  readonly responsibilities: ReadonlyArray<AuthoredIntegrationOrderResponsibility>
+}
+
+interface AuthoredIntegrationOrderResponsibilityBase {
+  readonly taskId: TaskId
+  readonly runId: RunId
+  readonly attemptId: AttemptId
+  readonly acceptedCommit: GitCommitSha
+  readonly integrationTarget: IntegrationTarget
+  readonly queuedAt: JournalPosition
+}
+
+type AuthoredIntegrationOrderResponsibility = AuthoredIntegrationOrderResponsibilityBase &
+  (
+    | { readonly state: "QueuedBeforeCutoff" }
+    | { readonly state: "StartedPastCutoff"; readonly startedAt: JournalPosition }
+  )
+
 /** Zero-based count of authored interactions consumed when a production delivery publication was captured. */
 const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
   Schema.brand("AuthoredStoryPosition")
@@ -165,6 +194,8 @@ export interface AuthoredDeliveryFrame {
     readonly runId: RunId
     readonly attemptId: AttemptId
   }>
+  /** Journal-derived same-target FIFO input; never a persisted queue row or process-local target lease. */
+  readonly integrationOrder: AuthoredIntegrationOrder
   readonly frontier: ReadonlyArray<
     | {
         readonly taskId: TaskId
@@ -227,6 +258,50 @@ const authoredTaggedDiagnosticOf = (value: { readonly _tag: string }): AuthoredT
 
 type DeliveryObligation = DeliveryConsequences["ticketDeliveries"]["deliveries"][number]["obligations"][number]
 type WorkflowResponsibility = Extract<DeliveryObligation, { readonly _tag: "WorkflowResponsibility" }>["responsibility"]
+
+const authoredOrderedIntegrationResponsibilityOf = (
+  obligation: DeliveryObligation
+): ReadonlyArray<AuthoredIntegrationOrderResponsibility> => {
+  if (obligation._tag !== "QueuedIntegration" && obligation._tag !== "StartedIntegration") return []
+  const responsibility = obligation.responsibility
+  const base: AuthoredIntegrationOrderResponsibilityBase = {
+    acceptedCommit: responsibility.acceptedResult.commit,
+    attemptId: responsibility.plannedAttempt.attemptId,
+    integrationTarget: responsibility.integrationTarget,
+    queuedAt: responsibility.queuedAt,
+    runId: responsibility.plannedAttempt.runId,
+    taskId: responsibility.plannedAttempt.taskId
+  }
+  return responsibility._tag === "StartedIntegrationResponsibility"
+    ? [{ ...base, startedAt: responsibility.startedAt, state: "StartedPastCutoff" }]
+    : [{ ...base, state: "QueuedBeforeCutoff" }]
+}
+
+const authoredIntegrationOrderOf = (
+  deliveries: DeliveryConsequences["ticketDeliveries"]["deliveries"]
+): AuthoredIntegrationOrder => {
+  const obligations = deliveries.flatMap(({ obligations }) => obligations)
+  return {
+    awaitingResponsibility: obligations
+      .flatMap((obligation) =>
+        obligation._tag === "AcceptedAwaitingIntegration"
+          ? [
+              {
+                acceptedCommit: obligation.accepted.acceptedResult.commit,
+                attemptId: obligation.accepted.plannedAttempt.attemptId,
+                runId: obligation.accepted.plannedAttempt.runId,
+                taskId: obligation.accepted.plannedAttempt.taskId,
+                terminalAt: obligation.accepted.terminalAt
+              }
+            ]
+          : []
+      )
+      .toSorted((left, right) => left.terminalAt - right.terminalAt),
+    responsibilities: obligations
+      .flatMap(authoredOrderedIntegrationResponsibilityOf)
+      .toSorted((left, right) => left.queuedAt - right.queuedAt)
+  }
+}
 
 const authoredWorkflowResponsibilityCorrelation = (
   responsibility: WorkflowResponsibility
@@ -518,6 +593,7 @@ const authoredDeliveryFrameOf = (
       runId: correlation.runId,
       attemptId: correlation.attemptId
     })),
+    integrationOrder: authoredIntegrationOrderOf(consequences.ticketDeliveries.deliveries),
     frontier: consequences.frontier.standings.map((standing) =>
       standing._tag === "Eligible"
         ? { taskId: standing.taskId, standing: standing._tag, taskRevision: standing.taskRevision, reasons: [] }

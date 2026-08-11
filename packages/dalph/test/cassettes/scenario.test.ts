@@ -1396,6 +1396,47 @@ it.effect("continues an accepted result after process death and crosses its inte
   })
 )
 
+it.effect("projects exact integration order from typed delivery obligations", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(acceptedResultRestartsIntoIntegrationAuthoredCassette)
+    const frames = run.deliveryFrames
+    const awaiting = frames.find(({ integrationOrder }) => integrationOrder.awaitingResponsibility.length > 0)
+    const queued = frames.find(({ integrationOrder }) =>
+      integrationOrder.responsibilities.some(({ state }) => state === "QueuedBeforeCutoff")
+    )
+    const started = frames.find(({ integrationOrder }) =>
+      integrationOrder.responsibilities.some(({ state }) => state === "StartedPastCutoff")
+    )
+
+    expect(awaiting?.integrationOrder.awaitingResponsibility).toContainEqual({
+      acceptedCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      attemptId: "attempt:A:0",
+      runId: run.runId,
+      taskId: "A",
+      terminalAt: expect.any(Number)
+    })
+    expect(queued?.integrationOrder.responsibilities).toContainEqual({
+      acceptedCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      attemptId: "attempt:A:0",
+      integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
+      queuedAt: expect.any(Number),
+      runId: run.runId,
+      state: "QueuedBeforeCutoff",
+      taskId: "A"
+    })
+    expect(started?.integrationOrder.responsibilities).toContainEqual({
+      acceptedCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      attemptId: "attempt:A:0",
+      integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
+      queuedAt: expect.any(Number),
+      runId: run.runId,
+      startedAt: expect.any(Number),
+      state: "StartedPastCutoff",
+      taskId: "A"
+    })
+  })
+)
+
 it.effect("rejects every mismatched candidate report expectation during reconstruction", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateConflictRecovery)

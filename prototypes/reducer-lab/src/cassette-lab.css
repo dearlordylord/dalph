@@ -246,6 +246,7 @@ dd {
 }
 
 .delivery-capacity-positions,
+.delivery-integration-order,
 .delivery-off-graph-responsibilities {
   border: 1px solid #b8afa1;
   border-radius: 0.45rem;
@@ -257,12 +258,26 @@ dd {
   background: #eef3f6;
 }
 
+.delivery-integration-order {
+  background: #edf3ea;
+  border-color: #789174;
+}
+
 .delivery-capacity-positions h5,
+.delivery-integration-order h5,
 .delivery-off-graph-responsibilities h5 {
   margin: 0 0 0.25rem;
 }
 
+.delivery-integration-order h6 {
+  font-size: 0.8rem;
+  margin: 0.65rem 0 0.25rem;
+  overflow-wrap: anywhere;
+}
+
 .delivery-capacity-explanation,
+.delivery-integration-order-explanation,
+.delivery-integration-order-empty,
 .delivery-off-graph-responsibilities p {
   color: #4f585d;
   font-size: 0.78rem;
@@ -270,6 +285,8 @@ dd {
 }
 
 .delivery-capacity-position-list,
+.delivery-integration-order ol,
+.delivery-integration-order ul,
 .delivery-off-graph-responsibilities ul {
   display: flex;
   flex-wrap: wrap;
@@ -280,6 +297,7 @@ dd {
 }
 
 .delivery-capacity-position-list li,
+.delivery-integration-order li,
 .delivery-off-graph-responsibilities li {
   background: #fff;
   border: 2px double #355a78;
@@ -289,6 +307,20 @@ dd {
   min-width: 0;
   overflow-wrap: anywhere;
   padding: 0.35rem 0.6rem;
+}
+
+.delivery-integration-order ol,
+.delivery-integration-order ul {
+  display: grid;
+}
+
+.delivery-integration-order ol li {
+  border-color: #52704f;
+}
+
+.delivery-integration-order ul li {
+  border-color: #9b7410;
+  border-style: dashed;
 }
 
 .delivery-capacity-position-list .available-capacity-position {

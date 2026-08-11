@@ -361,6 +361,75 @@ const renderTaskWorkCapacity = (parent: HTMLElement, frame: AuthoredDeliveryFram
   parent.append(positions)
 }
 
+const integrationTargetKey = (entry: AuthoredDeliveryFrame["integrationOrder"]["responsibilities"][number]): string =>
+  JSON.stringify([entry.integrationTarget.repository, entry.integrationTarget.ref])
+
+/**
+ * Maintainer-facing merge order derived from durable integration
+ * responsibilities. It deliberately does not infer the process-local target
+ * holder, whose acquire/use/release requirements remain in action planning.
+ */
+const renderIntegrationOrder = (parent: HTMLElement, frame: AuthoredDeliveryFrame): void => {
+  parent.replaceChildren()
+  parent.dataset.role = "delivery-integration-order"
+  const { awaitingResponsibility, responsibilities } = frame.integrationOrder
+  appendText(
+    parent,
+    "h5",
+    `Integration order · ${responsibilities.length} ordered · ${awaitingResponsibility.length} awaiting responsibility`
+  )
+  appendText(
+    parent,
+    "p",
+    "Journal position orders each repository/ref target. This is the merge-queue view, not a persisted queue row or proof that this process holds the integration-target position.",
+    "delivery-integration-order-explanation"
+  )
+  if (responsibilities.length === 0 && awaitingResponsibility.length === 0) {
+    appendText(parent, "p", "No accepted result has entered integration order in this frame.", "delivery-integration-order-empty")
+    return
+  }
+
+  if (awaitingResponsibility.length > 0) {
+    appendText(parent, "h6", "Accepted results not ordered yet")
+    const waiting = document.createElement("ul")
+    for (const entry of awaitingResponsibility) {
+      const item = appendText(
+        waiting,
+        "li",
+        `Task ${entry.taskId} · accepted commit ${entry.acceptedCommit} · Run ${entry.runId} · attempt ${entry.attemptId} · terminal journal ${entry.terminalAt} · awaiting durable integration responsibility`
+      )
+      item.dataset.taskId = entry.taskId
+    }
+    parent.append(waiting)
+  }
+
+  const entriesByTarget = new Map<string, Array<(typeof responsibilities)[number]>>()
+  for (const entry of responsibilities) {
+    const key = integrationTargetKey(entry)
+    entriesByTarget.set(key, [...entriesByTarget.get(key) ?? [], entry])
+  }
+  for (const entries of entriesByTarget.values()) {
+    const first = entries[0]
+    if (first === undefined) continue
+    appendText(parent, "h6", `${first.integrationTarget.repository} · ${first.integrationTarget.ref}`)
+    const ordered = document.createElement("ol")
+    for (const [index, entry] of entries.entries()) {
+      const state = entry.state === "QueuedBeforeCutoff"
+        ? "queued before integration cutoff"
+        : `started past integration cutoff at journal ${entry.startedAt}`
+      const item = appendText(
+        ordered,
+        "li",
+        `#${index + 1} · Task ${entry.taskId} · ${state} · queued journal ${entry.queuedAt} · accepted commit ${entry.acceptedCommit} · Run ${entry.runId} · attempt ${entry.attemptId}`
+      )
+      item.dataset.taskId = entry.taskId
+      item.dataset.queuedAt = String(entry.queuedAt)
+      item.dataset.state = entry.state
+    }
+    parent.append(ordered)
+  }
+}
+
 const offGraphReason = (
   frame: AuthoredDeliveryFrame,
   taskId: string,
@@ -511,6 +580,9 @@ const frameChangeSummary = (
     changes.push(`quiescence ${previous.quiescence._tag} → ${frame.quiescence._tag}`)
   }
   if (previous.capacity !== frame.capacity) changes.push(`capacity ${previous.capacity} → ${frame.capacity}`)
+  if (JSON.stringify(previous.integrationOrder) !== JSON.stringify(frame.integrationOrder)) {
+    changes.push("integration order changed")
+  }
   if (previous.acceptedAt !== frame.acceptedAt) {
     changes.push(`facts accepted through ${previous.acceptedAt ?? "none"} → ${frame.acceptedAt ?? "none"}`)
   }
@@ -756,6 +828,8 @@ const renderTimeline = (
   const change = appendText(frameHost, "p", "", "delivery-frame-change")
   const capacityPositions = document.createElement("section")
   capacityPositions.className = "delivery-capacity-positions"
+  const integrationOrder = document.createElement("section")
+  integrationOrder.className = "delivery-integration-order"
   const offGraphResponsibilities = document.createElement("aside")
   offGraphResponsibilities.className = "delivery-off-graph-responsibilities"
   const restart = appendText(frameHost, "p", "", "delivery-restart-boundary")
@@ -769,7 +843,14 @@ const renderTimeline = (
   const taskFactsSummary = appendText(taskFactsDisclosure, "summary", "All task delivery facts")
   const taskFactsHost = document.createElement("div")
   taskFactsDisclosure.append(taskFactsHost)
-  frameHost.prepend(graphViewControls, capacityPositions, graph, offGraphResponsibilities, settlementCoverage)
+  frameHost.prepend(
+    graphViewControls,
+    capacityPositions,
+    graph,
+    integrationOrder,
+    offGraphResponsibilities,
+    settlementCoverage
+  )
   settlementCoverage.after(readingGuide)
   frameHost.append(factsHost, taskFactsDisclosure)
   let frames = initialFrames
@@ -837,6 +918,7 @@ const renderTimeline = (
     if (frame === undefined) return
     graph.projection = frameProjection(row, frame, index)
     renderTaskWorkCapacity(capacityPositions, frame)
+    renderIntegrationOrder(integrationOrder, frame)
     renderOffGraphResponsibilities(offGraphResponsibilities, frame)
     resetGraphView.disabled = frame.graph._tag !== "Established"
     change.textContent = frameChangeSummary(frames[index - 1], frame, row)

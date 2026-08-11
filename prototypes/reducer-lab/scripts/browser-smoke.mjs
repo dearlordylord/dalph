@@ -5,6 +5,7 @@ const labUrl = process.env.REDUCER_LAB_URL ?? "http://determined_johnson.orb.loc
 const terminalTimeoutMs = 180_000
 const insecureOriginCassette = "authored:candidateCorrectionAfterUnreadableGit"
 const framedCassette = "authored:dependentTasksCompleteInOneRun"
+const acceptedIntegrationCassette = "authored:acceptedResultRestartsIntoIntegration"
 const linkedDeliveryStoryCassette = "authored:deliveryInvariantStory"
 
 const browser = await chromium.launch({ headless: true })
@@ -329,6 +330,46 @@ try {
   )
   assert.equal(disabledCursor, "not-allowed")
   console.log("✓ keeps exactly one keyboard playback handler after rerun")
+
+  await page.reload({ waitUntil: "networkidle" })
+  await selector.selectOption(acceptedIntegrationCassette)
+  await page.getByRole("button", { name: /Run selected cassette:/u }).click()
+  await page.waitForFunction(
+    (catalogKey) => document.querySelector("#selected-cassette")?.getAttribute("data-catalog-key") === catalogKey
+      && document.querySelector("#selected-cassette")?.getAttribute("data-state") === "Completed",
+    acceptedIntegrationCassette,
+    { timeout: terminalTimeoutMs }
+  )
+  const integrationFrameSelector = page.getByLabel("Delivery frame")
+  const integrationOrderFrames = await page.evaluate(() => {
+    const select = document.querySelector('[data-role="delivery-workbench"] select')
+    if (!(select instanceof HTMLSelectElement)) return []
+    return [...select.options].map((option) => {
+      select.value = option.value
+      select.dispatchEvent(new Event("change"))
+      return {
+        capacity: document.querySelector('[data-role="delivery-capacity-positions"]')?.textContent ?? "",
+        order: document.querySelector('[data-role="delivery-integration-order"]')?.textContent ?? "",
+        value: option.value
+      }
+    })
+  })
+  assert.ok(integrationOrderFrames.some(({ order }) => order.includes("0 ordered · 1 awaiting responsibility")))
+  assert.ok(integrationOrderFrames.some(({ order }) =>
+    order.includes("#1 · Task A · queued before integration cutoff")
+    && order.includes("/dalph/cassettes/integration.git · refs/heads/master")
+  ))
+  const startedIntegrationFrame = integrationOrderFrames.find(({ order }) =>
+    order.includes("#1 · Task A · started past integration cutoff at journal")
+  )
+  assert.ok(startedIntegrationFrame)
+  assert.match(startedIntegrationFrame.order, /not a persisted queue row or proof that this process holds/u)
+  assert.match(startedIntegrationFrame.capacity, /held of capacity 1/u)
+  await integrationFrameSelector.selectOption(startedIntegrationFrame.value)
+  await page.setViewportSize({ width: 390, height: 844 })
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= globalThis.innerWidth))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  console.log("✓ shows the accepted result enter and start its journal-derived integration order")
 
   await page.reload({ waitUntil: "networkidle" })
   await selector.selectOption(linkedDeliveryStoryCassette)
