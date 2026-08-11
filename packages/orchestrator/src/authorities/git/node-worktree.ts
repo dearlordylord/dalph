@@ -110,6 +110,56 @@ export const nodeGitWorktreeLayer = (gitDirectory: GitCommonDirectoryTarget) =>
         return yield* readFailure(plan, result)
       })
 
+      const validateUniqueRegistrations = Effect.fn("GitWorktree.Node.validateUniqueRegistrations")(function* (
+        plan: PlannedTaskAttempt,
+        atPath: ReadonlyArray<WorktreeRecord>,
+        onBranch: ReadonlyArray<WorktreeRecord>
+      ) {
+        if (atPath.length > 1 || onBranch.length > 1) {
+          return yield* new ContradictoryWorktreeState({
+            detail: "Git reported the planned path or branch more than once",
+            worktree: plan.worktree
+          })
+        }
+      })
+
+      const readRegisteredPlannedPath = Effect.fn("GitWorktree.Node.readRegisteredPlannedPath")(function* (
+        plan: PlannedTaskAttempt,
+        pathRecord: WorktreeRecord,
+        branchRecord: WorktreeRecord | undefined
+      ) {
+        if (pathRecord.branch === undefined) {
+          return yield* new ContradictoryWorktreeState({
+            detail: "The planned worktree is detached from every branch",
+            worktree: plan.worktree
+          })
+        }
+        if (pathRecord.branch !== plan.branch) {
+          if (branchRecord !== undefined) {
+            return yield* new CompetingWorktreeRegistrations({
+              observedBranchAtPlannedWorktree: pathRecord.branch,
+              observedHeadAtPlannedWorktree: pathRecord.head,
+              plannedBranch: plan.branch,
+              plannedBranchRegisteredWorktree: branchRecord.worktree,
+              plannedWorktree: plan.worktree
+            })
+          }
+          return yield* new ConflictingWorktreeRegistration({
+            observedBranch: pathRecord.branch,
+            observedHead: pathRecord.head,
+            plannedBranch: plan.branch,
+            worktree: plan.worktree
+          })
+        }
+        yield* proveBase(plan, pathRecord.head)
+        return PlannedWorktreeReady.make({
+          baseSha: plan.baseSha,
+          branch: plan.branch,
+          headSha: pathRecord.head,
+          worktree: plan.worktree
+        })
+      })
+
       const readPlannedWorktree = Effect.fn("GitWorktree.Node.readPlannedWorktree")(function* (
         plan: PlannedTaskAttempt
       ) {
@@ -118,45 +168,10 @@ export const nodeGitWorktreeLayer = (gitDirectory: GitCommonDirectoryTarget) =>
         const records = yield* parseWorktreeRecords(plan, list.stdout)
         const atPath = records.filter((record) => record.worktree === plan.worktree)
         const onBranch = records.filter((record) => record.branch === plan.branch)
-        if (atPath.length > 1 || onBranch.length > 1) {
-          return yield* new ContradictoryWorktreeState({
-            detail: "Git reported the planned path or branch more than once",
-            worktree: plan.worktree
-          })
-        }
+        yield* validateUniqueRegistrations(plan, atPath, onBranch)
         const pathRecord = atPath[0]
         if (pathRecord !== undefined) {
-          if (pathRecord.branch === undefined) {
-            return yield* new ContradictoryWorktreeState({
-              detail: "The planned worktree is detached from every branch",
-              worktree: plan.worktree
-            })
-          }
-          if (pathRecord.branch !== plan.branch) {
-            const branchRecord = onBranch[0]
-            if (branchRecord !== undefined) {
-              return yield* new CompetingWorktreeRegistrations({
-                observedBranchAtPlannedWorktree: pathRecord.branch,
-                observedHeadAtPlannedWorktree: pathRecord.head,
-                plannedBranch: plan.branch,
-                plannedBranchRegisteredWorktree: branchRecord.worktree,
-                plannedWorktree: plan.worktree
-              })
-            }
-            return yield* new ConflictingWorktreeRegistration({
-              observedBranch: pathRecord.branch,
-              observedHead: pathRecord.head,
-              plannedBranch: plan.branch,
-              worktree: plan.worktree
-            })
-          }
-          yield* proveBase(plan, pathRecord.head)
-          return PlannedWorktreeReady.make({
-            baseSha: plan.baseSha,
-            branch: plan.branch,
-            headSha: pathRecord.head,
-            worktree: plan.worktree
-          })
+          return yield* readRegisteredPlannedPath(plan, pathRecord, onBranch[0])
         }
         const branchRecord = onBranch[0]
         if (branchRecord !== undefined) {

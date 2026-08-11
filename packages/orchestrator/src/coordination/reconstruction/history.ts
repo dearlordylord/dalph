@@ -782,7 +782,9 @@ const validateOperationEvent = (
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
-  validateGitReadEvent(record, runId, indexes, issues)
+  recordGitReadIntent(record, indexes)
+  validateWorktreeObservationIntent(record, runId, indexes, issues)
+  validateTargetLineageObservationIntent(record, runId, indexes, issues)
   validateOperationDescriptor(record, runId, indexes, issues)
 }
 
@@ -804,15 +806,18 @@ const validateContinuationAuthorization = (
     semanticIssue(issues, runId, record.position, evaluation.detail)
   }
 }
-const validateGitReadEvent = (
+const recordGitReadIntent = (record: JournalRecord, indexes: FoldIndexes): void => {
+  if (record.event._tag === "GitReadIntentRecorded") {
+    indexes.gitReadIntents.set(record.event.operation.operationId, record.event.operation)
+  }
+}
+
+const validateWorktreeObservationIntent = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
-  if (record.event._tag === "GitReadIntentRecorded") {
-    indexes.gitReadIntents.set(record.event.operation.operationId, record.event.operation)
-  }
   if (record.event._tag === "PlannedAttemptWorktreeObserved") {
     const intent = indexes.gitReadIntents.get(record.event.operationId)
     if (
@@ -827,6 +832,14 @@ const validateGitReadEvent = (
       )
     }
   }
+}
+
+const validateTargetLineageObservationIntent = (
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
   if (record.event._tag === "TargetLineageObserved") {
     const intent = indexes.gitReadIntents.get(record.event.operationId)
     if (
@@ -948,6 +961,18 @@ const validatePlan = (
   indexes.plans.set(plannedAttempt.attemptId, plannedAttempt)
 }
 
+const acquiredClaimMatchesIntent = (
+  acquired: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"],
+  intended: Extract<
+    JournalRecord["event"],
+    { readonly _tag: "TaskClaimAcquisitionIntended" }
+  >["operation"]["acquisition"]
+): boolean =>
+  acquired.operationId === intended.operationId &&
+  acquired.owner === intended.owner &&
+  acquired.taskId === intended.taskId &&
+  acquired.token === intended.token
+
 const validateClaim = (
   record: JournalRecord,
   runId: RunId,
@@ -961,13 +986,7 @@ const validateClaim = (
       event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.operationId === acquired.operationId
   )?.event
   const intended = intent?._tag === "TaskClaimAcquisitionIntended" ? intent.operation.acquisition : undefined
-  if (
-    intended === undefined ||
-    acquired.operationId !== intended.operationId ||
-    acquired.owner !== intended.owner ||
-    acquired.taskId !== intended.taskId ||
-    acquired.token !== intended.token
-  ) {
+  if (intended === undefined || !acquiredClaimMatchesIntent(acquired, intended)) {
     identityIssue(issues, runId, record.position, `acquired task claim contradicts operation ${acquired.operationId}`)
   }
 }
@@ -1362,16 +1381,19 @@ const validateExecutorEvent = (
       )
     }
     indexes.executorReportOrdinals.set(attemptId, event.ordinal)
-    if (!indexes.unsettledExecutorCommands.has(attemptId)) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor report for attempt ${attemptId} has no outstanding command intent`
-      )
-    } else {
-      indexes.unsettledExecutorCommands.delete(attemptId)
+    const settleCommandIntent = () => {
+      if (!indexes.unsettledExecutorCommands.has(attemptId)) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor report for attempt ${attemptId} has no outstanding command intent`
+        )
+      } else {
+        indexes.unsettledExecutorCommands.delete(attemptId)
+      }
     }
+    settleCommandIntent()
     if (indexes.terminalExecutorAttempts.has(attemptId)) {
       semanticIssue(
         issues,
@@ -1380,16 +1402,22 @@ const validateExecutorEvent = (
         `executor report follows the terminal result for attempt ${attemptId}`
       )
     }
-    if (event.report._tag === "Terminal") {
-      indexes.terminalExecutorAttempts.add(attemptId)
-      if (event.report.result._tag === "Accepted") {
-        indexes.acceptedExecutorResults.set(attemptId, event.report.result.acceptedResult)
+    const recordTerminalOutcome = () => {
+      if (event.report._tag === "Terminal") {
+        indexes.terminalExecutorAttempts.add(attemptId)
+        if (event.report.result._tag === "Accepted") {
+          indexes.acceptedExecutorResults.set(attemptId, event.report.result.acceptedResult)
+        }
       }
     }
-    if (event.report._tag === "SafelySuspended") {
-      indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
-      indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
+    const recordSafeSuspension = () => {
+      if (event.report._tag === "SafelySuspended") {
+        indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
+        indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
+      }
     }
+    recordTerminalOutcome()
+    recordSafeSuspension()
   }
   validateResponsibilityBegan()
   validateCommandIntent()
