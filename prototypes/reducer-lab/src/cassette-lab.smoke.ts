@@ -95,7 +95,18 @@ await scenario("captures every authored delivery frame from the real production 
 })
 
 await scenario("shows the staggered double-diamond frontier being consumed on one graph", () => {
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  assert(
+    row?.surface._tag === "AuthoredDeliverySurface"
+      && row.surface.deliveryScope.includes("Focused workflow slice")
+      && row.surface.deliveryScope.includes("tracker success is not proof"),
+    "The linked graph story must expose its focused non-integration claim"
+  )
+  assert(
+    row?.storyName === "scheduler and restart traversal consume a staggered double diamond while X waits for capacity",
+    "The linked graph story title must not claim complete production delivery"
+  )
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The linked story must complete with frames")
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
   const frames = result.deliveryFrames

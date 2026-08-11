@@ -5,10 +5,13 @@ makes each beat's arithmetic checkable. The story is chosen to touch as many of
 `docs/DELIVERY-INVARIANTS.md` as one chronology can.
 
 Both registers are prose. The maintained cassette
-`authored:deliveryInvariantStory` is an executable graph-and-restart slice: one
-real Run consumes the staggered graph A → B+C → D → E+F → H+I → G with X added
+`authored:deliveryInvariantStory` is an executable graph-and-restart slice with
+the typed delivery scope `FocusedWorkflowSlice`: one real Run consumes the staggered
+graph A → B+C → D → E+F → H+I → G with X added
 during process loss between A and G, and reconstructs the exact B and C
-task-work positions before newly observed X can use capacity. The separate
+task-work positions before newly observed X can use capacity. Its coarse
+executor results and later outside tracker-success facts do not claim Dalph
+integrated every task. The separate
 `authored:deliveryFinalitySpine` retains the real A promotion and
 completion-finality chronology. Neither cassette pretends to execute all 22
 beats below. The checked-in manifest maps every beat either to exact maintained

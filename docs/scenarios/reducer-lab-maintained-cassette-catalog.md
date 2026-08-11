@@ -509,8 +509,32 @@ worktree, and integration responsibilities. Terms such as
 `IdentityFreeWorkflowRoute` stay in the secondary exact JSON rather than
 becoming the human action label.
 
-The linked `authored:deliveryInvariantStory` is the real staggered
-double-diamond graph story. Its initial tracker graph is
+The linked `authored:deliveryInvariantStory` is a focused scheduling and
+restart slice over the real production runtime, not the complete graph-delivery
+capstone owned by issue #167. Its typed delivery scope is
+`FocusedWorkflowSlice`. The Lab shows that scope before execution, so a
+maintainer does not have to infer scope from absent integration frames.
+
+The controlled executor reports coarse `Completed` results without accepted
+commits. Later complete tracker reads report successful tasks as outside facts;
+they prove tracker lifecycle and release dependants, but do not prove Dalph
+integrated those tasks. No Git integration, verification, promotion, or
+completion-finality boundary is called in this slice. A coordinator crash does
+not change that scope: restart reconstructs exact executor-work responsibility,
+not integration responsibility. Replaying the cassette repeats the same
+controlled chronology and must not reinterpret tracker success as Dalph
+delivery.
+
+If a maintainer authors a cassette with the typed delivery scope
+`CompleteGraphDelivery`, decoding fails unless every task ever observed in its
+tracker graphs reaches tracker success and has exactly one correlated accepted
+commit, attempt, integration target, candidate, verification, promotion, and
+completion-finality chain. A coarse `Completed` result or an outside tracker
+success cannot pass under that scope. The future issue #167 capstone must use
+this stricter scope; changing the present scope label alone is
+therefore a failing negative control rather than a way to upgrade the story.
+
+The focused slice's initial tracker graph is
 `A -> {B, C} -> D -> {E -> H, F -> I} -> G`, and capacity is two. Production
 first exposes only A in the frontier. A later complete tracker read proves A
 successful and exposes B and C together. Both acquire exact task-work positions
@@ -683,7 +707,8 @@ task whose exact facts are correlated below.
   task-work or integration-target resource requirement, and live-operation
   wait when present while retaining the raw proposal separately.
 - `settles a promoted authored task through the real completion-claim boundary`
-  checks the exact promotion, replacement intent/attempt/outcome, later fresh
+  uses the positive `CompleteGraphDelivery` scope and checks the exact accepted
+  result, promotion, replacement intent/attempt/outcome, later fresh
   successful tracker observation, deletion intent/attempt/outcome, and
   `IntegrationFinalitySettled` order, plus a non-empty production settlement
   and tracker-reflection frame. It also proves the cassette does not fabricate
@@ -695,6 +720,23 @@ task whose exact facts are correlated below.
   → G position chronology. It requires a later successful tracker observation
   before each deeper admission and real executor responsibility plus terminal
   evidence for every task.
+- `rejects a complete graph delivery scope backed only by coarse executor completion`
+  changes only the linked cassette's typed delivery scope and proves schema
+  decoding fails before execution because its coarse results carry neither
+  accepted commits nor exact integration evidence.
+- `rejects a complete graph delivery scope when successful tracker tasks lack Dalph delivery evidence`
+  relabels the seven-task A-finality spine and proves outside tracker success for
+  B through G cannot stand in for their missing accepted-result and finality chains.
+- `rejects a complete graph delivery scope before tracker success or exact finality`
+  checks complete delivery cannot omit orchestration evidence, cannot be claimed
+  without an observed graph task or before that task reaches tracker success,
+  and cannot omit the exact post-success completion-claim deletion response.
+- `rejects broken exact lineage in a complete graph delivery scope`
+  independently breaks the accepted commit, attempt, candidate, and integration
+  target edges, removes the task-to-attempt responsibility or terminal accepted
+  report, and duplicates a candidate stage. A two-task counterexample also tries
+  to assign both tasks the same AttemptId. Each malformed or ambiguous chain
+  fails schema decoding.
 - `preserves the double-diamond middle positions across coordinator restart`
   checks B and C hold exact task-work positions before process loss, the first
   later-activation publications retain the same Run and attempt correlations,
@@ -726,7 +768,8 @@ task whose exact facts are correlated below.
   checks the document's 22 stable beat IDs, exact catalog keys, explicit gap
   reasons, and generated manifest block in both directions.
 - `shows the staggered double-diamond frontier being consumed on one graph`
-  checks the same returned frames through the Lab presentation model, including
+  checks the typed focused-slice scope and the same returned frames through the
+  Lab presentation model, including
   the initial and post-crash topology, X's fresh appearance, every rolling
   frontier/held overlap, reconstructed B/C responsibilities, anonymous capacity
   positions, and the off-graph responsibility rail.
@@ -757,6 +800,9 @@ task whose exact facts are correlated below.
   the B/C attempt correlations and anonymous occupied positions on both sides
   of restart through the actual served application. At phone width it also
   proves the exact restart correlations wrap without widening the document.
+  Before execution it also checks the visible focused-slice explanation says
+  tracker completion may be an outside fact and does not claim complete Dalph
+  integration.
 - `does not fabricate a graph workbench for direct protocol cassettes` checks
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.

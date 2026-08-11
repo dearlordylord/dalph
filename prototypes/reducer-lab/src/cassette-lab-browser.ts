@@ -403,11 +403,14 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     const ownership = appendTextElement(article, "p", "Production runner: ", "group-facts")
     appendTextElement(ownership, "code", row.runnerName)
     ownership.append(` · Available controlled boundaries for this catalog: ${row.controlledBoundaries}`)
+    if (row.surface._tag === "AuthoredDeliverySurface") {
+      appendTextElement(article, "p", row.surface.deliveryScope, "delivery-scope")
+    }
     if (row.catalogKey === "authored:deliveryInvariantStory") {
       appendTextElement(
         article,
         "p",
-        "Delivery-story coverage: the real production runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues.",
+        "Scheduler/restart coverage: the production runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues. Its coarse Completed reports and later tracker-success facts intentionally do not claim accepted-result integration or complete graph delivery.",
         "delivery-story-scope"
       )
     }

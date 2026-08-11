@@ -392,6 +392,14 @@ try {
 
   await page.reload({ waitUntil: "networkidle" })
   await selector.selectOption(linkedDeliveryStoryCassette)
+  assert.match(
+    await page.locator("#selected-cassette .delivery-scope").textContent() ?? "",
+    /Focused workflow slice.*tracker success is not proof/u
+  )
+  assert.match(
+    await page.locator("#selected-cassette .delivery-story-scope").textContent() ?? "",
+    /coarse Completed reports and later tracker-success facts intentionally do not claim accepted-result integration or complete graph delivery/u
+  )
   await page.evaluate(() => {
     globalThis.__linkedDeliveryStoryTrace = []
     document.querySelector("#root")?.addEventListener("dalph-cassette-lab:delivery-frame", () => {

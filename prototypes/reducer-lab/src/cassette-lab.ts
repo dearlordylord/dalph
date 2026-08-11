@@ -11,6 +11,7 @@ import {
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import { maintainedAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/catalog.ts"
 import {
+  renderAuthoredCassetteDeliveryScope,
   renderAuthoredStoryItemLandmark,
   renderAuthoredStoryItemLyric
 } from "../../../packages/dalph/src/cassettes/authored-presentation.ts"
@@ -105,7 +106,11 @@ interface DeclaredTaskGraph {
 }
 
 type CassetteDeliverySurface =
-  | { readonly _tag: "AuthoredDeliverySurface"; readonly declaredGraph: DeclaredTaskGraph }
+  | {
+      readonly _tag: "AuthoredDeliverySurface"
+      readonly declaredGraph: DeclaredTaskGraph
+      readonly deliveryScope: string
+    }
   | { readonly _tag: "DirectProtocolSurface" }
 
 export type CassetteFailureLocation =
@@ -201,6 +206,7 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
   input: cassette,
   surface: {
     _tag: "AuthoredDeliverySurface",
+    deliveryScope: renderAuthoredCassetteDeliveryScope(cassette.deliveryScope),
     declaredGraph: {
       revision: cassette.startingFacts.trackerGraph.revision,
       tasks: cassette.startingFacts.trackerGraph.tasks.map((task) => ({

@@ -1900,15 +1900,17 @@ it.effect("records completion finality after valid candidate verification and pr
   })
 )
 
-it.effect("settles a promoted authored task through the real completion-claim boundary", () =>
-  Effect.gen(function* () {
-    const promoted = maintainedAuthoredCassetteCatalog.targetPromotionSuccess
-    const completedGraph = {
-      revision: "authored-finality-success",
-      tasks: [{ id: "A", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
-    } as const
-    const settledGraph = { revision: "authored-finality-settled", tasks: [] } as const
-    const finalityStory = promoted.story.flatMap(
+const completeSingletonDeliveryCassette = (() => {
+  const promoted = maintainedAuthoredCassetteCatalog.targetPromotionSuccess
+  const completedGraph = {
+    revision: "authored-finality-success",
+    tasks: [{ id: "A", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
+  } as const
+  const settledGraph = { revision: "authored-finality-settled", tasks: [] } as const
+  return Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...promoted,
+    deliveryScope: { _tag: "CompleteGraphDelivery" as const },
+    story: promoted.story.flatMap(
       (item): ReadonlyArray<unknown> =>
         item._tag !== "ExpectedBehavior"
           ? [item]
@@ -1940,8 +1942,12 @@ it.effect("settles a promoted authored task through the real completion-claim bo
               item
             ]
     )
+  })
+})()
 
-    const run = yield* runAuthoredScenarioCassette({ ...promoted, story: finalityStory })
+it.effect("settles a promoted authored task through the real completion-claim boundary", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(completeSingletonDeliveryCassette)
     const tags = run.records.map(({ event }) => event._tag)
     const ordered = [
       "TargetPromotionObservedSuccess",
@@ -3212,6 +3218,7 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
     ]
     const changedMembership = {
       _tag: "AuthoredScenarioCassette",
+      deliveryScope: { _tag: "FocusedWorkflowSlice" },
       name: "a complete refresh removes unstarted C and adds D",
       schemaVersion: 1,
       startingFacts: {
@@ -3388,6 +3395,256 @@ it.effect("keeps the maintained singleton Run active while its tracker task rema
     )
   })
 )
+
+it("rejects a complete graph delivery scope backed only by coarse executor completion", () => {
+  const storyWithClaimedEvidence = maintainedAuthoredCassetteCatalog.deliveryInvariantStory.story.map((item) =>
+    item._tag === "ExpectedBehavior" ? { ...item, orchestration: [], protocol: [] } : item
+  )
+  const claimedCompleteDelivery = {
+    ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
+    deliveryScope: { _tag: "CompleteGraphDelivery" },
+    story: storyWithClaimedEvidence
+  }
+
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(claimedCompleteDelivery)).toThrow(
+    "complete graph delivery requires one accepted commit for every observed tracker task"
+  )
+  expect(maintainedAuthoredCassetteCatalog.deliveryInvariantStory.deliveryScope).toEqual({
+    _tag: "FocusedWorkflowSlice"
+  })
+})
+
+it("rejects a complete graph delivery scope when successful tracker tasks lack Dalph delivery evidence", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.deliveryFinalitySpine,
+      deliveryScope: { _tag: "CompleteGraphDelivery" }
+    })
+  ).toThrow("complete graph delivery requires one accepted commit for every observed tracker task")
+})
+
+it("rejects a complete graph delivery scope before tracker success or exact finality", () => {
+  const withoutOrchestrationEvidence = {
+    ...completeSingletonDeliveryCassette,
+    story: completeSingletonDeliveryCassette.story.map((item) =>
+      item._tag === "ExpectedBehavior" ? { ...item, orchestration: null } : item
+    )
+  }
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutOrchestrationEvidence)).toThrow(
+    "complete graph delivery requires exact orchestration evidence"
+  )
+
+  const withoutObservedTasks = {
+    ...completeSingletonDeliveryCassette,
+    startingFacts: {
+      ...completeSingletonDeliveryCassette.startingFacts,
+      trackerGraph: { ...completeSingletonDeliveryCassette.startingFacts.trackerGraph, tasks: [] }
+    },
+    story: completeSingletonDeliveryCassette.story.map((item) =>
+      item._tag === "TrackerGraphReadReturned" || item._tag === "RunActivationFinalTrackerGraphReadReturned"
+        ? { ...item, graph: { ...item.graph, tasks: [] } }
+        : item
+    )
+  }
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutObservedTasks)).toThrow(
+    "complete graph delivery requires at least one observed tracker task"
+  )
+
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration,
+      deliveryScope: { _tag: "CompleteGraphDelivery" }
+    })
+  ).toThrow("complete graph delivery requires tracker success for every observed task; task A never reached success")
+
+  const withoutDeletion = {
+    ...completeSingletonDeliveryCassette,
+    story: completeSingletonDeliveryCassette.story.filter((item) => item._tag !== "CompletionClaimDeletionApplied")
+  }
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutDeletion)).toThrow(
+    "complete graph delivery requires promotion-bound completion finality for task A"
+  )
+})
+
+it("rejects broken exact lineage in a complete graph delivery scope", () => {
+  const brokenEvidenceCases = [
+    {
+      expected: "complete graph delivery requires an exact accepted-result integration responsibility for task A",
+      tag: "AcceptedResultIntegrationResponsibilityBegan",
+      update: { commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+    },
+    {
+      expected:
+        "complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task A",
+      tag: "AcceptedResultIntegrationStarted",
+      update: { attemptId: "attempt:A:99" }
+    },
+    {
+      expected:
+        "complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task A",
+      tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
+      update: { attemptId: "attempt:A:99" }
+    },
+    {
+      expected:
+        "complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task A",
+      tag: "IntegrationCandidateConstructed",
+      update: { attemptId: "attempt:A:99" }
+    },
+    {
+      expected: "complete graph delivery requires exact candidate verification and promotion lineage for task A",
+      tag: "TargetVerificationPassed",
+      update: { candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+    },
+    {
+      expected:
+        "complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task A",
+      tag: "AcceptedResultIntegrationStarted",
+      update: { integrationTarget: { repository: "/different.git", ref: "refs/heads/main" } }
+    }
+  ] as const
+
+  for (const broken of brokenEvidenceCases) {
+    const cassette = {
+      ...completeSingletonDeliveryCassette,
+      story: completeSingletonDeliveryCassette.story.map((item) =>
+        item._tag !== "ExpectedBehavior" || item.orchestration === null
+          ? item
+          : {
+              ...item,
+              orchestration: item.orchestration.map((evidence) =>
+                evidence._tag === broken.tag ? { ...evidence, ...broken.update } : evidence
+              )
+            }
+      )
+    }
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(cassette)).toThrow(broken.expected)
+  }
+
+  const withoutExecutorResponsibility = {
+    ...completeSingletonDeliveryCassette,
+    story: completeSingletonDeliveryCassette.story.map((item) =>
+      item._tag !== "ExpectedBehavior" || item.orchestration === null
+        ? item
+        : {
+            ...item,
+            orchestration: item.orchestration.filter(
+              (evidence) => evidence._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan"
+            )
+          }
+    )
+  }
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutExecutorResponsibility)).toThrow(
+    "complete graph delivery requires exactly one unambiguous delivery stage for task A"
+  )
+
+  const withoutTerminalAccepted = {
+    ...completeSingletonDeliveryCassette,
+    story: completeSingletonDeliveryCassette.story.map((item) =>
+      item._tag !== "ExpectedBehavior" || item.orchestration === null
+        ? item
+        : {
+            ...item,
+            orchestration: item.orchestration.filter(
+              (evidence) =>
+                evidence._tag !== "PlannedAttemptExecutorWorkReported" || evidence.report !== "TerminalAccepted"
+            )
+          }
+    )
+  }
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutTerminalAccepted)).toThrow(
+    "complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task A"
+  )
+
+  const withDuplicateCandidate = {
+    ...completeSingletonDeliveryCassette,
+    story: completeSingletonDeliveryCassette.story.map((item) => {
+      if (item._tag !== "ExpectedBehavior" || item.orchestration === null) return item
+      const candidate = item.orchestration.find((evidence) => evidence._tag === "IntegrationCandidateConstructed")
+      return candidate === undefined ? item : { ...item, orchestration: [...item.orchestration, candidate] }
+    })
+  }
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withDuplicateCandidate)).toThrow(
+    "complete graph delivery requires exactly one unambiguous delivery stage for task A"
+  )
+
+  const bCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  const bCandidate = "dddddddddddddddddddddddddddddddddddddddd"
+  const bEvidence = [
+    { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "B" },
+    {
+      _tag: "AcceptedResultIntegrationResponsibilityBegan",
+      attemptId: "attempt:A:0",
+      commit: bCommit,
+      integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
+      taskId: "B"
+    },
+    {
+      _tag: "AcceptedResultIntegrationStarted",
+      attemptId: "attempt:A:0",
+      commit: bCommit,
+      integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
+      taskId: "B"
+    },
+    {
+      _tag: "IntegrationCandidateConstructed",
+      acceptedResultCommit: bCommit,
+      attemptId: "attempt:A:0",
+      candidateCommit: bCandidate,
+      expectedTargetHead: "1111111111111111111111111111111111111111",
+      taskId: "B"
+    },
+    { _tag: "TargetVerificationPassed", candidateCommit: bCandidate, planId: "public-checks-v1", taskId: "B" },
+    {
+      _tag: "TargetPromotionSucceeded",
+      basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+      candidateCommit: bCandidate,
+      expectedTargetHead: "1111111111111111111111111111111111111111",
+      observedTargetHead: bCandidate,
+      observation: "CompareAndSetApplied",
+      taskId: "B"
+    }
+  ] as const
+  const twoTasksSharingOneAttempt = {
+    ...completeSingletonDeliveryCassette,
+    story: completeSingletonDeliveryCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+      if (item._tag === "CompletionClaimReplacementApplied") {
+        return [item, { _tag: "CompletionClaimReplacementApplied", taskId: "B" }]
+      }
+      if (item._tag === "CompletionClaimDeletionApplied") {
+        return [item, { _tag: "CompletionClaimDeletionApplied", taskId: "B" }]
+      }
+      if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === "authored-finality-success") {
+        return [
+          {
+            ...item,
+            graph: {
+              ...item.graph,
+              tasks: [
+                ...item.graph.tasks,
+                { id: "B", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }
+              ]
+            }
+          }
+        ]
+      }
+      if (item._tag !== "ExpectedBehavior" || item.orchestration === null) return [item]
+      return [
+        {
+          ...item,
+          orchestration: [...item.orchestration, ...bEvidence],
+          taskWork: {
+            ...item.taskWork,
+            results: [...item.taskWork.results, { _tag: "PlannedWorkForTaskAccepted", commit: bCommit, taskId: "B" }]
+          }
+        }
+      ]
+    })
+  }
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(twoTasksSharingOneAttempt)).toThrow(
+    "complete graph delivery requires one distinct planned attempt for every graph task"
+  )
+})
 
 it.effect("assigns a fresh exact run identity each time the same tracker target starts", () =>
   Effect.gen(function* () {
@@ -3978,6 +4235,7 @@ it.effect(
       }
       const localizedCassette = {
         _tag: "AuthoredScenarioCassette",
+        deliveryScope: { _tag: "FocusedWorkflowSlice" },
         name: "A leaves the target while independent B continues",
         schemaVersion: 1,
         startingFacts: {

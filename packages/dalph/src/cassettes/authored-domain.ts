@@ -439,7 +439,19 @@ export const assertExactlyOneAuthoredCassetteStoryItemOwner = Effect.fn(
 })
 
 const authoredScenarioCassetteVersion = 1 as const
+
+/**
+ * States what the authored chronology is allowed to claim about delivery.
+ * A focused slice may demonstrate scheduling, recovery, or one protocol seam
+ * without claiming that Dalph integrated every tracker-successful task. A
+ * complete graph delivery must carry the accepted-result and finality evidence
+ * that distinguishes Dalph delivery from an outside tracker completion.
+ */
+export const AuthoredCassetteDeliveryScope = Schema.TaggedUnion({ FocusedWorkflowSlice: {}, CompleteGraphDelivery: {} })
+export type AuthoredCassetteDeliveryScope = typeof AuthoredCassetteDeliveryScope.Type
+
 const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCassette", {
+  deliveryScope: AuthoredCassetteDeliveryScope,
   name: Schema.NonEmptyString,
   schemaVersion: Schema.Literal(authoredScenarioCassetteVersion),
   startingFacts: Schema.Struct({
@@ -453,6 +465,295 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
   }),
   story: Schema.Array(AuthoredCassetteStoryItem)
 })
+
+const terminalStoryItemOffset = -1
+
+const graphTasksObservedIn = (cassette: typeof AuthoredScenarioCassetteShape.Type) => [
+  ...cassette.startingFacts.trackerGraph.tasks,
+  ...cassette.story.flatMap((item) =>
+    item._tag === "TrackerGraphReadReturned" || item._tag === "RunActivationFinalTrackerGraphReadReturned"
+      ? item.graph.tasks
+      : []
+  )
+]
+
+const integrationTargetsAreEqual = (left: IntegrationTarget, right: IntegrationTarget) =>
+  left.repository === right.repository && left.ref === right.ref
+
+const missingEvidenceIndex = -1
+
+type ExpectedAuthoredBehavior = typeof AuthoredExpectedBehaviorShape.Type
+type ExpectedOrchestrationEvidence = NonNullable<ExpectedAuthoredBehavior["orchestration"]>[number]
+type AcceptedTaskWorkResult = Extract<AuthoredTaskWorkResult, { readonly _tag: "PlannedWorkForTaskAccepted" }>
+
+const exactTaskStages = [
+  "PlannedAttemptExecutorWorkResponsibilityBegan",
+  "AcceptedResultIntegrationResponsibilityBegan",
+  "AcceptedResultIntegrationStarted",
+  "IntegrationCandidateConstructed",
+  "TargetVerificationPassed",
+  "TargetPromotionSucceeded"
+] as const
+
+const taskStagesAreUnambiguous = (evidence: ReadonlyArray<ExpectedOrchestrationEvidence>, taskId: TaskId) =>
+  exactTaskStages.every((tag) => evidence.filter((item) => item._tag === tag && item.taskId === taskId).length === 1)
+
+const integrationResponsibilityFor = (
+  evidence: ReadonlyArray<ExpectedOrchestrationEvidence>,
+  taskId: TaskId,
+  acceptedCommit: GitCommitSha,
+  integrationTarget: IntegrationTarget
+) => {
+  const index = evidence.findIndex(
+    (item) =>
+      item._tag === "AcceptedResultIntegrationResponsibilityBegan" &&
+      item.taskId === taskId &&
+      item.commit === acceptedCommit &&
+      integrationTargetsAreEqual(item.integrationTarget, integrationTarget)
+  )
+  const item = evidence[index]
+  return item?._tag === "AcceptedResultIntegrationResponsibilityBegan" ? { index, item } : undefined
+}
+
+const executorAcceptancePrecedesIntegration = (
+  evidence: ReadonlyArray<ExpectedOrchestrationEvidence>,
+  taskId: TaskId,
+  attemptId: AttemptId,
+  integrationResponsibilityIndex: number
+) => {
+  const responsibilityIndex = evidence.findIndex(
+    (item) =>
+      item._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      item.taskId === taskId &&
+      item.attemptId === attemptId
+  )
+  const acceptedIndexes = evidence.flatMap((item, index) =>
+    item._tag === "PlannedAttemptExecutorWorkReported" &&
+    item.attemptId === attemptId &&
+    item.report === "TerminalAccepted"
+      ? [index]
+      : []
+  )
+  const acceptedIndex = acceptedIndexes[0] ?? missingEvidenceIndex
+  return [
+    responsibilityIndex >= 0,
+    acceptedIndexes.length === 1,
+    responsibilityIndex < acceptedIndex,
+    acceptedIndex < integrationResponsibilityIndex
+  ].every(Boolean)
+}
+
+const integrationStartedIndexFor = (
+  evidence: ReadonlyArray<ExpectedOrchestrationEvidence>,
+  after: number,
+  taskId: TaskId,
+  attemptId: AttemptId,
+  acceptedCommit: GitCommitSha,
+  integrationTarget: IntegrationTarget
+) =>
+  evidence.findIndex(
+    (item, index) =>
+      index > after &&
+      item._tag === "AcceptedResultIntegrationStarted" &&
+      item.taskId === taskId &&
+      item.attemptId === attemptId &&
+      item.commit === acceptedCommit &&
+      integrationTargetsAreEqual(item.integrationTarget, integrationTarget)
+  )
+
+const candidateAfter = (
+  evidence: ReadonlyArray<ExpectedOrchestrationEvidence>,
+  after: number,
+  taskId: TaskId,
+  attemptId: AttemptId,
+  acceptedCommit: GitCommitSha
+) => {
+  const index = evidence.findIndex(
+    (item, itemIndex) =>
+      itemIndex > after &&
+      item._tag === "IntegrationCandidateConstructed" &&
+      item.taskId === taskId &&
+      item.attemptId === attemptId &&
+      item.acceptedResultCommit === acceptedCommit
+  )
+  const item = evidence[index]
+  return item?._tag === "IntegrationCandidateConstructed" ? { index, item } : undefined
+}
+
+const candidateVerificationAndPromotionAreCorrelated = (
+  evidence: ReadonlyArray<ExpectedOrchestrationEvidence>,
+  taskId: TaskId,
+  candidate: Extract<ExpectedOrchestrationEvidence, { readonly _tag: "IntegrationCandidateConstructed" }>,
+  candidateIndex: number
+) => {
+  const verificationIndex = evidence.findIndex(
+    (item, index) =>
+      index > candidateIndex &&
+      item._tag === "TargetVerificationPassed" &&
+      item.taskId === taskId &&
+      item.candidateCommit === candidate.candidateCommit
+  )
+  const promotionIndex = evidence.findIndex(
+    (item, index) =>
+      index > verificationIndex &&
+      item._tag === "TargetPromotionSucceeded" &&
+      item.taskId === taskId &&
+      item.candidateCommit === candidate.candidateCommit &&
+      item.expectedTargetHead === candidate.expectedTargetHead
+  )
+  return verificationIndex >= 0 && promotionIndex >= 0
+}
+
+const exactDeliveryEvidenceIssue = (
+  taskId: TaskId,
+  acceptedCommit: GitCommitSha,
+  evidence: ReadonlyArray<ExpectedOrchestrationEvidence>,
+  integrationTarget: IntegrationTarget
+): string | undefined => {
+  if (!taskStagesAreUnambiguous(evidence, taskId)) {
+    return `complete graph delivery requires exactly one unambiguous delivery stage for task ${taskId}`
+  }
+  const responsibility = integrationResponsibilityFor(evidence, taskId, acceptedCommit, integrationTarget)
+  if (responsibility === undefined) {
+    return `complete graph delivery requires an exact accepted-result integration responsibility for task ${taskId}`
+  }
+  if (!executorAcceptancePrecedesIntegration(evidence, taskId, responsibility.item.attemptId, responsibility.index)) {
+    return `complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task ${taskId}`
+  }
+  const startedIndex = integrationStartedIndexFor(
+    evidence,
+    responsibility.index,
+    taskId,
+    responsibility.item.attemptId,
+    acceptedCommit,
+    integrationTarget
+  )
+  const candidate = candidateAfter(evidence, startedIndex, taskId, responsibility.item.attemptId, acceptedCommit)
+  if (startedIndex < 0 || candidate === undefined) {
+    return `complete graph delivery requires one exact accepted commit, attempt, and integration lineage for task ${taskId}`
+  }
+  return candidateVerificationAndPromotionAreCorrelated(evidence, taskId, candidate.item, candidate.index)
+    ? undefined
+    : `complete graph delivery requires exact candidate verification and promotion lineage for task ${taskId}`
+}
+
+const completionFinalityIssue = (
+  cassette: typeof AuthoredScenarioCassetteShape.Type,
+  taskId: TaskId
+): string | undefined => {
+  const replacementIndex = cassette.story.findIndex(
+    (item) => item._tag === "CompletionClaimReplacementApplied" && item.taskId === taskId
+  )
+  const successfulGraphIndex = cassette.story.findIndex(
+    (item, index) =>
+      index > replacementIndex &&
+      (item._tag === "TrackerGraphReadReturned" || item._tag === "RunActivationFinalTrackerGraphReadReturned") &&
+      item.graph.tasks.some((task) => task.id === taskId && task.lifecycle._tag === "CompletedSuccessfully")
+  )
+  const deletionIndex = cassette.story.findIndex(
+    (item, index) =>
+      index > successfulGraphIndex && item._tag === "CompletionClaimDeletionApplied" && item.taskId === taskId
+  )
+  return replacementIndex >= 0 && successfulGraphIndex >= 0 && deletionIndex >= 0
+    ? undefined
+    : `complete graph delivery requires promotion-bound completion finality for task ${taskId}`
+}
+
+type CompleteGraphTaskScope =
+  | { readonly _tag: "Invalid"; readonly issue: string }
+  | { readonly _tag: "Valid"; readonly taskIds: ReadonlyArray<TaskId> }
+
+const completeGraphTaskScopeOf = (cassette: typeof AuthoredScenarioCassetteShape.Type): CompleteGraphTaskScope => {
+  const observedGraphTasks = graphTasksObservedIn(cassette)
+  const taskIds = [...new Set(observedGraphTasks.map(({ id }) => id))]
+  if (taskIds.length === 0) {
+    return { _tag: "Invalid", issue: "complete graph delivery requires at least one observed tracker task" }
+  }
+  const taskWithoutTrackerSuccess = taskIds.find(
+    (taskId) =>
+      !observedGraphTasks.some((task) => task.id === taskId && task.lifecycle._tag === "CompletedSuccessfully")
+  )
+  return taskWithoutTrackerSuccess === undefined
+    ? { _tag: "Valid", taskIds }
+    : {
+        _tag: "Invalid",
+        issue: `complete graph delivery requires tracker success for every observed task; task ${taskWithoutTrackerSuccess} never reached success`
+      }
+}
+
+type CompleteGraphAcceptedResults =
+  | { readonly _tag: "Invalid"; readonly issue: string }
+  | { readonly _tag: "Valid"; readonly results: ReadonlyArray<AcceptedTaskWorkResult> }
+
+const completeGraphAcceptedResultsOf = (
+  expected: ExpectedAuthoredBehavior,
+  graphTaskIds: ReadonlyArray<TaskId>
+): CompleteGraphAcceptedResults => {
+  const results = expected.taskWork.results.filter(
+    (result): result is AcceptedTaskWorkResult => result._tag === "PlannedWorkForTaskAccepted"
+  )
+  const resultTasks = results.map(({ taskId }) => taskId)
+  const exactlyOnePerGraphTask = [
+    results.length === expected.taskWork.results.length,
+    results.length === graphTaskIds.length,
+    new Set(resultTasks).size === resultTasks.length,
+    resultTasks.every((taskId) => graphTaskIds.includes(taskId))
+  ].every(Boolean)
+  return exactlyOnePerGraphTask
+    ? { _tag: "Valid", results }
+    : { _tag: "Invalid", issue: "complete graph delivery requires one accepted commit for every observed tracker task" }
+}
+
+const plannedAttemptsHaveOneTask = (evidence: ReadonlyArray<ExpectedOrchestrationEvidence>) => {
+  const responsibilities = evidence.filter(
+    (
+      item
+    ): item is Extract<
+      ExpectedOrchestrationEvidence,
+      { readonly _tag: "PlannedAttemptExecutorWorkResponsibilityBegan" }
+    > => item._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+  )
+  return new Set(responsibilities.map(({ attemptId }) => attemptId)).size === responsibilities.length
+}
+
+const completeDeliveryEvidenceIssue = (
+  cassette: typeof AuthoredScenarioCassetteShape.Type,
+  evidence: ReadonlyArray<ExpectedOrchestrationEvidence>,
+  results: ReadonlyArray<AcceptedTaskWorkResult>,
+  integrationTarget: IntegrationTarget
+) =>
+  results
+    .flatMap((result) => [
+      exactDeliveryEvidenceIssue(result.taskId, result.commit, evidence, integrationTarget),
+      completionFinalityIssue(cassette, result.taskId)
+    ])
+    .find((issue) => issue !== undefined)
+
+const completeGraphDeliveryHasExactEvidence = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    if (cassette.deliveryScope._tag !== "CompleteGraphDelivery") return undefined
+    const expected = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(
+      cassette.story.at(terminalStoryItemOffset)
+    )
+    if (expected.orchestration === null) {
+      return "complete graph delivery requires exact orchestration evidence"
+    }
+    const graphScope = completeGraphTaskScopeOf(cassette)
+    if (graphScope._tag === "Invalid") return graphScope.issue
+    const acceptedResults = completeGraphAcceptedResultsOf(expected, graphScope.taskIds)
+    if (acceptedResults._tag === "Invalid") return acceptedResults.issue
+    if (!plannedAttemptsHaveOneTask(expected.orchestration)) {
+      return "complete graph delivery requires one distinct planned attempt for every graph task"
+    }
+    const runCoordinator = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.RunCoordinator)(cassette.story[1])
+    return completeDeliveryEvidenceIssue(
+      cassette,
+      expected.orchestration,
+      acceptedResults.results,
+      runCoordinator.integrationTarget
+    )
+  }
+)
 
 const exactlyOneAt = (
   tag: AuthoredCassetteStoryItem["_tag"],
@@ -770,6 +1071,7 @@ export const AuthoredScenarioCassette = AuthoredScenarioCassetteShape.check(
   )
   .check(startingFactsAreConsistent)
   .check(behaviorAssertionsAreConsistent)
+  .check(completeGraphDeliveryHasExactEvidence)
   .check(coordinatorLifecycleBoundariesHaveFollowingActivationWork)
   .check(finalTrackerReadClosesCurrentActivation)
   .check(ambiguousBoundaryLossesImmediatelyCrash)
