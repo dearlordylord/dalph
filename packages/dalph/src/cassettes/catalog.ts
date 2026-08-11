@@ -2498,7 +2498,7 @@ const doubleDiamondExecutionOrder = ["A", "B", "C", "D", "X", "E", "F", "H", "I"
 /** The real delivery runtime consumes a staggered double diamond and reconstructs both middle positions before observing X. */
 export const deliveryInvariantStoryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
-  name: "production delivery consumes a staggered double diamond while restart-delayed X waits for capacity",
+  name: "coarse executor reports and later tracker observations consume a staggered double diamond while restart-delayed X waits for capacity",
   schemaVersion: 1,
   startingFacts: {
     executorWork: "NoPriorReport",

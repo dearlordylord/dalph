@@ -98,7 +98,8 @@ await scenario("shows the staggered double-diamond frontier being consumed on on
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   assert(
-    row?.storyName === "production delivery consumes a staggered double diamond while restart-delayed X waits for capacity",
+    row?.storyName ===
+      "coarse executor reports and later tracker observations consume a staggered double diamond while restart-delayed X waits for capacity",
     "The linked graph story title must name its concrete production chronology"
   )
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The linked story must complete with frames")

@@ -655,7 +655,7 @@ task whose exact facts are correlated below.
   typed production presenter rather than the Lab's generic tag formatter. It
   also checks the production-authored activation-final tracker-read landmark
   remains distinct from an ordinary tracker graph return.
-- `renders an exact completion-request lookup in maintainer language` checks
+- `explains the tracker's classification of an ambiguous completion request` checks
   the production-authored presenter explains the exact request-result lookup
   and outcome without exposing only its raw story tag.
 - `keeps a dependant blocked after executor completion until a later tracker observation`
@@ -741,10 +741,6 @@ task whose exact facts are correlated below.
   `retains an exact attempt across outside-bound, closed, and absent graph placements`
   proves that exact placement is produced when a complete tracker graph omits
   the task; the presentation test does not replace that production proof.
-- `renders every tracker-success intent in maintainer language`
-  checks the production presenter distinguishes no tracker success, demonstrated
-  Dalph delivery, intentionally outside tracker success, a normal delivery target
-  pending a named issue, and a complete graph delivery claim.
 - `counts one delivery settlement once across repeated production publications`
   checks repeated publications carrying A's exact settlement report one
   distinct settlement and separately report their publication count. It also
@@ -754,8 +750,7 @@ task whose exact facts are correlated below.
   checks the document's 22 stable beat IDs, exact catalog keys, explicit gap
   reasons, and generated manifest block in both directions.
 - `shows the staggered double-diamond frontier being consumed on one graph`
-  checks the typed focused-slice scope and the same returned frames through the
-  Lab presentation model, including
+  checks the same returned frames through the Lab presentation model, including
   the initial and post-crash topology, X's fresh appearance, every rolling
   frontier/held overlap, reconstructed B/C responsibilities, anonymous capacity
   positions, and the off-graph responsibility rail.
@@ -779,16 +774,17 @@ task whose exact facts are correlated below.
   selected cassette's settled event, proves the article is still Running when
   a real frame appears, and then checks final auto-follow, rewind, disclosure
   stability, and the complete current-catalog terminal summary. Its
-  `drives the staggered double-diamond frontier through production overlap and restart`
+  `drives the staggered double-diamond frontier through every production wave, held-position release, and restart`
   checkpoint additionally observes the graph while the linked cassette is
   still Running, traverses its exact prerequisite edges and rolling parallel
   states, checks X appears only after the later tracker observation, and checks
   the B/C attempt correlations and anonymous occupied positions on both sides
   of restart through the actual served application. At phone width it also
   proves the exact restart correlations wrap without widening the document.
-  Before execution it also checks the visible focused-slice explanation says
-  tracker completion may be an outside fact and does not claim complete Dalph
-  integration.
+  Before execution it also checks the visible explanation says the chronology
+  contains coarse executor completion and later tracker-success observations,
+  but no accepted-result integration, and names issue #167 as the owner of
+  replacing that test seam.
 - `does not fabricate a graph workbench for direct protocol cassettes` checks
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.
