@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert"
 import { Schema } from "effect"
 import { TaskId } from "../../../packages/contracts/src/task-identity.ts"
 import { AuthoredRunActivationOrdinal } from "../../../packages/dalph/src/cassettes/authored-domain.ts"
+import { TaskWorkCapacity } from "../../../packages/orchestrator/src/coordination/admission/capacity.ts"
 import {
   DeliveryFrameIndex,
   deliveryPlaybackShortcutMessage,
@@ -29,7 +30,7 @@ const frame = (
   heldTaskIds: ReadonlyArray<string> = []
 ) => ({
   activationOrdinal: AuthoredRunActivationOrdinal.make(activationOrdinal),
-  capacity: 2,
+  capacity: TaskWorkCapacity.make(2),
   eligibleTaskIds: eligibleTaskIds.map((taskId) => TaskId.make(taskId)),
   heldTaskIds: heldTaskIds.map((taskId) => TaskId.make(taskId)),
   label

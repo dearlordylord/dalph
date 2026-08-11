@@ -4020,6 +4020,20 @@ it("rejects contradictory tracker-success intents", () => {
     })
   ).toThrow()
 
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...maintainedAuthoredCassetteCatalog.deliveryInvariantStory,
+      deliveryScope: {
+        _tag: "FocusedWorkflowSlice",
+        trackerSuccessIntents: doubleDiamondIntents.trackerSuccessIntents.map((intent) =>
+          intent.taskId === "A"
+            ? { _tag: "DalphDeliveryTargetPending", blockingIssue: "issue 167", taskId: "A" }
+            : intent
+        )
+      }
+    })
+  ).toThrow()
+
   const acceptedResultStory = maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration.story
   const lastGraphIndex = acceptedResultStory.findLastIndex((item) => item._tag === "TrackerGraphReadReturned")
   const acceptedResultWithPrematureTrackerSuccess = {

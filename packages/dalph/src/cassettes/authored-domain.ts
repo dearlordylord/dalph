@@ -466,7 +466,9 @@ export const assertExactlyOneAuthoredCassetteStoryItemOwner = Effect.fn(
 const authoredScenarioCassetteVersion = 1 as const
 
 /** Repository issue that owns the missing evidence for one provisional cassette intent. */
-const AuthoredImplementationIssue = Schema.NonEmptyString.pipe(Schema.brand("AuthoredImplementationIssue"))
+const AuthoredImplementationIssue = Schema.String.check(Schema.isPattern(/^#[1-9][0-9]*$/u)).pipe(
+  Schema.brand("AuthoredImplementationIssue")
+)
 
 /**
  * What one focused cassette intends each tracker-successful task to mean.

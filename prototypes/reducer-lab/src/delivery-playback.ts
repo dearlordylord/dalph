@@ -6,6 +6,7 @@ import {
   AuthoredRunActivationOrdinal,
   type AuthoredRunActivationOrdinal as AuthoredRunActivationOrdinalType
 } from "../../../packages/dalph/src/cassettes/authored-domain.ts"
+import type { TaskWorkCapacity } from "../../../packages/orchestrator/src/coordination/admission/capacity.ts"
 
 /**
  * Stable renderer contract for every playback control. A new FoldKit, React,
@@ -43,7 +44,7 @@ export type DeliveryLandmark = typeof DeliveryLandmark.Type
 /** Framework-neutral facts needed to derive playback stops from production frames. */
 export interface DeliveryPlaybackFrameInput {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
-  readonly capacity: number
+  readonly capacity: TaskWorkCapacity
   readonly eligibleTaskIds: ReadonlyArray<TaskIdType>
   readonly heldTaskIds: ReadonlyArray<TaskIdType>
   readonly label: string

@@ -284,9 +284,10 @@ When a button reaches the first or last frame and becomes unavailable, focus
 moves to the persistent delivery-playback control group instead of falling out
 of the workbench. The maintainer can immediately press the opposite Arrow key
 to move away from that endpoint without clicking the graph or another control.
-The same focus handoff occurs when repeated Left or Right Arrow presses reach
-an endpoint while focus is anywhere in the workbench, including on the frame
-button that becomes unavailable.
+The same focus handoff occurs when repeated Left or Right Arrow presses start
+from any playback button and reach an endpoint. When the shortcut starts
+elsewhere in the workbench, that still-available element keeps focus and the
+opposite Arrow key moves away from the endpoint directly.
 An enabled playback button keeps its native focus, so repeated Space or Enter
 activation continues moving in the same direction before the endpoint.
 Rerunning the selected cassette replaces the old timeline handler, so one key
@@ -547,6 +548,8 @@ delivery without the exact integration/finality chain, or a pending target that
 does not name its blocking issue. This prevents the presence or absence of the
 word “outside” in one cassette title from silently defining all other cassette
 intents.
+The blocking issue is a native repository issue locator written as `#` plus a
+positive integer; arbitrary prose cannot satisfy that boundary.
 
 If a maintainer authors a cassette with the typed delivery scope
 `CompleteGraphDelivery`, decoding fails unless every task ever observed in its
@@ -624,8 +627,8 @@ current tracker node.
 
 The separate `authored:deliveryFinalitySpine` crosses the ordinary production
 completion-finality boundary for A while classifying A as demonstrated Dalph
-delivery and tracker success for B through G as intentionally supplied outside
-Dalph. After A's promotion, the controlled tracker returns
+delivery, leaving B open, and classifying tracker success for C through G as
+intentionally supplied outside Dalph. After A's promotion, the controlled tracker returns
 the exact active claim, applies the exact replacement, later publishes a
 complete successful graph, returns the exact completion claim, and applies its
 deletion. Dalph itself records `IntegrationFinalitySettled`; the next
@@ -754,7 +757,8 @@ task whose exact facts are correlated below.
   accepted commits nor exact integration evidence.
 - `rejects a complete graph delivery scope when successful tracker tasks lack Dalph delivery evidence`
   relabels the seven-task A-finality spine and proves outside tracker success for
-  B through G cannot stand in for their missing accepted-result and finality chains.
+  C through G cannot stand in for their missing accepted-result and finality chains;
+  B remains open and is not part of that outside-completion claim.
 - `rejects a complete graph delivery scope before tracker success or exact finality`
   checks complete delivery cannot omit orchestration evidence, cannot be claimed
   without an observed graph task or before that task reaches tracker success,
@@ -775,7 +779,7 @@ task whose exact facts are correlated below.
   tracker observation, outside completion backed by an accepted Dalph result,
   demonstrated delivery without the exact chain, in-progress delivery without
   exact integration or after finality already completed, and a pending normal
-  target without its blocking issue.
+  target without its blocking issue or with a non-issue prose locator.
 - `preserves the double-diamond middle positions across coordinator restart`
   checks B and C hold exact task-work positions before process loss, the first
   later-activation publications retain the same Run and attempt correlations,
