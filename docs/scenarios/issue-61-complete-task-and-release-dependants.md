@@ -3,9 +3,11 @@
 Issue:
 [Complete the tracker task and release dependants](https://github.com/dearlordylord/dalph/issues/61)
 
-Status: proposed chronological scenarios for issue #61. A maintainer has not
-yet accepted this file. Runtime implementation remains blocked until the issue
-or another accepted specification accepts these choices.
+Status: accepted chronological scenarios for issue #61 on 2026-08-10. The
+maintainer approved the focused-success/complete-graph split, exact ancestry
+and evidence premises, exact-request reconciliation, three-call bound, and
+task-local conflict behavior. Runtime implementation may proceed from this
+file and the issue.
 
 Issue #61 currently states completion criteria and a fake-provider outcome, but
 does not choose the ordered boundary calls, crash and retry behavior, or human
@@ -16,7 +18,7 @@ promotion behavior in issue #60, the accepted blocker behavior in issue #138,
 the shipped completion-claim and settlement behavior in issue #141, and the
 later complete-graph traversal in issue #53.
 
-No person directly starts the proposed protocol. The running Dalph coordinator
+No person directly starts the protocol. The running Dalph coordinator
 reacts after Git has proved an exact promotion and the task tracker reports the
 task ready for completion. A maintainer observes its progress. Git owns current
 target ancestry; the tracker owns task lifecycle, prerequisites, target
@@ -25,7 +27,7 @@ ordered intents, observations, and outcomes described here. The executor is not
 called because its exact accepted result has already passed through integration
 and promotion.
 
-These choices need maintainer acceptance before they become a runtime contract:
+The accepted runtime contract is:
 
 - A tracker-completion request is authorized only by the exact current
   promotion-bound completion claim, a new focused tracker read proving the task
@@ -62,8 +64,11 @@ These choices need maintainer acceptance before they become a runtime contract:
   fingerprint, or later reopening is preserved as current tracker authority and
   produces a task-local conflict or wait rather than an automatic overwrite or
   repair.
+- Completion mutation attempts are numbered and bounded at three for one exact
+  request. A fourth tracker completion call is forbidden, including after
+  restart; cleanup has its existing independent three-call bound.
 
-Accepting these choices deliberately refines two earlier scenario seams. Issue
+These accepted choices deliberately refine two earlier scenario seams. Issue
 #141 currently requires a complete target-closure observation before KC
 deletion; this proposal instead gives its cleanup protocol the focused success
 observation and reserves the complete target-closure observation for the later
@@ -71,8 +76,8 @@ dependency refresh. Issue #138 says Dalph records an “actual successful
 completion result” after the tracker accepts a completion request; this proposal
 clarifies that the accepted response is only an acknowledgement and that the
 focused observation establishes success. Both scenario files and their current
-model/test mappings must change with an accepted issue #61 implementation. The
-proposed file alone does not silently override either accepted contract.
+model/test mappings must change with the issue #61 implementation. This accepted
+file explicitly amends both earlier scenario seams.
 
 Acceptance also expands the current coarse executor and integration boundaries
 only enough to return the two new sealed manifest references. It does not expose
@@ -84,7 +89,7 @@ acceptance and integration-review evidence criterion must change before runtime
 implementation; an accepted result or constructed candidate alone is not a
 substitute for the required sealed evidence.
 
-The proposed focused tracker read is a new usage-earned read shape. It covers
+The accepted focused tracker read is a new usage-earned read shape. It covers
 one exact task's lifecycle, task revision fingerprint, target membership,
 complete prerequisite set, and exact current claim. It is complete only for
 that task and those fact families; it is not a complete target-closure
@@ -92,13 +97,13 @@ observation and cannot release any dependant. The adapter must return one
 normalized usable value or a typed incomplete, contradictory, or unreadable
 result. It must not publish a partially assembled value.
 
-The proposed `ReadTaskCompletionRequestResult` operation is a second exact read
+The accepted `ReadTaskCompletionRequestResult` operation is a second exact read
 boundary. Dalph records its intent naming Q's operation identity, asks the
 tracker for that exact request's result, and records exactly one of `Applied`,
 `NotApplied`, or `Unreadable`. `NotApplied` must be positive provider evidence
 about Q; current open lifecycle, a missing acknowledgement, or an absent journal
 outcome cannot stand in for it. If the GitHub adapter cannot obtain that
-provider evidence, it cannot return `NotApplied` and the proposed protocol
+provider evidence, it cannot return `NotApplied` and the protocol
 waits instead of retrying.
 
 ## Dalph confirms A, then a later graph read permits B
@@ -429,6 +434,34 @@ projection process-local.
 - Authored and recorded graph cassette:
   `The later complete graph gives the current reason B may proceed`
 
+## Accepted S1-S5 scenario-to-test mapping
+
+The implementation must preserve these five chronological scenarios and prove
+each through the named seam before handoff:
+
+- S1, `Dalph confirms A, then a later graph read permits B`: focused success
+  precedes KC cleanup and only a later complete graph makes B eligible. Prove
+  with `completes exact A ...`, `records focused success ...`, and the happy
+  authored/recorded cassette.
+- S2, `A lost completion response is reconciled ...`: fresh success avoids a
+  duplicate call; open alone does not authorize retry; positive `NotApplied`
+  plus fresh premises permits the same request up to three calls. Prove with
+  `checks A after losing ...`, `reuses exact Q ...`, and the ambiguous cassette.
+- S3, `A tracker client changes A ...`: human success is accepted; foreign,
+  terminal, revision, and reopen outcomes stay task-local and preserve C.
+  Prove with the conflict cassette and focused authority tests.
+- S4, `Restart between success confirmation and graph refresh ...`: a crash
+  retains A's focused success but keeps B blocked until the later graph append.
+  Prove with the recovery cassette and append cut-point tests.
+- S5, `The later graph releases only what ...`: current complete facts alone
+  decide each dependant; added blockers, reopenings, and membership changes do
+  not manufacture release. Prove with the graph cassette and frontier tests.
+
+The complete-task request, focused observation, and later complete graph are
+separate workflow occurrences. No `dependant release` mutation or persisted
+frontier is added. The three-call completion bound is part of every S1-S3
+retry/restart test; cleanup from #141 may wait independently of S4/S5.
+
 ## Model, executable adapter, and reopening seams after acceptance
 
 The current owning model is `specs/integrationFinality.qnt`. It presently keeps
@@ -439,12 +472,12 @@ scenarios belong in `specs/integrationFinality_test.qnt`, and the production
 seam remains the executable integration-finality adapter under
 `packages/dalph/test/conformance/`.
 
-The same implementation change must amend the issue #138 and #141 scenarios as
-described above, their authored/recorded cassettes, and #141's current production
-history rule that recognizes successful completion only from a complete target
-closure. Leaving those artifacts unchanged would encode two competing answers
-to which first observation proves A successful and whether that observation may
-release B.
+The same implementation change amends the issue #138 and #141 scenarios as
+described above, their authored/recorded cassettes, and #141's current
+production history rule. #141 now recognizes successful completion from the
+focused task observation; only #53's later complete target-closure observation
+may release dependants. Leaving those artifacts unchanged would encode two
+competing answers to which first observation proves A successful.
 
 The extension must model the exact Q identity and evidence bindings, completion
 intent and numbered calls, lost response, exact-request result lookup, explicit
@@ -472,12 +505,8 @@ applicable in-memory paths at its current dependency point. The happy and
 lost-response cassettes above satisfy issue #165's readable register and must
 feed issue #167's later graph-eating capstone.
 
-## Gate outcome for this documentation change
+## Gate outcome
 
-Adding this proposed file and its scenario-index entry changes no Dalph runtime
-behavior. It exposes no command, service, type, workflow decision, outside
-request, durable fact, retry, recovery rule, cleanup action, or visible runtime
-result. Runtime tests, cassettes, models, and the issue prerequisite graph
-therefore remain unchanged in this documentation-only gate commit. They become
-required only after a maintainer accepts the chronology and implementation
-begins.
+This accepted chronology is the implementation gate. Runtime changes are
+required and must keep the S1-S5 mapping above; #53, #60, and #141 remain open
+dependency edges and are not closed or absorbed by #61.

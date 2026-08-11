@@ -62,11 +62,10 @@ today.
 | `issue-138-reconcile-blockers-around-promotion.md` | 138 |
 | `issue-139-reconcile-git-facts.md` | 139 |
 
-**Proposed chronology awaiting acceptance** — the owning issue is accepted as
-work, but its current text does not yet choose chronological behavior precise
-enough to permit runtime implementation. These files are review material, not
-an operational-scenario gate bypass. Move a file to the applicable section
-above only after the issue or another accepted specification accepts it.
+**Accepted, not yet implemented** — the owning issue is accepted as work and
+the chronology is precise enough to permit runtime implementation. These files
+state required behavior and remain an operational-scenario gate for their
+implementation.
 
 | File | Issue |
 |---|---|
