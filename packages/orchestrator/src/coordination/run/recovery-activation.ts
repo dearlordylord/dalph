@@ -85,6 +85,22 @@ export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 
 const finalRecordOffset = -1
 
+type AcquiredTaskClaim = Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
+type FocusedTaskClaim = Extract<
+  Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
+  { readonly _tag: "FocusedTaskClaimFacts" }
+>["observation"]
+
+const dispositionForFocusedClaim = (
+  focusedClaim: FocusedTaskClaim,
+  acquiredClaim: AcquiredTaskClaim
+): PlannedAttemptExecutorDisposition | undefined => {
+  if (focusedClaim._tag === "UnclaimedTask") return ResponsibilityDisposition.TaskClaimMissingConstraint()
+  return isExactTaskClaim(focusedClaim, acquiredClaim)
+    ? undefined
+    : ResponsibilityDisposition.TaskForeignClaimIsolation()
+}
+
 const isRunPauseEvent = (event: JournalRecord["event"]): boolean =>
   event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
 
@@ -800,13 +816,11 @@ const deriveJournalResponsibilityFacts = (
       /* v8 ignore start -- currentClaimRecord selects only focused-readable or focused-unreadable facts, and unreadable returned above. */
       if (currentClaimFacts.observation._tag !== "FocusedTaskClaimFacts") return undefined
       /* v8 ignore stop */
-      if (acquiredClaim?._tag !== "TaskClaimAcquired") return undefined
-      if (currentClaimFacts.observation.observation._tag === "UnclaimedTask") {
-        return ResponsibilityDisposition.TaskClaimMissingConstraint()
-      }
-      return isExactTaskClaim(currentClaimFacts.observation.observation, acquiredClaim.claim)
-        ? undefined
-        : ResponsibilityDisposition.TaskForeignClaimIsolation()
+      const focusedClaim = currentClaimFacts.observation.observation
+      return Option.match(Option.fromUndefinedOr(acquiredClaim), {
+        onNone: () => undefined,
+        onSome: (acquired) => dispositionForFocusedClaim(focusedClaim, acquired.claim)
+      })
     }
     const claimConstraint = deriveClaimConstraint()
     const worktreeReadOperationIds = new Set(

@@ -1,6 +1,7 @@
 {
   "threshold": 2,
-  "reporters": ["console"],
+  "reporters": ["silent"],
+  "noTips": true,
   "ignore": [
     "**/node_modules/**",
     "**/dist/**",

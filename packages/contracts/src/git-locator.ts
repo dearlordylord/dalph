@@ -9,19 +9,18 @@ export const WorktreeLocator = Schema.NonEmptyString.pipe(Schema.brand("Worktree
 export type WorktreeLocator = typeof WorktreeLocator.Type
 
 /** Locates the exact Git branch ref reserved for a planned task attempt. */
+const hasInvalidTaskBranchShape = (ref: string): boolean =>
+  ref.includes("..") || ref.includes("//") || ref.includes("@{") || ref.endsWith("/") || ref.endsWith(".")
+
+const isValidTaskBranchComponent = (component: string): boolean =>
+  !component.startsWith(".") && !component.endsWith(".lock")
+
 const isValidTaskBranchRef = (ref: string): boolean => {
   if (!ref.startsWith("refs/heads/") || ref === "refs/heads/") return false
-  if (
-    ref.includes("..") ||
-    ref.includes("//") ||
-    ref.includes("@{") ||
-    ref.endsWith("/") ||
-    ref.endsWith(".") ||
-    // oxlint-disable-next-line no-control-regex -- Git ref syntax rejects ASCII control characters.
-    /[\u0000-\u0020\u007f~^:?*[\\]/.test(ref)
-  )
-    return false
-  return ref.split("/").every((component) => !component.startsWith(".") && !component.endsWith(".lock"))
+  if (hasInvalidTaskBranchShape(ref)) return false
+  // oxlint-disable-next-line no-control-regex -- Git ref syntax rejects ASCII control characters.
+  if (/[\u0000-\u0020\u007f~^:?*[\\]/.test(ref)) return false
+  return ref.split("/").every(isValidTaskBranchComponent)
 }
 
 export const TaskBranchRef = Schema.String.check(
