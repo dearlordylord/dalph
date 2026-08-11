@@ -240,6 +240,65 @@ dd {
   margin-bottom: 0.4rem;
 }
 
+.delivery-capacity-positions,
+.delivery-off-graph-responsibilities {
+  border: 1px solid #b8afa1;
+  border-radius: 0.45rem;
+  margin: 0.55rem 0;
+  padding: 0.65rem 0.75rem;
+}
+
+.delivery-capacity-positions {
+  background: #eef3f6;
+}
+
+.delivery-capacity-positions h5,
+.delivery-off-graph-responsibilities h5 {
+  margin: 0 0 0.25rem;
+}
+
+.delivery-capacity-explanation,
+.delivery-off-graph-responsibilities p {
+  color: #4f585d;
+  font-size: 0.78rem;
+  margin: 0.2rem 0 0.5rem;
+}
+
+.delivery-capacity-position-list,
+.delivery-off-graph-responsibilities ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.delivery-capacity-position-list li,
+.delivery-off-graph-responsibilities li {
+  background: #fff;
+  border: 2px double #355a78;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+  padding: 0.35rem 0.6rem;
+}
+
+.delivery-capacity-position-list .available-capacity-position {
+  border-style: dashed;
+  color: #59666d;
+}
+
+.delivery-capacity-position-list .contracted-capacity-position {
+  border-color: #9b7410;
+  border-style: solid;
+}
+
+.delivery-off-graph-responsibilities {
+  background: #fff2d8;
+  border-color: #9b7410;
+}
+
 .delivery-not-observed {
   border-left-color: #9b7410;
 }

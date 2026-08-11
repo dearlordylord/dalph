@@ -318,6 +318,99 @@ const selectedTaskSummary = (frame: AuthoredDeliveryFrame, taskId: string): stri
   return `Selected task ${taskId}. Graph: ${facts.frontier}. Desired ticket: ${facts.ticket}. Held position: ${heldAttempts.length === 0 ? "none" : heldAttempts.join(", ")}. Settlement: ${facts.settlement}.${linkedPlanning.length === 0 ? " No planned action is correlated to this task in this frame." : ` Planned actions: ${linkedPlanning.map(proposalSummary).join("; ")}.`}`
 }
 
+/**
+ * Presentation-only view of the bounded task-work resource. Positions are
+ * anonymous: the production fact identifies a task/Run/attempt holder, never
+ * a durable slot number.
+ */
+const renderTaskWorkCapacity = (parent: HTMLElement, frame: AuthoredDeliveryFrame): void => {
+  parent.replaceChildren()
+  parent.dataset.role = "delivery-capacity-positions"
+  const heldCount = frame.heldPositions.length
+  appendText(parent, "h5", `Task-work positions · ${heldCount} held of capacity ${frame.capacity}`)
+  appendText(
+    parent,
+    "p",
+    "Anonymous process-local positions reconstructed from unfinished journal responsibilities; no position has a durable identity.",
+    "delivery-capacity-explanation"
+  )
+  const positions = document.createElement("ul")
+  positions.className = "delivery-capacity-position-list"
+  for (const { attemptId, runId, taskId } of frame.heldPositions) {
+    const item = appendText(positions, "li", `${taskId} · ${attemptId}`)
+    item.dataset.taskId = taskId
+    item.title = `Run ${runId}`
+  }
+  const available = Math.max(0, frame.capacity - heldCount)
+  if (available > 0) {
+    appendText(
+      positions,
+      "li",
+      `${available} available anonymous ${available === 1 ? "position" : "positions"}`,
+      "available-capacity-position"
+    )
+  }
+  if (heldCount > frame.capacity) {
+    appendText(
+      positions,
+      "li",
+      `${heldCount - frame.capacity} existing ${heldCount - frame.capacity === 1 ? "holder exceeds" : "holders exceed"} the current ceiling; none is evicted.`,
+      "contracted-capacity-position"
+    )
+  }
+  parent.append(positions)
+}
+
+const offGraphReason = (
+  frame: AuthoredDeliveryFrame,
+  delivery: AuthoredDeliveryFrame["deliveries"][number] | undefined
+): string => {
+  if (frame.graph._tag === "NotEstablished") return "graph not established"
+  if (delivery?.placement.kind === "AbsentFromCurrentGraph") return "absent from current tracker graph"
+  return "not represented by the current tracker graph"
+}
+
+/**
+ * Journal responsibilities can outlive tracker-graph membership. The rail is
+ * deliberately adjacent to, but never merged into, the tracker-owned graph.
+ */
+const renderOffGraphResponsibilities = (parent: HTMLElement, frame: AuthoredDeliveryFrame): void => {
+  parent.replaceChildren()
+  const represented = new Set(frame.graph._tag === "Established" ? frame.graph.tasks.map(({ id }) => id) : [])
+  const taskIds = [...new Set([
+    ...frame.deliveries.map(({ taskId }) => taskId),
+    ...frame.heldPositions.map(({ taskId }) => taskId)
+  ])].filter((taskId) => !represented.has(taskId)).toSorted()
+  if (taskIds.length === 0) {
+    parent.removeAttribute("data-role")
+    parent.hidden = true
+    return
+  }
+  parent.dataset.role = "delivery-off-graph-responsibilities"
+  parent.hidden = false
+  appendText(parent, "h5", "Retained responsibilities outside the observed graph")
+  appendText(
+    parent,
+    "p",
+    "These journal-owned responsibilities remain real, but they are not tracker nodes and no topology edge is invented for them."
+  )
+  const list = document.createElement("ul")
+  for (const taskId of taskIds) {
+    const delivery = frame.deliveries.find(({ taskId: candidate }) => candidate === taskId)
+    const held = frame.heldPositions.filter(({ taskId: candidate }) => candidate === taskId)
+    const obligations = delivery?.obligations.map(({ summary }) => summary) ?? []
+    const correlations = held.map(({ attemptId }) => attemptId)
+    appendText(
+      list,
+      "li",
+      `Task ${taskId} · ${offGraphReason(frame, delivery)}`
+        + `${correlations.length === 0 ? "" : ` · held ${correlations.join(", ")}`}`
+        + `${obligations.length === 0 ? "" : ` · ${obligations.join("; ")}`}`
+    ).dataset.taskId = taskId
+  }
+  parent.append(list)
+}
+
 const renderTaskTable = (parent: HTMLElement, frame: AuthoredDeliveryFrame): void => {
   const taskIds = [...new Set([
     ...(frame.graph._tag === "Established" ? frame.graph.tasks.map(({ id }) => id) : []),
@@ -449,13 +542,36 @@ const frameChangeSummary = (
   return changes.length === 0 ? "No descriptive delivery fact changed; production republished the coherent input." : changes.join(" · ")
 }
 
-export interface DeliveryWorkbenchPlaybackState {
-  model: DeliveryPlaybackModel
+export interface DeliveryWorkbenchPlaybackRuntime {
+  readonly current: () => DeliveryPlaybackModel
+  readonly dispatch: (message: DeliveryPlaybackMessage) => {
+    readonly changed: boolean
+    readonly commands: ReadonlyArray<DeliveryPlaybackCommand>
+  }
+  readonly replace: (model: DeliveryPlaybackModel) => void
 }
 
-export const makeDeliveryWorkbenchPlaybackState = (): DeliveryWorkbenchPlaybackState => ({
-  model: makeDeliveryPlaybackModel()
-})
+/**
+ * Necessary imperative island for the hand-written DOM adapter. Semantic
+ * transitions stay in updateDeliveryPlayback; this closure only remembers the
+ * latest immutable model between browser events. A FoldKit or React renderer
+ * replaces this adapter, not the model/update/view contract.
+ */
+export const makeDeliveryWorkbenchPlaybackRuntime = (): DeliveryWorkbenchPlaybackRuntime => {
+  let current = makeDeliveryPlaybackModel()
+  return {
+    current: () => current,
+    dispatch: (message) => {
+      const previous = current
+      const [next, commands] = updateDeliveryPlayback(previous, message)
+      current = next
+      return { changed: next !== previous, commands }
+    },
+    replace: (model) => {
+      current = model
+    }
+  }
+}
 
 interface DeliveryTimelineController {
   readonly destroy: () => void
@@ -555,7 +671,7 @@ const renderTimeline = (
   parent: HTMLElement,
   row: AuthoredRow,
   initialFrames: ReadonlyArray<AuthoredDeliveryFrame>,
-  playback: DeliveryWorkbenchPlaybackState,
+  playback: DeliveryWorkbenchPlaybackRuntime,
   initiallyRunning: boolean
 ): DeliveryTimelineController => {
   const readingGuide = document.createElement("details")
@@ -638,6 +754,10 @@ const renderTimeline = (
   graph.tabIndex = 0
   graph.setAttribute("aria-label", "Interactive delivery graph; drag to pan, scroll to zoom")
   const change = appendText(frameHost, "p", "", "delivery-frame-change")
+  const capacityPositions = document.createElement("section")
+  capacityPositions.className = "delivery-capacity-positions"
+  const offGraphResponsibilities = document.createElement("aside")
+  offGraphResponsibilities.className = "delivery-off-graph-responsibilities"
   const restart = appendText(frameHost, "p", "", "delivery-restart-boundary")
   restart.hidden = true
   const factsHost = document.createElement("div")
@@ -649,7 +769,7 @@ const renderTimeline = (
   const taskFactsSummary = appendText(taskFactsDisclosure, "summary", "All task delivery facts")
   const taskFactsHost = document.createElement("div")
   taskFactsDisclosure.append(taskFactsHost)
-  frameHost.prepend(graphViewControls, graph, settlementCoverage)
+  frameHost.prepend(graphViewControls, capacityPositions, graph, offGraphResponsibilities, settlementCoverage)
   settlementCoverage.after(readingGuide)
   frameHost.append(factsHost, taskFactsDisclosure)
   let frames = initialFrames
@@ -682,6 +802,7 @@ const renderTimeline = (
             .filter(({ id }) => taskFacts(frame, id).frontierFact?.standing === "Eligible")
             .map(({ id }) => id)
           : [],
+        heldTaskIds: frame.heldPositions.map(({ taskId }) => taskId),
         label: frameLabel(frame, index)
       })),
       running
@@ -700,7 +821,7 @@ const renderTimeline = (
   }
 
   const applyTaskSelection = (): void => {
-    const selectedTaskId = projectDeliveryPlayback(playback.model).selectedTaskId
+    const selectedTaskId = projectDeliveryPlayback(playback.current()).selectedTaskId
     graph.selectedTaskId = selectedTaskId
     for (const taskRow of taskFactsHost.querySelectorAll<HTMLTableRowElement>("tr[data-task-id]")) {
       const selected = taskRow.dataset.taskId === selectedTaskId
@@ -714,6 +835,8 @@ const renderTimeline = (
     const frame = frames[index]
     if (frame === undefined) return
     graph.projection = frameProjection(row, frame, index)
+    renderTaskWorkCapacity(capacityPositions, frame)
+    renderOffGraphResponsibilities(offGraphResponsibilities, frame)
     resetGraphView.disabled = frame.graph._tag !== "Established"
     change.textContent = frameChangeSummary(frames[index - 1], frame, row)
     const restartSummary = restartContinuity(frames[index - 1], frame)
@@ -721,7 +844,7 @@ const renderTimeline = (
     restart.textContent = restartSummary ?? ""
     factsHost.replaceChildren()
     renderFrameFacts(factsHost, row, frame, running)
-    const selectedTaskId = projectDeliveryPlayback(playback.model).selectedTaskId
+    const selectedTaskId = projectDeliveryPlayback(playback.current()).selectedTaskId
     selectedTask.textContent = selectedTaskId === null
       ? frame.graph._tag === "Established"
         ? "Select a task in the graph summary to correlate its graph state with exact delivery facts."
@@ -736,7 +859,7 @@ const renderTimeline = (
   }
 
   const renderPlayback = (commands: ReadonlyArray<DeliveryPlaybackCommand> = []): void => {
-    const projection = projectDeliveryPlayback(playback.model)
+    const projection = projectDeliveryPlayback(playback.current())
     follow.setAttribute("aria-pressed", String(projection.followingLive))
     follow.textContent = projection.followingLive
       ? deliveryPlaybackViewContract.followLive.activeLabel
@@ -773,8 +896,8 @@ const renderTimeline = (
   }
 
   const dispatchPlayback = (message: DeliveryPlaybackMessage): void => {
-    const [model, commands] = updateDeliveryPlayback(playback.model, message)
-    playback.model = model
+    const { changed, commands } = playback.dispatch(message)
+    if (!changed && commands.length === 0) return
     renderPlayback(commands)
   }
 
@@ -802,7 +925,7 @@ const renderTimeline = (
   graph.addEventListener("task-selected", (event) => {
     const taskId = TaskId.make((event as CustomEvent<{ readonly taskId: string }>).detail.taskId)
     dispatchPlayback(TaskSelectedRequested({ taskId }))
-    const selectedFrameIndex = projectDeliveryPlayback(playback.model).currentFrameIndex
+    const selectedFrameIndex = projectDeliveryPlayback(playback.current()).currentFrameIndex
     const frame = selectedFrameIndex === null ? undefined : frames[selectedFrameIndex]
     if (frame === undefined) return
     selectedTask.textContent = selectedTaskSummary(frame, taskId)
@@ -832,7 +955,7 @@ export const renderCassetteDeliveryWorkbench = (
   host: HTMLElement,
   row: CassetteRow,
   state: CassetteState,
-  playback: DeliveryWorkbenchPlaybackState = makeDeliveryWorkbenchPlaybackState(),
+  playback: DeliveryWorkbenchPlaybackRuntime = makeDeliveryWorkbenchPlaybackRuntime(),
   cassetteControls?: HTMLElement
 ): DeliveryWorkbenchController => {
   host.replaceChildren()

@@ -21,9 +21,15 @@ import {
   updateDeliveryPlayback
 } from "./delivery-playback.ts"
 
-const frame = (activationOrdinal: number, eligibleTaskIds: ReadonlyArray<string>, label: string) => ({
+const frame = (
+  activationOrdinal: number,
+  eligibleTaskIds: ReadonlyArray<string>,
+  label: string,
+  heldTaskIds: ReadonlyArray<string> = []
+) => ({
   activationOrdinal: AuthoredRunActivationOrdinal.make(activationOrdinal),
   eligibleTaskIds: eligibleTaskIds.map((taskId) => TaskId.make(taskId)),
+  heldTaskIds: heldTaskIds.map((taskId) => TaskId.make(taskId)),
   label
 })
 
@@ -38,7 +44,7 @@ const following = makeDeliveryPlaybackModel(frames, false)
 
 assert.deepEqual(deliveryPlaybackViewContract, {
   groupLabel: "Delivery playback controls",
-  help: "Frame = adjacent production publication · Jump = dependency wave, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
+  help: "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
   nextFrame: { accessibleName: "Next frame", label: "Frame →", shortcut: "ArrowRight" },
   nextLandmark: { accessibleName: "Next delivery landmark", label: "Jump →", shortcut: "]" },
   previousFrame: { accessibleName: "Previous frame", label: "← Frame", shortcut: "ArrowLeft" },

@@ -66,8 +66,8 @@ const scenarioTest = (name: string): DeliveryStoryAcceptanceTest => ({
   sourceFile: "packages/dalph/test/cassettes/scenario.test.ts"
 })
 
-const topologyTest = scenarioTest("consumes the double-diamond frontier through production delivery waves")
-const restartTest = scenarioTest("preserves the double-diamond middle wave across coordinator restart")
+const topologyTest = scenarioTest("consumes a staggered graph while reconstructed positions delay restart-added X")
+const restartTest = scenarioTest("preserves the double-diamond middle positions across coordinator restart")
 
 const spine = (
   beatId: DeliveryStoryBeatId,
@@ -165,10 +165,13 @@ export const deliveryStoryManifest = {
     missing("DS-19", "No maintained run combines the retained C attempt with a later capacity increase."),
     missing(
       "DS-20",
-      "The maintained double diamond makes E and F eligible together, then G; it does not add F and G behind three running tasks."
+      "The maintained staggered graph adds X during process loss and delays it behind reconstructed B/C positions; it does not add F and G behind three running tasks."
     ),
     missing("DS-21", "No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology."),
-    missing("DS-22", "Whole-run seven-task completion and normal Run termination are not implemented as one cassette.")
+    missing(
+      "DS-22",
+      "The staggered ten-task cassette terminates after executor completion, but it does not finalize every retained integration result from this prose beat."
+    )
   ] satisfies ReadonlyArray<DeliveryStoryBeatManifestEntry>
 } as const
 

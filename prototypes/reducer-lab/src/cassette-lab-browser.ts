@@ -16,7 +16,7 @@ import {
   cassetteStateStatusText
 } from "./cassette-lab-view.ts"
 import {
-  makeDeliveryWorkbenchPlaybackState,
+  makeDeliveryWorkbenchPlaybackRuntime,
   renderCassetteDeliveryWorkbench
 } from "./cassette-lab-workbench.ts"
 import { makeDeliveryPlaybackModel } from "./delivery-playback.ts"
@@ -276,7 +276,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     readonly update: (state: CassetteState) => void
     readonly updateDeliveryFrame: (state: CassetteState) => void
   } | undefined
-  const playbackByKey = new Map<MaintainedCassetteKey, ReturnType<typeof makeDeliveryWorkbenchPlaybackState>>()
+  const playbackByKey = new Map<MaintainedCassetteKey, ReturnType<typeof makeDeliveryWorkbenchPlaybackRuntime>>()
 
   const header = document.createElement("header")
   appendTextElement(header, "h1", "Dalph reducer lab")
@@ -407,7 +407,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       appendTextElement(
         article,
         "p",
-        "Delivery-story coverage: the real production delivery runtime consumes one double-diamond graph in dependency waves A → B+C → D → E+F → G. The coordinator restarts while B and C both hold exact task-work positions; recovered frames retain those same responsibilities before the frontier continues.",
+        "Delivery-story coverage: the real production runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues.",
         "delivery-story-scope"
       )
     }
@@ -450,7 +450,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     })
 
     const deliveryWorkbenchHost = document.createElement("div")
-    const playback = playbackByKey.get(row.catalogKey) ?? makeDeliveryWorkbenchPlaybackState()
+    const playback = playbackByKey.get(row.catalogKey) ?? makeDeliveryWorkbenchPlaybackRuntime()
     playbackByKey.set(row.catalogKey, playback)
     const workbench = renderCassetteDeliveryWorkbench(
       deliveryWorkbenchHost,
@@ -525,8 +525,8 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     }
     for (const key of keys) {
       const row = rowByKey.get(key)
-      const playback = playbackByKey.get(key) ?? makeDeliveryWorkbenchPlaybackState()
-      playback.model = makeDeliveryPlaybackModel([], true)
+      const playback = playbackByKey.get(key) ?? makeDeliveryWorkbenchPlaybackRuntime()
+      playback.replace(makeDeliveryPlaybackModel([], true))
       playbackByKey.set(key, playback)
       states.set(key, {
         _tag: "Running",

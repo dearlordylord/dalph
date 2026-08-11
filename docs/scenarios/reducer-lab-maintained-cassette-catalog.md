@@ -265,7 +265,7 @@ beside the primary playback experience. Playback controls and the graph precede
 the longer provenance, production-layer chain, and graph legend, which are
 collapsed under **How to read this delivery graph** until the maintainer asks
 for them. The visible playback help says that **Frame** moves to an adjacent
-production publication, **Jump** moves to a dependency wave, restart, or end,
+production publication, **Jump** moves to a frontier wave, held-position change, restart, or end,
 and **Live** follows the newest publication. A timeline with no established
 settlement says only **Established settlements in this timeline: 0** beside the
 graph; the cross-catalog explanation of direct integration-finality behavior is
@@ -505,19 +505,65 @@ worktree, and integration responsibilities. Terms such as
 `IdentityFreeWorkflowRoute` stay in the secondary exact JSON rather than
 becoming the human action label.
 
-The linked `authored:deliveryInvariantStory` is the real double-diamond graph
-story. Its tracker graph is `A -> {B, C} -> D -> {E, F} -> G`, and capacity is
-two. Production first exposes only A in the frontier. A later complete tracker
-read proves A successful and exposes B and C together. Both acquire exact
-task-work positions before the coordinator process dies. The first later-activation
-delivery publications retain both exact Run/attempt responsibilities rather
-than planning replacements. Later
-complete tracker reads prove each finished wave and expose D, then E and F
-together, then G. Every wave is admitted and
-reported through the ordinary coordinator and executor protocol. The Lab must
-show the frontier changing on the graph; it must not replace this chronology
-with a fan, a flat list, or one final tracker snapshot that declares unexecuted
-tasks complete.
+The linked `authored:deliveryInvariantStory` is the real staggered
+double-diamond graph story. Its initial tracker graph is
+`A -> {B, C} -> D -> {E -> H, F -> I} -> G`, and capacity is two. Production
+first exposes only A in the frontier. A later complete tracker read proves A
+successful and exposes B and C together. Both acquire exact task-work positions
+before the coordinator process dies.
+
+While that coordinator process is dead, Alice adds tracker task X with A as its
+prerequisite and makes X another prerequisite of G. Alice changes the tracker;
+she does not add directly to Dalph's derived frontier. The Journal still
+contains the exact unfinished B and C executor-work responsibilities and no
+terminal or safe-suspension report for either attempt. No Git, integration, or
+cleanup boundary participates in this slice because none of these executor
+results is accepted for integration.
+
+The next Run establishment reads the retained Journal, reconstructs the same B
+and C planned attempts, and recreates two anonymous process-local task-work
+positions from those unfinished responsibilities. It does not restore a slot
+identity, process-local owner, fiber, or old position map. The next ordinary
+complete tracker read observes X and the changed G prerequisites. X becomes
+graph-eligible, but B and C occupy both positions, so no X executor work begins
+and no X attempt is planned yet.
+
+The executor then reports B Terminal while C remains Running. B's report makes
+one position available but does not itself prove B complete; the graph keeps B
+open and the Lab separately shows C as the remaining holder. C then reports
+Terminal in a later production publication. Only after no current executable
+responsibility remains does an ordinary complete tracker read report B and C
+`CompletedSuccessfully`. That observation exposes D and the already-observed X,
+and those two tasks begin together. No terminal executor report is used as a
+substitute for this tracker observation.
+
+D and X report Terminal in separate production publications, so the Lab first
+shows both positions held, then X as the remaining holder, then neither held.
+The later complete tracker read proves both successful and exposes E and F.
+Those tasks begin together; E reports Terminal first while F remains visibly
+held, then F reports Terminal. The later successful tracker observation exposes
+H and I, which likewise begin together and release their positions in separate
+publications. G remains blocked until a later tracker observation proves H, I,
+and X successful. G then begins and reports through the same ordinary executor
+protocol. A final complete tracker read produces an empty eligible frontier.
+
+The Lab shows this rolling consumption on the production-observed graph rather
+than making each pair look like one atomic batch. A represented task uses
+composable node styling for graph eligibility, desired placement, retained
+responsibility, and held position. If a retained responsibility's task is
+closed, absent from the latest complete graph, or the later activation has not
+yet established a graph, the Lab must not invent a tracker node. It keeps the
+graph dimensions stable and shows that exact responsibility in an off-graph
+responsibility rail beside an anonymous capacity-position summary. The rail
+names the exact task, Run, attempt, graph placement, obligation, and whether it
+currently occupies capacity.
+
+Retrying the cassette starts fresh controlled boundary state and repeats the
+same chronology. Within one run, restart must not plan replacement B or C
+attempts, admit X before a position is available, infer task success from an
+executor Terminal report, discard a responsibility because Alice closed or
+removed its tracker task, or draw an absent responsibility as if it were a
+current tracker node.
 
 The separate `authored:deliveryFinalitySpine` crosses the ordinary production
 completion-finality boundary. After promotion, the controlled tracker returns
@@ -632,15 +678,24 @@ task whose exact facts are correlated below.
   `IntegrationFinalitySettled` order, plus a non-empty production settlement
   and tracker-reflection frame. It also proves the cassette does not fabricate
   whole-Run termination.
-- `consumes the double-diamond frontier through production delivery waves`
+- `consumes a staggered graph while reconstructed positions delay restart-added X`
   runs `authored:deliveryInvariantStory` through the public authored runner and
-  checks the exact prerequisite edges plus frontier waves A, B+C, D, E+F, G,
-  and empty. It requires real executor responsibility and terminal evidence
-  for every task rather than accepting a final tracker snapshot as execution.
-- `preserves the double-diamond middle wave across coordinator restart` checks
-  B and C hold exact task-work positions before process loss and the first
-  later-activation publications retain the same Run and attempt correlations before
-  either task advances.
+  checks the exact prerequisite edges, B/C reconstructed positions, X's later
+  tracker observation, and the staggered B+C → C → D+X → X → E+F → F → H+I → I
+  → G position chronology. It requires a later successful tracker observation
+  before each deeper admission and real executor responsibility plus terminal
+  evidence for every task.
+- `preserves the double-diamond middle positions across coordinator restart`
+  checks B and C hold exact task-work positions before process loss, the first
+  later-activation publications retain the same Run and attempt correlations,
+  and X receives neither an attempt nor a position until a later publication
+  has observed it and both reconstructed holders have reported Terminal.
+- `shows represented and off-graph responsibilities without inventing tracker nodes`
+  drives established and graph-not-established frames through the Lab
+  presentation. It checks
+  represented responsibilities compose with node encodings while off-graph
+  exact obligations remain in the capacity/responsibility rail and never become
+  topology nodes.
 - `rejects a partial authored completion-finality boundary chronology` checks
   that once an authored story uses the controlled finality boundary, each task
   must declare exactly one Active read, replacement, Completion read, and
@@ -653,10 +708,11 @@ task whose exact facts are correlated below.
 - `keeps every delivery-story beat linked to maintained evidence or an explicit implementation gap`
   checks the document's 22 stable beat IDs, exact catalog keys, explicit gap
   reasons, and generated manifest block in both directions.
-- `shows the double-diamond frontier being consumed on one graph` checks the
-  same returned frames through the Lab presentation model, including seven
-  nodes, the eight exact prerequisite edges, every frontier wave, concurrent B/C
-  and E/F held positions, and restart-preserved responsibilities.
+- `shows the staggered double-diamond frontier being consumed on one graph`
+  checks the same returned frames through the Lab presentation model, including
+  the initial and post-crash topology, X's fresh appearance, every rolling
+  frontier/held overlap, reconstructed B/C responsibilities, anonymous capacity
+  positions, and the off-graph responsibility rail.
 - `keeps multi-task chronology landmarks attributable` checks task lifecycle
   landmarks include the task identity instead of rendering indistinguishable
   repeated lifecycle fragments.
@@ -677,11 +733,12 @@ task whose exact facts are correlated below.
   selected cassette's settled event, proves the article is still Running when
   a real frame appears, and then checks final auto-follow, rewind, disclosure
   stability, and the complete current-catalog terminal summary. Its
-  `drives the double-diamond frontier through every production wave and restart`
-  checkpoint additionally observes the seven-node graph while the linked
-  cassette is still Running, traverses its exact prerequisite edges and
-  frontier waves, and checks the B/C attempt correlations on both sides of the
-  restart through the actual served application.
+  `drives the staggered double-diamond frontier through production overlap and restart`
+  checkpoint additionally observes the graph while the linked cassette is
+  still Running, traverses its exact prerequisite edges and rolling parallel
+  states, checks X appears only after the later tracker observation, and checks
+  the B/C attempt correlations and anonymous occupied positions on both sides
+  of restart through the actual served application.
 - `does not fabricate a graph workbench for direct protocol cassettes` checks
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.

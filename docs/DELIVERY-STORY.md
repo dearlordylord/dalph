@@ -6,8 +6,9 @@ makes each beat's arithmetic checkable. The story is chosen to touch as many of
 
 Both registers are prose. The maintained cassette
 `authored:deliveryInvariantStory` is an executable graph-and-restart slice: one
-real Run consumes the double diamond A → B+C → D → E+F → G, and reconstructs
-the exact B and C task-work positions after a coordinator restart. The separate
+real Run consumes the staggered graph A → B+C → D → E+F → H+I → G with X added
+during process loss between A and G, and reconstructs the exact B and C
+task-work positions before newly observed X can use capacity. The separate
 `authored:deliveryFinalitySpine` retains the real A promotion and
 completion-finality chronology. Neither cassette pretends to execute all 22
 beats below. The checked-in manifest maps every beat either to exact maintained
@@ -187,23 +188,23 @@ same key. Every demonstrated manifest row also names the exact registered
 acceptance test that checks its evidence; a catalog key by itself is not proof.
 `keeps every delivery-story beat linked to maintained evidence or an explicit
 implementation gap` checks both directions, exact catalog keys, exact test
-declarations, and the byte-for-byte manifest block. `consumes the double-diamond
-frontier through production delivery waves` runs the executable graph slice
+declarations, and the byte-for-byte manifest block. `consumes a staggered graph
+while reconstructed positions delay restart-added X` runs the executable graph slice
 through `runAuthoredScenarioCassette` and checks that it reaches its declared
 end.
 
-- `consumes the double-diamond frontier through production delivery waves`
-  checks the exact eight prerequisite edges, the ordered eligible waves A,
-  B+C, D, E+F, G, and empty, and real executor responsibility plus terminal
-  evidence for every task.
-- `preserves the double-diamond middle wave across coordinator restart` checks
+- `consumes a staggered graph while reconstructed positions delay restart-added
+  X` checks the exact twelve prerequisite edges,
+  ordered eligible waves A, B+C, B+C+X after restart, D+X, E+F, H+I, G, and empty, plus the held
+  sequence B+C, C, D+X, X, E+F, F, H+I, I, G and real terminal evidence.
+- `preserves the double-diamond middle positions across coordinator restart` checks
   that B and C both hold task-work positions before death and that recovered
   publications retain the same Run and Attempt identities.
 - `settles a promoted authored task through the real completion-claim boundary`
   checks promotion alone settles nothing; the exact A claim is replaced and
   deleted only after the declared fresh successful tracker read, producing one
   real settlement/reflection frame without claiming whole-Run termination.
-- `shows the double-diamond frontier being consumed on one graph` checks the
+- `shows the staggered double-diamond frontier being consumed on one graph` checks the
   same topology, waves, and recovered B/C correlations through the Lab's
   presentation model.
 - The real-browser checkpoint drives that catalog option while it is Running,
@@ -214,8 +215,8 @@ end.
 
 <!-- DELIVERY-STORY-MANIFEST:START -->
 cassette|authored:deliveryInvariantStory
-cassette-test|packages/dalph/test/cassettes/scenario.test.ts#it.effect#consumes the double-diamond frontier through production delivery waves
-cassette-test|packages/dalph/test/cassettes/scenario.test.ts#it.effect#preserves the double-diamond middle wave across coordinator restart
+cassette-test|packages/dalph/test/cassettes/scenario.test.ts#it.effect#consumes a staggered graph while reconstructed positions delay restart-added X
+cassette-test|packages/dalph/test/cassettes/scenario.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
 DS-01|NotImplemented|The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks.
 DS-02|NotImplemented|No maintained run admits A, B, and C together yet.
 DS-03|NotImplemented|No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change.
@@ -223,7 +224,7 @@ DS-04|NotImplemented|No named acceptance test proves B's changed graph/specifica
 DS-05|NotImplemented|The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart.
 DS-06|NotImplemented|No maintained run admits D after B's changed-instruction suspension releases one of three held positions.
 DS-07|NotImplemented|No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held.
-DS-08|DemonstratedBySpine|authored:deliveryInvariantStory|packages/dalph/test/cassettes/scenario.test.ts#it.effect#preserves the double-diamond middle wave across coordinator restart
+DS-08|DemonstratedBySpine|authored:deliveryInvariantStory|packages/dalph/test/cassettes/scenario.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
 DS-09|NotImplemented|The maintained double diamond recovers held B and C, not held A, C, and D plus retained B.
 DS-10|NotImplemented|No maintained run closes C without success and then asks its exact executor to suspend.
 DS-11|NotImplemented|No maintained run releases closed C's position while retaining its reversible lifecycle wait.
@@ -235,7 +236,7 @@ DS-16|NotImplemented|The maintained stale-head cassette detects H2 before compar
 DS-17|NotImplemented|The separate A-finality spine settles A, but does not first reconcile a stale head and rebuild its successor candidate.
 DS-18|NotImplemented|No maintained run reopens a tracker lifecycle wait for C; Operator task Unpause is a different phenomenon.
 DS-19|NotImplemented|No maintained run combines the retained C attempt with a later capacity increase.
-DS-20|NotImplemented|The maintained double diamond makes E and F eligible together, then G; it does not add F and G behind three running tasks.
+DS-20|NotImplemented|The maintained staggered graph adds X during process loss and delays it behind reconstructed B/C positions; it does not add F and G behind three running tasks.
 DS-21|NotImplemented|No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology.
-DS-22|NotImplemented|Whole-run seven-task completion and normal Run termination are not implemented as one cassette.
+DS-22|NotImplemented|The staggered ten-task cassette terminates after executor completion, but it does not finalize every retained integration result from this prose beat.
 <!-- DELIVERY-STORY-MANIFEST:END -->

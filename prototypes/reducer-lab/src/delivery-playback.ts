@@ -14,7 +14,7 @@ import {
  */
 export const deliveryPlaybackViewContract = {
   groupLabel: "Delivery playback controls",
-  help: "Frame = adjacent production publication · Jump = dependency wave, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
+  help: "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
   nextFrame: { accessibleName: "Next frame", label: "Frame →", shortcut: "ArrowRight" },
   nextLandmark: { accessibleName: "Next delivery landmark", label: "Jump →", shortcut: "]" },
   previousFrame: { accessibleName: "Previous frame", label: "← Frame", shortcut: "ArrowLeft" },
@@ -35,6 +35,7 @@ export const DeliveryLandmark = Schema.Union([
   ts("InitialPublication"),
   ts("CoordinatorRestart", { activationOrdinal: AuthoredRunActivationOrdinal }),
   ts("EligibleFrontierWave", { taskIds: Schema.NonEmptyArray(TaskId) }),
+  ts("HeldPositionsChanged", { taskIds: Schema.Array(TaskId) }),
   ts("TerminalPublication")
 ])
 export type DeliveryLandmark = typeof DeliveryLandmark.Type
@@ -43,6 +44,7 @@ export type DeliveryLandmark = typeof DeliveryLandmark.Type
 export interface DeliveryPlaybackFrameInput {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
   readonly eligibleTaskIds: ReadonlyArray<TaskIdType>
+  readonly heldTaskIds: ReadonlyArray<TaskIdType>
   readonly label: string
 }
 
@@ -87,6 +89,12 @@ export const deliveryPlaybackFramesFrom = (
         }
         lastFrontier = frontier
       }
+    }
+    if (
+      previous !== undefined
+      && JSON.stringify(previous.heldTaskIds.toSorted()) !== JSON.stringify(input.heldTaskIds.toSorted())
+    ) {
+      landmarks.push({ _tag: "HeldPositionsChanged", taskIds: input.heldTaskIds.toSorted() })
     }
     if (!running && index === inputs.length - 1) landmarks.push({ _tag: "TerminalPublication" })
     return DeliveryPlaybackFrame.make({ label: input.label, landmarks })
@@ -219,6 +227,10 @@ const landmarkLabel = (landmarks: ReadonlyArray<DeliveryLandmark>): string | nul
         return `coordinator restart into activation ${landmark.activationOrdinal}`
       case "EligibleFrontierWave":
         return `eligible frontier ${landmark.taskIds.join("+")}`
+      case "HeldPositionsChanged":
+        return landmark.taskIds.length === 0
+          ? "all task-work positions released"
+          : `held task-work positions ${landmark.taskIds.join("+")}`
       case "TerminalPublication":
         return "settled terminal publication"
     }

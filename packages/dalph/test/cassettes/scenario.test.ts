@@ -1927,29 +1927,41 @@ it.effect("settles a promoted authored task through the real completion-claim bo
   })
 )
 
-it.effect("consumes the double-diamond frontier through production delivery waves", () =>
+it.effect("consumes a staggered graph while reconstructed positions delay restart-added X", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory)
     const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
-    const sevenTasks = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 7)
+    const completeTopology = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 10)
     const edges =
-      sevenTasks?.graph._tag === "Established"
-        ? sevenTasks.graph.tasks.flatMap(({ id, prerequisiteIds }) =>
+      completeTopology?.graph._tag === "Established"
+        ? completeTopology.graph.tasks.flatMap(({ id, prerequisiteIds }) =>
             prerequisiteIds.map((prerequisiteId) => `${prerequisiteId}->${id}`)
           )
         : []
-    const eligibleWaves = established.map(({ frontier }) =>
+    const heldSets = run.deliveryFrames.map(({ heldPositions }) =>
+      heldPositions
+        .map(({ taskId }) => taskId)
+        .toSorted()
+        .join("+")
+    )
+    const eligibleSets = established.map(({ frontier }) =>
       frontier
         .filter(({ standing }) => standing === "Eligible")
         .map(({ taskId }) => taskId)
         .toSorted()
         .join("+")
     )
-    const expectedWaves = ["A", "B+C", "D", "E+F", "G", ""]
-    let previousWave = -1
-    const wavePositions = expectedWaves.map((wave) => {
-      previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
-      return previousWave
+    const expectedFrontiers = ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""]
+    let previousFrontier = -1
+    const frontierPositions = expectedFrontiers.map((frontier) => {
+      previousFrontier = eligibleSets.indexOf(frontier, previousFrontier + 1)
+      return previousFrontier
+    })
+    const expectedOverlaps = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"]
+    let previousOverlap = -1
+    const overlapPositions = expectedOverlaps.map((overlap) => {
+      previousOverlap = heldSets.indexOf(overlap, previousOverlap + 1)
+      return previousOverlap
     })
     const taskByAttempt = new Map(
       run.records.flatMap(({ event }) =>
@@ -1965,27 +1977,37 @@ it.effect("consumes the double-diamond frontier through production delivery wave
           ? [`terminal:${taskByAttempt.get(event.report.correlation.attemptId)}`]
           : []
     )
+    const taskIds = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X"]
 
-    expect(sevenTasks).toBeDefined()
-    expect(edges.toSorted()).toEqual(["A->B", "A->C", "B->D", "C->D", "D->E", "D->F", "E->G", "F->G"])
-    expect(sevenTasks?.frontier).toHaveLength(7)
-    expect(wavePositions.every((position) => position >= 0)).toBe(true)
+    expect(completeTopology).toBeDefined()
+    expect(edges.toSorted()).toEqual([
+      "A->B",
+      "A->C",
+      "A->X",
+      "B->D",
+      "C->D",
+      "D->E",
+      "D->F",
+      "E->H",
+      "F->I",
+      "H->G",
+      "I->G",
+      "X->G"
+    ])
+    expect(completeTopology?.frontier).toHaveLength(10)
+    expect(overlapPositions.every((position) => position >= 0)).toBe(true)
+    expect(frontierPositions.every((position) => position >= 0)).toBe(true)
     expect(run.deliveryFrames.every(({ capacity, heldPositions }) => capacity === 2 && heldPositions.length <= 2)).toBe(
       true
     )
-    expect(
-      run.deliveryFrames.some(({ heldPositions }) =>
-        ["E", "F"].every((taskId) => heldPositions.some((position) => position.taskId === taskId))
-      )
-    ).toBe(true)
     expect(taskWork.toSorted()).toEqual(
-      ["A", "B", "C", "D", "E", "F", "G"].flatMap((taskId) => [`began:${taskId}`, `terminal:${taskId}`]).toSorted()
+      taskIds.flatMap((taskId) => [`began:${taskId}`, `terminal:${taskId}`]).toSorted()
     )
     expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
   })
 )
 
-it.effect("preserves the double-diamond middle wave across coordinator restart", () =>
+it.effect("preserves the double-diamond middle positions across coordinator restart", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory)
     const initial = run.deliveryFrames.find(
@@ -2006,6 +2028,18 @@ it.effect("preserves the double-diamond middle wave across coordinator restart",
     if (initial === undefined || later === undefined) return
     expect(later.heldPositions.map(({ taskId }) => taskId).toSorted()).toEqual(["B", "C"])
     expect(correlations(later)).toEqual(correlations(initial))
+    const xObservedWithBothPositions = run.deliveryFrames.findIndex(
+      ({ graph, heldPositions }) =>
+        graph._tag === "Established" &&
+        graph.tasks.some(({ id }) => id === "X") &&
+        ["B", "C"].every((taskId) => heldPositions.some((position) => position.taskId === taskId))
+    )
+    const xHeld = run.deliveryFrames.findIndex(({ heldPositions }) =>
+      heldPositions.some(({ taskId }) => taskId === "X")
+    )
+    expect(xObservedWithBothPositions).toBeGreaterThanOrEqual(0)
+    expect(xHeld).toBeGreaterThan(xObservedWithBothPositions)
+    expect(run.deliveryFrames[xHeld]?.heldPositions.some(({ taskId }) => taskId === "B" || taskId === "C")).toBe(false)
   })
 )
 

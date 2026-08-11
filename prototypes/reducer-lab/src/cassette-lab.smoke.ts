@@ -94,13 +94,13 @@ await scenario("captures every authored delivery frame from the real production 
   }
 })
 
-await scenario("shows the double-diamond frontier being consumed on one graph", () => {
+await scenario("shows the staggered double-diamond frontier being consumed on one graph", () => {
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The linked story must complete with frames")
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
   const frames = result.deliveryFrames
   const established = frames.filter(({ graph }) => graph._tag === "Established")
-  const graph = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 7)?.graph
+  const graph = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 10)?.graph
   const edges = graph?._tag === "Established"
     ? graph.tasks.flatMap(({ id, prerequisiteIds }) => prerequisiteIds.map((from) => `${from}->${id}`)).toSorted()
     : []
@@ -109,7 +109,7 @@ await scenario("shows the double-diamond frontier being consumed on one graph", 
     .map(({ taskId }) => taskId)
     .toSorted()
     .join("+"))
-  const positions = ["A", "B+C", "D", "E+F", "G", ""].reduce<ReadonlyArray<number>>(
+  const positions = ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""].reduce<ReadonlyArray<number>>(
     (found, wave) => [...found, eligible.indexOf(wave, (found.at(-1) ?? -1) + 1)],
     []
   )
@@ -120,18 +120,25 @@ await scenario("shows the double-diamond frontier being consumed on one graph", 
   )
   const initial = heldMiddle(1)
   const later = frames.find(({ activationOrdinal }) => activationOrdinal === 2)
-  const lowerDiamondHeld = frames.some(({ heldPositions }) => ["E", "F"].every((taskId) =>
-    heldPositions.some((position) => position.taskId === taskId)
-  ))
+  const heldSequence = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"].reduce<ReadonlyArray<number>>(
+    (found, tasks) => [...found, frames.findIndex((frame, index) =>
+      index > (found.at(-1) ?? -1)
+      && frame.heldPositions.map(({ taskId }) => taskId).toSorted().join("+") === tasks
+    )],
+    []
+  )
   const correlations = (frame: NonNullable<typeof initial>) => frame.heldPositions
     .filter(({ taskId }) => taskId === "B" || taskId === "C")
     .map(({ attemptId, runId, taskId }) => `${taskId}:${runId}:${attemptId}`)
     .toSorted()
 
-  assert(edges.join(",") === "A->B,A->C,B->D,C->D,D->E,D->F,E->G,F->G", "The graph must be the exact double diamond")
+  assert(
+    edges.join(",") === "A->B,A->C,A->X,B->D,C->D,D->E,D->F,E->H,F->I,H->G,I->G,X->G",
+    "The graph must be the staggered double diamond with restart-added X"
+  )
   assert(positions.every((position) => position >= 0), "The production frontier must consume every dependency wave in order")
+  assert(heldSequence.every((position) => position >= 0), "The graph must expose each staggered held-position release in order")
   assert(initial !== undefined && later !== undefined, "B and C must remain held across restart")
-  assert(lowerDiamondHeld, "E and F must occupy the two bounded task-work positions together")
   if (initial !== undefined && later !== undefined) {
     assert(later.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C", "The first later-activation frame must retain both middle-wave positions")
     assert(correlations(later).join(",") === correlations(initial).join(","), "A later activation must preserve both exact positions")
@@ -416,7 +423,7 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
     "The primary graph must precede the explanatory delivery manual"
   )
   assert(
-    workbench.querySelector(".delivery-playback-shortcuts")?.textContent === "Frame = adjacent production publication · Jump = dependency wave, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
+    workbench.querySelector(".delivery-playback-shortcuts")?.textContent === "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
     "Visible playback help must distinguish adjacent frames, delivery landmarks, and live following"
   )
   const status = workbench.querySelector(".delivery-timeline-controls output")
@@ -558,6 +565,54 @@ await scenario("shows the production-observed graph frontier bounded tickets and
   workbench?.querySelector<HTMLButtonElement>("button[data-role='next-frame']")?.click()
   assert(workbench?.querySelector("tr[data-task-id='A']")?.getAttribute("aria-current") === "true", "Task selection must remain synchronized across frame navigation")
 
+})
+
+await scenario("shows represented and off-graph responsibilities without inventing tracker nodes", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
+    throw new Error("The staggered delivery story is missing")
+  }
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const select = document.querySelector<HTMLSelectElement>(".delivery-timeline-controls select")
+  if (select === null) throw new Error("The delivery timeline is missing")
+  const selectFrame = (index: number): void => {
+    for (const option of select.options) {
+      if (option.value === String(index)) option.setAttribute("selected", "")
+      else option.removeAttribute("selected")
+    }
+    select.dispatchEvent(new Event("change"))
+  }
+  const restartIndex = result.deliveryFrames.findIndex((frame) =>
+    frame.activationOrdinal === 2
+    && frame.graph._tag === "NotEstablished"
+    && frame.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C"
+  )
+  if (restartIndex < 0) throw new Error("The restart frame with reconstructed B/C positions is missing")
+  selectFrame(restartIndex)
+  const capacity = document.querySelector("[data-role='delivery-capacity-positions']")
+  const rail = document.querySelector("[data-role='delivery-off-graph-responsibilities']")
+  assert(capacity?.textContent?.includes("2 held of capacity 2") === true, "The capacity strip must show both reconstructed positions")
+  assert(capacity?.textContent?.includes("B · attempt:B:1") === true, "The capacity strip must correlate B's exact attempt")
+  assert(capacity?.textContent?.includes("C · attempt:C:2") === true, "The capacity strip must correlate C's exact attempt")
+  assert(capacity?.textContent?.toLowerCase().includes("anonymous") === true, "The capacity strip must not invent durable slot identities")
+  assert(rail?.textContent?.includes("B") === true && rail.textContent.includes("C"), "The off-graph rail must retain both responsibilities")
+  assert(rail?.textContent?.includes("graph not established") === true, "The rail must explain why the responsibilities are outside the graph")
+
+  const staggeredIndex = result.deliveryFrames.findIndex((frame) =>
+    frame.graph._tag === "Established"
+    && frame.heldPositions.map(({ taskId }) => taskId).join(",") === "C"
+  )
+  if (staggeredIndex < 0) throw new Error("The staggered C-only frame is missing")
+  selectFrame(staggeredIndex)
+  const representedCapacity = document.querySelector("[data-role='delivery-capacity-positions']")
+  assert(representedCapacity?.textContent?.includes("1 held of capacity 2") === true, "One released position must be visible before C finishes")
+  assert(representedCapacity?.textContent?.includes("1 available anonymous position") === true, "Released capacity must remain anonymous and visible")
+  assert(document.querySelector("[data-role='delivery-off-graph-responsibilities']") === null, "Graph-represented responsibilities must stay on their graph nodes")
 })
 
 await scenario("does not fabricate a graph workbench for direct protocol cassettes", () => {

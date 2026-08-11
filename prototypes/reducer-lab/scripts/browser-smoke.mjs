@@ -110,7 +110,7 @@ try {
   )
   assert.equal(
     await workbench.locator(".delivery-playback-shortcuts").textContent(),
-    "Frame = adjacent production publication · Jump = dependency wave, restart, or end · Live = follow newest · Keys: ←/→ and [/]."
+    "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/]."
   )
   const primaryBeforeGuide = await workbench.evaluate((element) => {
     const controls = element.querySelector(".delivery-timeline-controls")
@@ -355,7 +355,7 @@ try {
     { timeout: terminalTimeoutMs }
   )
   const linkedTrace = await page.evaluate(() => globalThis.__linkedDeliveryStoryTrace)
-  assert.ok(linkedTrace.some(({ state, taskCount }) => state === "Running" && taskCount === 7))
+  assert.ok(linkedTrace.some(({ state, taskCount }) => state === "Running" && taskCount === 10))
   const stableTrace = linkedTrace.filter(({ graphTop }) => graphTop !== null)
   assert.ok(stableTrace.length > 10)
   assert.ok(stableTrace.every(({ graphTop, scrollY }) =>
@@ -379,18 +379,25 @@ try {
           .filter((taskId) => taskId !== null)
           .sort()
           .join("+"),
+        held: [...document.querySelectorAll('[data-role="delivery-capacity-positions"] [data-task-id]')]
+          .map((item) => item.getAttribute("data-task-id"))
+          .filter((taskId) => taskId !== null)
+          .sort()
+          .join("+"),
+        offGraph: document.querySelector('[data-role="delivery-off-graph-responsibilities"]')?.textContent ?? "",
+        capacity: document.querySelector('[data-role="delivery-capacity-positions"]')?.textContent ?? "",
         taskCount: graph.projection?.tasks.length ?? 0,
         taskState: document.querySelector('[data-role="delivery-task-state"]')?.textContent ?? ""
       }
     })
   })
   assert.deepEqual(
-    linkedFrameTruth.find(({ taskCount }) => taskCount === 7)?.edges,
-    ["A->B", "A->C", "B->D", "C->D", "D->E", "D->F", "E->G", "F->G"]
+    linkedFrameTruth.find(({ taskCount }) => taskCount === 10)?.edges,
+    ["A->B", "A->C", "A->X", "B->D", "C->D", "D->E", "D->F", "E->H", "F->I", "H->G", "I->G", "X->G"]
   )
   const eligibleWaves = linkedFrameTruth.map(({ eligible }) => eligible)
   let previousWave = -1
-  for (const wave of ["A", "B+C", "D", "E+F", "G", ""]) {
+  for (const wave of ["A", "B+C", "D+X", "E+F", "H+I", "G", ""]) {
     previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
     assert.ok(previousWave >= 0, `missing rendered frontier wave ${wave || "empty"}`)
   }
@@ -402,11 +409,21 @@ try {
   assert.ok(laterMiddle)
   assert.match(laterMiddle.taskState, /attempt:B:1/u)
   assert.match(laterMiddle.taskState, /attempt:C:2/u)
+  assert.match(laterMiddle.capacity, /2 held of capacity 2/u)
+  assert.match(laterMiddle.capacity, /Anonymous process-local positions/u)
+  assert.match(laterMiddle.offGraph, /Task B · graph not established/u)
+  assert.match(laterMiddle.offGraph, /Task C · graph not established/u)
+  const heldSequence = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"]
+  let previousHeld = -1
+  for (const held of heldSequence) {
+    previousHeld = linkedFrameTruth.findIndex(({ held: value }, index) => index > previousHeld && value === held)
+    assert.ok(previousHeld >= 0, `missing rendered held-position state ${held}`)
+  }
   assert.ok(await linkedFrameSelector.locator("option").count() > 1)
   await linkedFrameSelector.selectOption("0")
   const landmarkWaves = []
   const nextLandmark = linkedWorkbench.getByRole("button", { name: "Next delivery landmark" })
-  while (await nextLandmark.isEnabled() && landmarkWaves.length < 12) {
+  while (await nextLandmark.isEnabled() && landmarkWaves.length < 64) {
     await nextLandmark.click()
     const wave = await linkedWorkbench.locator('tr[data-task-id]').evaluateAll((rows) => rows
       .filter((row) => row.querySelector('[data-label="Graph-only eligibility"]')?.textContent?.startsWith("eligible"))
@@ -416,12 +433,18 @@ try {
       .join("+"))
     landmarkWaves.push(`${await linkedFrameSelector.inputValue()}:${wave}:${await linkedFrameSelector.locator("option:checked").textContent()}`)
   }
-  for (const wave of ["A", "B+C", "D", "E+F", "G", ""]) assert.ok(landmarkWaves.some((value) => value.includes(`:${wave}:`)))
+  for (const wave of ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""]) {
+    assert.ok(
+      landmarkWaves.some((value) => value.includes(`:${wave}:`)),
+      `missing landmark frontier ${wave || "empty"}: ${JSON.stringify(landmarkWaves)}`
+    )
+  }
   for (const activation of ["Initial activation 1", "Later activation 2", "Later activation 3", "Later activation 4"]) {
     assert.ok(landmarkWaves.some((value) => value.includes(activation)), `missing delivery landmark for ${activation}`)
   }
-  assert.ok(landmarkWaves.length <= 9, `too many delivery landmarks: ${JSON.stringify(landmarkWaves)}`)
-  console.log("✓ drives the double-diamond frontier through every production wave and restart")
+  for (const held of heldSequence) assert.ok(landmarkWaves.some((value) => value.includes(`held task-work positions ${held}`)))
+  assert.ok(landmarkWaves.length <= 40, `too many delivery landmarks: ${JSON.stringify(landmarkWaves)}`)
+  console.log("✓ drives the staggered double-diamond frontier through every production wave, held-position release, and restart")
 
   const linkedFrameCount = await linkedFrameSelector.locator("option").count()
   await linkedFrameSelector.selectOption(String(Math.max(0, linkedFrameCount - 28)))
