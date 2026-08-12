@@ -2,6 +2,7 @@
 import { Effect, Match, Schema } from "effect"
 import {
   AttemptChoiceAppliedEvent,
+  AttemptRestartAuthorityReadFailedEvent,
   AttemptImplementationAbandonedEvent,
   AttemptStoppageIntendedEvent,
   ControlDirectionAppliedEvent,
@@ -744,6 +745,16 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
   if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
   if (isOperatorDirectionEvent(event)) return recordedOperatorDirectionEntryFor(event)
   if (isAttemptStopEvent(event)) return recordedAttemptStopEntryFor(event)
+  if (event._tag === "AttemptRestartAuthorityReadFailed") {
+    return {
+      _tag: event._tag,
+      failure: event.failure,
+      occurrenceClassification: event.occurrenceClassification,
+      operationId: event.operationId,
+      requestId: event.requestId,
+      subject: event.subject
+    }
+  }
   if (isIntegrationPreparationEvent(event)) return recordIntegrationPreparationEntry(event)
   if (
     event._tag === "GitReadIntentRecorded" ||
@@ -1332,6 +1343,7 @@ const eventForContinuationAuthorizationEntry = (entry: RecordedContinuationAutho
     witness: entry.witness
   })
 
+// eslint-disable-next-line complexity -- The inverse fold exhaustively routes the closed recorded cassette vocabulary.
 const eventForOtherRecordedEntry = (
   entry: Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>,
   entries: ReadonlyArray<RecordedCassetteEntry>,
@@ -1341,6 +1353,9 @@ const eventForOtherRecordedEntry = (
   if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
   if (isRecordedOperatorDirectionEntry(entry)) return eventForRecordedOperatorDirectionEntry(entry, runId)
   if (isRecordedAttemptStopEntry(entry)) return eventForRecordedAttemptStopEntry(entry)
+  if (entry._tag === "AttemptRestartAuthorityReadFailed") {
+    return AttemptRestartAuthorityReadFailedEvent.make({ ...entry, version: workflowJournalEventVersion })
+  }
   if (isRecordedIntegrationPreparationEntry(entry)) return eventForIntegrationPreparationEntry(entry, entries, index)
   if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return eventForExecutorEntry(entry)
@@ -1592,6 +1607,9 @@ const lyricForTaskBoundaryEntry = (
       : `Dalph coordinator started integrating accepted commit ${entry.acceptedResult.commit}.`
   }
   if (isRecordedWorktreeEntry(entry)) return lyricForWorktreeEntry(entry)
+  if (entry._tag === "AttemptRestartAuthorityReadFailed") {
+    return `The ${entry.failure._tag} boundary failed while Dalph checked whether attempt ${entry.subject.plannedAttempt.attemptId} could be replaced.`
+  }
   if (entry._tag === "PlannedAttemptReplaced") {
     return `Dalph atomically replaced attempt ${entry.subject.plannedAttempt.attemptId} with clean attempt ${entry.successorPlan.plannedAttempt.attemptId}.`
   }

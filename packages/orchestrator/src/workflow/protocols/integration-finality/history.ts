@@ -22,6 +22,7 @@ import { isExactTaskClaim } from "../../../authorities/task-tracker/claim-mutati
 import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import { invalidCompletionTaskHistory } from "./completion-task-history.js"
 import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
+import { recordedTaskAttemptPlans } from "../task-attempt-planning/journal-evidence.js"
 
 type ReplacementIntent = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimReplacementIntended" }>
 type ReplacementAttempt = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimReplacementAttemptIntended" }>
@@ -62,15 +63,8 @@ const exactPlanPrior = (
   claim: CompletionTaskClaim,
   position: JournalPosition
 ): boolean =>
-  prior(records, position).some(({ event }) => {
-    const operation =
-      event._tag === "TaskAttemptPlanned"
-        ? event.operation
-        : event._tag === "PlannedAttemptReplaced"
-          ? event.successorPlan
-          : undefined
+  recordedTaskAttemptPlans(prior(records, position)).some((operation) => {
     if (
-      operation === undefined ||
       operation.plannedAttempt.attemptId !== claim.plannedAttempt.attemptId ||
       !plannedTaskAttemptEquivalence(operation.plannedAttempt, claim.plannedAttempt)
     )

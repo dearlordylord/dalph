@@ -110,7 +110,7 @@ const indexes = (): IntegrationHistoryIndexes => ({
   integrationCandidatesConstructed: new Map([[candidate.constructedAt, constructed]]),
   integrationResponsibilitiesBegan: new Map(),
   integrationStarted: new Map(),
-  restartChoicesAppliedAt: new Map(),
+  firstRestartChoiceAppliedAt: new Map(),
   targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
   targetVerificationIntents: new Map(),
   targetVerificationTerminals: new Set()

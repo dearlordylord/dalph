@@ -44,7 +44,7 @@ export interface IntegrationHistoryIndexes {
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>
   >
-  readonly restartChoicesAppliedAt: Map<AttemptId, JournalPosition>
+  readonly firstRestartChoiceAppliedAt: Map<AttemptId, JournalPosition>
   readonly integrationCandidateIntents: Map<
     string,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateConstructionIntended" }>
@@ -89,7 +89,7 @@ const invalidResponsibilityBeginning = (
 ): string | undefined => {
   const accepted = indexes.acceptedExecutorResults.get(event.plannedAttempt.attemptId)
   const acceptedAt = indexes.acceptedExecutorResultPositions.get(event.plannedAttempt.attemptId)
-  const restartAt = indexes.restartChoicesAppliedAt.get(event.plannedAttempt.attemptId)
+  const restartAt = indexes.firstRestartChoiceAppliedAt.get(event.plannedAttempt.attemptId)
   const executorResponsibility = indexes.executorResponsibilitiesBegan.get(event.plannedAttempt.attemptId)
   return restartAt !== undefined && acceptedAt !== undefined && restartAt < acceptedAt
     ? `integration responsibility for attempt ${event.plannedAttempt.attemptId} follows an Accepted result suppressed by prior Restart`

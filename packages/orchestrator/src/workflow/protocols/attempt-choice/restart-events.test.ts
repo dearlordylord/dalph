@@ -71,6 +71,7 @@ const successorPlan = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("restart-event-plan-P2"),
   plannedAttempt: p2,
   predecessorOperationIds: [
+    witness.expectedClaim.operationId,
     witness.graphObservationOperationId,
     witness.specificationObservationOperationId,
     witness.claimObservationOperationId,
@@ -108,5 +109,22 @@ it.effect("rejects a successor that reuses P1 resources or is not based at recor
         _tag: "SchemaError"
       })
     }
+  })
+)
+
+it.effect("rejects a successor plan that omits retained K1 from its causal history", () =>
+  Effect.gen(function* () {
+    const invalid = {
+      ...event,
+      successorPlan: {
+        ...successorPlan,
+        predecessorOperationIds: successorPlan.predecessorOperationIds.filter(
+          (operationId) => operationId !== expectedClaim.operationId
+        )
+      }
+    }
+    expect(yield* Schema.decodeUnknownEffect(PlannedAttemptReplacedEvent)(invalid).pipe(Effect.flip)).toMatchObject({
+      _tag: "SchemaError"
+    })
   })
 )

@@ -233,13 +233,19 @@ const promotedPlanFor = (records: ReadonlyArray<JournalRecord>) => {
   const promotion = records.findLast(({ event }) => event._tag === "TargetPromotionObservedSuccess")?.event
   if (promotion?._tag !== "TargetPromotionObservedSuccess") return undefined
   const promotedAttempt = promotion.correlation.candidateCorrelation
-  const planned = records.findLast(
-    ({ event }) =>
-      event._tag === "TaskAttemptPlanned" &&
-      event.operation.plannedAttempt.attemptId === promotedAttempt.attemptId &&
-      event.operation.plannedAttempt.runId === promotedAttempt.runId
-  )?.event
-  return planned?._tag === "TaskAttemptPlanned" ? { planned, promotion } : undefined
+  const planned = records
+    .flatMap(({ event }) =>
+      event._tag === "TaskAttemptPlanned"
+        ? [event.operation]
+        : event._tag === "PlannedAttemptReplaced"
+          ? [event.successorPlan]
+          : []
+    )
+    .findLast(
+      ({ plannedAttempt }) =>
+        plannedAttempt.attemptId === promotedAttempt.attemptId && plannedAttempt.runId === promotedAttempt.runId
+    )
+  return planned === undefined ? undefined : { planned, promotion }
 }
 
 const completeGraphCoveringTask = (records: ReadonlyArray<JournalRecord>, taskId: TaskId) =>
@@ -258,7 +264,7 @@ const preparedFinalityFromPromotedRecords = Effect.fn(
     return yield* Effect.die("promoted finality cassette requires the promoted planned attempt")
   }
   const { planned, promotion } = premises
-  const plannedAttempt = planned.operation.plannedAttempt
+  const plannedAttempt = planned.plannedAttempt
   const acquired = authorizedClaimForAttempt(records, plannedAttempt)
   if (acquired === undefined) return yield* Effect.die("promoted finality cassette requires its authorized exact claim")
   const activeClaim = acquired.claim
@@ -281,7 +287,7 @@ const preparedFinalityFromPromotedRecords = Effect.fn(
     activeClaim,
     claim,
     initialRecords: records,
-    planOperation: planned.operation,
+    planOperation: planned,
     plannedAttempt,
     promotionCorrelation: promotion.correlation,
     promotionSuccess: promotion,

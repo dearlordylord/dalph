@@ -283,6 +283,67 @@ it.effect("preserves a late Accepted report after Restart without offering or re
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
+it.effect("retains the first Restart cutoff when a later malformed choice is also present", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("A", 0)
+    const result = acceptedResult("a")
+    const firstRequest = AttemptChoiceRequestId.make({ nonce: "first-restart", runId })
+    yield* beginRun
+    const journal = yield* JournalStore
+    yield* recordAcceptedTerminal(
+      attempt,
+      result,
+      journal
+        .append(
+          runId,
+          attemptChoiceAppliedRecordKey(firstRequest),
+          AttemptChoiceAppliedEvent.make({
+            choice: "RestartTaskImplementation",
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            requestId: firstRequest,
+            subject: { observedTaskRevision: TaskRevision.make("revision-A-F2"), plannedAttempt: attempt },
+            version: workflowJournalEventVersion
+          })
+        )
+        .pipe(Effect.asVoid, Effect.orDie)
+    )
+    const laterRequest = AttemptChoiceRequestId.make({ nonce: "later-malformed-restart", runId })
+    yield* journal.append(
+      runId,
+      attemptChoiceAppliedRecordKey(laterRequest),
+      AttemptChoiceAppliedEvent.make({
+        choice: "RestartTaskImplementation",
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        requestId: laterRequest,
+        subject: { observedTaskRevision: TaskRevision.make("revision-A-F3"), plannedAttempt: attempt },
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      integrationResponsibilityBeganRecordKey(attempt.attemptId),
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult: result,
+        integrationTarget,
+        plannedAttempt: attempt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
+
+    expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
+    if (reduction._tag !== "InvalidWorkflowJournalHistory") return
+    expect(reduction.issues).toContainEqual(
+      expect.objectContaining({
+        detail: `integration responsibility for attempt ${attempt.attemptId} follows an Accepted result suppressed by prior Restart`
+      })
+    )
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
 it.effect("rejects a responsibility before the matching accepted terminal report is durable", () =>
   Effect.gen(function* () {
     const attempt = plannedAttempt("A", 0)

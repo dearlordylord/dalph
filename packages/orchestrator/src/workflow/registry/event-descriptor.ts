@@ -234,6 +234,19 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
         ],
         requiredOperationIds: event.successorPlan.predecessorOperationIds
       }),
+    AttemptRestartAuthorityReadFailed: (event) =>
+      operationEvent({
+        expectedKey: outcomeRecordKey(event.operationId),
+        operationId: event.operationId,
+        plannedAttempt: event.subject.plannedAttempt,
+        requiredOperationIds: [event.operationId],
+        requiredPredecessorKey: intentRecordKey(event.operationId),
+        requiredPredecessorKinds: [
+          event.failure._tag === "AttemptRestartTaskFactsReadFailure"
+            ? "TaskTrackerReadIntentRecorded"
+            : "GitReadIntentRecorded"
+        ]
+      }),
     AttemptStoppageIntended: (event) => ({
       _tag: "AttemptChoiceEventDescriptor",
       expectedKey: attemptStoppageIntentRecordKey(event.requestId),

@@ -22,5 +22,14 @@ const transitionRuleByEventKind: Partial<Record<JournalEventTag, WorkflowJournal
 }
 
 export const workflowJournalTransitionRuleFor = (
-  eventKind: JournalEventTag
-): WorkflowJournalTransitionRule | undefined => transitionRuleByEventKind[eventKind]
+  event: WorkflowJournalEvent
+): WorkflowJournalTransitionRule | undefined =>
+  event._tag === "AttemptRestartAuthorityReadFailed"
+    ? {
+        _tag: "Outcome",
+        requiredIntent:
+          event.failure._tag === "AttemptRestartTaskFactsReadFailure"
+            ? "TaskTrackerReadIntentRecorded"
+            : "GitReadIntentRecorded"
+      }
+    : transitionRuleByEventKind[event._tag]

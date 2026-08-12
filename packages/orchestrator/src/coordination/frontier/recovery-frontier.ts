@@ -4,6 +4,7 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import { reconstructedTaskGraphFor } from "../reconstruction/graph-knowledge.js"
 import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { WorkflowOperation } from "../../workflow/registry/operation.js"
+import { recordedTaskAttemptPlans } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 
 /**
  * One exact next durable boundary for a task entering or continuing Dalph-coordinated work.
@@ -299,14 +300,8 @@ export const deriveRunRecoveryFrontier = (records: ReadonlyArray<JournalRecord>)
       event._tag === "PlannedAttemptReplaced" ? [event.subject.plannedAttempt.attemptId] : []
     )
   )
-  const planOperations = records.flatMap(({ event }) =>
-    event._tag === "TaskAttemptPlanned"
-      ? replacedAttemptIds.has(event.operation.plannedAttempt.attemptId)
-        ? []
-        : [event.operation]
-      : event._tag === "PlannedAttemptReplaced"
-        ? [event.successorPlan]
-        : []
+  const planOperations = recordedTaskAttemptPlans(records).filter(
+    ({ plannedAttempt }) => !replacedAttemptIds.has(plannedAttempt.attemptId)
   )
   const plannedStages = planOperations.map((operation) => recoveryEntryForAttempt(records, operation))
   const plannedTaskIds = new Set(planOperations.map(({ plannedAttempt }) => plannedAttempt.taskId))

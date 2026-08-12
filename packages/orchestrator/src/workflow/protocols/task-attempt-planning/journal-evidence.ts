@@ -4,6 +4,23 @@ import { type OperationId } from "../../identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { samePlannedTaskAttempt, TaskAttemptPlanHistoryContradiction } from "./record.js"
 
+/** Every durable planned-attempt recording operation, including an atomic replacement's successor plan. */
+export const recordedTaskAttemptPlans = (records: ReadonlyArray<JournalRecord>) =>
+  records.flatMap(({ event }) =>
+    event._tag === "TaskAttemptPlanned"
+      ? [event.operation]
+      : event._tag === "PlannedAttemptReplaced"
+        ? [event.successorPlan]
+        : []
+  )
+
+/** Finds the durable operation that recorded one exact attempt identity. */
+export const recordedTaskAttemptPlanFor = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) =>
+  recordedTaskAttemptPlans(records).find(
+    ({ plannedAttempt: recorded }) =>
+      recorded.attemptId === plannedAttempt.attemptId && samePlannedTaskAttempt(recorded, plannedAttempt)
+  )
+
 /** Requires the one exact causal durable plan before resource reconciliation. */
 export const requireAcknowledgedPlan = Effect.fn("WorkflowJournal.requireAcknowledgedPlan")(function* (
   records: ReadonlyArray<JournalRecord>,
@@ -11,13 +28,8 @@ export const requireAcknowledgedPlan = Effect.fn("WorkflowJournal.requireAcknowl
   operationId: OperationId,
   predecessorOperationIds: ReadonlyArray<OperationId>
 ) {
-  const plans = records.flatMap(({ event }) =>
-    event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
-      ? [event.operation]
-      : event._tag === "PlannedAttemptReplaced" &&
-          event.successorPlan.plannedAttempt.attemptId === plannedAttempt.attemptId
-        ? [event.successorPlan]
-        : []
+  const plans = recordedTaskAttemptPlans(records).filter(
+    ({ plannedAttempt: recorded }) => recorded.attemptId === plannedAttempt.attemptId
   )
   const plan = plans[0]
   if (plan === undefined || plans.length !== 1) {

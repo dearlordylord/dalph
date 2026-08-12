@@ -1,7 +1,9 @@
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { Effect, Match, Schema } from "effect"
+import { type JournalPosition } from "../../../workflow-journal/identity.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
+import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import {
   latestPlannedAttemptExecutorEvidence,
   latestUnsettledPlannedAttemptExecutorCommand,
@@ -41,8 +43,13 @@ export type AttemptRestartPendingReason =
   | "ClaimAbsent"
   | "ClaimForeign"
   | "ClaimUnreadable"
+  | "ExecutorContradictory"
   | "ExecutorRunning"
+  | "ExecutorUnavailable"
   | "OldWorktreeNotReady"
+  | "OldWorktreeUnreadable"
+  | "TargetHeadUnreadable"
+  | "TaskFactsUnreadable"
   | "TaskNotEligible"
 
 export type AttemptRestartRejectedReason =
@@ -74,6 +81,35 @@ export const recordedReplacement = (records: ReadonlyArray<JournalRecord>, subje
     ({ event }) =>
       event._tag === "PlannedAttemptReplaced" &&
       plannedTaskAttemptEquivalence(event.subject.plannedAttempt, subject.plannedAttempt)
+  )
+
+/**
+ * The claim retained by Restart is the exact P1 authority in force when the
+ * Operator's choice became durable. A later reacquisition cannot silently
+ * substitute a different claim for K1 while replacement is being prepared.
+ */
+export const restartClaimAuthorityAtApplication = (
+  records: ReadonlyArray<JournalRecord>,
+  application: RestartApplicationRecord
+) =>
+  authorizedClaimForAttempt(
+    records.filter(({ position }) => position <= application.position),
+    application.event.subject.plannedAttempt
+  )
+
+/** Once a later authored fingerprint differs, the exact earlier Restart choice can never authorize a successor. */
+export const restartChoiceWasInvalidatedByLaterSpecification = (
+  records: ReadonlyArray<JournalRecord>,
+  applicationPosition: JournalRecord["position"],
+  subject: AttemptChoiceSubject
+): boolean =>
+  records.some(
+    ({ event, position }) =>
+      position > applicationPosition &&
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      event.observation.factFamily.taskId === subject.plannedAttempt.taskId &&
+      event.observation.factFamily.fingerprint !== subject.observedTaskRevision
   )
 
 export const proofFor = (evidence: PlannedAttemptExecutorEvidence): AttemptQuiescenceProof =>
@@ -130,9 +166,9 @@ export const nextRestartReadOperationId = (
   records: ReadonlyArray<JournalRecord>,
   requestId: AttemptChoiceRequestId,
   phase: "claim" | "graph" | "specification" | "target-lineage" | "worktree",
-  after: number
+  after: JournalPosition
 ): OperationId => {
-  const prefix = `attempt-restart:${requestId.nonce}:${phase}:after:`
+  const prefix = `attempt-restart:${encodeURIComponent(requestId.nonce)}:${phase}:after:`
   const pending = records.findLast(
     ({ event }) =>
       ((event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId.startsWith(prefix)) ||
@@ -141,7 +177,8 @@ export const nextRestartReadOperationId = (
         ({ event: candidate }) =>
           (candidate._tag === "TaskTrackerFactsObserved" ||
             candidate._tag === "PlannedAttemptWorktreeObserved" ||
-            candidate._tag === "TargetLineageObserved") &&
+            candidate._tag === "TargetLineageObserved" ||
+            candidate._tag === "AttemptRestartAuthorityReadFailed") &&
           candidate.operationId === event.operation.operationId
       )
   )?.event

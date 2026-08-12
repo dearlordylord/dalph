@@ -65,9 +65,17 @@ import {
 import { defaultPlannedAttemptExecutorSuspensionLimit } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { sameAttemptChoiceRequestId, sameAttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
 import {
+  restartChoiceWasInvalidatedByLaterSpecification,
+  restartClaimAuthorityAtApplication
+} from "../../workflow/protocols/attempt-choice/restart-authority.js"
+import {
   requiredPlannedAttemptPositionsOf,
   type RequiredPlannedAttemptPosition
 } from "./required-planned-attempt-positions.js"
+import {
+  recordedTaskAttemptPlanFor,
+  recordedTaskAttemptPlans
+} from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 
 import {
   makeTaskClaimReleaseOperation,
@@ -165,6 +173,11 @@ const stopObservationIsRunning = (event: JournalRecord["event"]): boolean =>
     event._tag === "PlannedAttemptExecutorStateObserved") &&
   event.observation._tag === "ExactExecutorReport" &&
   event.observation.report._tag === "Running"
+
+const stopObservationIsUnavailable = (event: JournalRecord["event"]): boolean =>
+  (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+    event._tag === "PlannedAttemptExecutorStateObserved") &&
+  event.observation._tag === "ExecutorStateUnavailable"
 
 const stopWaitReasonFor = (
   event: JournalRecord["event"]
@@ -436,13 +449,23 @@ type AppliedRestartRecord = Omit<JournalRecord, "event"> & {
   }
 }
 
-const appliedRestartChoiceFor = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) =>
-  records.findLast(
-    (record): record is AppliedRestartRecord =>
+type AppliedChoiceRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
+}
+
+const appliedRestartChoiceFor = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): AppliedRestartRecord | undefined => {
+  const latest = records.findLast(
+    (record): record is AppliedChoiceRecord =>
       record.event._tag === "AttemptChoiceApplied" &&
-      record.event.choice === "RestartTaskImplementation" &&
       plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, plannedAttempt)
   )
+  return latest?.event.choice === "RestartTaskImplementation"
+    ? { ...latest, event: { ...latest.event, choice: "RestartTaskImplementation" } }
+    : undefined
+}
 
 type RestartObservationScope = (record: JournalRecord) => boolean
 
@@ -462,19 +485,9 @@ const terminalRestartDisposition = (
 
 const changedRestartSpecificationDisposition = (
   records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt,
   applied: AppliedRestartRecord
 ): PlannedAttemptExecutorDisposition | undefined => {
-  const latestSpecification = records.findLast(
-    ({ event, position }) =>
-      position > applied.position &&
-      event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-      event.observation.factFamily.taskId === plannedAttempt.taskId
-  )
-  return latestSpecification?.event._tag === "TaskTrackerFactsObserved" &&
-    latestSpecification.event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-    latestSpecification.event.observation.factFamily.fingerprint !== applied.event.subject.observedTaskRevision
+  return restartChoiceWasInvalidatedByLaterSpecification(records, applied.position, applied.event.subject)
     ? ResponsibilityDisposition.AttemptRestartRejected({ reason: "NewFingerprintChoiceRequired" })
     : undefined
 }
@@ -484,13 +497,25 @@ const restartGraphDisposition = (
   plannedAttempt: PlannedTaskAttempt,
   afterActivation: RestartObservationScope
 ): PlannedAttemptExecutorDisposition | undefined => {
-  const currentGraphRecord = records.findLast(
-    (record) =>
-      afterActivation(record) &&
-      record.event._tag === "TaskTrackerFactsObserved" &&
-      (record.event.observation._tag === "CompleteTaskTrackerFacts" ||
-        record.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
-  )
+  const currentGraphRecord = records.findLast((record) => {
+    if (
+      !afterActivation(record) ||
+      record.event._tag !== "TaskTrackerFactsObserved" ||
+      (record.event.observation._tag !== "CompleteTaskTrackerFacts" &&
+        record.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed")
+    ) {
+      return false
+    }
+    const operationId = record.event.operationId
+    return records.some(
+      ({ event, position }) =>
+        position < record.position &&
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadTrackerGraph" &&
+        event.operation.operationId === operationId &&
+        event.operation.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId)
+    )
+  })
   if (currentGraphRecord?.event._tag !== "TaskTrackerFactsObserved") return undefined
   const graph = reconstructedTaskGraphFromEvents(
     records.filter(({ position }) => position <= currentGraphRecord.position).map(({ event }) => event),
@@ -517,10 +542,10 @@ const latestRestartClaimObservation = (
 
 const activeRestartClaimDisposition = (
   records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt,
+  applied: AppliedRestartRecord,
   observation: Extract<FocusedTaskClaim, { readonly _tag: "ActiveTaskClaim" }>
 ): PlannedAttemptExecutorDisposition | undefined => {
-  const expected = authorizedClaimForAttempt(records, plannedAttempt)?.claim
+  const expected = restartClaimAuthorityAtApplication(records, applied)?.claim
   return expected === undefined || !isExactTaskClaim(observation, expected)
     ? ResponsibilityDisposition.AttemptRestartWait({ reason: "ClaimForeign" })
     : undefined
@@ -529,6 +554,7 @@ const activeRestartClaimDisposition = (
 const restartClaimDisposition = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
+  applied: AppliedRestartRecord,
   afterActivation: RestartObservationScope
 ): PlannedAttemptExecutorDisposition | undefined => {
   const claim = latestRestartClaimObservation(records, plannedAttempt, afterActivation)
@@ -541,16 +567,26 @@ const restartClaimDisposition = (
   if (observation._tag === "UnclaimedTask") {
     return ResponsibilityDisposition.AttemptRestartWait({ reason: "ClaimAbsent" })
   }
-  return activeRestartClaimDisposition(records, plannedAttempt, observation)
+  return activeRestartClaimDisposition(records, applied, observation)
 }
 
 const restartWorktreeDisposition = (
   records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
   afterActivation: RestartObservationScope
 ): PlannedAttemptExecutorDisposition | undefined => {
-  const worktree = records.findLast(
-    (record) => afterActivation(record) && record.event._tag === "PlannedAttemptWorktreeObserved"
-  )
+  const worktree = records.findLast((record) => {
+    if (!afterActivation(record) || record.event._tag !== "PlannedAttemptWorktreeObserved") return false
+    const operationId = record.event.operationId
+    return records.some(
+      ({ event, position }) =>
+        position < record.position &&
+        event._tag === "GitReadIntentRecorded" &&
+        event.operation._tag === "ReadTaskWorktree" &&
+        event.operation.operationId === operationId &&
+        plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plannedAttempt)
+    )
+  })
   return worktree?.event._tag === "PlannedAttemptWorktreeObserved" &&
     worktree.event.observation._tag !== "PlannedWorktreeReady"
     ? ResponsibilityDisposition.AttemptRestartWait({ reason: "OldWorktreeNotReady" })
@@ -575,9 +611,34 @@ const restartExecutorDisposition = (
   if (stopObservationIsContradictory(latestExecutor.event)) {
     return ResponsibilityDisposition.AttemptRestartWait({ reason: "ExecutorContradictory" })
   }
+  if (stopObservationIsUnavailable(latestExecutor.event)) {
+    return ResponsibilityDisposition.AttemptRestartWait({ reason: "ExecutorUnavailable" })
+  }
   return restartExecutorIsRunning(latestExecutor.event)
     ? ResponsibilityDisposition.AttemptRestartWait({ reason: "ExecutorRunning" })
     : undefined
+}
+
+const restartAuthorityReadFailureDisposition = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  afterActivation: RestartObservationScope
+): PlannedAttemptExecutorDisposition | undefined => {
+  const failure = records.findLast(
+    (record) =>
+      afterActivation(record) &&
+      record.event._tag === "AttemptRestartAuthorityReadFailed" &&
+      plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, plannedAttempt)
+  )?.event
+  if (failure?._tag !== "AttemptRestartAuthorityReadFailed") return undefined
+  return ResponsibilityDisposition.AttemptRestartWait({
+    reason:
+      failure.failure._tag === "AttemptRestartTaskFactsReadFailure"
+        ? "TaskFactsUnreadable"
+        : failure.failure._tag === "GitWorktreeReadFailure"
+          ? "OldWorktreeUnreadable"
+          : "TargetHeadUnreadable"
+  })
 }
 
 const restartReplacementDisposition = (
@@ -598,10 +659,11 @@ const restartReplacementDisposition = (
     position > applied.position && positionIsAfter(position, activationBaselinePosition)
   const observedDisposition = [
     terminalRestartDisposition(records, plannedAttempt),
-    changedRestartSpecificationDisposition(records, plannedAttempt, applied),
+    changedRestartSpecificationDisposition(records, applied),
     restartGraphDisposition(records, plannedAttempt, afterActivation),
-    restartClaimDisposition(records, plannedAttempt, afterActivation),
-    restartWorktreeDisposition(records, afterActivation),
+    restartClaimDisposition(records, plannedAttempt, applied, afterActivation),
+    restartWorktreeDisposition(records, plannedAttempt, afterActivation),
+    restartAuthorityReadFailureDisposition(records, plannedAttempt, afterActivation),
     restartExecutorDisposition(records, plannedAttempt, afterActivation)
   ].find((disposition) => disposition !== undefined)
   if (observedDisposition !== undefined) return observedDisposition
@@ -801,7 +863,7 @@ const deriveJournalResponsibilityFacts = (
     )
   const settledOperationIds = new Set(
     records.flatMap(({ event }) => {
-      const transition = workflowJournalTransitionRuleFor(event._tag)
+      const transition = workflowJournalTransitionRuleFor(event)
       const descriptor = describeJournalEvent(event)
       return transition?._tag === "Outcome" && descriptor._tag === "OperationEventDescriptor"
         ? [descriptor.operationId]
@@ -1779,15 +1841,7 @@ const unsettledExecutorCommandFor = (
 const plannedAttemptPlanOperationId = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt
-): OperationId | undefined =>
-  records.flatMap(({ event }) =>
-    event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
-      ? [event.operation.operationId]
-      : event._tag === "PlannedAttemptReplaced" &&
-          event.successorPlan.plannedAttempt.attemptId === plannedAttempt.attemptId
-        ? [event.successorPlan.operationId]
-        : []
-  )[0]
+): OperationId | undefined => recordedTaskAttemptPlanFor(records, plannedAttempt)?.operationId
 
 const continuationDecisionFor = (
   transition: RunnableFrontierTransition,
@@ -1874,7 +1928,10 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
         const operationId = record.event.operation.operationId
         return !runState.workflowHistory.records.some(
           ({ event }) =>
-            (event._tag === "PlannedAttemptWorktreeObserved" || event._tag === "TargetLineageObserved") &&
+            (event._tag === "PlannedAttemptWorktreeObserved" ||
+              event._tag === "TargetLineageObserved" ||
+              (event._tag === "AttemptRestartAuthorityReadFailed" &&
+                event.failure._tag !== "AttemptRestartTaskFactsReadFailure")) &&
             event.operationId === operationId
         )
       }
@@ -1925,14 +1982,7 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
   })
   const targetLineageByAttemptId = new Map(activationTargetLineage)
   const activeClaimByAttemptId = new Map(
-    runState.workflowHistory.records.flatMap(({ event }) => {
-      const plannedAttempt =
-        event._tag === "TaskAttemptPlanned"
-          ? event.operation.plannedAttempt
-          : event._tag === "PlannedAttemptReplaced"
-            ? event.successorPlan.plannedAttempt
-            : undefined
-      if (plannedAttempt === undefined) return []
+    recordedTaskAttemptPlans(runState.workflowHistory.records).flatMap(({ plannedAttempt }) => {
       const claim = authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim
       return claim === undefined ? [] : [[plannedAttempt.attemptId, claim] as const]
     })
@@ -1959,25 +2009,16 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
     integrationFinalityConfigured,
     completionTaskConfigured,
     taskClaimAuthorityByAttemptId: new Map(
-      runState.workflowHistory.records.flatMap(({ event }) => {
-        const plannedAttempt =
-          event._tag === "TaskAttemptPlanned"
-            ? event.operation.plannedAttempt
-            : event._tag === "PlannedAttemptReplaced"
-              ? event.successorPlan.plannedAttempt
-              : undefined
-        if (plannedAttempt === undefined) return []
+      recordedTaskAttemptPlans(runState.workflowHistory.records).map(({ plannedAttempt }) => {
         return [
-          [
-            plannedAttempt.attemptId,
-            currentTaskClaimAuthority(
-              runState.workflowHistory.records,
-              plannedAttempt.taskId,
-              authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim,
-              freshnessBaselineForTask(plannedAttempt.taskId)
-            )
-          ] as const
-        ]
+          plannedAttempt.attemptId,
+          currentTaskClaimAuthority(
+            runState.workflowHistory.records,
+            plannedAttempt.taskId,
+            authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim,
+            freshnessBaselineForTask(plannedAttempt.taskId)
+          )
+        ] as const
       })
     )
   })

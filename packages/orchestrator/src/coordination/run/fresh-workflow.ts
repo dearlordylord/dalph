@@ -9,6 +9,7 @@ import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { CurrentDeliveryFrame } from "./current-delivery-frame.js"
 import { reconstructedTaskGraphFromEvents } from "../reconstruction/graph-knowledge.js"
 import { FreshWorkflowStep, type FreshWorkflowStep as FreshWorkflowStepType } from "../delivery/fresh-workflow-step.js"
+import { recordedTaskAttemptPlans } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 
 const postClaimGraphRank = 0
 const claimRank = 1
@@ -85,14 +86,8 @@ const journaledStepFor = (
     /* v8 ignore stop */
   }
   const observed = observedOperationIds(records)
-  const plan = records
-    .flatMap(({ event }) =>
-      event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === task.id
-        ? [event.operation]
-        : event._tag === "PlannedAttemptReplaced" && event.successorPlan.plannedAttempt.taskId === task.id
-          ? [event.successorPlan]
-          : []
-    )
+  const plan = recordedTaskAttemptPlans(records)
+    .filter(({ plannedAttempt }) => plannedAttempt.taskId === task.id)
     .at(lastElementOffset)
   if (plan !== undefined) {
     const worktree = records.findLast(

@@ -1678,6 +1678,25 @@ module taskFactReconciliation {
     },
   }
 
+  // The production interpreter owns the three raw tracker reads and returns
+  // one exhausted observation to the Restart protocol. This action exposes
+  // that composed boundary at the production-backed MBT's granularity while
+  // the lower-level action above retains crash-between-read exploration.
+  action observeReplacementClaimUnreadableBounded: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementClaim,
+    state.replacementClaimReadsThisActivation == 0,
+    state' = {
+      ...state,
+      replacementClaimFacts: ReplacementClaimUnreadable,
+      replacementClaimReadsThisActivation: REPLACEMENT_CLAIM_READ_LIMIT,
+      claimState: UnreadableClaim,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: ClaimUnreadableWait,
+      lastAction: ReplacementClaimUnreadableAction,
+    },
+  }
+
   // A coordinator loss discards only the per-activation read budget. It does
   // not convert an unreadable observation into proof that K1 exists or is
   // absent, and it crosses no tracker mutation boundary.
@@ -2502,6 +2521,7 @@ module taskFactReconciliation {
     observeReplacementClaimAbsent,
     observeReplacementClaimForeign,
     observeReplacementClaimUnreadable,
+    observeReplacementClaimUnreadableBounded,
     recoverReplacementClaimReadActivation,
     observeReplacementExactW1Ready,
     observeReplacementW1NotReady,
@@ -2788,6 +2808,8 @@ module taskFactReconciliation {
       state.replacementPhase == NeedCurrentExecutorQuiescence,
       any {
         observeRestartRunning,
+        observeRestartExecutorUnavailable,
+        observeRestartExecutorContradiction,
         observeRestartSafelySuspended,
         observeRestartAccepted,
         observeRestartCompleted,
@@ -2796,30 +2818,39 @@ module taskFactReconciliation {
     },
     all {
       state.f2WinningChoice == RestartChoice,
-      state.replacementPhase == ReplacementWaiting,
-      state.replacementDisposition == RunningWriterWait,
+      Set(ReplacementWaiting, ReplacementRejected).contains(state.replacementPhase),
       not(state.independentTaskSelected),
       selectIndependentTaskB,
     },
     all {
       state.f2WinningChoice == RestartChoice,
       state.replacementPhase == NeedCurrentReplacementTaskFacts,
-      any { observeReplacementExactF2TaskFacts, observeReplacementF3TaskFacts },
+      any {
+        observeReplacementExactF2TaskFacts,
+        observeReplacementF3TaskFacts,
+        observeReplacementTaskFactsUnreadable,
+        observeReplacementTaskNotEligible,
+      },
     },
     all {
       state.f2WinningChoice == RestartChoice,
       state.replacementPhase == NeedCurrentReplacementClaim,
-      any { observeReplacementExactK1, observeReplacementClaimAbsent },
+      any {
+        observeReplacementExactK1,
+        observeReplacementClaimAbsent,
+        observeReplacementClaimForeign,
+        observeReplacementClaimUnreadableBounded,
+      },
     },
     all {
       state.f2WinningChoice == RestartChoice,
       state.replacementPhase == NeedCurrentOldWorktree,
-      any { observeReplacementExactW1Ready, observeReplacementW1NotReady },
+      any { observeReplacementExactW1Ready, observeReplacementW1NotReady, observeReplacementW1Unreadable },
     },
     all {
       state.f2WinningChoice == RestartChoice,
       state.replacementPhase == NeedCurrentTargetHead,
-      observeReplacementExactH2,
+      any { observeReplacementExactH2, observeReplacementH2Unreadable },
     },
     all {
       state.f2WinningChoice == RestartChoice,
@@ -2832,8 +2863,72 @@ module taskFactReconciliation {
     all {
       state.f2WinningChoice == RestartChoice,
       state.replacementPhase == PlannedAttemptReplacementRecorded,
-      state.replacementProcessLossCount == 0,
-      recoverReplacementAppendPresent,
+      if (state.replacementProcessLossCount == 0)
+        any { recoverReplacementAppendPresent, prepareCleanSuccessorW2 }
+      else
+        prepareCleanSuccessorW2,
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == SuccessorWaitingForAdmission,
+      admitSuccessorThroughOrdinaryCapacity,
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == SuccessorAdmitted,
+      startSuccessorExecutor,
+    },
+  }
+
+  // A deterministic executable witness keeps the full successful production
+  // path live in the adapter even when the reason-rich randomized relation
+  // samples only rejection or waiting branches for a particular seed.
+  action restartSuccessMbtStep: bool = any {
+    all {
+      state.f2WinningChoice == NoChoice,
+      state.currentFingerprint == F1,
+      observeF2Change,
+    },
+    all {
+      state.f2WinningChoice == NoChoice,
+      state.currentFingerprint == F2,
+      applyRestartF2,
+    },
+    all {
+      state.replacementPhase == RestartApplied,
+      beginReplacementFactsFromRetainedSafeSuspension,
+    },
+    all {
+      state.replacementPhase == NeedCurrentReplacementTaskFacts,
+      observeReplacementExactF2TaskFacts,
+    },
+    all {
+      state.replacementPhase == NeedCurrentReplacementClaim,
+      observeReplacementExactK1,
+    },
+    all {
+      state.replacementPhase == NeedCurrentOldWorktree,
+      observeReplacementExactW1Ready,
+    },
+    all {
+      state.replacementPhase == NeedCurrentTargetHead,
+      observeReplacementExactH2,
+    },
+    all {
+      state.replacementPhase == ReplacementReadyToAppend,
+      recordPlannedAttemptReplacement,
+    },
+    all {
+      state.replacementPhase == PlannedAttemptReplacementRecorded,
+      prepareCleanSuccessorW2,
+    },
+    all {
+      state.replacementPhase == SuccessorWaitingForAdmission,
+      admitSuccessorThroughOrdinaryCapacity,
+    },
+    all {
+      state.replacementPhase == SuccessorAdmitted,
+      startSuccessorExecutor,
     },
   }
 }

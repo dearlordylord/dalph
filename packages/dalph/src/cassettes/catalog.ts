@@ -1818,18 +1818,23 @@ export const changedAttemptRestartLateAcceptedAuthoredCassette: ScenarioCassette
       request: "StartOrContinue"
     },
     ...changedAttemptRestartAuthorityReads,
-    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:1", taskId: "A" } },
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:1" },
-      request: "StartOrContinue"
-    },
+    ...changedAttemptSuccessorStory,
     {
       ...attemptChoiceExpectedBehavior,
+      orchestration: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalAccepted" },
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:1", taskId: "A" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:1", report: "Running" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:1", report: "TerminalCompleted" }
+      ],
       taskWork: {
         absences: [],
         results: [
-          { _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "A" }
+          { _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "A" },
+          { _tag: "PlannedWorkForTaskCompleted", taskId: "A" }
         ]
       }
     }

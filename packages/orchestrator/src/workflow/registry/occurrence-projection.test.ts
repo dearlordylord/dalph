@@ -94,6 +94,10 @@ import {
 } from "../protocols/control-direction-application/events.js"
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
 import {
+  AttemptRestartAuthorityReadFailedEvent,
+  AttemptRestartTaskFactsReadFailure
+} from "../protocols/attempt-choice/replacement-events.js"
+import {
   TaskClaimReacquisitionDirectedEvent,
   TaskClaimReacquisitionRequestId
 } from "../protocols/task-claim-reacquisition/events.js"
@@ -1079,12 +1083,94 @@ it.effect("rejects an observation whose exact initiating action is absent, later
   })
 )
 
+it.effect("rejects a Restart read failure without one exact earlier authority read", () =>
+  Effect.gen(function* () {
+    const restartRead = makeTrackerGraphObservationOperation(
+      OperationId.make("restart-authority-read"),
+      operation.target,
+      [],
+      [plannedAttempt.taskId]
+    )
+    const requestId = AttemptChoiceRequestId.make({ nonce: "restart-authority-failure", runId })
+    const subject = { observedTaskRevision: TaskRevision.make("occurrence-revision-changed"), plannedAttempt }
+    const projection = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        AttemptChoiceAppliedEvent.make({
+          choice: "RestartTaskImplementation",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId,
+          subject,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(2, taskTrackerReadIntent(restartRead)),
+      record(
+        3,
+        AttemptRestartAuthorityReadFailedEvent.make({
+          failure: AttemptRestartTaskFactsReadFailure.make({
+            detail: "tracker unavailable",
+            source: "FixtureReader.FixtureReadError",
+            target: restartRead.target
+          }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: restartRead.operationId,
+          requestId,
+          subject,
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+    const action = projection.occurrences.find(({ _tag }) => _tag === "TaskTrackerReadInitiated")
+    const applied = projection.occurrences.find(({ _tag }) => _tag === "AppliedAttemptChoice")
+    const failure = projection.occurrences.find(({ _tag }) => _tag === "AttemptRestartAuthorityReadFailed")
+    if (
+      action?._tag !== "TaskTrackerReadInitiated" ||
+      applied?._tag !== "AppliedAttemptChoice" ||
+      failure?._tag !== "AttemptRestartAuthorityReadFailed"
+    ) {
+      return expect.fail("expected applied Restart, read action, and failure")
+    }
+    const laterAction = { ...action, recordedAt: JournalPosition.make(failure.recordedAt + 1) }
+    const wrongTarget = {
+      ...failure,
+      failure: AttemptRestartTaskFactsReadFailure.make({
+        detail: "tracker unavailable",
+        source: "FixtureReader.FixtureReadError",
+        target: FixtureTarget.make("other-restart-target")
+      })
+    }
+    const wrongRun = {
+      ...failure,
+      requestId: AttemptChoiceRequestId.make({ nonce: requestId.nonce, runId: RunId.make("other-run") })
+    }
+    const wrongApplied = { ...applied, requestId: AttemptChoiceRequestId.make({ nonce: "another-restart", runId }) }
+    for (const occurrences of [
+      [failure],
+      [failure, applied, action],
+      [applied, laterAction, failure],
+      [applied, action, action, failure],
+      [applied, action, wrongTarget],
+      [applied, action, wrongRun],
+      [wrongApplied, action, failure]
+    ]) {
+      const schemaFailure = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
+        occurrences,
+        version: projection.version
+      }).pipe(Effect.flip)
+      expect(schemaFailure._tag).toBe("SchemaError")
+    }
+  })
+)
+
 it("compile-time exhaustive fixtures cover every occurrence and actor variant", () => {
   const occurrenceVariants = {
     AppliedAttemptChoice: true,
     AppliedControlDirection: true,
     AppliedTaskClaimReacquisitionDirection: true,
     AppliedTaskWorkCapacity: true,
+    AttemptRestartAuthorityReadFailed: true,
     IntegrationResponsibilityBegan: true,
     IntegrationStarted: true,
     GitReadInitiated: true,
@@ -1098,6 +1184,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(14)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(15)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

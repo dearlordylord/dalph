@@ -165,7 +165,7 @@ const validateResponsibilityEntry = (
   const operationId = workflowResponsibilityOperationId(entry)
   if (record !== undefined) {
     const descriptor = describeJournalEvent(record.event)
-    const transition = workflowJournalTransitionRuleFor(record.event._tag)
+    const transition = workflowJournalTransitionRuleFor(record.event)
     if (
       descriptor._tag === "OperationEventDescriptor" &&
       descriptor.operationId === operationId &&

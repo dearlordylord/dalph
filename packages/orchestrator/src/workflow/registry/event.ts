@@ -37,7 +37,10 @@ import {
   AttemptStoppageIntendedEvent,
   StoppedAttemptClaimNoReleaseObservedEvent
 } from "../protocols/attempt-choice/events.js"
-import { PlannedAttemptReplacedEvent } from "../protocols/attempt-choice/replacement-events.js"
+import {
+  AttemptRestartAuthorityReadFailedEvent,
+  PlannedAttemptReplacedEvent
+} from "../protocols/attempt-choice/replacement-events.js"
 
 const ResponsibilityJournalEvent = Schema.Union([
   PlannedAttemptExecutorCommandIntendedEvent,
@@ -177,6 +180,7 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskWorkCapacityChangedEvent,
   ControlDirectionAppliedEvent,
   AttemptChoiceAppliedEvent,
+  AttemptRestartAuthorityReadFailedEvent,
   PlannedAttemptReplacedEvent,
   AttemptStoppageIntendedEvent,
   AttemptImplementationAbandonedEvent,

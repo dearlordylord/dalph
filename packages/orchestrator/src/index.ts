@@ -36,6 +36,9 @@ export {
   StoppedAttemptClaimObservationMissing
 } from "./workflow/protocols/attempt-choice/stop.js"
 export {
+  AttemptRestartAuthorityReadFailedEvent,
+  AttemptRestartAuthorityReadFailure,
+  AttemptRestartTaskFactsReadFailure,
   PlannedAttemptReplacementWitness,
   PlannedAttemptReplacedEvent
 } from "./workflow/protocols/attempt-choice/replacement-events.js"
@@ -590,6 +593,7 @@ export {
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,
+  AttemptRestartAuthorityReadFailed,
   decodeWorkflowOccurrence,
   ExecutorReportWithoutResponsibilityBegan,
   GitOutcomeWithoutReadIntent,

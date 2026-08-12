@@ -3,19 +3,14 @@ import type { JournalRecord } from "../workflow-journal/store.js"
 import { causalPredecessorOperationIds } from "./causal-history.js"
 import { type WorkflowJournalEvent } from "./registry/event.js"
 import { taskClaimReacquisitionOperationId } from "./protocols/task-claim-reacquisition/plan.js"
+import { recordedTaskAttemptPlans } from "./protocols/task-attempt-planning/journal-evidence.js"
 
 /** Finds the exact acquired claim in one planned attempt's causal history. */
 export const causalClaimForAttempt = (
   records: ReadonlyArray<JournalRecord>,
   attemptId: AttemptId
 ): Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }> | undefined => {
-  const plan = records.flatMap(({ event }) =>
-    event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === attemptId
-      ? [event.operation]
-      : event._tag === "PlannedAttemptReplaced" && event.successorPlan.plannedAttempt.attemptId === attemptId
-        ? [event.successorPlan]
-        : []
-  )[0]
+  const plan = recordedTaskAttemptPlans(records).find(({ plannedAttempt }) => plannedAttempt.attemptId === attemptId)
   if (plan === undefined) return undefined
   const causalOperationIds = causalPredecessorOperationIds(records, plan)
   const claim = records.find(

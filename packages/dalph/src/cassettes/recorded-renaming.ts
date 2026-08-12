@@ -76,6 +76,7 @@ import {
   type TaskTrackerFactsObservation,
   type TrackerRevision,
   type WorkflowOperation,
+  GitWorktreeReadFailure,
   UntrackedWorktreePath,
   WorktreeBaseMismatch
 } from "@dalph/orchestrator"
@@ -999,6 +1000,24 @@ const renameRecordedCassetteEntry = (
               replacementEntry.witness.targetLineageObservationOperationId,
               maps.operationIds
             )
+          })
+        }),
+      AttemptRestartAuthorityReadFailed: (failureEntry) =>
+        completeFields<typeof failureEntry>({
+          _tag: "AttemptRestartAuthorityReadFailed",
+          failure:
+            failureEntry.failure._tag === "GitWorktreeReadFailure"
+              ? new GitWorktreeReadFailure({
+                  detail: failureEntry.failure.detail,
+                  worktree: renamed(failureEntry.failure.worktree, maps.worktreeLocators)
+                })
+              : preserveCassetteValue(failureEntry.failure),
+          occurrenceClassification: preserveCassetteValue(failureEntry.occurrenceClassification),
+          operationId: renamed(failureEntry.operationId, maps.operationIds),
+          requestId: renameAttemptChoiceRequestId(failureEntry.requestId, maps),
+          subject: completeFields<typeof failureEntry.subject>({
+            observedTaskRevision: preserveCassetteValue(failureEntry.subject.observedTaskRevision),
+            plannedAttempt: renamePlannedAttempt(failureEntry.subject.plannedAttempt, maps)
           })
         }),
       AttemptStoppageIntended: (intentEntry) =>

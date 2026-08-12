@@ -3,7 +3,11 @@ import type { WorkflowOperation } from "./registry/operation.js"
 import { workflowOperationId } from "./registry/operation.js"
 
 const journaledOperation = (record: JournalRecord): WorkflowOperation | undefined =>
-  "operation" in record.event ? record.event.operation : undefined
+  record.event._tag === "PlannedAttemptReplaced"
+    ? record.event.successorPlan
+    : "operation" in record.event
+      ? record.event.operation
+      : undefined
 
 /** Returns every durable operation that causally precedes the supplied operation. */
 export const causalPredecessorOperationIds = (

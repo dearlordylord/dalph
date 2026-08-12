@@ -46,6 +46,7 @@ import {
   EvidenceReference,
   ForeignWorktreeRegistration,
   FixtureTarget,
+  GitWorktreeReadFailure,
   JournalPosition,
   IntegrationCandidateId,
   IntegrationCandidateResourceLocator,
@@ -486,6 +487,12 @@ it.effect("records one atomic P1 to P2 replacement before ordinary clean success
     })
     expect(run.records.filter(({ event }) => event._tag === "PlannedAttemptReplaced")).toHaveLength(1)
     expect(run.records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
+    const missingRestartProjection = yield* projectWorkflowOccurrences(
+      run.records.filter(
+        ({ event }) => event._tag !== "AttemptChoiceApplied" || event.choice !== "RestartTaskImplementation"
+      )
+    ).pipe(Effect.flip)
+    expect(missingRestartProjection._tag).toBe("SchemaError")
     const recorded = yield* projectRecordedCassette(run.records)
     expectRecordedRoundTrip(run.records, recorded)
   })
@@ -6663,6 +6670,7 @@ it.effect(
       const entryVariants = {
         AttemptChoiceApplied: true,
         AttemptImplementationAbandoned: true,
+        AttemptRestartAuthorityReadFailed: true,
         AttemptStoppageIntended: true,
         ControlDirectionApplied: true,
         GitReadInitiated: true,
@@ -6776,6 +6784,40 @@ it.effect(
       if (replacementEntry?._tag !== "PlannedAttemptReplaced") {
         return yield* Effect.die("replacement alpha-renaming fixture requires PlannedAttemptReplaced")
       }
+      const replacementWorktreeIntentIndex = replacementRecorded.entries.findIndex(
+        (entry) =>
+          entry._tag === "GitReadInitiated" &&
+          entry.operation._tag === "ReadTaskWorktree" &&
+          entry.operation.operationId === replacementEntry.witness.oldWorktreeObservationOperationId
+      )
+      const replacementWorktreeIntent = replacementRecorded.entries[replacementWorktreeIntentIndex]
+      if (
+        replacementWorktreeIntentIndex < 0 ||
+        replacementWorktreeIntent?._tag !== "GitReadInitiated" ||
+        replacementWorktreeIntent.operation._tag !== "ReadTaskWorktree"
+      ) {
+        return yield* Effect.die("replacement alpha-renaming fixture requires the exact W1 read intent")
+      }
+      const restartFailureEntry: RecordedCassetteEntry = {
+        _tag: "AttemptRestartAuthorityReadFailed",
+        failure: new GitWorktreeReadFailure({
+          detail: "recorded W1 read failed",
+          worktree: replacementEntry.subject.plannedAttempt.worktree
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: replacementWorktreeIntent.operation.operationId,
+        requestId: replacementEntry.requestId,
+        subject: replacementEntry.subject
+      }
+      const restartFailureRecorded = RecordedCassette.make({
+        ...replacementRecorded,
+        entries: [...replacementRecorded.entries.slice(0, replacementWorktreeIntentIndex + 1), restartFailureEntry]
+      })
+      const restartFailureHistory = foldRecordedCassette(restartFailureRecorded)
+      if (restartFailureHistory._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die("Restart W1 read failure recording must fold into valid journal history")
+      }
+      expectRecordedRoundTrip(restartFailureHistory.records, restartFailureRecorded)
       const replacementOperationIds = Array.from(
         new Set([
           replacementEntry.successorPlan.operationId,
@@ -6815,6 +6857,7 @@ it.effect(
         ]
       })
       const renamedReplacement = yield* renameRecordedCassette(replacementRecorded, replacementRenaming)
+      const renamedRestartFailure = yield* renameRecordedCassette(restartFailureRecorded, replacementRenaming)
       const encodedReplacement = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(renamedReplacement))
       for (const { from, to } of [
         ...replacementRenaming.attemptIds,
@@ -6840,6 +6883,7 @@ it.effect(
       expect(stopLyrics).toContain("must not release the current claim")
       expect(stopLyrics).toContain("while reconciling executor command")
       expect(stopLyrics).toContain("read-only executor projection")
+      expect(renderRecordedCassetteLyrics(renamedRestartFailure)).toContain("GitWorktreeReadFailure boundary failed")
 
       const projectionEntry = stoppageRecorded.entries.find(
         (entry) => entry._tag === "PlannedAttemptExecutorCommandProjectionObserved"
@@ -7069,6 +7113,7 @@ it.effect(
             ...foreignNoReleaseRecorded.entries,
             ...continuationRecorded.entries,
             ...replacementRecorded.entries,
+            ...restartFailureRecorded.entries,
             ...executorObservationVariants.entries,
             ...completionEntries
           ].map(({ _tag }) => _tag)

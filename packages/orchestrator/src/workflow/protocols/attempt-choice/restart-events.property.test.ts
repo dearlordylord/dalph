@@ -77,6 +77,7 @@ const event = PlannedAttemptReplacedEvent.make({
     operationId: OperationId.make("restart-event-property-plan-P2"),
     plannedAttempt: p2,
     predecessorOperationIds: [
+      witness.expectedClaim.operationId,
       witness.graphObservationOperationId,
       witness.specificationObservationOperationId,
       witness.claimObservationOperationId,
@@ -116,6 +117,7 @@ it.effect("round-trips generated exact replacement identities and Git heads", ()
             operationId: OperationId.make(`restart-event-plan-P2-${identity}`),
             plannedAttempt: generatedP2,
             predecessorOperationIds: [
+              generatedWitness.expectedClaim.operationId,
               generatedWitness.graphObservationOperationId,
               generatedWitness.specificationObservationOperationId,
               generatedWitness.claimObservationOperationId,

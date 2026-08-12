@@ -1913,20 +1913,27 @@ const runAuthoredScenarioCassetteWith = (request: {
               readonly attemptId: AuthoredAttemptChoiceItem["attemptId"]
               readonly taskId: AuthoredAttemptChoiceItem["taskId"]
             }) {
-              const planned = (yield* sharedJournal.read(runId)).findLast(
-                ({ event }) =>
-                  event._tag === "TaskAttemptPlanned" &&
-                  event.operation.plannedAttempt.attemptId === item.attemptId &&
-                  event.operation.plannedAttempt.taskId === item.taskId
-              )?.event
+              const records = yield* sharedJournal.read(runId)
+              const planned = records
+                .flatMap(({ event }) =>
+                  event._tag === "TaskAttemptPlanned"
+                    ? [event.operation]
+                    : event._tag === "PlannedAttemptReplaced"
+                      ? [event.successorPlan]
+                      : []
+                )
+                .findLast(
+                  ({ plannedAttempt }) =>
+                    plannedAttempt.attemptId === item.attemptId && plannedAttempt.taskId === item.taskId
+                )
               /* v8 ignore start -- @preserve Attempt-choice closure validation requires the exact earlier planned attempt. */
-              if (planned?._tag !== "TaskAttemptPlanned") {
+              if (planned === undefined) {
                 return yield* Effect.die(
                   new Error(`authored attempt choice cannot find planned attempt ${item.attemptId}`)
                 )
               }
               /* v8 ignore stop -- @preserve */
-              return planned.operation.plannedAttempt
+              return planned.plannedAttempt
             })
             const applyAttemptChoice = (
               plannedAttempt: PlannedTaskAttempt,

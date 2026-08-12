@@ -75,7 +75,8 @@ import {
   CompletionTaskRequestOrdinal,
   TargetPromotionGitReadObservation,
   PlannedAttemptContinuationWitness,
-  PlannedAttemptReplacementWitness
+  PlannedAttemptReplacementWitness,
+  AttemptRestartAuthorityReadFailure
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -103,6 +104,13 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     subject: AttemptChoiceSubject,
     successorPlan: WorkflowOperation.cases.RecordTaskAttemptPlan,
     witness: PlannedAttemptReplacementWitness
+  },
+  AttemptRestartAuthorityReadFailed: {
+    failure: AttemptRestartAuthorityReadFailure,
+    ...nonActionOccurrence,
+    operationId: OperationId,
+    requestId: AttemptChoiceRequestId,
+    subject: AttemptChoiceSubject
   },
   AttemptStoppageIntended: {
     ...initiatedByCoordinator,

@@ -24,6 +24,7 @@ import {
 import {
   ActiveTaskClaim,
   AttemptWorktreeLost,
+  AuthoritativeTaskWorktreeReady,
   advanceAttemptStoppage,
   advanceAttemptRestart,
   AttemptChoiceControl,
@@ -60,6 +61,7 @@ import { Deferred, Effect, Fiber, Layer, Match, Option, Schema } from "effect"
 import { expect } from "vitest"
 import {
   makeDeliveryRuntimeAdmissionController,
+  type DeliveryAdmissionReservation,
   type DeliveryRuntimeAdmissionController
 } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-admission.js"
 import {
@@ -67,8 +69,12 @@ import {
   trackerGraphReadProposalOf
 } from "../../../orchestrator/src/coordination/delivery/delivery-proposal.js"
 import { makeIntegrationTargetResourceController } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
-import { PlannedWorktreeReady } from "../../../orchestrator/src/authorities/git/worktree.js"
-import { TargetLineageObservation } from "../../../orchestrator/src/authorities/git/target-lineage.js"
+import { GitWorktreeReadFailure, PlannedWorktreeReady } from "../../../orchestrator/src/authorities/git/worktree.js"
+import {
+  GitTargetLineageReadFailure,
+  TargetLineageObservation
+} from "../../../orchestrator/src/authorities/git/target-lineage.js"
+import { FixtureReadError } from "../../../orchestrator/src/authorities/task-tracker/graph-reader.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { makeTaskWorkSpecification } from "../../../orchestrator/src/authorities/task-tracker/task-work-specification.js"
 import { makeRunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
@@ -99,6 +105,7 @@ import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../../orchestrator/src/workflow/registry/operation.js"
@@ -113,6 +120,7 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
+import { continuePlannedAttemptExecutorWorkWithPermit } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.js"
 import {
   queueAcceptedResultIntegrationResponsibility,
   startQueuedIntegration
@@ -176,6 +184,7 @@ const independentPlannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/task-fact-model-B")
 })
 const correlation = { attemptId: plannedAttempt.attemptId, runId }
+const successorCorrelation = { attemptId: successorAttempt.attemptId, runId }
 const claimOperation = makeTaskClaimAcquisitionOperation({
   acquisition: {
     operationId: OperationId.make("task-fact-model-claim"),
@@ -213,6 +222,15 @@ const graphProjection = projectTrackerSnapshot({
 })
 const graphSnapshot = Option.getOrThrow(
   graphProjection._tag === "Valid" ? Option.some(graphProjection.snapshot) : Option.none()
+)
+const independentOnlyGraphProjection = projectTrackerSnapshot({
+  revision: TrackerRevision.make("task-fact-model-independent-only-graph"),
+  tasks: [
+    { id: independentTaskId, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
+  ]
+})
+const independentOnlyGraphSnapshot = Option.getOrThrow(
+  independentOnlyGraphProjection._tag === "Valid" ? Option.some(independentOnlyGraphProjection.snapshot) : Option.none()
 )
 
 const Variant = Schema.Struct({ tag: Schema.String, value: Schema.Unknown })
@@ -341,6 +359,7 @@ const continuationProposal = {
 const taskFactReconciliationDriver = defineDriver(
   {
     abandonImplementation: {},
+    admitSuccessorThroughOrdinaryCapacity: {},
     admitSameAttemptP: {},
     applyContinueF2: {},
     applyContinueF3: {},
@@ -358,14 +377,22 @@ const taskFactReconciliationDriver = defineDriver(
     observeExactTerminal: {},
     observeF3BeforeContinuation: {},
     observeReplacementClaimAbsent: {},
+    observeReplacementClaimForeign: {},
+    observeReplacementClaimUnreadableBounded: {},
     observeReplacementExactF2TaskFacts: {},
     observeReplacementExactH2: {},
     observeReplacementExactK1: {},
     observeReplacementExactW1Ready: {},
     observeReplacementF3TaskFacts: {},
+    observeReplacementH2Unreadable: {},
+    observeReplacementTaskFactsUnreadable: {},
+    observeReplacementTaskNotEligible: {},
     observeReplacementW1NotReady: {},
+    observeReplacementW1Unreadable: {},
     observeRestartAccepted: {},
     observeRestartCompleted: {},
+    observeRestartExecutorContradiction: {},
+    observeRestartExecutorUnavailable: {},
     observeRestartFailed: {},
     observeRestartRunning: {},
     observeRestartSafelySuspended: {},
@@ -377,6 +404,7 @@ const taskFactReconciliationDriver = defineDriver(
     projectExactSafeForStoppage: {},
     projectExactTerminalForStoppage: {},
     projectReadOnlyExactSafeAfterStoppageLimit: {},
+    prepareCleanSuccessorW2: {},
     readFreshExactClaim: {},
     readFreshExactExecutor: {},
     readFreshExactGraph: {},
@@ -400,14 +428,18 @@ const taskFactReconciliationDriver = defineDriver(
     requireStoppageReconciliation: {},
     recordPlannedAttemptReplacement: {},
     breakRestartSafeSuspension: {},
-    selectIndependentTaskB: {}
+    selectIndependentTaskB: {},
+    startSuccessorExecutor: {}
   },
   () => {
     let records: ReadonlyArray<JournalRecord> = []
     let activeRecovery: Effect.Success<ReturnType<typeof makeRunRecoveryProjection>> | undefined
     let currentSpecification = plannedSpecification
     let currentClaim: "Exact" | "Absent" | "Foreign" | "Unreadable" = "Exact"
-    let currentOldWorktree: "Ready" | "NotReady" = "Ready"
+    let currentOldWorktree: "Ready" | "NotReady" | "Unreadable" = "Ready"
+    let replacementTaskFactsReadable = true
+    let replacementTaskEligible = true
+    let replacementTargetHeadReadable = true
     let executorAuthority: PlannedAttemptExecutorReport | undefined =
       PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
     let nextStartOrContinueReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.Running.make({
@@ -429,6 +461,8 @@ const taskFactReconciliationDriver = defineDriver(
     let oldBaseB1IsAncestor = false
     let observedReplacementTargetHead = "NoGitCommit"
     let replacementProcessLossCount = 0
+    let successorAdmissionCount = 0
+    let successorAdmissionReservation: DeliveryAdmissionReservation | undefined
     let restartSuspensionReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.Running.make({
       correlation
     })
@@ -516,8 +550,11 @@ const taskFactReconciliationDriver = defineDriver(
               yield* Deferred.succeed(commandCallSignal, undefined)
               return yield* Deferred.await(commandResponse)
             }),
-      startOrContinue: () =>
+      startOrContinue: (attempt) =>
         Effect.sync(() => {
+          if (plannedTaskAttemptEquivalence(attempt, successorAttempt)) {
+            return PlannedAttemptExecutorReport.cases.Running.make({ correlation: successorCorrelation })
+          }
           const report = nextStartOrContinueReport
           nextStartOrContinueReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
           executorAuthority = report
@@ -526,7 +563,10 @@ const taskFactReconciliationDriver = defineDriver(
     })
     const baseInterpreter = WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.die("claim acquisition is outside this adapter"),
-      readTrackerGraph: () => Effect.succeed(graphSnapshot) as ReturnType<typeof Effect.succeed<typeof graphSnapshot>>,
+      readTrackerGraph: () =>
+        replacementTaskFactsReadable
+          ? Effect.succeed(replacementTaskEligible ? graphSnapshot : independentOnlyGraphSnapshot)
+          : Effect.fail(new FixtureReadError({ detail: "replacement task facts unreadable", target })),
       readTaskClaim: () =>
         currentClaim === "Unreadable"
           ? Effect.succeed(TaskClaimObservationUnreadable.make({ attempts: 3, taskId }))
@@ -541,29 +581,41 @@ const taskFactReconciliationDriver = defineDriver(
               })
             ),
       readTaskWorktree: () =>
-        Effect.succeed(
-          AuthoritativePlannedAttemptWorktreeObserved.make({
-            observation:
-              currentOldWorktree === "Ready"
-                ? PlannedWorktreeReady.make({
-                    baseSha: plannedAttempt.baseSha,
-                    branch: plannedAttempt.branch,
-                    headSha: GitCommitSha.make("2".repeat(40)),
-                    worktree: plannedAttempt.worktree
-                  })
-                : AttemptWorktreeLost.make({ plannedAttempt })
-          })
-        ),
+        currentOldWorktree === "Unreadable"
+          ? Effect.fail(
+              new GitWorktreeReadFailure({ detail: "replacement W1 unreadable", worktree: plannedAttempt.worktree })
+            )
+          : Effect.succeed(
+              AuthoritativePlannedAttemptWorktreeObserved.make({
+                observation:
+                  currentOldWorktree === "Ready"
+                    ? PlannedWorktreeReady.make({
+                        baseSha: plannedAttempt.baseSha,
+                        branch: plannedAttempt.branch,
+                        headSha: GitCommitSha.make("2".repeat(40)),
+                        worktree: plannedAttempt.worktree
+                      })
+                    : AttemptWorktreeLost.make({ plannedAttempt })
+              })
+            ),
       readTargetLineage: () =>
-        Effect.succeed(
-          AuthoritativeTargetLineageObserved.make({
-            observation: TargetLineageObservation.make({
-              plannedBaseIsAncestorOfTargetHead: true,
-              plannedBaseSha: plannedAttempt.baseSha,
-              targetHeadSha: replacementTargetHead
-            })
-          })
-        ),
+        replacementTargetHeadReadable
+          ? Effect.succeed(
+              AuthoritativeTargetLineageObserved.make({
+                observation: TargetLineageObservation.make({
+                  plannedBaseIsAncestorOfTargetHead: true,
+                  plannedBaseSha: plannedAttempt.baseSha,
+                  targetHeadSha: replacementTargetHead
+                })
+              })
+            )
+          : Effect.fail(
+              new GitTargetLineageReadFailure({
+                detail: "replacement H2 unreadable",
+                plannedBaseSha: plannedAttempt.baseSha,
+                target: integrationTarget
+              })
+            ),
       releaseTaskClaim: (operation) =>
         Effect.gen(function* () {
           releaseCallCount += 1
@@ -577,7 +629,19 @@ const taskFactReconciliationDriver = defineDriver(
         }),
       readTaskWorkSpecification: (operation) =>
         Effect.succeed(operation.taskId === independentTaskId ? independentSpecification : currentSpecification),
-      reconcileTaskWorktree: () => Effect.die("worktree reconciliation is outside this adapter"),
+      reconcileTaskWorktree: (operation) =>
+        plannedTaskAttemptEquivalence(operation.plannedAttempt, successorAttempt)
+          ? Effect.succeed(
+              AuthoritativeTaskWorktreeReady.make({
+                proof: PlannedWorktreeReady.make({
+                  baseSha: successorAttempt.baseSha,
+                  branch: successorAttempt.branch,
+                  headSha: successorAttempt.baseSha,
+                  worktree: successorAttempt.worktree
+                })
+              })
+            )
+          : Effect.die("model worktree reconciliation must prepare exact P2"),
       recordTaskAttemptPlan: (operation) =>
         Effect.succeed(TaskAttemptPlanRecordAcknowledged.make({ plannedAttempt: operation.plannedAttempt }))
     })
@@ -680,6 +744,28 @@ const taskFactReconciliationDriver = defineDriver(
         if (decision._tag === "Deferred") return yield* Effect.die("task position must be available")
         yield* admission.bindPlannedAttemptPosition(taskId, correlation)
       }
+    })
+    const reserveSuccessorPosition = Effect.fn("TaskFactModel.reserveSuccessorPosition")(function* () {
+      const admission = yield* requireController()
+      const successorProposal = {
+        ...continuationProposal,
+        admission: {
+          integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+          plannedAttemptProtocol: {
+            _tag: "PlannedAttemptProtocolRequired" as const,
+            correlation: successorCorrelation
+          },
+          taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId }
+        },
+        id: DeliveryProposalId.make("task-fact-model-successor-admission")
+      }
+      const decision = yield* admission.tryReserve(successorProposal)
+      if (decision._tag === "Deferred") return yield* Effect.die(`successor admission deferred: ${decision.reason}`)
+      if (decision.reservation._tag !== "PlannedAttemptProtocolAdmission") {
+        return yield* Effect.die("successor admission omitted its exact-attempt protocol permit")
+      }
+      successorAdmissionReservation = decision.reservation
+      successorAdmissionCount += 1
     })
     const releasePosition = Effect.fn("TaskFactModel.releasePosition")(function* () {
       const admission = yield* requireController()
@@ -798,14 +884,17 @@ const taskFactReconciliationDriver = defineDriver(
             readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
           })
         | undefined
-    const latestEvidence = () =>
-      records.findLast(
-        ({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkReported" ||
-          (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-            event.observation._tag === "ExactExecutorReport") ||
-          (event._tag === "PlannedAttemptExecutorStateObserved" && event.observation._tag === "ExactExecutorReport")
-      )?.event
+    const latestEvidenceRecord = () =>
+      records.findLast(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported"
+          ? event.report.correlation.attemptId === correlation.attemptId &&
+            event.report.correlation.runId === correlation.runId
+          : (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+              event._tag === "PlannedAttemptExecutorStateObserved") &&
+            event.observation._tag === "ExactExecutorReport" &&
+            plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
+      )
+    const latestEvidence = () => latestEvidenceRecord()?.event
     const evidenceReport = () => {
       const evidence = latestEvidence()
       if (evidence?._tag === "PlannedAttemptExecutorWorkReported") return evidence.report
@@ -1015,6 +1104,24 @@ const taskFactReconciliationDriver = defineDriver(
         )
         yield* appendExecutorReport(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
       })
+    const appendUnsettledExecutorCommand = () =>
+      Effect.gen(function* () {
+        const ordinal = PlannedAttemptExecutorCommandOrdinal.make(
+          records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended").length + 1
+        )
+        yield* journal.append(
+          runId,
+          plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, ordinal),
+          PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "StartOrContinue",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal,
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        )
+      })
     const appendStartOrContinueReport = (report: PlannedAttemptExecutorReport) =>
       Effect.gen(function* () {
         const ordinal = PlannedAttemptExecutorCommandOrdinal.make(
@@ -1059,6 +1166,9 @@ const taskFactReconciliationDriver = defineDriver(
           currentSpecification = plannedSpecification
           currentClaim = "Exact"
           currentOldWorktree = "Ready"
+          replacementTaskFactsReadable = true
+          replacementTaskEligible = true
+          replacementTargetHeadReadable = true
           executorAuthority = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
           nextStartOrContinueReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
           activeRequestId = continueD1
@@ -1076,6 +1186,8 @@ const taskFactReconciliationDriver = defineDriver(
           oldBaseB1IsAncestor = false
           observedReplacementTargetHead = "NoGitCommit"
           replacementProcessLossCount = 0
+          successorAdmissionCount = 0
+          successorAdmissionReservation = undefined
           restartSuspensionReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
           restartSuspensionBoundary = false
           suspensionCallCount = 0
@@ -1413,6 +1525,24 @@ const taskFactReconciliationDriver = defineDriver(
           replacementPhase = "ReplacementWaiting"
           replacementDisposition = "RunningWriterWait"
         }),
+      observeRestartExecutorUnavailable: () =>
+        Effect.gen(function* () {
+          executorAuthority = undefined
+          yield* appendUnsettledExecutorCommand()
+          yield* expectRestartResult("AttemptRestartPending", "ExecutorUnavailable")
+          replacementPhase = "ReplacementWaiting"
+          replacementDisposition = "ExecutorUnreadableWait"
+        }).pipe(Effect.orDie),
+      observeRestartExecutorContradiction: () =>
+        Effect.gen(function* () {
+          executorAuthority = PlannedAttemptExecutorReport.cases.Running.make({
+            correlation: { attemptId: AttemptId.make("task-fact-model-contradictory-attempt"), runId }
+          })
+          yield* appendUnsettledExecutorCommand()
+          yield* expectRestartResult("AttemptRestartPending", "ExecutorContradictory")
+          replacementPhase = "ReplacementWaiting"
+          replacementDisposition = "ExecutorCorrelationContradiction"
+        }).pipe(Effect.orDie),
       observeRestartSafelySuspended: () =>
         Effect.gen(function* () {
           restartSuspensionBoundary = true
@@ -1507,6 +1637,36 @@ const taskFactReconciliationDriver = defineDriver(
           Effect.orDie,
           Effect.asVoid
         ),
+      observeReplacementTaskFactsUnreadable: () =>
+        Effect.sync(() => {
+          replacementTaskFactsReadable = false
+        }).pipe(
+          Effect.andThen(expectRestartResult("AttemptRestartPending", "TaskFactsUnreadable")),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              replacementPhase = "ReplacementWaiting"
+              replacementDisposition = "TaskFactsUnreadableWait"
+              replacementTaskFacts = "ReplacementTaskFactsUnreadable"
+            })
+          ),
+          Effect.orDie,
+          Effect.asVoid
+        ),
+      observeReplacementTaskNotEligible: () =>
+        Effect.sync(() => {
+          replacementTaskEligible = false
+        }).pipe(
+          Effect.andThen(expectRestartResult("AttemptRestartPending", "TaskNotEligible")),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              replacementPhase = "ReplacementWaiting"
+              replacementDisposition = "TaskNotEligibleWait"
+              replacementTaskFacts = "ReplacementTaskNotEligible"
+            })
+          ),
+          Effect.orDie,
+          Effect.asVoid
+        ),
       observeReplacementExactK1: () =>
         Effect.sync(() => {
           currentClaim = "Exact"
@@ -1525,6 +1685,38 @@ const taskFactReconciliationDriver = defineDriver(
               replacementDisposition = "ClaimAbsentWait"
               replacementClaimFacts = "ReplacementClaimAbsent"
               replacementClaimReadsThisActivation += 1
+            })
+          ),
+          Effect.orDie,
+          Effect.asVoid
+        ),
+      observeReplacementClaimForeign: () =>
+        Effect.sync(() => {
+          currentClaim = "Foreign"
+        }).pipe(
+          Effect.andThen(expectRestartResult("AttemptRestartPending", "ClaimForeign")),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              replacementPhase = "ReplacementWaiting"
+              replacementDisposition = "ClaimForeignWait"
+              replacementClaimFacts = "ReplacementClaimForeign"
+              replacementClaimReadsThisActivation += 1
+            })
+          ),
+          Effect.orDie,
+          Effect.asVoid
+        ),
+      observeReplacementClaimUnreadableBounded: () =>
+        Effect.sync(() => {
+          currentClaim = "Unreadable"
+        }).pipe(
+          Effect.andThen(expectRestartResult("AttemptRestartPending", "ClaimUnreadable")),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              replacementPhase = "ReplacementWaiting"
+              replacementDisposition = "ClaimUnreadableWait"
+              replacementClaimFacts = "ReplacementClaimUnreadable"
+              replacementClaimReadsThisActivation = 3
             })
           ),
           Effect.orDie,
@@ -1553,12 +1745,42 @@ const taskFactReconciliationDriver = defineDriver(
           Effect.orDie,
           Effect.asVoid
         ),
+      observeReplacementW1Unreadable: () =>
+        Effect.sync(() => {
+          currentOldWorktree = "Unreadable"
+        }).pipe(
+          Effect.andThen(expectRestartResult("AttemptRestartPending", "OldWorktreeUnreadable")),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              replacementPhase = "ReplacementWaiting"
+              replacementDisposition = "OldWorktreeUnreadableWait"
+              oldWorktreeFacts = "OldWorktreeUnreadable"
+            })
+          ),
+          Effect.orDie,
+          Effect.asVoid
+        ),
       observeReplacementExactH2: () =>
         Effect.sync(() => {
           replacementTargetHeadFacts = "ExactH2Observed"
           observedReplacementTargetHead = "HeadH2Commit"
           replacementPhase = "ReplacementReadyToAppend"
         }),
+      observeReplacementH2Unreadable: () =>
+        Effect.sync(() => {
+          replacementTargetHeadReadable = false
+        }).pipe(
+          Effect.andThen(expectRestartResult("AttemptRestartPending", "TargetHeadUnreadable")),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              replacementPhase = "ReplacementWaiting"
+              replacementDisposition = "TargetHeadUnreadableWait"
+              replacementTargetHeadFacts = "ReplacementTargetHeadUnreadable"
+            })
+          ),
+          Effect.orDie,
+          Effect.asVoid
+        ),
       recoverReplacementAppendAbsent: () =>
         Effect.sync(() => {
           replacementProcessLossCount += 1
@@ -1588,6 +1810,45 @@ const taskFactReconciliationDriver = defineDriver(
           replacementProcessLossCount += 1
           activeRecovery = undefined
         }).pipe(Effect.andThen(expectRestartResult("PlannedAttemptReplacementRecorded")), Effect.asVoid),
+      prepareCleanSuccessorW2: () =>
+        Effect.gen(function* () {
+          const replacement = records.findLast(({ event }) => event._tag === "PlannedAttemptReplaced")?.event
+          if (replacement?._tag !== "PlannedAttemptReplaced") {
+            return yield* Effect.die("successor worktree preparation requires the atomic replacement event")
+          }
+          const operation = makeTaskWorktreeReconciliationOperation({
+            operationId: OperationId.make("task-fact-model-worktree-P2"),
+            plannedAttempt: successorAttempt,
+            predecessorOperationIds: [replacement.successorPlan.operationId]
+          })
+          yield* provideInterpreter(
+            Effect.gen(function* () {
+              yield* (yield* WorkflowInterpreter).reconcileTaskWorktree(operation)
+            })
+          )
+          replacementPhase = "SuccessorWaitingForAdmission"
+        }).pipe(Effect.orDie),
+      admitSuccessorThroughOrdinaryCapacity: () =>
+        reserveSuccessorPosition().pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              replacementPhase = "SuccessorAdmitted"
+            })
+          ),
+          Effect.orDie
+        ),
+      startSuccessorExecutor: () =>
+        Effect.gen(function* () {
+          const admission = yield* requireController()
+          const reservation = successorAdmissionReservation
+          if (reservation?._tag !== "PlannedAttemptProtocolAdmission") {
+            return yield* Effect.die("successor start requires its admitted exact-attempt protocol permit")
+          }
+          yield* provideJournal(continuePlannedAttemptExecutorWorkWithPermit(reservation.permit, successorAttempt))
+          yield* admission.complete(reservation)
+          successorAdmissionReservation = undefined
+          replacementPhase = "SuccessorRunning"
+        }).pipe(Effect.orDie),
       requireStoppageReconciliation: () =>
         Effect.sync(() => {
           executorAuthority = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
@@ -1843,7 +2104,9 @@ const taskFactReconciliationDriver = defineDriver(
                 ({ event, position }) =>
                   latestSuspendIntent !== undefined &&
                   position > latestSuspendIntent.position &&
-                  event._tag === "PlannedAttemptExecutorWorkReported"
+                  event._tag === "PlannedAttemptExecutorWorkReported" &&
+                  event.report.correlation.attemptId === correlation.attemptId &&
+                  event.report.correlation.runId === correlation.runId
               )
             : []
           const latestSuspend = suspendIntents.at(-1)?.event
@@ -1916,18 +2179,29 @@ const taskFactReconciliationDriver = defineDriver(
             "nonce" in releaseOperation.authority.requestId &&
             releaseOperation.authority.requestId.runId === activeRequestId.runId &&
             releaseOperation.authority.requestId.nonce === activeRequestId.nonce
-          const evidenceRecord = records.findLast(
+          const evidenceRecord = latestEvidenceRecord()
+          const nonExactExecutorObservation = records.findLast(
             ({ event }) =>
-              event._tag === "PlannedAttemptExecutorWorkReported" ||
-              (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-                event.observation._tag === "ExactExecutorReport") ||
-              (event._tag === "PlannedAttemptExecutorStateObserved" && event.observation._tag === "ExactExecutorReport")
+              (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+                event._tag === "PlannedAttemptExecutorStateObserved") &&
+              event.observation._tag !== "ExactExecutorReport" &&
+              plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
           )
+          const currentExecutorFailure =
+            nonExactExecutorObservation !== undefined &&
+            (evidenceRecord === undefined || nonExactExecutorObservation.position > evidenceRecord.position)
+              ? nonExactExecutorObservation.event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+                nonExactExecutorObservation.event._tag === "PlannedAttemptExecutorStateObserved"
+                ? nonExactExecutorObservation.event.observation._tag
+                : undefined
+              : undefined
           const laterExecutorCommand =
             evidenceRecord !== undefined &&
             records.some(
               ({ event, position }) =>
-                position > evidenceRecord.position && event._tag === "PlannedAttemptExecutorCommandIntended"
+                position > evidenceRecord.position &&
+                event._tag === "PlannedAttemptExecutorCommandIntended" &&
+                plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
             )
           const plannedIdentityPreserved =
             records.some(
@@ -1977,6 +2251,35 @@ const taskFactReconciliationDriver = defineDriver(
           const replacement = replacementRecords.at(-1)?.event
           const replacementSuccessor =
             replacement?._tag === "PlannedAttemptReplaced" ? replacement.successorPlan.plannedAttempt : undefined
+          const successorWorktreeIntent = records.findLast(
+            ({ event }) =>
+              event._tag === "TaskWorktreeReconciliationIntended" &&
+              plannedTaskAttemptEquivalence(event.operation.plannedAttempt, successorAttempt)
+          )?.event
+          const successorWorktreeReady =
+            successorWorktreeIntent?._tag === "TaskWorktreeReconciliationIntended" &&
+            records.some(
+              ({ event }) =>
+                event._tag === "TaskWorktreeReady" &&
+                event.operationId === successorWorktreeIntent.operation.operationId
+            )
+          const successorExecutorStartCount = records.filter(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandIntended" &&
+              event.command === "StartOrContinue" &&
+              plannedTaskAttemptEquivalence(event.plannedAttempt, successorAttempt)
+          ).length
+          const successorExecutorResponsibilityBegan = records.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+              plannedTaskAttemptEquivalence(event.plannedAttempt, successorAttempt)
+          )
+          const successorExecutorReport = records.findLast(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" &&
+              event.report.correlation.attemptId === successorCorrelation.attemptId &&
+              event.report.correlation.runId === successorCorrelation.runId
+          )?.event
           const restartApplication = records.find(
             ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
           )
@@ -2032,19 +2335,23 @@ const taskFactReconciliationDriver = defineDriver(
             currentFingerprint: fingerprintTag(currentSpecification.fingerprint),
             evidencePreserved: artifactsPreserved,
             executorEvidence:
-              report?._tag === "SafelySuspended"
-                ? "ExactSafelySuspended"
-                : report?._tag === "Terminal"
-                  ? choice?.choice !== "RestartTaskImplementation"
-                    ? "ExactTerminal"
-                    : report.result._tag === "Accepted"
-                      ? "ExactAcceptedTerminal"
-                      : report.result._tag === "Completed"
-                        ? "ExactCompletedTerminal"
-                        : "ExactFailedTerminal"
-                  : report?._tag === "Running"
-                    ? "ExactRunning"
-                    : "ExecutorUnavailable",
+              currentExecutorFailure === "ExecutorReportContradiction"
+                ? "ExecutorContradiction"
+                : currentExecutorFailure === "ExecutorStateUnavailable"
+                  ? "ExecutorUnavailable"
+                  : report?._tag === "SafelySuspended"
+                    ? "ExactSafelySuspended"
+                    : report?._tag === "Terminal"
+                      ? choice?.choice !== "RestartTaskImplementation"
+                        ? "ExactTerminal"
+                        : report.result._tag === "Accepted"
+                          ? "ExactAcceptedTerminal"
+                          : report.result._tag === "Completed"
+                            ? "ExactCompletedTerminal"
+                            : "ExactFailedTerminal"
+                      : report?._tag === "Running"
+                        ? "ExactRunning"
+                        : "ExecutorUnavailable",
             f2WinningChoice:
               f2Choice?._tag === "AttemptChoiceApplied"
                 ? f2Choice.choice === "ContinueExistingAttempt"
@@ -2081,7 +2388,15 @@ const taskFactReconciliationDriver = defineDriver(
                   ? BigInt(latestRestartSuspendResponse.ordinal)
                   : 0n,
             logsPreserved: artifactsPreserved,
-            positionHeld: admissionSnapshot.positions.has(taskId),
+            positionHeld: (() => {
+              const position = admissionSnapshot.positions.get(taskId)
+              return (
+                position !== undefined &&
+                position._tag !== "PendingRuntimePosition" &&
+                position.correlation.attemptId === correlation.attemptId &&
+                position.correlation.runId === correlation.runId
+              )
+            })(),
             quiescenceUnbroken:
               (report?._tag === "SafelySuspended" || report?._tag === "Terminal") && !laterExecutorCommand,
             resumedAttempt: continueStage() === "ContinueResumed" ? "AttemptP" : "NoAttempt",
@@ -2130,11 +2445,22 @@ const taskFactReconciliationDriver = defineDriver(
               replacementSuccessor !== undefined &&
               (replacementSuccessor.branch === plannedAttempt.branch ||
                 replacementSuccessor.worktree === plannedAttempt.worktree),
-            successorWorktreeReady: false,
-            successorAdmissionCount: 0n,
-            successorPositionHeld: false,
-            successorExecutorStartCount: 0n,
-            successorExecutorResponsibilityRetained: false,
+            successorWorktreeReady,
+            successorAdmissionCount: BigInt(successorAdmissionCount),
+            successorPositionHeld: (() => {
+              const position = admissionSnapshot.positions.get(taskId)
+              return (
+                position !== undefined &&
+                position._tag !== "PendingRuntimePosition" &&
+                position.correlation.attemptId === successorCorrelation.attemptId &&
+                position.correlation.runId === successorCorrelation.runId
+              )
+            })(),
+            successorExecutorStartCount: BigInt(successorExecutorStartCount),
+            successorExecutorResponsibilityRetained:
+              successorExecutorResponsibilityBegan &&
+              successorExecutorReport?._tag === "PlannedAttemptExecutorWorkReported" &&
+              successorExecutorReport.report._tag === "Running",
             replacementProcessLossCount: BigInt(replacementProcessLossCount),
             completedResultPreserved: completed,
             failedResultPreserved: failed,
@@ -2152,6 +2478,42 @@ const taskFactReconciliationDriver = defineDriver(
   }
 )
 
+const taskFactStateCheck = stateCheck(
+  (raw) =>
+    Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
+      Effect.map(({ state }) => ({
+        ...state,
+        authorizedFingerprint: tag(state.authorizedFingerprint),
+        claimObservation: tag(state.claimObservation),
+        claimResult: tag(state.claimResult),
+        continueStage: tag(state.continueStage),
+        currentFingerprint: tag(state.currentFingerprint),
+        executorEvidence: tag(state.executorEvidence),
+        f2WinningChoice: tag(state.f2WinningChoice),
+        f3WinningChoice: tag(state.f3WinningChoice),
+        lastControlResult: tag(state.lastControlResult),
+        oldWorktreeFacts: tag(state.oldWorktreeFacts),
+        observedOldWorktreeHead: tag(state.observedOldWorktreeHead),
+        observedReplacementTargetHead: tag(state.observedReplacementTargetHead),
+        plannedSuccessor: tag(state.plannedSuccessor),
+        replacementClaimFacts: tag(state.replacementClaimFacts),
+        replacementDisposition: tag(state.replacementDisposition),
+        replacementPhase: tag(state.replacementPhase),
+        replacementTargetHeadFacts: tag(state.replacementTargetHeadFacts),
+        replacementTaskFacts: tag(state.replacementTaskFacts),
+        resumedAttempt: tag(state.resumedAttempt),
+        successorBaseHead: tag(state.successorBaseHead),
+        successorBranchIdentity: tag(state.successorBranchIdentity),
+        successorWorktreeIdentity: tag(state.successorWorktreeIdentity),
+        stopStage: tag(state.stopStage)
+      })),
+      Effect.orDie
+    ),
+  (spec, implementation) =>
+    JSON.stringify(spec, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
+    JSON.stringify(implementation, (_, value) => (typeof value === "bigint" ? value.toString() : value))
+)
+
 quintIt(
   it.effect,
   "replays exact task-fact choices and recovery through production journal and authority seams",
@@ -2164,41 +2526,7 @@ quintIt(
     seed: "65",
     spec: "specs/taskFactReconciliation.qnt",
     step: "mbtStep",
-    stateCheck: stateCheck(
-      (raw) =>
-        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
-          Effect.map(({ state }) => ({
-            ...state,
-            authorizedFingerprint: tag(state.authorizedFingerprint),
-            claimObservation: tag(state.claimObservation),
-            claimResult: tag(state.claimResult),
-            continueStage: tag(state.continueStage),
-            currentFingerprint: tag(state.currentFingerprint),
-            executorEvidence: tag(state.executorEvidence),
-            f2WinningChoice: tag(state.f2WinningChoice),
-            f3WinningChoice: tag(state.f3WinningChoice),
-            lastControlResult: tag(state.lastControlResult),
-            oldWorktreeFacts: tag(state.oldWorktreeFacts),
-            observedOldWorktreeHead: tag(state.observedOldWorktreeHead),
-            observedReplacementTargetHead: tag(state.observedReplacementTargetHead),
-            plannedSuccessor: tag(state.plannedSuccessor),
-            replacementClaimFacts: tag(state.replacementClaimFacts),
-            replacementDisposition: tag(state.replacementDisposition),
-            replacementPhase: tag(state.replacementPhase),
-            replacementTargetHeadFacts: tag(state.replacementTargetHeadFacts),
-            replacementTaskFacts: tag(state.replacementTaskFacts),
-            resumedAttempt: tag(state.resumedAttempt),
-            successorBaseHead: tag(state.successorBaseHead),
-            successorBranchIdentity: tag(state.successorBranchIdentity),
-            successorWorktreeIdentity: tag(state.successorWorktreeIdentity),
-            stopStage: tag(state.stopStage)
-          })),
-          Effect.orDie
-        ),
-      (spec, implementation) =>
-        JSON.stringify(spec, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
-        JSON.stringify(implementation, (_, value) => (typeof value === "bigint" ? value.toString() : value))
-    )
+    stateCheck: taskFactStateCheck
   },
   180_000
 )
@@ -2215,41 +2543,24 @@ quintIt(
     seed: "66",
     spec: "specs/taskFactReconciliation.qnt",
     step: "restartMbtStep",
-    stateCheck: stateCheck(
-      (raw) =>
-        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
-          Effect.map(({ state }) => ({
-            ...state,
-            authorizedFingerprint: tag(state.authorizedFingerprint),
-            claimObservation: tag(state.claimObservation),
-            claimResult: tag(state.claimResult),
-            continueStage: tag(state.continueStage),
-            currentFingerprint: tag(state.currentFingerprint),
-            executorEvidence: tag(state.executorEvidence),
-            f2WinningChoice: tag(state.f2WinningChoice),
-            f3WinningChoice: tag(state.f3WinningChoice),
-            lastControlResult: tag(state.lastControlResult),
-            oldWorktreeFacts: tag(state.oldWorktreeFacts),
-            observedOldWorktreeHead: tag(state.observedOldWorktreeHead),
-            observedReplacementTargetHead: tag(state.observedReplacementTargetHead),
-            plannedSuccessor: tag(state.plannedSuccessor),
-            replacementClaimFacts: tag(state.replacementClaimFacts),
-            replacementDisposition: tag(state.replacementDisposition),
-            replacementPhase: tag(state.replacementPhase),
-            replacementTargetHeadFacts: tag(state.replacementTargetHeadFacts),
-            replacementTaskFacts: tag(state.replacementTaskFacts),
-            resumedAttempt: tag(state.resumedAttempt),
-            successorBaseHead: tag(state.successorBaseHead),
-            successorBranchIdentity: tag(state.successorBranchIdentity),
-            successorWorktreeIdentity: tag(state.successorWorktreeIdentity),
-            stopStage: tag(state.stopStage)
-          })),
-          Effect.orDie
-        ),
-      (spec, implementation) =>
-        JSON.stringify(spec, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
-        JSON.stringify(implementation, (_, value) => (typeof value === "bigint" ? value.toString() : value))
-    )
+    stateCheck: taskFactStateCheck
+  },
+  180_000
+)
+
+quintIt(
+  it.effect,
+  "replays the complete clean P2 worktree, bounded admission, and executor start path",
+  {
+    backend: "typescript",
+    driverFactory: taskFactReconciliationDriver,
+    maxSamples: 1,
+    maxSteps: 12,
+    nTraces: 1,
+    seed: "6601",
+    spec: "specs/taskFactReconciliation.qnt",
+    step: "restartSuccessMbtStep",
+    stateCheck: taskFactStateCheck
   },
   180_000
 )

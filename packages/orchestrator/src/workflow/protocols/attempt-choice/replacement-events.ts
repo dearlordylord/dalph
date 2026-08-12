@@ -1,6 +1,8 @@
 import { GitCommitSha } from "@dalph/contracts"
 import { Schema } from "effect"
-import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
+import { GitTargetLineageReadFailure } from "../../../authorities/git/target-lineage.js"
+import { GitWorktreeReadFailure, PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
+import { TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -40,6 +42,56 @@ export const PlannedAttemptReplacementWitness = Schema.Struct({
 )
 export type PlannedAttemptReplacementWitness = typeof PlannedAttemptReplacementWitness.Type
 
+/** A complete tracker read failed without proving any replacement task facts. */
+export const AttemptRestartTaskFactsReadFailure = Schema.TaggedStruct("AttemptRestartTaskFactsReadFailure", {
+  detail: Schema.String,
+  source: Schema.Literals([
+    "FixtureReader.FixtureReadError",
+    "TaskDag.GraphProjectionError",
+    "TrackerGraphReader.AdapterReadError",
+    "TrackerGraphReader.TrackerReadError"
+  ]),
+  target: TrackerTarget
+})
+export type AttemptRestartTaskFactsReadFailure = typeof AttemptRestartTaskFactsReadFailure.Type
+
+/** Exact read-only boundary failure that leaves P1 intact and authorizes no P2. */
+export const AttemptRestartAuthorityReadFailure = Schema.Union([
+  AttemptRestartTaskFactsReadFailure,
+  GitWorktreeReadFailure,
+  GitTargetLineageReadFailure
+])
+export type AttemptRestartAuthorityReadFailure = typeof AttemptRestartAuthorityReadFailure.Type
+
+/**
+ * Dalph durably observed one typed Restart authority-read failure. The exact
+ * operation links this non-action occurrence to its already-recorded read
+ * intent so recovery waits without inventing task or Git authority.
+ */
+export const AttemptRestartAuthorityReadFailedEvent = Schema.TaggedStruct("AttemptRestartAuthorityReadFailed", {
+  failure: AttemptRestartAuthorityReadFailure,
+  occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  operationId: OperationId,
+  requestId: AttemptChoiceRequestId,
+  subject: AttemptChoiceSubject,
+  version: Schema.Literal(workflowJournalEventVersion)
+}).check(
+  Schema.makeFilter((event) => {
+    const plannedAttempt = event.subject.plannedAttempt
+    if (event.failure._tag === "GitWorktreeReadFailure" && event.failure.worktree !== plannedAttempt.worktree) {
+      return "Restart worktree read failure must name P1's exact worktree"
+    }
+    if (
+      event.failure._tag === "GitTargetLineageReadFailure" &&
+      event.failure.plannedBaseSha !== plannedAttempt.baseSha
+    ) {
+      return "Restart target read failure must name P1's exact Base SHA"
+    }
+    return undefined
+  })
+)
+export type AttemptRestartAuthorityReadFailedEvent = typeof AttemptRestartAuthorityReadFailedEvent.Type
+
 interface ReplacementShape {
   readonly subject: AttemptChoiceSubject
   readonly successorPlan: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
@@ -51,6 +103,7 @@ const replacementValidationRules = (event: ReplacementShape): ReadonlyArray<read
   const successor = event.successorPlan.plannedAttempt
   const oldWorktree = event.witness.oldWorktreeProof
   const requiredPredecessors = [
+    event.witness.expectedClaim.operationId,
     event.witness.claimObservationOperationId,
     event.witness.graphObservationOperationId,
     event.witness.oldWorktreeObservationOperationId,
@@ -89,7 +142,7 @@ const replacementValidationRules = (event: ReplacementShape): ReadonlyArray<read
     [event.witness.expectedClaim.taskId === prior.taskId, "replacement witness claim must belong to the exact task"],
     [
       requiredPredecessors.every((operationId) => event.successorPlan.predecessorOperationIds.includes(operationId)),
-      "replacement successor plan must causally name every fresh authority witness"
+      "replacement successor plan must causally name the retained claim and every fresh authority witness"
     ]
   ]
 }

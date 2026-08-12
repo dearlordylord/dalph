@@ -17,6 +17,7 @@ import {
   latestPlannedAttemptExecutorEvidence,
   latestUnsettledPlannedAttemptExecutorCommand
 } from "../planned-attempt-executor-work/evidence.js"
+import { recordedTaskAttemptPlanFor } from "../task-attempt-planning/journal-evidence.js"
 import {
   AttemptChoiceAppliedEvent,
   AttemptChoiceRequestId,
@@ -53,7 +54,12 @@ export class AttemptChoiceAlreadyApplied extends Schema.TaggedError<AttemptChoic
 export class AttemptChoiceNotAvailable extends Schema.TaggedError<AttemptChoiceNotAvailable>()(
   "AttemptChoiceNotAvailable",
   {
-    reason: Schema.Literals(["AttemptNotPlanned", "ExecutorNotSafelySuspended", "ObservedFingerprintNotCurrent"]),
+    reason: Schema.Literals([
+      "AttemptNotPlanned",
+      "AttemptSuperseded",
+      "ExecutorNotSafelySuspended",
+      "ObservedFingerprintNotCurrent"
+    ]),
     requestId: AttemptChoiceRequestId,
     runId: RunId
   }
@@ -250,13 +256,22 @@ const resultFor = (
 const choiceIsExposed = (
   records: ReadonlyArray<JournalRecord>,
   request: ApplyAttemptChoiceRequest
-): "AttemptNotPlanned" | "ExecutorNotSafelySuspended" | "ObservedFingerprintNotCurrent" | undefined => {
-  const planned = records.some(
-    ({ event }) =>
-      event._tag === "TaskAttemptPlanned" &&
-      plannedTaskAttemptEquivalence(event.operation.plannedAttempt, request.subject.plannedAttempt)
-  )
-  if (!planned) return "AttemptNotPlanned"
+):
+  | "AttemptNotPlanned"
+  | "AttemptSuperseded"
+  | "ExecutorNotSafelySuspended"
+  | "ObservedFingerprintNotCurrent"
+  | undefined => {
+  if (recordedTaskAttemptPlanFor(records, request.subject.plannedAttempt) === undefined) return "AttemptNotPlanned"
+  if (
+    records.some(
+      ({ event }) =>
+        event._tag === "PlannedAttemptReplaced" &&
+        plannedTaskAttemptEquivalence(event.subject.plannedAttempt, request.subject.plannedAttempt)
+    )
+  ) {
+    return "AttemptSuperseded"
+  }
   const latestReport = latestPlannedAttemptExecutorEvidence(records, request.subject.plannedAttempt)
   const latestCommandWasSettled =
     latestUnsettledPlannedAttemptExecutorCommand(records, request.subject.plannedAttempt) === undefined

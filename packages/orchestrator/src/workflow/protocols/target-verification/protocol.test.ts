@@ -702,7 +702,7 @@ it("rejects duplicate verification intent, false contradiction, and foreign-run 
     executorResponsibilitiesBegan: new Map(),
     integrationResponsibilitiesBegan: new Map(),
     integrationStarted: new Map(),
-    restartChoicesAppliedAt: new Map(),
+    firstRestartChoiceAppliedAt: new Map(),
     integrationCandidateIntents: new Map(),
     integrationCandidateIntentsByStartedAt: new Map(),
     integrationCandidateSubmissions: new Map(),

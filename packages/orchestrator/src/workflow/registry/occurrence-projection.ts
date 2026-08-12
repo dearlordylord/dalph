@@ -1,6 +1,13 @@
 /* eslint-disable functional/immutable-data, max-lines -- The closed occurrence schema, relationship validation, and journal projection share one exhaustive boundary. */
 import { Effect, Option, Schema } from "effect"
-import { AttemptId, PlannedTaskAttempt, RunId, TaskId, PlannedAttemptExecutorReport } from "@dalph/contracts"
+import {
+  AttemptId,
+  PlannedTaskAttempt,
+  RunId,
+  TaskId,
+  PlannedAttemptExecutorReport,
+  plannedTaskAttemptEquivalence
+} from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -12,6 +19,7 @@ import { WorkflowOperation } from "./operation.js"
 import { WorkflowActor } from "./actor.js"
 import { PlannedAttemptWorktreeObservation } from "../protocols/planned-attempt-worktree-observation/protocol.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { RunPolicyRevision } from "../../control/policy.js"
 import {
@@ -19,8 +27,17 @@ import {
   ControlDirectionSubject
 } from "../protocols/control-direction-application/events.js"
 import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
-import { AttemptChoice, AttemptChoiceRequestId, AttemptChoiceSubject } from "../protocols/attempt-choice/events.js"
-import { PlannedAttemptReplacementWitness } from "../protocols/attempt-choice/replacement-events.js"
+import {
+  AttemptChoice,
+  AttemptChoiceRequestId,
+  AttemptChoiceSubject,
+  sameAttemptChoiceRequestId,
+  sameAttemptChoiceSubject
+} from "../protocols/attempt-choice/events.js"
+import {
+  AttemptRestartAuthorityReadFailure,
+  PlannedAttemptReplacementWitness
+} from "../protocols/attempt-choice/replacement-events.js"
 import {
   IntegrationResponsibilityBegan,
   IntegrationStarted,
@@ -205,6 +222,18 @@ export const PlannedAttemptReplaced = Schema.TaggedStruct("PlannedAttemptReplace
 })
 export type PlannedAttemptReplaced = typeof PlannedAttemptReplaced.Type
 
+/** A Restart authority read failed and therefore proved no successor authority. */
+export const AttemptRestartAuthorityReadFailed = Schema.TaggedStruct("AttemptRestartAuthorityReadFailed", {
+  failure: AttemptRestartAuthorityReadFailure,
+  ...nonActionOccurrenceFields,
+  originatingActionOperationId: OperationId,
+  recordedAt: JournalPosition,
+  requestId: AttemptChoiceRequestId,
+  runId: RunId,
+  subject: AttemptChoiceSubject
+})
+export type AttemptRestartAuthorityReadFailed = typeof AttemptRestartAuthorityReadFailed.Type
+
 /** Operator durably changed the future task-admission ceiling for one Run. */
 export const AppliedTaskWorkCapacity = Schema.TaggedStruct("AppliedTaskWorkCapacity", {
   capacity: TaskWorkCapacity,
@@ -218,6 +247,7 @@ export type AppliedTaskWorkCapacity = typeof AppliedTaskWorkCapacity.Type
 
 export const WorkflowOccurrence = Schema.Union([
   AppliedAttemptChoice,
+  AttemptRestartAuthorityReadFailed,
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,
@@ -328,6 +358,124 @@ const invalidExecutorRelationship = (
       }
 }
 
+const trackerOperationMatchesRestartFailure = (
+  operation: TaskTrackerReadInitiated["operation"],
+  occurrence: AttemptRestartAuthorityReadFailed
+): boolean => {
+  if (occurrence.failure._tag !== "AttemptRestartTaskFactsReadFailure") return false
+  const taskId = occurrence.subject.plannedAttempt.taskId
+  const coversTask =
+    operation._tag === "ReadTrackerGraph"
+      ? operation.readShape.explicitlyCoveredTaskIds.includes(taskId)
+      : operation._tag === "ReadTaskWorkSpecification" && operation.taskId === taskId
+  return coversTask && taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(occurrence.failure.target)
+}
+
+const exactTrackerReadForRestartFailure = (
+  trackerActions: ReadonlyMap<string, IndexedRelationship<TaskTrackerReadInitiated>>,
+  occurrence: AttemptRestartAuthorityReadFailed
+): boolean => {
+  if (occurrence.failure._tag !== "AttemptRestartTaskFactsReadFailure") return false
+  const action = trackerActions.get(relationshipKey(occurrence.runId, occurrence.originatingActionOperationId))
+  if (action === undefined || action === ambiguousRelationship || action.recordedAt >= occurrence.recordedAt) {
+    return false
+  }
+  return trackerOperationMatchesRestartFailure(action.operation, occurrence)
+}
+
+const isExactEarlierGitReadForRestartFailure =
+  (occurrence: AttemptRestartAuthorityReadFailed) =>
+  (candidate: WorkflowOccurrence): candidate is GitReadInitiated =>
+    candidate._tag === "GitReadInitiated" &&
+    candidate.runId === occurrence.runId &&
+    candidate.operation.operationId === occurrence.originatingActionOperationId &&
+    candidate.recordedAt < occurrence.recordedAt &&
+    plannedTaskAttemptEquivalence(candidate.operation.plannedAttempt, occurrence.subject.plannedAttempt)
+
+const gitOperationMatchesRestartFailure = (
+  operation: GitReadInitiated["operation"],
+  occurrence: AttemptRestartAuthorityReadFailed
+): boolean => {
+  if (occurrence.failure._tag === "AttemptRestartTaskFactsReadFailure") return false
+  if (occurrence.failure._tag === "GitWorktreeReadFailure") {
+    return (
+      operation._tag === "ReadTaskWorktree" &&
+      occurrence.failure.worktree === occurrence.subject.plannedAttempt.worktree
+    )
+  }
+  if (operation._tag !== "ReadTargetLineage") return false
+  return [
+    occurrence.failure.plannedBaseSha === occurrence.subject.plannedAttempt.baseSha,
+    operation.integrationTarget.repository === occurrence.failure.target.repository,
+    operation.integrationTarget.ref === occurrence.failure.target.ref
+  ].every(Boolean)
+}
+
+const exactGitReadForRestartFailure = (
+  occurrences: ReadonlyArray<WorkflowOccurrence>,
+  occurrence: AttemptRestartAuthorityReadFailed
+): boolean => {
+  if (occurrence.failure._tag === "AttemptRestartTaskFactsReadFailure") return false
+  const actions = occurrences.filter(isExactEarlierGitReadForRestartFailure(occurrence))
+  if (actions.length !== 1) return false
+  const operation = actions[0]?.operation
+  if (operation === undefined) return false
+  return gitOperationMatchesRestartFailure(operation, occurrence)
+}
+
+const restartFailureHasExactEarlierRead = (
+  occurrences: ReadonlyArray<WorkflowOccurrence>,
+  trackerActions: ReadonlyMap<string, IndexedRelationship<TaskTrackerReadInitiated>>,
+  occurrence: AttemptRestartAuthorityReadFailed
+): boolean =>
+  occurrence.requestId.runId === occurrence.runId &&
+  occurrence.subject.plannedAttempt.runId === occurrence.runId &&
+  (exactTrackerReadForRestartFailure(trackerActions, occurrence) ||
+    exactGitReadForRestartFailure(occurrences, occurrence))
+
+type RestartDependentOccurrence = AttemptRestartAuthorityReadFailed | PlannedAttemptReplaced
+
+const isRestartDependentOccurrence = (occurrence: WorkflowOccurrence): occurrence is RestartDependentOccurrence =>
+  occurrence._tag === "AttemptRestartAuthorityReadFailed" || occurrence._tag === "PlannedAttemptReplaced"
+
+const restartOccurrenceHasExactAppliedChoice = (
+  occurrences: ReadonlyArray<WorkflowOccurrence>,
+  occurrence: RestartDependentOccurrence
+): boolean =>
+  occurrences.filter(
+    (candidate) =>
+      candidate._tag === "AppliedAttemptChoice" &&
+      candidate.choice === "RestartTaskImplementation" &&
+      candidate.recordedAt < occurrence.recordedAt &&
+      sameAttemptChoiceRequestId(candidate.requestId, occurrence.requestId) &&
+      sameAttemptChoiceSubject(candidate.subject, occurrence.subject)
+  ).length === 1
+
+const invalidRestartOccurrenceRelationship = (
+  occurrences: ReadonlyArray<WorkflowOccurrence>,
+  trackerActions: ReadonlyMap<string, IndexedRelationship<TaskTrackerReadInitiated>>,
+  occurrence: RestartDependentOccurrence,
+  index: number
+) => {
+  if (!restartOccurrenceHasExactAppliedChoice(occurrences, occurrence)) {
+    const subject =
+      occurrence._tag === "AttemptRestartAuthorityReadFailed"
+        ? "Restart authority failure"
+        : "planned-attempt replacement"
+    return {
+      issue: `${subject} requires its exact earlier applied Restart ${occurrence.requestId.nonce}`,
+      path: ["occurrences", index]
+    }
+  }
+  if (occurrence._tag === "PlannedAttemptReplaced") return undefined
+  return !restartFailureHasExactEarlierRead(occurrences, trackerActions, occurrence)
+    ? {
+        issue: `Restart authority failure must have one exact earlier initiating read action ${occurrence.originatingActionOperationId}`,
+        path: ["occurrences", index]
+      }
+    : undefined
+}
+
 const invalidOutcomeRelationship = (
   projection: { readonly occurrences: ReadonlyArray<WorkflowOccurrence> },
   occurrence: WorkflowOccurrence,
@@ -337,6 +485,9 @@ const invalidOutcomeRelationship = (
 ) => {
   if (occurrence._tag === "TaskTrackerFactsObserved") {
     return invalidTrackerRelationship(trackerActions, occurrence, index)
+  }
+  if (isRestartDependentOccurrence(occurrence)) {
+    return invalidRestartOccurrenceRelationship(projection.occurrences, trackerActions, occurrence, index)
   }
   if (occurrence._tag === "PlannedAttemptExecutorWorkReported") {
     return invalidExecutorRelationship(executorResponsibilities, occurrence, index)
@@ -401,6 +552,7 @@ type ProjectedJournalEvent = Extract<
       | "TaskWorkCapacityChanged"
       | "AttemptChoiceApplied"
       | "PlannedAttemptReplaced"
+      | "AttemptRestartAuthorityReadFailed"
       | "ControlDirectionApplied"
       | "TaskClaimReacquisitionDirected"
       | "TaskTrackerReadIntentRecorded"
@@ -688,6 +840,56 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
           plannedAttempt: event.plannedAttempt,
           recordedAt: record.position,
           runId: record.runId
+        })
+      )
+      continue
+    }
+    if (event._tag === "AttemptRestartAuthorityReadFailed") {
+      const relationship = relationshipKey(record.runId, event.operationId)
+      const exactTaskFactsIntent = () => {
+        const intent = trackerReadIntents.get(relationship)
+        if (intent === undefined) return false
+        const operation = intent.operation
+        return (
+          event.failure._tag === "AttemptRestartTaskFactsReadFailure" &&
+          ((operation._tag === "ReadTrackerGraph" &&
+            operation.readShape.explicitlyCoveredTaskIds.includes(event.subject.plannedAttempt.taskId)) ||
+            (operation._tag === "ReadTaskWorkSpecification" &&
+              operation.taskId === event.subject.plannedAttempt.taskId)) &&
+          taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(event.failure.target)
+        )
+      }
+      const exactGitIntent = () => {
+        const intent = gitReadIntents.get(relationship)
+        if (
+          intent === undefined ||
+          !plannedTaskAttemptEquivalence(intent.operation.plannedAttempt, event.subject.plannedAttempt)
+        ) {
+          return false
+        }
+        return event.failure._tag === "GitWorktreeReadFailure"
+          ? intent.operation._tag === "ReadTaskWorktree"
+          : event.failure._tag === "GitTargetLineageReadFailure" &&
+              intent.operation._tag === "ReadTargetLineage" &&
+              intent.operation.integrationTarget.repository === event.failure.target.repository &&
+              intent.operation.integrationTarget.ref === event.failure.target.ref
+      }
+      if (!exactTaskFactsIntent() && !exactGitIntent()) {
+        const Failure =
+          event.failure._tag === "AttemptRestartTaskFactsReadFailure"
+            ? TrackerOutcomeWithoutReadIntent
+            : GitOutcomeWithoutReadIntent
+        return yield* new Failure({ operationId: event.operationId, position: record.position, runId: record.runId })
+      }
+      occurrences.push(
+        AttemptRestartAuthorityReadFailed.make({
+          failure: event.failure,
+          occurrenceClassification: event.occurrenceClassification,
+          originatingActionOperationId: event.operationId,
+          recordedAt: record.position,
+          requestId: event.requestId,
+          runId: record.runId,
+          subject: event.subject
         })
       )
       continue
