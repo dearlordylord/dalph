@@ -123,6 +123,7 @@ export {
 export { defaultTaskWorkCapacity, TaskWorkCapacity } from "./coordination/admission/capacity.js"
 export * from "./coordination/application-exit/lifecycle-decision.js"
 export * from "./coordination/application-exit/lifecycle.js"
+export * from "./coordination/application-exit/executor-drain.js"
 export * from "./coordination/application-exit/application-shell.js"
 export {
   IntegrationTargetResourceUnavailable,
