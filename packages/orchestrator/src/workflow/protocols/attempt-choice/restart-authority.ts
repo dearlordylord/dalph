@@ -10,6 +10,7 @@ import {
   type PlannedAttemptExecutorEvidence
 } from "../planned-attempt-executor-work/evidence.js"
 import {
+  observePlannedAttemptExecutorStateWithPermit,
   reconcileOrObservePlannedAttemptExecutorStateWithPermit,
   requestPlannedAttemptExecutorSuspensionWithPermit
 } from "../planned-attempt-executor-work/protocol.js"
@@ -198,7 +199,11 @@ export const terminalOrSafeRestartQuiescence = Effect.fn("AttemptRestart.establi
   if (current._tag !== "Unproved") return current
   const unsettled = latestUnsettledPlannedAttemptExecutorCommand(records, subject.plannedAttempt)
   const report = yield* unsettled === undefined
-    ? requestPlannedAttemptExecutorSuspensionWithPermit(permit, subject.plannedAttempt)
+    ? requestPlannedAttemptExecutorSuspensionWithPermit(permit, subject.plannedAttempt).pipe(
+        Effect.catchTag("PlannedAttemptExecutorSuspensionLimitReached", () =>
+          observePlannedAttemptExecutorStateWithPermit(permit, subject.plannedAttempt)
+        )
+      )
     : reconcileOrObservePlannedAttemptExecutorStateWithPermit(permit, subject.plannedAttempt)
   if (report._tag === "Running") return { _tag: "Pending" as const, reason: "ExecutorRunning" as const }
   const journal = yield* InRunJournal

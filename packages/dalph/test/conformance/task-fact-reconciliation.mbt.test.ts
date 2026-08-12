@@ -278,6 +278,7 @@ const SpecProjection = Schema.Struct({
     stopRecoveryCount: ITFBigInt,
     stopResponseAmbiguous: Schema.Boolean,
     stopStage: Variant,
+    suspensionCommandCountSinceSafeEvidence: ITFBigInt,
     unresolvedClaimReleaseResponsibility: Schema.Boolean,
     winningRequestId: RequestIdProjection,
     wipPreserved: Schema.Boolean,
@@ -2085,6 +2086,14 @@ const taskFactReconciliationDriver = defineDriver(
           const suspendIntents = records.filter(
             ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
           )
+          const latestSafeEvidencePosition = records.findLast(
+            ({ event }) =>
+              (event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended") ||
+              ((event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+                event._tag === "PlannedAttemptExecutorStateObserved") &&
+                event.observation._tag === "ExactExecutorReport" &&
+                event.observation.report._tag === "SafelySuspended")
+          )?.position
           const exactSuspendProjections = records.filter(
             ({ event }) =>
               event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
@@ -2416,6 +2425,11 @@ const taskFactReconciliationDriver = defineDriver(
               suspensionCallCount > 0 &&
               pendingCommandExit !== undefined,
             stopStage: projectedStopStage,
+            suspensionCommandCountSinceSafeEvidence: BigInt(
+              suspendIntents.filter(
+                ({ position }) => latestSafeEvidencePosition === undefined || position > latestSafeEvidencePosition
+              ).length
+            ),
             unresolvedClaimReleaseResponsibility:
               abandonment !== undefined && !claimReleased && noRelease === undefined,
             winningRequestId: choice === undefined ? { nonce: 0n, runId: 0n } : requestProjection(choice.requestId),

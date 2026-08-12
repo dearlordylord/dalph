@@ -287,6 +287,9 @@ module taskFactReconciliation {
     stopCommandIntentCount: int,
     stopCommandCallCount: int,
     stopCommandSettlementCount: int,
+    // The shared executor protocol resets its three-Suspend budget whenever
+    // exact safe evidence is published; lifetime intent totals do not reset.
+    suspensionCommandCountSinceSafeEvidence: int,
     stopCommandCalled: bool,
     stopResponseAmbiguous: bool,
     runningProjectionSettledStopIntent: bool,
@@ -516,20 +519,33 @@ module taskFactReconciliation {
       == state.stopCommandSettlementCount + (if (stopCommandActive(state)) 1 else 0),
     state.stopCommandCallCount
       == state.stopCommandSettlementCount + (if (state.stopCommandCalled) 1 else 0),
-    state.nextStopCommandOrdinal == state.stopCommandIntentCount + 2,
-    state.lastSettledStopCommandOrdinal
-      == if (state.stopCommandSettlementCount == 0) 0 else state.stopCommandSettlementCount + 1,
+    // Executor command ordinals are shared with StartOrContinue. Restart may
+    // therefore advance the next ordinal without adding a stoppage intent.
+    state.nextStopCommandOrdinal >= state.stopCommandIntentCount + 2,
+    state.activeStopCommandOrdinal == 0
+      or and {
+        state.activeStopCommandOrdinal >= 2,
+        state.activeStopCommandOrdinal < state.nextStopCommandOrdinal,
+      },
+    (state.stopCommandSettlementCount == 0) == (state.lastSettledStopCommandOrdinal == 0),
+    state.lastSettledStopCommandOrdinal == 0
+      or and {
+        state.lastSettledStopCommandOrdinal >= state.stopCommandSettlementCount + 1,
+        state.lastSettledStopCommandOrdinal < state.nextStopCommandOrdinal,
+      },
   }
 
+  // The existing executor protocol counts Suspend commands only since the
+  // most recent exact safe report, then switches to read-only observation at
+  // the limit. Restart and Stop share that same episode-local allowance.
   val stoppageIsBounded: bool = and {
-    state.stopCommandIntentCount <= STOP_COMMAND_LIMIT,
-    state.stopCommandCallCount <= STOP_COMMAND_LIMIT,
+    state.suspensionCommandCountSinceSafeEvidence <= STOP_COMMAND_LIMIT,
     state.stopProjectionsThisActivation <= 1,
     state.stopRecoveryCount <= RECOVERY_LIMIT,
   }
 
   val stoppageLimitPreservesReadOnlyRecovery: bool =
-    state.stopCommandIntentCount != STOP_COMMAND_LIMIT
+    state.suspensionCommandCountSinceSafeEvidence != STOP_COMMAND_LIMIT
       or stopCommandActive(state)
       or state.executorEvidence != ExactRunning
       or state.stopProjectionsThisActivation != 1
@@ -992,6 +1008,7 @@ module taskFactReconciliation {
       stopCommandIntentCount: 0,
       stopCommandCallCount: 0,
       stopCommandSettlementCount: 0,
+      suspensionCommandCountSinceSafeEvidence: 0,
       stopCommandCalled: false,
       stopResponseAmbiguous: false,
       runningProjectionSettledStopIntent: false,
@@ -1409,19 +1426,32 @@ module taskFactReconciliation {
 
   action observeRestartRunning: bool = all {
     state.f2WinningChoice == RestartChoice,
-    state.replacementPhase == NeedCurrentExecutorQuiescence,
+    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
     state.implementationResponsibilityRetained,
     state' = {
       ...state,
       executorEvidence: ExactRunning,
       quiescenceUnbroken: false,
       positionHeld: true,
-      activeStopCommandOrdinal: state.nextStopCommandOrdinal,
-      lastSettledStopCommandOrdinal: state.nextStopCommandOrdinal,
-      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
-      stopCommandIntentCount: state.stopCommandIntentCount + 1,
-      stopCommandCallCount: state.stopCommandCallCount + 1,
-      stopCommandSettlementCount: state.stopCommandSettlementCount + 1,
+      lastSettledStopCommandOrdinal:
+        if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT)
+          state.nextStopCommandOrdinal
+        else state.lastSettledStopCommandOrdinal,
+      nextStopCommandOrdinal:
+        state.nextStopCommandOrdinal
+          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
+      stopCommandIntentCount:
+        state.stopCommandIntentCount
+          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
+      stopCommandCallCount:
+        state.stopCommandCallCount
+          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
+      stopCommandSettlementCount:
+        state.stopCommandSettlementCount
+          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
+      suspensionCommandCountSinceSafeEvidence:
+        state.suspensionCommandCountSinceSafeEvidence
+          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
       replacementPhase: ReplacementWaiting,
       replacementDisposition: RunningWriterWait,
       lastAction: RestartRunningObservedAction,
@@ -1466,12 +1496,23 @@ module taskFactReconciliation {
       executorEvidence: ExactSafelySuspended,
       quiescenceUnbroken: true,
       positionHeld: false,
-      activeStopCommandOrdinal: state.nextStopCommandOrdinal,
-      lastSettledStopCommandOrdinal: state.nextStopCommandOrdinal,
-      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
-      stopCommandIntentCount: state.stopCommandIntentCount + 1,
-      stopCommandCallCount: state.stopCommandCallCount + 1,
-      stopCommandSettlementCount: state.stopCommandSettlementCount + 1,
+      lastSettledStopCommandOrdinal:
+        if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT)
+          state.nextStopCommandOrdinal
+        else state.lastSettledStopCommandOrdinal,
+      nextStopCommandOrdinal:
+        state.nextStopCommandOrdinal
+          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
+      stopCommandIntentCount:
+        state.stopCommandIntentCount
+          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
+      stopCommandCallCount:
+        state.stopCommandCallCount
+          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
+      stopCommandSettlementCount:
+        state.stopCommandSettlementCount
+          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
+      suspensionCommandCountSinceSafeEvidence: 0,
       replacementPhase: NeedCurrentReplacementTaskFacts,
       replacementDisposition: NoReplacementDisposition,
       replacementTaskFacts: ReplacementTaskFactsNotRead,
@@ -1931,12 +1972,13 @@ module taskFactReconciliation {
     state.stopStage == NeedQuiescence,
     not(exactQuiescence(state)),
     not(stopCommandActive(state)),
-    state.stopCommandIntentCount < STOP_COMMAND_LIMIT,
+    state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT,
     state' = {
       ...state,
       activeStopCommandOrdinal: state.nextStopCommandOrdinal,
       nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
       stopCommandIntentCount: state.stopCommandIntentCount + 1,
+      suspensionCommandCountSinceSafeEvidence: state.suspensionCommandCountSinceSafeEvidence + 1,
       lastAction: StoppageIntentRecordedAction,
     },
   }
@@ -1994,6 +2036,7 @@ module taskFactReconciliation {
       lastSettledStopCommandOrdinal: state.activeStopCommandOrdinal,
       activeStopCommandOrdinal: 0,
       stopCommandSettlementCount: state.stopCommandSettlementCount + 1,
+      suspensionCommandCountSinceSafeEvidence: 0,
       stopCommandCalled: false,
       stopResponseAmbiguous: false,
       stopProjectionsThisActivation: 1,
@@ -2032,7 +2075,7 @@ module taskFactReconciliation {
       not(stopCommandActive(state)) and state.stopProjectionsThisActivation == 1,
     state.stopRecoveryCount < RECOVERY_LIMIT
       or and {
-        state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+        state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
         not(stopCommandActive(state)),
         state.stopProjectionsThisActivation == 1,
         state.stopRecoveryCount == RECOVERY_LIMIT,
@@ -2050,7 +2093,7 @@ module taskFactReconciliation {
   action projectReadOnlyExactSafeAfterStoppageLimit: bool = all {
     state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
     state.stopStage == NeedQuiescence,
-    state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+    state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
     not(stopCommandActive(state)),
     not(state.stopCommandCalled),
     state.stopProjectionsThisActivation == 0,
@@ -2058,6 +2101,7 @@ module taskFactReconciliation {
     state' = {
       ...state,
       executorEvidence: ExactSafelySuspended,
+      suspensionCommandCountSinceSafeEvidence: 0,
       quiescenceUnbroken: true,
       runningProjectionSettledStopIntent: false,
       stopProjectionsThisActivation: 1,
@@ -2379,6 +2423,7 @@ module taskFactReconciliation {
       ...state,
       executorEvidence: ExactSafelySuspended,
       quiescenceUnbroken: true,
+      suspensionCommandCountSinceSafeEvidence: 0,
       positionHeld: false,
       factDecision:
         if (state.constraint == MembershipConstraint) MembershipWait
@@ -2706,7 +2751,7 @@ module taskFactReconciliation {
       not(stopCommandActive(state)),
       not(exactQuiescence(state)),
       state.stopProjectionsThisActivation != 1,
-      state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+      state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
       any { projectReadOnlyExactSafeAfterStoppageLimit },
     },
     all {
@@ -2715,7 +2760,7 @@ module taskFactReconciliation {
       not(stopCommandActive(state)),
       not(exactQuiescence(state)),
       state.stopProjectionsThisActivation != 1,
-      state.stopCommandIntentCount != STOP_COMMAND_LIMIT,
+      state.suspensionCommandCountSinceSafeEvidence != STOP_COMMAND_LIMIT,
       any {
         recordStoppageIntent,
         selectIndependentTaskB,

@@ -257,7 +257,7 @@ interface RestartHarnessOptions {
   readonly additionalRecordedAttempt?: boolean
   readonly ambiguousReplacementAppend?: boolean
   readonly claim?: "Absent" | "Exact" | "Foreign" | "Unreadable"
-  readonly executor?: "Completed" | "Contradictory" | "Failed" | "Running" | "Unavailable"
+  readonly executor?: "Completed" | "Contradictory" | "Failed" | "Running" | "RunningUntilReadOnlySafe" | "Unavailable"
   readonly factsChangeDuringTargetRead?: boolean
   readonly postChoiceClaimReacquired?: boolean
   readonly specification?: "F2" | "F3" | "F3ThenF2"
@@ -265,6 +265,7 @@ interface RestartHarnessOptions {
   readonly taskEligible?: boolean
   readonly taskFacts?: "Readable" | "Unreadable"
   readonly retryAfterPending?: boolean
+  readonly restartAttempts?: number
   readonly worktree?: "NotReady" | "Ready" | "Unreadable"
 }
 
@@ -330,6 +331,7 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
     const plannerCalls = yield* Ref.make(0)
     const plannerOrdinals = yield* Ref.make<ReadonlyArray<number>>([])
     const specificationReads = yield* Ref.make(0)
+    const suspensionCalls = yield* Ref.make(0)
     const executorReport =
       options.executor === "Completed"
         ? PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
@@ -340,16 +342,18 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       project: () =>
         options.executor === "Unavailable"
           ? Effect.succeed(Option.none())
-          : options.executor === "Contradictory"
-            ? Effect.succeed(
-                Option.some(
-                  PlannedAttemptExecutorReport.cases.Running.make({
-                    correlation: { attemptId: AttemptId.make("attempt-restart-other"), runId }
-                  })
+          : options.executor === "RunningUntilReadOnlySafe"
+            ? Effect.succeed(Option.some(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })))
+            : options.executor === "Contradictory"
+              ? Effect.succeed(
+                  Option.some(
+                    PlannedAttemptExecutorReport.cases.Running.make({
+                      correlation: { attemptId: AttemptId.make("attempt-restart-other"), runId }
+                    })
+                  )
                 )
-              )
-            : unused(),
-      requestSuspension: () => Effect.succeed(executorReport),
+              : unused(),
+      requestSuspension: () => Ref.update(suspensionCalls, (count) => count + 1).pipe(Effect.as(executorReport)),
       startOrContinue: () => Effect.succeed(executorReport)
     })
     if (options.executor === "Unavailable" || options.executor === "Contradictory") {
@@ -506,14 +510,18 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       Effect.provideService(InRunJournal, inRunJournal)
     )
     const ambiguousFailure = options.ambiguousReplacementAppend ? yield* Effect.flip(restart) : undefined
-    const firstResult = yield* restart
-    const result = options.retryAfterPending === true ? yield* restart : firstResult
+    const restartAttempts = options.restartAttempts ?? (options.retryAfterPending === true ? 2 : 1)
+    let result = yield* restart
+    for (let attempt = 1; attempt < restartAttempts; attempt += 1) {
+      result = yield* restart
+    }
     return {
       ambiguousFailure,
       plannerCalls: yield* Ref.get(plannerCalls),
       plannerOrdinals: yield* Ref.get(plannerOrdinals),
       records: yield* (yield* JournalStore).read(runId),
-      result
+      result,
+      suspensionCalls: yield* Ref.get(suspensionCalls)
     }
   })
 
@@ -1148,6 +1156,34 @@ for (const fixture of nonAuthorizingCases) {
     )
   )
 }
+
+it.effect("uses read-only safe evidence after three consecutive Running suspension responses", () =>
+  exerciseRestart({ executor: "RunningUntilReadOnlySafe", restartAttempts: 4 }).pipe(
+    Effect.tap(({ records, result, suspensionCalls }) =>
+      Effect.sync(() => {
+        expect(result._tag).toBe("PlannedAttemptReplacementRecorded")
+        expect(suspensionCalls).toBe(3)
+        expect(
+          records.filter(
+            ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+          )
+        ).toHaveLength(3)
+        expect(
+          records.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorStateObserved" &&
+              event.observation._tag === "ExactExecutorReport" &&
+              event.observation.report._tag === "SafelySuspended"
+          )
+        ).toBe(true)
+        expect(records.filter(({ event }) => event._tag === "PlannedAttemptReplaced")).toHaveLength(1)
+      })
+    ),
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
 
 it.effect("records a later identified read after a durable Restart authority failure", () =>
   exerciseRestart({ retryAfterPending: true, taskFacts: "Unreadable" }).pipe(

@@ -426,13 +426,22 @@ module taskFactReconciliationNegativeTest {
   }
 
   action recordFourthStoppageIntent: bool = all {
-    state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+    state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
     not(stopCommandActive(state)),
     state' = {
       ...state,
       activeStopCommandOrdinal: state.nextStopCommandOrdinal,
       nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
       stopCommandIntentCount: state.stopCommandIntentCount + 1,
+      suspensionCommandCountSinceSafeEvidence: state.suspensionCommandCountSinceSafeEvidence + 1,
+    },
+  }
+
+  action settleStoppageAtUnissuedOrdinal: bool = all {
+    state.stopCommandSettlementCount > 0,
+    state' = {
+      ...state,
+      lastSettledStopCommandOrdinal: state.nextStopCommandOrdinal,
     },
   }
 
@@ -442,7 +451,7 @@ module taskFactReconciliationNegativeTest {
   }
 
   action makePostLimitReadOnlyStoppageRecoveryUnavailable: bool = all {
-    state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+    state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
     not(stopCommandActive(state)),
     state.stopProjectionsThisActivation == 1,
     state' = { ...state, stopRecoveryCount: RECOVERY_LIMIT + 1 },
@@ -659,6 +668,19 @@ module taskFactReconciliationNegativeTest {
       .then(projectExactRunningForStoppage)
       .then(takeSecondStopProjectionInActivation)
       .expect(not(stoppageIsBounded))
+  }
+
+  run unissuedOrdinalCannotSettleStoppageIntentTest = {
+    init
+      .then(observeF2Change)
+      .then(applyStopF2)
+      .then(requireStoppageReconciliation)
+      .then(recordStoppageIntent)
+      .then(callStoppage)
+      .then(loseStoppageResponse)
+      .then(projectExactRunningForStoppage)
+      .then(settleStoppageAtUnissuedOrdinal)
+      .expect(not(stoppageCallsHaveExactDurableIntents))
   }
 
   run stoppageLimitCannotBecomePermanentReadOnlyDeadEndTest = {

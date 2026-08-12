@@ -317,6 +317,7 @@ module taskFactReconciliationTest {
       .then(projectExactRunningForStoppage)
       .expect(and {
         state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+        state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
         state.stopCommandSettlementCount == STOP_COMMAND_LIMIT,
         stoppageLimitPreservesReadOnlyRecovery,
       })
@@ -620,6 +621,7 @@ module taskFactReconciliationTest {
         state.replacementPhase == NeedCurrentExecutorQuiescence,
         state.replacementTaskFacts == ReplacementTaskFactsNotRead,
         state.positionHeld,
+        stoppageCallsHaveExactDurableIntents,
       })
       .then(observeRestartSafelySuspended)
       .then(observeReplacementExactF2TaskFacts)
@@ -630,6 +632,7 @@ module taskFactReconciliationTest {
       .expect(and {
         state.executorEvidence == ExactSafelySuspended,
         state.replacementEventRecorded,
+        stoppageCallsHaveExactDurableIntents,
         plannedAttemptReplacementRequiresExactCurrentEvidence,
       })
   }
@@ -681,7 +684,35 @@ module taskFactReconciliationTest {
         state.positionHeld,
         not(state.replacementEventRecorded),
         state.independentTaskSelected,
+        stoppageCallsHaveExactDurableIntents,
         nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
+      })
+  }
+
+  run restartSuspensionLimitUsesReadOnlySafeEvidenceTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(breakRestartSafeSuspension)
+      .then(observeRestartRunning)
+      .then(observeRestartRunning)
+      .then(observeRestartRunning)
+      .expect(and {
+        state.replacementPhase == ReplacementWaiting,
+        state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+        state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
+        stoppageCallsHaveExactDurableIntents,
+        stoppageIsBounded,
+      })
+      .then(observeRestartSafelySuspended)
+      .expect(and {
+        state.replacementPhase == NeedCurrentReplacementTaskFacts,
+        state.executorEvidence == ExactSafelySuspended,
+        state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
+        state.stopCommandSettlementCount == STOP_COMMAND_LIMIT,
+        state.suspensionCommandCountSinceSafeEvidence == 0,
+        stoppageCallsHaveExactDurableIntents,
+        stoppageIsBounded,
       })
   }
 
