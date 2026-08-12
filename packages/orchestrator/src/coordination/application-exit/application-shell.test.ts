@@ -20,6 +20,8 @@ import {
   makeApplicationExitShell
 } from "./application-shell.js"
 
+const defaultOwnership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+
 const successfulDrain = (
   record: (event: string) => Effect.Effect<void>,
   closeProcessLocalResources: Effect.Effect<void, ApplicationExitDrainFailure> = record("local-resources-closed")
@@ -187,6 +189,40 @@ it.effect("coalesces repeated Exit requests without resetting the fixed five-sec
   )
 )
 
+it.effect("uses no fresh drain time when driver start is delayed beyond the original fifth second", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const cutoffObserved = yield* Deferred.make<void>()
+      const allowDriver = yield* Deferred.make<void>()
+      const boundary = yield* makeApplicationExitRequestBoundary(
+        lifecycle,
+        {
+          closeProcessLocalResources: Effect.void,
+          flushProducedJournalWrites: Effect.never,
+          releaseCoordinatorLock: Effect.void,
+          suspendRunningExecutorWork: Effect.succeed([])
+        },
+        { requestEnd: () => Effect.void },
+        {
+          emit: (event) =>
+            event._tag === "AdmissionCutoffClosed"
+              ? Deferred.succeed(cutoffObserved, undefined).pipe(Effect.andThen(Deferred.await(allowDriver)))
+              : Effect.void
+        }
+      )
+      const exiting = yield* boundary.requestExit.pipe(Effect.forkChild)
+      yield* Deferred.await(cutoffObserved)
+      yield* TestClock.adjust("5 seconds")
+      yield* Deferred.succeed(allowDriver, undefined)
+
+      expect(yield* Fiber.join(exiting)).toEqual(
+        ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
+      )
+    })
+  )
+)
+
 it.effect("reports a flush failure only after releasing idle process resources and the coordinator lock", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -211,6 +247,36 @@ it.effect("reports a flush failure only after releasing idle process resources a
       )
       expect(yield* Ref.get(chronology)).toEqual(["local-resources-closed", "coordinator-lock-released"])
       expect(yield* Ref.get(processEnds)).toEqual([{ _tag: "RequestForcedTermination", status: 1 }])
+    })
+  )
+)
+
+it.effect("reports a direct executor-family drain failure and still performs every later quick drain", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const diagnostic = ApplicationExitDiagnostic.make("executor suspension contradicted the exact attempt")
+      const record = (event: string) => Ref.update(chronology, (current) => [...current, event])
+      const boundary = yield* makeApplicationExitRequestBoundary(
+        lifecycle,
+        {
+          closeProcessLocalResources: record("local-resources-closed"),
+          flushProducedJournalWrites: record("produced-writes-flushed"),
+          releaseCoordinatorLock: record("coordinator-lock-released"),
+          suspendRunningExecutorWork: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] }))
+        },
+        { requestEnd: () => Effect.void }
+      )
+
+      expect(yield* boundary.requestExit).toEqual(
+        ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
+      )
+      expect(yield* Ref.get(chronology)).toEqual([
+        "produced-writes-flushed",
+        "local-resources-closed",
+        "coordinator-lock-released"
+      ])
     })
   )
 )
@@ -243,6 +309,98 @@ it.effect("continues every application-owned local drain after one sibling repor
         "coordinator-lock-released",
         "process-end-requested"
       ])
+    })
+  )
+)
+
+it.effect("reports a registered executor-family drain failure after its admitted Run owner releases", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const diagnostic = ApplicationExitDiagnostic.make("registered executor suspension failed")
+      const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      const owner = yield* shell.admission.acquireForwardOwner("RunActivation")
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] }))
+      })
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* owner.release
+
+      expect(yield* Fiber.join(exiting)).toEqual(
+        ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
+      )
+    })
+  )
+)
+
+it.effect("drains an admitted Run that registers after the Exit driver captured its first executor set", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const firstDrainStarted = yield* Deferred.make<void>()
+      const releaseFirstDrain = yield* Deferred.make<void>()
+      const lateDrainStarted = yield* Deferred.make<void>()
+      const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      const owner = yield* shell.admission.acquireForwardOwner("RunActivation")
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Deferred.succeed(firstDrainStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseFirstDrain)),
+          Effect.as([])
+        )
+      })
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* Deferred.await(firstDrainStarted)
+
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Deferred.succeed(lateDrainStarted, undefined).pipe(Effect.as([]))
+      })
+      yield* Effect.yieldNow
+      expect(yield* Deferred.isDone(lateDrainStarted)).toBe(true)
+
+      yield* Deferred.succeed(releaseFirstDrain, undefined)
+      yield* owner.release
+      expect(yield* Fiber.join(exiting)).toMatchObject({ _tag: "Succeeded" })
+    })
+  )
+)
+
+it.effect("keeps a pre-cutoff executor drain registered when its Run scope closes before driver capture", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cutoffObserved = yield* Deferred.make<void>()
+      const allowDriver = yield* Deferred.make<void>()
+      const drainStarted = yield* Deferred.make<void>()
+      const releaseDrain = yield* Deferred.make<void>()
+      const registrationScope = yield* Scope.make()
+      const shell = yield* makeApplicationExitShell(
+        defaultOwnership,
+        { requestEnd: () => Effect.void },
+        {
+          emit: (event) =>
+            event._tag === "AdmissionCutoffClosed"
+              ? Deferred.succeed(cutoffObserved, undefined).pipe(Effect.andThen(Deferred.await(allowDriver)))
+              : Effect.void
+        }
+      )
+      yield* shell
+        .registerExecutorDrain({
+          suspendRunningExecutorWork: Deferred.succeed(drainStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseDrain)),
+            Effect.as([])
+          )
+        })
+        .pipe(Scope.provide(registrationScope))
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* Deferred.await(cutoffObserved)
+
+      const closingRegistration = yield* Scope.close(registrationScope, Exit.void).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(closingRegistration.pollUnsafe()).toBeUndefined()
+
+      yield* Deferred.succeed(allowDriver, undefined)
+      yield* Deferred.await(drainStarted)
+      yield* Deferred.succeed(releaseDrain, undefined)
+      yield* Fiber.join(closingRegistration)
+      expect(yield* Fiber.join(exiting)).toMatchObject({ _tag: "Succeeded" })
     })
   )
 )

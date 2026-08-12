@@ -50,7 +50,10 @@ export const runningAttemptsForApplicationExit = (state: {
 
 const diagnosticFor = (error: { readonly _tag?: string }): ApplicationExitDiagnostic =>
   ApplicationExitDiagnostic.make(
-    `Executor suspension during application Exit failed: ${error._tag ?? "UnknownExecutorSuspensionFailure"}`
+    `Executor suspension during application Exit failed: ${
+      /* v8 ignore next -- every typed journal and executor failure carries an Effect tag. */
+      error._tag ?? "UnknownExecutorSuspensionFailure"
+    }`
   )
 
 /**

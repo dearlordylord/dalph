@@ -508,6 +508,37 @@ it.effect("rejects a Run activation that reaches the application after the Exit 
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("does not append Run termination when the program reaches finality only after the Exit cutoff", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-finality-after-exit")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const runtimeActive = yield* Deferred.make<void>()
+      const applicationExit = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      const bootstrap = yield* buildBootstrap(runId, storage, defaultTrackerGraphReader, applicationExit)
+      const running = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(runtimeActive, undefined).pipe(
+            Effect.andThen(applicationExit.awaitExitRequested),
+            Effect.as(finalityProof(RunFinalityDecision.RunMayTerminate()))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(runtimeActive)
+
+      const exiting = yield* applicationExit.requestBoundary.requestExit.pipe(Effect.forkChild)
+      expect(yield* Fiber.join(running)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+      expect(yield* Fiber.join(exiting)).toMatchObject({ _tag: "Succeeded" })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("rejects an activation queued before Exit when it reaches the cutoff after the active Run closes", () =>
   Effect.scoped(
     Effect.gen(function* () {

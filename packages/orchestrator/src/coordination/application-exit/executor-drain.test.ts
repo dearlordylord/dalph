@@ -13,11 +13,14 @@ import {
   WorktreeLocator,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
-import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalHistoryInvalid, type JournalRecord } from "../../workflow-journal/store.js"
+import { OperationId } from "../../workflow/identity.js"
+import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
@@ -26,15 +29,20 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import {
+  makePlannedAttemptProtocolController,
+  plannedAttemptProtocolControllerLayer
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
+import { Journal } from "../delivery/journal.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { type ApplicationExitTraceEvent, makeApplicationExitShell } from "./application-shell.js"
 import { ApplicationExitResult } from "./lifecycle-decision.js"
 import {
   RunningAttemptForApplicationExit,
   runningAttemptsForApplicationExit,
-  suspendApplicationExitAttempts
+  suspendApplicationExitAttempts,
+  suspendRunningExecutorWorkForApplicationExit
 } from "./executor-drain.js"
 
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -85,11 +93,72 @@ const responsibility = WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorW
   plannedAttempt
 })
 
+const unusedExecutor = PlannedAttemptExecutor.of({
+  project: () => Effect.die("this scenario must not project executor state"),
+  requestSuspension: () => Effect.die("this scenario must not request executor suspension"),
+  startOrContinue: () => Effect.die("this scenario must not start executor work")
+})
+
 it("discovers the exact running planned attempt from accepted Run history without another identity", () => {
   expect(runningAttemptsForApplicationExit({ records: runningHistory(), responsibilities: [responsibility] })).toEqual([
     RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
   ])
 })
+
+it("ignores non-executor responsibilities and exact attempts without current Running evidence", () => {
+  const claimResponsibility = WorkflowResponsibilityEntry.cases.TaskClaimResponsibility.make({
+    acquisition: TaskClaimAcquisition.make({
+      operationId: OperationId.make("exit-claim-operation"),
+      owner: ClaimOwner.make("exit-claim-owner"),
+      taskId: plannedAttempt.taskId,
+      token: ClaimToken.make("exit-claim-token")
+    }),
+    beganAt: JournalPosition.make(1),
+    taskId: plannedAttempt.taskId
+  })
+  const responsibilityOnly = runningHistory().slice(0, 1)
+
+  expect(
+    runningAttemptsForApplicationExit({
+      records: responsibilityOnly,
+      responsibilities: [claimResponsibility, responsibility]
+    })
+  ).toEqual([])
+})
+
+it.effect("maps a failed Run-journal state read to one application Exit drain diagnostic", () =>
+  Effect.gen(function* () {
+    const journalFailure = new JournalHistoryInvalid({
+      detail: "accepted prefix cannot be reduced",
+      position: JournalPosition.make(2),
+      runId: plannedAttempt.runId
+    })
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const failure = yield* suspendRunningExecutorWorkForApplicationExit().pipe(
+      Effect.flip,
+      Effect.provide(
+        Layer.mergeAll(
+          journalLayer(records),
+          Layer.succeed(PlannedAttemptExecutor, unusedExecutor),
+          plannedAttemptProtocolControllerLayer,
+          Layer.succeed(
+            Journal,
+            Journal.of({
+              append: () => Effect.die("the failed state read must prevent append"),
+              read: () => Effect.die("the failed state read must prevent direct read"),
+              state: { changes: Stream.fail(journalFailure), get: Effect.fail(journalFailure) }
+            })
+          )
+        )
+      )
+    )
+
+    expect(failure).toMatchObject({
+      _tag: "ApplicationExitDrainFailure",
+      diagnostics: [expect.stringContaining("JournalHistoryInvalid")]
+    })
+  })
+)
 
 const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
   Layer.succeed(
@@ -355,6 +424,49 @@ it.effect("does not retry or project an already-unresolved executor command duri
       yield* Fiber.interrupt(draining)
     })
   )
+)
+
+it.effect("keeps an already-classified unresolved executor command pending for the original Exit deadline", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const draining = yield* suspendApplicationExitAttempts([
+        RunningAttemptForApplicationExit.ExecutorCommandAlreadyUnresolved({ plannedAttempt })
+      ]).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            journalLayer(records),
+            Layer.succeed(PlannedAttemptExecutor, unusedExecutor),
+            plannedAttemptProtocolControllerLayer
+          )
+        ),
+        Effect.forkChild
+      )
+      yield* Effect.yieldNow
+
+      expect(draining.pollUnsafe()).toBeUndefined()
+      yield* Fiber.interrupt(draining)
+    })
+  )
+)
+
+it.effect("waits for the exact attempt permit before a concurrent Exit suspension can enter", () =>
+  Effect.gen(function* () {
+    const controller = yield* makePlannedAttemptProtocolController()
+    const reserved = yield* controller.reserve(correlation)
+    expect(Option.isSome(reserved)).toBe(true)
+    if (Option.isNone(reserved)) return
+    const entered = yield* Deferred.make<void>()
+    const waiting = yield* controller
+      .withPermit(correlation, () => Deferred.succeed(entered, undefined))
+      .pipe(Effect.forkChild)
+    yield* Effect.yieldNow
+    expect(yield* Deferred.isDone(entered)).toBe(false)
+
+    yield* reserved.value.release
+    yield* Fiber.join(waiting)
+    expect(yield* Deferred.isDone(entered)).toBe(true)
+  })
 )
 
 const runningExecutorExitAuthoredCassette = [

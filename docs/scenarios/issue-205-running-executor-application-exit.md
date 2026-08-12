@@ -61,6 +61,8 @@ append an application Exit fact to the Run journal.
 | Do not retry or begin a fresh executor projection when Exit finds an already-unresolved executor command. | `does not retry or project an already-unresolved executor command during Exit` |
 | Close admission, suspend the running attempt, preserve the Run journal as workflow-only history, then report application success. | `Alice exits successfully only after the running exact attempt is safely suspended` |
 | Keep the active Run services alive until the executor-family drain settles; idle Runs still close normally. | `keeps the active Run alive until its exact executor-family Exit drain finishes`; `an idle application Exit closes its runtime, releases the coordinator lock, and journals no Exit fact` |
+| Preserve a pre-cutoff Run whose executor drain registers after the driver's first capture, and start that late drain under the original deadline. | `drains an admitted Run that registers after the Exit driver captured its first executor set` |
+| Prevent a pre-cutoff Run scope from unregistering its executor drain between the cutoff and driver capture. | `keeps a pre-cutoff executor drain registered when its Run scope closes before driver capture` |
 | Exact safe-or-terminal evidence controls position release for every model trace. | `application-exit.mbt.test.ts`; `applicationExit` model tests and negative controls named in the issue-203 mapping |
 
 The authored application cassette is request → cutoff → exact running executor

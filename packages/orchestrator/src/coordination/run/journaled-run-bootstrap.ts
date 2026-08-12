@@ -148,7 +148,6 @@ export const journaledRunBootstrapLayer = (
         append: (...input) => observeProducedWrite(`append:${input[1]}`, "append", storage.append(...input))
       })
       const runtimeState = yield* Ref.make<RuntimeControlState>({ _tag: "RuntimeInactive" })
-      const activeRuntimeClosed = yield* Ref.make<Option.Option<Deferred.Deferred<void>>>(Option.none())
       const activation = yield* Semaphore.make(1)
       const processRuntimeCapabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
         yield* makeIntegrationTargetResourceController(),
@@ -214,74 +213,59 @@ export const journaledRunBootstrapLayer = (
         initial: ValidWorkflowJournalHistory,
         program: Effect.Effect<RunFinalityProof, E, R>
       ) =>
-        Effect.gen(function* () {
-          const runtimeClosed = yield* Deferred.make<void>()
-          yield* Ref.set(activeRuntimeClosed, Option.some(runtimeClosed))
-          return yield* Effect.scoped(
-            Effect.uninterruptibleMask((restore) =>
-              Effect.gen(function* () {
-                const downstream = runtimeLayer({ runId }).pipe(
-                  Layer.provideMerge(processRuntimeLayer),
-                  Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
-                  Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
-                )
-                const runtime = downstream.pipe(
-                  Layer.provideMerge(journalLayer(runId, target, initial, exitAwareStorage))
-                )
-                const context = yield* Layer.build(runtime)
-                const journal = Context.get(context, Journal)
-                const executorExitDrain = yield* applicationExit.registerExecutorDrain({
-                  suspendRunningExecutorWork: suspendRunningExecutorWorkForApplicationExit().pipe(
-                    Effect.provide(context)
-                  )
-                })
-                const controls: RuntimeControls = {
-                  attemptChoice: Context.get(context, AttemptChoiceControl),
-                  controlDirection: Context.get(context, ControlDirectionApplication),
-                  deliveryRuntimeResources: Context.get(context, DeliveryRuntimeResources),
-                  journal,
-                  operationIdAllocator: Context.get(context, OperationIdAllocator),
-                  runId,
-                  target,
-                  taskClaimReacquisition: Context.get(context, TaskClaimReacquisitionControl),
-                  taskWorkCapacity: Context.get(context, TaskWorkCapacityControl),
-                  workflowInterpreter: Context.get(context, WorkflowInterpreter),
-                  workflowTrace: Context.get(context, WorkflowTrace)
-                }
-                const drained = yield* Deferred.make<void>()
-                yield* Ref.set(runtimeState, { _tag: "RuntimeAcceptingControl", activeLeases: 0, controls, drained })
-                const result = yield* restore(Effect.provide(program, context)).pipe(Effect.exit)
-                if ((yield* admission.snapshot).cutoffClosed) {
-                  yield* executorExitDrain.awaitFinished
-                }
-                yield* closeControlAdmission()
-                return yield* Exit.match(result, {
-                  onFailure: Effect.failCause,
-                  onSuccess: (proof) =>
-                    proof.decision._tag === "RunMustRemainActive"
-                      ? Effect.succeed(proof.decision)
-                      : journal.state.get.pipe(
-                          Effect.map(({ records }) =>
-                            records.some(
-                              ({ event, position }) =>
-                                (proof.acceptedAt === null || position > proof.acceptedAt) &&
-                                event._tag !== "TaskWorkCapacityChanged"
-                            )
-                              ? RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
-                              : proof.decision
-                          )
-                        )
-                })
-              })
-            )
-          ).pipe(
-            Effect.ensuring(
-              Deferred.succeed(runtimeClosed, undefined).pipe(
-                Effect.andThen(Ref.set(activeRuntimeClosed, Option.none()))
+        Effect.scoped(
+          Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const downstream = runtimeLayer({ runId }).pipe(
+                Layer.provideMerge(processRuntimeLayer),
+                Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
+                Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
               )
-            )
+              const runtime = downstream.pipe(
+                Layer.provideMerge(journalLayer(runId, target, initial, exitAwareStorage))
+              )
+              const context = yield* Layer.build(runtime)
+              const journal = Context.get(context, Journal)
+              yield* applicationExit.registerExecutorDrain({
+                suspendRunningExecutorWork: suspendRunningExecutorWorkForApplicationExit().pipe(Effect.provide(context))
+              })
+              const controls: RuntimeControls = {
+                attemptChoice: Context.get(context, AttemptChoiceControl),
+                controlDirection: Context.get(context, ControlDirectionApplication),
+                deliveryRuntimeResources: Context.get(context, DeliveryRuntimeResources),
+                journal,
+                operationIdAllocator: Context.get(context, OperationIdAllocator),
+                runId,
+                target,
+                taskClaimReacquisition: Context.get(context, TaskClaimReacquisitionControl),
+                taskWorkCapacity: Context.get(context, TaskWorkCapacityControl),
+                workflowInterpreter: Context.get(context, WorkflowInterpreter),
+                workflowTrace: Context.get(context, WorkflowTrace)
+              }
+              const drained = yield* Deferred.make<void>()
+              yield* Ref.set(runtimeState, { _tag: "RuntimeAcceptingControl", activeLeases: 0, controls, drained })
+              const result = yield* restore(Effect.provide(program, context)).pipe(Effect.exit)
+              yield* closeControlAdmission()
+              return yield* Exit.match(result, {
+                onFailure: Effect.failCause,
+                onSuccess: (proof) =>
+                  proof.decision._tag === "RunMustRemainActive"
+                    ? Effect.succeed(proof.decision)
+                    : journal.state.get.pipe(
+                        Effect.map(({ records }) =>
+                          records.some(
+                            ({ event, position }) =>
+                              (proof.acceptedAt === null || position > proof.acceptedAt) &&
+                              event._tag !== "TaskWorkCapacityChanged"
+                          )
+                            ? RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+                            : proof.decision
+                        )
+                      )
+              })
+            })
           )
-        })
+        )
 
       const finish = Effect.fn("JournaledRunBootstrap.finish")(function* (
         runId: RunId,
@@ -300,8 +284,6 @@ export const journaledRunBootstrapLayer = (
 
       yield* applicationExit.registerProcessLocalDrain({
         closeProcessLocalResources: Effect.gen(function* () {
-          const active = yield* Ref.get(activeRuntimeClosed)
-          if (Option.isSome(active)) yield* Deferred.await(active.value)
           yield* processRuntimeCapabilities.resources.integrationTargets.releaseAll
           yield* processRuntimeCapabilities.observation.close
           const diagnostics = [...(yield* Ref.get(unresolvedProducedWrites)).values()]
