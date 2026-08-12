@@ -11,9 +11,9 @@ import {
 } from "../planned-attempt-executor-work/evidence.js"
 import {
   observePlannedAttemptExecutorStateWithPermit,
-  reconcileOrObservePlannedAttemptExecutorStateWithPermit,
-  requestPlannedAttemptExecutorSuspensionWithPermit
+  reconcileOrObservePlannedAttemptExecutorStateWithPermit
 } from "../planned-attempt-executor-work/protocol.js"
+import { requestPlannedAttemptExecutorSuspensionWithPermit } from "../planned-attempt-executor-work/suspension-commands.js"
 import { type PlannedAttemptProtocolPermit } from "../planned-attempt-executor-work/protocol-controller.js"
 import {
   AttemptChoiceRequestId,

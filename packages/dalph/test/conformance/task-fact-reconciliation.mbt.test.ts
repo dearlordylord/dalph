@@ -120,7 +120,7 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
-import { continuePlannedAttemptExecutorWorkWithPermit } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.js"
+import { continuePlannedAttemptExecutorWorkWithPermit } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/suspension-commands.js"
 import {
   queueAcceptedResultIntegrationResponsibility,
   startQueuedIntegration
