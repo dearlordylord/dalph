@@ -18,7 +18,11 @@ import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim
 import { TaskAttemptPlanAcknowledged } from "../../workflow/protocols/task-attempt-planning/record.js"
 import { TaskWorktreeReadyTrace } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import { deliveryActionCompleted, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
-import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
+import {
+  type DeliveryActionExecutionLease,
+  interruptibleBoundaryOf,
+  type MaterializedDeliveryAction
+} from "./delivery-action-executor.js"
 import type { FreshOperationOnlyRoute, FreshOperationStep } from "./delivery-action-proposal.js"
 
 type FreshOperationAction = Extract<MaterializedDeliveryAction, { readonly _tag: "FreshOperationAction" }>
@@ -41,7 +45,7 @@ const acquireTaskClaim = Effect.fn("DeliveryAction.acquireTaskClaim")(function* 
   const result = yield* interpreter.acquireTaskClaim(
     operation,
     lease.recordIntent(action.operationId),
-    lease.interruptibleBoundary
+    interruptibleBoundaryOf(lease)
   )
   yield* trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
 })
@@ -62,7 +66,7 @@ const reconcileTaskWorktree = Effect.fn("DeliveryAction.reconcileTaskWorktree")(
   const result = yield* interpreter.reconcileTaskWorktree(
     operation,
     lease.recordIntent(action.operationId),
-    lease.interruptibleBoundary
+    interruptibleBoundaryOf(lease)
   )
   yield* trace.emit(TaskWorktreeReadyTrace.make({ operation, proof: result.proof }))
 })
@@ -113,7 +117,7 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
         yield* interpreter.readTaskWorkSpecification(
           operation,
           lease.recordIntent(action.operationId),
-          lease.interruptibleBoundary
+          interruptibleBoundaryOf(lease)
         )
         return deliveryActionCompleted(action.proposal.id)
       }),

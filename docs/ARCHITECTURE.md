@@ -212,8 +212,13 @@ already-produced journal writes, and process-local release. It does not wait
 for executor work to finish, start fresh reconciliation or stabilization, send
 an LLM request, or dispose a durable workflow resource. Exact safe-or-terminal
 executor evidence is required before releasing that attempt's task-work
-position. An interruptible tracker, Git, evidence, or cleanup call may instead
-leave a recoverable ambiguity behind its acknowledged intent.
+position. An interruptible tracker or ordinary Git workflow call may instead
+leave a recoverable ambiguity behind its acknowledged intent. Candidate
+construction, target verification plus immutable evidence sealing, and target
+promotion are separately classified atomic integration actions: one admitted
+action may finish only inside the original drain, then releases its local owner
+without admitting a successor. Its existing protocol intent remains the basis
+for ordinary restart reconciliation if the process deadline wins.
 
 Exit request, result, failure, timeout, signal, and process death are
 application-lifecycle facts outside every Run workflow journal. Success requires
@@ -227,6 +232,8 @@ The accepted chronology is in
 [issue-169-graceful-application-exit.md](scenarios/issue-169-graceful-application-exit.md),
 the exact model/test mapping is in
 [issue-203-application-exit-model-mapping.md](scenarios/issue-203-application-exit-model-mapping.md),
+the integration/evidence boundary mapping is in
+[issue-207-integration-evidence-exit.md](scenarios/issue-207-integration-evidence-exit.md),
 and the durable-boundary trade-off is recorded in
 [ADR 0013](adr/0013-bound-graceful-application-exit.md).
 

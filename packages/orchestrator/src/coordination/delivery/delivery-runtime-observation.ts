@@ -167,7 +167,10 @@ export const makeObservedDeliveryActionLease = (
       : Effect.void
   },
   integrationTargets,
-  interruptibleBoundary: owner.reservation.forwardOwner,
+  forwardBoundary:
+    owner.reservation.forwardOwner.kind === "AtomicBoundary"
+      ? { _tag: "AtomicBoundary", execution: owner.reservation.forwardOwner }
+      : { _tag: "InterruptibleBoundary", execution: owner.reservation.forwardOwner },
   recordIntent: (operationId) =>
     owner
       .recordIntent(operationId)

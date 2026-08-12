@@ -2,7 +2,6 @@ import { it } from "@effect/vitest"
 import { acceptedResultFixture, evidenceReferenceFixture } from "../../../../test/support/evidence.js"
 import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
 import { expect } from "vitest"
-import type { InterruptibleWorkflowBoundaryExecution } from "../../interpretation/interpreter.js"
 import {
   GitCommitSha,
   GitRepositoryLocator,
@@ -71,10 +70,6 @@ import type {
   IdentityFreeDeliveryProposal
 } from "../../../coordination/delivery/delivery-action-proposal.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-
-const uninterruptedBoundary: InterruptibleWorkflowBoundaryExecution = {
-  run: (_intent, call, recordResult) => Effect.flatMap(call, recordResult)
-}
 
 const runId = RunId.make("target-promotion-test-run")
 const trackerTarget = FixtureTarget.make("target-promotion-tracker-target")
@@ -329,8 +324,8 @@ it.effect("reports a typed failure when target-promotion runtime services are un
       {
         acceptIntegrationTargetOwnership: Effect.void,
         bindPlannedAttemptPosition: () => Effect.void,
+        forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } },
         integrationTargets: resources,
-        interruptibleBoundary: uninterruptedBoundary,
         recordIntent: () => Effect.void,
         releasePlannedAttemptPosition: () => Effect.void,
         withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
@@ -368,8 +363,8 @@ it.effect("allows a different target while the exact promotion permit is active"
         {
           acceptIntegrationTargetOwnership: Effect.void,
           bindPlannedAttemptPosition: () => Effect.void,
+          forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } },
           integrationTargets: resources,
-          interruptibleBoundary: uninterruptedBoundary,
           recordIntent: () => Effect.void,
           releasePlannedAttemptPosition: () => Effect.void,
           withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")

@@ -19,7 +19,11 @@ import { TargetPromotionGit } from "../../workflow/protocols/target-promotion/ev
 import { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
 import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotion/runtime.js"
 import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
-import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
+import {
+  type DeliveryActionExecutionLease,
+  type MaterializedDeliveryAction,
+  runAtomicDeliveryBoundary
+} from "./delivery-action-executor.js"
 import type { IdentityFreeWorkflowTransition } from "./delivery-action-proposal.js"
 import {
   runCompletionClaimDeletionProtocol,
@@ -41,6 +45,7 @@ import {
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -386,5 +391,8 @@ export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegra
     yield* lease.integrationTargets.release(transition.responsibility)
     return deliveryActionCompleted(action.proposal.id)
   }
-  return yield* executeAdvancedIntegrationAction(action, transition, lease, target)
+  const execution = executeAdvancedIntegrationAction(action, transition, lease, target)
+  return yield* integrationExitBoundaryFamilyFor(transition) === null
+    ? execution
+    : runAtomicDeliveryBoundary(lease, execution)
 })

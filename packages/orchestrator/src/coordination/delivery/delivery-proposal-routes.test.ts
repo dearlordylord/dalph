@@ -29,11 +29,7 @@ import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.j
 import { TaskLifecycle, type Task, TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import {
-  type InterruptibleWorkflowBoundaryExecution,
-  WorkflowInterpreter,
-  WorkflowTrace
-} from "../../workflow/interpretation/interpreter.js"
+import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import {
   intentRecordKey,
@@ -210,13 +206,10 @@ const proposalsFor = (transition: Transition, acceptedOperationIds: ReadonlySet<
   return { issues: result.issues, proposals: [...result.ticketDelivery, ...result.deliverySettlement] }
 }
 
-const uninterruptedBoundary: InterruptibleWorkflowBoundaryExecution = {
-  run: (_intent, call, recordResult) => Effect.flatMap(call, recordResult)
-}
-
 const inertLease: DeliveryActionExecutionLease = {
   acceptIntegrationTargetOwnership: Effect.void,
   bindPlannedAttemptPosition: () => Effect.void,
+  forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } },
   integrationTargets: {
     acquire: () => Effect.void,
     changes: Stream.empty,
@@ -226,7 +219,6 @@ const inertLease: DeliveryActionExecutionLease = {
     snapshot: Effect.succeed({ activeResponsibilityPositions: new Set(), heldResponsibilityPositions: new Set() }),
     withPermit: (_responsibility, effect) => effect
   },
-  interruptibleBoundary: uninterruptedBoundary,
   recordIntent: () => Effect.void,
   releasePlannedAttemptPosition: () => Effect.void,
   withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol lease")

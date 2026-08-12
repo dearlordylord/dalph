@@ -4,7 +4,7 @@ import {
   type PlannedAttemptExecutorService,
   type PlannedTaskAttempt
 } from "@dalph/contracts"
-import { Context, type Effect, Schema } from "effect"
+import { Context, Effect, Schema } from "effect"
 import type { InRunJournalService } from "../../workflow-journal/store.js"
 import type {
   InterruptibleWorkflowBoundaryExecution,
@@ -57,6 +57,7 @@ import type {
 import type { OperationId } from "../../workflow/identity.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import type { AtomicBoundaryExecution } from "../application-exit/lifecycle.js"
 import {
   type AcceptedIdentityDeliveryProposal,
   DeliveryProposalId,
@@ -97,11 +98,15 @@ export type MaterializedDeliveryAction =
   | { readonly _tag: "IdentityFreeAction"; readonly proposal: IdentityFreeDeliveryProposal }
 
 /** Process-local capabilities held by the one live owner of an admitted proposal. */
+export type DeliveryActionForwardBoundary =
+  | { readonly _tag: "AtomicBoundary"; readonly execution: AtomicBoundaryExecution }
+  | { readonly _tag: "InterruptibleBoundary"; readonly execution: InterruptibleWorkflowBoundaryExecution }
+
 export interface DeliveryActionExecutionLease {
   readonly acceptIntegrationTargetOwnership: Effect.Effect<void>
   readonly bindPlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
+  readonly forwardBoundary: DeliveryActionForwardBoundary
   readonly integrationTargets: IntegrationTargetResourceController
-  readonly interruptibleBoundary: InterruptibleWorkflowBoundaryExecution
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
   readonly releasePlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
   readonly withPlannedAttemptProtocol: <A, E, R>(
@@ -109,6 +114,21 @@ export interface DeliveryActionExecutionLease {
     effect: (permit: PlannedAttemptProtocolPermit) => Effect.Effect<A, E, R>
   ) => Effect.Effect<A, E | DeliveryActionProtocolAdmissionMissing, R>
 }
+
+/** Fails closed if a route asks an atomic owner to perform an interruptible outside call. */
+export const interruptibleBoundaryOf = (
+  lease: Pick<DeliveryActionExecutionLease, "forwardBoundary">
+): InterruptibleWorkflowBoundaryExecution =>
+  lease.forwardBoundary._tag === "InterruptibleBoundary"
+    ? lease.forwardBoundary.execution
+    : { run: () => Effect.interrupt }
+
+/** Fails closed if a route asks an interruptible owner to enter an atomic integration section. */
+export const runAtomicDeliveryBoundary = <A, E, R>(
+  lease: DeliveryActionExecutionLease,
+  execution: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> =>
+  lease.forwardBoundary._tag === "AtomicBoundary" ? lease.forwardBoundary.execution.run(execution) : Effect.interrupt
 
 /** A route attempted exact-attempt protocol work without declaring its admission requirement. */
 export class DeliveryActionProtocolAdmissionMissing extends Schema.TaggedError<DeliveryActionProtocolAdmissionMissing>()(

@@ -84,6 +84,18 @@ the durable intent or the outside system's result authority.
 _Avoid_: In-flight Boolean, persisted request state, inferred outside outcome,
 Exit recovery mode
 
+**Atomic integration Exit boundary**:
+The one already-admitted delivery action currently constructing an integration
+candidate, running target verification and sealing its immutable evidence, or
+reading/updating the target ref for promotion. If Exit closes admission while
+that action is inside its boundary, the action may record its produced result
+and release its process-local owner, but it cannot enter a successor delivery
+action. The application drain limit may still force nonzero process termination;
+restart uses the boundary family's existing journaled intent and ordinary
+reconciliation protocol.
+_Avoid_: Whole integration obligation, unbounded verification completion,
+Exit-specific workflow recovery, durable integration lock
+
 **Exit drain**:
 The short, bounded application-lifecycle interval after the Exit admission
 cutoff in which Dalph brings admitted work to a durably recoverable boundary.

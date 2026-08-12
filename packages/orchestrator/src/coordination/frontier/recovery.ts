@@ -3,9 +3,9 @@ import { type RunId } from "@dalph/contracts"
 import type { OperationId } from "../../workflow/identity.js"
 import { InRunJournal } from "../../workflow-journal/store.js"
 import { WorkflowInterpreter } from "../../workflow/interpretation/interpreter.js"
-import type { DeliveryActionExecutionLease } from "../delivery/delivery-action-executor.js"
+import { type DeliveryActionExecutionLease, interruptibleBoundaryOf } from "../delivery/delivery-action-executor.js"
 
-type BoundaryExecutionLease = Pick<DeliveryActionExecutionLease, "interruptibleBoundary" | "recordIntent">
+type BoundaryExecutionLease = Pick<DeliveryActionExecutionLease, "forwardBoundary" | "recordIntent">
 
 export const recoverTaskClaimOperation = Effect.fn("WorkflowRecovery.recoverTaskClaimOperation")(function* (
   runId: RunId,
@@ -22,7 +22,7 @@ export const recoverTaskClaimOperation = Effect.fn("WorkflowRecovery.recoverTask
     yield* interpreter.acquireTaskClaim(
       intent.operation,
       lease?.recordIntent(operationId),
-      lease?.interruptibleBoundary
+      lease === undefined ? undefined : interruptibleBoundaryOf(lease)
     )
   }
 })
@@ -41,7 +41,7 @@ export const recoverTaskWorktreeOperation = Effect.fn("WorkflowRecovery.recoverT
     yield* interpreter.reconcileTaskWorktree(
       intent.operation,
       lease?.recordIntent(operationId),
-      lease?.interruptibleBoundary
+      lease === undefined ? undefined : interruptibleBoundaryOf(lease)
     )
   }
 })
@@ -57,7 +57,7 @@ export const recoverTaskClaimReleaseOperation = Effect.fn("WorkflowRecovery.reco
       yield* interpreter.releaseTaskClaim(
         intent.operation,
         lease?.recordIntent(operationId),
-        lease?.interruptibleBoundary
+        lease === undefined ? undefined : interruptibleBoundaryOf(lease)
       )
     }
   }

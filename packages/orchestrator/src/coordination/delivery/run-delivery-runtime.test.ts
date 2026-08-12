@@ -50,7 +50,12 @@ import {
   deliveryProposalsOf,
   trackerGraphReadProposalOf
 } from "./delivery-proposal.js"
-import { DeliveryActionExecutor, type DeliveryActionResult, DeliverySemanticTrace } from "./delivery-action-executor.js"
+import {
+  DeliveryActionExecutor,
+  type DeliveryActionResult,
+  DeliverySemanticTrace,
+  interruptibleBoundaryOf
+} from "./delivery-action-executor.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { liveActionIsPresent, liveActionKeyOf } from "./live-delivery-action.js"
@@ -467,7 +472,7 @@ it.effect("interrupts an admitted tracker owner under Exit and starts no success
               )
             : Effect.gen(function* () {
                 yield* lease.recordIntent(operationId)
-                return yield* lease.interruptibleBoundary.run(
+                return yield* interruptibleBoundaryOf(lease).run(
                   { family: "TaskTracker", operationId },
                   Deferred.succeed(callStarted, undefined).pipe(
                     Effect.andThen(Effect.never),
@@ -527,7 +532,7 @@ it.effect("records a produced Git result under Exit and starts no later protocol
               )
             : Effect.gen(function* () {
                 yield* lease.recordIntent(operationId)
-                return yield* lease.interruptibleBoundary.run(
+                return yield* interruptibleBoundaryOf(lease).run(
                   { family: "Git", operationId },
                   Effect.succeed("normalized-git-result"),
                   (result) =>

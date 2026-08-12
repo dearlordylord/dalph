@@ -61,16 +61,27 @@ interface ForwardOwnerLeaseBase {
   readonly release: Effect.Effect<void>
 }
 
+/** One already-entered integration-family section that may finish only before the application drain ends. */
+export interface AtomicBoundaryExecution {
+  readonly run: <A, E, R>(section: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+}
+
 /** One admitted tracker/Git owner whose exact intent and local call phase control Exit interruption. */
 export interface InterruptibleForwardOwnerLease extends ForwardOwnerLeaseBase, InterruptibleWorkflowBoundaryExecution {
   readonly kind: "InterruptibleBoundary"
   readonly snapshot: Effect.Effect<InterruptibleBoundaryOwnerSnapshot>
 }
 
+/** One admitted atomic section; it may return, but cannot cross the Exit cutoff into a successor phase. */
+export interface AtomicForwardOwnerLease extends ForwardOwnerLeaseBase, AtomicBoundaryExecution {
+  readonly kind: "AtomicBoundary"
+}
+
 /** One owner admitted before the application Exit cutoff; release is idempotent. */
 export type ForwardOwnerLease =
   | InterruptibleForwardOwnerLease
-  | (ForwardOwnerLeaseBase & { readonly kind: Exclude<ForwardOwnerKind, "InterruptibleBoundary"> })
+  | AtomicForwardOwnerLease
+  | (ForwardOwnerLeaseBase & { readonly kind: Exclude<ForwardOwnerKind, "AtomicBoundary" | "InterruptibleBoundary"> })
 
 export interface ApplicationExitLifecycleSnapshot {
   readonly cutoffClosed: boolean
@@ -196,6 +207,22 @@ export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.
       )
     })
 
+  const runAtomicBoundary = <A, E, R>(
+    ownerId: ForwardOwnerId,
+    section: Effect.Effect<A, E, R>
+  ): Effect.Effect<A, E, R> =>
+    Effect.gen(function* () {
+      const mayEnter = yield* Ref.modify(state, (current) => [
+        current.phase === "Serving" &&
+          current.owners.get(ownerId)?.phase === "Registered" &&
+          current.owners.get(ownerId)?.kind === "AtomicBoundary",
+        current
+      ])
+      if (!mayEnter) return yield* Effect.interrupt
+      const result = yield* Effect.uninterruptible(section)
+      return (yield* Ref.get(state)).phase === "Exiting" ? yield* Effect.interrupt : result
+    })
+
   const prepareForwardOwner = Effect.fn("ApplicationExitLifecycle.prepareForwardOwner")((kind: ForwardOwnerKind) =>
     Effect.gen(function* () {
       const ownerId = yield* Ref.modify(state, (current) => {
@@ -206,7 +233,7 @@ export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.
       })
       if (ownerId === undefined) return yield* new ApplicationExiting()
       const cancel = removeOwner(ownerId)
-      const register = Effect.gen(function* () {
+      const register: Effect.Effect<ForwardOwnerLease, ApplicationExiting> = Effect.gen(function* () {
         const registered = yield* Ref.modify(state, (registrationState) => {
           const owner = registrationState.owners.get(ownerId)
           if (registrationState.phase === "Exiting" || owner?.phase !== "Preparing") {
@@ -227,7 +254,13 @@ export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.
               run: (intent, call, recordResult) => runInterruptibleBoundary(ownerId, intent, call, recordResult),
               snapshot: interruptibleSnapshot(ownerId)
             } satisfies InterruptibleForwardOwnerLease)
-          : ({ kind, release: removeOwner(ownerId) } satisfies ForwardOwnerLease)
+          : kind === "AtomicBoundary"
+            ? ({
+                kind,
+                release: removeOwner(ownerId),
+                run: (section) => runAtomicBoundary(ownerId, section)
+              } satisfies AtomicForwardOwnerLease)
+            : ({ kind, release: removeOwner(ownerId) } satisfies ForwardOwnerLease)
       })
       return { cancel, register } satisfies ForwardOwnerPreparation
     })

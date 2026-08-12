@@ -108,7 +108,10 @@ import {
 const uninterruptedBoundary: InterruptibleWorkflowBoundaryExecution = {
   run: (_intent, call, recordResult) => Effect.flatMap(call, recordResult)
 }
-const inertBoundaryLease = { interruptibleBoundary: uninterruptedBoundary, recordIntent: () => Effect.void }
+const inertBoundaryLease = {
+  forwardBoundary: { _tag: "InterruptibleBoundary" as const, execution: uninterruptedBoundary },
+  recordIntent: () => Effect.void
+}
 
 const runId = RunId.make("attempt-stop-run")
 const taskId = TaskId.make("attempt-stop-task")

@@ -12,9 +12,11 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import {
   type ApplicationExitAdmissionService,
+  type AtomicForwardOwnerLease,
   type InterruptibleForwardOwnerLease
 } from "../application-exit/lifecycle.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
+import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
 
 type TaskWorkPosition =
   | { readonly _tag: "AcceptedAttemptPosition"; readonly correlation: PlannedAttemptExecutorCorrelation }
@@ -32,11 +34,13 @@ interface AdmissionState {
 
 const DeliveryAdmissionReservationTypeId: unique symbol = Symbol.for("@dalph/DeliveryAdmissionReservation")
 
+type DeliveryForwardOwnerLease = AtomicForwardOwnerLease | InterruptibleForwardOwnerLease
+
 interface DeliveryAdmissionReservationBase {
   readonly [DeliveryAdmissionReservationTypeId]: typeof DeliveryAdmissionReservationTypeId
   readonly acquiredIntegrationResponsibility: IntegrationTargetResourceResponsibility | null
   readonly createdTaskPositionFor: TaskId | null
-  readonly forwardOwner: InterruptibleForwardOwnerLease
+  readonly forwardOwner: DeliveryForwardOwnerLease
 }
 
 /** Opaque admission ownership is either exact-attempt guarded or carries no protocol resource. */
@@ -87,6 +91,14 @@ const sameCorrelation = (
 interface TaskPositionReservation {
   readonly admitted: boolean
   readonly createdFor: TaskId | null
+}
+
+/** Integration-family actions own one indivisible protocol section; every other route retains interruptible calls. */
+const forwardOwnerKindFor = (proposal: DeliveryActionProposal): DeliveryForwardOwnerLease["kind"] => {
+  const route = proposal.route
+  return route._tag === "IdentityFreeWorkflowRoute" && integrationExitBoundaryFamilyFor(route.transition) !== null
+    ? "AtomicBoundary"
+    : "InterruptibleBoundary"
 }
 
 type PlannedAttemptProtocolReservation =
@@ -266,7 +278,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
     Effect.uninterruptible(
       // eslint-disable-next-line complexity -- One transaction reserves and rolls back every declared proposal resource before exact owner registration.
       Effect.gen(function* () {
-        const forwardOwner = yield* applicationExit.prepareForwardOwner("InterruptibleBoundary")
+        const forwardOwner = yield* applicationExit.prepareForwardOwner(forwardOwnerKindFor(proposal))
         const protocol = yield* reservePlannedAttemptProtocol(proposal)
         if (protocol._tag === "PlannedAttemptProtocolUnavailable") {
           yield* forwardOwner.cancel
@@ -295,8 +307,8 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
             })
           )
         )
-        if (registeredOwner.kind !== "InterruptibleBoundary") {
-          return yield* Effect.die("delivery admission registered a non-interruptible owner")
+        if (registeredOwner.kind !== "AtomicBoundary" && registeredOwner.kind !== "InterruptibleBoundary") {
+          return yield* Effect.die(`delivery admission registered unsupported owner ${registeredOwner.kind}`)
         }
         const base = {
           [DeliveryAdmissionReservationTypeId]: DeliveryAdmissionReservationTypeId,

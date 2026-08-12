@@ -223,6 +223,40 @@ it.effect("uses no fresh drain time when driver start is delayed beyond the orig
   )
 )
 
+it.effect("forcefully terminates at five seconds while an atomic integration section remains active", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const owner = yield* lifecycle.admission.acquireForwardOwner("AtomicBoundary")
+      if (owner.kind !== "AtomicBoundary") return yield* Effect.die("wrong owner kind")
+      const entered = yield* Deferred.make<void>()
+      const mayReturn = yield* Deferred.make<void>()
+      const running = yield* owner
+        .run(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(mayReturn))))
+        .pipe(Effect.ensuring(owner.release), Effect.forkChild)
+      yield* Deferred.await(entered)
+      const processEnds = yield* Ref.make<Array<ApplicationProcessEndDecision>>([])
+      const boundary = yield* makeApplicationExitRequestBoundary(
+        lifecycle,
+        successfulDrain(() => Effect.void, lifecycle.awaitForwardOwnersReleased),
+        { requestEnd: (decision) => Ref.update(processEnds, (decisions) => [...decisions, decision]) }
+      )
+      const exiting = yield* boundary.requestExit.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust("5 seconds")
+
+      expect(yield* Fiber.join(exiting)).toEqual(
+        ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
+      )
+      expect(yield* lifecycle.admission.snapshot).toMatchObject({ cutoffClosed: true, registeredOwnerCount: 1 })
+      expect(yield* Ref.get(processEnds)).toEqual([{ _tag: "RequestForcedTermination", status: 1 }])
+
+      yield* Deferred.succeed(mayReturn, undefined)
+      expect((yield* Fiber.await(running))._tag).toBe("Failure")
+    })
+  )
+)
+
 it.effect("reports a flush failure only after releasing idle process resources and the coordinator lock", () =>
   Effect.scoped(
     Effect.gen(function* () {

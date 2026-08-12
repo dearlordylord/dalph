@@ -157,3 +157,67 @@ it.effect("starts no tracker or Git call whose acknowledged intent reaches the o
     yield* owner.release
   })
 )
+
+it.effect("lets an admitted atomic section return under Exit and starts no successor phase", () =>
+  Effect.gen(function* () {
+    const lifecycle = yield* makeApplicationExitLifecycle()
+    const owner = yield* lifecycle.admission.acquireForwardOwner("AtomicBoundary")
+    if (owner.kind !== "AtomicBoundary") return yield* Effect.die("wrong owner kind")
+    const entered = yield* Deferred.make<void>()
+    const mayReturn = yield* Deferred.make<void>()
+    const successors = yield* Ref.make(0)
+    const running = yield* owner
+      .run(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(mayReturn))))
+      .pipe(
+        Effect.andThen(Ref.update(successors, (count) => count + 1)),
+        Effect.ensuring(owner.release),
+        Effect.forkChild
+      )
+
+    yield* Deferred.await(entered)
+    yield* lifecycle.requestExit
+    yield* Deferred.succeed(mayReturn, undefined)
+
+    expect((yield* Fiber.await(running))._tag).toBe("Failure")
+    expect(yield* Ref.get(successors)).toBe(0)
+    yield* lifecycle.awaitForwardOwnersReleased
+  })
+)
+
+it.effect("keeps a stuck atomic section owned after the application Exit cutoff", () =>
+  Effect.gen(function* () {
+    const lifecycle = yield* makeApplicationExitLifecycle()
+    const owner = yield* lifecycle.admission.acquireForwardOwner("AtomicBoundary")
+    if (owner.kind !== "AtomicBoundary") return yield* Effect.die("wrong owner kind")
+    const entered = yield* Deferred.make<void>()
+    const mayReturn = yield* Deferred.make<void>()
+    const running = yield* owner
+      .run(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(mayReturn))))
+      .pipe(Effect.ensuring(owner.release), Effect.forkChild)
+
+    yield* Deferred.await(entered)
+    yield* lifecycle.requestExit
+
+    expect(yield* lifecycle.admission.snapshot).toEqual({
+      cutoffClosed: true,
+      preparingOwnerCount: 0,
+      registeredOwnerCount: 1
+    })
+    yield* Deferred.succeed(mayReturn, undefined)
+    expect((yield* Fiber.await(running))._tag).toBe("Failure")
+  })
+)
+
+it.effect("starts no atomic integration section after the application Exit cutoff", () =>
+  Effect.gen(function* () {
+    const lifecycle = yield* makeApplicationExitLifecycle()
+    const owner = yield* lifecycle.admission.acquireForwardOwner("AtomicBoundary")
+    if (owner.kind !== "AtomicBoundary") return yield* Effect.die("wrong owner kind")
+    const calls = yield* Ref.make(0)
+    yield* lifecycle.requestExit
+
+    expect((yield* owner.run(Ref.update(calls, (count) => count + 1)).pipe(Effect.exit))._tag).toBe("Failure")
+    expect(yield* Ref.get(calls)).toBe(0)
+    yield* owner.release
+  })
+)
