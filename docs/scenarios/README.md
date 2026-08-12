@@ -52,6 +52,7 @@ on the issue while later dependent work proceeds.
 | `issue-205-running-executor-application-exit.md` | 205 |
 | `issue-207-integration-evidence-exit.md` | 207 |
 | `issue-208-cleanup-dispositions-during-application-exit.md` | 208 |
+| `issue-209-force-application-termination.md` | 209 |
 
 **Accepted, not yet implemented** — the owning issue is open. These state
 required behavior and must not be read as a description of what Dalph does

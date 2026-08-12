@@ -1,4 +1,15 @@
-import { Clock, Context, Deferred, Duration, Effect, Option, Ref, Schema, type Scope } from "effect"
+import {
+  Array as EffectArray,
+  Clock,
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Option,
+  Ref,
+  Schema,
+  type Scope
+} from "effect"
 import type { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import {
   ApplicationExitDiagnostic,
@@ -75,6 +86,20 @@ export class ApplicationExitRequestBoundary extends Context.Service<
 const applicationExitDrainLimit = Duration.seconds(applicationExitDrainLimitSeconds)
 const applicationExitDrainLimitNanos = Duration.toNanosUnsafe(applicationExitDrainLimit)
 
+/** One independently useful quick-work family whose diagnostic order remains stable under concurrent Exit drain. */
+type ApplicationExitQuickDrainFamily =
+  | "CoordinatorLockRelease"
+  | "ExecutorSuspension"
+  | "ProcessLocalResourceRelease"
+  | "ProducedJournalWriteFlush"
+
+const applicationExitQuickDrainFamilyOrder: ReadonlyArray<ApplicationExitQuickDrainFamily> = [
+  "ExecutorSuspension",
+  "ProducedJournalWriteFlush",
+  "ProcessLocalResourceRelease",
+  "CoordinatorLockRelease"
+]
+
 const applicationExitDrainResult = (
   diagnostics: ReadonlyArray<ApplicationExitDiagnostic>
 ): ApplicationExitResultType => {
@@ -93,39 +118,55 @@ export const makeApplicationExitRequestBoundary = Effect.fn("ApplicationExitRequ
   drain: ApplicationExitDrain,
   processLifecycle: ApplicationProcessLifecycleService,
   trace: ApplicationExitTraceService = { emit: () => Effect.void },
-  beginExecutorDrainHandoff: Effect.Effect<void> = Effect.void
+  beginExecutorDrainHandoff: Effect.Effect<void> = Effect.void,
+  readSettledQuickDrainDiagnostics: Effect.Effect<
+    ReadonlyMap<ApplicationExitQuickDrainFamily, ReadonlyArray<ApplicationExitDiagnostic>>
+  > = Effect.succeed(new Map())
 ) {
   const scope = yield* Effect.scope
-  const recordedDiagnostics = yield* Ref.make<ReadonlyArray<ApplicationExitDiagnostic>>([])
-  const runStep = Effect.fn("ApplicationExitRequestBoundary.runStep")(function* (
-    operation: Effect.Effect<void, ApplicationExitDrainFailure>,
-    successEvent: ApplicationExitTraceEvent
+  const recordedDiagnostics = yield* Ref.make<
+    ReadonlyMap<ApplicationExitQuickDrainFamily, ReadonlyArray<ApplicationExitDiagnostic>>
+  >(new Map())
+  const currentDiagnostics = Effect.all([Ref.get(recordedDiagnostics), readSettledQuickDrainDiagnostics]).pipe(
+    Effect.map(([recorded, settled]) =>
+      applicationExitQuickDrainFamilyOrder.flatMap((family) => recorded.get(family) ?? settled.get(family) ?? [])
+    )
+  )
+  const runQuickDrain = Effect.fn("ApplicationExitRequestBoundary.runQuickDrain")(function* <A>(
+    family: ApplicationExitQuickDrainFamily,
+    operation: Effect.Effect<A, ApplicationExitDrainFailure>,
+    onSuccess: (value: A) => Effect.Effect<void>
   ) {
     return yield* operation.pipe(
       Effect.matchEffect({
-        onFailure: (failure) => Ref.update(recordedDiagnostics, (current) => [...current, ...failure.diagnostics]),
-        onSuccess: () => trace.emit(successEvent)
+        onFailure: ({ diagnostics }) =>
+          Ref.update(recordedDiagnostics, (current) => new Map(current).set(family, diagnostics)),
+        onSuccess
       })
     )
   })
 
   const drainApplication = Effect.gen(function* () {
-    const safeExecutorCorrelations = yield* drain.suspendRunningExecutorWork.pipe(
-      Effect.matchEffect({
-        onFailure: (failure) =>
-          Ref.update(recordedDiagnostics, (current) => [...current, ...failure.diagnostics]).pipe(Effect.as([])),
-        onSuccess: Effect.succeed
-      })
+    yield* Effect.all(
+      [
+        runQuickDrain("ExecutorSuspension", drain.suspendRunningExecutorWork, (correlations) =>
+          emitSafeExecutorCorrelations(trace, correlations)
+        ),
+        runQuickDrain("ProducedJournalWriteFlush", drain.flushProducedJournalWrites, () =>
+          trace.emit({ _tag: "ProducedJournalWritesFlushed" })
+        ),
+        runQuickDrain(
+          "ProcessLocalResourceRelease",
+          lifecycle.awaitForwardOwnersReleased.pipe(Effect.andThen(drain.closeProcessLocalResources)),
+          () => trace.emit({ _tag: "ProcessLocalResourcesClosed" })
+        )
+      ],
+      { concurrency: "unbounded" }
     )
-    yield* emitSafeExecutorCorrelations(trace, safeExecutorCorrelations)
-    for (const [operation, event] of [
-      [drain.flushProducedJournalWrites, { _tag: "ProducedJournalWritesFlushed" as const }],
-      [drain.closeProcessLocalResources, { _tag: "ProcessLocalResourcesClosed" as const }],
-      [drain.releaseCoordinatorLock, { _tag: "CoordinatorLockReleased" as const }]
-    ] as const) {
-      yield* runStep(operation, event)
-    }
-    return applicationExitDrainResult(yield* Ref.get(recordedDiagnostics))
+    yield* runQuickDrain("CoordinatorLockRelease", drain.releaseCoordinatorLock, () =>
+      trace.emit({ _tag: "CoordinatorLockReleased" })
+    )
+    return applicationExitDrainResult(yield* currentDiagnostics)
   })
 
   const driver = (cutoffAt: bigint) =>
@@ -136,10 +177,7 @@ export const makeApplicationExitRequestBoundary = Effect.fn("ApplicationExitRequ
       const withinLimit = yield* drainApplication.pipe(Effect.timeoutOption(Duration.nanos(remaining)))
       const result = Option.isSome(withinLimit)
         ? withinLimit.value
-        : ApplicationExitResult.cases.TimedOut.make({
-            diagnostics: yield* Ref.get(recordedDiagnostics),
-            requestedStatus: 1
-          })
+        : ApplicationExitResult.cases.TimedOut.make({ diagnostics: yield* currentDiagnostics, requestedStatus: 1 })
       yield* trace.emit({ _tag: "ExitResultReported", result })
       yield* lifecycle.completeExit(result)
       const decision = decideApplicationProcessEnd(result)
@@ -184,8 +222,10 @@ interface ApplicationExitExecutorDrainResult {
 }
 
 interface RegisteredApplicationExitExecutorDrain {
+  readonly drainId: number
   readonly drain: ApplicationExitExecutorDrain
   readonly finished: Deferred.Deferred<ApplicationExitExecutorDrainResult>
+  readonly resultCollected: Ref.Ref<boolean>
   readonly started: boolean
 }
 
@@ -227,6 +267,12 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
     nextId: 0,
     registered: new Map<number, ApplicationExitProcessLocalDrain>()
   })
+  const settledExecutorDiagnostics = yield* Ref.make<ReadonlyMap<number, ReadonlyArray<ApplicationExitDiagnostic>>>(
+    new Map()
+  )
+  const settledProcessLocalDiagnostics = yield* Ref.make<ReadonlyMap<number, ReadonlyArray<ApplicationExitDiagnostic>>>(
+    new Map()
+  )
   const runExecutorDrain = Effect.fn("ApplicationExitShell.runExecutorDrain")(function* (
     entry: RegisteredApplicationExitExecutorDrain
   ) {
@@ -236,12 +282,27 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
         onSuccess: (correlations): ApplicationExitExecutorDrainResult => ({ correlations, diagnostics: [] })
       })
     )
+    if (result.diagnostics.length > 0) {
+      yield* Ref.update(settledExecutorDiagnostics, (current) =>
+        new Map(current).set(entry.drainId, result.diagnostics)
+      )
+    }
     yield* emitSafeExecutorCorrelations(trace, result.correlations)
     yield* Deferred.succeed(entry.finished, result)
   })
 
   const startExecutorDrains = (entries: ReadonlyArray<RegisteredApplicationExitExecutorDrain>) =>
     Effect.forEach(entries, (entry) => runExecutorDrain(entry).pipe(Effect.forkIn(scope)), { discard: true })
+
+  const claimExecutorDrainResult = Effect.fn("ApplicationExitShell.claimExecutorDrainResult")(function* (
+    entry: RegisteredApplicationExitExecutorDrain
+  ) {
+    const result = yield* Deferred.await(entry.finished)
+    return yield* Ref.modify(entry.resultCollected, (collected) => [
+      collected ? Option.none() : Option.some(result),
+      true
+    ])
+  })
 
   const beginExecutorDrainHandoff = Ref.update(executorDrains, (current) =>
     current.phase === "Serving" ? { ...current, phase: "CutoffPending" as const } : current
@@ -254,14 +315,19 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
       return [pending, { ...current, phase: "Draining" as const, registered }] as const
     })
     yield* startExecutorDrains(entries)
-    yield* Effect.forEach(entries, ({ finished }) => Deferred.await(finished), { discard: true })
+    const results = yield* Effect.forEach(entries, claimExecutorDrainResult)
+    const diagnostics = EffectArray.getSomes(results).flatMap(({ diagnostics }) => diagnostics)
+    const [first, ...remaining] = diagnostics
+    if (first !== undefined) {
+      return yield* new ApplicationExitDrainFailure({ diagnostics: [first, ...remaining] })
+    }
     return []
   })
 
   const awaitExecutorDrainResults = Effect.gen(function* () {
     const entries = [...(yield* Ref.get(executorDrains)).registered.values()]
-    const results = yield* Effect.forEach(entries, ({ finished }) => Deferred.await(finished))
-    const diagnostics = results.flatMap(({ diagnostics }) => diagnostics)
+    const results = yield* Effect.forEach(entries, claimExecutorDrainResult)
+    const diagnostics = EffectArray.getSomes(results).flatMap(({ diagnostics }) => diagnostics)
     const [first, ...remaining] = diagnostics
     if (first !== undefined) {
       return yield* new ApplicationExitDrainFailure({ diagnostics: [first, ...remaining] })
@@ -274,11 +340,20 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
       suspendRunningExecutorWork: activateExecutorDrains,
       flushProducedJournalWrites: lifecycle.awaitForwardOwnersReleased.pipe(Effect.andThen(awaitExecutorDrainResults)),
       closeProcessLocalResources: Effect.gen(function* () {
-        const drains = [...(yield* Ref.get(processLocalDrains)).registered.values()]
-        const diagnostics = yield* Effect.forEach(drains, ({ closeProcessLocalResources }) =>
-          closeProcessLocalResources.pipe(
-            Effect.match({ onFailure: ({ diagnostics }) => diagnostics, onSuccess: () => [] })
-          )
+        const drains = [...(yield* Ref.get(processLocalDrains)).registered.entries()]
+        const diagnostics = yield* Effect.forEach(
+          drains,
+          ([drainId, { closeProcessLocalResources }]) =>
+            closeProcessLocalResources.pipe(
+              Effect.matchEffect({
+                onFailure: ({ diagnostics }) =>
+                  Ref.update(settledProcessLocalDiagnostics, (current) =>
+                    new Map(current).set(drainId, diagnostics)
+                  ).pipe(Effect.as(diagnostics)),
+                onSuccess: () => Effect.succeed([])
+              })
+            ),
+          { concurrency: "unbounded" }
         ).pipe(Effect.map((results) => results.flat()))
         const [first, ...remaining] = diagnostics
         if (first !== undefined) {
@@ -289,7 +364,21 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
     },
     processLifecycle,
     trace,
-    beginExecutorDrainHandoff
+    beginExecutorDrainHandoff,
+    Effect.all([Ref.get(settledExecutorDiagnostics), Ref.get(settledProcessLocalDiagnostics)]).pipe(
+      Effect.map(([executor, processLocal]) => {
+        const byFamily = new Map<ApplicationExitQuickDrainFamily, ReadonlyArray<ApplicationExitDiagnostic>>()
+        const inRegistrationOrder = (
+          diagnostics: ReadonlyMap<number, ReadonlyArray<ApplicationExitDiagnostic>>
+        ): ReadonlyArray<ApplicationExitDiagnostic> =>
+          [...diagnostics.entries()].sort(([left], [right]) => left - right).flatMap(([, values]) => values)
+        const executorDiagnostics = inRegistrationOrder(executor)
+        const processLocalDiagnostics = inRegistrationOrder(processLocal)
+        if (executorDiagnostics.length > 0) byFamily.set("ExecutorSuspension", executorDiagnostics)
+        if (processLocalDiagnostics.length > 0) byFamily.set("ProcessLocalResourceRelease", processLocalDiagnostics)
+        return byFamily
+      })
+    )
   )
   return {
     admission: lifecycle.admission,
@@ -297,9 +386,16 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
     registerExecutorDrain: (drain) =>
       Effect.gen(function* () {
         const finished = yield* Deferred.make<ApplicationExitExecutorDrainResult>()
+        const resultCollected = yield* Ref.make(false)
         const registration = yield* Ref.modify(executorDrains, (current) => {
           const started = current.phase === "Draining"
-          const entry = { drain, finished, started } satisfies RegisteredApplicationExitExecutorDrain
+          const entry = {
+            drainId: current.nextId,
+            drain,
+            finished,
+            resultCollected,
+            started
+          } satisfies RegisteredApplicationExitExecutorDrain
           const registered = new Map(current.registered).set(current.nextId, entry)
           return [
             { drainId: current.nextId, entry, started },

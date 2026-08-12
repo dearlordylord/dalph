@@ -472,9 +472,9 @@ it.effect("waits for the exact attempt permit before a concurrent Exit suspensio
 const runningExecutorExitAuthoredCassette = [
   "ExitRequested",
   "AdmissionCutoffClosed",
+  "ProcessLocalResourcesClosed",
   "RunningExecutorWorkReachedSafeBoundary",
   "ProducedJournalWritesFlushed",
-  "ProcessLocalResourcesClosed",
   "CoordinatorLockReleased",
   "ExitResultReported",
   "ProcessEndRequested"

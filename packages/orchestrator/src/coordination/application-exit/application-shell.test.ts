@@ -82,6 +82,22 @@ const idleApplicationExitAuthoredCassette: ReadonlyArray<ApplicationExitTraceEve
   { _tag: "ProcessEndRequested", decision: { _tag: "RequestGracefulTermination", status: 0 } }
 ]
 
+/** Maintained #209 cassette: one family fails while independent quick drains still reach their boundaries. */
+const crossFamilyFailureApplicationExitAuthoredCassette = (
+  diagnostic: ApplicationExitDiagnostic
+): ReadonlyArray<ApplicationExitTraceEvent> => [
+  { _tag: "ExitRequested" },
+  { _tag: "AdmissionCutoffClosed" },
+  { _tag: "ProcessLocalResourcesClosed" },
+  { _tag: "ProducedJournalWritesFlushed" },
+  { _tag: "CoordinatorLockReleased" },
+  {
+    _tag: "ExitResultReported",
+    result: ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
+  },
+  { _tag: "ProcessEndRequested", decision: { _tag: "RequestForcedTermination", status: 1 } }
+]
+
 type ApplicationExitDeathStoryItem =
   | { readonly _tag: "ApplicationExitRequested" }
   | { readonly _tag: "ApplicationProcessDies" }
@@ -395,6 +411,56 @@ it.effect("reports a direct executor-family drain failure and still performs eve
   )
 )
 
+it.effect("retains every concurrent family diagnostic in stable application-drain order", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const executorDiagnostic = ApplicationExitDiagnostic.make("executor diagnostic")
+      const writeDiagnostic = ApplicationExitDiagnostic.make("produced-write diagnostic")
+      const localDiagnostic = ApplicationExitDiagnostic.make("process-local diagnostic")
+      const lockDiagnostic = ApplicationExitDiagnostic.make("coordinator-lock diagnostic")
+      const executorStarted = yield* Deferred.make<void>()
+      const writeStarted = yield* Deferred.make<void>()
+      const localStarted = yield* Deferred.make<void>()
+      const finishExecutor = yield* Deferred.make<void>()
+      const finishWrite = yield* Deferred.make<void>()
+      const finishLocal = yield* Deferred.make<void>()
+      const failAfter = (started: Deferred.Deferred<void>, finish: Deferred.Deferred<void>, diagnostic: string) =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(finish)),
+          Effect.andThen(
+            Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [ApplicationExitDiagnostic.make(diagnostic)] }))
+          )
+        )
+      const boundary = yield* makeApplicationExitRequestBoundary(
+        lifecycle,
+        {
+          closeProcessLocalResources: failAfter(localStarted, finishLocal, localDiagnostic),
+          flushProducedJournalWrites: failAfter(writeStarted, finishWrite, writeDiagnostic),
+          releaseCoordinatorLock: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [lockDiagnostic] })),
+          suspendRunningExecutorWork: failAfter(executorStarted, finishExecutor, executorDiagnostic)
+        },
+        { requestEnd: () => Effect.void }
+      )
+      const exiting = yield* boundary.requestExit.pipe(Effect.forkChild)
+      yield* Deferred.await(executorStarted)
+      yield* Deferred.await(writeStarted)
+      yield* Deferred.await(localStarted)
+
+      yield* Deferred.succeed(finishLocal, undefined)
+      yield* Deferred.succeed(finishWrite, undefined)
+      yield* Deferred.succeed(finishExecutor, undefined)
+
+      expect(yield* Fiber.join(exiting)).toEqual(
+        ApplicationExitResult.cases.Failed.make({
+          diagnostics: [executorDiagnostic, writeDiagnostic, localDiagnostic, lockDiagnostic],
+          requestedStatus: 1
+        })
+      )
+    })
+  )
+)
+
 it.effect("continues every application-owned local drain after one sibling reports failure", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -427,6 +493,76 @@ it.effect("continues every application-owned local drain after one sibling repor
   )
 )
 
+it.effect("retains a settled local-drain failure when its sibling remains stuck at the fifth second", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const diagnostic = ApplicationExitDiagnostic.make("first local drain failed while its sibling remained useful")
+      const failedDrainSettled = yield* Deferred.make<void>()
+      const processEnds = yield* Ref.make<ReadonlyArray<ApplicationProcessEndDecision>>([])
+      const shell = yield* makeApplicationExitShell(defaultOwnership, {
+        requestEnd: (decision) => Ref.update(processEnds, (current) => [...current, decision])
+      })
+      yield* shell.registerProcessLocalDrain({
+        closeProcessLocalResources: Deferred.succeed(failedDrainSettled, undefined).pipe(
+          Effect.andThen(Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })))
+        )
+      })
+      yield* shell.registerProcessLocalDrain({ closeProcessLocalResources: Effect.never })
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* Deferred.await(failedDrainSettled)
+      yield* TestClock.adjust("5 seconds")
+
+      expect(yield* Fiber.join(exiting)).toEqual(
+        ApplicationExitResult.cases.TimedOut.make({ diagnostics: [diagnostic], requestedStatus: 1 })
+      )
+      expect(yield* Ref.get(processEnds)).toEqual([{ _tag: "RequestForcedTermination", status: 1 }])
+    })
+  )
+)
+
+it.effect("orders settled local-drain timeout diagnostics by registration rather than completion", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const firstDiagnostic = ApplicationExitDiagnostic.make("first registered local drain failed second")
+      const secondDiagnostic = ApplicationExitDiagnostic.make("second registered local drain failed first")
+      const failFirst = yield* Deferred.make<void>()
+      const failSecond = yield* Deferred.make<void>()
+      const firstSettled = yield* Deferred.make<void>()
+      const secondSettled = yield* Deferred.make<void>()
+      const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      const failWhenAllowed = (
+        allowed: Deferred.Deferred<void>,
+        settled: Deferred.Deferred<void>,
+        diagnostic: ApplicationExitDiagnostic
+      ) =>
+        Deferred.await(allowed).pipe(
+          Effect.andThen(Deferred.succeed(settled, undefined)),
+          Effect.andThen(Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })))
+        )
+      yield* shell.registerProcessLocalDrain({
+        closeProcessLocalResources: failWhenAllowed(failFirst, firstSettled, firstDiagnostic)
+      })
+      yield* shell.registerProcessLocalDrain({
+        closeProcessLocalResources: failWhenAllowed(failSecond, secondSettled, secondDiagnostic)
+      })
+      yield* shell.registerProcessLocalDrain({ closeProcessLocalResources: Effect.never })
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* Deferred.succeed(failSecond, undefined)
+      yield* Deferred.await(secondSettled)
+      yield* Deferred.succeed(failFirst, undefined)
+      yield* Deferred.await(firstSettled)
+      yield* TestClock.adjust("5 seconds")
+
+      expect(yield* Fiber.join(exiting)).toEqual(
+        ApplicationExitResult.cases.TimedOut.make({
+          diagnostics: [firstDiagnostic, secondDiagnostic],
+          requestedStatus: 1
+        })
+      )
+    })
+  )
+)
+
 it.effect("reports a registered executor-family drain failure after its admitted Run owner releases", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -442,6 +578,102 @@ it.effect("reports a registered executor-family drain failure after its admitted
 
       expect(yield* Fiber.join(exiting)).toEqual(
         ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
+      )
+    })
+  )
+)
+
+it.effect("reports timeout with an earlier executor failure while an atomic owner remains stuck", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const diagnostic = ApplicationExitDiagnostic.make("exact executor suspension failed before the owner settled")
+      const processEnds = yield* Ref.make<ReadonlyArray<ApplicationProcessEndDecision>>([])
+      const shell = yield* makeApplicationExitShell(defaultOwnership, {
+        requestEnd: (decision) => Ref.update(processEnds, (current) => [...current, decision])
+      })
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] }))
+      })
+      yield* shell.admission.acquireForwardOwner("AtomicBoundary")
+      const first = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      const joined = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* TestClock.adjust("5 seconds")
+
+      const expected = ApplicationExitResult.cases.TimedOut.make({ diagnostics: [diagnostic], requestedStatus: 1 })
+      expect(yield* Fiber.join(first)).toEqual(expected)
+      expect(yield* Fiber.join(joined)).toEqual(expected)
+      expect(yield* Ref.get(processEnds)).toEqual([{ _tag: "RequestForcedTermination", status: 1 }])
+    })
+  )
+)
+
+it.effect("retains a settled executor failure when another executor drain remains unconfirmed", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const diagnostic = ApplicationExitDiagnostic.make("first executor failed while its sibling remained running")
+      const failedDrainSettled = yield* Deferred.make<void>()
+      const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Deferred.succeed(failedDrainSettled, undefined).pipe(
+          Effect.andThen(Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })))
+        )
+      })
+      yield* shell.registerExecutorDrain({ suspendRunningExecutorWork: Effect.never })
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* Deferred.await(failedDrainSettled)
+      yield* TestClock.adjust("5 seconds")
+
+      expect(yield* Fiber.join(exiting)).toEqual(
+        ApplicationExitResult.cases.TimedOut.make({ diagnostics: [diagnostic], requestedStatus: 1 })
+      )
+    })
+  )
+)
+
+it.effect("finishes independent cross-family quick drains before reporting one shared conclusive failure", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const diagnostic = ApplicationExitDiagnostic.make("executor suspension contradicted the exact attempt")
+      const executorStarted = yield* Deferred.make<void>()
+      const localCloseStarted = yield* Deferred.make<void>()
+      const allowExecutorFailure = yield* Deferred.make<void>()
+      const allowLocalClose = yield* Deferred.make<void>()
+      const lifecycleCassette = yield* Ref.make<ReadonlyArray<ApplicationExitTraceEvent>>([])
+      const shell = yield* makeApplicationExitShell(
+        defaultOwnership,
+        { requestEnd: () => Effect.void },
+        { emit: (event) => Ref.update(lifecycleCassette, (events) => [...events, event]) }
+      )
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Deferred.succeed(executorStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(allowExecutorFailure)),
+          Effect.andThen(Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })))
+        )
+      })
+      yield* shell.registerProcessLocalDrain({
+        closeProcessLocalResources: Deferred.succeed(localCloseStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(allowLocalClose))
+        )
+      })
+      const owner = yield* shell.admission.acquireForwardOwner("AtomicBoundary")
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+
+      yield* Deferred.await(executorStarted)
+      const joined = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      expect(yield* Deferred.isDone(localCloseStarted)).toBe(false)
+      yield* owner.release
+      yield* Deferred.await(localCloseStarted)
+      yield* Deferred.succeed(allowExecutorFailure, undefined)
+      yield* Deferred.succeed(allowLocalClose, undefined)
+
+      const expected = ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
+      expect(yield* Fiber.join(exiting)).toEqual(expected)
+      expect(yield* Fiber.join(joined)).toEqual(expected)
+      const recordedCassette = yield* Ref.get(lifecycleCassette)
+      expect(recordedCassette.filter(({ _tag }) => _tag === "ExitRequested")).toHaveLength(2)
+      expect(recordedCassette.filter(({ _tag }, index) => _tag !== "ExitRequested" || index === 0)).toEqual(
+        crossFamilyFailureApplicationExitAuthoredCassette(diagnostic)
       )
     })
   )

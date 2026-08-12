@@ -817,14 +817,30 @@ describe("delivery proposal route matrix", () => {
       if (deletionProposal === undefined || !isIdentityFreeProposal(deletionProposal)) {
         return yield* Effect.die("missing completion-claim deletion proposal")
       }
+      const interruptibleBoundaryEntries = yield* Ref.make(0)
+      const deletionLease: DeliveryActionExecutionLease = {
+        ...inertLease,
+        forwardBoundary: {
+          _tag: "InterruptibleBoundary",
+          execution: {
+            run: (_intent, call, recordResult) =>
+              Ref.update(interruptibleBoundaryEntries, (count) => count + 1).pipe(
+                Effect.andThen(call),
+                Effect.flatMap(recordResult)
+              )
+          }
+        }
+      }
+      expect(deletionLease.forwardBoundary._tag).toBe("InterruptibleBoundary")
       expect(
         yield* executeIntegrationAction(
           { _tag: "IdentityFreeAction", proposal: deletionProposal },
           deletion,
-          inertLease,
+          deletionLease,
           target
         ).pipe(Effect.provideService(CompletionClaimBoundary, boundary), Effect.provideService(InRunJournal, journal))
       ).toMatchObject({ _tag: "ActionCompleted", proposalId: deletionProposal.id })
+      expect(yield* Ref.get(interruptibleBoundaryEntries)).toBeGreaterThan(0)
       expect((yield* Ref.get(records)).at(-1)?.event._tag).toBe("IntegrationFinalitySettled")
 
       const waitingRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
@@ -873,7 +889,7 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           { _tag: "IdentityFreeAction", proposal: deletionProposal },
           deletion,
-          inertLease,
+          deletionLease,
           target
         ).pipe(
           Effect.provideService(CompletionClaimBoundary, unreadableBoundary),
@@ -892,7 +908,7 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           { _tag: "IdentityFreeAction", proposal: deletionProposal },
           deletion,
-          inertLease,
+          deletionLease,
           target
         ).pipe(
           Effect.provideService(CompletionClaimBoundary, unreadableBoundary),
