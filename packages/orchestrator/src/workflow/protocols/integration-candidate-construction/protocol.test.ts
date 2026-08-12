@@ -393,10 +393,18 @@ it.effect("builds one candidate with current target first and accepted result se
   )
 )
 
-it.effect("records the constructed candidate through production admission before Exit stops the successor", () =>
+it.effect("replays the authored candidate Exit cassette through production admission without a successor", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* seedStartedResponsibility
+      const authored = [
+        "CandidateBoundaryEntered",
+        "ExitCutoffClosed",
+        "IntegrationCandidateConstructed",
+        "OwnerReleasedWithoutSuccessor"
+      ] as const
+      const recorded = yield* Ref.make<ReadonlyArray<(typeof authored)[number]>>([])
+      const record = (entry: (typeof authored)[number]) => Ref.update(recorded, (entries) => [...entries, entry])
       const candidateEntered = yield* Deferred.make<void>()
       const candidateMayReturn = yield* Deferred.make<void>()
       const resources = yield* makeIntegrationTargetResourceController()
@@ -417,7 +425,8 @@ it.effect("records the constructed candidate through production admission before
       const successors = yield* Ref.make(0)
       const agent = IntegrationCandidateAgent.of({
         startOrContinue: (request) =>
-          Deferred.succeed(candidateEntered, undefined).pipe(
+          record("CandidateBoundaryEntered").pipe(
+            Effect.andThen(Deferred.succeed(candidateEntered, undefined)),
             Effect.andThen(Deferred.await(candidateMayReturn)),
             Effect.as(
               IntegrationCandidateAgentReport.cases.Submitted.make({
@@ -449,13 +458,17 @@ it.effect("records the constructed candidate through production admission before
 
       yield* Deferred.await(candidateEntered)
       yield* lifecycle.requestExit
+      yield* record("ExitCutoffClosed")
       yield* Deferred.succeed(candidateMayReturn, undefined)
 
       expect((yield* Fiber.await(running))._tag).toBe("Failure")
       const records = yield* (yield* JournalStore).read(runId)
       expect(records.some(({ event }) => event._tag === "IntegrationCandidateConstructed")).toBe(true)
+      yield* record("IntegrationCandidateConstructed")
       expect(yield* Ref.get(successors)).toBe(0)
       yield* lifecycle.awaitForwardOwnersReleased
+      yield* record("OwnerReleasedWithoutSuccessor")
+      expect(yield* Ref.get(recorded)).toEqual(authored)
     })
   ).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )

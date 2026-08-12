@@ -286,14 +286,23 @@ it.effect("keeps another target usable while exact M verifies and releases only 
   })
 )
 
-it.effect("records verified evidence through production admission before Exit stops the successor", () =>
+it.effect("replays the authored verification Exit cassette through production admission without a successor", () =>
   Effect.gen(function* () {
+    const authored = [
+      "VerificationBoundaryEntered",
+      "ExitCutoffClosed",
+      "TargetVerificationEvidenceSealed",
+      "OwnerReleasedWithoutSuccessor"
+    ] as const
+    const recorded = yield* Ref.make<ReadonlyArray<(typeof authored)[number]>>([])
+    const record = (entry: (typeof authored)[number]) => Ref.update(recorded, (entries) => [...entries, entry])
     const verificationEntered = yield* Deferred.make<void>()
     const verificationMayReturn = yield* Deferred.make<void>()
     return yield* harness(
       {
         runOrResume: (request) =>
           Effect.gen(function* () {
+            yield* record("VerificationBoundaryEntered")
             yield* Deferred.succeed(verificationEntered, undefined)
             yield* Deferred.await(verificationMayReturn)
             return TargetVerificationTerminal.cases.Passed.make({
@@ -335,14 +344,18 @@ it.effect("records verified evidence through production admission before Exit st
 
             yield* Deferred.await(verificationEntered)
             yield* lifecycle.requestExit
+            yield* record("ExitCutoffClosed")
             yield* Deferred.succeed(verificationMayReturn, undefined)
 
             expect((yield* Fiber.await(running))._tag).toBe("Failure")
             expect(
               (yield* Ref.get(records)).some(({ event }) => event._tag === "TargetVerificationEvidenceSealed")
             ).toBe(true)
+            yield* record("TargetVerificationEvidenceSealed")
             expect(yield* Ref.get(successors)).toBe(0)
             yield* lifecycle.awaitForwardOwnersReleased
+            yield* record("OwnerReleasedWithoutSuccessor")
+            expect(yield* Ref.get(recorded)).toEqual(authored)
           })
         )
     )

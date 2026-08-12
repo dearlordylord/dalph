@@ -415,9 +415,17 @@ it.effect("allows a different target while the exact promotion permit is active"
   )
 )
 
-it.effect("records an applied promotion through production admission before Exit stops the successor", () =>
+it.effect("replays the authored promotion Exit cassette through production admission without a successor", () =>
   Effect.scoped(
     Effect.gen(function* () {
+      const authored = [
+        "PromotionBoundaryEntered",
+        "ExitCutoffClosed",
+        "TargetPromotionObservedSuccess",
+        "OwnerReleasedWithoutSuccessor"
+      ] as const
+      const recorded = yield* Ref.make<ReadonlyArray<(typeof authored)[number]>>([])
+      const record = (entry: (typeof authored)[number]) => Ref.update(recorded, (entries) => [...entries, entry])
       const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
       const promotionEntered = yield* Deferred.make<void>()
       const promotionMayReturn = yield* Deferred.make<void>()
@@ -439,7 +447,8 @@ it.effect("records an applied promotion through production admission before Exit
       const successors = yield* Ref.make(0)
       const git = TargetPromotionGit.of({
         compareAndSet: () =>
-          Deferred.succeed(promotionEntered, undefined).pipe(
+          record("PromotionBoundaryEntered").pipe(
+            Effect.andThen(Deferred.succeed(promotionEntered, undefined)),
             Effect.andThen(Deferred.await(promotionMayReturn)),
             Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
           ),
@@ -458,12 +467,16 @@ it.effect("records an applied promotion through production admission before Exit
 
       yield* Deferred.await(promotionEntered)
       yield* lifecycle.requestExit
+      yield* record("ExitCutoffClosed")
       yield* Deferred.succeed(promotionMayReturn, undefined)
 
       expect((yield* Fiber.await(running))._tag).toBe("Failure")
       expect((yield* Ref.get(records)).some(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toBe(true)
+      yield* record("TargetPromotionObservedSuccess")
       expect(yield* Ref.get(successors)).toBe(0)
       yield* lifecycle.awaitForwardOwnersReleased
+      yield* record("OwnerReleasedWithoutSuccessor")
+      expect(yield* Ref.get(recorded)).toEqual(authored)
     })
   )
 )
