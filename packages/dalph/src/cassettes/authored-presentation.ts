@@ -76,6 +76,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       OperatorControlDirectionFailed: noLandmark,
       OperatorDirectsTaskClaimReacquisition: noLandmark,
       OperatorRacesContinueAndStop: noLandmark,
+      OperatorRestartsAttempt: noLandmark,
       OperatorStopsAttempt: noLandmark,
       PlannedAttemptExecutorProjectionReturned: noLandmark,
       PlannedAttemptExecutorResponseLost: noLandmark,
@@ -191,6 +192,8 @@ const protocolEvidenceLyric = Match.type<AuthoredProtocolEvidence>().pipe(
       `The story expects Operator to apply ${evidence.choice} to task ${evidence.taskId}, attempt ${evidence.attemptId}, at authored revision ${evidence.observedTaskRevision}.`,
     AttemptImplementationAbandoned: (evidence) =>
       `The story expects Dalph to abandon implementation responsibility for task ${evidence.taskId}, attempt ${evidence.attemptId}.`,
+    PlannedAttemptReplaced: (evidence) =>
+      `The story expects Dalph to atomically replace attempt ${evidence.priorAttemptId} with clean attempt ${evidence.successorAttemptId} for task ${evidence.taskId}.`,
     AttemptWorktreeLost: (evidence) =>
       `The story expects Git to report the planned worktree lost for task ${evidence.taskId}, attempt ${evidence.attemptId}.`,
     CompatibleTargetAdvance: (evidence) =>
@@ -305,6 +308,7 @@ type OperatorStoryItem = Extract<
       | "OperatorContinuesAttempt"
       | "OperatorDirectsTaskClaimReacquisition"
       | "OperatorRacesContinueAndStop"
+      | "OperatorRestartsAttempt"
       | "OperatorStopsAttempt"
       | "SetTaskExecutionCapacity"
   }
@@ -318,6 +322,7 @@ const operatorStoryItemTags: ReadonlySet<RemainingCoordinatorStoryItem["_tag"]> 
   "OperatorContinuesAttempt",
   "OperatorDirectsTaskClaimReacquisition",
   "OperatorRacesContinueAndStop",
+  "OperatorRestartsAttempt",
   "OperatorStopsAttempt",
   "SetTaskExecutionCapacity"
 ])
@@ -327,7 +332,7 @@ const isOperatorStoryItem = (item: RemainingCoordinatorStoryItem): item is Opera
 
 type AttemptChoiceOperatorItem = Extract<
   OperatorStoryItem,
-  { readonly _tag: "OperatorContinuesAttempt" | "OperatorStopsAttempt" }
+  { readonly _tag: "OperatorContinuesAttempt" | "OperatorRestartsAttempt" | "OperatorStopsAttempt" }
 >
 type ControlDirectionOperatorItem = Extract<
   OperatorStoryItem,
@@ -340,7 +345,9 @@ type ControlDirectionOperatorItem = Extract<
 >
 
 const isAttemptChoiceOperatorItem = (item: OperatorStoryItem): item is AttemptChoiceOperatorItem =>
-  item._tag === "OperatorContinuesAttempt" || item._tag === "OperatorStopsAttempt"
+  item._tag === "OperatorContinuesAttempt" ||
+  item._tag === "OperatorRestartsAttempt" ||
+  item._tag === "OperatorStopsAttempt"
 
 const isControlDirectionOperatorItem = (item: OperatorStoryItem): item is ControlDirectionOperatorItem =>
   item._tag === "OperatorAppliesControlDirection" ||
@@ -348,13 +355,16 @@ const isControlDirectionOperatorItem = (item: OperatorStoryItem): item is Contro
   item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
 
 const attemptChoiceOperatorLyric = (item: AttemptChoiceOperatorItem): string => {
-  const direction = item._tag === "OperatorContinuesAttempt" ? "Continue" : "Stop"
+  const direction =
+    item._tag === "OperatorContinuesAttempt" ? "Continue" : item._tag === "OperatorRestartsAttempt" ? "Restart" : "Stop"
   const result =
     item.expected._tag === "Rejected"
       ? `rejection ${item.expected.reason}`
       : item._tag === "OperatorStopsAttempt"
         ? `status ${item.expected.status}`
-        : "ContinueApplied"
+        : item._tag === "OperatorRestartsAttempt"
+          ? "RestartApplied"
+          : "ContinueApplied"
   return `Operator applies ${direction} request ${item.requestNonce} to task ${item.taskId}, attempt ${item.attemptId}, and observes ${result}.`
 }
 

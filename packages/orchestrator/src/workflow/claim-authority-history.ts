@@ -9,11 +9,15 @@ export const causalClaimForAttempt = (
   records: ReadonlyArray<JournalRecord>,
   attemptId: AttemptId
 ): Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }> | undefined => {
-  const plan = records.find(
-    ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === attemptId
-  )?.event
-  if (plan?._tag !== "TaskAttemptPlanned") return undefined
-  const causalOperationIds = causalPredecessorOperationIds(records, plan.operation)
+  const plan = records.flatMap(({ event }) =>
+    event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === attemptId
+      ? [event.operation]
+      : event._tag === "PlannedAttemptReplaced" && event.successorPlan.plannedAttempt.attemptId === attemptId
+        ? [event.successorPlan]
+        : []
+  )[0]
+  if (plan === undefined) return undefined
+  const causalOperationIds = causalPredecessorOperationIds(records, plan)
   const claim = records.find(
     ({ event }) => event._tag === "TaskClaimAcquired" && causalOperationIds.has(event.claim.operationId)
   )?.event

@@ -66,9 +66,18 @@ const responsibilityForRecord = (record: JournalRecord): WorkflowResponsibilityE
 
 /** Pure per-subject responsibility reducer. */
 const reduceWorkflowResponsibility = (records: ReadonlyArray<JournalRecord>): WorkflowResponsibilityState => {
+  const replacedAttemptIds = new Set(
+    records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptReplaced" ? [event.subject.plannedAttempt.attemptId] : []
+    )
+  )
   const entries = records.flatMap<WorkflowResponsibilityEntry>((record) => {
     const entry = responsibilityForRecord(record)
-    return entry === undefined ? [] : [entry]
+    return entry === undefined ||
+      (entry._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+        replacedAttemptIds.has(entry.plannedAttempt.attemptId))
+      ? []
+      : [entry]
   })
   return WorkflowResponsibilityState.make({ entries })
 }

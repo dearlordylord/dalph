@@ -14,6 +14,7 @@ import {
 import { executeFreshAttemptPlanning, executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
 import {
+  executeAttemptRestartTransition,
   executeFreshPlannedAttempt,
   executePlannedAttemptTransition
 } from "./planned-attempt-delivery-action-adapter.js"
@@ -55,6 +56,9 @@ const executeIdentityFreeAction = Effect.fn("DeliveryAction.executeIdentityFree"
   const route = action.proposal.route
   if (route._tag === "FreshExecutorWorkflowRoute") return yield* executeFreshPlannedAttempt(action, route, lease)
   const transition = route.transition
+  if (transition._tag === "AdvanceAttemptRestart") {
+    return yield* executeAttemptRestartTransition(action, transition, lease)
+  }
   if (isPlannedAttemptTransition(transition)) {
     return yield* executePlannedAttemptTransition(action, transition, lease)
   }

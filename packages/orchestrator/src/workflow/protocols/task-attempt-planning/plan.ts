@@ -44,8 +44,18 @@ export class PlannedTaskAttemptError extends Schema.TaggedError<PlannedTaskAttem
   detail: Schema.String
 }) {}
 
+/** Zero-based durable identity slot for one task's immutable planned attempts. */
+export const PlannedTaskAttemptOrdinal = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("PlannedTaskAttemptOrdinal")
+)
+export type PlannedTaskAttemptOrdinal = typeof PlannedTaskAttemptOrdinal.Type
+
 export interface PlannedTaskAttemptPlannerService {
-  readonly plan: (specification: TaskWorkSpecification) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>
+  readonly plan: (
+    specification: TaskWorkSpecification,
+    baseSha?: GitCommitSha,
+    ordinal?: PlannedTaskAttemptOrdinal
+  ) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>
 }
 
 /** Selects one exact Base SHA and worktree/branch locator set for a task attempt. */
@@ -67,21 +77,26 @@ export const deterministicPlannedTaskAttemptLayer = (options: DeterministicPlann
     Effect.gen(function* () {
       const nextAttemptOrdinal = yield* Ref.make(0)
       return PlannedTaskAttemptPlanner.of({
-        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function* (specification) {
-          const ordinal = yield* Ref.getAndUpdate(nextAttemptOrdinal, (current) => current + 1)
-          const attemptId = AttemptId.make(`attempt:${specification.taskId}:${ordinal}`)
-          const resourceSegment = `attempt-${encodeURIComponent(specification.taskId)}-${ordinal}`
-          return PlannedTaskAttempt.make({
-            attemptId,
-            baseSha: options.baseSha,
-            branch: TaskBranchRef.make(`refs/heads/dalph/${resourceSegment}`),
-            executor: options.executor,
-            runId: options.runId,
-            taskId: specification.taskId,
-            taskRevision: specification.fingerprint,
-            worktree: WorktreeLocator.make(`${options.worktreeRoot}/${resourceSegment}`)
-          })
-        })
+        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(
+          function* (specification, selectedBaseSha, selectedOrdinal) {
+            const ordinal = yield* Ref.modify(nextAttemptOrdinal, (current) => {
+              const selected = selectedOrdinal === undefined ? current : Number(selectedOrdinal)
+              return [selected, Math.max(current, selected + 1)] as const
+            })
+            const attemptId = AttemptId.make(`attempt:${specification.taskId}:${ordinal}`)
+            const resourceSegment = `attempt-${encodeURIComponent(specification.taskId)}-${ordinal}`
+            return PlannedTaskAttempt.make({
+              attemptId,
+              baseSha: selectedBaseSha ?? options.baseSha,
+              branch: TaskBranchRef.make(`refs/heads/dalph/${resourceSegment}`),
+              executor: options.executor,
+              runId: options.runId,
+              taskId: specification.taskId,
+              taskRevision: specification.fingerprint,
+              worktree: WorktreeLocator.make(`${options.worktreeRoot}/${resourceSegment}`)
+            })
+          }
+        )
       })
     })
   )

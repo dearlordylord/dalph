@@ -41,6 +41,10 @@ export const taskClaimReacquisitionDirectedRecordKey = (requestId: TaskClaimReac
 export const attemptChoiceAppliedRecordKey = (requestId: AttemptChoiceRequestId): JournalRecordKey =>
   JournalRecordKey.make(`attempt-choice:${requestId.nonce}:applied`)
 
+/** Stable P1-scoped key for its one possible atomic successor plan. */
+export const plannedAttemptReplacedRecordKey = (attemptId: AttemptId): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:replaced`)
+
 export const attemptStoppageIntentRecordKey = (requestId: AttemptChoiceRequestId): JournalRecordKey =>
   JournalRecordKey.make(`attempt-stoppage:${requestId.nonce}:intent`)
 

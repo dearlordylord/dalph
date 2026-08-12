@@ -11,6 +11,7 @@ import {
   observeAttemptStoppageExecutorWithPermit,
   recordStoppedAttemptClaimNoRelease
 } from "../../workflow/protocols/attempt-choice/stop.js"
+import { advanceAttemptRestartWithPermit } from "../../workflow/protocols/attempt-choice/restart.js"
 import { deliveryActionCompleted, deliveryActionDeferred } from "./delivery-action-adapter-common.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import type { IdentityFreeWorkflowRoute, IdentityFreeWorkflowTransition } from "./delivery-action-proposal.js"
@@ -21,6 +22,7 @@ type PlannedAttemptTransition = Extract<
   {
     readonly _tag:
       | "ContinuePlannedAttemptExecutorWork"
+      | "AdvanceAttemptRestart"
       | "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
       | "AdvanceAttemptStoppage"
       | "ObserveAttemptStoppageExecutor"
@@ -34,6 +36,9 @@ type AttemptStoppageTransition = Extract<
   PlannedAttemptTransition,
   { readonly _tag: "AdvanceAttemptStoppage" | "ObserveAttemptStoppageExecutor" }
 >
+
+type AttemptRestartTransition = Extract<PlannedAttemptTransition, { readonly _tag: "AdvanceAttemptRestart" }>
+type NonRestartPlannedAttemptTransition = Exclude<PlannedAttemptTransition, AttemptRestartTransition>
 
 const executeAttemptStoppageTransition = Effect.fn("DeliveryAction.executeAttemptStoppageTransition")(function* (
   transition: AttemptStoppageTransition,
@@ -55,9 +60,21 @@ const executeAttemptStoppageTransition = Effect.fn("DeliveryAction.executeAttemp
 })
 
 type ExecutorTransition = Exclude<
-  PlannedAttemptTransition,
-  AttemptStoppageTransition | Extract<PlannedAttemptTransition, { readonly _tag: "RecordStoppedAttemptClaimNoRelease" }>
+  NonRestartPlannedAttemptTransition,
+  | AttemptStoppageTransition
+  | Extract<PlannedAttemptTransition, { readonly _tag: "AdvanceAttemptRestart" | "RecordStoppedAttemptClaimNoRelease" }>
 >
+
+export const executeAttemptRestartTransition = Effect.fn("DeliveryAction.executeAttemptRestartTransition")(function* (
+  action: IdentityFreeAction,
+  transition: AttemptRestartTransition,
+  lease: DeliveryActionExecutionLease
+) {
+  yield* lease.withPlannedAttemptProtocol(plannedAttemptExecutorCorrelation(transition.plannedAttempt), (permit) =>
+    advanceAttemptRestartWithPermit(permit, transition.requestId, transition.subject, transition.integrationTarget)
+  )
+  return deliveryActionCompleted(action.proposal.id)
+})
 
 const executorReportFor = (
   transition: ExecutorTransition,
@@ -122,7 +139,7 @@ export const executeFreshPlannedAttempt = Effect.fn("DeliveryAction.executeFresh
 
 export const executePlannedAttemptTransition = Effect.fn("DeliveryAction.executePlannedAttemptTransition")(function* (
   action: IdentityFreeAction,
-  transition: PlannedAttemptTransition,
+  transition: NonRestartPlannedAttemptTransition,
   lease: DeliveryActionExecutionLease
 ) {
   if (transition._tag === "AdvanceAttemptStoppage" || transition._tag === "ObserveAttemptStoppageExecutor") {

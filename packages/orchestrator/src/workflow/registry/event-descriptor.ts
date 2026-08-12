@@ -64,7 +64,8 @@ import {
   completionTaskRequestLookupRecordKey,
   completionTaskRejectedRecordKey,
   completionTaskResponseLostRecordKey,
-  plannedAttemptContinuationAuthorizedRecordKey
+  plannedAttemptContinuationAuthorizedRecordKey,
+  plannedAttemptReplacedRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
 import type {
@@ -219,6 +220,20 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       requestId: event.requestId,
       runId: event.subject.plannedAttempt.runId
     }),
+    PlannedAttemptReplaced: (event) =>
+      operationEvent({
+        expectedKey: plannedAttemptReplacedRecordKey(event.subject.plannedAttempt.attemptId),
+        operationId: event.successorPlan.operationId,
+        plannedAttempt: event.successorPlan.plannedAttempt,
+        relatedOperationIds: [
+          event.witness.graphObservationOperationId,
+          event.witness.specificationObservationOperationId,
+          event.witness.claimObservationOperationId,
+          event.witness.oldWorktreeObservationOperationId,
+          event.witness.targetLineageObservationOperationId
+        ],
+        requiredOperationIds: event.successorPlan.predecessorOperationIds
+      }),
     AttemptStoppageIntended: (event) => ({
       _tag: "AttemptChoiceEventDescriptor",
       expectedKey: attemptStoppageIntentRecordKey(event.requestId),

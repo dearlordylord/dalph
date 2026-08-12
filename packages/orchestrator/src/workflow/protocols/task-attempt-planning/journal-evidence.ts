@@ -13,8 +13,11 @@ export const requireAcknowledgedPlan = Effect.fn("WorkflowJournal.requireAcknowl
 ) {
   const plans = records.flatMap(({ event }) =>
     event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
-      ? [event]
-      : []
+      ? [event.operation]
+      : event._tag === "PlannedAttemptReplaced" &&
+          event.successorPlan.plannedAttempt.attemptId === plannedAttempt.attemptId
+        ? [event.successorPlan]
+        : []
   )
   const plan = plans[0]
   if (plan === undefined || plans.length !== 1) {
@@ -24,14 +27,14 @@ export const requireAcknowledgedPlan = Effect.fn("WorkflowJournal.requireAcknowl
       reason: plans.length === 0 ? "Missing" : "MultiplePlans"
     })
   }
-  if (!predecessorOperationIds.includes(plan.operation.operationId)) {
+  if (!predecessorOperationIds.includes(plan.operationId)) {
     return yield* new TaskAttemptPlanHistoryContradiction({
       attemptId: plannedAttempt.attemptId,
       operationId,
       reason: "CausalPredecessorMissing"
     })
   }
-  if (!samePlannedTaskAttempt(plan.operation.plannedAttempt, plannedAttempt)) {
+  if (!samePlannedTaskAttempt(plan.plannedAttempt, plannedAttempt)) {
     return yield* new TaskAttemptPlanHistoryContradiction({
       attemptId: plannedAttempt.attemptId,
       operationId,

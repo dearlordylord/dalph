@@ -38,7 +38,7 @@ export class AttemptChoiceRequestRunMismatch extends Schema.TaggedError<AttemptC
   { boundRunId: RunId, requestId: AttemptChoiceRequestId, subjectRunId: RunId }
 ) {}
 
-/** Another valid Continue-or-Stop request already won this exact changed-task choice. */
+/** Another valid Continue, Restart, or Stop request already won this exact changed-task choice. */
 export class AttemptChoiceAlreadyApplied extends Schema.TaggedError<AttemptChoiceAlreadyApplied>()(
   "AttemptChoiceAlreadyApplied",
   {
@@ -83,10 +83,9 @@ export type AttemptChoiceStopStatus =
       readonly observationOperationId: OperationId
     }
 
-type AttemptChoiceAppliedRecord<Choice extends "ContinueExistingAttempt" | "StopTaskImplementation"> = Omit<
-  JournalRecord,
-  "event"
-> & {
+type AttemptChoiceAppliedRecord<
+  Choice extends "ContinueExistingAttempt" | "RestartTaskImplementation" | "StopTaskImplementation"
+> = Omit<JournalRecord, "event"> & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
     readonly choice: Choice
   }
@@ -108,6 +107,7 @@ type ClaimReleaseIntentRecord = Omit<JournalRecord, "event"> & {
 /** Public application/query result: the winning record plus a choice-valid current phase. */
 export type AttemptChoiceApplicationResult =
   | { readonly _tag: "ContinueApplied"; readonly application: AttemptChoiceAppliedRecord<"ContinueExistingAttempt"> }
+  | { readonly _tag: "RestartApplied"; readonly application: AttemptChoiceAppliedRecord<"RestartTaskImplementation"> }
   | {
       readonly _tag: "StopApplied"
       readonly application: AttemptChoiceAppliedRecord<"StopTaskImplementation">
@@ -132,7 +132,7 @@ interface AttemptChoiceControlService {
   readonly read: (input: unknown) => Effect.Effect<AttemptChoiceApplicationResult, AttemptChoiceControlError>
 }
 
-/** Applies one exact pre-integration Continue-or-Stop request. */
+/** Applies one exact pre-integration Continue, Restart, or Stop request. */
 export class AttemptChoiceControl extends Context.Service<AttemptChoiceControl, AttemptChoiceControlService>()(
   "@dalph/AttemptChoiceControl"
 ) {}
@@ -231,16 +231,21 @@ const resultFor = (
   application: JournalRecord,
   event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
 ): AttemptChoiceApplicationResult =>
-  event.choice === "ContinueExistingAttempt"
+  event.choice === "StopTaskImplementation"
     ? {
-        _tag: "ContinueApplied",
-        application: { ...application, event: { ...event, choice: "ContinueExistingAttempt" } }
-      }
-    : {
         _tag: "StopApplied",
         application: { ...application, event: { ...event, choice: "StopTaskImplementation" } },
         status: currentResultFor(records, { ...event, choice: "StopTaskImplementation" })
       }
+    : event.choice === "RestartTaskImplementation"
+      ? {
+          _tag: "RestartApplied",
+          application: { ...application, event: { ...event, choice: "RestartTaskImplementation" } }
+        }
+      : {
+          _tag: "ContinueApplied",
+          application: { ...application, event: { ...event, choice: "ContinueExistingAttempt" } }
+        }
 
 const choiceIsExposed = (
   records: ReadonlyArray<JournalRecord>,

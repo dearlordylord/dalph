@@ -6,11 +6,12 @@ import { Schema } from "effect"
 export const AuthoredProtocolEvidence = Schema.TaggedUnion({
   AttemptChoiceApplied: {
     attemptId: AttemptId,
-    choice: Schema.Literals(["ContinueExistingAttempt", "StopTaskImplementation"]),
+    choice: Schema.Literals(["ContinueExistingAttempt", "RestartTaskImplementation", "StopTaskImplementation"]),
     observedTaskRevision: TaskRevision,
     taskId: TaskId
   },
   AttemptImplementationAbandoned: { attemptId: AttemptId, taskId: TaskId },
+  PlannedAttemptReplaced: { priorAttemptId: AttemptId, successorAttemptId: AttemptId, taskId: TaskId },
   AttemptWorktreeLost: { attemptId: AttemptId, taskId: TaskId },
   CompatibleTargetAdvance: { plannedBaseSha: GitCommitSha, targetHeadSha: GitCommitSha, taskId: TaskId },
   ControlDirectionApplied: {

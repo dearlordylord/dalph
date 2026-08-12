@@ -18,6 +18,7 @@ import {
   integrationCandidateCorrelationEquals,
   JournalPosition,
   PlannedAttemptContinuationAuthorizedEvent,
+  PlannedAttemptReplacedEvent,
   TargetVerificationCorrelationContradictedEvent,
   TargetVerificationEvidenceSealedEvent,
   TargetVerificationIntendedEvent,
@@ -621,12 +622,24 @@ type TaskBoundaryEvent = Extract<
       | "TaskClaimReleased"
       | "IntegrationResponsibilityBegan"
       | "IntegrationStarted"
+      | "PlannedAttemptReplaced"
       | "TaskWorktreeReady"
       | "TaskWorktreeReconciliationIntended"
   }
 >
 
 const recordTaskBoundaryEntry = (event: TaskBoundaryEvent): RecordedCassetteEntry => {
+  if (event._tag === "PlannedAttemptReplaced") {
+    return {
+      _tag: event._tag,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      requestId: event.requestId,
+      subject: event.subject,
+      successorPlan: event.successorPlan,
+      witness: event.witness
+    }
+  }
   if (isRecordedClaimReleaseEntry(event)) return recordClaimReleaseEntry(event)
   if (isRecordedIntegrationEntry(event)) return recordIntegrationEntry(event)
   if (isRecordedWorktreeEntry(event)) return recordWorktreeEntry(event)
@@ -795,6 +808,7 @@ const eventForTaskBoundaryEntry = (
         | "TaskClaimReleased"
         | "IntegrationResponsibilityBegan"
         | "IntegrationStarted"
+        | "PlannedAttemptReplaced"
         | "TaskWorktreeReady"
         | "TaskWorktreeReconciliationIntended"
     }
@@ -805,6 +819,9 @@ const eventForTaskBoundaryEntry = (
   if (isRecordedClaimReleaseEntry(entry)) return eventForClaimReleaseEntry(entry)
   if (isRecordedIntegrationEntry(entry)) return eventForIntegrationEntry(entry, entries, index)
   if (isRecordedWorktreeEntry(entry)) return eventForWorktreeEntry(entry)
+  if (entry._tag === "PlannedAttemptReplaced") {
+    return PlannedAttemptReplacedEvent.make({ ...entry, version: workflowJournalEventVersion })
+  }
   return Match.valueTags(entry, {
     TaskAttemptPlanned: (value) =>
       TaskAttemptPlannedEvent.make({ operation: value.operation, version: workflowJournalEventVersion }),
@@ -1575,6 +1592,9 @@ const lyricForTaskBoundaryEntry = (
       : `Dalph coordinator started integrating accepted commit ${entry.acceptedResult.commit}.`
   }
   if (isRecordedWorktreeEntry(entry)) return lyricForWorktreeEntry(entry)
+  if (entry._tag === "PlannedAttemptReplaced") {
+    return `Dalph atomically replaced attempt ${entry.subject.plannedAttempt.attemptId} with clean attempt ${entry.successorPlan.plannedAttempt.attemptId}.`
+  }
   return `Dalph planned attempt ${entry.operation.plannedAttempt.attemptId} for task ${entry.operation.plannedAttempt.taskId}.`
 }
 

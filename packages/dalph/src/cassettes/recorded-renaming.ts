@@ -950,6 +950,57 @@ const renameRecordedCassetteEntry = (
             plannedAttempt: renamePlannedAttempt(choiceEntry.subject.plannedAttempt, maps)
           })
         }),
+      PlannedAttemptReplaced: (replacementEntry) =>
+        completeFields<typeof replacementEntry>({
+          _tag: "PlannedAttemptReplaced",
+          initiatedBy: preserveCassetteValue(replacementEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(replacementEntry.occurrenceClassification),
+          requestId: renameAttemptChoiceRequestId(replacementEntry.requestId, maps),
+          subject: completeFields<typeof replacementEntry.subject>({
+            observedTaskRevision: preserveCassetteValue(replacementEntry.subject.observedTaskRevision),
+            plannedAttempt: renamePlannedAttempt(replacementEntry.subject.plannedAttempt, maps)
+          }),
+          successorPlan: completeFields<typeof replacementEntry.successorPlan>({
+            _tag: "RecordTaskAttemptPlan",
+            operationId: renamed(replacementEntry.successorPlan.operationId, maps.operationIds),
+            plannedAttempt: renamePlannedAttempt(replacementEntry.successorPlan.plannedAttempt, maps),
+            predecessorOperationIds: replacementEntry.successorPlan.predecessorOperationIds.map((operationId) =>
+              renamed(operationId, maps.operationIds)
+            )
+          }),
+          witness: completeFields<typeof replacementEntry.witness>({
+            claimObservationOperationId: renamed(
+              replacementEntry.witness.claimObservationOperationId,
+              maps.operationIds
+            ),
+            expectedClaim: renameActiveTaskClaim(replacementEntry.witness.expectedClaim, maps),
+            graphObservationOperationId: renamed(
+              replacementEntry.witness.graphObservationOperationId,
+              maps.operationIds
+            ),
+            oldWorktreeObservationOperationId: renamed(
+              replacementEntry.witness.oldWorktreeObservationOperationId,
+              maps.operationIds
+            ),
+            oldWorktreeProof: completeFields<typeof replacementEntry.witness.oldWorktreeProof>({
+              _tag: "PlannedWorktreeReady",
+              baseSha: preserveCassetteValue(replacementEntry.witness.oldWorktreeProof.baseSha),
+              branch: renamed(replacementEntry.witness.oldWorktreeProof.branch, maps.taskBranchRefs),
+              headSha: preserveCassetteValue(replacementEntry.witness.oldWorktreeProof.headSha),
+              worktree: renamed(replacementEntry.witness.oldWorktreeProof.worktree, maps.worktreeLocators)
+            }),
+            quiescenceProof: preserveCassetteValue(replacementEntry.witness.quiescenceProof),
+            specificationObservationOperationId: renamed(
+              replacementEntry.witness.specificationObservationOperationId,
+              maps.operationIds
+            ),
+            targetHeadSha: preserveCassetteValue(replacementEntry.witness.targetHeadSha),
+            targetLineageObservationOperationId: renamed(
+              replacementEntry.witness.targetLineageObservationOperationId,
+              maps.operationIds
+            )
+          })
+        }),
       AttemptStoppageIntended: (intentEntry) =>
         completeFields<typeof intentEntry>({
           _tag: "AttemptStoppageIntended",

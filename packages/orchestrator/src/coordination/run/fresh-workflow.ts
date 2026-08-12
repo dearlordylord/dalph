@@ -85,21 +85,27 @@ const journaledStepFor = (
     /* v8 ignore stop */
   }
   const observed = observedOperationIds(records)
-  const plan = records.findLast(
-    ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === task.id
-  )?.event
-  if (plan?._tag === "TaskAttemptPlanned") {
+  const plan = records
+    .flatMap(({ event }) =>
+      event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === task.id
+        ? [event.operation]
+        : event._tag === "PlannedAttemptReplaced" && event.successorPlan.plannedAttempt.taskId === task.id
+          ? [event.successorPlan]
+          : []
+    )
+    .at(lastElementOffset)
+  if (plan !== undefined) {
     const worktree = records.findLast(
       ({ event }) =>
         event._tag === "TaskWorktreeReconciliationIntended" &&
-        event.operation.plannedAttempt.attemptId === plan.operation.plannedAttempt.attemptId
+        event.operation.plannedAttempt.attemptId === plan.plannedAttempt.attemptId
     )?.event
     if (worktree?._tag === "TaskWorktreeReconciliationIntended" && observed.has(worktree.operation.operationId)) {
-      return FreshWorkflowStep.StartPlannedAttemptExecutorWork({ plannedAttempt: plan.operation.plannedAttempt, task })
+      return FreshWorkflowStep.StartPlannedAttemptExecutorWork({ plannedAttempt: plan.plannedAttempt, task })
     }
     return FreshWorkflowStep.ReconcileTaskWorktree({
-      plannedAttempt: plan.operation.plannedAttempt,
-      predecessorOperationId: plan.operation.operationId,
+      plannedAttempt: plan.plannedAttempt,
+      predecessorOperationId: plan.operationId,
       task
     })
   }

@@ -70,6 +70,7 @@ import {
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
+import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import { deliveryProposalsOf } from "./delivery-proposal.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
@@ -1644,6 +1645,14 @@ describe("delivery proposal route matrix", () => {
               requestSuspension: () => Effect.die("unused executor suspension"),
               startOrContinue: () => Effect.die("unused executor continuation")
             })
+          ),
+          Effect.provideService(
+            OperationIdAllocator,
+            OperationIdAllocator.of({ allocate: () => Effect.die("unused operation allocator") })
+          ),
+          Effect.provideService(
+            PlannedTaskAttemptPlanner,
+            PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused attempt planner") })
           ),
           Effect.provideService(WorkflowInterpreter, interpreter)
         )

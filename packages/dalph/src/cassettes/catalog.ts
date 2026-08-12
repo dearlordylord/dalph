@@ -1302,6 +1302,141 @@ export const changedAttemptContinuesAuthoredCassette: ScenarioCassette = Schema.
   ]
 })
 
+const changedAttemptRestartRequest = {
+  _tag: "OperatorRestartsAttempt",
+  attemptId: "attempt:A:0",
+  expected: { _tag: "Applied" },
+  observedTaskRevision: changedAttemptRevision,
+  requestNonce: "restart-changed-attempt-A",
+  taskId: "A"
+} as const
+
+const changedAttemptRestartAuthorityReads = [
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+  { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+  { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
+  { _tag: "TaskClaimCurrentReadReturned", taskId: "A" }
+] as const
+
+const changedAttemptRestartStoryThroughChoice = [
+  ...lostWorktreeStoryBeforeAssertions,
+  ...changedAttemptChoiceExposureReads,
+  {
+    _tag: "PlannedAttemptExecutorWorkReported",
+    report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+    request: "Suspend"
+  },
+  changedAttemptRestartRequest
+] as const
+
+const changedAttemptSuccessorStory = [
+  { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:1", taskId: "A" } },
+  {
+    _tag: "PlannedAttemptExecutorWorkReported",
+    report: { _tag: "Running", attemptId: "attempt:A:1" },
+    request: "StartOrContinue"
+  },
+  {
+    _tag: "PlannedAttemptExecutorWorkReported",
+    report: { _tag: "Terminal", attemptId: "attempt:A:1", result: { _tag: "Completed" } },
+    request: "StartOrContinue"
+  }
+] as const
+
+/** Alice replaces exact safely suspended P1, then ordinary worktree reconciliation and admission start clean P2. */
+export const changedAttemptRestartsCleanlyAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "Alice restarts the exact changed attempt into one clean successor",
+  startingFacts: attemptChoiceStartingFacts,
+  story: [
+    ...changedAttemptRestartStoryThroughChoice,
+    ...changedAttemptRestartAuthorityReads,
+    ...changedAttemptSuccessorStory,
+    {
+      ...attemptChoiceExpectedBehavior,
+      taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }] }
+    }
+  ]
+})
+
+/** Process loss after the atomic append reconstructs exact P2 and never allocates P3. */
+export const changedAttemptRestartAfterSupersessionCrashAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...changedAttemptRestartsCleanlyAuthoredCassette,
+  name: "Dalph reconstructs the exact replacement successor after process loss",
+  story: [
+    ...changedAttemptRestartStoryThroughChoice,
+    ...changedAttemptRestartAuthorityReads,
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    ...changedAttemptSuccessorStory,
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      ...attemptChoiceExpectedBehavior,
+      taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }] }
+    }
+  ]
+})
+
+/** A fresh F3 read makes D1 stale and records no replacement successor. */
+export const changedAttemptRestartFactsChangedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...changedAttemptRestartsCleanlyAuthoredCassette,
+  name: "Alice sees changed-again task facts prevent the recorded Restart from planning P2",
+  story: [
+    ...changedAttemptRestartStoryThroughChoice,
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "TaskWorkSpecificationReadReturned", ...changedAgainAttemptSpecification },
+    attemptChoiceExpectedBehavior
+  ]
+})
+
+/** Three unreadable K1 reads enter the typed local wait without tracker mutation or P2. */
+export const changedAttemptRestartClaimUnavailableAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...changedAttemptRestartsCleanlyAuthoredCassette,
+  name: "Alice sees Restart wait after three unreadable exact-claim reads",
+  story: [
+    ...changedAttemptRestartStoryThroughChoice,
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
+    { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+    { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+    { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+    attemptChoiceExpectedBehavior
+  ]
+})
+
+/** A concrete non-ready W1 observation preserves P1 and records no successor or Git mutation. */
+export const changedAttemptRestartWorktreeNotReadyAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...changedAttemptRestartsCleanlyAuthoredCassette,
+  name: "Alice sees Restart wait when Git reports the old worktree absent",
+  story: [
+    ...changedAttemptRestartStoryThroughChoice,
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "GitWorktreeObservationChanged", observation: { _tag: "PlannedWorktreeAbsent" } },
+    attemptChoiceExpectedBehavior
+  ]
+})
+
 const changedAttemptContinueRestartAt = changedAttemptContinuesAuthoredCassette.story.findLastIndex(
   (item) => item._tag === "CoordinatorProcessDies"
 )
@@ -1607,6 +1742,99 @@ const runUnpauseContinuationReportAt = runUnpauseAfterSafeSuspensionAuthoredCass
     item.request === "StartOrContinue" &&
     item.report._tag === "Terminal"
 )
+
+const changedAttemptRestartWithHeldContinuationThroughChoice = [
+  ...runUnpauseAfterSafeSuspensionAuthoredCassette.story.slice(0, runUnpauseContinuationReportAt),
+  { _tag: "DalphHoldsAdmittedContinuationBeforeExecutorIntent", attemptId: "attempt:A:0", taskId: "A" },
+  { _tag: "OperatorAppliesControlDirection", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+  { _tag: "OperatorAppliesControlDirection", direction: "Unpause", subject: { _tag: "Task", taskId: "A" } },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+  { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
+  { ...changedAttemptRestartRequest, requestNonce: "restart-held-continuation-A" }
+] as const
+
+/** An already admitted P1 continuation breaks safe suspension and leaves Restart visibly waiting while P1 runs. */
+export const changedAttemptRestartRemainsUnprovedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...runUnpauseAfterSafeSuspensionAuthoredCassette,
+  name: "Alice sees Restart remain unproved while the exact old attempt still runs",
+  story: [
+    ...changedAttemptRestartWithHeldContinuationThroughChoice,
+    {
+      _tag: "PlannedAttemptExecutorResponseLost",
+      detail: "the admitted continuation reached Running after Restart, but its response was lost",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "StartOrContinue"
+    },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "Running", attemptId: "attempt:A:0" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    attemptChoiceExpectedBehavior
+  ]
+})
+
+/** A late Accepted P1 report remains evidence but starts no integration; fresh authority still records exact P2. */
+export const changedAttemptRestartLateAcceptedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...runUnpauseAfterSafeSuspensionAuthoredCassette,
+  name: "Dalph honors the applied Restart after preserving a late Accepted P1 result",
+  story: [
+    ...changedAttemptRestartWithHeldContinuationThroughChoice,
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: {
+        _tag: "Terminal",
+        attemptId: "attempt:A:0",
+        result: { _tag: "Accepted", acceptedResult: { commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }
+      },
+      request: "StartOrContinue"
+    },
+    ...changedAttemptRestartAuthorityReads,
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:1", taskId: "A" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:1" },
+      request: "StartOrContinue"
+    },
+    {
+      ...attemptChoiceExpectedBehavior,
+      taskWork: {
+        absences: [],
+        results: [
+          { _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "A" }
+        ]
+      }
+    }
+  ]
+})
 
 /**
  * Alice stops after F2 while an already admitted continuation is held before intent;
@@ -2267,6 +2495,26 @@ export const postIntegrationAttemptChoiceRejectedAuthoredCassette: ScenarioCasse
       expected: { _tag: "Rejected", reason: "OutsidePreIntegrationPhase" },
       observedTaskRevision: changedAttemptRevision,
       requestNonce: "stop-after-integration-cutoff-A",
+      taskId: "A"
+    },
+    acceptedResultRestartsIntoIntegrationAuthoredCassette.story.at(terminalStoryItemOffset)
+  ]
+})
+
+/** Integration start removes Restart capability before any executor, tracker, Git, cleanup, or disposition call. */
+export const changedAttemptRestartPastIntegrationRejectedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
+  name: "Alice's Restart request is rejected after the exact integration cutoff",
+  story: [
+    ...acceptedResultRestartsIntoIntegrationAuthoredCassette.story.slice(0, terminalStoryItemOffset),
+    {
+      _tag: "OperatorRestartsAttempt",
+      attemptId: "attempt:A:0",
+      expected: { _tag: "Rejected", reason: "OutsidePreIntegrationPhase" },
+      observedTaskRevision: changedAttemptRevision,
+      requestNonce: "restart-after-integration-cutoff-A",
       taskId: "A"
     },
     acceptedResultRestartsIntoIntegrationAuthoredCassette.story.at(terminalStoryItemOffset)
@@ -3749,6 +3997,14 @@ type MaintainedAuthoredCassetteName =
   | "targetPromotionStaleBeforeCompareAndSet"
   | "targetPromotionLostResponseDiscoversCurrentCandidate"
   | "changedAttemptContinues"
+  | "changedAttemptRestartAfterSupersessionCrash"
+  | "changedAttemptRestartClaimUnavailable"
+  | "changedAttemptRestartFactsChanged"
+  | "changedAttemptRestartLateAccepted"
+  | "changedAttemptRestartPastIntegrationRejected"
+  | "changedAttemptRestartRemainsUnproved"
+  | "changedAttemptRestartsCleanly"
+  | "changedAttemptRestartWorktreeNotReady"
   | "changedAttemptChoiceRace"
   | "changedAgainAttemptRequiresNewChoice"
   | "changedAttemptStopLostThirdSuspension"
@@ -3803,6 +4059,14 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     targetPromotionLostResponseDiscoversCurrentCandidate:
       targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassette,
     changedAttemptContinues: changedAttemptContinuesAuthoredCassette,
+    changedAttemptRestartAfterSupersessionCrash: changedAttemptRestartAfterSupersessionCrashAuthoredCassette,
+    changedAttemptRestartClaimUnavailable: changedAttemptRestartClaimUnavailableAuthoredCassette,
+    changedAttemptRestartFactsChanged: changedAttemptRestartFactsChangedAuthoredCassette,
+    changedAttemptRestartLateAccepted: changedAttemptRestartLateAcceptedAuthoredCassette,
+    changedAttemptRestartPastIntegrationRejected: changedAttemptRestartPastIntegrationRejectedAuthoredCassette,
+    changedAttemptRestartRemainsUnproved: changedAttemptRestartRemainsUnprovedAuthoredCassette,
+    changedAttemptRestartsCleanly: changedAttemptRestartsCleanlyAuthoredCassette,
+    changedAttemptRestartWorktreeNotReady: changedAttemptRestartWorktreeNotReadyAuthoredCassette,
     changedAttemptChoiceRace: changedAttemptChoiceRaceAuthoredCassette,
     changedAgainAttemptRequiresNewChoice: changedAgainAttemptRequiresNewChoiceAuthoredCassette,
     changedAttemptStopLostThirdSuspension: changedAttemptStopLostThirdSuspensionAuthoredCassette,

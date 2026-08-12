@@ -70,6 +70,7 @@ import type {
   observeAttemptStoppageExecutor,
   recordStoppedAttemptClaimNoRelease
 } from "../../workflow/protocols/attempt-choice/stop.js"
+import type { advanceAttemptRestart } from "../../workflow/protocols/attempt-choice/restart.js"
 
 type FreshOperationProposal = Extract<
   FreshIdentityDeliveryProposal,
@@ -194,6 +195,7 @@ type EffectFunctionFailure<F> = F extends (...args: infer _Args) => Effect.Effec
 /** Exact typed protocol failures preserved by the action-coloured executor port. */
 export type DeliveryActionExecutionError =
   | DeliveryActionProtocolAdmissionMissing
+  | EffectFunctionFailure<typeof advanceAttemptRestart>
   | EffectFunctionFailure<typeof advanceAttemptStoppage>
   | EffectFunctionFailure<typeof observeAttemptStoppageExecutor>
   | EffectFunctionFailure<typeof recordStoppedAttemptClaimNoRelease>

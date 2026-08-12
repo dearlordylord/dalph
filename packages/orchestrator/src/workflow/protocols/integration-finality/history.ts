@@ -63,16 +63,20 @@ const exactPlanPrior = (
   position: JournalPosition
 ): boolean =>
   prior(records, position).some(({ event }) => {
+    const operation =
+      event._tag === "TaskAttemptPlanned"
+        ? event.operation
+        : event._tag === "PlannedAttemptReplaced"
+          ? event.successorPlan
+          : undefined
     if (
-      event._tag !== "TaskAttemptPlanned" ||
-      event.operation.plannedAttempt.attemptId !== claim.plannedAttempt.attemptId ||
-      !plannedTaskAttemptEquivalence(event.operation.plannedAttempt, claim.plannedAttempt)
+      operation === undefined ||
+      operation.plannedAttempt.attemptId !== claim.plannedAttempt.attemptId ||
+      !plannedTaskAttemptEquivalence(operation.plannedAttempt, claim.plannedAttempt)
     )
       return false
     const accepted = prior(records, position)
-    const originalIsCausal = causalPredecessorOperationIds(accepted, event.operation).has(
-      claim.originalClaim.operationId
-    )
+    const originalIsCausal = causalPredecessorOperationIds(accepted, operation).has(claim.originalClaim.operationId)
     const authorized = authorizedClaimForAttempt(accepted, claim.plannedAttempt)
     return originalIsCausal || (authorized !== undefined && isExactTaskClaim(authorized.claim, claim.originalClaim))
   })

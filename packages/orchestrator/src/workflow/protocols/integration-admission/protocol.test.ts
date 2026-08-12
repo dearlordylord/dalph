@@ -27,6 +27,7 @@ import { JournalRecord, JournalStore } from "../../../workflow-journal/store.js"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
   AcceptedResultNotDurable,
+  AcceptedResultSuppressedByRestart,
   deriveIntegrationAdmission,
   deriveUnqueuedAcceptedResults,
   integrationTargetSelectionLayer,
@@ -51,7 +52,8 @@ import {
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  attemptChoiceAppliedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -62,6 +64,7 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   taskTrackerReadIntent
 } from "../../registry/event.js"
+import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../attempt-choice/events.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -172,7 +175,11 @@ const beginRun = Effect.gen(function* () {
   )
 })
 
-const recordAcceptedTerminal = (attempt: PlannedTaskAttempt, result: AcceptedResult) =>
+const recordAcceptedTerminal = (
+  attempt: PlannedTaskAttempt,
+  result: AcceptedResult,
+  beforeTerminal: Effect.Effect<void> = Effect.void
+) =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
     const claim = claimFor(attempt)
@@ -222,6 +229,7 @@ const recordAcceptedTerminal = (attempt: PlannedTaskAttempt, result: AcceptedRes
         version: workflowJournalEventVersion
       })
     )
+    yield* beforeTerminal
     const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
     yield* journal.append(
       runId,
@@ -236,6 +244,44 @@ const recordAcceptedTerminal = (attempt: PlannedTaskAttempt, result: AcceptedRes
       })
     )
   })
+
+it.effect("preserves a late Accepted report after Restart without offering or recording P1 integration", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("A", 0)
+    const result = acceptedResult("a")
+    const requestId = AttemptChoiceRequestId.make({ nonce: "late-accepted-restart", runId })
+    yield* beginRun
+    const journal = yield* JournalStore
+    yield* recordAcceptedTerminal(
+      attempt,
+      result,
+      journal
+        .append(
+          runId,
+          attemptChoiceAppliedRecordKey(requestId),
+          AttemptChoiceAppliedEvent.make({
+            choice: "RestartTaskImplementation",
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            requestId,
+            subject: { observedTaskRevision: TaskRevision.make("revision-A-F2"), plannedAttempt: attempt },
+            version: workflowJournalEventVersion
+          })
+        )
+        .pipe(Effect.asVoid, Effect.orDie)
+    )
+
+    const records = yield* journal.read(runId)
+    expect(deriveUnqueuedAcceptedResults(records)).toEqual([])
+    const failure = yield* Effect.flip(queueAcceptedResultIntegrationResponsibility(attempt, result, integrationTarget))
+    expect(failure).toEqual(
+      new AcceptedResultSuppressedByRestart({ attemptId: attempt.attemptId, runId: attempt.runId })
+    )
+    expect((yield* journal.read(runId)).some(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toBe(
+      false
+    )
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
 
 it.effect("rejects a responsibility before the matching accepted terminal report is durable", () =>
   Effect.gen(function* () {

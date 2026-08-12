@@ -1,5 +1,6 @@
 import { Data } from "effect"
 import {
+  type IntegrationTarget,
   type TaskId,
   type TaskRevision,
   type PlannedAttemptExecutorCorrelation,
@@ -25,6 +26,32 @@ export type AcceptedPlannedAttemptExecutorProgress =
 
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{
+  AttemptRestartRequired: {
+    readonly integrationTarget: IntegrationTarget
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
+  AttemptRestartRejected: {
+    readonly reason:
+      | "CompletedDoesNotAuthorizeReplacement"
+      | "FailedDoesNotAuthorizeReplacement"
+      | "NewFingerprintChoiceRequired"
+  }
+  AttemptRestartWait: {
+    readonly reason:
+      | "ClaimAbsent"
+      | "ClaimForeign"
+      | "ClaimUnreadable"
+      | "ExecutorContradictory"
+      | "ExecutorRunning"
+      | "ExecutorUnavailable"
+      | "IntegrationTargetUnavailable"
+      | "OldWorktreeNotReady"
+      | "OldWorktreeUnreadable"
+      | "TargetHeadUnreadable"
+      | "TaskFactsUnreadable"
+      | "TaskNotEligible"
+  }
   AttemptStoppageRequired: {
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
@@ -117,6 +144,9 @@ export type PlannedAttemptExecutorDisposition =
           | "PlannedAttemptExecutorWorkTerminal"
           | "PlannedAttemptExecutorSuspensionRequested"
           | "AttemptStoppageRequired"
+          | "AttemptRestartRequired"
+          | "AttemptRestartRejected"
+          | "AttemptRestartWait"
           | "AttemptStoppageExecutorObservationRequired"
           | "AttemptStoppageWait"
           | "StoppedAttemptClaimNoReleaseRequired"
@@ -150,6 +180,9 @@ type WorkflowOperationDisposition = Exclude<
       | "PlannedAttemptExecutorWorkTerminal"
       | "PlannedAttemptExecutorSuspensionRequested"
       | "AttemptStoppageRequired"
+      | "AttemptRestartRequired"
+      | "AttemptRestartRejected"
+      | "AttemptRestartWait"
       | "AttemptStoppageExecutorObservationRequired"
       | "AttemptStoppageWait"
       | "StoppedAttemptClaimNoReleaseRequired"

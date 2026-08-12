@@ -31,6 +31,7 @@ import {
 
 export interface IntegrationHistoryIndexes {
   readonly acceptedExecutorResults: Map<AttemptId, AcceptedResult>
+  readonly acceptedExecutorResultPositions: Map<AttemptId, JournalPosition>
   readonly executorResponsibilitiesBegan: ReadonlyMap<
     AttemptId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
@@ -43,6 +44,7 @@ export interface IntegrationHistoryIndexes {
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>
   >
+  readonly restartChoicesAppliedAt: Map<AttemptId, JournalPosition>
   readonly integrationCandidateIntents: Map<
     string,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateConstructionIntended" }>
@@ -86,13 +88,17 @@ const invalidResponsibilityBeginning = (
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
   const accepted = indexes.acceptedExecutorResults.get(event.plannedAttempt.attemptId)
+  const acceptedAt = indexes.acceptedExecutorResultPositions.get(event.plannedAttempt.attemptId)
+  const restartAt = indexes.restartChoicesAppliedAt.get(event.plannedAttempt.attemptId)
   const executorResponsibility = indexes.executorResponsibilitiesBegan.get(event.plannedAttempt.attemptId)
-  return accepted === undefined ||
-    !acceptedResultEquivalence(accepted, event.acceptedResult) ||
-    executorResponsibility === undefined ||
-    !plannedTaskAttemptEquivalence(executorResponsibility.plannedAttempt, event.plannedAttempt)
-    ? `integration responsibility for attempt ${event.plannedAttempt.attemptId} has no prior matching accepted terminal result`
-    : undefined
+  return restartAt !== undefined && acceptedAt !== undefined && restartAt < acceptedAt
+    ? `integration responsibility for attempt ${event.plannedAttempt.attemptId} follows an Accepted result suppressed by prior Restart`
+    : accepted === undefined ||
+        !acceptedResultEquivalence(accepted, event.acceptedResult) ||
+        executorResponsibility === undefined ||
+        !plannedTaskAttemptEquivalence(executorResponsibility.plannedAttempt, event.plannedAttempt)
+      ? `integration responsibility for attempt ${event.plannedAttempt.attemptId} has no prior matching accepted terminal result`
+      : undefined
 }
 
 const invalidIntegrationStart = (

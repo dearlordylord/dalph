@@ -9,6 +9,11 @@ export const AuthoredContinueAttemptResult = Schema.Union([
   AuthoredAttemptChoiceRejection
 ])
 
+export const AuthoredRestartAttemptResult = Schema.Union([
+  Schema.TaggedStruct("Applied", {}),
+  AuthoredAttemptChoiceRejection
+])
+
 export const AuthoredStopAttemptResult = Schema.Union([
   Schema.TaggedStruct("Applied", {
     status: Schema.Literals([

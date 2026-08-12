@@ -774,6 +774,7 @@ type ActionMeaningTag = ProposalActionTag | DeliveryProposalIssue["transition"]
 const proposalActionLabels = {
   AcquireStartedIntegrationTarget: "Acquire the integration-target position for started integration",
   AcquireTaskClaim: "Ask the tracker to create the task claim",
+  AdvanceAttemptRestart: "Check current authority and atomically replace the exact changed attempt",
   AdvanceAttemptStoppage: "Advance the exact Stop decision for the planned attempt",
   CheckTaskClaim: "Check the tracker result for the accepted task-claim request",
   CommitFreshTaskClaimIntent: "Record intent to create the task claim",
@@ -1068,8 +1069,12 @@ type AttemptChoiceControlResult = Result.Result<AttemptChoiceApplicationResult, 
 
 const attemptChoiceDirectionFor = (
   item: AuthoredAttemptChoiceItem
-): "ContinueExistingAttempt" | "StopTaskImplementation" =>
-  item._tag === "OperatorContinuesAttempt" ? "ContinueExistingAttempt" : "StopTaskImplementation"
+): "ContinueExistingAttempt" | "RestartTaskImplementation" | "StopTaskImplementation" =>
+  item._tag === "OperatorContinuesAttempt"
+    ? "ContinueExistingAttempt"
+    : item._tag === "OperatorRestartsAttempt"
+      ? "RestartTaskImplementation"
+      : "StopTaskImplementation"
 
 const appliedAttemptChoiceMatches = (
   item: AuthoredAttemptChoiceItem,
@@ -1079,6 +1084,7 @@ const appliedAttemptChoiceMatches = (
   if (item.expected._tag !== "Applied") return false
   /* v8 ignore stop -- @preserve */
   if (item._tag === "OperatorContinuesAttempt") return result._tag === "ContinueApplied"
+  if (item._tag === "OperatorRestartsAttempt") return result._tag === "RestartApplied"
   return result._tag === "StopApplied" && result.status._tag === item.expected.status
 }
 
@@ -1440,6 +1446,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                       yield* Deferred.succeed(candidateOutcomeRecorded, undefined)
                     }
                     if (
+                      event._tag !== "PlannedAttemptReplaced" &&
                       event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" &&
                       event._tag !== "PlannedAttemptExecutorWorkReported"
                     ) {
@@ -1924,7 +1931,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             const applyAttemptChoice = (
               plannedAttempt: PlannedTaskAttempt,
               observedTaskRevision: TaskRevision,
-              choice: "ContinueExistingAttempt" | "StopTaskImplementation",
+              choice: "ContinueExistingAttempt" | "RestartTaskImplementation" | "StopTaskImplementation",
               nonce: string
             ) =>
               Effect.result(
@@ -1965,7 +1972,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 return yield* Effect.die(new Error(`authored attempt-choice query mismatch for ${item.requestNonce}`))
               }
               /* v8 ignore stop -- @preserve */
-              if (item._tag === "OperatorStopsAttempt") {
+              if (item._tag === "OperatorStopsAttempt" || item._tag === "OperatorRestartsAttempt") {
                 yield* Deferred.succeed(admittedContinuationChoiceApplied, undefined)
               }
             })
@@ -2273,6 +2280,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                   | "OperatorContinuesAttempt"
                   | "OperatorDirectsTaskClaimReacquisition"
                   | "OperatorRacesContinueAndStop"
+                  | "OperatorRestartsAttempt"
                   | "OperatorAwaitsPauseProgress"
                   | "OperatorStartsPauseObservation"
                   | "OperatorSubscribesToPauseObservation"
@@ -2295,6 +2303,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               "OperatorContinuesAttempt",
               "OperatorDirectsTaskClaimReacquisition",
               "OperatorRacesContinueAndStop",
+              "OperatorRestartsAttempt",
               "OperatorAwaitsPauseProgress",
               "OperatorStartsPauseObservation",
               "OperatorSubscribesToPauseObservation",
@@ -2323,6 +2332,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 OperatorContinuesAttempt: () => driveAttemptChoice,
                 OperatorDirectsTaskClaimReacquisition: () => driveClaimReacquisition,
                 OperatorRacesContinueAndStop: () => driveAttemptChoiceRace,
+                OperatorRestartsAttempt: () => driveAttemptChoice,
                 OperatorAwaitsPauseProgress: () => drivePauseProgressAwait,
                 OperatorStartsPauseObservation: () => drivePauseObservationStart,
                 OperatorSubscribesToPauseObservation: () => drivePauseObservationStart,
@@ -2471,7 +2481,13 @@ const runAuthoredScenarioCassetteWith = (request: {
         yield* Effect.raceFirst(
           cursor.awaitTerminalAssertions,
           Fiber.join(coordinator).pipe(
-            Effect.andThen(Effect.die("coordinator activation stopped before the authored terminal assertions"))
+            Effect.andThen(
+              Effect.flatMap(cursor.storyPosition, (storyPosition) =>
+                Effect.die(
+                  `coordinator activation stopped at story position ${storyPosition} before the authored terminal assertions`
+                )
+              )
+            )
           )
         )
         if (candidateTerminalEventTag !== undefined) {

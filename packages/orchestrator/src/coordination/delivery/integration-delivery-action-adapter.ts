@@ -53,6 +53,7 @@ type IntegrationTransition = Exclude<
   IdentityFreeWorkflowTransition,
   {
     readonly _tag:
+      | "AdvanceAttemptRestart"
       | "AdvanceAttemptStoppage"
       | "ContinuePlannedAttemptExecutorWork"
       | "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"

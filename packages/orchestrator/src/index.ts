@@ -36,6 +36,18 @@ export {
   StoppedAttemptClaimObservationMissing
 } from "./workflow/protocols/attempt-choice/stop.js"
 export {
+  PlannedAttemptReplacementWitness,
+  PlannedAttemptReplacedEvent
+} from "./workflow/protocols/attempt-choice/replacement-events.js"
+export {
+  advanceAttemptRestart,
+  type AttemptRestartAdvanceResult,
+  AttemptRestartAuthorityContradiction,
+  AttemptRestartChoiceContradiction,
+  type AttemptRestartPendingReason,
+  type AttemptRestartRejectedReason
+} from "./workflow/protocols/attempt-choice/restart.js"
+export {
   ControlDirection,
   ControlDirectionApplicationOrdinal,
   ControlDirectionAppliedEvent,
@@ -345,6 +357,7 @@ export {
   deterministicPlannedTaskAttemptLayer,
   freshOperationIdAllocatorLayer,
   OperationIdAllocator,
+  PlannedTaskAttemptOrdinal,
   PlannedTaskAttemptError,
   PlannedTaskAttemptPlanner
 } from "./workflow/protocols/task-attempt-planning/plan.js"
@@ -589,6 +602,7 @@ export {
   plannedAttemptExecutorResponsibilityForReport,
   PlannedAttemptExecutorWorkReported,
   PlannedAttemptExecutorWorkResponsibilityBegan,
+  PlannedAttemptReplaced,
   PlannedAttemptWorktreeObserved,
   TargetLineageObserved,
   presentWorkflowOccurrence,

@@ -12,6 +12,7 @@ import {
   AuthoredTaskWorkResult,
   type AuthoredTaskWorkResult as TaskWorkResult
 } from "./authored-domain.js"
+import { taskWorkResultFor } from "./authored-task-work-result.js"
 
 export class AuthoredCassetteBehaviorMismatch extends Schema.TaggedError<AuthoredCassetteBehaviorMismatch>()(
   "AuthoredCassetteBehaviorMismatch",
@@ -134,6 +135,16 @@ const protocolEvidenceFor = (
       {
         _tag: "AttemptImplementationAbandoned",
         attemptId: event.subject.plannedAttempt.attemptId,
+        taskId: event.subject.plannedAttempt.taskId
+      }
+    ]
+  }
+  if (event._tag === "PlannedAttemptReplaced") {
+    return [
+      {
+        _tag: "PlannedAttemptReplaced",
+        priorAttemptId: event.subject.plannedAttempt.attemptId,
+        successorAttemptId: event.successorPlan.plannedAttempt.attemptId,
         taskId: event.subject.plannedAttempt.taskId
       }
     ]
@@ -338,21 +349,6 @@ const targetPromotionEvidenceFor = (
   )
 }
 
-const taskWorkResultFor = (
-  event: JournalRecord["event"],
-  taskByAttempt: ReadonlyMap<AttemptId, TaskId>
-): ReadonlyArray<TaskWorkResult> => {
-  if (event._tag !== "PlannedAttemptExecutorWorkReported" || event.report._tag !== "Terminal") return []
-  const taskId = Option.getOrThrow(Option.fromUndefinedOr(taskByAttempt.get(event.report.correlation.attemptId)))
-  return [
-    event.report.result._tag === "Accepted"
-      ? { _tag: "PlannedWorkForTaskAccepted", commit: event.report.result.acceptedResult.commit, taskId }
-      : event.report.result._tag === "Completed"
-        ? { _tag: "PlannedWorkForTaskCompleted", taskId }
-        : { _tag: "PlannedWorkForTaskFailed", taskId }
-  ]
-}
-
 const completeObservedBehavior = (records: ReadonlyArray<JournalRecord>): CompleteAuthoredObservedBehavior => {
   const plannedAttemptByGitOperation = new Map(
     records.flatMap(({ event }) =>
@@ -367,7 +363,9 @@ const completeObservedBehavior = (records: ReadonlyArray<JournalRecord>): Comple
     records.flatMap(({ event }) =>
       event._tag === "TaskAttemptPlanned"
         ? [[event.operation.plannedAttempt.attemptId, event.operation.plannedAttempt.taskId] as const]
-        : []
+        : event._tag === "PlannedAttemptReplaced"
+          ? [[event.successorPlan.plannedAttempt.attemptId, event.successorPlan.plannedAttempt.taskId] as const]
+          : []
     )
   )
   const plannedWorkUndertakenFor = [

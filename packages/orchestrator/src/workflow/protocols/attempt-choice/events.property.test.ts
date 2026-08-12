@@ -29,7 +29,11 @@ it("round-trips every generated applied attempt choice through the journal codec
     fc.asyncProperty(
       identityText,
       identityText,
-      fc.constantFrom("ContinueExistingAttempt" as const, "StopTaskImplementation" as const),
+      fc.constantFrom(
+        "ContinueExistingAttempt" as const,
+        "RestartTaskImplementation" as const,
+        "StopTaskImplementation" as const
+      ),
       async (requestIdentity, subjectIdentity, choice) => {
         const plannedAttempt = PlannedTaskAttempt.make({
           attemptId: AttemptId.make(`attempt-${subjectIdentity}`),

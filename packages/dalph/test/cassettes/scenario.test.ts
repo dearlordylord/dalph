@@ -106,6 +106,14 @@ import {
   changedAgainAttemptRequiresNewChoiceAuthoredCassette,
   changedAttemptChoiceRaceAuthoredCassette,
   changedAttemptContinuesAuthoredCassette,
+  changedAttemptRestartAfterSupersessionCrashAuthoredCassette,
+  changedAttemptRestartClaimUnavailableAuthoredCassette,
+  changedAttemptRestartFactsChangedAuthoredCassette,
+  changedAttemptRestartLateAcceptedAuthoredCassette,
+  changedAttemptRestartPastIntegrationRejectedAuthoredCassette,
+  changedAttemptRestartRemainsUnprovedAuthoredCassette,
+  changedAttemptRestartsCleanlyAuthoredCassette,
+  changedAttemptRestartWorktreeNotReadyAuthoredCassette,
   changedAttemptStopLostThirdSuspensionAuthoredCassette,
   changedAttemptStopRemainsUnprovedAuthoredCassette,
   changedAttemptStopsAndReleasesAuthoredCassette,
@@ -455,6 +463,126 @@ it.effect("records both task fingerprints when Alice continues the exact attempt
     expect(applied.subject.observedTaskRevision).not.toBe(applied.subject.plannedAttempt.taskRevision)
     const recorded = yield* projectRecordedCassette(run.records)
     expectRecordedRoundTrip(run.records, recorded)
+  })
+)
+
+it.effect("records one atomic P1 to P2 replacement before ordinary clean successor work", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(changedAttemptRestartsCleanlyAuthoredCassette)
+    const replacement = run.records.find(({ event }) => event._tag === "PlannedAttemptReplaced")?.event
+    const restart = run.records.find(
+      ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
+    )?.event
+    if (replacement?._tag !== "PlannedAttemptReplaced") return yield* Effect.die("missing planned-attempt replacement")
+    if (restart?._tag !== "AttemptChoiceApplied") return yield* Effect.die("missing applied Restart")
+
+    expect(replacement.subject.plannedAttempt.attemptId).toBe("attempt:A:0")
+    expect(replacement.successorPlan.plannedAttempt).toMatchObject({
+      attemptId: "attempt:A:1",
+      baseSha: "2222222222222222222222222222222222222222",
+      branch: "refs/heads/dalph/attempt-A-1",
+      taskRevision: restart.subject.observedTaskRevision,
+      worktree: "/dalph/cassettes/attempt-A-1"
+    })
+    expect(run.records.filter(({ event }) => event._tag === "PlannedAttemptReplaced")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
+    const recorded = yield* projectRecordedCassette(run.records)
+    expectRecordedRoundTrip(run.records, recorded)
+  })
+)
+
+it.effect("reconstructs P2 after replacement and never allocates P3", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(changedAttemptRestartAfterSupersessionCrashAuthoredCassette)
+    const replacements = run.records.flatMap(({ event }) => (event._tag === "PlannedAttemptReplaced" ? [event] : []))
+
+    expect(run.activationOrdinals).toEqual([1, 2, 3])
+    expect(replacements).toHaveLength(1)
+    expect(replacements[0]?.successorPlan.plannedAttempt.attemptId).toBe("attempt:A:1")
+    expect(run.records.some(({ event }) => JSON.stringify(event).includes("attempt:A:2"))).toBe(false)
+    expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
+  })
+)
+
+it.effect("records no P2 when fresh restart authority is changed, unreadable, or non-ready", () =>
+  Effect.gen(function* () {
+    for (const cassette of [
+      changedAttemptRestartFactsChangedAuthoredCassette,
+      changedAttemptRestartClaimUnavailableAuthoredCassette,
+      changedAttemptRestartWorktreeNotReadyAuthoredCassette
+    ]) {
+      const run = yield* runAuthoredScenarioCassette(cassette)
+      expect(run.records.filter(({ event }) => event._tag === "PlannedAttemptReplaced")).toHaveLength(0)
+      expect(run.records.filter(({ event }) => event._tag === "TaskClaimReleaseIntended")).toHaveLength(0)
+      expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
+    }
+  })
+)
+
+it.effect("keeps Restart unproved while P1 is Running and mutates no claim or worktree", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(changedAttemptRestartRemainsUnprovedAuthoredCassette)
+    const restartAt = run.records.findIndex(
+      ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
+    )
+    const laterCommands = run.records
+      .slice(restartAt + 1)
+      .flatMap(({ event }) => (event._tag === "PlannedAttemptExecutorCommandIntended" ? [event.command] : []))
+
+    expect(restartAt).toBeGreaterThan(0)
+    expect(laterCommands).toEqual(["StartOrContinue", "Suspend"])
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+          event.observation._tag === "ExactExecutorReport" &&
+          event.observation.report._tag === "Running"
+      )
+    ).toBe(true)
+    expect(run.records.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
+    expect(run.records.some(({ event }) => event._tag === "TaskClaimReleaseIntended")).toBe(false)
+    expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
+  })
+)
+
+it.effect("preserves late Accepted evidence without P1 integration and still replaces P1 after fresh checks", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(changedAttemptRestartLateAcceptedAuthoredCassette)
+    const restartAt = run.records.findIndex(
+      ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
+    )
+    const acceptedAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" &&
+        event.report._tag === "Terminal" &&
+        event.report.result._tag === "Accepted"
+    )
+    const replacementAt = run.records.findIndex(({ event }) => event._tag === "PlannedAttemptReplaced")
+
+    expect(acceptedAt).toBeGreaterThan(restartAt)
+    expect(replacementAt).toBeGreaterThan(acceptedAt)
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "IntegrationResponsibilityBegan" && event.plannedAttempt.attemptId === "attempt:A:0"
+      )
+    ).toBe(false)
+    expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
+  })
+)
+
+it.effect("rejects Restart after integration without appending a choice or crossing another boundary", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(changedAttemptRestartPastIntegrationRejectedAuthoredCassette)
+
+    expect(run.records.some(({ event }) => event._tag === "IntegrationStarted")).toBe(true)
+    expect(
+      run.records.some(
+        ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
+      )
+    ).toBe(false)
+    expect(run.records.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
+    expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
   })
 )
 
@@ -6541,6 +6669,7 @@ it.effect(
         IntegrationResponsibilityBegan: true,
         IntegrationStarted: true,
         PlannedAttemptContinuationAuthorized: true,
+        PlannedAttemptReplaced: true,
         IntegrationCandidateAgentReported: true,
         IntegrationCandidateConstructed: true,
         IntegrationCandidateConstructionIntended: true,
@@ -6629,16 +6758,75 @@ it.effect(
         runAuthoredScenarioCassette(changedAttemptStopsWithForeignClaimAuthoredCassette)
       ])
       const continuationRun = yield* runAuthoredScenarioCassette(coordinatorProcessDeathContinuesAuthoredCassette)
-      const [stoppageRecorded, noReleaseRecorded, foreignNoReleaseRecorded, continuationRecorded] = yield* Effect.all([
-        projectRecordedCassette(stoppageRun.records),
-        projectRecordedCassette(noReleaseRun.records),
-        projectRecordedCassette(foreignNoReleaseRun.records),
-        projectRecordedCassette(continuationRun.records)
-      ])
+      const replacementRun = yield* runAuthoredScenarioCassette(changedAttemptRestartsCleanlyAuthoredCassette)
+      const [stoppageRecorded, noReleaseRecorded, foreignNoReleaseRecorded, continuationRecorded, replacementRecorded] =
+        yield* Effect.all([
+          projectRecordedCassette(stoppageRun.records),
+          projectRecordedCassette(noReleaseRun.records),
+          projectRecordedCassette(foreignNoReleaseRun.records),
+          projectRecordedCassette(continuationRun.records),
+          projectRecordedCassette(replacementRun.records)
+        ])
       expectRecordedRoundTrip(stoppageRun.records, stoppageRecorded)
       expectRecordedRoundTrip(noReleaseRun.records, noReleaseRecorded)
       expectRecordedRoundTrip(foreignNoReleaseRun.records, foreignNoReleaseRecorded)
       expectRecordedRoundTrip(continuationRun.records, continuationRecorded)
+      expectRecordedRoundTrip(replacementRun.records, replacementRecorded)
+      const replacementEntry = replacementRecorded.entries.find((entry) => entry._tag === "PlannedAttemptReplaced")
+      if (replacementEntry?._tag !== "PlannedAttemptReplaced") {
+        return yield* Effect.die("replacement alpha-renaming fixture requires PlannedAttemptReplaced")
+      }
+      const replacementOperationIds = Array.from(
+        new Set([
+          replacementEntry.successorPlan.operationId,
+          ...replacementEntry.successorPlan.predecessorOperationIds,
+          replacementEntry.witness.claimObservationOperationId,
+          replacementEntry.witness.expectedClaim.operationId,
+          replacementEntry.witness.graphObservationOperationId,
+          replacementEntry.witness.oldWorktreeObservationOperationId,
+          replacementEntry.witness.specificationObservationOperationId,
+          replacementEntry.witness.targetLineageObservationOperationId
+        ])
+      )
+      const replacementRenaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
+        attemptIds: [
+          { from: replacementEntry.subject.plannedAttempt.attemptId, to: "renamed-replaced-attempt" },
+          { from: replacementEntry.successorPlan.plannedAttempt.attemptId, to: "renamed-successor-attempt" }
+        ],
+        claimTokens: [{ from: replacementEntry.witness.expectedClaim.token, to: "renamed-replacement-claim" }],
+        integrationCandidateIds: [],
+        integrationCandidateResourceLocators: [],
+        integrationSessionIds: [],
+        operationIds: replacementOperationIds.map((operationId, ordinal) => ({
+          from: operationId,
+          to: `renamed-replacement-operation:${ordinal}`
+        })),
+        runIds: [{ from: replacementRun.runId, to: "renamed-replacement-run" }],
+        taskBranchRefs: [
+          { from: replacementEntry.subject.plannedAttempt.branch, to: "refs/heads/dalph/renamed-replaced-attempt" },
+          {
+            from: replacementEntry.successorPlan.plannedAttempt.branch,
+            to: "refs/heads/dalph/renamed-successor-attempt"
+          }
+        ],
+        worktreeLocators: [
+          { from: replacementEntry.subject.plannedAttempt.worktree, to: "/dalph/renamed-replaced-attempt" },
+          { from: replacementEntry.successorPlan.plannedAttempt.worktree, to: "/dalph/renamed-successor-attempt" }
+        ]
+      })
+      const renamedReplacement = yield* renameRecordedCassette(replacementRecorded, replacementRenaming)
+      const encodedReplacement = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(renamedReplacement))
+      for (const { from, to } of [
+        ...replacementRenaming.attemptIds,
+        ...replacementRenaming.claimTokens,
+        ...replacementRenaming.operationIds,
+        ...replacementRenaming.runIds,
+        ...replacementRenaming.taskBranchRefs,
+        ...replacementRenaming.worktreeLocators
+      ]) {
+        expect(encodedReplacement).not.toContain(`"${from}"`)
+        expect(encodedReplacement).toContain(`"${to}"`)
+      }
       const [renamedStoppage, renamedNoRelease, renamedForeignNoRelease] = yield* Effect.all([
         renameRecordedCassette(stoppageRecorded, renaming),
         renameRecordedCassette(noReleaseRecorded, renaming),
@@ -6880,6 +7068,7 @@ it.effect(
             ...noReleaseRecorded.entries,
             ...foreignNoReleaseRecorded.entries,
             ...continuationRecorded.entries,
+            ...replacementRecorded.entries,
             ...executorObservationVariants.entries,
             ...completionEntries
           ].map(({ _tag }) => _tag)

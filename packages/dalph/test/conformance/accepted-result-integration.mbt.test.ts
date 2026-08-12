@@ -21,6 +21,9 @@ import {
 import {
   CandidateContinuationLimit,
   CandidateCorrectionLimit,
+  AttemptChoiceAppliedEvent,
+  AttemptChoiceRequestId,
+  attemptChoiceAppliedRecordKey,
   continueIntegrationCandidateConstruction,
   deriveIntegrationAdmission,
   deriveIntegrationCandidateConstruction,
@@ -103,6 +106,7 @@ const correctionLimit = CandidateCorrectionLimit.make(1)
 const continuationLimit = CandidateContinuationLimit.make(2)
 const verificationPlanFor = (id: bigint) =>
   TargetVerificationPlan.make({ planId: TargetVerificationPlanId.make(`model-public-plan-${id}`), target })
+const restartRequestId = AttemptChoiceRequestId.make({ nonce: "accepted-result-model-restart", runId })
 
 const commitOf = (value: bigint | number): GitCommitSha =>
   GitCommitSha.make(BigInt(value).toString(16).padStart(40, "0"))
@@ -133,11 +137,14 @@ const acceptedResultOf = (id: bigint): AcceptedResult =>
   })
 
 const SpecResult = Schema.Struct({
+  acceptedEvidencePreserved: Schema.Boolean,
   acceptedResultCommit: ITFBigInt,
   candidateJournalPosition: ITFBigInt,
   continuationCount: ITFBigInt,
   correctionCount: ITFBigInt,
   expectedTargetHead: ITFBigInt,
+  integrationResponsibilityCount: ITFBigInt,
+  integrationResponsibilityRecorded: Schema.Boolean,
   integrationTarget: ITFBigInt,
   integrationSession: ITFBigInt,
   observedFirstParent: ITFBigInt,
@@ -178,7 +185,8 @@ const SpecResult = Schema.Struct({
   promotionResponseAmbiguous: Schema.Boolean,
   promotionCompareAndSetRequested: Schema.Boolean,
   promotionForceRequested: Schema.Boolean,
-  promotionEquivalentContentAccepted: Schema.Boolean
+  promotionEquivalentContentAccepted: Schema.Boolean,
+  restartChoiceCommittedBeforeTerminal: Schema.Boolean
 })
 
 const SpecProjection = Schema.Struct({
@@ -207,6 +215,7 @@ const numericCommit = (sha: GitCommitSha | undefined): bigint => (sha === undefi
 type Phase =
   | "NoAcceptedResult"
   | "AcceptedResult"
+  | "LateAcceptedEvidence"
   | "Queued"
   | "Started"
   | "DependencyWait"
@@ -262,6 +271,7 @@ type VerificationRequest = {
 }
 
 type ModelResult = {
+  acceptedEvidencePreserved: boolean
   phase: Phase
   queuePosition: bigint
   preIntegrationCancellation: boolean
@@ -271,6 +281,8 @@ type ModelResult = {
   candidateJournalPosition: bigint
   expectedTargetHead: bigint
   integrationTarget: bigint
+  integrationResponsibilityCount: bigint
+  integrationResponsibilityRecorded: boolean
   acceptedResultCommit: bigint
   observedFirstParent: bigint
   observedSecondParent: bigint
@@ -300,9 +312,11 @@ type ModelResult = {
   promotionCompareAndSetRequested: boolean
   promotionForceRequested: boolean
   promotionEquivalentContentAccepted: boolean
+  restartChoiceCommittedBeforeTerminal: boolean
 }
 
 const initialModelResult = (id: bigint): ModelResult => ({
+  acceptedEvidencePreserved: false,
   phase: "NoAcceptedResult",
   queuePosition: 0n,
   preIntegrationCancellation: false,
@@ -312,6 +326,8 @@ const initialModelResult = (id: bigint): ModelResult => ({
   candidateJournalPosition: 0n,
   expectedTargetHead: 0n,
   integrationTarget: 1n,
+  integrationResponsibilityCount: 0n,
+  integrationResponsibilityRecorded: false,
   acceptedResultCommit: id + 20n,
   observedFirstParent: 0n,
   observedSecondParent: 0n,
@@ -348,7 +364,8 @@ const initialModelResult = (id: bigint): ModelResult => ({
   promotionResponseAmbiguous: false,
   promotionCompareAndSetRequested: false,
   promotionForceRequested: false,
-  promotionEquivalentContentAccepted: false
+  promotionEquivalentContentAccepted: false,
+  restartChoiceCommittedBeforeTerminal: false
 })
 
 const phaseFor = (
@@ -396,6 +413,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     gitReadFailsOne: {},
     gitReadFailsTwo: {},
     init: {},
+    observeAppliedRestartBeforeAcceptedOne: {},
     observeExactCandidateOne: {},
     observeExactCandidateTwo: {},
     observeInvalidCandidateOne: {},
@@ -500,14 +518,23 @@ const acceptedResultIntegrationDriver = defineDriver(
       modelTargetReacquisitionRequired = false
       modelResults = new Map([...attempts.keys()].map((id) => [id, initialModelResult(id)]))
     }
+    const modelObserveAppliedRestartBeforeAccepted = (id: bigint): void => {
+      updateModelResult(id, (result) => ({ ...result, restartChoiceCommittedBeforeTerminal: true }))
+    }
     const modelAcceptResult = (id: bigint): void => {
-      updateModelResult(id, (result) => ({ ...result, phase: "AcceptedResult" }))
+      updateModelResult(id, (result) => ({
+        ...result,
+        acceptedEvidencePreserved: true,
+        phase: result.restartChoiceCommittedBeforeTerminal ? "LateAcceptedEvidence" : "AcceptedResult"
+      }))
     }
     const modelQueueAcceptedResult = (id: bigint): void => {
       const queuePosition = modelNextJournalPosition
       modelNextJournalPosition += 1n
       updateModelResult(id, (result) => ({
         ...result,
+        integrationResponsibilityCount: 1n,
+        integrationResponsibilityRecorded: true,
         phase: "Queued",
         queuePosition,
         preIntegrationCancellation: true
@@ -586,7 +613,10 @@ const acceptedResultIntegrationDriver = defineDriver(
     const modelRecoverCoordinator = (): void => {
       const terminalPromotionPhases = new Set<Phase>(["PromotionSucceeded", "PromotionStale", "PromotionExhausted"])
       const requiresFreshAuthorityFacts = [...modelResults.values()].some(
-        (result) => result.phase !== "NoAcceptedResult" && !terminalPromotionPhases.has(result.phase)
+        (result) =>
+          result.phase !== "NoAcceptedResult" &&
+          result.phase !== "LateAcceptedEvidence" &&
+          !terminalPromotionPhases.has(result.phase)
       )
       updateModelResults((result) => ({
         ...result,
@@ -1228,6 +1258,27 @@ const acceptedResultIntegrationDriver = defineDriver(
         }
         modelAcceptResult(id)
       })
+    const observeAppliedRestartBeforeAccepted = (id: bigint) =>
+      append
+        .append(
+          runId,
+          attemptChoiceAppliedRecordKey(restartRequestId),
+          AttemptChoiceAppliedEvent.make({
+            choice: "RestartTaskImplementation",
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            requestId: restartRequestId,
+            subject: {
+              observedTaskRevision: TaskRevision.make(`accepted-result-integration-revision-${id}-changed`),
+              plannedAttempt: idFor(id)
+            },
+            version: workflowJournalEventVersion
+          })
+        )
+        .pipe(
+          Effect.tap(() => Effect.sync(() => modelObserveAppliedRestartBeforeAccepted(id))),
+          Effect.asVoid
+        )
     const gitReadFails = (id: bigint) =>
       Effect.gen(function* () {
         const state = deriveIntegrationCandidateConstruction(records, responsibilityFor(id))
@@ -1763,13 +1814,29 @@ const acceptedResultIntegrationDriver = defineDriver(
             .toSorted((left, right) => left - right)
           const results = new Map(
             [...attempts].map(([id, attempt]) => {
-              const accepted = records.some(
+              const acceptedRecord = records.find(
                 ({ event }) =>
                   event._tag === "PlannedAttemptExecutorWorkReported" &&
                   event.report._tag === "Terminal" &&
                   event.report.result._tag === "Accepted" &&
                   event.report.correlation.attemptId === attempt.attemptId
               )
+              const accepted = acceptedRecord !== undefined
+              const restartRecord = records.find(
+                ({ event }) =>
+                  event._tag === "AttemptChoiceApplied" &&
+                  event.choice === "RestartTaskImplementation" &&
+                  event.subject.plannedAttempt.attemptId === attempt.attemptId
+              )
+              const restartChoiceCommittedBeforeTerminal =
+                restartRecord !== undefined &&
+                acceptedRecord !== undefined &&
+                restartRecord.position < acceptedRecord.position
+              const integrationResponsibilityCount = records.filter(
+                ({ event }) =>
+                  event._tag === "IntegrationResponsibilityBegan" &&
+                  event.plannedAttempt.attemptId === attempt.attemptId
+              ).length
               const queued = currentAdmission.responsibilities.find(
                 (responsibility) => responsibility.plannedAttempt.attemptId === attempt.attemptId
               )
@@ -1859,7 +1926,14 @@ const acceptedResultIntegrationDriver = defineDriver(
                   concretePromotionProjectionFor(
                     id,
                     queued === undefined ? false : snapshot.heldResponsibilityPositions.has(queued.queuedAt)
-                  )
+                  ),
+                  {
+                    acceptedEvidencePreserved: accepted,
+                    integrationResponsibilityCount: BigInt(integrationResponsibilityCount),
+                    integrationResponsibilityRecorded: integrationResponsibilityCount === 1,
+                    phase: restartChoiceCommittedBeforeTerminal ? "LateAcceptedEvidence" : modelResultFor(id).phase,
+                    restartChoiceCommittedBeforeTerminal
+                  }
                 )
               ] as const
             })
@@ -1899,6 +1973,7 @@ const acceptedResultIntegrationDriver = defineDriver(
           promotionReadAccounting = "Count"
           independentTargetTwo = false
         }),
+      observeAppliedRestartBeforeAcceptedOne: () => observeAppliedRestartBeforeAccepted(1n),
       observeExactCandidateOne: () => observe(1n, true),
       observeExactCandidateTwo: () => observe(2n, true),
       observeInvalidCandidateOne: () => observe(1n, false),
@@ -2016,11 +2091,14 @@ quintIt(
           const actual = implementation.results.get(id)
           return (
             actual !== undefined &&
+            expected.acceptedEvidencePreserved === actual.acceptedEvidencePreserved &&
             expected.acceptedResultCommit === actual.acceptedResultCommit &&
             expected.candidateJournalPosition === actual.candidateJournalPosition &&
             expected.continuationCount === actual.continuationCount &&
             expected.correctionCount === actual.correctionCount &&
             expected.expectedTargetHead === actual.expectedTargetHead &&
+            expected.integrationResponsibilityCount === actual.integrationResponsibilityCount &&
+            expected.integrationResponsibilityRecorded === actual.integrationResponsibilityRecorded &&
             expected.integrationTarget === actual.integrationTarget &&
             expected.integrationSession === actual.integrationSession &&
             expected.observedFirstParent === actual.observedFirstParent &&
@@ -2059,7 +2137,8 @@ quintIt(
             expected.promotionResponseAmbiguous === actual.promotionResponseAmbiguous &&
             expected.promotionCompareAndSetRequested === actual.promotionCompareAndSetRequested &&
             expected.promotionForceRequested === actual.promotionForceRequested &&
-            expected.promotionEquivalentContentAccepted === actual.promotionEquivalentContentAccepted
+            expected.promotionEquivalentContentAccepted === actual.promotionEquivalentContentAccepted &&
+            expected.restartChoiceCommittedBeforeTerminal === actual.restartChoiceCommittedBeforeTerminal
           )
         })
     )

@@ -90,6 +90,25 @@ export class AcceptedResultNotDurable extends Schema.TaggedError<AcceptedResultN
   { attemptId: AttemptId, runId: RunId }
 ) {}
 
+/** An Accepted result published after exact Restart is preserved as evidence but never enters integration. */
+export class AcceptedResultSuppressedByRestart extends Schema.TaggedError<AcceptedResultSuppressedByRestart>()(
+  "AcceptedResultSuppressedByRestart",
+  { attemptId: AttemptId, runId: RunId }
+) {}
+
+const restartChoiceCommittedBefore = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  terminalAt: JournalPosition
+): boolean =>
+  records.some(
+    ({ event, position }) =>
+      position < terminalAt &&
+      event._tag === "AttemptChoiceApplied" &&
+      event.choice === "RestartTaskImplementation" &&
+      plannedTaskAttemptEquivalence(event.subject.plannedAttempt, plannedAttempt)
+  )
+
 const hasDurableAcceptedResult = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
@@ -171,7 +190,7 @@ export const deriveUnqueuedAcceptedResults = (
       return []
     }
     const plannedAttempt = executorResponsibilities.get(event.report.correlation.attemptId)
-    return plannedAttempt === undefined
+    return plannedAttempt === undefined || restartChoiceCommittedBefore(records, plannedAttempt, record.position)
       ? []
       : [
           UnqueuedAcceptedResult.make({
@@ -246,6 +265,24 @@ export const queueAcceptedResultIntegrationResponsibility = Effect.fn(
 )(function* (plannedAttempt: PlannedTaskAttempt, acceptedResult: AcceptedResult, integrationTarget: IntegrationTarget) {
   const journal = yield* InRunJournal
   const records = yield* journal.read(plannedAttempt.runId)
+  const acceptedTerminal = records.find(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" &&
+      event.report._tag === "Terminal" &&
+      event.report.result._tag === "Accepted" &&
+      event.report.correlation.attemptId === plannedAttempt.attemptId &&
+      event.report.correlation.runId === plannedAttempt.runId &&
+      acceptedResultEquivalence(event.report.result.acceptedResult, acceptedResult)
+  )
+  if (
+    acceptedTerminal !== undefined &&
+    restartChoiceCommittedBefore(records, plannedAttempt, acceptedTerminal.position)
+  ) {
+    return yield* new AcceptedResultSuppressedByRestart({
+      attemptId: plannedAttempt.attemptId,
+      runId: plannedAttempt.runId
+    })
+  }
   if (!hasDurableAcceptedResult(records, plannedAttempt, acceptedResult)) {
     return yield* new AcceptedResultNotDurable({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
   }

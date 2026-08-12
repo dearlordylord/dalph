@@ -74,7 +74,8 @@ import {
   CompletionTaskRequestLookup,
   CompletionTaskRequestOrdinal,
   TargetPromotionGitReadObservation,
-  PlannedAttemptContinuationWitness
+  PlannedAttemptContinuationWitness,
+  PlannedAttemptReplacementWitness
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -95,6 +96,13 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     occurrenceClassification: Schema.Literal("InitiatedAction"),
     requestId: AttemptChoiceRequestId,
     subject: AttemptChoiceSubject
+  },
+  PlannedAttemptReplaced: {
+    ...initiatedByCoordinator,
+    requestId: AttemptChoiceRequestId,
+    subject: AttemptChoiceSubject,
+    successorPlan: WorkflowOperation.cases.RecordTaskAttemptPlan,
+    witness: PlannedAttemptReplacementWitness
   },
   AttemptStoppageIntended: {
     ...initiatedByCoordinator,
@@ -412,7 +420,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Incrementing it does not promise
  * backward compatibility until the project owner removes this comment.
  */
-const currentRecordedCassetteVersion = 9
+const currentRecordedCassetteVersion = 10
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

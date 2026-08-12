@@ -34,7 +34,11 @@ import {
   JournalPosition,
   OperationId
 } from "@dalph/orchestrator"
-import { AuthoredContinueAttemptResult, AuthoredStopAttemptResult } from "./authored-attempt-choice.js"
+import {
+  AuthoredContinueAttemptResult,
+  AuthoredRestartAttemptResult,
+  AuthoredStopAttemptResult
+} from "./authored-attempt-choice.js"
 import { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
 export { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
 
@@ -824,6 +828,14 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
     stopRequestNonce: Schema.NonEmptyString,
     taskId: TaskId
   },
+  /** Alice applies Restart for one immutable changed attempt and observes the typed public result. */
+  OperatorRestartsAttempt: {
+    attemptId: AttemptId,
+    expected: AuthoredRestartAttemptResult,
+    observedTaskRevision: TaskRevision,
+    requestNonce: Schema.NonEmptyString,
+    taskId: TaskId
+  },
   /** Alice applies Stop for one immutable attempt and observes its current durable phase. */
   OperatorStopsAttempt: {
     attemptId: AttemptId,
@@ -877,6 +889,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "OperatorContinuesAttempt",
     "OperatorDirectsTaskClaimReacquisition",
     "OperatorRacesContinueAndStop",
+    "OperatorRestartsAttempt",
     "OperatorStopsAttempt",
     "RunCoordinator",
     "SetTaskExecutionCapacity"
@@ -1123,7 +1136,7 @@ const heldLaterActivationGraphSelectionOffset = 7
 const heldLaterActivationGraphReturnOffset = 8
 const heldSpecificationSelectionOffset = 9
 const heldSpecificationReturnOffset = 10
-const heldStopOffset = 11
+const heldAttemptChoiceOffset = 11
 const heldExecutorOutcomeOffset = 12
 
 type AuthoredStory = (typeof AuthoredScenarioCassetteShape.Type)["story"]
@@ -1189,21 +1202,40 @@ const exactHeldSpecificationAt = (
     : undefined
 }
 
-const exactHeldStopAt = (
+type HeldAttemptChoice = Extract<
+  AuthoredCassetteStoryItem,
+  { readonly _tag: "OperatorRestartsAttempt" | "OperatorStopsAttempt" }
+>
+
+const isHeldAttemptChoice = (choice: AuthoredCassetteStoryItem | undefined): choice is HeldAttemptChoice =>
+  choice?._tag === "OperatorStopsAttempt" || choice?._tag === "OperatorRestartsAttempt"
+
+const heldAttemptChoiceStatusMatches = (choice: HeldAttemptChoice): boolean => {
+  if (choice._tag === "OperatorRestartsAttempt") return true
+  return choice.expected._tag === "Applied" && choice.expected.status === "AwaitingQuiescence"
+}
+
+const heldAttemptChoiceMatches = (
+  choice: HeldAttemptChoice,
+  hold: AdmittedContinuationHold,
+  specification: typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type
+): boolean =>
+  [
+    choice.attemptId === hold.attemptId,
+    choice.taskId === hold.taskId,
+    choice.expected._tag === "Applied",
+    heldAttemptChoiceStatusMatches(choice),
+    choice.observedTaskRevision === makeTaskWorkSpecification(specification).fingerprint
+  ].every(Boolean)
+
+const exactHeldAttemptChoiceAt = (
   story: AuthoredStory,
   holdIndex: number,
   hold: AdmittedContinuationHold,
   specification: typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type
 ): boolean => {
-  const stop = story[holdIndex + heldStopOffset]
-  return (
-    stop?._tag === "OperatorStopsAttempt" &&
-    stop.attemptId === hold.attemptId &&
-    stop.taskId === hold.taskId &&
-    stop.expected._tag === "Applied" &&
-    stop.expected.status === "AwaitingQuiescence" &&
-    stop.observedTaskRevision === makeTaskWorkSpecification(specification).fingerprint
-  )
+  const choice = story[holdIndex + heldAttemptChoiceOffset]
+  return isHeldAttemptChoice(choice) && heldAttemptChoiceMatches(choice, hold, specification)
 }
 
 const exactHeldExecutorOutcomeAt = (story: AuthoredStory, holdIndex: number, attemptId: AttemptId): boolean => {
@@ -1252,8 +1284,8 @@ const admittedContinuationClosureIssue = (
   if (specification === undefined) {
     return "the admitted continuation hold must be followed by the production-selected exact F2 specification read"
   }
-  if (!exactHeldStopAt(story, holdIndex, hold, specification)) {
-    return "the admitted continuation hold must be followed by the matching applied Stop request"
+  if (!exactHeldAttemptChoiceAt(story, holdIndex, hold, specification)) {
+    return "the admitted continuation hold must be followed by the matching applied Stop or Restart request"
   }
   if (!exactHeldExecutorOutcomeAt(story, holdIndex, hold.attemptId)) {
     return "the admitted continuation hold must close with the exact StartOrContinue boundary outcome"
@@ -1261,7 +1293,7 @@ const admittedContinuationClosureIssue = (
   return undefined
 }
 
-const admittedContinuationHoldHasExactStopClosure = Schema.makeFilter(
+const admittedContinuationHoldHasExactAttemptChoiceClosure = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
     const holdIndexes = admittedContinuationHoldIndexes(cassette.story)
     if (holdIndexes.length === 0) return undefined
@@ -1296,6 +1328,6 @@ const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   .check(ambiguousBoundaryLossesImmediatelyCrash)
   .check(lostExecutorResponsesRequireExplicitProjection)
   .check(completionFinalityStoryIsComplete)
-  .check(admittedContinuationHoldHasExactStopClosure)
+  .check(admittedContinuationHoldHasExactAttemptChoiceClosure)
 export const AuthoredScenarioCassette: typeof AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteSchema
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type

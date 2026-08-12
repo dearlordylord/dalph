@@ -101,6 +101,7 @@ const constructed = IntegrationCandidateConstructedEvent.make({
 
 const indexes = (): IntegrationHistoryIndexes => ({
   acceptedExecutorResults: new Map(),
+  acceptedExecutorResultPositions: new Map(),
   executorResponsibilitiesBegan: new Map(),
   integrationCandidateGitObservations: new Map(),
   integrationCandidateIntents: new Map(),
@@ -109,6 +110,7 @@ const indexes = (): IntegrationHistoryIndexes => ({
   integrationCandidatesConstructed: new Map([[candidate.constructedAt, constructed]]),
   integrationResponsibilitiesBegan: new Map(),
   integrationStarted: new Map(),
+  restartChoicesAppliedAt: new Map(),
   targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
   targetVerificationIntents: new Map(),
   targetVerificationTerminals: new Set()

@@ -1394,6 +1394,7 @@ module taskFactReconciliation {
       executorEvidence: ExactRunning,
       quiescenceUnbroken: false,
       positionHeld: true,
+      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
       replacementTaskFacts: ReplacementTaskFactsNotRead,
       replacementClaimFacts: ReplacementClaimNotRead,
       replacementClaimReadsThisActivation: 0,
@@ -1415,6 +1416,12 @@ module taskFactReconciliation {
       executorEvidence: ExactRunning,
       quiescenceUnbroken: false,
       positionHeld: true,
+      activeStopCommandOrdinal: state.nextStopCommandOrdinal,
+      lastSettledStopCommandOrdinal: state.nextStopCommandOrdinal,
+      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
+      stopCommandIntentCount: state.stopCommandIntentCount + 1,
+      stopCommandCallCount: state.stopCommandCallCount + 1,
+      stopCommandSettlementCount: state.stopCommandSettlementCount + 1,
       replacementPhase: ReplacementWaiting,
       replacementDisposition: RunningWriterWait,
       lastAction: RestartRunningObservedAction,
@@ -1459,6 +1466,12 @@ module taskFactReconciliation {
       executorEvidence: ExactSafelySuspended,
       quiescenceUnbroken: true,
       positionHeld: false,
+      activeStopCommandOrdinal: state.nextStopCommandOrdinal,
+      lastSettledStopCommandOrdinal: state.nextStopCommandOrdinal,
+      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
+      stopCommandIntentCount: state.stopCommandIntentCount + 1,
+      stopCommandCallCount: state.stopCommandCallCount + 1,
+      stopCommandSettlementCount: state.stopCommandSettlementCount + 1,
       replacementPhase: NeedCurrentReplacementTaskFacts,
       replacementDisposition: NoReplacementDisposition,
       replacementTaskFacts: ReplacementTaskFactsNotRead,
@@ -1486,6 +1499,7 @@ module taskFactReconciliation {
       quiescenceUnbroken: true,
       implementationResponsibilityRetained: false,
       positionHeld: false,
+      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
       lateAcceptedCommitPreserved: true,
       lateAcceptedEvidencePreserved: true,
       lateAcceptedIntegrationResponsibilityCount: 0,
@@ -1517,6 +1531,7 @@ module taskFactReconciliation {
       quiescenceUnbroken: true,
       implementationResponsibilityRetained: false,
       positionHeld: false,
+      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
       completedResultPreserved: true,
       replacementPhase: ReplacementRejected,
       replacementDisposition: CompletedDoesNotAuthorizeReplacement,
@@ -1537,6 +1552,7 @@ module taskFactReconciliation {
       quiescenceUnbroken: true,
       implementationResponsibilityRetained: false,
       positionHeld: false,
+      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
       failedResultPreserved: true,
       replacementPhase: ReplacementRejected,
       replacementDisposition: FailedDoesNotAuthorizeReplacement,
@@ -2723,6 +2739,101 @@ module taskFactReconciliation {
       state.f2WinningChoice == StopChoice,
       state.stopStage == ImplementationAbandoned or state.stopStage == StopComplete,
       any { redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+  }
+
+  // The issue-66 executable relation keeps replacement traces focused while
+  // the established `mbtStep` continues to sample the Stop and Continue
+  // protocols with its stable seed.
+  action restartMbtStep: bool = any {
+    all {
+      state.f2WinningChoice == NoChoice,
+      state.phase == PreIntegration,
+      state.currentFingerprint == F1,
+      state.executorEvidence == ExactSafelySuspended,
+      any { observeF2Change, observeExactTerminal },
+    },
+    all {
+      state.f2WinningChoice == NoChoice,
+      state.phase == PreIntegration,
+      state.currentFingerprint == F1,
+      state.executorEvidence == ExactTerminal,
+      beginIntegration,
+    },
+    all {
+      state.f2WinningChoice == NoChoice,
+      state.phase == IntegrationStarted,
+      state.currentFingerprint == F1,
+      observeF2Change,
+    },
+    all {
+      state.f2WinningChoice == NoChoice,
+      state.phase == IntegrationStarted,
+      state.currentFingerprint == F2,
+      rejectRestartPastIntegrationCutoff,
+    },
+    all {
+      state.f2WinningChoice == NoChoice,
+      state.phase == PreIntegration,
+      state.currentFingerprint == F2,
+      applyRestartF2,
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == RestartApplied,
+      any { beginReplacementFactsFromRetainedSafeSuspension, breakRestartSafeSuspension },
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == NeedCurrentExecutorQuiescence,
+      any {
+        observeRestartRunning,
+        observeRestartSafelySuspended,
+        observeRestartAccepted,
+        observeRestartCompleted,
+        observeRestartFailed,
+      },
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == ReplacementWaiting,
+      state.replacementDisposition == RunningWriterWait,
+      not(state.independentTaskSelected),
+      selectIndependentTaskB,
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == NeedCurrentReplacementTaskFacts,
+      any { observeReplacementExactF2TaskFacts, observeReplacementF3TaskFacts },
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == NeedCurrentReplacementClaim,
+      any { observeReplacementExactK1, observeReplacementClaimAbsent },
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == NeedCurrentOldWorktree,
+      any { observeReplacementExactW1Ready, observeReplacementW1NotReady },
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == NeedCurrentTargetHead,
+      observeReplacementExactH2,
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == ReplacementReadyToAppend,
+      if (state.replacementProcessLossCount == 0)
+        any { recoverReplacementAppendAbsent, recordPlannedAttemptReplacement }
+      else
+        recordPlannedAttemptReplacement,
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.replacementPhase == PlannedAttemptReplacementRecorded,
+      state.replacementProcessLossCount == 0,
+      recoverReplacementAppendPresent,
     },
   }
 }

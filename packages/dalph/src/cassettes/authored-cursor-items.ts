@@ -3,10 +3,12 @@ import { AuthoredCassetteStoryItem } from "./authored-domain.js"
 
 export type AuthoredAttemptChoiceItem =
   | typeof AuthoredCassetteStoryItem.cases.OperatorContinuesAttempt.Type
+  | typeof AuthoredCassetteStoryItem.cases.OperatorRestartsAttempt.Type
   | typeof AuthoredCassetteStoryItem.cases.OperatorStopsAttempt.Type
 
 export const AuthoredAttemptChoiceItem = Schema.Union([
   AuthoredCassetteStoryItem.cases.OperatorContinuesAttempt,
+  AuthoredCassetteStoryItem.cases.OperatorRestartsAttempt,
   AuthoredCassetteStoryItem.cases.OperatorStopsAttempt
 ])
 
@@ -14,7 +16,9 @@ export const isAuthoredAttemptChoiceItem = (item: unknown): item is AuthoredAtte
   typeof item === "object" &&
   item !== null &&
   "_tag" in item &&
-  (item._tag === "OperatorContinuesAttempt" || item._tag === "OperatorStopsAttempt")
+  (item._tag === "OperatorContinuesAttempt" ||
+    item._tag === "OperatorRestartsAttempt" ||
+    item._tag === "OperatorStopsAttempt")
 
 export type AuthoredTaskClaimReadItem =
   | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.Type

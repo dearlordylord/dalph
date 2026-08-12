@@ -142,7 +142,10 @@ const appendExposedChoice = Effect.fn("AttemptChoiceTest.appendExposedChoice")(f
   )
 })
 
-const request = (choice: "ContinueExistingAttempt" | "StopTaskImplementation", requestId: string) => ({
+const request = (
+  choice: "ContinueExistingAttempt" | "RestartTaskImplementation" | "StopTaskImplementation",
+  requestId: string
+) => ({
   choice,
   requestId: AttemptChoiceRequestId.make({ nonce: requestId, runId }),
   subject: { observedTaskRevision: observedRevision, plannedAttempt }
@@ -257,6 +260,25 @@ it.effect("coalesces exact Continue redelivery and rejects request identity reus
 
     const contradiction = yield* control.apply(request("StopTaskImplementation", "stable-D1")).pipe(Effect.flip)
     expect(contradiction).toBeInstanceOf(AttemptChoiceRequestIdentityContradiction)
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("journals Restart as the third exact choice and coalesces its redelivery", () =>
+  Effect.gen(function* () {
+    yield* appendExposedChoice()
+    const control = yield* AttemptChoiceControl
+    const input = request("RestartTaskImplementation", "stable-restart-D1")
+    const first = yield* control.apply(input)
+
+    expect(first).toMatchObject({
+      _tag: "RestartApplied",
+      application: { event: { choice: "RestartTaskImplementation", requestId: input.requestId } }
+    })
+    expect(yield* control.apply(input)).toEqual(first)
+    expect(yield* control.read(input.requestId)).toEqual(first)
+    expect(
+      yield* control.apply(request("ContinueExistingAttempt", "stable-restart-D1")).pipe(Effect.flip)
+    ).toBeInstanceOf(AttemptChoiceRequestIdentityContradiction)
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
@@ -395,6 +417,7 @@ it.effect("rejects Continue and Stop after the exact integration cutoff", () =>
 
     for (const [choice, requestId] of [
       ["ContinueExistingAttempt", "late-continue"],
+      ["RestartTaskImplementation", "late-restart"],
       ["StopTaskImplementation", "late-stop"]
     ] as const) {
       expect(yield* control.apply(request(choice, requestId)).pipe(Effect.flip)).toBeInstanceOf(

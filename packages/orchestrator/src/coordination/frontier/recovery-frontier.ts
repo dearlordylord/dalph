@@ -294,12 +294,22 @@ const unplannedClaimRecoveryEntry = (
 
 /** Reduces immutable workflow-journal history into one total run-level recovery frontier. */
 export const deriveRunRecoveryFrontier = (records: ReadonlyArray<JournalRecord>): RunRecoveryFrontier => {
-  const plannedStages = records.flatMap(({ event }) =>
-    event._tag === "TaskAttemptPlanned" ? [recoveryEntryForAttempt(records, event.operation)] : []
+  const replacedAttemptIds = new Set(
+    records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptReplaced" ? [event.subject.plannedAttempt.attemptId] : []
+    )
   )
-  const plannedTaskIds = new Set(
-    records.flatMap(({ event }) => (event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt.taskId] : []))
+  const planOperations = records.flatMap(({ event }) =>
+    event._tag === "TaskAttemptPlanned"
+      ? replacedAttemptIds.has(event.operation.plannedAttempt.attemptId)
+        ? []
+        : [event.operation]
+      : event._tag === "PlannedAttemptReplaced"
+        ? [event.successorPlan]
+        : []
   )
+  const plannedStages = planOperations.map((operation) => recoveryEntryForAttempt(records, operation))
+  const plannedTaskIds = new Set(planOperations.map(({ plannedAttempt }) => plannedAttempt.taskId))
   const unplannedClaims = records.flatMap<RunRecoveryFrontierEntry>(({ event }) =>
     unplannedClaimRecoveryEntry(records, plannedTaskIds, event)
   )

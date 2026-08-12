@@ -698,9 +698,11 @@ it("rejects duplicate verification intent, false contradiction, and foreign-run 
   if (constructedEvent._tag !== "IntegrationCandidateConstructed") throw new Error("constructed fixture changed")
   const indexes: IntegrationHistoryIndexes = {
     acceptedExecutorResults: new Map(),
+    acceptedExecutorResultPositions: new Map(),
     executorResponsibilitiesBegan: new Map(),
     integrationResponsibilitiesBegan: new Map(),
     integrationStarted: new Map(),
+    restartChoicesAppliedAt: new Map(),
     integrationCandidateIntents: new Map(),
     integrationCandidateIntentsByStartedAt: new Map(),
     integrationCandidateSubmissions: new Map(),

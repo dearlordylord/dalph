@@ -20,6 +20,7 @@ import {
 } from "../protocols/control-direction-application/events.js"
 import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
 import { AttemptChoice, AttemptChoiceRequestId, AttemptChoiceSubject } from "../protocols/attempt-choice/events.js"
+import { PlannedAttemptReplacementWitness } from "../protocols/attempt-choice/replacement-events.js"
 import {
   IntegrationResponsibilityBegan,
   IntegrationStarted,
@@ -180,7 +181,7 @@ export const AppliedTaskClaimReacquisitionDirection = Schema.TaggedStruct("Appli
 })
 export type AppliedTaskClaimReacquisitionDirection = typeof AppliedTaskClaimReacquisitionDirection.Type
 
-/** Operator applied one exact Continue-or-Stop choice before integration. */
+/** Operator applied one exact Continue, Restart, or Stop choice before integration. */
 export const AppliedAttemptChoice = Schema.TaggedStruct("AppliedAttemptChoice", {
   choice: AttemptChoice,
   initiatedBy: WorkflowActor.cases.Operator,
@@ -190,6 +191,19 @@ export const AppliedAttemptChoice = Schema.TaggedStruct("AppliedAttemptChoice", 
   subject: AttemptChoiceSubject
 })
 export type AppliedAttemptChoice = typeof AppliedAttemptChoice.Type
+
+/** Dalph atomically superseded P1 and recorded its exact immutable successor P2. */
+export const PlannedAttemptReplaced = Schema.TaggedStruct("PlannedAttemptReplaced", {
+  initiatedBy: WorkflowActor.cases.DalphCoordinator,
+  occurrenceClassification: initiatedActionFields.occurrenceClassification,
+  recordedAt: JournalPosition,
+  requestId: AttemptChoiceRequestId,
+  runId: RunId,
+  subject: AttemptChoiceSubject,
+  successorPlan: WorkflowOperation.cases.RecordTaskAttemptPlan,
+  witness: PlannedAttemptReplacementWitness
+})
+export type PlannedAttemptReplaced = typeof PlannedAttemptReplaced.Type
 
 /** Operator durably changed the future task-admission ceiling for one Run. */
 export const AppliedTaskWorkCapacity = Schema.TaggedStruct("AppliedTaskWorkCapacity", {
@@ -212,6 +226,7 @@ export const WorkflowOccurrence = Schema.Union([
   GitReadInitiated,
   PlannedAttemptExecutorWorkReported,
   PlannedAttemptExecutorWorkResponsibilityBegan,
+  PlannedAttemptReplaced,
   PlannedAttemptWorktreeObserved,
   TargetLineageObserved,
   TaskTrackerReadInitiated,
@@ -241,7 +256,7 @@ export const presentWorkflowOccurrence = (occurrence: WorkflowOccurrence): Workf
         classification: "InitiatedAction"
       }
 
-export const workflowOccurrenceProjectionVersion = 6 as const // eslint-disable-line no-magic-numbers
+export const workflowOccurrenceProjectionVersion = 7 as const // eslint-disable-line no-magic-numbers
 
 const relationshipKey = (runId: RunId, relatedId: string): string => JSON.stringify([runId, relatedId])
 
@@ -385,6 +400,7 @@ type ProjectedJournalEvent = Extract<
       | "TargetLineageObserved"
       | "TaskWorkCapacityChanged"
       | "AttemptChoiceApplied"
+      | "PlannedAttemptReplaced"
       | "ControlDirectionApplied"
       | "TaskClaimReacquisitionDirected"
       | "TaskTrackerReadIntentRecorded"
@@ -478,6 +494,7 @@ type DirectlyProjectedJournalEvent = Extract<
       | "PlannedAttemptExecutorWorkResponsibilityBegan"
       | "TaskWorkCapacityChanged"
       | "AttemptChoiceApplied"
+      | "PlannedAttemptReplaced"
       | "ControlDirectionApplied"
       | "TaskClaimReacquisitionDirected"
   }
@@ -488,6 +505,7 @@ const isDirectlyProjectedJournalEvent = (event: WorkflowJournalEvent): event is 
   event._tag === "IntegrationStarted" ||
   event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
   event._tag === "AttemptChoiceApplied" ||
+  event._tag === "PlannedAttemptReplaced" ||
   event._tag === "ControlDirectionApplied" ||
   event._tag === "TaskClaimReacquisitionDirected" ||
   event._tag === "TaskWorkCapacityChanged"
@@ -507,6 +525,21 @@ const projectDirectOccurrence = (
         recordedAt: record.position,
         requestId: event.requestId,
         subject: event.subject
+      })
+    )
+    return
+  }
+  if (event._tag === "PlannedAttemptReplaced") {
+    occurrences.push(
+      PlannedAttemptReplaced.make({
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        recordedAt: record.position,
+        requestId: event.requestId,
+        runId: record.runId,
+        subject: event.subject,
+        successorPlan: event.successorPlan,
+        witness: event.witness
       })
     )
     return

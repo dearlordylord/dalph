@@ -17,7 +17,11 @@ export const AttemptChoiceRequestId = Schema.Struct({ nonce: Schema.NonEmptyStri
 )
 export type AttemptChoiceRequestId = typeof AttemptChoiceRequestId.Type
 
-export const AttemptChoice = Schema.Literals(["ContinueExistingAttempt", "StopTaskImplementation"])
+export const AttemptChoice = Schema.Literals([
+  "ContinueExistingAttempt",
+  "RestartTaskImplementation",
+  "StopTaskImplementation"
+])
 export type AttemptChoice = typeof AttemptChoice.Type
 
 /** The immutable attempt and changed authored fingerprint governed by one choice. */

@@ -32,6 +32,7 @@ const acceptedPolicy = <
 /** One closed classification drives proposal identity, admission, accepted execution, and adapter transition types. */
 export const deliveryTransitionPolicy = {
   AcquireStartedIntegrationTarget: policy("IdentityFree", "None"),
+  AdvanceAttemptRestart: policy("IdentityFree", "PlannedAttempt"),
   AdvanceAttemptStoppage: policy("IdentityFree", "StopSubject"),
   CheckTaskClaim: acceptedPolicy("AcceptedOperation", "Recovery"),
   CommitFreshTaskClaimIntent: policy("FreshProvenance", "None"),

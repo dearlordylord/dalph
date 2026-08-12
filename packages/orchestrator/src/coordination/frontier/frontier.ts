@@ -64,6 +64,12 @@ export type IntegrationFinalityTrackerSuccessWaitReason =
     }
 
 export type RunnableFrontierTransition = Data.TaggedEnum<{
+  AdvanceAttemptRestart: {
+    readonly integrationTarget: IntegrationTarget
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly requestId: AttemptChoiceRequestId
+    readonly subject: AttemptChoiceSubject
+  }
   AdvanceAttemptStoppage: {
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
@@ -233,6 +239,7 @@ export type TransitionTrackerGraphRequirement = "AcceptedHistorySufficient" | "C
  * transition before the current tracker graph has been established.
  */
 const transitionTrackerGraphRequirements = {
+  AdvanceAttemptRestart: "AcceptedHistorySufficient",
   AdvanceAttemptStoppage: "AcceptedHistorySufficient",
   AcquireStartedIntegrationTarget: "CurrentTrackerGraphRequired",
   CheckTaskClaim: "AcceptedHistorySufficient",
@@ -276,6 +283,32 @@ export const transitionTrackerGraphRequirement = (
 ): TransitionTrackerGraphRequirement => transitionTrackerGraphRequirements[transition._tag]
 
 export type FrontierExplanation = Data.TaggedEnum<{
+  AttemptRestartRejected: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly reason:
+      | "CompletedDoesNotAuthorizeReplacement"
+      | "FailedDoesNotAuthorizeReplacement"
+      | "NewFingerprintChoiceRequired"
+    readonly taskId: TaskId
+  }
+  AttemptRestartWait: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly reason:
+      | "ClaimAbsent"
+      | "ClaimForeign"
+      | "ClaimUnreadable"
+      | "ExecutorContradictory"
+      | "ExecutorRunning"
+      | "ExecutorUnavailable"
+      | "IntegrationTargetUnavailable"
+      | "OldWorktreeNotReady"
+      | "OldWorktreeUnreadable"
+      | "TargetHeadUnreadable"
+      | "TaskFactsUnreadable"
+      | "TaskNotEligible"
+    readonly taskId: TaskId
+    readonly wakeCondition: "ProcessRestartedOrAcceptedFactsChanged"
+  }
   AttemptStoppageWait: {
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable"
@@ -514,6 +547,29 @@ const executorDecisionFor = (
 ): { readonly explanation?: FrontierExplanation; readonly transition?: RunnableFrontierTransition } =>
   Match.value(facts.disposition).pipe(
     Match.tags({
+      AttemptRestartRequired: ({ integrationTarget, requestId, subject }) => ({
+        transition: RunnableFrontierTransition.AdvanceAttemptRestart({
+          integrationTarget,
+          plannedAttempt: facts.responsibility.plannedAttempt,
+          requestId,
+          subject
+        })
+      }),
+      AttemptRestartRejected: ({ reason }) => ({
+        explanation: FrontierExplanation.AttemptRestartRejected({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          reason,
+          taskId: facts.responsibility.plannedAttempt.taskId
+        })
+      }),
+      AttemptRestartWait: ({ reason }) => ({
+        explanation: FrontierExplanation.AttemptRestartWait({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          reason,
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "ProcessRestartedOrAcceptedFactsChanged"
+        })
+      }),
       AttemptStoppageRequired: ({ requestId, subject, taskWorkPosition }) => ({
         transition: RunnableFrontierTransition.AdvanceAttemptStoppage({ requestId, subject, taskWorkPosition })
       }),
