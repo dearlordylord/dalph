@@ -66,8 +66,9 @@ sequence.
 
 If Exit instead arrives after a cleanup read recorded an exact still-present
 claim in `CompletionClaimDeletionReadObserved` but before the deletion call
-starts, the next call cannot enter the owner: the cutoff wins, so the attempt
-intent and deletion remain absent.
+starts, Dalph first appends the exact numbered deletion-attempt intent. The
+call then cannot enter the owner: the cutoff wins and the tracker deletion
+remains absent.
 Process death preserves whichever prefix was durably appended and creates no
 Exit-specific recovery mode.
 
@@ -80,6 +81,10 @@ Exit-specific recovery mode.
 - `recomposes and reopens an interrupted completion cleanup through authored and recorded cassettes`
   projects `DeletionPending`, simulates process death, enters ordinarily,
   reconciles exact absence without another deletion, and projects settlement.
+- `reconstructs and round-trips interrupted and settled completion-cleanup Run prefixes`
+  reconstructs the unfinished Run at the exact deletion-attempt cut, proves no
+  Run termination was invented, round-trips that recorded prefix, then verifies the
+  ordinary restart reconciliation and settled recorded prefix.
 - `deletes only the exact completion claim after focused task success` projects
   the exact cleanup reread through the versioned recorded cassette and verifies
   its journal round trip.

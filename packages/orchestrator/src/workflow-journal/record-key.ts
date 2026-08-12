@@ -22,6 +22,7 @@ import type {
   TargetPromotionRequestId
 } from "../workflow/protocols/target-promotion/events.js"
 import type {
+  CompletionClaimDeletionReadPurpose,
   CompletionClaimRequestOrdinal,
   CompletionTaskRequest,
   CompletionTaskRequestOrdinal
@@ -224,11 +225,7 @@ export const completionClaimDeletionAttemptIntentRecordKey = (
 /** Stable journal key for one exact completion-claim cleanup reread result. */
 export const completionClaimDeletionReadObservedRecordKey = (
   operationId: OperationId,
-  purpose: {
-    readonly _tag: string
-    readonly attemptOrdinal: CompletionClaimRequestOrdinal
-    readonly readOrdinal: number
-  }
+  purpose: CompletionClaimDeletionReadPurpose
 ): JournalRecordKey =>
   JournalRecordKey.make(
     `${completionClaimRecordKeyPrefix(operationId)}:deletion-read:${purpose._tag}:${purpose.attemptOrdinal}:${purpose.readOrdinal}`

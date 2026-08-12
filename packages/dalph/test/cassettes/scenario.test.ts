@@ -7534,6 +7534,76 @@ it.effect("reconciles a lost completion-claim deletion without reopening success
   })
 )
 
+it.effect("reconstructs and round-trips interrupted and settled completion-cleanup Run prefixes", () =>
+  Effect.gen(function* () {
+    const run = yield* replayIntegrationFinalityCassette(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess
+    )
+    const deletionAttemptAt = run.records.findIndex(
+      ({ event }) => event._tag === "CompletionClaimDeletionAttemptIntended"
+    )
+    expect(deletionAttemptAt).toBeGreaterThan(0)
+    const interruptedPrefix = run.records.slice(0, deletionAttemptAt + 1)
+    const runId = run.records[0]?.runId
+    if (runId === undefined) return yield* Effect.die("the completion-cleanup cassette must begin a Run")
+    const interruptedHistory = reduceWorkflowJournalHistory(runId, interruptedPrefix)
+    expect(interruptedHistory._tag).toBe("ValidWorkflowJournalHistory")
+    if (interruptedHistory._tag !== "ValidWorkflowJournalHistory") {
+      return yield* Effect.die("the interrupted completion-cleanup Run prefix must reconstruct")
+    }
+    expect(interruptedPrefix.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+    expect(interruptedPrefix.at(-1)?.event).toMatchObject({
+      _tag: "CompletionClaimDeletionAttemptIntended",
+      attemptOrdinal: 1
+    })
+    expect(interruptedPrefix.some(({ event }) => event._tag === "CompletionClaimDeletionReadObserved")).toBe(true)
+
+    const interruptedRecorded = yield* projectRecordedCassette(interruptedPrefix)
+    expect(foldRecordedCassette(interruptedRecorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expectRecordedRoundTrip(interruptedPrefix, interruptedRecorded)
+    const interruptedRead = interruptedRecorded.entries.find(
+      (entry) => entry._tag === "CompletionClaimDeletionReadObserved"
+    )
+    const interruptedAttempt = interruptedRecorded.entries.find(
+      (entry) => entry._tag === "CompletionClaimDeletionAttemptIntended"
+    )
+    expect(interruptedRead).toMatchObject({
+      observation: { _tag: "CompletionTaskClaim" },
+      purpose: { _tag: "BeforeDeletionAttempt", attemptOrdinal: 1, readOrdinal: 1 }
+    })
+    expect(interruptedAttempt).toMatchObject({ attemptOrdinal: 1 })
+    if (
+      interruptedRead?._tag !== "CompletionClaimDeletionReadObserved" ||
+      interruptedAttempt?._tag !== "CompletionClaimDeletionAttemptIntended"
+    ) {
+      return yield* Effect.die("the interrupted cassette must retain its exact read and deletion intent")
+    }
+    expect(interruptedAttempt.operationId).toBe(interruptedRead.request.operationId)
+    expect(renderRecordedCassetteLyrics(interruptedRecorded)).toContain(
+      "completion-claim cleanup BeforeDeletionAttempt"
+    )
+
+    const settledHistory = reduceWorkflowJournalHistory(runId, run.records)
+    expect(settledHistory._tag).toBe("ValidWorkflowJournalHistory")
+    expect(run.journalTags.slice(deletionAttemptAt + 1)).toEqual([
+      "CompletionClaimDeletionReadObserved",
+      "CompletionClaimDeleted",
+      "IntegrationFinalitySettled"
+    ])
+    expect(run.deletionCalls).toBe(1)
+    const settledRecorded = yield* projectRecordedCassette(run.records)
+    expect(foldRecordedCassette(settledRecorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expectRecordedRoundTrip(run.records, settledRecorded)
+    expect(settledRecorded.entries).toContainEqual(
+      expect.objectContaining({
+        _tag: "CompletionClaimDeletionReadObserved",
+        observation: expect.objectContaining({ _tag: "UnclaimedTask" }),
+        purpose: { _tag: "BeforeDeletionAttempt", attemptOrdinal: 2, readOrdinal: 1 }
+      })
+    )
+  })
+)
+
 it.effect("waits without replacing when the current completion claim cannot be read", () =>
   Effect.gen(function* () {
     const run = yield* replayIntegrationFinalityCassette(
