@@ -35,12 +35,13 @@ inner algorithm is post-milestone design.
 _Avoid_: Dalph orchestrator, universal review pipeline
 
 **Operator**:
-The one logical V1 human actor that intentionally applies a Pause, Unpause, or
-task-claim reacquisition direction through Dalph. V1 records the actor class
-`Operator`, not an authenticated person identity; a separately accepted
-transport request identity may identify a redeliverable request without
-identifying the person. Authentication and multiple operator identities
-require a separately accepted boundary design.
+The one logical V1 human actor that intentionally applies a Pause or Unpause
+direction, an exact Continue, Restart, or Stop choice for one changed attempt,
+or a task-claim reacquisition direction through Dalph. V1 records the actor
+class `Operator`, not an authenticated
+person identity; a separately accepted transport request identity may identify
+a redeliverable request without identifying the person. Authentication and
+multiple operator identities require a separately accepted boundary design.
 _Avoid_: Authenticated operator identity, claim owner, provider user
 
 **Workflow occurrence**:
@@ -88,6 +89,14 @@ The initiated action established when Operator's Pause or Unpause direction is
 accepted and applied to one exact run or task subject. Receiving or durably
 recording a command request is not this event.
 _Avoid_: Control command receipt, pause phase, operator identity
+
+**Applied attempt choice**:
+The initiated action established when Operator's exact Continue, Restart, or
+Stop choice is accepted and applied to one exact pre-integration planned task
+attempt and one earlier/current task-revision fingerprint pair. Receiving or
+durably recording the request is not this event; the first valid choice
+committed for that pair wins.
+_Avoid_: Attempt-choice request receipt, executor result, replacement event
 
 **Pause progress observation**:
 Alice's process-local, current-first subscription to the derived progress of
@@ -200,9 +209,10 @@ _Avoid_: Executor interruption, process exit alone, coordinator cancellation,
 attempt abandonment
 
 **Planned-attempt executor-work outcome**:
-An executor's normalized completed or failed result for one
-exact planned task attempt. Suspension is separately resumable and therefore
-is not a terminal outcome.
+An executor's normalized completed, failed, or accepted result for one exact
+planned task attempt. Suspension is separately resumable and therefore is not
+a terminal outcome; an accepted result carries the immutable Git commit and
+evidence defined below.
 _Avoid_: Internal review result, raw provider response
 
 **Planned-attempt executor-work projection**:
@@ -463,7 +473,11 @@ The process-local condition for one Run in which no delivery action is currently
 executable and no admitted delivery action is still running. It does not prove
 that every task completed, every responsibility settled, the tracker graph was
 freshly reconfirmed, the Run may terminate, or the coordinator process should
-remain alive.
+remain alive. A durably published exact terminal executor report that ends its
+correlated planned-attempt executor-work responsibility may supply the
+no-live-owner fact used by this condition. In issue #66, a late terminal
+`Accepted` report may replace an earlier safe-suspension report as that current
+fact, but it remains neither tracker completion nor integration authority.
 _Avoid_: Run completion, empty target, polling permission, finality proof
 
 **Delivery settlement**:
@@ -588,16 +602,33 @@ execution resource. Planning it does not prove that an external resource
 exists or that executor work started.
 _Avoid_: Plan, attempt plan, task, task work, retry counter
 
+**Planned attempt replacement**:
+The workflow event that atomically makes one exact pre-integration planned task
+attempt no longer unsettled and records its one exact successor. It requires
+the matching applied Restart choice, current executor quiescence evidence, the
+fresh exact task and claim facts, the current ready old worktree with its
+lineage proof, and the fresh target head. It preserves the old attempt's
+immutable plan and resources; neither this event nor its Journal envelope
+proves that the successor worktree exists or that executor work started.
+_Avoid_: Attempt retry, worktree cleanup, executor restart, integration start
+
 **Attempt-choice request identity**:
-The non-person identity of one Operator request to continue or stop one exact
-pre-integration planned task attempt. It coalesces exact request redelivery and
-cannot identify another attempt or a different choice.
+The non-person identity of one Operator request to Continue, Restart, or Stop
+one exact pre-integration planned task attempt under one exact earlier/current
+task-revision fingerprint pair. It coalesces exact request redelivery and
+cannot identify another Run, task, attempt, fingerprint pair, or choice.
 _Avoid_: Operator identity, attempt identity, operation identity, idempotency key
 
 **Accepted result**:
 The immutable Git commit returned by the executor after its whole bounded
 workflow accepts one planned attempt. It does not select repository policy,
-prove integration lineage, promote a ref, or complete the tracker task.
+prove integration lineage, promote a ref, or complete the tracker task. An
+ordinary accepted result enters one integration responsibility after its
+terminal report is recorded and paired with the configured target. If an exact
+pre-integration Restart choice was already applied before that terminal report,
+the late accepted result is instead preserved as old-attempt evidence, creates
+no integration responsibility, and may supply current executor quiescence for
+the matching replacement only after fresh facts are checked.
 _Avoid_: Completed task, integrated commit, promoted result
 
 **Integration responsibility**:

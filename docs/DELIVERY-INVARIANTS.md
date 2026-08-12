@@ -299,8 +299,14 @@ quiescence only when the executable proposal frontier is empty and no admitted
 action still has a live owner. Quiescence proves no currently executable action
 — not completion and not an empty target. Only one later accepted complete
 tracker observation may support the activation's next decision. Quiescence is
-never inferred from process loss, a timeout, a boundary result not yet published
-by delivery planning, or missing session data. D35 owns termination.
+never inferred from process loss, a timeout, missing session data, or a
+boundary result that delivery planning has not durably published. After Dalph
+durably publishes an exact terminal executor report and ends its correlated
+planned-attempt executor-work responsibility, that report may supply the
+no-live-owner fact used in quiescence. In issue #66, a late `Accepted` report
+may replace an earlier safe-suspension report as that current quiescence fact;
+it remains neither tracker completion nor integration authority. D35 owns
+termination.
 → `I19` and `integrationFinality`'s empty-frontier witness with a retained
 unrelated responsibility. `runActivation.finalityReadRequiresQuiescence` and
 `runActivation.establishmentSourceDoesNotChangeActivationBounds` check the
@@ -426,8 +432,12 @@ resource.
 
 **D42 The integration queue is single and its order is acceptance-derived.**
 Order follows accepted-result acceptance, not task identity, completion time, or
-insertion order. The same-target queue is never reordered, and one responsibility
-does not move ahead of another merely because that other is waiting.
+insertion order. The same-target queue is never reordered, and one
+responsibility does not move ahead of another merely because that other is
+waiting. An accepted result whose exact pre-integration Restart choice was
+already applied before that terminal report remains preserved P1 evidence and
+does not create an integration responsibility; the ordinary accepted-result
+path still creates one responsibility exactly once.
 → `—` no model has a queue.
 
 **D43 The serialized target resource is released while only waiting.** Process-local
@@ -451,15 +461,18 @@ capability — pre-integration cancellation after integration starts — it is n
 offered again, and restart reconstructs the cutoff rather than resurrecting the
 capability.
 → `taskFactReconciliation` states `postCutoffChoiceNeverApplies` and reaches the
-integration-started rejection. The scenario's forbidden Continue-or-Stop result
-is exercised by `rejects Continue and Stop after the exact integration cutoff`.
+integration-started rejection. The scenario's forbidden Continue, Restart, or
+Stop result is exercised by `rejects every attempt choice after the exact
+integration cutoff`.
 
 ## Operator requests
 
-**Implemented.** Applying a control direction, applying an exact changed-attempt
-Continue-or-Stop choice, exact redelivery, request-identity contradictions,
-first-journaled race arbitration, and the pre-integration cutoff ship. The
-issue 65 cassette scenarios trace the forbidden results named by D46-D49:
+**Accepted operator-request rules.** Applying a control direction and the issue
+65 exact changed-attempt Continue/Stop choice, exact redelivery,
+request-identity contradictions, first-journaled race arbitration, and the
+pre-integration cutoff ship. Issue 66 extends the accepted choice algebra with
+Restart but is not implemented yet. The issue 65 and issue 66 cassette scenarios
+trace the forbidden results named by D46-D49:
 receipt alone is not policy, a stale direction crosses no later boundary, one
 request identity cannot name different contents, a losing raced choice cannot
 act, and a later fingerprint requires a fresh choice.
@@ -482,16 +495,32 @@ checks the exact prior direction and its observation episode. The scenario seam
 `does not cross cleanup or integration boundaries for a stale direction` traces
 the forbidden later action.
 
+**D48a A late terminal report does not erase an applied Restart choice.**
+When an exact Restart choice is durably applied before a planned attempt's
+terminal `Accepted` report, Dalph preserves that result and evidence without
+creating integration responsibility. The terminal report may replace an
+earlier safe-suspension report as the current executor quiescence fact, but it
+does not authorize replacement by itself. After fresh task and Git reads still
+prove the exact Restart choice, task revision, claim, ready old worktree, and
+target head, Dalph may append the one atomic P1/P2 replacement event and admit
+P2 ordinarily; Alice does not issue Restart again. A changed, missing, or
+unreadable fresh fact authorizes no successor.
+→ `taskFactReconciliation` must state the late-`Accepted` preservation,
+fresh-facts guard, and atomic replacement; the issue #56 scenario and its
+`acceptedResultIntegration` seam must keep the result outside integration.
+
 **D49 Operator request identity is exact.** Exact redelivery of a request returns
 its recorded result rather than acting twice. Reuse of a request identity for a
 different Run, task, attempt, fingerprint pair, or choice is a typed
 contradiction. Where two valid requests race, the first committed to the journal
-wins regardless of arrival order, and a later change of instructions requires a
-fresh choice.
+wins regardless of arrival order across Continue, Restart, and Stop, and a
+later change of instructions requires a fresh choice. A late terminal result
+does not require exact redelivery of an already applied Restart choice.
 → `taskFactReconciliation` states `requestIdentityErrorsRemainDistinct`,
 `firstJournaledChoiceWins`, and `changedAgainRequiresNewChoice`. Its collected
-tests reach exact redelivery, conflicting reuse, both race winners, and the new
-fingerprint choice; matching production cassette tests use those same cases.
+tests reach exact redelivery, conflicting reuse, both race winners, the new
+fingerprint choice, Restart redelivery, and the late-`Accepted` branch; matching
+production cassette tests use those same cases.
 
 ## Application Exit
 

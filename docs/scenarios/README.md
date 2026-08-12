@@ -59,6 +59,7 @@ today.
 | `issue-56-queue-accepted-integration.md` | 56 |
 | `issue-63-observe-pause-progress.md` | 63 |
 | `issue-65-cancel-or-continue-attempt.md` | 65 |
+| `issue-66-clean-restart-changed-attempt.md` | 66 |
 | `issue-136-reconcile-changed-task-facts.md` | 136 |
 | `issue-137-reconcile-task-claims.md` | 137 |
 | `issue-138-reconcile-blockers-around-promotion.md` | 138 |

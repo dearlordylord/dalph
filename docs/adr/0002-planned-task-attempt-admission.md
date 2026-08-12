@@ -2,9 +2,11 @@
 
 Status: Accepted
 
-Dalph records a planned task attempt only after it has durably recorded a fresh
-claimed-task eligibility observation for the same task identity and task
-revision fingerprint. This decision replaces the misleading
+Dalph records an ordinary planned task attempt only after it has durably
+recorded a fresh claimed-task eligibility observation for the same task
+identity and task revision fingerprint. A clean successor attempt uses a
+separate replacement action below; it never weakens or reinterprets this
+ordinary planning edge. This decision replaces the misleading
 `TrackerExecutionAdmitted` term and defines the exact causal evidence required
 by planning and recovery.
 
@@ -103,6 +105,35 @@ freeze task or graph state. A generic `TrackerGraphOutcomeObserved` cannot
 authorize planning because it summarizes a whole graph read without recording
 the combined exact-claim, eligibility, and task-revision conclusion.
 
+## Replacement planning for issue #66
+
+Issue #66 adds one distinct planning action for a clean successor. Dalph may
+append `PlannedAttemptReplaced` only after the Journal contains the exact
+applied Restart choice for P1 and its F1/F2 pair, and after fresh evidence
+records all of the following:
+
+- claimed-task eligibility for A at F2 with the exact current claim K1;
+- current executor quiescence for R/P1, supplied by the unbroken exact
+  `SafelySuspended` report or by a durably published late terminal `Accepted`
+  report that arrives after the Restart choice and ends P1's writer
+  responsibility;
+- the exact current P1 worktree W1, including its current HEAD H1 and proof
+  that B1 is an ancestor; and
+- the configured target head H2 used as P2's Base SHA.
+
+One Journal record atomically makes P1 no longer unsettled and records
+immutable successor P2. It preserves P1's branch, worktree, commits,
+uncommitted work, claim, and Journal evidence. It creates no integration
+responsibility for a terminal `Accepted` report that arrived after the
+Restart choice; the report remains P1 evidence. P2 still requires ordinary
+task-work admission before Dalph asks the executor to start or continue it.
+
+The replacement action is not `RecordTaskAttemptPlan` with a different
+operation identity. A matching eligibility outcome alone, a terminal executor
+result alone, a current Git observation alone, or a process restart never
+authorizes replacement. If any fresh fact is missing, changed, or unreadable,
+Dalph records the typed wait or contradiction and records no successor.
+
 ## Negative observations
 
 A completed negative observation stops the current workflow or recovery pass
@@ -141,12 +172,15 @@ Only durable outcomes are workflow evidence:
   returns the typed stopping result instead of being retried as an unresolved
   read.
 
-No current outcome authorizes a replacement planned task attempt. Recovery
-continues an acknowledged attempt, recognizes its terminal disposition, or
-returns a typed recovery result. A future replacement-attempt capability
-requires a separately specified authorization phenomenon and durable event.
-An executor failure, loss of a planned Git worktree, coordinator process death,
-and a new operation identity do not imply replacement authorization.
+No ordinary current outcome authorizes a replacement planned task attempt.
+Recovery continues an acknowledged attempt, recognizes its terminal
+disposition, or returns a typed recovery result. Issue #66's dedicated
+`PlannedAttemptReplaced` action is the only replacement capability, and its
+exact Restart choice, current-quiescence, task, claim, worktree, and target-head
+evidence is required as specified above. An executor failure, loss of a planned
+Git worktree, coordinator process death, a late terminal result without the
+fresh checks, and a new operation identity do not imply replacement
+authorization.
 
 ## Layer composition
 
@@ -186,16 +220,19 @@ identity.
   failure.
 - Add an explicit workflow mode branch: rejected because Layers interpret one
   operation algebra.
-- Infer a replacement attempt or ordinal: rejected because no accepted outcome
-  authorizes replacement.
+- Infer a replacement attempt or ordinal: rejected because only issue #66's
+  separately specified `PlannedAttemptReplaced` action may authorize a
+  successor, and it requires its complete causal evidence.
 
 ## Consequences
 
-The workflow algebra, journal schema, workflow-journal-history reducer, and recovery
-model must represent the eligibility-observation intent, its authoritative and
-simulated outcomes, and the causal validation described above. Journal schema
-evolution must preserve readable supported history without treating a prior
-generic graph observation as eligibility evidence.
+The workflow algebra, journal schema, workflow-journal-history reducer, and
+recovery model must represent the eligibility-observation intent, its
+authoritative and simulated outcomes, the ordinary planning edge, and issue
+#66's separate replacement action and causal validation described above.
+Journal schema evolution must preserve readable supported history without
+treating a prior generic graph observation as eligibility evidence or a
+terminal result as an unrecorded successor.
 
 The canonical glossary uses **claimed task eligibility observed**. The accepted
 operation and outcome names supersede `TrackerExecutionAdmitted`.
