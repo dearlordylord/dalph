@@ -10,6 +10,7 @@ import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
+import { RunFinalityDecision } from "../frontier/frontier.js"
 
 const proofOf = (quiescence: DeliveryRuntimeQuiescence): RunFinalityProof => ({
   acceptedAt: quiescence.acceptedAt,
@@ -52,12 +53,31 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
       const g1 = yield* runDeliveryRuntimePhase(evaluations)
       if (g1._tag === "PassiveRuntimeQuiescence") return proofOf(g1)
 
+      const applicationExit = (yield* DeliveryRuntimeResources).applicationExit
+      const preparing = yield* applicationExit.prepareForwardOwner("InterruptibleBoundary").pipe(Effect.option)
+      if (Option.isNone(preparing)) return proofOf(g1)
+      const owner = yield* preparing.value.register.pipe(
+        Effect.onError(() => preparing.value.cancel),
+        Effect.option
+      )
+      if (Option.isNone(owner)) return proofOf(g1)
+
       const allocator = yield* OperationIdAllocator
       const operationId = yield* allocator.allocate()
       const predecessorOperationIds = [g1.current.trackerGraph.observation.operationId]
       const operation = makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
-      yield* executeTrackerGraphRead(operation)
-      yield* awaitAcceptedObservation(evaluations, operationId, g1.current.trackerGraph.observation.recordedAt)
+      const accepted = yield* executeTrackerGraphRead(operation).pipe(
+        Effect.andThen(
+          awaitAcceptedObservation(evaluations, operationId, g1.current.trackerGraph.observation.recordedAt)
+        ),
+        Effect.ensuring(owner.value.release)
+      )
+      if ((yield* applicationExit.snapshot).cutoffClosed) {
+        return {
+          acceptedAt: accepted.acceptedAt,
+          decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+        }
+      }
       return proofOf(yield* runDeliveryRuntimePhase(evaluations))
     })
   ).pipe(

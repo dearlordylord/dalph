@@ -218,7 +218,10 @@ it.effect("guards generic tracker and Git mutations with coordinator ownership",
         coordinatorOwnedGitWorktreeLayer(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})))
       ).pipe(
         Layer.provide(
-          Layer.succeed(CoordinatorOwnership, CoordinatorOwnership.of({ runMutation: (mutation) => mutation }))
+          Layer.succeed(
+            CoordinatorOwnership,
+            CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+          )
         )
       )
     )

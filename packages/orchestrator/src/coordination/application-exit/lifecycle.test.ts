@@ -37,16 +37,19 @@ it.effect("rolls back a preparing reservation when Exit closes admission before 
 it.effect("joins repeated Exit requests to one result and never registers a later owner", () =>
   Effect.gen(function* () {
     const lifecycle = yield* makeApplicationExitLifecycle()
-    const firstResult = yield* lifecycle.requestExit
-    const repeatedResult = yield* lifecycle.requestExit
+    const first = yield* lifecycle.requestExit
+    const repeated = yield* lifecycle.requestExit
 
-    expect(repeatedResult).toBe(firstResult)
+    expect(first.first).toBe(true)
+    expect(repeated.first).toBe(false)
+    expect(repeated.cutoffAt).toBe(first.cutoffAt)
+    expect(repeated.result).toBe(first.result)
     expect((yield* lifecycle.prepareForwardOwner("AtomicBoundary").pipe(Effect.flip))._tag).toBe("ApplicationExiting")
     expect(yield* lifecycle.snapshot).toEqual({ cutoffClosed: true, preparingOwnerCount: 0, registeredOwnerCount: 0 })
 
     const succeeded = ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })
     expect(yield* lifecycle.completeExit(succeeded)).toBe(true)
-    expect(yield* Deferred.await(firstResult)).toEqual(succeeded)
-    expect(yield* Deferred.await(repeatedResult)).toEqual(succeeded)
+    expect(yield* Deferred.await(first.result)).toEqual(succeeded)
+    expect(yield* Deferred.await(repeated.result)).toEqual(succeeded)
   })
 )

@@ -43,6 +43,8 @@ export type CoordinatorOwnershipError = CoordinatorLockObservationContradiction 
  * in-flight mutation when the scoped ownership signal fails.
  */
 export interface CoordinatorOwnershipCapability {
+  /** Releases this process's exact lock; later guarded mutations fail closed. */
+  readonly release: Effect.Effect<void>
   readonly runMutation: <A, E, R>(
     mutation: Effect.Effect<A, E, R>
   ) => Effect.Effect<A, E | CoordinatorOwnershipError, R>
@@ -119,17 +121,18 @@ export const controlledCoordinatorLockLayer = Layer.effectContext(
         return yield* new CoordinatorLockHeld({ gitCommonDirectory })
       }
 
-      yield* Effect.addFinalizer(() =>
-        Effect.gen(function* () {
-          yield* Deferred.fail(signal, new CoordinatorOwnershipLost({ gitCommonDirectory }))
-          yield* Ref.update(active, (current) => {
-            if (current.get(gitCommonDirectory)?.token !== token) return current
-            return new Map([...current].filter(([key]) => key !== gitCommonDirectory))
-          })
+      const release = Effect.gen(function* () {
+        yield* Deferred.fail(signal, new CoordinatorOwnershipLost({ gitCommonDirectory }))
+        yield* Ref.update(active, (current) => {
+          if (current.get(gitCommonDirectory)?.token !== token) return current
+          return new Map([...current].filter(([key]) => key !== gitCommonDirectory))
         })
-      )
+      })
+
+      yield* Effect.addFinalizer(() => release)
 
       return {
+        release,
         runMutation: <A, E, R>(mutation: Effect.Effect<A, E, R>) => guardCoordinatorMutation(signal, mutation)
       } satisfies CoordinatorOwnershipCapability
     })

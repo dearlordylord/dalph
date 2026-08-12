@@ -1774,7 +1774,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const coordinatorOwnershipLayer = Layer.succeed(
         CoordinatorOwnership,
         /* v8 ignore next -- Activation construction requires capability presence; cassette mutations use controlled authorities. */
-        CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
       )
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())

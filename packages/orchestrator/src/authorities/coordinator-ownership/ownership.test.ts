@@ -145,6 +145,23 @@ const coordinatorLockContract = <Services, E>(
       )
     )
 
+    it.effect("allows a successor immediately after the application explicitly releases ownership", () =>
+      Effect.scoped(
+        withTemporaryGitCommonDirectory((target) =>
+          Effect.gen(function* () {
+            const lock = yield* CoordinatorLock
+            const ownership = yield* lock.acquire(target)
+
+            yield* ownership.release
+
+            expect(yield* ownership.runMutation(Effect.void).pipe(Effect.flip)).toBeInstanceOf(CoordinatorOwnershipLost)
+            const successor = yield* lock.acquire(target)
+            yield* successor.runMutation(Effect.void)
+          }).pipe(Effect.provide(layer))
+        )
+      )
+    )
+
     it.effect("interrupts every affected mutation after a contradictory observation", () =>
       Effect.scoped(
         withTemporaryGitCommonDirectory((target) =>

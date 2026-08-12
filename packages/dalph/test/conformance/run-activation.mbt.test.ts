@@ -183,7 +183,7 @@ const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWor
 const earlierPolicy = initialPolicy
 const ownershipLayer = Layer.succeed(
   CoordinatorOwnership,
-  CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
+  CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 )
 
 const attemptFor = (taskId: TaskId, suffix: string) =>
@@ -523,7 +523,9 @@ const makeRunActivationDriverImplementation = () => {
           )
         }
         const context = yield* Layer.build(
-          journaledRunBootstrapLayer(expectedRunId, runtimeLayer).pipe(Layer.provide(dependencies))
+          journaledRunBootstrapLayer(expectedRunId, runtimeLayer, yield* makeApplicationExitLifecycle()).pipe(
+            Layer.provide(dependencies)
+          )
         )
         return yield* use(Context.get(context, JournaledRunBootstrap))
       })

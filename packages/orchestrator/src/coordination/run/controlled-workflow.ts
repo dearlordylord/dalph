@@ -20,7 +20,7 @@ import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 const controlledOwnershipLayer = Layer.succeed(
   CoordinatorOwnership,
   /* v8 ignore next -- #167 owns controlled coordinator-lock behavior; #195 only installs the ordinary capability. */
-  CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
+  CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 )
 
 /** Installs an in-memory journal around otherwise ordinary workflow boundary implementations. */

@@ -46,6 +46,7 @@ import {
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { runStabilizedDelivery } from "./run-stabilization.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import { type ApplicationExitLifecycleService, makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 const runId = RunId.make("run-stabilization")
 const target = FixtureTarget.make("run-stabilization-target")
 const emptyFrontier = { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] }
@@ -163,6 +164,102 @@ const signalOf = (state: SubscriptionRef.SubscriptionRef<DeliveryRuntimeEvaluati
   get: SubscriptionRef.get(state),
   changes: SubscriptionRef.changes(state)
 })
+
+const runtimeResourcesFor = Effect.fn("RunStabilizationTest.runtimeResourcesFor")(function* (
+  lifecycle: ApplicationExitLifecycleService
+) {
+  const integrationTargets = yield* makeIntegrationTargetResourceController()
+  return deliveryRuntimeResourceCapabilitiesLayer(
+    yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets, lifecycle)
+  )
+})
+
+it.effect("starts no tracker stabilization read after the application Exit cutoff", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const g1 = graph("cutoff-before-G2", 1, snapshot("cutoff-before-G2", []))
+      const state = yield* SubscriptionRef.make(evaluation(base, g1))
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const resources = yield* runtimeResourcesFor(lifecycle)
+      const reads = yield* Ref.make(0)
+      yield* lifecycle.requestExit
+
+      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+        Effect.provide(supportWithoutResources),
+        Effect.provide(resources),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("cutoff G1 has no executable action") })
+        ),
+        Effect.provide(
+          Layer.mock(WorkflowInterpreter, {
+            readTrackerGraph: () => Ref.update(reads, (count) => count + 1).pipe(Effect.andThen(Effect.die("no G2")))
+          })
+        )
+      )
+
+      expect(yield* Ref.get(reads)).toBe(0)
+      expect(proof.acceptedAt).toBe(g1.observation.recordedAt)
+    })
+  )
+)
+
+it.effect("records a stabilization read admitted before Exit but starts no phase-two action", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const open = snapshot("cutoff-during-G2", [
+        { id: TaskId.make("A"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+      ])
+      const g1 = graph("cutoff-during-G2-G1", 1, open)
+      const state = yield* SubscriptionRef.make(evaluation(base, g1))
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const resources = yield* runtimeResourcesFor(lifecycle)
+      const readStarted = yield* Deferred.make<void>()
+      const finishRead = yield* Deferred.make<void>()
+      const executions = yield* Ref.make(0)
+      const interpreter = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+          Deferred.succeed(readStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(finishRead)),
+            Effect.flatMap(() => {
+              const g2 = graph(operation.operationId, 4, open)
+              return SubscriptionRef.set(
+                state,
+                evaluation(base, g2, { ...emptyFrontier, proposals: [freshGraphReadProposal(g2)] })
+              ).pipe(Effect.as(open))
+            })
+          )
+      })
+      const running = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+        Effect.provide(supportWithoutResources),
+        Effect.provide(resources),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: ({ proposal }) =>
+              Ref.update(executions, (count) => count + 1).pipe(
+                Effect.as({ _tag: "ActionCompleted", proposalId: proposal.id } as const)
+              )
+          })
+        ),
+        Effect.provide(interpreter),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(readStarted)
+      yield* lifecycle.requestExit
+      yield* Deferred.succeed(finishRead, undefined)
+
+      expect(yield* Fiber.join(running)).toEqual({
+        acceptedAt: JournalPosition.make(4),
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      })
+      expect(yield* Ref.get(executions)).toBe(0)
+    })
+  )
+)
 
 it.effect("requests accepted G2 only after G1 becomes quiescent", () =>
   Effect.scoped(

@@ -133,7 +133,11 @@ export const nodeCoordinatorLockAdapterLayer = Layer.effect(
       }).pipe(Effect.onError(() => Scope.close(directoryScope, Exit.void)))
 
       const signal = yield* Deferred.make<never, CoordinatorOwnershipError>()
-      yield* Effect.addFinalizer(() => Deferred.fail(signal, new CoordinatorOwnershipLost({ gitCommonDirectory })))
+      const release = Effect.gen(function* () {
+        yield* Deferred.fail(signal, new CoordinatorOwnershipLost({ gitCommonDirectory }))
+        yield* Scope.close(directoryScope, Exit.void)
+      })
+      yield* Effect.addFinalizer(() => release)
 
       const observe = observeOwnership(fileSystem, directory, gitCommonDirectory)
       const failOwnership = (failure: CoordinatorOwnershipError) => Deferred.fail(signal, failure)
@@ -141,13 +145,13 @@ export const nodeCoordinatorLockAdapterLayer = Layer.effect(
         Effect.repeat(ownershipObservationSchedule),
         Effect.tapError(failOwnership),
         Effect.ignore,
-        Effect.forkScoped
+        Effect.forkIn(directoryScope)
       )
 
       const runMutation: CoordinatorOwnershipCapability["runMutation"] = (mutation) =>
         guardCoordinatorMutation(signal, observe.pipe(Effect.tapError(failOwnership), Effect.andThen(mutation)))
 
-      return { runMutation }
+      return { release, runMutation }
     })
 
     return CoordinatorLock.of({ acquire })

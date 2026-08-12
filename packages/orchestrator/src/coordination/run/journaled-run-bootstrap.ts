@@ -43,11 +43,11 @@ import {
   JournalStore,
   RunLifecycleJournal
 } from "../../workflow-journal/store.js"
+import { type ApplicationExitLifecycleService, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
 import {
-  type ApplicationExitLifecycleService,
-  type ForwardOwnerLease,
-  makeApplicationExitLifecycle
-} from "../application-exit/lifecycle.js"
+  type ApplicationProcessLifecycleService,
+  makeApplicationExitRequestBoundary
+} from "../application-exit/application-shell.js"
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
@@ -112,7 +112,8 @@ const validateRun = Effect.fn("JournaledRunBootstrap.validateRun")(function* (
 export const journaledRunBootstrapLayer = (
   expectedRunId: RunId,
   runtimeLayer: (input: JournaledRuntimeLayerInput) => JournaledRuntimeLayer,
-  suppliedApplicationExit?: ApplicationExitLifecycleService
+  applicationExit: ApplicationExitLifecycleService,
+  processLifecycle: ApplicationProcessLifecycleService = { requestEnd: () => Effect.void }
 ) =>
   Layer.effect(
     JournaledRunBootstrap,
@@ -120,8 +121,8 @@ export const journaledRunBootstrapLayer = (
       const ownership = yield* CoordinatorOwnership
       const storage = yield* JournalStore
       const lifecycle = yield* RunLifecycleJournal
-      const applicationExit = suppliedApplicationExit ?? (yield* makeApplicationExitLifecycle())
       const runtimeState = yield* Ref.make<RuntimeControlState>({ _tag: "RuntimeInactive" })
+      const activeRuntimeClosed = yield* Ref.make<Option.Option<Deferred.Deferred<void>>>(Option.none())
       const activation = yield* Semaphore.make(1)
       const processRuntimeCapabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
         yield* makeIntegrationTargetResourceController(),
@@ -188,89 +189,137 @@ export const journaledRunBootstrapLayer = (
         initial: ValidWorkflowJournalHistory,
         program: Effect.Effect<RunFinalityProof, E, R>
       ) =>
-        Effect.scoped(
-          Effect.uninterruptibleMask((restore) =>
-            Effect.gen(function* () {
-              const downstream = runtimeLayer({ runId }).pipe(
-                Layer.provideMerge(processRuntimeLayer),
-                Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
-              )
-              const runtime = downstream.pipe(Layer.provideMerge(journalLayer(runId, target, initial, storage)))
-              const context = yield* Layer.build(runtime)
-              const journal = Context.get(context, Journal)
-              const controls: RuntimeControls = {
-                attemptChoice: Context.get(context, AttemptChoiceControl),
-                controlDirection: Context.get(context, ControlDirectionApplication),
-                deliveryRuntimeResources: Context.get(context, DeliveryRuntimeResources),
-                journal,
-                operationIdAllocator: Context.get(context, OperationIdAllocator),
-                runId,
-                target,
-                taskClaimReacquisition: Context.get(context, TaskClaimReacquisitionControl),
-                taskWorkCapacity: Context.get(context, TaskWorkCapacityControl),
-                workflowInterpreter: Context.get(context, WorkflowInterpreter),
-                workflowTrace: Context.get(context, WorkflowTrace)
-              }
-              const drained = yield* Deferred.make<void>()
-              yield* Ref.set(runtimeState, { _tag: "RuntimeAcceptingControl", activeLeases: 0, controls, drained })
-              const result = yield* restore(Effect.provide(program, context)).pipe(Effect.exit)
-              yield* closeControlAdmission()
-              return yield* Exit.match(result, {
-                onFailure: Effect.failCause,
-                onSuccess: (proof) =>
-                  proof.decision._tag === "RunMustRemainActive"
-                    ? Effect.succeed(proof.decision)
-                    : journal.state.get.pipe(
-                        Effect.map(({ records }) =>
-                          records.some(
-                            ({ event, position }) =>
-                              (proof.acceptedAt === null || position > proof.acceptedAt) &&
-                              event._tag !== "TaskWorkCapacityChanged"
+        Effect.gen(function* () {
+          const runtimeClosed = yield* Deferred.make<void>()
+          yield* Ref.set(activeRuntimeClosed, Option.some(runtimeClosed))
+          return yield* Effect.scoped(
+            Effect.uninterruptibleMask((restore) =>
+              Effect.gen(function* () {
+                const downstream = runtimeLayer({ runId }).pipe(
+                  Layer.provideMerge(processRuntimeLayer),
+                  Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
+                )
+                const runtime = downstream.pipe(Layer.provideMerge(journalLayer(runId, target, initial, storage)))
+                const context = yield* Layer.build(runtime)
+                const journal = Context.get(context, Journal)
+                const controls: RuntimeControls = {
+                  attemptChoice: Context.get(context, AttemptChoiceControl),
+                  controlDirection: Context.get(context, ControlDirectionApplication),
+                  deliveryRuntimeResources: Context.get(context, DeliveryRuntimeResources),
+                  journal,
+                  operationIdAllocator: Context.get(context, OperationIdAllocator),
+                  runId,
+                  target,
+                  taskClaimReacquisition: Context.get(context, TaskClaimReacquisitionControl),
+                  taskWorkCapacity: Context.get(context, TaskWorkCapacityControl),
+                  workflowInterpreter: Context.get(context, WorkflowInterpreter),
+                  workflowTrace: Context.get(context, WorkflowTrace)
+                }
+                const drained = yield* Deferred.make<void>()
+                yield* Ref.set(runtimeState, { _tag: "RuntimeAcceptingControl", activeLeases: 0, controls, drained })
+                const result = yield* restore(Effect.provide(program, context)).pipe(Effect.exit)
+                yield* closeControlAdmission()
+                return yield* Exit.match(result, {
+                  onFailure: Effect.failCause,
+                  onSuccess: (proof) =>
+                    proof.decision._tag === "RunMustRemainActive"
+                      ? Effect.succeed(proof.decision)
+                      : journal.state.get.pipe(
+                          Effect.map(({ records }) =>
+                            records.some(
+                              ({ event, position }) =>
+                                (proof.acceptedAt === null || position > proof.acceptedAt) &&
+                                event._tag !== "TaskWorkCapacityChanged"
+                            )
+                              ? RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+                              : proof.decision
                           )
-                            ? RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
-                            : proof.decision
                         )
-                      )
+                })
               })
-            })
+            )
+          ).pipe(
+            Effect.ensuring(
+              Deferred.succeed(runtimeClosed, undefined).pipe(
+                Effect.andThen(Ref.set(activeRuntimeClosed, Option.none()))
+              )
+            )
           )
-        )
+        })
 
       const finish = Effect.fn("JournaledRunBootstrap.finish")(function* (
         runId: RunId,
         finality: RunFinalityDecisionType
       ) {
-        if (finality._tag === "RunMayTerminate") yield* lifecycle.terminateRun(runId)
+        if (finality._tag !== "RunMayTerminate") return finality
+        const preparing = yield* applicationExit
+          .prepareForwardOwner("AuthorizedRunTerminationAppend")
+          .pipe(Effect.option)
+        if (Option.isNone(preparing)) {
+          return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+        }
+        const owner = yield* preparing.value.register.pipe(
+          Effect.onError(() => preparing.value.cancel),
+          Effect.option
+        )
+        if (Option.isNone(owner)) {
+          return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+        }
+        yield* lifecycle.terminateRun(runId).pipe(Effect.ensuring(owner.value.release))
         return finality
       })
 
+      const applicationExitBoundary = yield* makeApplicationExitRequestBoundary(
+        applicationExit,
+        {
+          flushProducedJournalWrites: applicationExit.awaitForwardOwnersReleased,
+          closeProcessLocalResources: Effect.gen(function* () {
+            const active = yield* Ref.get(activeRuntimeClosed)
+            if (Option.isSome(active)) yield* Deferred.await(active.value)
+            yield* processRuntimeCapabilities.resources.integrationTargets.releaseAll
+            yield* processRuntimeCapabilities.observation.close
+          }),
+          releaseCoordinatorLock: ownership.release
+        },
+        processLifecycle
+      )
+
       const activate: JournaledRunBootstrapService["activate"] = (target, initialControlPolicySource, runId, program) =>
         activation.withPermit(
-          Effect.gen(function* () {
-            if (runId !== expectedRunId) {
-              return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
-            }
-            const current = yield* inspectStartupRecovery(runId, lifecycle)
-            if (current === undefined) {
-              const initialControlPolicy = yield* initialControlPolicySource
-              yield* lifecycle.beginRun(runId, target, initialControlPolicy).pipe(
-                Effect.catch((beginFailure) =>
-                  lifecycle.readRunForRecovery(runId, target).pipe(
-                    Effect.asVoid,
-                    Effect.mapError((reconciliationFailure) =>
-                      reconciliationFailure._tag === "WorkflowRunTargetMismatch" ||
-                      reconciliationFailure._tag === "WorkflowRunAlreadyTerminated"
-                        ? reconciliationFailure
-                        : beginFailure
+          Effect.acquireUseRelease(
+            applicationExit
+              .prepareForwardOwner("RunActivation")
+              .pipe(
+                Effect.flatMap((preparation) => preparation.register.pipe(Effect.onError(() => preparation.cancel)))
+              ),
+            () =>
+              Effect.gen(function* () {
+                if (runId !== expectedRunId) {
+                  return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
+                }
+                const current = yield* inspectStartupRecovery(runId, lifecycle)
+                if (current === undefined) {
+                  const initialControlPolicy = yield* initialControlPolicySource
+                  yield* lifecycle.beginRun(runId, target, initialControlPolicy).pipe(
+                    Effect.catch((beginFailure) =>
+                      lifecycle.readRunForRecovery(runId, target).pipe(
+                        Effect.asVoid,
+                        Effect.mapError((reconciliationFailure) =>
+                          reconciliationFailure._tag === "WorkflowRunTargetMismatch" ||
+                          reconciliationFailure._tag === "WorkflowRunAlreadyTerminated"
+                            ? reconciliationFailure
+                            : beginFailure
+                        )
+                      )
                     )
                   )
-                )
-              )
-            }
-            yield* lifecycle.readRunForRecovery(runId, target)
-            const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-            return yield* finish(runId, yield* runWithJournal(runId, target, initial, program))
-          })
+                }
+                yield* lifecycle.readRunForRecovery(runId, target)
+                const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
+                return yield* finish(runId, yield* runWithJournal(runId, target, initial, program))
+              }),
+            (activationOwner) => activationOwner.release
+          )
         )
 
       const operatorControl: JournaledRunBootstrapService["operatorControl"] = {
@@ -302,6 +351,10 @@ export const journaledRunBootstrapLayer = (
         setTaskWorkCapacity: (input) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.apply(input))
       }
 
-      return JournaledRunBootstrap.of({ activate, applicationExit, operatorControl })
+      return JournaledRunBootstrap.of({
+        activate,
+        operatorControl,
+        requestApplicationExit: applicationExitBoundary.requestExit
+      })
     })
   )

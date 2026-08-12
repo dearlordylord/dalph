@@ -48,7 +48,12 @@ export type ApplicationExitResult = typeof ApplicationExitResult.Type
 /** A forward-progress request reached the shared boundary after Exit closed it. */
 export class ApplicationExiting extends Schema.TaggedError<ApplicationExiting>()("ApplicationExiting", {}) {}
 
-export type ForwardOwnerKind = "AtomicBoundary" | "AuthorizedRunTerminationAppend" | "InterruptibleBoundary"
+export type ForwardOwnerKind =
+  | "AtomicBoundary"
+  | "AuthorizedRunTerminationAppend"
+  | "InterruptibleBoundary"
+  /** The process-local activation scope that must close before the application releases its coordinator lock. */
+  | "RunActivation"
 
 /** One side of the indivisible permission-to-registration admission handoff. */
 export type ForwardOwnerAdmission = Data.TaggedEnum<{

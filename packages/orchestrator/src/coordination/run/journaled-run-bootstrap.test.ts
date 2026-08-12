@@ -3,6 +3,7 @@ import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Scope, Stream } from "effect"
 import { expect } from "vitest"
+import { TestClock } from "effect/testing"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import {
@@ -35,6 +36,7 @@ import {
 import { OperationId } from "../../workflow/identity.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import { projectWorkflowOccurrences } from "../../workflow/registry/occurrence-projection.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { intentRecordKey } from "../../workflow-journal/record-key.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
@@ -43,6 +45,7 @@ import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap } from "./run.js"
 import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
 import { type ApplicationExitLifecycleService, makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
+import type { ApplicationProcessLifecycleService } from "../application-exit/application-shell.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
@@ -61,10 +64,7 @@ const finalityProof = (
     | ReturnType<typeof RunFinalityDecision.RunMayTerminate>
     | ReturnType<typeof RunFinalityDecision.RunMustRemainActive>
 ) => ({ acceptedAt: JournalPosition.make(1), decision })
-const ownershipLayer = Layer.succeed(
-  CoordinatorOwnership,
-  CoordinatorOwnership.of({ runMutation: (mutation) => mutation })
-)
+const defaultOwnership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 const emptyGraph = TaskDagSnapshot.project(
   TrackerSnapshot.make({ revision: TrackerRevision.make("bootstrap-control-empty"), tasks: [] })
 )
@@ -137,23 +137,224 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   expectedRunId: RunId,
   storage: JournalStore["Service"],
   trackerGraphReader: TrackerGraphReader["Service"] = defaultTrackerGraphReader,
-  applicationExit?: ApplicationExitLifecycleService
+  applicationExit?: ApplicationExitLifecycleService,
+  processLifecycle?: ApplicationProcessLifecycleService,
+  ownership: CoordinatorOwnership["Service"] = defaultOwnership
 ) {
   const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
   const dependencies = Layer.mergeAll(
     Layer.succeed(JournalStore, storage),
     Layer.succeed(RunLifecycleJournal, Context.get(journalContext, RunLifecycleJournal)),
-    ownershipLayer
+    Layer.succeed(CoordinatorOwnership, ownership)
   )
+  const sharedApplicationExit = applicationExit ?? (yield* makeApplicationExitLifecycle())
   const application = journaledRunBootstrapLayer(
     expectedRunId,
     ({ runId }) => runtimeLayer(runId, trackerGraphReader),
-    applicationExit
+    sharedApplicationExit,
+    processLifecycle
   ).pipe(Layer.provide(dependencies))
   return Context.get(yield* Layer.build(application), JournaledRunBootstrap)
 })
 
-it.effect("one application Exit cutoff rejects control admission in every Run bootstrap", () =>
+it.effect("an idle application Exit closes its runtime, releases the coordinator lock, and journals no Exit fact", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-idle-exit")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const applicationExit = yield* makeApplicationExitLifecycle()
+      const runtimeActive = yield* Deferred.make<void>()
+      const lockReleased = yield* Deferred.make<void>()
+      const requestedStatus = yield* Deferred.make<number>()
+      const chronology = yield* Ref.make<Array<string>>([])
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        applicationExit,
+        {
+          requestEnd: ({ status }) =>
+            Ref.update(chronology, (events) => [...events, "process-end-requested"]).pipe(
+              Effect.andThen(Deferred.succeed(requestedStatus, status)),
+              Effect.asVoid
+            )
+        },
+        CoordinatorOwnership.of({
+          release: Ref.update(chronology, (events) => [...events, "coordinator-lock-released"]).pipe(
+            Effect.andThen(Deferred.succeed(lockReleased, undefined)),
+            Effect.asVoid
+          ),
+          runMutation: (mutation) => mutation
+        })
+      )
+      const running = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(runtimeActive, undefined).pipe(
+            Effect.andThen(applicationExit.awaitExitRequested),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))),
+            Effect.ensuring(Ref.update(chronology, (events) => [...events, "runtime-closed"]))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(runtimeActive)
+
+      const result = yield* bootstrap.requestApplicationExit
+
+      expect(result).toMatchObject({ _tag: "Succeeded", requestedStatus: 0 })
+      expect(yield* Deferred.isDone(lockReleased)).toBe(true)
+      expect(yield* Deferred.await(requestedStatus)).toBe(0)
+      expect(yield* Ref.get(chronology)).toEqual([
+        "runtime-closed",
+        "coordinator-lock-released",
+        "process-end-requested"
+      ])
+      expect(yield* Fiber.join(running)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+      const records = yield* storage.read(runId)
+      expect(records.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+      expect((yield* projectWorkflowOccurrences(records)).occurrences).toEqual([])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("times out instead of interrupting a non-idle Run whose family owner has not drained", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-non-idle-exit")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const applicationExit = yield* makeApplicationExitLifecycle()
+      const runtimeActive = yield* Deferred.make<void>()
+      const lockReleased = yield* Ref.make(false)
+      const requestedStatuses = yield* Ref.make<ReadonlyArray<number>>([])
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        applicationExit,
+        { requestEnd: ({ status }) => Ref.update(requestedStatuses, (statuses) => [...statuses, status]) },
+        CoordinatorOwnership.of({ release: Ref.set(lockReleased, true), runMutation: (mutation) => mutation })
+      )
+      const running = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(runtimeActive, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(runtimeActive)
+      const exiting = yield* bootstrap.requestApplicationExit.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust("5 seconds")
+
+      expect(yield* Fiber.join(exiting)).toMatchObject({ _tag: "TimedOut", requestedStatus: 1 })
+      expect(yield* Ref.get(lockReleased)).toBe(false)
+      expect(yield* Ref.get(requestedStatuses)).toEqual([1])
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+      expect(running.pollUnsafe()).toBeUndefined()
+      yield* Fiber.interrupt(running)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("finishes an already-admitted Run termination append before successful Exit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-termination-append-at-exit")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      const terminationStarted = yield* Deferred.make<void>()
+      const releaseTermination = yield* Deferred.make<void>()
+      const lockReleased = yield* Deferred.make<void>()
+      const applicationExit = yield* makeApplicationExitLifecycle()
+      const storage = JournalStore.of({
+        ...delegate,
+        terminateRun: (requestedRunId) =>
+          Deferred.succeed(terminationStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseTermination)),
+            Effect.andThen(delegate.terminateRun(requestedRunId))
+          )
+      })
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        applicationExit,
+        undefined,
+        CoordinatorOwnership.of({
+          release: Deferred.succeed(lockReleased, undefined).pipe(Effect.asVoid),
+          runMutation: (mutation) => mutation
+        })
+      )
+      const running = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.succeed(finalityProof(RunFinalityDecision.RunMayTerminate()))
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(terminationStarted)
+
+      const exiting = yield* bootstrap.requestApplicationExit.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(yield* Deferred.isDone(lockReleased)).toBe(false)
+
+      yield* Deferred.succeed(releaseTermination, undefined)
+      expect(yield* Fiber.join(running)).toEqual({ _tag: "RunMayTerminate" })
+      expect(yield* Fiber.join(exiting)).toMatchObject({ _tag: "Succeeded", requestedStatus: 0 })
+      expect(yield* Deferred.isDone(lockReleased)).toBe(true)
+      expect((yield* delegate.read(runId)).map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan",
+        "WorkflowRunTerminated"
+      ])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("reopens an unfinished Run normally after an authored Exit death cut", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-reopen-after-exit-death")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy)
+
+      const restarted = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        yield* makeApplicationExitLifecycle()
+      )
+      const entered = yield* Ref.make(false)
+      const finality = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+
+      expect(
+        yield* restarted.activate(
+          target,
+          Effect.die("ordinary reopening must retain the recorded initial policy"),
+          runId,
+          Ref.set(entered, true).pipe(Effect.as(finalityProof(finality)))
+        )
+      ).toEqual(finality)
+      expect(yield* Ref.get(entered)).toBe(true)
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("one application Exit driver and cutoff are shared by every Run bootstrap", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const firstTarget = FixtureTarget.make("shared-exit-first-run")
@@ -163,19 +364,102 @@ it.effect("one application Exit cutoff rejects control admission in every Run bo
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
       const applicationExit = yield* makeApplicationExitLifecycle()
-      const first = yield* buildBootstrap(firstRunId, storage, defaultTrackerGraphReader, applicationExit)
-      const second = yield* buildBootstrap(secondRunId, storage, defaultTrackerGraphReader, applicationExit)
+      const firstProcessEnds = yield* Ref.make(0)
+      const secondProcessEnds = yield* Ref.make(0)
+      const first = yield* buildBootstrap(firstRunId, storage, defaultTrackerGraphReader, applicationExit, {
+        requestEnd: () => Ref.update(firstProcessEnds, (count) => count + 1)
+      })
+      const second = yield* buildBootstrap(secondRunId, storage, defaultTrackerGraphReader, applicationExit, {
+        requestEnd: () => Ref.update(secondProcessEnds, (count) => count + 1)
+      })
 
-      yield* first.applicationExit.requestExit
+      const firstResult = yield* first.requestApplicationExit
+      const repeatedResult = yield* second.requestApplicationExit
 
-      expect((yield* second.applicationExit.prepareForwardOwner("InterruptibleBoundary").pipe(Effect.flip))._tag).toBe(
+      expect(repeatedResult).toEqual(firstResult)
+      expect(yield* Ref.get(firstProcessEnds)).toBe(1)
+      expect(yield* Ref.get(secondProcessEnds)).toBe(0)
+      expect((yield* applicationExit.prepareForwardOwner("InterruptibleBoundary").pipe(Effect.flip))._tag).toBe(
         "ApplicationExiting"
       )
-      expect(yield* second.applicationExit.snapshot).toEqual({
+      expect(yield* applicationExit.snapshot).toEqual({
         cutoffClosed: true,
         preparingOwnerCount: 0,
         registeredOwnerCount: 0
       })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("rejects a Run activation that reaches the application after the Exit cutoff", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-activation-after-exit")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const applicationExit = yield* makeApplicationExitLifecycle()
+      const bootstrap = yield* buildBootstrap(runId, storage, defaultTrackerGraphReader, applicationExit)
+      yield* applicationExit.requestExit
+
+      expect(
+        yield* bootstrap
+          .activate(
+            target,
+            Effect.succeed(initialPolicy),
+            runId,
+            Effect.die("a post-cutoff activation must not enter its runtime")
+          )
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "ApplicationExiting" })
+      expect(yield* storage.read(runId)).toEqual([])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("rejects an activation queued before Exit when it reaches the cutoff after the active Run closes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-queued-activation-at-exit")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const applicationExit = yield* makeApplicationExitLifecycle()
+      const bootstrap = yield* buildBootstrap(runId, storage, defaultTrackerGraphReader, applicationExit)
+      const active = yield* Deferred.make<void>()
+      const finish = yield* Deferred.make<void>()
+      const first = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(active, undefined).pipe(
+            Effect.andThen(Deferred.await(finish)),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(active)
+      const queuedProgramEntered = yield* Ref.make(false)
+      const queued = yield* bootstrap
+        .activate(
+          target,
+          Effect.die("the established Run must not reread an initial policy"),
+          runId,
+          Ref.set(queuedProgramEntered, true).pipe(
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+
+      yield* applicationExit.requestExit
+      yield* Deferred.succeed(finish, undefined)
+      yield* Fiber.join(first)
+
+      expect(yield* Fiber.join(queued).pipe(Effect.flip)).toMatchObject({ _tag: "ApplicationExiting" })
+      expect(yield* Ref.get(queuedProgramEntered)).toBe(false)
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -645,31 +929,31 @@ it.effect("rejects an unapplied Operator Pause after the application Exit cutoff
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      const bootstrap = yield* buildBootstrap(runId, storage)
+      const applicationExit = yield* makeApplicationExitLifecycle()
+      const bootstrap = yield* buildBootstrap(runId, storage, defaultTrackerGraphReader, applicationExit)
       const runtimeActive = yield* Deferred.make<void>()
-      const finish = yield* Deferred.make<void>()
       const running = yield* bootstrap
         .activate(
           target,
           Effect.succeed(initialPolicy),
           runId,
           Deferred.succeed(runtimeActive, undefined).pipe(
-            Effect.andThen(Deferred.await(finish)),
+            Effect.andThen(applicationExit.awaitExitRequested),
             Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
           )
         )
         .pipe(Effect.forkChild)
       yield* Deferred.await(runtimeActive)
 
-      yield* bootstrap.applicationExit.requestExit
-      expect(
-        yield* bootstrap.operatorControl
-          .applyControlDirection({ direction: "Pause", subject: { _tag: "Run", runId } })
-          .pipe(Effect.flip)
-      ).toMatchObject({ _tag: "ApplicationExiting" })
+      yield* bootstrap.requestApplicationExit
+      for (const direction of ["Pause", "Unpause"] as const) {
+        expect(
+          yield* bootstrap.operatorControl
+            .applyControlDirection({ direction, subject: { _tag: "Run", runId } })
+            .pipe(Effect.flip)
+        ).toMatchObject({ _tag: "ApplicationExiting" })
+      }
       expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
-
-      yield* Deferred.succeed(finish, undefined)
       yield* Fiber.join(running)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
@@ -959,6 +1243,73 @@ it.effect("rechecks a terminal decision after an already-accepted Operator Pause
 
       yield* Deferred.succeed(releasePauseAppend, undefined)
       yield* Fiber.join(pause)
+      expect(yield* Fiber.join(running)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan",
+        "ControlDirectionApplied"
+      ])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("flushes an already-started Pause append before successful Exit and preserves the applied direction", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-pause-flush-before-exit")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      const pauseAppendStarted = yield* Deferred.make<void>()
+      const releasePauseAppend = yield* Deferred.make<void>()
+      const runtimeActive = yield* Deferred.make<void>()
+      const lockReleased = yield* Deferred.make<void>()
+      const applicationExit = yield* makeApplicationExitLifecycle()
+      const storage = JournalStore.of({
+        ...delegate,
+        append: (requestedRunId, key, event) =>
+          event._tag === "ControlDirectionApplied"
+            ? Deferred.succeed(pauseAppendStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releasePauseAppend)),
+                Effect.andThen(delegate.append(requestedRunId, key, event))
+              )
+            : delegate.append(requestedRunId, key, event)
+      })
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        applicationExit,
+        undefined,
+        CoordinatorOwnership.of({
+          release: Deferred.succeed(lockReleased, undefined).pipe(Effect.asVoid),
+          runMutation: (mutation) => mutation
+        })
+      )
+      const running = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(runtimeActive, undefined).pipe(
+            Effect.andThen(applicationExit.awaitExitRequested),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(runtimeActive)
+      const pause = yield* bootstrap.operatorControl
+        .applyControlDirection({ direction: "Pause", subject: { _tag: "Run", runId } })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(pauseAppendStarted)
+
+      const exiting = yield* bootstrap.requestApplicationExit.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(yield* Deferred.isDone(lockReleased)).toBe(false)
+
+      yield* Deferred.succeed(releasePauseAppend, undefined)
+      yield* Fiber.join(pause)
+      expect(yield* Fiber.join(exiting)).toMatchObject({ _tag: "Succeeded" })
+      expect(yield* Deferred.isDone(lockReleased)).toBe(true)
       expect(yield* Fiber.join(running)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
       expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual([
         "WorkflowRunBegan",

@@ -23,6 +23,7 @@ import {
 } from "../application-exit/lifecycle.js"
 
 export interface DeliveryRuntimeResourcesService {
+  readonly applicationExit: ApplicationExitLifecycleService
   readonly integrationTargets: IntegrationTargetResourceController
   readonly makeAdmissionController: (
     initial: DeliveryTaskWorkAdmissionBasis
@@ -43,6 +44,7 @@ export const deliveryRuntimeResourcesOf = (
   applicationExit: ApplicationExitLifecycle["Service"]
 ): DeliveryRuntimeResourcesService => {
   return {
+    applicationExit,
     integrationTargets,
     makeAdmissionController: (initial) =>
       makeDeliveryRuntimeAdmissionController(initial, integrationTargets, applicationExit),
