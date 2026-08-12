@@ -223,8 +223,10 @@ the remaining useful quick work settles; a drain still unresolved at five
 seconds force-terminates nonzero. Restart restores no Exit mode or timer and
 uses ordinary Run establishment and owning-boundary reconciliation.
 
-The accepted chronology and model/test mapping are in
+The accepted chronology is in
 [issue-169-graceful-application-exit.md](scenarios/issue-169-graceful-application-exit.md),
+the exact model/test mapping is in
+[issue-203-application-exit-model-mapping.md](scenarios/issue-203-application-exit-model-mapping.md),
 and the durable-boundary trade-off is recorded in
 [ADR 0013](adr/0013-bound-graceful-application-exit.md).
 
@@ -394,7 +396,9 @@ ordinary repository verification runs `pnpm check:all`.
 
 Current model boundaries include
 [`plannedAttemptExecutor.qnt`](../specs/plannedAttemptExecutor.qnt) and
-[`acceptedResultIntegration.qnt`](../specs/acceptedResultIntegration.qnt).
+[`acceptedResultIntegration.qnt`](../specs/acceptedResultIntegration.qnt), and
+the process-local lifecycle decisions in
+[`applicationExit.qnt`](../specs/applicationExit.qnt).
 
 [QUINT-GUIDE.md](QUINT-GUIDE.md) covers how to write a model here: guard and
 invariant conventions, the places Quint fails silently, and where these models

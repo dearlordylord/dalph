@@ -4,7 +4,7 @@ Status: accepted
 
 Dalph keeps one Quint model per subject-scoped decision boundary, each with its
 own executable conformance adapter under
-`packages/dalph/test/conformance/*.mbt.test.ts`. Seven exist:
+`packages/dalph/test/conformance/*.mbt.test.ts`. Eight exist:
 
 | Model | Owns | Issues |
 |---|---|---|
@@ -15,6 +15,7 @@ own executable conformance adapter under
 | `specs/controlDirectionApplication.qnt` | receiving a Pause or Unpause as ephemeral against applying one exact run-or-task direction as a durable Operator-initiated action | 155, 166 |
 | `specs/plannedAttemptExecutor.qnt` | the same-process executor boundary: responsibility, durable command intent, exact response versus command/state projection evidence, correlation and ordinal settlement, bounded continuation and Stop suspension commands, recovery reconciliation, and task-work position ownership. Executable seam: `packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts` invokes the production executor protocol and admission controller. | 65, 158 |
 | `specs/runActivation.qnt` | one idempotent Run-entry boundary: exact target and Run identity, lazy first policy versus the latest durable policy, reduction of exactly one unfinished history, independent reconstruction of every retained task-work position before new admission, and identical quiescence/finality handling after a new or reconstructed beginning. Process loss clears only process-local activation state; the same ordinary entry establishes the Run again from durable history. Executable seam: `packages/dalph/test/conformance/run-activation.mbt.test.ts` invokes production lifecycle, startup inspection, history reduction, recovery projection, the ordinary delivery relation's admission basis, admission, planned-attempt ambiguity reconciliation, and finality seams. | 195 |
+| `specs/applicationExit.qnt` | one process-local graceful application Exit decision boundary: cutoff-linearized admission, joined requests, typed owner disposition, exact executor evidence, enumerated quick drain actions, five monotonic ticks, distinct success/failure/timeout/unexpected-death outcomes, forced termination, no Run-journal Exit facts, and fresh restart state. Executable seam: `packages/dalph/test/conformance/application-exit.mbt.test.ts` invokes the production lifecycle-decision kernel without becoming a second runtime. | 203 |
 
 ## Why subject scope rather than composition scope
 
@@ -32,7 +33,7 @@ is deliberate under this decision and is recorded as a TODO on that function.
 
 ## Adding a model
 
-An eighth model is justified by a materially different subject boundary,
+An additional model is justified by a materially different subject boundary,
 abstraction, checking profile, executable adapter, lifecycle, or implementation
 consumer. Reaching for one because an existing model has grown is a signal to
 narrow that model's subject instead.
@@ -57,6 +58,15 @@ canonical model still owns their shared vocabulary and
 `packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts` remains
 the production seam. The projections have collected positive and negative
 tests, sampled witnesses, and complete TLC enumeration without a depth token.
+
+`specs/applicationExit_proof.qnt` applies the exception to the canonical Exit
+model's two-owner, two-attempt, five-tick, result, death, and restart product.
+Four acyclic graphs retain its admission, owner-intent, executor-evidence, and
+lifecycle-result decisions. The canonical model remains the only executable
+behavior source and
+`packages/dalph/test/conformance/application-exit.mbt.test.ts` remains the
+production seam. Each projection has collected positive and negative tests,
+sampled witnesses, and complete TLC enumeration without a depth token.
 
 ## Consequences
 

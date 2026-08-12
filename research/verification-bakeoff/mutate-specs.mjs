@@ -24,6 +24,7 @@ import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { promisify } from "node:util"
 
+import { applicationExitMutationRegistry } from "../../scripts/application-exit-model-registry.mjs"
 import {
   acceptedResultIntegrationObligations,
   plannedAttemptExecutorObligations,
@@ -44,6 +45,7 @@ if (pnpmEntryPoint === undefined) {
 }
 
 const SPECS = [
+  applicationExitMutationRegistry,
   {
     name: "plannedAttemptExecutor",
     file: "specs/plannedAttemptExecutor.qnt",

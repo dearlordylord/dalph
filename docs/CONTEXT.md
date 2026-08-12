@@ -64,6 +64,16 @@ The process-wide point at which an accepted graceful application Exit request
 prevents every later forward-progress admission while preserving earlier work.
 _Avoid_: Pause application, proposal selection, process interruption
 
+**Forward-progress owner**:
+One process-local action that acquired permission before the Exit admission
+cutoff and is still inside its exact tracker, Git, journal, evidence, cleanup,
+executor-control, or already-authorized Run-termination boundary. Admission is
+registered as one indivisible handoff so preparation cannot straddle the
+cutoff. An interruptible owner may release after recording an already-produced
+result or behind its acknowledged exact intent; an admitted atomic owner may
+only finish its current boundary inside the original Exit drain.
+_Avoid_: Tracker claim owner, durable workflow responsibility, replacement work
+
 **Exit drain**:
 The short, bounded application-lifecycle interval after the Exit admission
 cutoff in which Dalph brings admitted work to a durably recoverable boundary.

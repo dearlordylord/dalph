@@ -524,9 +524,11 @@ production cassette tests use those same cases.
 
 ## Application Exit
 
-**Accepted, not yet implemented.** Issue 169 specifies the application-level
-cutoff and drain. Its focused model and production-backed adapter are required
-before these invariants describe shipped behavior.
+Issue 169 specifies the application-level cutoff and drain. Issue 203 supplies
+the focused model, finite proof projections, typed lifecycle-decision kernel,
+and production-backed conformance adapter. The shared cutoff/drain runtime and
+application-shell integration remain owned by issues 204-210, so these
+invariants do not yet describe an end-to-end shipped Exit path.
 
 **D50 Exit closes forward-progress admission exactly once.** Accepting the
 first graceful application Exit request and closing the process-wide admission
@@ -534,7 +536,7 @@ gate are one indivisible decision. Admission permission and live-owner
 registration cannot straddle that cutoff. Later requests join the same drain
 without resetting its clock; only enumerated fast Exit-drain actions may begin
 afterward.
-→ `applicationExit` must state cutoff uniqueness, no later forward owner,
+→ `applicationExit` states cutoff uniqueness, no later forward owner,
 joined-request result agreement, and monotonic non-resetting ticks.
 
 **D51 Successful Exit proves recoverability, not work completion.** Success
@@ -545,7 +547,7 @@ lock to be released. An ambiguous outside effect may remain only behind its
 acknowledged exact intent and with no local owner able to send a successor.
 Exit never starts an LLM request, fresh reconciliation, stabilization,
 durable-resource cleanup, attempt replacement, or Run termination.
-→ `applicationExit` must state the typed owner-disposition and success guards;
+→ `applicationExit` states the typed owner-disposition and success guards;
 `plannedAttemptExecutor` retains exact suspension and position-release proof.
 
 **D52 Exit lifecycle is not Run workflow history.** Exit request, result,
@@ -555,7 +557,7 @@ nonzero after useful quick drain work settles. The fifth monotonic drain tick
 force-terminates unresolved work nonzero. Neither path proves safe suspension,
 an outside result, cleanup disposition, Pause, cancellation, or Run
 termination; later startup uses ordinary Run establishment and reconciliation.
-→ `applicationExit` must state lifecycle non-persistence and forced-termination
+→ `applicationExit` states lifecycle non-persistence and forced-termination
 non-inference; `runActivation` retains ordinary process-loss reopening.
 
 ## Open questions

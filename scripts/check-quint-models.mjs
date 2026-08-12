@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks"
 
+import { applicationExitCheckRegistry } from "./application-exit-model-registry.mjs"
 import {
   acceptedResultIntegrationObligations,
   plannedAttemptExecutorObligations,
@@ -263,6 +264,96 @@ for (const proof of plannedAttemptExecutorProofs) {
   await run(`${proof.title} exhaustive model`, [
     "verify",
     "specs/plannedAttemptExecutor_proof.qnt",
+    "--main",
+    proof.main,
+    "--backend",
+    "tlc",
+    "--invariants",
+    ...proof.invariants,
+    "--verbosity",
+    "1"
+  ])
+}
+
+const applicationExitCheck = applicationExitCheckRegistry.canonical
+
+await run("application Exit model typecheck", [
+  "typecheck",
+  applicationExitCheck.file
+])
+await run("application Exit deterministic tests", [
+  "test",
+  applicationExitCheck.testFile,
+  "--main",
+  applicationExitCheck.testMain
+])
+await run("application Exit negative mutation profile", [
+  "test",
+  applicationExitCheck.negativeTestFile,
+  "--main",
+  applicationExitCheck.negativeTestMain
+])
+await run("application Exit sampled model", [
+  "run",
+  applicationExitCheck.file,
+  "--invariants",
+  ...applicationExitCheck.invariants,
+  "--witnesses",
+  ...applicationExitCheck.witnesses,
+  "--max-steps",
+  applicationExitCheck.maxSteps,
+  "--max-samples",
+  applicationExitCheck.maxSamples,
+  "--seed",
+  applicationExitCheck.seed,
+  "--verbosity",
+  "1"
+])
+
+// The canonical state product deliberately keeps the two owners, two executor
+// attempts, five ticks, drain resources, process endings, and restart in one
+// production-backed model. ADR 0010 permits these smaller acyclic projections
+// to own complete enumeration while the canonical model retains behavior.
+await run("application Exit proof projection typecheck", [
+  "typecheck",
+  applicationExitCheckRegistry.proofFile
+])
+for (const proof of applicationExitCheckRegistry.proofs) {
+  await run(`${proof.title} deterministic tests`, [
+    "test",
+    applicationExitCheckRegistry.proofTestFile,
+    "--main",
+    proof.testMain
+  ])
+  await run(`${proof.title} negative mutation profile`, [
+    "test",
+    applicationExitCheckRegistry.proofNegativeTestFile,
+    "--main",
+    proof.negativeTestMain
+  ])
+  await run(`${proof.title} sampled model`, [
+    "run",
+    applicationExitCheckRegistry.proofFile,
+    "--main",
+    proof.main,
+    "--invariants",
+    ...proof.invariants,
+    "--witnesses",
+    ...proof.witnesses,
+    "--max-steps",
+    proof.maxSteps,
+    "--max-samples",
+    proof.maxSamples,
+    "--seed",
+    proof.seed,
+    "--verbosity",
+    "1"
+  ])
+  // Each finite projection graph is completely enumerated without a depth
+  // token. A future diameter increase therefore remains visible to the gate.
+  await run(`${proof.title} exhaustive model`, [
+    "verify",
+    applicationExitCheckRegistry.proofFile,
     "--main",
     proof.main,
     "--backend",
