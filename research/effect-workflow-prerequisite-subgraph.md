@@ -1,9 +1,5 @@
 ```mermaid
 flowchart LR
-  subgraph controls["Pause, drain, and dispositions"]
-    i66["#66 Clean restart"]
-  end
-
   subgraph milestone["Controlled-provider milestone"]
     i167["#167 Complete controlled-provider behavior"]
   end
@@ -20,7 +16,6 @@ flowchart LR
     effectWorkflow["Effect Workflow evaluation"]
   end
 
-  i66 --> i167
   i167 --> i127
   i127 --> i168
   i167 --> i168
@@ -32,3 +27,7 @@ flowchart LR
   i167 --> i143
   i143 -. evaluation authorized .-> effectWorkflow
 ```
+
+Completed prerequisites are removed from the active graph. Issue #66 was
+integrated and closed on master at `147a1774b`; #167 is now the active entry
+node for the controlled-provider milestone.
