@@ -14,10 +14,8 @@ import {
   latestPlannedAttemptExecutorEvidence,
   type PlannedAttemptExecutorEvidence
 } from "../planned-attempt-executor-work/evidence.js"
-import {
-  observePlannedAttemptExecutorStateWithPermit,
-  requestPlannedAttemptExecutorSuspensionWithPermit
-} from "../planned-attempt-executor-work/protocol.js"
+import { observePlannedAttemptExecutorStateWithPermit } from "../planned-attempt-executor-work/protocol.js"
+import { requestPlannedAttemptExecutorSuspensionWithPermit } from "../planned-attempt-executor-work/suspension-commands.js"
 import {
   PlannedAttemptProtocolController,
   type PlannedAttemptProtocolPermit,

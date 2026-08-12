@@ -1,10 +1,10 @@
 import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import { Effect } from "effect"
+import { reconcileOrObservePlannedAttemptExecutorStateWithPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import {
   continuePlannedAttemptExecutorWorkWithPermit,
-  reconcileOrObservePlannedAttemptExecutorStateWithPermit,
   requestPlannedAttemptExecutorSuspensionWithPermit
-} from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
+} from "../../workflow/protocols/planned-attempt-executor-work/suspension-commands.js"
 import { authorizePlannedAttemptContinuation } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import {
   advanceAttemptStoppageWithPermit,

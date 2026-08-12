@@ -228,6 +228,51 @@ it.effect("an idle application Exit closes its runtime, releases the coordinator
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("keeps the active Run alive until its exact executor-family Exit drain finishes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-executor-exit-drain")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const runtimeActive = yield* Deferred.make<void>()
+      const executorDrainStarted = yield* Deferred.make<void>()
+      const releaseExecutorDrain = yield* Deferred.make<void>()
+      const applicationExit = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      const observedApplicationExit: ApplicationExitShellService = {
+        ...applicationExit,
+        registerExecutorDrain: (drain) =>
+          applicationExit.registerExecutorDrain({
+            suspendRunningExecutorWork: Deferred.succeed(executorDrainStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseExecutorDrain)),
+              Effect.andThen(drain.suspendRunningExecutorWork)
+            )
+          })
+      }
+      const bootstrap = yield* buildBootstrap(runId, storage, defaultTrackerGraphReader, observedApplicationExit)
+      const running = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(runtimeActive, undefined).pipe(
+            Effect.andThen(applicationExit.awaitExitRequested),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(runtimeActive)
+      const exiting = yield* applicationExit.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* Deferred.await(executorDrainStarted)
+
+      expect(running.pollUnsafe()).toBeUndefined()
+      yield* Deferred.succeed(releaseExecutorDrain, undefined)
+      expect(yield* Fiber.join(exiting)).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(yield* Fiber.join(running)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("times out instead of interrupting a non-idle Run whose family owner has not drained", () =>
   Effect.scoped(
     Effect.gen(function* () {

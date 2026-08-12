@@ -46,6 +46,7 @@ import {
 import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
 import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
+import { suspendRunningExecutorWorkForApplicationExit } from "../application-exit/executor-drain.js"
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
@@ -229,6 +230,11 @@ export const journaledRunBootstrapLayer = (
                 )
                 const context = yield* Layer.build(runtime)
                 const journal = Context.get(context, Journal)
+                const executorExitDrain = yield* applicationExit.registerExecutorDrain({
+                  suspendRunningExecutorWork: suspendRunningExecutorWorkForApplicationExit().pipe(
+                    Effect.provide(context)
+                  )
+                })
                 const controls: RuntimeControls = {
                   attemptChoice: Context.get(context, AttemptChoiceControl),
                   controlDirection: Context.get(context, ControlDirectionApplication),
@@ -245,6 +251,9 @@ export const journaledRunBootstrapLayer = (
                 const drained = yield* Deferred.make<void>()
                 yield* Ref.set(runtimeState, { _tag: "RuntimeAcceptingControl", activeLeases: 0, controls, drained })
                 const result = yield* restore(Effect.provide(program, context)).pipe(Effect.exit)
+                if ((yield* admission.snapshot).cutoffClosed) {
+                  yield* executorExitDrain.awaitFinished
+                }
                 yield* closeControlAdmission()
                 return yield* Exit.match(result, {
                   onFailure: Effect.failCause,

@@ -14,7 +14,7 @@ import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ow
 import {
   ApplicationExitDrainFailure,
   ApplicationExitRequestBoundary,
-  type ApplicationExitIdleDrain,
+  type ApplicationExitDrain,
   type ApplicationExitTraceEvent,
   makeApplicationExitRequestBoundary,
   makeApplicationExitShell
@@ -23,10 +23,11 @@ import {
 const successfulDrain = (
   record: (event: string) => Effect.Effect<void>,
   closeProcessLocalResources: Effect.Effect<void, ApplicationExitDrainFailure> = record("local-resources-closed")
-): ApplicationExitIdleDrain => ({
+): ApplicationExitDrain => ({
   closeProcessLocalResources,
   flushProducedJournalWrites: record("produced-writes-flushed"),
-  releaseCoordinatorLock: record("coordinator-lock-released")
+  releaseCoordinatorLock: record("coordinator-lock-released"),
+  suspendRunningExecutorWork: Effect.succeed([])
 })
 
 /** Maintained application-lifecycle cassette; these entries are deliberately outside every Run story. */
@@ -165,7 +166,8 @@ it.effect("coalesces repeated Exit requests without resetting the fixed five-sec
         {
           closeProcessLocalResources: Effect.void,
           flushProducedJournalWrites: Effect.never,
-          releaseCoordinatorLock: Effect.void
+          releaseCoordinatorLock: Effect.void,
+          suspendRunningExecutorWork: Effect.succeed([])
         },
         { requestEnd: (decision) => Ref.update(processEnds, (decisions) => [...decisions, decision]) }
       )
@@ -198,7 +200,8 @@ it.effect("reports a flush failure only after releasing idle process resources a
         {
           closeProcessLocalResources: record("local-resources-closed"),
           flushProducedJournalWrites: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })),
-          releaseCoordinatorLock: record("coordinator-lock-released")
+          releaseCoordinatorLock: record("coordinator-lock-released"),
+          suspendRunningExecutorWork: Effect.succeed([])
         },
         { requestEnd: (decision) => Ref.update(processEnds, (decisions) => [...decisions, decision]) }
       )
@@ -254,7 +257,8 @@ it.effect("reports timeout with an earlier produced-write diagnostic at the orig
         {
           closeProcessLocalResources: Effect.never,
           flushProducedJournalWrites: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })),
-          releaseCoordinatorLock: Effect.void
+          releaseCoordinatorLock: Effect.void,
+          suspendRunningExecutorWork: Effect.succeed([])
         },
         { requestEnd: () => Effect.void }
       )
@@ -278,7 +282,8 @@ it.effect("an authored process-death cut before the Exit result persists no cuto
       {
         closeProcessLocalResources: Effect.void,
         flushProducedJournalWrites: Effect.never,
-        releaseCoordinatorLock: Effect.void
+        releaseCoordinatorLock: Effect.void,
+        suspendRunningExecutorWork: Effect.succeed([])
       },
       { requestEnd: () => Effect.void }
     ).pipe(Scope.provide(applicationScope))

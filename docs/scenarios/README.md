@@ -49,6 +49,7 @@ on the issue while later dependent work proceeds.
 | `issue-193-run-reactive-delivery-actions.md` | 193 |
 | `issue-194-stabilize-each-run.md` | 194 |
 | `issue-206-interruptible-tracker-git-exit.md` | 206 |
+| `issue-205-running-executor-application-exit.md` | 205 |
 
 **Accepted, not yet implemented** — the owning issue is open. These state
 required behavior and must not be read as a description of what Dalph does

@@ -31,7 +31,6 @@ import {
   PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptExecutorContinuationLimit,
   defaultPlannedAttemptExecutorContinuationLimit,
-  defaultPlannedAttemptExecutorSuspensionLimit,
   PlannedAttemptExecutorSuspensionLimit,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
@@ -227,7 +226,8 @@ const commandLimitError = (
   return undefined
 }
 
-const runCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(function* (
+/** Journal-first executor command primitive used by guarded protocol entry points. */
+export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(function* (
   plannedAttempt: PlannedTaskAttempt,
   command: "StartOrContinue" | "Suspend",
   continuationLimit: PlannedAttemptExecutorContinuationLimit,
@@ -429,28 +429,4 @@ export const reconcileOrObservePlannedAttemptExecutorStateWithPermit = (
         ? yield* observePlannedAttemptExecutorStateUnserialized(plannedAttempt)
         : yield* reconcileUnsettledCommand(records, plannedAttempt, unsettledCommand)
     })
-  )
-
-/** Starts or resumes all executor work for the exact planned attempt. */
-export const continuePlannedAttemptExecutorWorkWithPermit = (
-  permit: PlannedAttemptProtocolPermit,
-  plannedAttempt: PlannedTaskAttempt,
-  continuationLimit = defaultPlannedAttemptExecutorContinuationLimit
-) =>
-  withPlannedAttemptProtocolPermit(
-    permit,
-    plannedAttemptExecutorCorrelation(plannedAttempt),
-    runCommand(plannedAttempt, "StartOrContinue", continuationLimit, defaultPlannedAttemptExecutorSuspensionLimit)
-  )
-
-/** Asks the executor to stop all work while preserving the exact attempt for resume. */
-export const requestPlannedAttemptExecutorSuspensionWithPermit = (
-  permit: PlannedAttemptProtocolPermit,
-  plannedAttempt: PlannedTaskAttempt,
-  suspensionLimit = defaultPlannedAttemptExecutorSuspensionLimit
-) =>
-  withPlannedAttemptProtocolPermit(
-    permit,
-    plannedAttemptExecutorCorrelation(plannedAttempt),
-    runCommand(plannedAttempt, "Suspend", defaultPlannedAttemptExecutorContinuationLimit, suspensionLimit)
   )

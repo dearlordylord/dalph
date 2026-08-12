@@ -6,11 +6,12 @@ import {
   type PlannedAttemptExecutorContinuationLimit,
   type PlannedAttemptExecutorSuspensionLimit
 } from "./events.js"
+import { observePlannedAttemptExecutorStateWithPermit } from "./protocol.js"
 import {
   continuePlannedAttemptExecutorWorkWithPermit,
-  observePlannedAttemptExecutorStateWithPermit,
+  requestPlannedAttemptExecutorSuspensionWithoutReconciliationWithPermit,
   requestPlannedAttemptExecutorSuspensionWithPermit
-} from "./protocol.js"
+} from "./suspension-commands.js"
 import { PlannedAttemptProtocolController } from "./protocol-controller.js"
 
 /** Reads the exact executor state while excluding command intent and abandonment changes for that attempt. */
@@ -46,3 +47,16 @@ export const requestPlannedAttemptExecutorSuspension = Effect.fn("PlannedAttempt
     )
   }
 )
+
+/** Requests suspension without projecting an earlier ambiguous command. */
+export const requestPlannedAttemptExecutorSuspensionWithoutReconciliation = Effect.fn(
+  "PlannedAttemptExecutorWorkflow.requestSuspensionWithoutReconciliation"
+)(function* (
+  plannedAttempt: PlannedTaskAttempt,
+  suspensionLimit: PlannedAttemptExecutorSuspensionLimit = defaultPlannedAttemptExecutorSuspensionLimit
+) {
+  const controller = yield* PlannedAttemptProtocolController
+  return yield* controller.withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
+    requestPlannedAttemptExecutorSuspensionWithoutReconciliationWithPermit(permit, plannedAttempt, suspensionLimit)
+  )
+})
