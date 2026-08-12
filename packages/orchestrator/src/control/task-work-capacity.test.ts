@@ -17,6 +17,7 @@ import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../coordination/admission/integration-target-resource.js"
 import { makeDeliveryRuntimeAdmissionController } from "../coordination/delivery/delivery-runtime-admission.js"
+import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
 import { makeRunRecoveryProjection } from "../coordination/run/recovery-activation.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
 import { legacyMemoryJournalStoreLayer } from "../workflow-journal/adapters/memory-store.js"
@@ -268,7 +269,8 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
           taskId
         }))
       },
-      yield* makeIntegrationTargetResourceController()
+      yield* makeIntegrationTargetResourceController(),
+      yield* makeApplicationExitLifecycle()
     )
 
     expect(current).toEqual({ revision: 2, taskExecutionCapacity: 1 })

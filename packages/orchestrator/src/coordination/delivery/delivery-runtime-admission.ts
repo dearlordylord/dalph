@@ -10,6 +10,8 @@ import {
   PlannedAttemptProtocolController,
   type PlannedAttemptProtocolPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import { type ApplicationExitLifecycleService, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
+import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 
 type TaskWorkPosition =
   | { readonly _tag: "AcceptedAttemptPosition"; readonly correlation: PlannedAttemptExecutorCorrelation }
@@ -31,6 +33,7 @@ interface DeliveryAdmissionReservationBase {
   readonly [DeliveryAdmissionReservationTypeId]: typeof DeliveryAdmissionReservationTypeId
   readonly acquiredIntegrationResponsibility: IntegrationTargetResourceResponsibility | null
   readonly createdTaskPositionFor: TaskId | null
+  readonly forwardOwner: ForwardOwnerLease
 }
 
 /** Opaque admission ownership is either exact-attempt guarded or carries no protocol resource. */
@@ -68,7 +71,8 @@ export interface DeliveryRuntimeAdmissionController {
           | "IntegrationTargetUnavailable"
           | "PlannedAttemptProtocolUnavailable"
           | "TaskWorkPositionUnavailable"
-      }
+      },
+    ApplicationExiting
   >
 }
 
@@ -177,7 +181,8 @@ const reserveTaskPositionState = (
  */
 export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntimeAdmission.make")(function* (
   initial: DeliveryTaskWorkAdmissionBasis,
-  integrationTargets: IntegrationTargetResourceController
+  integrationTargets: IntegrationTargetResourceController,
+  applicationExit: ApplicationExitLifecycleService
 ): Effect.fn.Return<DeliveryRuntimeAdmissionController, never, PlannedAttemptProtocolController> {
   const plannedAttemptProtocol = yield* PlannedAttemptProtocolController
   const state = yield* Ref.make<AdmissionState>({
@@ -257,25 +262,40 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
   const tryReserve = Effect.fn("DeliveryRuntimeAdmission.tryReserve")((proposal: DeliveryActionProposal) =>
     Effect.uninterruptible(
       Effect.gen(function* () {
+        const forwardOwner = yield* applicationExit.prepareForwardOwner("InterruptibleBoundary")
         const protocol = yield* reservePlannedAttemptProtocol(proposal)
         if (protocol._tag === "PlannedAttemptProtocolUnavailable") {
+          yield* forwardOwner.cancel
           return { _tag: "Deferred" as const, reason: "PlannedAttemptProtocolUnavailable" as const }
         }
         const task = yield* reserveTaskPosition(proposal)
         if (!task.admitted) {
           if (protocol._tag === "PlannedAttemptProtocolAdmitted") yield* protocol.permit.release
+          yield* forwardOwner.cancel
           return { _tag: "Deferred" as const, reason: "TaskWorkPositionUnavailable" as const }
         }
         const integration = yield* reserveIntegration(proposal)
         if (!integration.admitted) {
           if (task.createdFor !== null) yield* releaseTaskReservation(task.createdFor, proposal.id)
           if (protocol._tag === "PlannedAttemptProtocolAdmitted") yield* protocol.permit.release
+          yield* forwardOwner.cancel
           return { _tag: "Deferred" as const, reason: "IntegrationTargetUnavailable" as const }
         }
+        const registeredOwner = yield* forwardOwner.register.pipe(
+          Effect.onError(() =>
+            Effect.gen(function* () {
+              if (integration.acquired !== null) yield* integrationTargets.release(integration.acquired)
+              if (task.createdFor !== null) yield* releaseTaskReservation(task.createdFor, proposal.id)
+              if (protocol._tag === "PlannedAttemptProtocolAdmitted") yield* protocol.permit.release
+              yield* forwardOwner.cancel
+            })
+          )
+        )
         const base = {
           [DeliveryAdmissionReservationTypeId]: DeliveryAdmissionReservationTypeId,
           acquiredIntegrationResponsibility: integration.acquired,
-          createdTaskPositionFor: task.createdFor
+          createdTaskPositionFor: task.createdFor,
+          forwardOwner: registeredOwner
         } satisfies DeliveryAdmissionReservationBase
         return {
           _tag: "Admitted" as const,
@@ -304,6 +324,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
       yield* integrationTargets.release(reservation.acquiredIntegrationResponsibility)
     }
     if (reservation._tag === "PlannedAttemptProtocolAdmission") yield* reservation.permit.release
+    yield* reservation.forwardOwner.release
   })
 
   const complete = Effect.fn("DeliveryRuntimeAdmission.complete")(function* (
@@ -316,6 +337,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
       yield* releaseTaskReservation(reservation.createdTaskPositionFor, reservation.proposal.id)
     }
     if (reservation._tag === "PlannedAttemptProtocolAdmission") yield* reservation.permit.release
+    yield* reservation.forwardOwner.release
   })
 
   return {

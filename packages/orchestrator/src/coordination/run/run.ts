@@ -44,6 +44,8 @@ import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-re
 import type { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import type { StartupRecoveryBlocked } from "./startup-recovery.js"
+import type { ApplicationExitLifecycleService } from "../application-exit/lifecycle.js"
+import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair
@@ -88,6 +90,7 @@ export class JournaledRunIdentityMismatch extends Schema.TaggedError<JournaledRu
 export class JournaledRunNotActive extends Schema.TaggedError<JournaledRunNotActive>()("JournaledRunNotActive", {}) {}
 
 export interface JournaledRunBootstrapService {
+  readonly applicationExit: ApplicationExitLifecycleService
   readonly activate: <EInitial, RInitial, E, R>(
     target: TrackerTarget,
     initialControlPolicySource: Effect.Effect<InitialControlPolicy, EInitial, RInitial>,
@@ -103,7 +106,7 @@ export interface JournaledRunBootstrapService {
       input: unknown
     ) => Effect.Effect<
       Effect.Success<ReturnType<AttemptChoiceControl["Service"]["apply"]>>,
-      Effect.Error<ReturnType<AttemptChoiceControl["Service"]["apply"]>> | JournaledRunNotActive
+      Effect.Error<ReturnType<AttemptChoiceControl["Service"]["apply"]>> | ApplicationExiting | JournaledRunNotActive
     >
     readonly applyControlDirection: (
       input: unknown
@@ -113,31 +116,34 @@ export interface JournaledRunBootstrapService {
       | Effect.Error<ReturnType<WorkflowInterpreter["Service"]["readTrackerGraph"]>>
       | Effect.Error<ReturnType<WorkflowTrace["Service"]["emit"]>>
       | JournaledRunNotActive
+      | ApplicationExiting
       | TaskControlSubjectOutsideRun
     >
     readonly applyTaskClaimReacquisition: (
       input: unknown
     ) => Effect.Effect<
       Effect.Success<ReturnType<TaskClaimReacquisitionControl["Service"]["apply"]>>,
-      Effect.Error<ReturnType<TaskClaimReacquisitionControl["Service"]["apply"]>> | JournaledRunNotActive
+      | Effect.Error<ReturnType<TaskClaimReacquisitionControl["Service"]["apply"]>>
+      | ApplicationExiting
+      | JournaledRunNotActive
     >
     readonly readAttemptChoice: (
       input: unknown
     ) => Effect.Effect<
       Effect.Success<ReturnType<AttemptChoiceControl["Service"]["read"]>>,
-      Effect.Error<ReturnType<AttemptChoiceControl["Service"]["read"]>> | JournaledRunNotActive
+      Effect.Error<ReturnType<AttemptChoiceControl["Service"]["read"]>> | ApplicationExiting | JournaledRunNotActive
     >
     readonly readTaskWorkCapacity: (
       runId: RunId
     ) => Effect.Effect<
       Effect.Success<ReturnType<TaskWorkCapacityControl["Service"]["read"]>>,
-      Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["read"]>> | JournaledRunNotActive
+      Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["read"]>> | ApplicationExiting | JournaledRunNotActive
     >
     readonly setTaskWorkCapacity: (
       input: unknown
     ) => Effect.Effect<
       Effect.Success<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>>,
-      Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>> | JournaledRunNotActive
+      Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>> | ApplicationExiting | JournaledRunNotActive
     >
     /**
      * Alice passively observes the exact applied Pause through a transport-independent stream.
@@ -153,6 +159,7 @@ export interface JournaledRunBootstrapService {
       | PauseProgressProjectionConflict
       | JournalError
       | JournaledRunNotActive
+      | ApplicationExiting
     >
   }
 }

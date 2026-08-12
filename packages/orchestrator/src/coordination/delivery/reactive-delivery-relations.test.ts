@@ -81,6 +81,7 @@ import {
 } from "./delivery-publication-observer.js"
 import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
 import { makeDeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
+import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import {
   DeliveryControlPolicyMissing,
@@ -357,7 +358,8 @@ it.effect("retains the exact task-work position after a safe report when a later
       expect(current.taskWork.held).toEqual([expectedPosition])
       const admission = yield* makeDeliveryRuntimeAdmissionController(
         current.taskWork,
-        yield* makeIntegrationTargetResourceController()
+        yield* makeIntegrationTargetResourceController(),
+        yield* makeApplicationExitLifecycle()
       ).pipe(Effect.provide(Layer.fresh(plannedAttemptProtocolControllerLayer)))
       expect(yield* admission.tryReserve(nextAttemptProposal())).toMatchObject({
         _tag: "Deferred",
@@ -389,7 +391,8 @@ it.effect("releases the exact position after a safely suspended command projecti
       expect(current.taskWork.held).toEqual([])
       const admission = yield* makeDeliveryRuntimeAdmissionController(
         current.taskWork,
-        yield* makeIntegrationTargetResourceController()
+        yield* makeIntegrationTargetResourceController(),
+        yield* makeApplicationExitLifecycle()
       ).pipe(Effect.provide(Layer.fresh(plannedAttemptProtocolControllerLayer)))
       expect((yield* admission.tryReserve(nextAttemptProposal()))._tag).toBe("Admitted")
     }).pipe(Effect.provide(memoryJournalStoreLayer))

@@ -24,6 +24,7 @@ import {
   legacyUnpublishedInRunJournalLayer,
   JournalPosition,
   makePlannedAttemptProtocolController,
+  makeApplicationExitLifecycle,
   observePlannedAttemptExecutorState,
   PlannedAttemptProtocolController,
   type PlannedAttemptProtocolControllerService,
@@ -370,7 +371,8 @@ const executorConformanceDriver = defineDriver(
           protocolController = freshProtocolController
           controller = yield* makeDeliveryRuntimeAdmissionController(
             { capacity: TaskWorkCapacity.make(1), held: [] },
-            yield* makeIntegrationTargetResourceController()
+            yield* makeIntegrationTargetResourceController(),
+            yield* makeApplicationExitLifecycle()
           ).pipe(Effect.provideService(PlannedAttemptProtocolController, freshProtocolController))
         }),
       beginResponsibility: () =>

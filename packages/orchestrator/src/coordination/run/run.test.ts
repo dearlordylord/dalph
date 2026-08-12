@@ -35,6 +35,7 @@ import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/
 import { freshWorkflowRunId } from "./fresh-run-identity.js"
 import { JournaledRunBootstrap, runWorkflow } from "./run.js"
 import { runControlledWorkflow } from "./controlled-workflow.js"
+import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
 const programDependencies = Layer.mergeAll(
@@ -49,7 +50,9 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
     const runId = yield* freshWorkflowRunId(target)
     const seen: Array<unknown> = []
     const finality = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+    const applicationExit = yield* makeApplicationExitLifecycle()
     const bootstrap = JournaledRunBootstrap.of({
+      applicationExit,
       activate: (receivedTarget, receivedPolicy, receivedRunId, program) => {
         seen.push(receivedTarget, receivedPolicy, receivedRunId, program)
         return Effect.succeed(finality)

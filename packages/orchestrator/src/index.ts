@@ -107,6 +107,7 @@ export {
 } from "./workflow-journal/identity.js"
 export { defaultTaskWorkCapacity, TaskWorkCapacity } from "./coordination/admission/capacity.js"
 export * from "./coordination/application-exit/lifecycle-decision.js"
+export * from "./coordination/application-exit/lifecycle.js"
 export {
   IntegrationTargetResourceUnavailable,
   makeIntegrationTargetResourceController,

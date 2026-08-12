@@ -43,6 +43,7 @@ import {
   type PlannedAttemptProtocolControllerService,
   plannedAttemptProtocolControllerLayer,
   recordStoppedAttemptClaimNoRelease,
+  makeApplicationExitLifecycle,
   requestPlannedAttemptExecutorSuspension,
   TaskClaimReleaseFailure,
   TaskLifecycle,
@@ -875,7 +876,8 @@ const taskFactReconciliationDriver = defineDriver(
           protocolController = freshProtocolController
           controller = yield* makeDeliveryRuntimeAdmissionController(
             { capacity: TaskWorkCapacity.make(1), held: [] },
-            yield* makeIntegrationTargetResourceController()
+            yield* makeIntegrationTargetResourceController(),
+            yield* makeApplicationExitLifecycle()
           ).pipe(Effect.provideService(PlannedAttemptProtocolController, freshProtocolController))
           yield* journal.beginRun(
             runId,

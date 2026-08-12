@@ -13,6 +13,7 @@ import {
   type JournalStoreError,
   journaledRunBootstrapLayer,
   journaledWorkflowInterpreterLayer,
+  makeApplicationExitLifecycle,
   nodeGitCommandLayer,
   nodeGitTargetLineageLayer,
   nodeGitWorktreeLayer,
@@ -82,6 +83,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const crypto = yield* Crypto.Crypto
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
+      const applicationExit = yield* makeApplicationExitLifecycle()
       const runtimeLayer = ({ runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(
           activeRunId,
@@ -110,7 +112,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           Layer.provide(Layer.succeed(WorkflowTrace, trace))
         )
       }
-      return journaledRunBootstrapLayer(runId, runtimeLayer).pipe(
+      return journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(
         Layer.provide(journalLayer),
         Layer.provide(ownershipLayer)
       )

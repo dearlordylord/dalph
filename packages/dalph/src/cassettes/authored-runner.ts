@@ -73,6 +73,7 @@ import {
   journalStoreCapabilities,
   JournaledRunBootstrap,
   journaledRunBootstrapLayer,
+  makeApplicationExitLifecycle,
   type JournaledRuntimeLayerInput,
   journaledWorkflowInterpreterLayer,
   type PauseProgressView,
@@ -1815,7 +1816,8 @@ const runAuthoredScenarioCassetteWith = (request: {
             Effect.map((ordinal) => runtimeLayerFor(AuthoredRunActivationOrdinal.make(ordinal)))
           )
         )
-      const application = journaledRunBootstrapLayer(runId, runtimeLayer).pipe(
+      const applicationExit = yield* makeApplicationExitLifecycle()
+      const application = journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(
         Layer.provide(journalLayer),
         Layer.provide(coordinatorOwnershipLayer)
       )

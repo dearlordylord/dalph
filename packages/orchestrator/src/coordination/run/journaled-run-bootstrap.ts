@@ -43,6 +43,11 @@ import {
   JournalStore,
   RunLifecycleJournal
 } from "../../workflow-journal/store.js"
+import {
+  type ApplicationExitLifecycleService,
+  type ForwardOwnerLease,
+  makeApplicationExitLifecycle
+} from "../application-exit/lifecycle.js"
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
@@ -66,6 +71,11 @@ interface RuntimeControls {
   readonly taskWorkCapacity: TaskWorkCapacityControl["Service"]
   readonly workflowInterpreter: WorkflowInterpreter["Service"]
   readonly workflowTrace: WorkflowTrace["Service"]
+}
+
+interface RuntimeControlLease {
+  readonly controls: RuntimeControls
+  readonly forwardOwner: ForwardOwnerLease
 }
 
 type RuntimeControlState =
@@ -101,7 +111,8 @@ const validateRun = Effect.fn("JournaledRunBootstrap.validateRun")(function* (
  */
 export const journaledRunBootstrapLayer = (
   expectedRunId: RunId,
-  runtimeLayer: (input: JournaledRuntimeLayerInput) => JournaledRuntimeLayer
+  runtimeLayer: (input: JournaledRuntimeLayerInput) => JournaledRuntimeLayer,
+  suppliedApplicationExit?: ApplicationExitLifecycleService
 ) =>
   Layer.effect(
     JournaledRunBootstrap,
@@ -109,15 +120,19 @@ export const journaledRunBootstrapLayer = (
       const ownership = yield* CoordinatorOwnership
       const storage = yield* JournalStore
       const lifecycle = yield* RunLifecycleJournal
+      const applicationExit = suppliedApplicationExit ?? (yield* makeApplicationExitLifecycle())
       const runtimeState = yield* Ref.make<RuntimeControlState>({ _tag: "RuntimeInactive" })
       const activation = yield* Semaphore.make(1)
       const processRuntimeCapabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
-        yield* makeIntegrationTargetResourceController()
+        yield* makeIntegrationTargetResourceController(),
+        applicationExit
       )
       yield* Effect.addFinalizer(() => processRuntimeCapabilities.observation.close)
       const processRuntimeLayer = deliveryRuntimeResourceCapabilitiesLayer(processRuntimeCapabilities)
 
       const acquireControlLease = Effect.fn("JournaledRunBootstrap.acquireControlLease")(function* () {
+        const preparingOwner = yield* applicationExit.prepareForwardOwner("InterruptibleBoundary")
+        const forwardOwner = yield* preparingOwner.register.pipe(Effect.onError(() => preparingOwner.cancel))
         const controls = yield* Ref.modify(runtimeState, (current) =>
           current._tag === "RuntimeAcceptingControl"
             ? [
@@ -126,11 +141,16 @@ export const journaledRunBootstrapLayer = (
               ]
             : [Option.none<RuntimeControls>(), current]
         )
-        if (Option.isNone(controls)) return yield* new JournaledRunNotActive()
-        return controls.value
+        if (Option.isNone(controls)) {
+          yield* forwardOwner.release
+          return yield* new JournaledRunNotActive()
+        }
+        return { controls: controls.value, forwardOwner } satisfies RuntimeControlLease
       })
 
-      const releaseControlLease = Effect.fn("JournaledRunBootstrap.releaseControlLease")(function* () {
+      const releaseControlLease = Effect.fn("JournaledRunBootstrap.releaseControlLease")(function* (
+        lease: RuntimeControlLease
+      ) {
         const signal = yield* Ref.modify(runtimeState, (current) => {
           /* v8 ignore start -- acquireUseRelease cannot release a lease that was never acquired. */
           if (current._tag === "RuntimeInactive") return [Option.none<Deferred.Deferred<void>>(), current]
@@ -143,13 +163,12 @@ export const journaledRunBootstrapLayer = (
             { ...current, activeLeases } satisfies RuntimeControlState
           ]
         })
+        yield* lease.forwardOwner.release
         if (Option.isSome(signal)) yield* Deferred.succeed(signal.value, undefined)
       })
 
-      const withRuntimeControls = <A, E>(
-        use: (controls: RuntimeControls) => Effect.Effect<A, E>
-      ): Effect.Effect<A, E | JournaledRunNotActive> =>
-        Effect.acquireUseRelease(acquireControlLease(), use, releaseControlLease)
+      const withRuntimeControls = <A, E>(use: (controls: RuntimeControls) => Effect.Effect<A, E>) =>
+        Effect.acquireUseRelease(acquireControlLease(), ({ controls }) => use(controls), releaseControlLease)
 
       const closeControlAdmission = Effect.fn("JournaledRunBootstrap.closeControlAdmission")(function* () {
         const wait = yield* Ref.modify(runtimeState, (current) => {
@@ -283,6 +302,6 @@ export const journaledRunBootstrapLayer = (
         setTaskWorkCapacity: (input) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.apply(input))
       }
 
-      return JournaledRunBootstrap.of({ activate, operatorControl })
+      return JournaledRunBootstrap.of({ activate, applicationExit, operatorControl })
     })
   )

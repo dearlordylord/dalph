@@ -35,6 +35,7 @@ import {
   type LiveDeliveryActionKey,
   proposalIsAvailable
 } from "./live-delivery-action.js"
+import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 
 /** Two lower relations claim the same proposal identity, so no action is authorized. */
 export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedError<DeliveryRuntimeProposalOwnershipConflict>()(
@@ -120,6 +121,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 ): Effect.fn.Return<
   DeliveryRuntimeQuiescence,
   | E
+  | ApplicationExiting
   | DeliveryActionExecutionError
   | DeliveryRuntimeProposalOwnershipConflict
   | DeliveryRuntimeReconfirmationStateInvalid

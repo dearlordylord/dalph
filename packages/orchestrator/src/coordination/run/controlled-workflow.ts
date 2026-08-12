@@ -15,6 +15,7 @@ import { journaledRunBootstrapLayer, type JournaledRuntimeLayerInput } from "./j
 import { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { runWorkflow } from "./run.js"
 import { validatedRunActivationLayer } from "./startup-recovery.js"
+import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 
 const controlledOwnershipLayer = Layer.succeed(
   CoordinatorOwnership,
@@ -30,6 +31,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
       const operationIdAllocator = yield* OperationIdAllocator
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
+      const applicationExit = yield* makeApplicationExitLifecycle()
       const runtimeLayer = ({ runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const controls = Layer.mergeAll(
           attemptChoiceControlLayer,
@@ -47,7 +49,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
           Layer.provide(Layer.succeed(WorkflowTrace, trace))
         )
       }
-      return journaledRunBootstrapLayer(runId, runtimeLayer).pipe(
+      return journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(
         Layer.provide(memoryJournalStoreLayer),
         Layer.provide(controlledOwnershipLayer)
       )

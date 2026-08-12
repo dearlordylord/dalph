@@ -23,6 +23,7 @@ import {
   JournalRecordKey,
   type JournalRecord,
   JournalStore,
+  makeApplicationExitLifecycle,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
@@ -667,7 +668,8 @@ const makeRunActivationDriverImplementation = () => {
             }
             const activeController = yield* makeDeliveryRuntimeAdmissionController(
               productionAdmissionBasis,
-              integrationTargets
+              integrationTargets,
+              yield* makeApplicationExitLifecycle()
             ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
             yield* Deferred.succeed(ready, undefined)
 

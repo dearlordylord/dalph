@@ -15,6 +15,12 @@ import {
   type DeliveryRuntimeObservationController,
   type DeliveryRuntimeObservationState
 } from "./delivery-runtime-observation.js"
+import {
+  ApplicationExitLifecycle,
+  applicationExitLifecycleLayer,
+  type ApplicationExitLifecycleService,
+  makeApplicationExitLifecycle
+} from "../application-exit/lifecycle.js"
 
 export interface DeliveryRuntimeResourcesService {
   readonly integrationTargets: IntegrationTargetResourceController
@@ -33,11 +39,13 @@ export class DeliveryRuntimeResources extends Context.Service<
 
 export const deliveryRuntimeResourcesOf = (
   integrationTargets: IntegrationTargetResourceController,
-  observation: DeliveryRuntimeObservationController
+  observation: DeliveryRuntimeObservationController,
+  applicationExit: ApplicationExitLifecycle["Service"]
 ): DeliveryRuntimeResourcesService => {
   return {
     integrationTargets,
-    makeAdmissionController: (initial) => makeDeliveryRuntimeAdmissionController(initial, integrationTargets),
+    makeAdmissionController: (initial) =>
+      makeDeliveryRuntimeAdmissionController(initial, integrationTargets, applicationExit),
     runtimeObservation: observation.signal
   }
 }
@@ -55,10 +63,12 @@ export class DeliveryRuntimeResourceCapabilityPair extends Context.Service<
 
 /** Constructs the read-only runtime resources and their separately typed publication capability together. */
 export const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("DeliveryRuntimeResources.makeCapabilities")(function* (
-  integrationTargets: IntegrationTargetResourceController
+  integrationTargets: IntegrationTargetResourceController,
+  lifecycle?: ApplicationExitLifecycleService
 ) {
+  const applicationExit = lifecycle ?? (yield* makeApplicationExitLifecycle())
   const observation = yield* makeDeliveryRuntimeObservationController()
-  return { observation, resources: deliveryRuntimeResourcesOf(integrationTargets, observation) }
+  return { observation, resources: deliveryRuntimeResourcesOf(integrationTargets, observation, applicationExit) }
 })
 
 export const deliveryRuntimeResourceCapabilitiesLayer = ({
@@ -74,10 +84,11 @@ export const deliveryRuntimeResourceCapabilitiesLayer = ({
     )
   )
 
-export const deliveryRuntimeResourcesLayer = Layer.effectContext(
+const deliveryRuntimeResourcesLayerEffect = Layer.effectContext(
   Effect.gen(function* () {
+    const applicationExit = yield* ApplicationExitLifecycle
     const integrationTargets = yield* makeIntegrationTargetResourceController()
-    const { observation, resources } = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+    const { observation, resources } = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets, applicationExit)
     yield* Effect.addFinalizer(() => observation.close)
     return Context.empty().pipe(
       Context.add(DeliveryRuntimeResources, DeliveryRuntimeResources.of(resources)),
@@ -88,4 +99,9 @@ export const deliveryRuntimeResourcesLayer = Layer.effectContext(
       )
     )
   })
+)
+
+/** Standalone runtime composition owns one lifecycle; application bootstrap supplies its shared instance directly. */
+export const deliveryRuntimeResourcesLayer = deliveryRuntimeResourcesLayerEffect.pipe(
+  Layer.provide(applicationExitLifecycleLayer)
 )

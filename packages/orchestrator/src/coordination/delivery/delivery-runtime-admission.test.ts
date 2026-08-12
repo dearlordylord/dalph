@@ -19,7 +19,7 @@ import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { DeliveryProposalId, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import type { TaskWorkPositionRequirement } from "./delivery-action-proposal.js"
-import { makeDeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
+import { makeDeliveryRuntimeAdmissionController as makeAdmissionControllerWithLifecycle } from "./delivery-runtime-admission.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
@@ -27,6 +27,14 @@ import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/
 import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
 import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
+
+const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntimeAdmissionTest.make")(function* (
+  initial: Parameters<typeof makeAdmissionControllerWithLifecycle>[0],
+  integrationTargets: Parameters<typeof makeAdmissionControllerWithLifecycle>[1]
+) {
+  return yield* makeAdmissionControllerWithLifecycle(initial, integrationTargets, yield* makeApplicationExitLifecycle())
+})
 
 const withProtocolController = <A, E>(
   effect: Effect.Effect<A, E, PlannedAttemptProtocolController>
@@ -163,6 +171,48 @@ it.effect("a successful claim action releases its temporary task-work reservatio
       yield* admission.complete(admitted.reservation)
 
       expect((yield* admission.snapshot).positions.size).toBe(0)
+    })
+  )
+)
+
+it.effect("Exit rolls back delivery reservations prepared before owner registration", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const admission = yield* makeAdmissionControllerWithLifecycle(
+        { capacity: TaskWorkCapacity.make(1), held: [] },
+        yield* makeIntegrationTargetResourceController(),
+        {
+          ...lifecycle,
+          prepareForwardOwner: (kind) =>
+            lifecycle
+              .prepareForwardOwner(kind)
+              .pipe(
+                Effect.map((preparation) => ({
+                  ...preparation,
+                  register: lifecycle.requestExit.pipe(Effect.andThen(preparation.register))
+                }))
+              )
+        }
+      )
+      const proposal = {
+        ...trackerGraphReadProposalOf({
+          acceptedAt: JournalPosition.make(1),
+          purpose: "EstablishCurrentGraph",
+          runId,
+          target: FixtureTarget.make("exit-racing-admission-target")
+        }),
+        admission: {
+          integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+          plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+          taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId }
+        },
+        id: DeliveryProposalId.make("exit-racing-reservation")
+      }
+
+      expect((yield* admission.tryReserve(proposal).pipe(Effect.flip))._tag).toBe("ApplicationExiting")
+      expect((yield* admission.snapshot).positions.size).toBe(0)
+      expect(yield* lifecycle.snapshot).toEqual({ cutoffClosed: true, preparingOwnerCount: 0, registeredOwnerCount: 0 })
     })
   )
 )

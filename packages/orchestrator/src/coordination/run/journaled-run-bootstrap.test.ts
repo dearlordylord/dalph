@@ -42,6 +42,7 @@ import { freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap } from "./run.js"
 import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
+import { type ApplicationExitLifecycleService, makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
@@ -135,7 +136,8 @@ const runtimeLayer = (runId: RunId, trackerGraphReader: TrackerGraphReader["Serv
 const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   expectedRunId: RunId,
   storage: JournalStore["Service"],
-  trackerGraphReader: TrackerGraphReader["Service"] = defaultTrackerGraphReader
+  trackerGraphReader: TrackerGraphReader["Service"] = defaultTrackerGraphReader,
+  applicationExit?: ApplicationExitLifecycleService
 ) {
   const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
   const dependencies = Layer.mergeAll(
@@ -143,11 +145,40 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
     Layer.succeed(RunLifecycleJournal, Context.get(journalContext, RunLifecycleJournal)),
     ownershipLayer
   )
-  const application = journaledRunBootstrapLayer(expectedRunId, ({ runId }) =>
-    runtimeLayer(runId, trackerGraphReader)
+  const application = journaledRunBootstrapLayer(
+    expectedRunId,
+    ({ runId }) => runtimeLayer(runId, trackerGraphReader),
+    applicationExit
   ).pipe(Layer.provide(dependencies))
   return Context.get(yield* Layer.build(application), JournaledRunBootstrap)
 })
+
+it.effect("one application Exit cutoff rejects control admission in every Run bootstrap", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const firstTarget = FixtureTarget.make("shared-exit-first-run")
+      const secondTarget = FixtureTarget.make("shared-exit-second-run")
+      const firstRunId = yield* freshWorkflowRunId(firstTarget)
+      const secondRunId = yield* freshWorkflowRunId(secondTarget)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const applicationExit = yield* makeApplicationExitLifecycle()
+      const first = yield* buildBootstrap(firstRunId, storage, defaultTrackerGraphReader, applicationExit)
+      const second = yield* buildBootstrap(secondRunId, storage, defaultTrackerGraphReader, applicationExit)
+
+      yield* first.applicationExit.requestExit
+
+      expect((yield* second.applicationExit.prepareForwardOwner("InterruptibleBoundary").pipe(Effect.flip))._tag).toBe(
+        "ApplicationExiting"
+      )
+      expect(yield* second.applicationExit.snapshot).toEqual({
+        cutoffClosed: true,
+        preparingOwnerCount: 0,
+        registeredOwnerCount: 0
+      })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
 
 it.effect("establishes an absent Run before activating its journal-backed runtime once", () =>
   Effect.scoped(
@@ -603,6 +634,43 @@ it.effect("publishes an Operator Pause through the active journal without exposi
           .applyControlDirection({ direction: "Unpause", subject: { _tag: "Run", runId } })
           .pipe(Effect.flip)
       ).toMatchObject({ _tag: "JournaledRunNotActive" })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("rejects an unapplied Operator Pause after the application Exit cutoff", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-exiting-pause")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const runtimeActive = yield* Deferred.make<void>()
+      const finish = yield* Deferred.make<void>()
+      const running = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(runtimeActive, undefined).pipe(
+            Effect.andThen(Deferred.await(finish)),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(runtimeActive)
+
+      yield* bootstrap.applicationExit.requestExit
+      expect(
+        yield* bootstrap.operatorControl
+          .applyControlDirection({ direction: "Pause", subject: { _tag: "Run", runId } })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "ApplicationExiting" })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+
+      yield* Deferred.succeed(finish, undefined)
+      yield* Fiber.join(running)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
