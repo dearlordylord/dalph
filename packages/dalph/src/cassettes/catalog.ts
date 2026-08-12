@@ -417,7 +417,7 @@ export const runPauseObservationDisconnectsAuthoredCassette: ScenarioCassette = 
                 _tag: "LiveDeliveryAction",
                 owner: {
                   _tag: "MaterializedDeliveryAction",
-                  intent: "IntentNotRecorded",
+                  intent: "IntentRecorded",
                   operationId: "cassette:$authored-run:activation:1:operation:6",
                   proposal: authoredReconcileProposal("A", "attempt:A:0")
                 }
