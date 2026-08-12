@@ -9,11 +9,14 @@ import {
   type ApplicationProcessEndDecision
 } from "./lifecycle-decision.js"
 import { makeApplicationExitLifecycle } from "./lifecycle.js"
+import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import {
   ApplicationExitDrainFailure,
+  ApplicationExitRequestBoundary,
   type ApplicationExitIdleDrain,
   type ApplicationExitTraceEvent,
-  makeApplicationExitRequestBoundary
+  makeApplicationExitRequestBoundary,
+  makeApplicationExitShell
 } from "./application-shell.js"
 
 const successfulDrain = (
@@ -82,7 +85,7 @@ it.effect("closes admission before success and waits for a pre-cutoff owner befo
   Effect.scoped(
     Effect.gen(function* () {
       const lifecycle = yield* makeApplicationExitLifecycle()
-      const owner = yield* (yield* lifecycle.prepareForwardOwner("AtomicBoundary")).register
+      const owner = yield* (yield* lifecycle.admission.prepareForwardOwner("AtomicBoundary")).register
       const chronology = yield* Ref.make<Array<string>>([])
       const writesFlushed = yield* Deferred.make<void>()
       const record = (event: string) =>
@@ -100,8 +103,10 @@ it.effect("closes admission before success and waits for a pre-cutoff owner befo
       const exiting = yield* boundary.requestExit.pipe(Effect.forkChild)
       yield* Deferred.await(writesFlushed)
 
-      expect(yield* lifecycle.snapshot).toMatchObject({ cutoffClosed: true, registeredOwnerCount: 1 })
-      expect((yield* lifecycle.prepareForwardOwner("AtomicBoundary").pipe(Effect.flip))._tag).toBe("ApplicationExiting")
+      expect(yield* lifecycle.admission.snapshot).toMatchObject({ cutoffClosed: true, registeredOwnerCount: 1 })
+      expect((yield* lifecycle.admission.prepareForwardOwner("AtomicBoundary").pipe(Effect.flip))._tag).toBe(
+        "ApplicationExiting"
+      )
       expect(yield* Ref.get(chronology)).toEqual(["produced-writes-flushed"])
 
       yield* owner.release
@@ -157,7 +162,7 @@ it.effect("reports a flush failure only after releasing idle process resources a
         lifecycle,
         {
           closeProcessLocalResources: record("local-resources-closed"),
-          flushProducedJournalWrites: Effect.fail(new ApplicationExitDrainFailure({ diagnostic })),
+          flushProducedJournalWrites: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })),
           releaseCoordinatorLock: record("coordinator-lock-released")
         },
         { requestEnd: (decision) => Ref.update(processEnds, (decisions) => [...decisions, decision]) }
@@ -172,6 +177,38 @@ it.effect("reports a flush failure only after releasing idle process resources a
   )
 )
 
+it.effect("continues every application-owned local drain after one sibling reports failure", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const chronology = yield* Ref.make<Array<string>>([])
+      const diagnostic = ApplicationExitDiagnostic.make("first local drain failed")
+      const record = (event: string) => Ref.update(chronology, (events) => [...events, event])
+      const shell = yield* makeApplicationExitShell(
+        CoordinatorOwnership.of({ release: record("coordinator-lock-released"), runMutation: (mutation) => mutation }),
+        { requestEnd: () => record("process-end-requested") }
+      )
+      yield* shell.registerProcessLocalDrain({
+        closeProcessLocalResources: record("first-local-drain").pipe(
+          Effect.andThen(Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })))
+        )
+      })
+      yield* shell.registerProcessLocalDrain({ closeProcessLocalResources: record("second-local-drain") })
+
+      const result = yield* ApplicationExitRequestBoundary.pipe(
+        Effect.flatMap((boundary) => boundary.requestExit),
+        Effect.provideService(ApplicationExitRequestBoundary, shell.requestBoundary)
+      )
+      expect(result).toEqual(ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 }))
+      expect(yield* Ref.get(chronology)).toEqual([
+        "first-local-drain",
+        "second-local-drain",
+        "coordinator-lock-released",
+        "process-end-requested"
+      ])
+    })
+  )
+)
+
 it.effect("reports timeout with an earlier produced-write diagnostic at the original fifth second", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -181,7 +218,7 @@ it.effect("reports timeout with an earlier produced-write diagnostic at the orig
         lifecycle,
         {
           closeProcessLocalResources: Effect.never,
-          flushProducedJournalWrites: Effect.fail(new ApplicationExitDrainFailure({ diagnostic })),
+          flushProducedJournalWrites: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })),
           releaseCoordinatorLock: Effect.void
         },
         { requestEnd: () => Effect.void }
@@ -225,6 +262,10 @@ it.effect("an authored process-death cut before the Exit result persists no cuto
     if (request !== undefined) yield* Fiber.interrupt(request)
 
     const restarted = yield* makeApplicationExitLifecycle()
-    expect(yield* restarted.snapshot).toEqual({ cutoffClosed: false, preparingOwnerCount: 0, registeredOwnerCount: 0 })
+    expect(yield* restarted.admission.snapshot).toEqual({
+      cutoffClosed: false,
+      preparingOwnerCount: 0,
+      registeredOwnerCount: 0
+    })
   })
 )

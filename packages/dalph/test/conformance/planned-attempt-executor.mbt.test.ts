@@ -372,7 +372,7 @@ const executorConformanceDriver = defineDriver(
           controller = yield* makeDeliveryRuntimeAdmissionController(
             { capacity: TaskWorkCapacity.make(1), held: [] },
             yield* makeIntegrationTargetResourceController(),
-            yield* makeApplicationExitLifecycle()
+            (yield* makeApplicationExitLifecycle()).admission
           ).pipe(Effect.provideService(PlannedAttemptProtocolController, freshProtocolController))
         }),
       beginResponsibility: () =>

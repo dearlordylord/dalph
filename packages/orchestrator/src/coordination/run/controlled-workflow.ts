@@ -15,13 +15,14 @@ import { journaledRunBootstrapLayer, type JournaledRuntimeLayerInput } from "./j
 import { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { runWorkflow } from "./run.js"
 import { validatedRunActivationLayer } from "./startup-recovery.js"
-import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
+import { ApplicationExitRequestBoundary, makeApplicationExitShell } from "../application-exit/application-shell.js"
 
-const controlledOwnershipLayer = Layer.succeed(
-  CoordinatorOwnership,
+const controlledOwnership = CoordinatorOwnership.of({
   /* v8 ignore next -- #167 owns controlled coordinator-lock behavior; #195 only installs the ordinary capability. */
-  CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
-)
+  release: Effect.void,
+  runMutation: (mutation) => mutation
+})
+const controlledOwnershipLayer = Layer.succeed(CoordinatorOwnership, controlledOwnership)
 
 /** Installs an in-memory journal around otherwise ordinary workflow boundary implementations. */
 const controlledJournaledRunLayer = (runId: RunId) =>
@@ -31,7 +32,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
       const operationIdAllocator = yield* OperationIdAllocator
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
-      const applicationExit = yield* makeApplicationExitLifecycle()
+      const applicationExit = yield* makeApplicationExitShell(controlledOwnership, { requestEnd: () => Effect.void })
       const runtimeLayer = ({ runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const controls = Layer.mergeAll(
           attemptChoiceControlLayer,
@@ -49,9 +50,12 @@ const controlledJournaledRunLayer = (runId: RunId) =>
           Layer.provide(Layer.succeed(WorkflowTrace, trace))
         )
       }
-      return journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(
-        Layer.provide(memoryJournalStoreLayer),
-        Layer.provide(controlledOwnershipLayer)
+      return Layer.merge(
+        journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(
+          Layer.provide(memoryJournalStoreLayer),
+          Layer.provide(controlledOwnershipLayer)
+        ),
+        Layer.succeed(ApplicationExitRequestBoundary, applicationExit.requestBoundary)
       )
     })
   )

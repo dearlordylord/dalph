@@ -23,6 +23,7 @@ import {
   JournalRecordKey,
   type JournalRecord,
   JournalStore,
+  makeApplicationExitShell,
   makeApplicationExitLifecycle,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -181,10 +182,8 @@ const taskB = TaskId.make("run-activation-B")
 const taskC = TaskId.make("run-activation-capacity-sentinel")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
 const earlierPolicy = initialPolicy
-const ownershipLayer = Layer.succeed(
-  CoordinatorOwnership,
-  CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
-)
+const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+const ownershipLayer = Layer.succeed(CoordinatorOwnership, ownership)
 
 const attemptFor = (taskId: TaskId, suffix: string) =>
   PlannedTaskAttempt.make({
@@ -523,9 +522,11 @@ const makeRunActivationDriverImplementation = () => {
           )
         }
         const context = yield* Layer.build(
-          journaledRunBootstrapLayer(expectedRunId, runtimeLayer, yield* makeApplicationExitLifecycle()).pipe(
-            Layer.provide(dependencies)
-          )
+          journaledRunBootstrapLayer(
+            expectedRunId,
+            runtimeLayer,
+            yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
+          ).pipe(Layer.provide(dependencies))
         )
         return yield* use(Context.get(context, JournaledRunBootstrap))
       })
@@ -671,7 +672,7 @@ const makeRunActivationDriverImplementation = () => {
             const activeController = yield* makeDeliveryRuntimeAdmissionController(
               productionAdmissionBasis,
               integrationTargets,
-              yield* makeApplicationExitLifecycle()
+              (yield* makeApplicationExitLifecycle()).admission
             ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
             yield* Deferred.succeed(ready, undefined)
 

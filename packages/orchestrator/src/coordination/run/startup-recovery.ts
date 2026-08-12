@@ -52,6 +52,7 @@ import {
   CompletionTaskBoundary,
   type CompletionTaskBoundaryService
 } from "../../workflow/protocols/integration-finality/events.js"
+import { ApplicationExitAdmission } from "../application-exit/lifecycle.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -131,9 +132,10 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   /* v8 ignore start -- @preserve Production bootstrap always supplies the process-owned capability pair; the fallback only keeps isolated validated-activation adapters self-contained, while the pair factory and close behavior have focused tests. */
   const runtimeCapabilityOwnership = Option.isSome(ambientRuntimeCapabilities)
     ? { ownedByActivation: false as const, value: ambientRuntimeCapabilities.value }
-    : yield* deliveryRuntimeResourceCapabilitiesOf(yield* makeIntegrationTargetResourceController()).pipe(
-        Effect.map((value) => ({ ownedByActivation: true as const, value }))
-      )
+    : yield* deliveryRuntimeResourceCapabilitiesOf(
+        yield* makeIntegrationTargetResourceController(),
+        yield* ApplicationExitAdmission
+      ).pipe(Effect.map((value) => ({ ownedByActivation: true as const, value })))
   const runtimeResources = DeliveryRuntimeResources.of(runtimeCapabilityOwnership.value.resources)
   const observationPublication = DeliveryRuntimeObservationPublication.of(runtimeCapabilityOwnership.value.observation)
   if (runtimeCapabilityOwnership.ownedByActivation) yield* Effect.addFinalizer(() => observationPublication.close)

@@ -1,17 +1,23 @@
-import { Clock, Context, Deferred, Duration, Effect, Option, Ref, Schema } from "effect"
+import { Clock, Context, Deferred, Duration, Effect, Option, Ref, Schema, type Scope } from "effect"
 import {
   ApplicationExitDiagnostic,
   ApplicationExitResult,
+  applicationExitDrainLimitSeconds,
   type ApplicationExitResult as ApplicationExitResultType,
   type ApplicationProcessEndDecision,
   decideApplicationProcessEnd
 } from "./lifecycle-decision.js"
-import type { ApplicationExitLifecycleService } from "./lifecycle.js"
+import {
+  type ApplicationExitAdmissionService,
+  type ApplicationExitLifecycleService,
+  makeApplicationExitLifecycle
+} from "./lifecycle.js"
+import type { CoordinatorOwnershipCapability } from "../../authorities/coordinator-ownership/ownership.js"
 
 /** One idle-drain boundary failed without creating a Run workflow fact. */
 export class ApplicationExitDrainFailure extends Schema.TaggedError<ApplicationExitDrainFailure>()(
   "ApplicationExitDrainFailure",
-  { diagnostic: ApplicationExitDiagnostic }
+  { diagnostics: Schema.NonEmptyArray(ApplicationExitDiagnostic) }
 ) {}
 
 export interface ApplicationExitIdleDrain {
@@ -47,7 +53,6 @@ export class ApplicationExitRequestBoundary extends Context.Service<
   ApplicationExitRequestBoundaryService
 >()("@dalph/ApplicationExitRequestBoundary") {}
 
-const applicationExitDrainLimitSeconds = 5
 const applicationExitDrainLimit = Duration.seconds(applicationExitDrainLimitSeconds)
 const applicationExitDrainLimitNanos = Duration.toNanosUnsafe(applicationExitDrainLimit)
 
@@ -76,7 +81,7 @@ export const makeApplicationExitRequestBoundary = Effect.fn("ApplicationExitRequ
   ) {
     return yield* operation.pipe(
       Effect.matchEffect({
-        onFailure: (failure) => Ref.update(recordedDiagnostics, (current) => [...current, failure.diagnostic]),
+        onFailure: (failure) => Ref.update(recordedDiagnostics, (current) => [...current, ...failure.diagnostics]),
         onSuccess: () => trace.emit(successEvent)
       })
     )
@@ -128,4 +133,74 @@ export const makeApplicationExitRequestBoundary = Effect.fn("ApplicationExitRequ
   )
 
   return ApplicationExitRequestBoundary.of({ requestExit })
+})
+
+export interface ApplicationExitProcessLocalDrain {
+  readonly closeProcessLocalResources: Effect.Effect<void, ApplicationExitDrainFailure>
+}
+
+/** Application-owned runtime capabilities shared by every Run bootstrap in this process. */
+export interface ApplicationExitShellService {
+  readonly admission: ApplicationExitAdmissionService
+  readonly awaitExitRequested: Effect.Effect<void>
+  readonly registerProcessLocalDrain: (
+    drain: ApplicationExitProcessLocalDrain
+  ) => Effect.Effect<void, never, Scope.Scope>
+  readonly requestBoundary: ApplicationExitRequestBoundaryService
+}
+
+/**
+ * Owns the one process-wide Exit lifecycle, driver, process port, drain registry,
+ * and exact coordinator-lock release independently of any Run bootstrap.
+ */
+export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(function* (
+  ownership: CoordinatorOwnershipCapability,
+  processLifecycle: ApplicationProcessLifecycleService,
+  trace: ApplicationExitTraceService = { emit: () => Effect.void }
+) {
+  const lifecycle = yield* makeApplicationExitLifecycle()
+  const processLocalDrains = yield* Ref.make({
+    nextId: 0,
+    registered: new Map<number, ApplicationExitProcessLocalDrain>()
+  })
+  const requestBoundary = yield* makeApplicationExitRequestBoundary(
+    lifecycle,
+    {
+      flushProducedJournalWrites: lifecycle.awaitForwardOwnersReleased,
+      closeProcessLocalResources: Effect.gen(function* () {
+        const drains = [...(yield* Ref.get(processLocalDrains)).registered.values()]
+        const diagnostics = yield* Effect.forEach(drains, ({ closeProcessLocalResources }) =>
+          closeProcessLocalResources.pipe(
+            Effect.match({ onFailure: ({ diagnostics }) => diagnostics, onSuccess: () => [] })
+          )
+        ).pipe(Effect.map((results) => results.flat()))
+        const [first, ...remaining] = diagnostics
+        if (first !== undefined) {
+          return yield* new ApplicationExitDrainFailure({ diagnostics: [first, ...remaining] })
+        }
+      }),
+      releaseCoordinatorLock: ownership.release
+    },
+    processLifecycle,
+    trace
+  )
+  return {
+    admission: lifecycle.admission,
+    awaitExitRequested: lifecycle.awaitExitRequested,
+    registerProcessLocalDrain: (drain) =>
+      Effect.gen(function* () {
+        const drainId = yield* Ref.modify(processLocalDrains, (current) => {
+          const registered = new Map(current.registered).set(current.nextId, drain)
+          return [current.nextId, { nextId: current.nextId + 1, registered }] as const
+        })
+        yield* Effect.addFinalizer(() =>
+          Ref.update(processLocalDrains, (current) => {
+            const registered = new Map(current.registered)
+            registered.delete(drainId)
+            return { ...current, registered }
+          })
+        )
+      }),
+    requestBoundary
+  } satisfies ApplicationExitShellService
 })

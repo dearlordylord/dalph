@@ -7,7 +7,7 @@ import { makeApplicationExitLifecycle } from "./lifecycle.js"
 it.effect("rolls back a preparing reservation when Exit closes admission before owner registration", () =>
   Effect.gen(function* () {
     const lifecycle = yield* makeApplicationExitLifecycle()
-    const preparation = yield* lifecycle.prepareForwardOwner("InterruptibleBoundary")
+    const preparation = yield* lifecycle.admission.prepareForwardOwner("InterruptibleBoundary")
     const reservationPrepared = yield* Deferred.make<void>()
     const allowRegistration = yield* Deferred.make<void>()
     let reservationHeld = false
@@ -30,7 +30,11 @@ it.effect("rolls back a preparing reservation when Exit closes admission before 
     yield* Deferred.succeed(allowRegistration, undefined)
     expect((yield* Fiber.await(admission))._tag).toBe("Failure")
     expect(reservationHeld).toBe(false)
-    expect(yield* lifecycle.snapshot).toEqual({ cutoffClosed: true, preparingOwnerCount: 0, registeredOwnerCount: 0 })
+    expect(yield* lifecycle.admission.snapshot).toEqual({
+      cutoffClosed: true,
+      preparingOwnerCount: 0,
+      registeredOwnerCount: 0
+    })
   })
 )
 
@@ -44,8 +48,14 @@ it.effect("joins repeated Exit requests to one result and never registers a late
     expect(repeated.first).toBe(false)
     expect(repeated.cutoffAt).toBe(first.cutoffAt)
     expect(repeated.result).toBe(first.result)
-    expect((yield* lifecycle.prepareForwardOwner("AtomicBoundary").pipe(Effect.flip))._tag).toBe("ApplicationExiting")
-    expect(yield* lifecycle.snapshot).toEqual({ cutoffClosed: true, preparingOwnerCount: 0, registeredOwnerCount: 0 })
+    expect((yield* lifecycle.admission.prepareForwardOwner("AtomicBoundary").pipe(Effect.flip))._tag).toBe(
+      "ApplicationExiting"
+    )
+    expect(yield* lifecycle.admission.snapshot).toEqual({
+      cutoffClosed: true,
+      preparingOwnerCount: 0,
+      registeredOwnerCount: 0
+    })
 
     const succeeded = ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })
     expect(yield* lifecycle.completeExit(succeeded)).toBe(true)

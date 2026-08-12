@@ -19,8 +19,11 @@ status zero. Application lifecycle trace entries never enter the Run journal.
   idle drain order, status-zero request, and unchanged non-Run recording seam.
 - `an idle application Exit closes its runtime, releases the coordinator lock, and journals no Exit fact`
   proves runtime closure → lock release → process-end-request ordering through
-  the public bootstrap boundary. Its recorded workflow-occurrence projection
-  remains empty because the only Run record is `WorkflowRunBegan`.
+  the application-shell request boundary. Its recorded workflow-occurrence
+  projection remains empty because the only Run record is `WorkflowRunBegan`.
+- `continues every application-owned local drain after one sibling reports failure`
+  proves one local close failure cannot skip another registered Run drain or
+  the exact coordinator-lock release, and the shared result retains the failure.
 - `allows a successor immediately after the application explicitly releases ownership`
   proves both controlled and Node coordinator-lock adapters release the exact
   lock and reject later mutations through the released capability.
@@ -66,8 +69,9 @@ the second request does not create a new five-second deadline.
 - `joins repeated Exit requests to one result and never registers a later owner`
   proves every requester observes the exact shared result `Deferred`.
 - `one application Exit driver and cutoff are shared by every Run bootstrap`
-  proves two separately constructed Run bootstraps share one injected
-  lifecycle cutoff, one drain result, and one process-end request.
+  proves two separately constructed Run bootstraps register with one injected
+  application shell and therefore share one cutoff, drain registry, result,
+  coordinator-lock owner, and process-end request.
 
 ## Process death before a successful result
 

@@ -37,7 +37,8 @@ import {
   DeliveryRuntimeLiveOwnerSnapshot,
   DeliveryRuntimeObservationState
 } from "../delivery/delivery-runtime-observation.js"
-import { deliveryRuntimeResourceCapabilitiesOf } from "../delivery/delivery-runtime-resources.js"
+import { deliveryRuntimeResourceCapabilitiesOf as makeCapabilitiesWithAdmission } from "../delivery/delivery-runtime-resources.js"
+import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import {
   makeDeliveryReflection,
   type DeliveryRuntimeEvaluation,
@@ -58,6 +59,12 @@ import {
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import { observePauseProgress } from "./pause-progress-observer.js"
 import { pauseProgressViewOf, pauseSafeBoundaryBlockersOf } from "./pause-progress-observation.js"
+
+const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("PauseProgressCoverage.makeCapabilities")(function* (
+  integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
+) {
+  return yield* makeCapabilitiesWithAdmission(integrationTargets, (yield* makeApplicationExitLifecycle()).admission)
+})
 
 const runId = RunId.make("pause-progress-coverage-run")
 const taskId = TaskId.make("A")

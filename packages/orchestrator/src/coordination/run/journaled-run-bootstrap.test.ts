@@ -44,8 +44,12 @@ import { freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap } from "./run.js"
 import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
-import { type ApplicationExitLifecycleService, makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
-import type { ApplicationProcessLifecycleService } from "../application-exit/application-shell.js"
+import {
+  type ApplicationExitShellService,
+  type ApplicationProcessLifecycleService,
+  makeApplicationExitShell
+} from "../application-exit/application-shell.js"
+import { ApplicationExitDiagnostic, ApplicationExitResult } from "../application-exit/lifecycle-decision.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
@@ -137,7 +141,7 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   expectedRunId: RunId,
   storage: JournalStore["Service"],
   trackerGraphReader: TrackerGraphReader["Service"] = defaultTrackerGraphReader,
-  applicationExit?: ApplicationExitLifecycleService,
+  applicationExit?: ApplicationExitShellService,
   processLifecycle?: ApplicationProcessLifecycleService,
   ownership: CoordinatorOwnership["Service"] = defaultOwnership
 ) {
@@ -147,14 +151,16 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
     Layer.succeed(RunLifecycleJournal, Context.get(journalContext, RunLifecycleJournal)),
     Layer.succeed(CoordinatorOwnership, ownership)
   )
-  const sharedApplicationExit = applicationExit ?? (yield* makeApplicationExitLifecycle())
+  const sharedApplicationExit =
+    applicationExit ??
+    (yield* makeApplicationExitShell(ownership, processLifecycle ?? { requestEnd: () => Effect.void }))
   const application = journaledRunBootstrapLayer(
     expectedRunId,
     ({ runId }) => runtimeLayer(runId, trackerGraphReader),
-    sharedApplicationExit,
-    processLifecycle
+    sharedApplicationExit
   ).pipe(Layer.provide(dependencies))
-  return Context.get(yield* Layer.build(application), JournaledRunBootstrap)
+  const bootstrap = Context.get(yield* Layer.build(application), JournaledRunBootstrap)
+  return { ...bootstrap, applicationExitRequestBoundary: sharedApplicationExit.requestBoundary }
 })
 
 it.effect("an idle application Exit closes its runtime, releases the coordinator lock, and journals no Exit fact", () =>
@@ -164,30 +170,31 @@ it.effect("an idle application Exit closes its runtime, releases the coordinator
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      const applicationExit = yield* makeApplicationExitLifecycle()
       const runtimeActive = yield* Deferred.make<void>()
       const lockReleased = yield* Deferred.make<void>()
       const requestedStatus = yield* Deferred.make<number>()
       const chronology = yield* Ref.make<Array<string>>([])
+      const ownership = CoordinatorOwnership.of({
+        release: Ref.update(chronology, (events) => [...events, "coordinator-lock-released"]).pipe(
+          Effect.andThen(Deferred.succeed(lockReleased, undefined)),
+          Effect.asVoid
+        ),
+        runMutation: (mutation) => mutation
+      })
+      const applicationExit = yield* makeApplicationExitShell(ownership, {
+        requestEnd: ({ status }) =>
+          Ref.update(chronology, (events) => [...events, "process-end-requested"]).pipe(
+            Effect.andThen(Deferred.succeed(requestedStatus, status)),
+            Effect.asVoid
+          )
+      })
       const bootstrap = yield* buildBootstrap(
         runId,
         storage,
         defaultTrackerGraphReader,
         applicationExit,
-        {
-          requestEnd: ({ status }) =>
-            Ref.update(chronology, (events) => [...events, "process-end-requested"]).pipe(
-              Effect.andThen(Deferred.succeed(requestedStatus, status)),
-              Effect.asVoid
-            )
-        },
-        CoordinatorOwnership.of({
-          release: Ref.update(chronology, (events) => [...events, "coordinator-lock-released"]).pipe(
-            Effect.andThen(Deferred.succeed(lockReleased, undefined)),
-            Effect.asVoid
-          ),
-          runMutation: (mutation) => mutation
-        })
+        undefined,
+        ownership
       )
       const running = yield* bootstrap
         .activate(
@@ -203,7 +210,7 @@ it.effect("an idle application Exit closes its runtime, releases the coordinator
         .pipe(Effect.forkChild)
       yield* Deferred.await(runtimeActive)
 
-      const result = yield* bootstrap.requestApplicationExit
+      const result = yield* bootstrap.applicationExitRequestBoundary.requestExit
 
       expect(result).toMatchObject({ _tag: "Succeeded", requestedStatus: 0 })
       expect(yield* Deferred.isDone(lockReleased)).toBe(true)
@@ -228,17 +235,23 @@ it.effect("times out instead of interrupting a non-idle Run whose family owner h
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      const applicationExit = yield* makeApplicationExitLifecycle()
       const runtimeActive = yield* Deferred.make<void>()
       const lockReleased = yield* Ref.make(false)
       const requestedStatuses = yield* Ref.make<ReadonlyArray<number>>([])
+      const ownership = CoordinatorOwnership.of({
+        release: Ref.set(lockReleased, true),
+        runMutation: (mutation) => mutation
+      })
+      const applicationExit = yield* makeApplicationExitShell(ownership, {
+        requestEnd: ({ status }) => Ref.update(requestedStatuses, (statuses) => [...statuses, status])
+      })
       const bootstrap = yield* buildBootstrap(
         runId,
         storage,
         defaultTrackerGraphReader,
         applicationExit,
-        { requestEnd: ({ status }) => Ref.update(requestedStatuses, (statuses) => [...statuses, status]) },
-        CoordinatorOwnership.of({ release: Ref.set(lockReleased, true), runMutation: (mutation) => mutation })
+        undefined,
+        ownership
       )
       const running = yield* bootstrap
         .activate(
@@ -252,7 +265,7 @@ it.effect("times out instead of interrupting a non-idle Run whose family owner h
         )
         .pipe(Effect.forkChild)
       yield* Deferred.await(runtimeActive)
-      const exiting = yield* bootstrap.requestApplicationExit.pipe(Effect.forkChild)
+      const exiting = yield* bootstrap.applicationExitRequestBoundary.requestExit.pipe(Effect.forkChild)
       yield* Effect.yieldNow
       yield* TestClock.adjust("5 seconds")
 
@@ -276,7 +289,6 @@ it.effect("finishes an already-admitted Run termination append before successful
       const terminationStarted = yield* Deferred.make<void>()
       const releaseTermination = yield* Deferred.make<void>()
       const lockReleased = yield* Deferred.make<void>()
-      const applicationExit = yield* makeApplicationExitLifecycle()
       const storage = JournalStore.of({
         ...delegate,
         terminateRun: (requestedRunId) =>
@@ -285,16 +297,18 @@ it.effect("finishes an already-admitted Run termination append before successful
             Effect.andThen(delegate.terminateRun(requestedRunId))
           )
       })
+      const ownership = CoordinatorOwnership.of({
+        release: Deferred.succeed(lockReleased, undefined).pipe(Effect.asVoid),
+        runMutation: (mutation) => mutation
+      })
+      const applicationExit = yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
       const bootstrap = yield* buildBootstrap(
         runId,
         storage,
         defaultTrackerGraphReader,
         applicationExit,
         undefined,
-        CoordinatorOwnership.of({
-          release: Deferred.succeed(lockReleased, undefined).pipe(Effect.asVoid),
-          runMutation: (mutation) => mutation
-        })
+        ownership
       )
       const running = yield* bootstrap
         .activate(
@@ -306,7 +320,7 @@ it.effect("finishes an already-admitted Run termination append before successful
         .pipe(Effect.forkChild)
       yield* Deferred.await(terminationStarted)
 
-      const exiting = yield* bootstrap.requestApplicationExit.pipe(Effect.forkChild)
+      const exiting = yield* bootstrap.applicationExitRequestBoundary.requestExit.pipe(Effect.forkChild)
       yield* Effect.yieldNow
       expect(yield* Deferred.isDone(lockReleased)).toBe(false)
 
@@ -335,7 +349,7 @@ it.effect("reopens an unfinished Run normally after an authored Exit death cut",
         runId,
         storage,
         defaultTrackerGraphReader,
-        yield* makeApplicationExitLifecycle()
+        yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
       )
       const entered = yield* Ref.make(false)
       const finality = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
@@ -363,26 +377,58 @@ it.effect("one application Exit driver and cutoff are shared by every Run bootst
       const secondRunId = yield* freshWorkflowRunId(secondTarget)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      const applicationExit = yield* makeApplicationExitLifecycle()
-      const firstProcessEnds = yield* Ref.make(0)
-      const secondProcessEnds = yield* Ref.make(0)
-      const first = yield* buildBootstrap(firstRunId, storage, defaultTrackerGraphReader, applicationExit, {
-        requestEnd: () => Ref.update(firstProcessEnds, (count) => count + 1)
+      const processEnds = yield* Ref.make(0)
+      const lockReleases = yield* Ref.make(0)
+      const ownership = CoordinatorOwnership.of({
+        release: Ref.update(lockReleases, (count) => count + 1),
+        runMutation: (mutation) => mutation
       })
-      const second = yield* buildBootstrap(secondRunId, storage, defaultTrackerGraphReader, applicationExit, {
-        requestEnd: () => Ref.update(secondProcessEnds, (count) => count + 1)
+      const applicationExit = yield* makeApplicationExitShell(ownership, {
+        requestEnd: () => Ref.update(processEnds, (count) => count + 1)
       })
+      const nextDrainId = yield* Ref.make(0)
+      const drained = yield* Ref.make<ReadonlyArray<number>>([])
+      const observedApplicationExit: ApplicationExitShellService = {
+        ...applicationExit,
+        registerProcessLocalDrain: (drain) =>
+          Ref.getAndUpdate(nextDrainId, (id) => id + 1).pipe(
+            Effect.flatMap((drainId) =>
+              applicationExit.registerProcessLocalDrain({
+                closeProcessLocalResources: drain.closeProcessLocalResources.pipe(
+                  Effect.ensuring(Ref.update(drained, (ids) => [...ids, drainId]))
+                )
+              })
+            )
+          )
+      }
+      const first = yield* buildBootstrap(
+        firstRunId,
+        storage,
+        defaultTrackerGraphReader,
+        observedApplicationExit,
+        undefined,
+        ownership
+      )
+      const second = yield* buildBootstrap(
+        secondRunId,
+        storage,
+        defaultTrackerGraphReader,
+        observedApplicationExit,
+        undefined,
+        ownership
+      )
 
-      const firstResult = yield* first.requestApplicationExit
-      const repeatedResult = yield* second.requestApplicationExit
+      const firstResult = yield* first.applicationExitRequestBoundary.requestExit
+      const repeatedResult = yield* second.applicationExitRequestBoundary.requestExit
 
       expect(repeatedResult).toEqual(firstResult)
-      expect(yield* Ref.get(firstProcessEnds)).toBe(1)
-      expect(yield* Ref.get(secondProcessEnds)).toBe(0)
-      expect((yield* applicationExit.prepareForwardOwner("InterruptibleBoundary").pipe(Effect.flip))._tag).toBe(
-        "ApplicationExiting"
-      )
-      expect(yield* applicationExit.snapshot).toEqual({
+      expect(yield* Ref.get(drained)).toEqual([0, 1])
+      expect(yield* Ref.get(lockReleases)).toBe(1)
+      expect(yield* Ref.get(processEnds)).toBe(1)
+      expect(
+        (yield* applicationExit.admission.prepareForwardOwner("InterruptibleBoundary").pipe(Effect.flip))._tag
+      ).toBe("ApplicationExiting")
+      expect(yield* applicationExit.admission.snapshot).toEqual({
         cutoffClosed: true,
         preparingOwnerCount: 0,
         registeredOwnerCount: 0
@@ -398,9 +444,9 @@ it.effect("rejects a Run activation that reaches the application after the Exit 
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      const applicationExit = yield* makeApplicationExitLifecycle()
+      const applicationExit = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
       const bootstrap = yield* buildBootstrap(runId, storage, defaultTrackerGraphReader, applicationExit)
-      yield* applicationExit.requestExit
+      yield* applicationExit.requestBoundary.requestExit
 
       expect(
         yield* bootstrap
@@ -424,7 +470,7 @@ it.effect("rejects an activation queued before Exit when it reaches the cutoff a
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      const applicationExit = yield* makeApplicationExitLifecycle()
+      const applicationExit = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
       const bootstrap = yield* buildBootstrap(runId, storage, defaultTrackerGraphReader, applicationExit)
       const active = yield* Deferred.make<void>()
       const finish = yield* Deferred.make<void>()
@@ -453,9 +499,10 @@ it.effect("rejects an activation queued before Exit when it reaches the cutoff a
         .pipe(Effect.forkChild)
       yield* Effect.yieldNow
 
-      yield* applicationExit.requestExit
+      const exiting = yield* applicationExit.requestBoundary.requestExit.pipe(Effect.forkChild)
       yield* Deferred.succeed(finish, undefined)
       yield* Fiber.join(first)
+      yield* Fiber.join(exiting)
 
       expect(yield* Fiber.join(queued).pipe(Effect.flip)).toMatchObject({ _tag: "ApplicationExiting" })
       expect(yield* Ref.get(queuedProgramEntered)).toBe(false)
@@ -542,6 +589,7 @@ it.effect("retries an unacknowledged Run beginning through the same entry withou
       ).toEqual(active)
       expect(yield* Ref.get(activations)).toBe(1)
       expect((yield* delegate.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+      expect(yield* bootstrap.applicationExitRequestBoundary.requestExit).toMatchObject({ _tag: "Succeeded" })
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -588,6 +636,7 @@ it.effect("retries a pre-commit Run beginning failure without entering activatio
       expect(yield* Ref.get(scans)).toBe(2)
       expect(yield* Ref.get(programCalls)).toBe(1)
       expect((yield* delegate.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+      expect(yield* bootstrap.applicationExitRequestBoundary.requestExit).toMatchObject({ _tag: "Succeeded" })
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -929,7 +978,7 @@ it.effect("rejects an unapplied Operator Pause after the application Exit cutoff
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      const applicationExit = yield* makeApplicationExitLifecycle()
+      const applicationExit = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
       const bootstrap = yield* buildBootstrap(runId, storage, defaultTrackerGraphReader, applicationExit)
       const runtimeActive = yield* Deferred.make<void>()
       const running = yield* bootstrap
@@ -945,7 +994,7 @@ it.effect("rejects an unapplied Operator Pause after the application Exit cutoff
         .pipe(Effect.forkChild)
       yield* Deferred.await(runtimeActive)
 
-      yield* bootstrap.requestApplicationExit
+      yield* bootstrap.applicationExitRequestBoundary.requestExit
       for (const direction of ["Pause", "Unpause"] as const) {
         expect(
           yield* bootstrap.operatorControl
@@ -954,6 +1003,70 @@ it.effect("rejects an unapplied Operator Pause after the application Exit cutoff
         ).toMatchObject({ _tag: "ApplicationExiting" })
       }
       expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+      yield* Fiber.join(running)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("reports a failed already-produced Pause write through the application Exit result", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-failed-write-at-exit")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      const storage = JournalStore.of({
+        ...delegate,
+        append: (requestedRunId, key, event) =>
+          event._tag === "ControlDirectionApplied"
+            ? Effect.fail(
+                new JournalStorageUnavailable({
+                  detail: "authored produced-write failure",
+                  operation: "JournalStore.append"
+                })
+              )
+            : delegate.append(requestedRunId, key, event)
+      })
+      const runtimeActive = yield* Deferred.make<void>()
+      const lockReleased = yield* Ref.make(false)
+      const ownership = CoordinatorOwnership.of({
+        release: Ref.set(lockReleased, true),
+        runMutation: (mutation) => mutation
+      })
+      const applicationExit = yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        applicationExit,
+        undefined,
+        ownership
+      )
+      const running = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(runtimeActive, undefined).pipe(
+            Effect.andThen(applicationExit.awaitExitRequested),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(runtimeActive)
+
+      expect(
+        yield* bootstrap.operatorControl
+          .applyControlDirection({ direction: "Pause", subject: { _tag: "Run", runId } })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "JournalStorageUnavailable" })
+      expect(yield* bootstrap.applicationExitRequestBoundary.requestExit).toEqual(
+        ApplicationExitResult.cases.Failed.make({
+          diagnostics: [ApplicationExitDiagnostic.make("Run journal append failed before application Exit completed")],
+          requestedStatus: 1
+        })
+      )
+      expect(yield* Ref.get(lockReleased)).toBe(true)
       yield* Fiber.join(running)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
@@ -1263,7 +1376,6 @@ it.effect("flushes an already-started Pause append before successful Exit and pr
       const releasePauseAppend = yield* Deferred.make<void>()
       const runtimeActive = yield* Deferred.make<void>()
       const lockReleased = yield* Deferred.make<void>()
-      const applicationExit = yield* makeApplicationExitLifecycle()
       const storage = JournalStore.of({
         ...delegate,
         append: (requestedRunId, key, event) =>
@@ -1274,16 +1386,18 @@ it.effect("flushes an already-started Pause append before successful Exit and pr
               )
             : delegate.append(requestedRunId, key, event)
       })
+      const ownership = CoordinatorOwnership.of({
+        release: Deferred.succeed(lockReleased, undefined).pipe(Effect.asVoid),
+        runMutation: (mutation) => mutation
+      })
+      const applicationExit = yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
       const bootstrap = yield* buildBootstrap(
         runId,
         storage,
         defaultTrackerGraphReader,
         applicationExit,
         undefined,
-        CoordinatorOwnership.of({
-          release: Deferred.succeed(lockReleased, undefined).pipe(Effect.asVoid),
-          runMutation: (mutation) => mutation
-        })
+        ownership
       )
       const running = yield* bootstrap
         .activate(
@@ -1302,7 +1416,7 @@ it.effect("flushes an already-started Pause append before successful Exit and pr
         .pipe(Effect.forkChild)
       yield* Deferred.await(pauseAppendStarted)
 
-      const exiting = yield* bootstrap.requestApplicationExit.pipe(Effect.forkChild)
+      const exiting = yield* bootstrap.applicationExitRequestBoundary.requestExit.pipe(Effect.forkChild)
       yield* Effect.yieldNow
       expect(yield* Deferred.isDone(lockReleased)).toBe(false)
 

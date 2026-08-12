@@ -132,7 +132,12 @@ const supportWithoutResources = Layer.mergeAll(
   plannedAttemptProtocolControllerLayer,
   Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
 )
-const support = Layer.merge(supportWithoutResources, deliveryRuntimeResourcesLayer)
+const support = Layer.merge(
+  supportWithoutResources,
+  Layer.unwrap(
+    makeApplicationExitLifecycle().pipe(Effect.map((lifecycle) => deliveryRuntimeResourcesLayer(lifecycle.admission)))
+  )
+)
 
 const freshGraphReadProposal = (trackerGraph: Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>) => {
   const task = trackerGraph.observation.snapshot.eligibleTasks()[0]
@@ -170,7 +175,7 @@ const runtimeResourcesFor = Effect.fn("RunStabilizationTest.runtimeResourcesFor"
 ) {
   const integrationTargets = yield* makeIntegrationTargetResourceController()
   return deliveryRuntimeResourceCapabilitiesLayer(
-    yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets, lifecycle)
+    yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets, lifecycle.admission)
   )
 })
 
@@ -392,10 +397,13 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
       const releases = yield* Ref.make(0)
       const observedAfterG2 = yield* Ref.make(false)
       const getCount = yield* Ref.make(0)
-      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf({
-        ...controller,
-        releaseAll: Ref.update(releases, (count) => count + 1).pipe(Effect.andThen(controller.releaseAll))
-      })
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
+        {
+          ...controller,
+          releaseAll: Ref.update(releases, (count) => count + 1).pipe(Effect.andThen(controller.releaseAll))
+        },
+        (yield* makeApplicationExitLifecycle()).admission
+      )
       const signal = {
         changes: SubscriptionRef.changes(state),
         get: Ref.updateAndGet(getCount, (count) => count + 1).pipe(

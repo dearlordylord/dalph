@@ -6,7 +6,9 @@ import {
 import { Data, Match, Schema } from "effect"
 
 const initialDrainTickValue = 0
-const finalDrainTickValue = 5
+/** The fixed V1 number of monotonic seconds and abstract model ticks in one Exit drain. */
+export const applicationExitDrainLimitSeconds = 5
+const finalDrainTickValue = applicationExitDrainLimitSeconds
 const penultimateDrainTickValue = 4
 const successfulProcessStatus = 0
 const forcedProcessStatus = 1

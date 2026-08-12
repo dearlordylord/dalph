@@ -43,7 +43,8 @@ import {
   DeliveryRuntimeLiveOwnerSnapshot,
   DeliveryRuntimeObservationState
 } from "../delivery/delivery-runtime-observation.js"
-import { deliveryRuntimeResourceCapabilitiesOf } from "../delivery/delivery-runtime-resources.js"
+import { deliveryRuntimeResourceCapabilitiesOf as makeCapabilitiesWithAdmission } from "../delivery/delivery-runtime-resources.js"
+import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import {
   type PlannedAttemptExecutorDisposition,
   ResponsibilityDisposition,
@@ -56,6 +57,7 @@ import {
   IntegrationCandidateResourceLocator,
   IntegrationSessionId
 } from "../../workflow/protocols/integration-candidate-construction/events.js"
+
 import {
   TargetPromotionCorrelation,
   TargetPromotionRequestId
@@ -74,6 +76,12 @@ import {
   type PauseResponsibilityAtBoundary,
   type PauseStartedIntegrationBlocker
 } from "./pause-progress-observation.js"
+
+const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("PauseProgressProperty.makeCapabilities")(function* (
+  integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
+) {
+  return yield* makeCapabilitiesWithAdmission(integrationTargets, (yield* makeApplicationExitLifecycle()).admission)
+})
 
 const runId = RunId.make("pause-progress-run")
 const target = FixtureTarget.make("pause-progress-target")

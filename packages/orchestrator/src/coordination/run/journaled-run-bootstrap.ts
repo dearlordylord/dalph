@@ -43,11 +43,9 @@ import {
   JournalStore,
   RunLifecycleJournal
 } from "../../workflow-journal/store.js"
-import { type ApplicationExitLifecycleService, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
-import {
-  type ApplicationProcessLifecycleService,
-  makeApplicationExitRequestBoundary
-} from "../application-exit/application-shell.js"
+import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
+import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
+import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
@@ -56,7 +54,7 @@ export interface JournaledRuntimeLayerInput {
 export type JournaledRuntimeLayer = Layer.Layer<
   Exclude<JournaledRunServices, Journal | JournaledRunProcessServices>,
   InvalidWorkflowJournalHistory | JournalReadError | StartupRecoveryBlocked,
-  CoordinatorOwnership | InRunJournal
+  ApplicationExitAdmission | CoordinatorOwnership | InRunJournal
 >
 
 interface RuntimeControls {
@@ -112,8 +110,7 @@ const validateRun = Effect.fn("JournaledRunBootstrap.validateRun")(function* (
 export const journaledRunBootstrapLayer = (
   expectedRunId: RunId,
   runtimeLayer: (input: JournaledRuntimeLayerInput) => JournaledRuntimeLayer,
-  applicationExit: ApplicationExitLifecycleService,
-  processLifecycle: ApplicationProcessLifecycleService = { requestEnd: () => Effect.void }
+  applicationExit: ApplicationExitShellService
 ) =>
   Layer.effect(
     JournaledRunBootstrap,
@@ -121,19 +118,46 @@ export const journaledRunBootstrapLayer = (
       const ownership = yield* CoordinatorOwnership
       const storage = yield* JournalStore
       const lifecycle = yield* RunLifecycleJournal
+      const admission = applicationExit.admission
+      const unresolvedProducedWrites = yield* Ref.make<ReadonlyMap<string, ApplicationExitDiagnostic>>(new Map())
+      const observeProducedWrite = <A, E, R>(
+        writeKey: string,
+        operation: "append" | "begin" | "terminate",
+        write: Effect.Effect<A, E, R>
+      ) =>
+        write.pipe(
+          Effect.tap(() =>
+            Ref.update(unresolvedProducedWrites, (current) => {
+              const unresolved = new Map(current)
+              unresolved.delete(writeKey)
+              return unresolved
+            })
+          ),
+          Effect.tapError(() =>
+            Ref.update(unresolvedProducedWrites, (current) =>
+              new Map(current).set(
+                writeKey,
+                ApplicationExitDiagnostic.make(`Run journal ${operation} failed before application Exit completed`)
+              )
+            )
+          )
+        )
+      const exitAwareStorage = JournalStore.of({
+        ...storage,
+        append: (...input) => observeProducedWrite(`append:${input[1]}`, "append", storage.append(...input))
+      })
       const runtimeState = yield* Ref.make<RuntimeControlState>({ _tag: "RuntimeInactive" })
       const activeRuntimeClosed = yield* Ref.make<Option.Option<Deferred.Deferred<void>>>(Option.none())
       const activation = yield* Semaphore.make(1)
       const processRuntimeCapabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
         yield* makeIntegrationTargetResourceController(),
-        applicationExit
+        admission
       )
       yield* Effect.addFinalizer(() => processRuntimeCapabilities.observation.close)
       const processRuntimeLayer = deliveryRuntimeResourceCapabilitiesLayer(processRuntimeCapabilities)
 
       const acquireControlLease = Effect.fn("JournaledRunBootstrap.acquireControlLease")(function* () {
-        const preparingOwner = yield* applicationExit.prepareForwardOwner("InterruptibleBoundary")
-        const forwardOwner = yield* preparingOwner.register.pipe(Effect.onError(() => preparingOwner.cancel))
+        const forwardOwner = yield* admission.acquireForwardOwner("InterruptibleBoundary")
         const controls = yield* Ref.modify(runtimeState, (current) =>
           current._tag === "RuntimeAcceptingControl"
             ? [
@@ -197,9 +221,12 @@ export const journaledRunBootstrapLayer = (
               Effect.gen(function* () {
                 const downstream = runtimeLayer({ runId }).pipe(
                   Layer.provideMerge(processRuntimeLayer),
+                  Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
                   Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
                 )
-                const runtime = downstream.pipe(Layer.provideMerge(journalLayer(runId, target, initial, storage)))
+                const runtime = downstream.pipe(
+                  Layer.provideMerge(journalLayer(runId, target, initial, exitAwareStorage))
+                )
                 const context = yield* Layer.build(runtime)
                 const journal = Context.get(context, Journal)
                 const controls: RuntimeControls = {
@@ -252,46 +279,34 @@ export const journaledRunBootstrapLayer = (
         finality: RunFinalityDecisionType
       ) {
         if (finality._tag !== "RunMayTerminate") return finality
-        const preparing = yield* applicationExit
-          .prepareForwardOwner("AuthorizedRunTerminationAppend")
-          .pipe(Effect.option)
-        if (Option.isNone(preparing)) {
-          return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
-        }
-        const owner = yield* preparing.value.register.pipe(
-          Effect.onError(() => preparing.value.cancel),
-          Effect.option
-        )
+        const owner = yield* admission.acquireForwardOwner("AuthorizedRunTerminationAppend").pipe(Effect.option)
         if (Option.isNone(owner)) {
           return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
         }
-        yield* lifecycle.terminateRun(runId).pipe(Effect.ensuring(owner.value.release))
+        yield* observeProducedWrite(`terminate:${runId}`, "terminate", lifecycle.terminateRun(runId)).pipe(
+          Effect.ensuring(owner.value.release)
+        )
         return finality
       })
 
-      const applicationExitBoundary = yield* makeApplicationExitRequestBoundary(
-        applicationExit,
-        {
-          flushProducedJournalWrites: applicationExit.awaitForwardOwnersReleased,
-          closeProcessLocalResources: Effect.gen(function* () {
-            const active = yield* Ref.get(activeRuntimeClosed)
-            if (Option.isSome(active)) yield* Deferred.await(active.value)
-            yield* processRuntimeCapabilities.resources.integrationTargets.releaseAll
-            yield* processRuntimeCapabilities.observation.close
-          }),
-          releaseCoordinatorLock: ownership.release
-        },
-        processLifecycle
-      )
+      yield* applicationExit.registerProcessLocalDrain({
+        closeProcessLocalResources: Effect.gen(function* () {
+          const active = yield* Ref.get(activeRuntimeClosed)
+          if (Option.isSome(active)) yield* Deferred.await(active.value)
+          yield* processRuntimeCapabilities.resources.integrationTargets.releaseAll
+          yield* processRuntimeCapabilities.observation.close
+          const diagnostics = [...(yield* Ref.get(unresolvedProducedWrites)).values()]
+          const [first, ...remaining] = diagnostics
+          if (first !== undefined) {
+            return yield* new ApplicationExitDrainFailure({ diagnostics: [first, ...remaining] })
+          }
+        })
+      })
 
       const activate: JournaledRunBootstrapService["activate"] = (target, initialControlPolicySource, runId, program) =>
         activation.withPermit(
           Effect.acquireUseRelease(
-            applicationExit
-              .prepareForwardOwner("RunActivation")
-              .pipe(
-                Effect.flatMap((preparation) => preparation.register.pipe(Effect.onError(() => preparation.cancel)))
-              ),
+            admission.acquireForwardOwner("RunActivation"),
             () =>
               Effect.gen(function* () {
                 if (runId !== expectedRunId) {
@@ -300,9 +315,20 @@ export const journaledRunBootstrapLayer = (
                 const current = yield* inspectStartupRecovery(runId, lifecycle)
                 if (current === undefined) {
                   const initialControlPolicy = yield* initialControlPolicySource
-                  yield* lifecycle.beginRun(runId, target, initialControlPolicy).pipe(
+                  yield* observeProducedWrite(
+                    `begin:${runId}`,
+                    "begin",
+                    lifecycle.beginRun(runId, target, initialControlPolicy)
+                  ).pipe(
                     Effect.catch((beginFailure) =>
                       lifecycle.readRunForRecovery(runId, target).pipe(
+                        Effect.tap(() =>
+                          Ref.update(unresolvedProducedWrites, (current) => {
+                            const unresolved = new Map(current)
+                            unresolved.delete(`begin:${runId}`)
+                            return unresolved
+                          })
+                        ),
                         Effect.asVoid,
                         Effect.mapError((reconciliationFailure) =>
                           reconciliationFailure._tag === "WorkflowRunTargetMismatch" ||
@@ -351,10 +377,6 @@ export const journaledRunBootstrapLayer = (
         setTaskWorkCapacity: (input) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.apply(input))
       }
 
-      return JournaledRunBootstrap.of({
-        activate,
-        operatorControl,
-        requestApplicationExit: applicationExitBoundary.requestExit
-      })
+      return JournaledRunBootstrap.of({ activate, operatorControl })
     })
   )

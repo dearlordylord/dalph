@@ -270,7 +270,7 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
         }))
       },
       yield* makeIntegrationTargetResourceController(),
-      yield* makeApplicationExitLifecycle()
+      (yield* makeApplicationExitLifecycle()).admission
     )
 
     expect(current).toEqual({ revision: 2, taskExecutionCapacity: 1 })

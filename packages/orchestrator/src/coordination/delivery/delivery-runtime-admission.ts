@@ -10,7 +10,7 @@ import {
   PlannedAttemptProtocolController,
   type PlannedAttemptProtocolPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
-import { type ApplicationExitLifecycleService, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
+import { type ApplicationExitAdmissionService, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 
 type TaskWorkPosition =
@@ -182,7 +182,7 @@ const reserveTaskPositionState = (
 export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntimeAdmission.make")(function* (
   initial: DeliveryTaskWorkAdmissionBasis,
   integrationTargets: IntegrationTargetResourceController,
-  applicationExit: ApplicationExitLifecycleService
+  applicationExit: ApplicationExitAdmissionService
 ): Effect.fn.Return<DeliveryRuntimeAdmissionController, never, PlannedAttemptProtocolController> {
   const plannedAttemptProtocol = yield* PlannedAttemptProtocolController
   const state = yield* Ref.make<AdmissionState>({

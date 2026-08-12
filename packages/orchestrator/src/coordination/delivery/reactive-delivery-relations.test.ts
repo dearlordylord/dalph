@@ -359,7 +359,7 @@ it.effect("retains the exact task-work position after a safe report when a later
       const admission = yield* makeDeliveryRuntimeAdmissionController(
         current.taskWork,
         yield* makeIntegrationTargetResourceController(),
-        yield* makeApplicationExitLifecycle()
+        (yield* makeApplicationExitLifecycle()).admission
       ).pipe(Effect.provide(Layer.fresh(plannedAttemptProtocolControllerLayer)))
       expect(yield* admission.tryReserve(nextAttemptProposal())).toMatchObject({
         _tag: "Deferred",
@@ -392,7 +392,7 @@ it.effect("releases the exact position after a safely suspended command projecti
       const admission = yield* makeDeliveryRuntimeAdmissionController(
         current.taskWork,
         yield* makeIntegrationTargetResourceController(),
-        yield* makeApplicationExitLifecycle()
+        (yield* makeApplicationExitLifecycle()).admission
       ).pipe(Effect.provide(Layer.fresh(plannedAttemptProtocolControllerLayer)))
       expect((yield* admission.tryReserve(nextAttemptProposal()))._tag).toBe("Admitted")
     }).pipe(Effect.provide(memoryJournalStoreLayer))

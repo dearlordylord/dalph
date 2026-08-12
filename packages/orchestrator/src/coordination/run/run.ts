@@ -44,7 +44,7 @@ import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-re
 import type { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import type { StartupRecoveryBlocked } from "./startup-recovery.js"
-import type { ApplicationExiting, ApplicationExitResult } from "../application-exit/lifecycle-decision.js"
+import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair
@@ -89,7 +89,6 @@ export class JournaledRunIdentityMismatch extends Schema.TaggedError<JournaledRu
 export class JournaledRunNotActive extends Schema.TaggedError<JournaledRunNotActive>()("JournaledRunNotActive", {}) {}
 
 export interface JournaledRunBootstrapService {
-  readonly requestApplicationExit: Effect.Effect<ApplicationExitResult>
   readonly activate: <EInitial, RInitial, E, R>(
     target: TrackerTarget,
     initialControlPolicySource: Effect.Effect<InitialControlPolicy, EInitial, RInitial>,

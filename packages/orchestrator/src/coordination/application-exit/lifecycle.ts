@@ -1,4 +1,4 @@
-import { Clock, Context, Deferred, Effect, Layer, Ref } from "effect"
+import { Clock, Context, Deferred, Effect, Ref } from "effect"
 import { ApplicationExiting, type ApplicationExitResult, type ForwardOwnerKind } from "./lifecycle-decision.js"
 
 type ForwardOwnerId = number
@@ -45,9 +45,23 @@ export interface ApplicationExitLifecycleSnapshot {
   readonly registeredOwnerCount: number
 }
 
-export interface ApplicationExitLifecycleService {
+/** Least authority required to admit and observe process-local forward-progress ownership. */
+export interface ApplicationExitAdmissionService {
   /** Atomically rejects late work or records its preparation before any reservation is acquired. */
   readonly prepareForwardOwner: (kind: ForwardOwnerKind) => Effect.Effect<ForwardOwnerPreparation, ApplicationExiting>
+  /** Acquires one registered owner without exposing the preparation state to callers that reserve nothing. */
+  readonly acquireForwardOwner: (kind: ForwardOwnerKind) => Effect.Effect<ForwardOwnerLease, ApplicationExiting>
+  readonly snapshot: Effect.Effect<ApplicationExitLifecycleSnapshot>
+}
+
+/** The application-owned admission capability injected into isolated runtime compositions. */
+export class ApplicationExitAdmission extends Context.Service<
+  ApplicationExitAdmission,
+  ApplicationExitAdmissionService
+>()("@dalph/ApplicationExitAdmission") {}
+
+export interface ApplicationExitLifecycleService {
+  readonly admission: ApplicationExitAdmissionService
   /** Every request closes or joins one cutoff, monotonic deadline, driver, and result. */
   readonly requestExit: Effect.Effect<ApplicationExitRequest>
   readonly completeExit: (result: ApplicationExitResult) => Effect.Effect<boolean>
@@ -57,14 +71,7 @@ export interface ApplicationExitLifecycleService {
   readonly awaitForwardOwnersReleased: Effect.Effect<void>
   /** Lets the application runtime stop its ordinary scope without persisting an Exit fact. */
   readonly awaitExitRequested: Effect.Effect<void>
-  readonly snapshot: Effect.Effect<ApplicationExitLifecycleSnapshot>
 }
-
-/** The single process-wide lifecycle boundary shared by control calls and delivery admission. */
-export class ApplicationExitLifecycle extends Context.Service<
-  ApplicationExitLifecycle,
-  ApplicationExitLifecycleService
->()("@dalph/ApplicationExitLifecycle") {}
 
 export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.make")(function* () {
   const result = yield* Deferred.make<ApplicationExitResult>()
@@ -139,16 +146,23 @@ export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.
     )
   )
 
-  return ApplicationExitLifecycle.of({
+  const admission = {
+    acquireForwardOwner: Effect.fn("ApplicationExitLifecycle.acquireForwardOwner")((kind: ForwardOwnerKind) =>
+      prepareForwardOwner(kind).pipe(
+        Effect.flatMap((preparation) => preparation.register.pipe(Effect.onError(() => preparation.cancel)))
+      )
+    ),
+    prepareForwardOwner,
+    snapshot
+  } satisfies ApplicationExitAdmissionService
+
+  return {
+    admission,
     awaitExitDriverFinished: Deferred.await(exitDriverFinished),
     awaitExitRequested: Deferred.await(exitRequested),
     awaitForwardOwnersReleased: Deferred.await(forwardOwnersReleased),
     completeExitDriver: Deferred.succeed(exitDriverFinished, undefined),
     completeExit: (exitResult) => Deferred.succeed(result, exitResult),
-    prepareForwardOwner,
-    requestExit,
-    snapshot
-  })
+    requestExit
+  } satisfies ApplicationExitLifecycleService
 })
-
-export const applicationExitLifecycleLayer = Layer.effect(ApplicationExitLifecycle, makeApplicationExitLifecycle())

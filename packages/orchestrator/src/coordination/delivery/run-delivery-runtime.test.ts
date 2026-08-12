@@ -74,9 +74,10 @@ import {
 import {
   type DeliveryRuntimeResourceCapabilities,
   deliveryRuntimeResourceCapabilitiesLayer,
-  deliveryRuntimeResourceCapabilitiesOf,
+  deliveryRuntimeResourceCapabilitiesOf as makeCapabilitiesWithAdmission,
   deliveryRuntimeResourcesLayer
 } from "./delivery-runtime-resources.js"
+import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import type { DeliveryRuntimeObservationState } from "./delivery-runtime-observation.js"
 import {
   makePlannedAttemptProtocolController,
@@ -84,6 +85,16 @@ import {
   plannedAttemptProtocolControllerLayer
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
+
+const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("RunDeliveryRuntimeTest.makeCapabilities")(function* (
+  integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
+) {
+  return yield* makeCapabilitiesWithAdmission(integrationTargets, (yield* makeApplicationExitLifecycle()).admission)
+})
+
+const testDeliveryRuntimeResourcesLayer = Layer.unwrap(
+  makeApplicationExitLifecycle().pipe(Effect.map((lifecycle) => deliveryRuntimeResourcesLayer(lifecycle.admission)))
+)
 
 const runDeliveryRuntimeQuiescence = <E>(relation: DeliveryRuntimeInput<E>) => runDeliveryRuntime(relation)
 
@@ -108,7 +119,7 @@ const plannerLayer = deterministicPlannedTaskAttemptLayer({
 const identityLayers = Layer.mergeAll(
   deterministicOperationIdAllocatorLayer("runtime-operation"),
   plannerLayer,
-  deliveryRuntimeResourcesLayer,
+  testDeliveryRuntimeResourcesLayer,
   plannedAttemptProtocolControllerLayer
 )
 
@@ -598,7 +609,7 @@ it.effect("does not start a causal successor before its live operation owner is 
 
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(plannerLayer),
-      Effect.provide(deliveryRuntimeResourcesLayer),
+      Effect.provide(testDeliveryRuntimeResourcesLayer),
       Effect.provide(plannedAttemptProtocolControllerLayer),
       Effect.provideService(OperationIdAllocator, allocator),
       Effect.provideService(DeliveryActionExecutor, executor),
@@ -1002,7 +1013,7 @@ it.effect("does not allocate an operation or attempt identity before admission",
     })
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(plannerLayer),
-      Effect.provide(deliveryRuntimeResourcesLayer),
+      Effect.provide(testDeliveryRuntimeResourcesLayer),
       Effect.provide(plannedAttemptProtocolControllerLayer),
       Effect.provideService(OperationIdAllocator, allocator),
       Effect.provideService(DeliveryActionExecutor, executor),

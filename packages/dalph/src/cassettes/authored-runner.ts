@@ -73,7 +73,7 @@ import {
   journalStoreCapabilities,
   JournaledRunBootstrap,
   journaledRunBootstrapLayer,
-  makeApplicationExitLifecycle,
+  makeApplicationExitShell,
   type JournaledRuntimeLayerInput,
   journaledWorkflowInterpreterLayer,
   type PauseProgressView,
@@ -1771,11 +1771,12 @@ const runAuthoredScenarioCassetteWith = (request: {
           })
         )
       )
-      const coordinatorOwnershipLayer = Layer.succeed(
-        CoordinatorOwnership,
+      const coordinatorOwnership = CoordinatorOwnership.of({
         /* v8 ignore next -- Activation construction requires capability presence; cassette mutations use controlled authorities. */
-        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
-      )
+        release: Effect.void,
+        runMutation: (mutation) => mutation
+      })
+      const coordinatorOwnershipLayer = Layer.succeed(CoordinatorOwnership, coordinatorOwnership)
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
       const unresolvedLostExecutorResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
@@ -1816,7 +1817,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             Effect.map((ordinal) => runtimeLayerFor(AuthoredRunActivationOrdinal.make(ordinal)))
           )
         )
-      const applicationExit = yield* makeApplicationExitLifecycle()
+      const applicationExit = yield* makeApplicationExitShell(coordinatorOwnership, { requestEnd: () => Effect.void })
       const application = journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(
         Layer.provide(journalLayer),
         Layer.provide(coordinatorOwnershipLayer)

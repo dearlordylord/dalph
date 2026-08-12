@@ -19,7 +19,7 @@ import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Scope, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
-import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
+import { makeApplicationExitShell } from "../application-exit/application-shell.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -434,19 +434,17 @@ const buildBootstrap = Effect.fn("PauseProgressAcceptance.buildBootstrap")(funct
   reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"]
 ) {
   const capabilities = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
+  const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
   const application = journaledRunBootstrapLayer(
     runId,
     ({ runId }) => runtimeLayer(runId, graph, calls, reconcileTaskWorktree),
-    yield* makeApplicationExitLifecycle()
+    yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
   ).pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(JournalStore, storage),
         Layer.succeed(RunLifecycleJournal, Context.get(capabilities, RunLifecycleJournal)),
-        Layer.succeed(
-          CoordinatorOwnership,
-          CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
-        )
+        Layer.succeed(CoordinatorOwnership, ownership)
       )
     )
   )

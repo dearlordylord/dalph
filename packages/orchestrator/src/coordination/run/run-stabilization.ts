@@ -50,29 +50,28 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
 ) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      const g1 = yield* runDeliveryRuntimePhase(evaluations)
-      if (g1._tag === "PassiveRuntimeQuiescence") return proofOf(g1)
+      const firstQuiescence = yield* runDeliveryRuntimePhase(evaluations)
+      if (firstQuiescence._tag === "PassiveRuntimeQuiescence") return proofOf(firstQuiescence)
 
-      const applicationExit = (yield* DeliveryRuntimeResources).applicationExit
-      const preparing = yield* applicationExit.prepareForwardOwner("InterruptibleBoundary").pipe(Effect.option)
-      if (Option.isNone(preparing)) return proofOf(g1)
-      const owner = yield* preparing.value.register.pipe(
-        Effect.onError(() => preparing.value.cancel),
-        Effect.option
-      )
-      if (Option.isNone(owner)) return proofOf(g1)
+      const applicationExitAdmission = (yield* DeliveryRuntimeResources).applicationExitAdmission
+      const owner = yield* applicationExitAdmission.acquireForwardOwner("InterruptibleBoundary").pipe(Effect.option)
+      if (Option.isNone(owner)) return proofOf(firstQuiescence)
 
       const allocator = yield* OperationIdAllocator
       const operationId = yield* allocator.allocate()
-      const predecessorOperationIds = [g1.current.trackerGraph.observation.operationId]
+      const predecessorOperationIds = [firstQuiescence.current.trackerGraph.observation.operationId]
       const operation = makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
       const accepted = yield* executeTrackerGraphRead(operation).pipe(
         Effect.andThen(
-          awaitAcceptedObservation(evaluations, operationId, g1.current.trackerGraph.observation.recordedAt)
+          awaitAcceptedObservation(
+            evaluations,
+            operationId,
+            firstQuiescence.current.trackerGraph.observation.recordedAt
+          )
         ),
         Effect.ensuring(owner.value.release)
       )
-      if ((yield* applicationExit.snapshot).cutoffClosed) {
+      if ((yield* applicationExitAdmission.snapshot).cutoffClosed) {
         return {
           acceptedAt: accepted.acceptedAt,
           decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })

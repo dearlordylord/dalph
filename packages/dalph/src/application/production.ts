@@ -13,7 +13,9 @@ import {
   type JournalStoreError,
   journaledRunBootstrapLayer,
   journaledWorkflowInterpreterLayer,
-  makeApplicationExitLifecycle,
+  ApplicationExitRequestBoundary,
+  CoordinatorOwnership,
+  makeApplicationExitShell,
   nodeGitCommandLayer,
   nodeGitTargetLineageLayer,
   nodeGitWorktreeLayer,
@@ -40,7 +42,7 @@ import { Crypto, Effect, Layer } from "effect"
  * and one same-process coarse fake executor.
  */
 type ProductionWorkflowLayer<TrackerError, TrackerRequirements> = Layer.Layer<
-  JournaledRunBootstrap,
+  ApplicationExitRequestBoundary | JournaledRunBootstrap,
   | TrackerError
   | JournalStoreError
   | Layer.Error<typeof productionJournalStoreLayer>
@@ -83,7 +85,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const crypto = yield* Crypto.Crypto
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
-      const applicationExit = yield* makeApplicationExitLifecycle()
+      const ownership = yield* CoordinatorOwnership
+      const applicationExit = yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
       const runtimeLayer = ({ runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(
           activeRunId,
@@ -112,10 +115,10 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           Layer.provide(Layer.succeed(WorkflowTrace, trace))
         )
       }
-      return journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(
-        Layer.provide(journalLayer),
-        Layer.provide(ownershipLayer)
+      return Layer.merge(
+        journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(Layer.provide(journalLayer)),
+        Layer.succeed(ApplicationExitRequestBoundary, applicationExit.requestBoundary)
       )
     })
-  ).pipe(Layer.provide(nonJournaledRuntimeInputs))
+  ).pipe(Layer.provide(nonJournaledRuntimeInputs), Layer.provide(ownershipLayer))
 }

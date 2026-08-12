@@ -22,6 +22,7 @@ import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/
 import { DeliveryActionProtocolAdmissionMissing } from "./delivery-action-executor.js"
 import { DeliveryProposalId, trackerGraphReadProposalOf } from "./delivery-action-proposal.js"
 import { deliveryRuntimeResourceCapabilitiesOf } from "./delivery-runtime-resources.js"
+import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import {
   deliveryRuntimeLiveOwnerSnapshots,
   makeDeliveryRuntimeLiveOwner,
@@ -56,7 +57,10 @@ const correlation = plannedAttemptExecutorCorrelation(
 
 const makeOwner = Effect.fn("DeliveryRuntimeObservationTest.makeOwner")(function* () {
   const integrationTargets = yield* makeIntegrationTargetResourceController()
-  const { resources } = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+  const { resources } = yield* deliveryRuntimeResourceCapabilitiesOf(
+    integrationTargets,
+    (yield* makeApplicationExitLifecycle()).admission
+  )
   const admission = yield* resources
     .makeAdmissionController({ capacity: TaskWorkCapacity.make(1), held: [] })
     .pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
@@ -182,7 +186,10 @@ it.effect("closes a not-ready observation once and preserves that final state wh
 it.effect("keeps Alice's runtime observation open when an ordinary runtime phase releases integration targets", () =>
   Effect.gen(function* () {
     const integrationTargets = yield* makeIntegrationTargetResourceController()
-    const { observation, resources } = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+    const { observation, resources } = yield* deliveryRuntimeResourceCapabilitiesOf(
+      integrationTargets,
+      (yield* makeApplicationExitLifecycle()).admission
+    )
 
     yield* resources.integrationTargets.releaseAll
 

@@ -33,7 +33,11 @@ const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntimeAdmissi
   initial: Parameters<typeof makeAdmissionControllerWithLifecycle>[0],
   integrationTargets: Parameters<typeof makeAdmissionControllerWithLifecycle>[1]
 ) {
-  return yield* makeAdmissionControllerWithLifecycle(initial, integrationTargets, yield* makeApplicationExitLifecycle())
+  return yield* makeAdmissionControllerWithLifecycle(
+    initial,
+    integrationTargets,
+    (yield* makeApplicationExitLifecycle()).admission
+  )
 })
 
 const withProtocolController = <A, E>(
@@ -183,9 +187,9 @@ it.effect("Exit rolls back delivery reservations prepared before owner registrat
         { capacity: TaskWorkCapacity.make(1), held: [] },
         yield* makeIntegrationTargetResourceController(),
         {
-          ...lifecycle,
+          ...lifecycle.admission,
           prepareForwardOwner: (kind) =>
-            lifecycle
+            lifecycle.admission
               .prepareForwardOwner(kind)
               .pipe(
                 Effect.map((preparation) => ({
@@ -212,7 +216,11 @@ it.effect("Exit rolls back delivery reservations prepared before owner registrat
 
       expect((yield* admission.tryReserve(proposal).pipe(Effect.flip))._tag).toBe("ApplicationExiting")
       expect((yield* admission.snapshot).positions.size).toBe(0)
-      expect(yield* lifecycle.snapshot).toEqual({ cutoffClosed: true, preparingOwnerCount: 0, registeredOwnerCount: 0 })
+      expect(yield* lifecycle.admission.snapshot).toEqual({
+        cutoffClosed: true,
+        preparingOwnerCount: 0,
+        registeredOwnerCount: 0
+      })
     })
   )
 )

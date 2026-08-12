@@ -62,8 +62,7 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
         readTaskWorkCapacity: () => Effect.die("unused"),
         observePause: () => Stream.empty,
         setTaskWorkCapacity: () => Effect.die("unused")
-      },
-      requestApplicationExit: Effect.die("unused")
+      }
     })
 
     expect(
