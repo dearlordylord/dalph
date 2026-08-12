@@ -46,7 +46,10 @@ Acceptance tests:
 The child owns one exact planned attempt and its controlled executor has
 reported `Running`. The task-work position, worktree, claim, WIP, and journaled
 responsibility remain present. No real LLM boundary exists in this controlled
-host fixture.
+host fixture. The fixture is the JavaScript application-host executable emitted
+by the normal `@dalph/dalph` package build, not a TypeScript source loader. Its
+planned attempt names a real Git-registered worktree at the exact committed Base
+SHA, and that worktree contains a concrete uncommitted artifact.
 
 The supervisor sends `SIGTERM`. The same Exit boundary closes admission,
 records the exact suspension intent, uses the fast controlled suspension path,
@@ -60,13 +63,17 @@ suspension. Restart follows the existing planned-attempt recovery protocol.
 
 The supervisor sees success only after exact suspension evidence. Dalph must
 not wait for executor completion, send an LLM request, manufacture a report
-from signal receipt, or delete preserved work.
+from signal receipt, delete the registered worktree, or change/delete its
+uncommitted artifact.
 
 Acceptance test:
 
 - `a running controlled executor suspends before its Linux child exits zero`
   exercises the ordinary planned-attempt command protocol and observes the
   journaled suspension intent before the exact safe report and lifecycle result.
+  The automated Linux test launches the built JavaScript fixture, then asks Git
+  for the same registered worktree and reads its artifact after process status
+  zero; both must be byte-for-byte unchanged.
 
 ## Repeated Linux signals join one stuck atomic drain
 
@@ -117,3 +124,105 @@ Issue #211 records equivalent evidence on supported Apple hardware. This Linux
 automation does not qualify macOS. A production `dalph exit` command, remote
 Operator identity, configurable signal, or supervisor-owned deadline needs a
 separately accepted scenario.
+
+## Built-fixture evidence and macOS handoff
+
+Every real-child acceptance test above launches
+`packages/dalph/dist/bin/linux-application-exit-host-fixture.js`, produced by
+`pnpm build` from the exact checkout. No test or manual qualification command
+may substitute the TypeScript source file, a source loader, or output copied
+from another commit. The host's JSON Lines output and its process status are the
+observable application boundary.
+
+After `pnpm install --frozen-lockfile && pnpm build`, a maintainer can run the
+same built executable with this positional command contract:
+
+```text
+node packages/dalph/dist/bin/linux-application-exit-host-fixture.js \
+  <acquire-once|failed|idle|running|stuck|stuck-repeat> \
+  <git-common-directory> [journal-path|-] [planned-worktree] [base-sha]
+```
+
+`running` requires all three trailing planned-attempt facts: use `-` when no
+journal file is requested, pass a Git-registered worktree containing
+`dalph-preserved-work.txt`, and pass that worktree's exact `HEAD`. The fixture
+reports its initial physical-work evidence, the exact fast suspension request,
+the resulting journal chronology, and the application-lifecycle result. The
+maintainer must still ask Git for the registered worktree and read the artifact
+after the child ends; fixture output alone is not preservation proof. Other
+modes accept the optional journal path and ignore the worktree/Base positions.
+
+This executable and command contract are evidence tooling for #210/#211. They
+do not add a production Dalph command, qualify macOS automatically, or change
+the transport-neutral Exit behavior.
+
+Before installing, the macOS maintainer records the exact checkout and host
+facts in the attached terminal evidence:
+
+```sh
+git rev-parse HEAD
+sw_vers
+uname -m
+node --version
+pnpm --version
+pnpm install --frozen-lockfile
+pnpm build
+```
+
+For the running-work preservation case, a maintainer prepares the physical
+facts in one shell from the exact checkout:
+
+```sh
+QUALIFICATION_ROOT="$(mktemp -d)"
+QUALIFICATION_REPOSITORY="$QUALIFICATION_ROOT/repository"
+QUALIFICATION_WORKTREE="$QUALIFICATION_ROOT/planned-worktree"
+mkdir -p "$QUALIFICATION_REPOSITORY"
+git -C "$QUALIFICATION_REPOSITORY" init
+git -C "$QUALIFICATION_REPOSITORY" config user.email dalph@example.invalid
+git -C "$QUALIFICATION_REPOSITORY" config user.name 'Dalph Exit Qualification'
+printf 'application Exit fixture\n' >"$QUALIFICATION_REPOSITORY/README.md"
+git -C "$QUALIFICATION_REPOSITORY" add README.md
+git -C "$QUALIFICATION_REPOSITORY" commit -m 'fixture base'
+QUALIFICATION_BASE="$(git -C "$QUALIFICATION_REPOSITORY" rev-parse HEAD)"
+git -C "$QUALIFICATION_REPOSITORY" worktree add \
+  -b dalph/running-exit-qualification \
+  "$QUALIFICATION_WORKTREE" "$QUALIFICATION_BASE"
+printf 'uncommitted executor work must survive application Exit\n' \
+  >"$QUALIFICATION_WORKTREE/dalph-preserved-work.txt"
+QUALIFICATION_GIT_COMMON_DIRECTORY="$QUALIFICATION_REPOSITORY/.git"
+node packages/dalph/dist/bin/linux-application-exit-host-fixture.js \
+  running "$QUALIFICATION_GIT_COMMON_DIRECTORY" - \
+  "$QUALIFICATION_WORKTREE" "$QUALIFICATION_BASE"
+```
+
+When the last command reports `{"ready":true,"pid":PID}`, a second shell sends
+`kill -TERM PID`. After the first shell returns status zero, it verifies the
+owning Git facts and preserved bytes with:
+
+```sh
+git -C "$QUALIFICATION_REPOSITORY" worktree list --porcelain
+git -C "$QUALIFICATION_WORKTREE" status --porcelain -- dalph-preserved-work.txt
+test "$(cat "$QUALIFICATION_WORKTREE/dalph-preserved-work.txt")" = \
+  'uncommitted executor work must survive application Exit'
+```
+
+For idle, failed, stuck, and stuck-repeat evidence, use the same
+`QUALIFICATION_GIT_COMMON_DIRECTORY`, replace `running` with the exact mode, and
+omit the final three arguments. Send `kill -TERM PID` only after that long-lived
+child's ready line; `stuck-repeat` sends its second signal itself immediately
+after observing the closed cutoff. Do not signal `acquire-once`: it reports
+`lockAcquired` and `ready`, releases the lock, and must exit zero on its own.
+
+Immediately after each `idle`, `failed`, and `stuck` child ends, start this
+exact follow-up child against the same Git common directory:
+
+```sh
+node packages/dalph/dist/bin/linux-application-exit-host-fixture.js \
+  acquire-once "$QUALIFICATION_GIT_COMMON_DIRECTORY"
+```
+
+For each follow-up, attach its `{"lockAcquired":true}` line and status zero to
+prove the preceding child released the coordinator lock after successful Exit
+or nonzero forced termination. The maintainer records every command, JSON Line,
+shell status, and monotonic elapsed time externally as the human-only #211
+evidence requires.

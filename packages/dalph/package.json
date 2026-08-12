@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "bin": {
-    "dalph": "dist/bin/dalph.js"
+    "dalph": "dist/bin/dalph.js",
+    "dalph-linux-exit-host-fixture": "dist/bin/linux-application-exit-host-fixture.js"
   },
   "exports": {
     ".": {

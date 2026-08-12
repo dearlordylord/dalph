@@ -1,10 +1,27 @@
 /* eslint-disable import/no-nodejs-modules -- Linux qualification deliberately controls real Node child processes. */
 import { NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
+import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
+import {
+  GitCommand,
+  GitCommonDirectoryTarget,
+  GitWorktree,
+  PlannedWorktreeReady,
+  nodeGitCommandLayer,
+  nodeGitWorktreeLayer
+} from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema, Stream } from "effect"
 import nodeProcess from "node:process"
 import { expect } from "vitest"
+import {
+  fixtureTaskBranch,
+  type HostFixtureInput,
+  JournalEvidenceLocator,
+  makeFixturePlannedAttempt,
+  preservedArtifact,
+  preservedArtifactContents
+} from "../../bin/linux-application-exit-host-fixture-contract.js"
 
 const LifecycleLine = Schema.Struct({
   lifecycle: Schema.optionalKey(
@@ -21,28 +38,26 @@ const LifecycleLine = Schema.Struct({
   lockAcquired: Schema.optionalKey(Schema.Boolean),
   observedAt: Schema.optionalKey(Schema.Finite),
   ready: Schema.optionalKey(Schema.Boolean),
-  repeatedSignalSent: Schema.optionalKey(Schema.Boolean)
+  repeatedSignalSent: Schema.optionalKey(Schema.Boolean),
+  worktreeEvidence: Schema.optionalKey(
+    Schema.Struct({ artifact: Schema.String, baseSha: GitCommitSha, worktree: WorktreeLocator })
+  )
 })
 type LifecycleLine = typeof LifecycleLine.Type
 
 const nodeLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
-const fixture = new URL("../../test/fixtures/linux-application-exit-host.ts", import.meta.url).pathname
-const loader = new URL("../../test/fixtures/typescript-source-loader.mjs", import.meta.url).pathname
+const fixture = new URL("../../dist/bin/linux-application-exit-host-fixture.js", import.meta.url).pathname
 const dalphPackageDirectory = new URL("../../", import.meta.url).pathname
 
-type HostFixtureMode = "acquire-once" | "failed" | "idle" | "running" | "stuck" | "stuck-repeat"
-
-const childCommand = (mode: HostFixtureMode, directory: string, journal?: string) =>
+const childCommand = (input: HostFixtureInput) =>
   ChildProcess.make(
     nodeProcess.execPath,
     [
-      "--experimental-transform-types",
-      "--import",
-      loader,
       fixture,
-      mode,
-      directory,
-      ...(journal === undefined ? [] : [journal])
+      input.mode,
+      input.gitCommonDirectory,
+      ...(input.journalPath === undefined && input.mode !== "running" ? [] : [input.journalPath ?? "-"]),
+      ...(input.mode === "running" ? [input.worktree, input.baseSha] : [])
     ],
     { cwd: dalphPackageDirectory }
   )
@@ -54,13 +69,9 @@ const readJsonLines = (handle: ChildProcessSpawner.ChildProcessHandle) =>
     Stream.mapEffect((line) => Schema.decodeUnknownEffect(Schema.fromJsonString(LifecycleLine))(line))
   )
 
-const spawnReadyChild = Effect.fn("LinuxSupervisorExit.Test.spawnReadyChild")(function* (
-  mode: HostFixtureMode,
-  directory: string,
-  journal?: string
-) {
+const spawnReadyChild = Effect.fn("LinuxSupervisorExit.Test.spawnReadyChild")(function* (input: HostFixtureInput) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-  const handle = yield* spawner.spawn(childCommand(mode, directory, journal))
+  const handle = yield* spawner.spawn(childCommand(input))
   const observed = yield* Ref.make<ReadonlyArray<LifecycleLine>>([])
   const exitRequested = yield* Deferred.make<void>()
   const ready = yield* Deferred.make<void>()
@@ -79,7 +90,13 @@ const spawnReadyChild = Effect.fn("LinuxSupervisorExit.Test.spawnReadyChild")(fu
   return { collector, exitRequested: Deferred.await(exitRequested), handle, observed }
 })
 
-const temporaryDirectory = <A, E, R>(use: (directory: string, journal: string) => Effect.Effect<A, E, R>) =>
+interface TemporaryFixturePaths {
+  readonly gitCommonDirectory: GitCommonDirectoryTarget
+  readonly journal: JournalEvidenceLocator
+  readonly root: string
+}
+
+const temporaryDirectory = <A, E, R>(use: (paths: TemporaryFixturePaths) => Effect.Effect<A, E, R>) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -88,7 +105,11 @@ const temporaryDirectory = <A, E, R>(use: (directory: string, journal: string) =
       const directory = path.join(root, "git-common-directory")
       const journal = path.join(root, "run-journal.txt")
       yield* fileSystem.makeDirectory(directory)
-      return yield* use(directory, journal)
+      return yield* use({
+        gitCommonDirectory: GitCommonDirectoryTarget.make(directory),
+        journal: JournalEvidenceLocator.make(journal),
+        root
+      })
     })
   ).pipe(Effect.provide(nodeLayer))
 
@@ -97,12 +118,54 @@ const signal = (handle: ChildProcessSpawner.ChildProcessHandle, killSignal: "SIG
     nodeProcess.kill(handle.pid, killSignal)
   })
 
+const runGit = Effect.fn("LinuxSupervisorExit.Test.runGit")(function* (directory: string, args: ReadonlyArray<string>) {
+  const git = yield* GitCommand
+  const result = yield* git.runInWorktree(directory, args)
+  if (result.exitCode !== 0) return yield* Effect.die(`git ${args.join(" ")} failed: ${result.stderr}`)
+  return result.stdout
+})
+
+const makePhysicalRunningWorktree = Effect.fn("LinuxSupervisorExit.Test.makePhysicalRunningWorktree")(function* (
+  root: string
+) {
+  const fileSystem = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const repository = path.join(root, "repository")
+  const worktree = path.join(root, "planned-worktree")
+  const artifact = path.join(worktree, preservedArtifact)
+  yield* fileSystem.makeDirectory(repository)
+  yield* runGit(repository, ["init"])
+  yield* runGit(repository, ["config", "user.email", "dalph@example.invalid"])
+  yield* runGit(repository, ["config", "user.name", "Dalph Exit Fixture"])
+  yield* fileSystem.writeFileString(path.join(repository, "README.md"), "application Exit fixture\n")
+  yield* runGit(repository, ["add", "README.md"])
+  yield* runGit(repository, ["commit", "-m", "fixture base"])
+  const baseSha = yield* Schema.decodeUnknownEffect(GitCommitSha)(
+    (yield* runGit(repository, ["rev-parse", "HEAD"])).trim()
+  )
+  yield* runGit(repository, ["worktree", "add", "-b", fixtureTaskBranch.slice("refs/heads/".length), worktree, baseSha])
+  yield* fileSystem.writeFileString(artifact, preservedArtifactContents)
+  const gitCommonDirectory = GitCommonDirectoryTarget.make(path.join(repository, ".git"))
+  const running = {
+    baseSha,
+    gitCommonDirectory,
+    journalPath: undefined,
+    mode: "running",
+    worktree: WorktreeLocator.make(worktree)
+  } as const
+  return { artifact, gitCommonDirectory, plannedAttempt: makeFixturePlannedAttempt(running), repository, running }
+})
+
 it.live(
   "an idle Linux child reports successful Exit and status zero after SIGTERM",
   () =>
-    temporaryDirectory((directory) =>
+    temporaryDirectory(({ gitCommonDirectory }) =>
       Effect.gen(function* () {
-        const { collector, handle, observed } = yield* spawnReadyChild("idle", directory)
+        const { collector, handle, observed } = yield* spawnReadyChild({
+          gitCommonDirectory,
+          journalPath: undefined,
+          mode: "idle"
+        })
         yield* signal(handle, "SIGTERM")
         expect(yield* handle.exitCode).toBe(0)
         yield* Fiber.join(collector)
@@ -119,35 +182,70 @@ it.live(
 it.live(
   "a running controlled executor suspends before its Linux child exits zero",
   () =>
-    temporaryDirectory((directory) =>
+    temporaryDirectory(({ journal, root }) =>
       Effect.gen(function* () {
-        const { collector, handle, observed } = yield* spawnReadyChild("running", directory)
+        const physical = yield* makePhysicalRunningWorktree(root)
+        const { collector, handle, observed } = yield* spawnReadyChild({ ...physical.running, journalPath: journal })
         yield* signal(handle, "SIGTERM")
         expect(yield* handle.exitCode).toBe(0)
         yield* Fiber.join(collector)
         const lifecycle = yield* Ref.get(observed)
         const fastRequest = lifecycle.find(({ controlledExecutor }) => controlledExecutor === "FastSuspensionRequested")
-        const journal = lifecycle.find(({ journalEvents }) => journalEvents !== undefined)
+        const journalEvidence = lifecycle.find(({ journalEvents }) => journalEvents !== undefined)
         const result = lifecycle.findIndex(({ lifecycle }) => lifecycle?._tag === "ExitResultReported")
         expect(fastRequest).toEqual({ controlledExecutor: "FastSuspensionRequested", llmRequests: 0 })
-        expect(journal?.journalEvents).toEqual([
+        expect(lifecycle.find(({ worktreeEvidence }) => worktreeEvidence !== undefined)?.worktreeEvidence).toEqual({
+          artifact: preservedArtifactContents,
+          baseSha: physical.running.baseSha,
+          worktree: physical.running.worktree
+        })
+        expect(journalEvidence?.journalEvents).toEqual([
           "PlannedAttemptExecutorWorkResponsibilityBegan",
           "PlannedAttemptExecutorWorkReported",
           "PlannedAttemptExecutorCommandIntended",
           "PlannedAttemptExecutorWorkReported"
         ])
-        expect(journal === undefined ? -1 : lifecycle.indexOf(journal)).toBeLessThan(result)
+        expect(journalEvidence === undefined ? -1 : lifecycle.indexOf(journalEvidence)).toBeLessThan(result)
+        const fileSystem = yield* FileSystem.FileSystem
+        expect(yield* fileSystem.readFileString(physical.artifact)).toBe(preservedArtifactContents)
+        const observedWorktree = yield* Effect.gen(function* () {
+          return yield* (yield* GitWorktree).readPlannedWorktree(physical.plannedAttempt)
+        }).pipe(
+          Effect.provide(
+            nodeGitWorktreeLayer(GitCommonDirectoryTarget.make(physical.gitCommonDirectory)).pipe(
+              Layer.provide(nodeGitCommandLayer),
+              Layer.provide(NodeServices.layer)
+            )
+          )
+        )
+        expect(observedWorktree).toEqual(
+          PlannedWorktreeReady.make({
+            baseSha: physical.running.baseSha,
+            branch: TaskBranchRef.make(fixtureTaskBranch),
+            headSha: physical.running.baseSha,
+            worktree: physical.running.worktree
+          })
+        )
+        yield* Schema.decodeUnknownEffect(Schema.Literal(`?? ${preservedArtifact}\n`))(
+          yield* runGit(physical.running.worktree, ["status", "--porcelain", "--", preservedArtifact])
+        )
       })
-    ).pipe(Effect.provide(NodeServices.layer)),
+    ).pipe(
+      Effect.provide(Layer.mergeAll(NodeServices.layer, nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer))))
+    ),
   120_000
 )
 
 it.live(
   "repeated SIGTERM joins the original stuck Linux child drain and exits nonzero at five seconds",
   () =>
-    temporaryDirectory((directory) =>
+    temporaryDirectory(({ gitCommonDirectory }) =>
       Effect.gen(function* () {
-        const { collector, handle, observed } = yield* spawnReadyChild("stuck-repeat", directory)
+        const { collector, handle, observed } = yield* spawnReadyChild({
+          gitCommonDirectory,
+          journalPath: undefined,
+          mode: "stuck-repeat"
+        })
         yield* signal(handle, "SIGTERM")
         expect(yield* handle.exitCode).toBe(1)
         yield* Fiber.join(collector)
@@ -183,10 +281,14 @@ it.live(
   "signal receipt, scope closure, and unexpected death leave only the ordinary journal prefix",
   () =>
     Effect.forEach(["SIGTERM", "SIGKILL"] as const, (killSignal) =>
-      temporaryDirectory((directory, journal) =>
+      temporaryDirectory(({ gitCommonDirectory, journal }) =>
         Effect.gen(function* () {
           const fileSystem = yield* FileSystem.FileSystem
-          const { collector, handle, observed } = yield* spawnReadyChild("idle", directory, journal)
+          const { collector, handle, observed } = yield* spawnReadyChild({
+            gitCommonDirectory,
+            journalPath: journal,
+            mode: "idle"
+          })
           yield* signal(handle, killSignal)
           const status = yield* Effect.exit(handle.exitCode)
           yield* Fiber.join(collector)
@@ -205,9 +307,13 @@ it.live(
   "a successor Linux child acquires the coordinator lock after zero success and nonzero failed or timed-out Exit",
   () =>
     Effect.forEach(["idle", "failed", "stuck"] as const, (mode) =>
-      temporaryDirectory((directory) =>
+      temporaryDirectory(({ gitCommonDirectory }) =>
         Effect.gen(function* () {
-          const { collector, handle, observed } = yield* spawnReadyChild(mode, directory)
+          const { collector, handle, observed } = yield* spawnReadyChild({
+            gitCommonDirectory,
+            journalPath: undefined,
+            mode
+          })
           yield* signal(handle, "SIGTERM")
           const exitCode = yield* handle.exitCode
           yield* Fiber.join(collector)
@@ -217,7 +323,7 @@ it.live(
             (yield* Ref.get(observed)).find(({ lifecycle }) => lifecycle?.result?._tag === expectedResult)
           ).toBeDefined()
 
-          const successor = yield* spawnReadyChild("acquire-once", directory)
+          const successor = yield* spawnReadyChild({ gitCommonDirectory, journalPath: undefined, mode: "acquire-once" })
           expect(yield* successor.handle.exitCode).toBe(0)
           yield* Fiber.join(successor.collector)
           expect((yield* Ref.get(successor.observed)).find(({ lockAcquired }) => lockAcquired === true)).toBeDefined()
