@@ -10,7 +10,10 @@ import {
   PlannedAttemptProtocolController,
   type PlannedAttemptProtocolPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
-import { type ApplicationExitAdmissionService, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
+import {
+  type ApplicationExitAdmissionService,
+  type InterruptibleForwardOwnerLease
+} from "../application-exit/lifecycle.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 
 type TaskWorkPosition =
@@ -33,7 +36,7 @@ interface DeliveryAdmissionReservationBase {
   readonly [DeliveryAdmissionReservationTypeId]: typeof DeliveryAdmissionReservationTypeId
   readonly acquiredIntegrationResponsibility: IntegrationTargetResourceResponsibility | null
   readonly createdTaskPositionFor: TaskId | null
-  readonly forwardOwner: ForwardOwnerLease
+  readonly forwardOwner: InterruptibleForwardOwnerLease
 }
 
 /** Opaque admission ownership is either exact-attempt guarded or carries no protocol resource. */
@@ -261,6 +264,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
 
   const tryReserve = Effect.fn("DeliveryRuntimeAdmission.tryReserve")((proposal: DeliveryActionProposal) =>
     Effect.uninterruptible(
+      // eslint-disable-next-line complexity -- One transaction reserves and rolls back every declared proposal resource before exact owner registration.
       Effect.gen(function* () {
         const forwardOwner = yield* applicationExit.prepareForwardOwner("InterruptibleBoundary")
         const protocol = yield* reservePlannedAttemptProtocol(proposal)
@@ -291,6 +295,9 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
             })
           )
         )
+        if (registeredOwner.kind !== "InterruptibleBoundary") {
+          return yield* Effect.die("delivery admission registered a non-interruptible owner")
+        }
         const base = {
           [DeliveryAdmissionReservationTypeId]: DeliveryAdmissionReservationTypeId,
           acquiredIntegrationResponsibility: integration.acquired,

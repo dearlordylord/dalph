@@ -3,7 +3,11 @@ import { OperationSelected, TaskTrackerFactsObservedTrace } from "../../presenta
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { makeCompleteTaskTrackerFactsObserved } from "../../workflow/task-tracker-facts/observation.js"
-import type { DeliveryActionResult, MaterializedDeliveryAction } from "./delivery-action-executor.js"
+import type {
+  DeliveryActionExecutionLease,
+  DeliveryActionResult,
+  MaterializedDeliveryAction
+} from "./delivery-action-executor.js"
 import type { FreshOperationOnlyRoute } from "./delivery-action-proposal.js"
 
 export const deliveryActionCompleted = (
@@ -16,12 +20,17 @@ export const deliveryActionDeferred = (
 ): DeliveryActionResult => ({ _tag: "ActionDeferred", proposalId, reason })
 
 export const executeTrackerGraphRead = Effect.fn("DeliveryAction.readGraph")(function* (
-  operation: ReturnType<typeof makeTrackerGraphObservationOperation>
+  operation: ReturnType<typeof makeTrackerGraphObservationOperation>,
+  lease?: DeliveryActionExecutionLease
 ) {
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
   yield* trace.emit(OperationSelected.make({ operation }))
-  const snapshot = yield* interpreter.readTrackerGraph(operation)
+  const snapshot = yield* interpreter.readTrackerGraph(
+    operation,
+    lease?.recordIntent(operation.operationId),
+    lease?.interruptibleBoundary
+  )
   yield* trace.emit(
     TaskTrackerFactsObservedTrace.make({
       observation: makeCompleteTaskTrackerFactsObserved(operation, snapshot),
@@ -33,10 +42,11 @@ export const executeTrackerGraphRead = Effect.fn("DeliveryAction.readGraph")(fun
 
 export const executeFreshTrackerGraphRead = Effect.fn("DeliveryAction.executeFreshTrackerGraphRead")(function* (
   action: Extract<MaterializedDeliveryAction, { readonly _tag: "FreshOperationAction" }>,
-  route: Extract<FreshOperationOnlyRoute, { readonly _tag: "TrackerGraphReadRoute" }>
+  route: Extract<FreshOperationOnlyRoute, { readonly _tag: "TrackerGraphReadRoute" }>,
+  lease: DeliveryActionExecutionLease
 ) {
   const operation = makeTrackerGraphObservationOperation(action.operationId, route.target)
-  const snapshot = yield* executeTrackerGraphRead(operation)
+  const snapshot = yield* executeTrackerGraphRead(operation, lease)
   return {
     _tag: "TrackerGraphObservationPublished" as const,
     operationId: action.operationId,

@@ -1,12 +1,36 @@
-import { Clock, Context, Deferred, Effect, Ref } from "effect"
+import { Clock, Context, Data, Deferred, Effect, Ref } from "effect"
+import type {
+  InterruptibleWorkflowBoundaryExecution,
+  InterruptibleWorkflowBoundaryFamily,
+  InterruptibleWorkflowBoundaryIntent
+} from "../../workflow/interpretation/interpreter.js"
 import { ApplicationExiting, type ApplicationExitResult, type ForwardOwnerKind } from "./lifecycle-decision.js"
 
 type ForwardOwnerId = number
 
-interface ForwardOwnerState {
-  readonly kind: ForwardOwnerKind
-  readonly phase: "Preparing" | "Registered"
-}
+/** The exact durable intent whose outside result may remain unknown after Exit interrupts the local wait. */
+export type InterruptibleBoundaryFamily = InterruptibleWorkflowBoundaryFamily
+export type InterruptibleBoundaryIntent = InterruptibleWorkflowBoundaryIntent
+
+/** The current local tracker/Git call state retained only while its forward owner is live. */
+export type InterruptibleBoundaryOwnerSnapshot = Data.TaggedEnum<{
+  NoBoundaryCall: Record<never, never>
+  AwaitingBoundaryResult: { readonly intent: InterruptibleBoundaryIntent }
+  BoundaryResultProduced: { readonly intent: InterruptibleBoundaryIntent }
+  BoundaryResultRecorded: { readonly intent: InterruptibleBoundaryIntent }
+  RecoverableAmbiguity: { readonly intent: InterruptibleBoundaryIntent }
+}>
+
+export const InterruptibleBoundaryOwnerSnapshot = Data.taggedEnum<InterruptibleBoundaryOwnerSnapshot>()
+
+type ForwardOwnerState =
+  | { readonly kind: ForwardOwnerKind; readonly phase: "Preparing" }
+  | {
+      readonly boundary: InterruptibleBoundaryOwnerSnapshot
+      readonly kind: "InterruptibleBoundary"
+      readonly phase: "Registered"
+    }
+  | { readonly kind: Exclude<ForwardOwnerKind, "InterruptibleBoundary">; readonly phase: "Registered" }
 
 interface ApplicationExitLifecycleStateFields {
   readonly nextOwnerId: ForwardOwnerId
@@ -33,11 +57,20 @@ export interface ForwardOwnerPreparation {
   readonly register: Effect.Effect<ForwardOwnerLease, ApplicationExiting>
 }
 
-/** One owner admitted before the application Exit cutoff; release is idempotent. */
-export interface ForwardOwnerLease {
-  readonly kind: ForwardOwnerKind
+interface ForwardOwnerLeaseBase {
   readonly release: Effect.Effect<void>
 }
+
+/** One admitted tracker/Git owner whose exact intent and local call phase control Exit interruption. */
+export interface InterruptibleForwardOwnerLease extends ForwardOwnerLeaseBase, InterruptibleWorkflowBoundaryExecution {
+  readonly kind: "InterruptibleBoundary"
+  readonly snapshot: Effect.Effect<InterruptibleBoundaryOwnerSnapshot>
+}
+
+/** One owner admitted before the application Exit cutoff; release is idempotent. */
+export type ForwardOwnerLease =
+  | InterruptibleForwardOwnerLease
+  | (ForwardOwnerLeaseBase & { readonly kind: Exclude<ForwardOwnerKind, "InterruptibleBoundary"> })
 
 export interface ApplicationExitLifecycleSnapshot {
   readonly cutoffClosed: boolean
@@ -88,6 +121,81 @@ export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.
       return [current.phase === "Exiting" && owners.size === 0, { ...current, owners }] as const
     }).pipe(Effect.flatMap((drained) => (drained ? Deferred.succeed(forwardOwnersReleased, undefined) : Effect.void)))
 
+  const interruptibleSnapshot = (ownerId: ForwardOwnerId) =>
+    Ref.get(state).pipe(
+      Effect.map((current) => {
+        const owner = current.owners.get(ownerId)
+        return owner?.phase === "Registered" && owner.kind === "InterruptibleBoundary"
+          ? owner.boundary
+          : InterruptibleBoundaryOwnerSnapshot.NoBoundaryCall()
+      })
+    )
+
+  const updateInterruptibleBoundary = (
+    ownerId: ForwardOwnerId,
+    update: (current: InterruptibleBoundaryOwnerSnapshot) => InterruptibleBoundaryOwnerSnapshot
+  ) =>
+    Ref.update(state, (current) => {
+      const owner = current.owners.get(ownerId)
+      if (owner?.phase !== "Registered" || owner.kind !== "InterruptibleBoundary") return current
+      return {
+        ...current,
+        owners: new Map(current.owners).set(ownerId, { ...owner, boundary: update(owner.boundary) })
+      }
+    })
+
+  const runInterruptibleBoundary = <A, E, R, B, E2, R2>(
+    ownerId: ForwardOwnerId,
+    intent: InterruptibleBoundaryIntent,
+    call: Effect.Effect<A, E, R>,
+    recordResult: (result: A) => Effect.Effect<B, E2, R2>
+  ): Effect.Effect<B, E | E2, R | R2> =>
+    Effect.gen(function* () {
+      const admitted = yield* Ref.modify(state, (current) => {
+        const owner = current.owners.get(ownerId)
+        if (
+          current.phase !== "Serving" ||
+          owner?.phase !== "Registered" ||
+          owner.kind !== "InterruptibleBoundary" ||
+          owner.boundary._tag !== "NoBoundaryCall"
+        ) {
+          return [false, current] as const
+        }
+        const owners = new Map(current.owners).set(ownerId, {
+          ...owner,
+          boundary: InterruptibleBoundaryOwnerSnapshot.AwaitingBoundaryResult({ intent })
+        })
+        return [true, { ...current, owners }] as const
+      })
+      if (!admitted) return yield* Effect.interrupt
+
+      const interrupted = { _tag: "Interrupted" as const }
+      const boundaryResult = yield* Effect.raceFirst(
+        call.pipe(Effect.map((value) => ({ _tag: "Result" as const, value }))),
+        Deferred.await(exitRequested).pipe(Effect.as(interrupted))
+      )
+      if (boundaryResult._tag === "Interrupted") {
+        yield* updateInterruptibleBoundary(ownerId, () =>
+          InterruptibleBoundaryOwnerSnapshot.RecoverableAmbiguity({ intent })
+        )
+        return yield* Effect.interrupt
+      }
+
+      return yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* updateInterruptibleBoundary(ownerId, () =>
+            InterruptibleBoundaryOwnerSnapshot.BoundaryResultProduced({ intent })
+          )
+          const recorded = yield* recordResult(boundaryResult.value)
+          yield* updateInterruptibleBoundary(ownerId, () =>
+            InterruptibleBoundaryOwnerSnapshot.BoundaryResultRecorded({ intent })
+          )
+          const cutoffClosed = (yield* Ref.get(state)).phase === "Exiting"
+          return cutoffClosed ? yield* Effect.interrupt : recorded
+        })
+      )
+    })
+
   const prepareForwardOwner = Effect.fn("ApplicationExitLifecycle.prepareForwardOwner")((kind: ForwardOwnerKind) =>
     Effect.gen(function* () {
       const ownerId = yield* Ref.modify(state, (current) => {
@@ -104,14 +212,22 @@ export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.
           if (registrationState.phase === "Exiting" || owner?.phase !== "Preparing") {
             return [false, registrationState] as const
           }
-          const registeredOwners = new Map(registrationState.owners).set(ownerId, {
-            kind,
-            phase: "Registered"
-          } as const)
+          const registered =
+            kind === "InterruptibleBoundary"
+              ? ({ boundary: InterruptibleBoundaryOwnerSnapshot.NoBoundaryCall(), kind, phase: "Registered" } as const)
+              : ({ kind, phase: "Registered" } as const)
+          const registeredOwners = new Map(registrationState.owners).set(ownerId, registered)
           return [true, { ...registrationState, owners: registeredOwners }] as const
         })
         if (!registered) return yield* new ApplicationExiting()
-        return { kind, release: removeOwner(ownerId) } satisfies ForwardOwnerLease
+        return kind === "InterruptibleBoundary"
+          ? ({
+              kind,
+              release: removeOwner(ownerId),
+              run: (intent, call, recordResult) => runInterruptibleBoundary(ownerId, intent, call, recordResult),
+              snapshot: interruptibleSnapshot(ownerId)
+            } satisfies InterruptibleForwardOwnerLease)
+          : ({ kind, release: removeOwner(ownerId) } satisfies ForwardOwnerLease)
       })
       return { cancel, register } satisfies ForwardOwnerPreparation
     })

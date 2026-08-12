@@ -30,6 +30,8 @@ no issue declares any file here outdated.
 | `issue-164-journal-first-tracker-observations.md` | 164 |
 | `issue-165-domain-readable-cassettes.md` | 165 |
 | `issue-170-maintained-cassette-catalog.md` | 170 |
+| `issue-203-application-exit-model-mapping.md` | 203 |
+| `issue-204-application-exit-runtime-mapping.md` | 204 |
 
 **Describes implemented behavior with an intentionally open owning issue** —
 the implementation evidence and post-implementation choices audit are recorded
@@ -46,6 +48,7 @@ on the issue while later dependent work proceeds.
 | `issue-192-describe-delivery-actions.md` | 192 |
 | `issue-193-run-reactive-delivery-actions.md` | 193 |
 | `issue-194-stabilize-each-run.md` | 194 |
+| `issue-206-interruptible-tracker-git-exit.md` | 206 |
 
 **Accepted, not yet implemented** — the owning issue is open. These state
 required behavior and must not be read as a description of what Dalph does

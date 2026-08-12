@@ -90,7 +90,12 @@ import {
   AttemptStoppageIntendedEvent,
   StoppedAttemptClaimNoReleaseObservedEvent
 } from "./events.js"
-import { AuthoritativeTaskClaimObserved, WorkflowInterpreter, WorkflowTrace } from "../../interpretation/interpreter.js"
+import {
+  AuthoritativeTaskClaimObserved,
+  type InterruptibleWorkflowBoundaryExecution,
+  WorkflowInterpreter,
+  WorkflowTrace
+} from "../../interpretation/interpreter.js"
 import { AuthoritativeTaskClaimReleased } from "../task-claim-release/protocol.js"
 import { advanceAttemptStoppage, observeAttemptStoppageExecutor, recordStoppedAttemptClaimNoRelease } from "./stop.js"
 import {
@@ -99,6 +104,11 @@ import {
   PlannedAttemptProtocolController,
   plannedAttemptProtocolControllerLayer
 } from "../../../index.js"
+
+const uninterruptedBoundary: InterruptibleWorkflowBoundaryExecution = {
+  run: (_intent, call, recordResult) => Effect.flatMap(call, recordResult)
+}
+const inertBoundaryLease = { interruptibleBoundary: uninterruptedBoundary, recordIntent: () => Effect.void }
 
 const runId = RunId.make("attempt-stop-run")
 const taskId = TaskId.make("attempt-stop-task")
@@ -1748,7 +1758,7 @@ it.effect("retries the same stopped-claim release after reconstruction confirms 
       expect(acceptedWorkflowTransitionOperationId(proposal.route.transition)).toBe(
         release.operation.release.operationId
       )
-      yield* executeAcceptedWorkflowAction(runId, proposal.route.transition).pipe(
+      yield* executeAcceptedWorkflowAction(runId, proposal.route.transition, inertBoundaryLease).pipe(
         Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
       )
     }).pipe(Effect.provide(journaledWorkflowInterpreterLayer(runId, base)))

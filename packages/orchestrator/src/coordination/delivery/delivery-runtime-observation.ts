@@ -167,6 +167,7 @@ export const makeObservedDeliveryActionLease = (
       : Effect.void
   },
   integrationTargets,
+  interruptibleBoundary: owner.reservation.forwardOwner,
   recordIntent: (operationId) =>
     owner
       .recordIntent(operationId)

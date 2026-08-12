@@ -443,6 +443,123 @@ it.effect("publishes current-first exact live-owner observations until standalon
   )
 )
 
+it.effect("interrupts an admitted tracker owner under Exit and starts no successor action", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const admitted = proposal(0, TaskId.make("runtime-exit-tracker-task"))
+      const successor = proposal(1, TaskId.make("runtime-exit-successor-task"))
+      const initial = withProposals(yield* baseEvaluation, [admitted, successor], 1)
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const capabilities = yield* makeCapabilitiesWithAdmission(
+        yield* makeIntegrationTargetResourceController(),
+        lifecycle.admission
+      )
+      const operationId = OperationId.make("runtime-exit-tracker-operation")
+      const callStarted = yield* Deferred.make<void>()
+      const callInterrupted = yield* Deferred.make<void>()
+      const successorStarted = yield* Deferred.make<void>()
+      const executor = DeliveryActionExecutor.of({
+        execute: (action, lease) =>
+          action.proposal.id === successor.id
+            ? Deferred.succeed(successorStarted, undefined).pipe(
+                Effect.andThen(Effect.die("a post-cutoff successor started"))
+              )
+            : Effect.gen(function* () {
+                yield* lease.recordIntent(operationId)
+                return yield* lease.interruptibleBoundary.run(
+                  { family: "TaskTracker", operationId },
+                  Deferred.succeed(callStarted, undefined).pipe(
+                    Effect.andThen(Effect.never),
+                    Effect.onInterrupt(() => Deferred.succeed(callInterrupted, undefined))
+                  ),
+                  () => Effect.die("the interrupted tracker wait produced no result")
+                )
+              })
+      })
+      const allocator = OperationIdAllocator.of({ allocate: () => Effect.succeed(operationId) })
+      const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(OperationIdAllocator, allocator),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(callStarted)
+      yield* lifecycle.requestExit
+      yield* Deferred.await(callInterrupted)
+      expect((yield* Fiber.await(runtime))._tag).toBe("Failure")
+      yield* lifecycle.awaitForwardOwnersReleased
+      expect(yield* lifecycle.admission.snapshot).toEqual({
+        cutoffClosed: true,
+        preparingOwnerCount: 0,
+        registeredOwnerCount: 0
+      })
+      expect(yield* Deferred.isDone(successorStarted)).toBe(false)
+    })
+  )
+)
+
+it.effect("records a produced Git result under Exit and starts no later protocol phase", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const admitted = proposal(0, TaskId.make("runtime-exit-git-task"))
+      const successor = proposal(1, TaskId.make("runtime-exit-git-successor"))
+      const initial = withProposals(yield* baseEvaluation, [admitted, successor], 1)
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const capabilities = yield* makeCapabilitiesWithAdmission(
+        yield* makeIntegrationTargetResourceController(),
+        lifecycle.admission
+      )
+      const operationId = OperationId.make("runtime-exit-git-operation")
+      const resultProduced = yield* Deferred.make<void>()
+      const recordMayFinish = yield* Deferred.make<void>()
+      const recorded = yield* Ref.make<ReadonlyArray<string>>([])
+      const successorStarted = yield* Deferred.make<void>()
+      const executor = DeliveryActionExecutor.of({
+        execute: (action, lease) =>
+          action.proposal.id === successor.id
+            ? Deferred.succeed(successorStarted, undefined).pipe(
+                Effect.andThen(Effect.die("a later Git protocol phase started after cutoff"))
+              )
+            : Effect.gen(function* () {
+                yield* lease.recordIntent(operationId)
+                return yield* lease.interruptibleBoundary.run(
+                  { family: "Git", operationId },
+                  Effect.succeed("normalized-git-result"),
+                  (result) =>
+                    Deferred.succeed(resultProduced, undefined).pipe(
+                      Effect.andThen(Deferred.await(recordMayFinish)),
+                      Effect.andThen(Ref.update(recorded, (results) => [...results, result])),
+                      Effect.as({ _tag: "ActionCompleted", proposalId: admitted.id } satisfies DeliveryActionResult)
+                    )
+                )
+              })
+      })
+      const allocator = OperationIdAllocator.of({ allocate: () => Effect.succeed(operationId) })
+      const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(OperationIdAllocator, allocator),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(resultProduced)
+      yield* lifecycle.requestExit
+      yield* Deferred.succeed(recordMayFinish, undefined)
+      expect((yield* Fiber.await(runtime))._tag).toBe("Failure")
+      yield* lifecycle.awaitForwardOwnersReleased
+      expect(yield* Ref.get(recorded)).toEqual(["normalized-git-result"])
+      expect(yield* Deferred.isDone(successorStarted)).toBe(false)
+    })
+  )
+)
+
 it("keeps exact proposal identity for routes outside semantic recovered-read ownership", () => {
   const responsibleClaim = recoveredProposalFor(
     RunnableFrontierTransition.ObserveResponsibleTaskClaim({

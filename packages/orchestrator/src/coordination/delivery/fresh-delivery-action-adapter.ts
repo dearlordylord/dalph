@@ -38,13 +38,18 @@ const acquireTaskClaim = Effect.fn("DeliveryAction.acquireTaskClaim")(function* 
   })
   yield* trace.emit(OperationSelected.make({ operation }))
   yield* trace.emit(TaskClaimAcquisitionIntended.make({ operation }))
-  const result = yield* interpreter.acquireTaskClaim(operation, lease.recordIntent(action.operationId))
+  const result = yield* interpreter.acquireTaskClaim(
+    operation,
+    lease.recordIntent(action.operationId),
+    lease.interruptibleBoundary
+  )
   yield* trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
 })
 
 const reconcileTaskWorktree = Effect.fn("DeliveryAction.reconcileTaskWorktree")(function* (
   action: FreshOperationAction,
-  step: Extract<FreshOperationStep, { readonly _tag: "ReconcileTaskWorktree" }>
+  step: Extract<FreshOperationStep, { readonly _tag: "ReconcileTaskWorktree" }>,
+  lease: DeliveryActionExecutionLease
 ) {
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
@@ -54,7 +59,11 @@ const reconcileTaskWorktree = Effect.fn("DeliveryAction.reconcileTaskWorktree")(
     predecessorOperationIds: [step.predecessorOperationId]
   })
   yield* trace.emit(OperationSelected.make({ operation }))
-  const result = yield* interpreter.reconcileTaskWorktree(operation)
+  const result = yield* interpreter.reconcileTaskWorktree(
+    operation,
+    lease.recordIntent(action.operationId),
+    lease.interruptibleBoundary
+  )
   yield* trace.emit(TaskWorktreeReadyTrace.make({ operation, proof: result.proof }))
 })
 
@@ -71,7 +80,7 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
     ReadCurrentTaskGraph: (step) =>
       Effect.gen(function* () {
         const operation = makeTrackerGraphObservationOperation(action.operationId, target, [], [step.task.id])
-        yield* executeTrackerGraphRead(operation)
+        yield* executeTrackerGraphRead(operation, lease)
         return deliveryActionCompleted(action.proposal.id)
       }),
     AcquireTaskClaim: (step) =>
@@ -87,7 +96,7 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
           [step.predecessorOperationId],
           [step.task.id]
         )
-        const snapshot = yield* executeTrackerGraphRead(operation)
+        const snapshot = yield* executeTrackerGraphRead(operation, lease)
         if (snapshot.eligibleTasks().some(({ id }) => id === step.task.id)) {
           yield* trace.emit(
             TrackerExecutionAdmitted.make({ claimOperation: step.claimOperation, observationOperation: operation })
@@ -101,12 +110,16 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
           step.predecessorOperationId
         ])
         yield* trace.emit(OperationSelected.make({ operation }))
-        yield* interpreter.readTaskWorkSpecification(operation)
+        yield* interpreter.readTaskWorkSpecification(
+          operation,
+          lease.recordIntent(action.operationId),
+          lease.interruptibleBoundary
+        )
         return deliveryActionCompleted(action.proposal.id)
       }),
     ReconcileTaskWorktree: (step) =>
       Effect.gen(function* () {
-        yield* reconcileTaskWorktree(action, step)
+        yield* reconcileTaskWorktree(action, step, lease)
         return deliveryActionCompleted(action.proposal.id)
       })
   })

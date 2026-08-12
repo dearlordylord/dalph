@@ -40,9 +40,10 @@ const isPlannedAttemptTransition = (
 
 const executeAcceptedAction = Effect.fn("DeliveryAction.executeAccepted")(function* (
   action: AcceptedOperationAction,
-  runId: RunId
+  runId: RunId,
+  lease: DeliveryActionExecutionLease
 ) {
-  yield* executeAcceptedWorkflowAction(runId, action.proposal.route.transition)
+  yield* executeAcceptedWorkflowAction(runId, action.proposal.route.transition, lease)
   return deliveryActionCompleted(action.proposal.id)
 })
 
@@ -73,7 +74,7 @@ const executeFreshOperationAction = Effect.fn("DeliveryAction.executeFreshOperat
       executeNewRecoveredAction(route.action, action.operationId, lease, runId).pipe(
         Effect.as(deliveryActionCompleted(action.proposal.id))
       ),
-    TrackerGraphReadRoute: (route) => executeFreshTrackerGraphRead(action, route)
+    TrackerGraphReadRoute: (route) => executeFreshTrackerGraphRead(action, route, lease)
   })
 })
 
@@ -85,7 +86,7 @@ const executeLiveAction = Effect.fn("DeliveryAction.executeLive")(function* (
   target: TrackerTarget
 ): Effect.fn.Return<DeliveryActionResult, DeliveryActionExecutionError, DeliveryActionAdapterEnvironment> {
   return yield* Match.valueTags(action, {
-    AcceptedOperationAction: (action) => executeAcceptedAction(action, runId),
+    AcceptedOperationAction: (action) => executeAcceptedAction(action, runId, lease),
     IdentityFreeAction: (action) => executeIdentityFreeAction(action, lease, target),
     FreshAttemptAction: executeFreshAttemptPlanning,
     FreshOperationAction: (action) => executeFreshOperationAction(action, lease, runId, target)

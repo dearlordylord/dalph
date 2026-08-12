@@ -1,8 +1,16 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber } from "effect"
+import { Deferred, Effect, Fiber, Ref } from "effect"
 import { expect } from "vitest"
+import { OperationId } from "../../workflow/identity.js"
 import { ApplicationExitResult } from "./lifecycle-decision.js"
 import { makeApplicationExitLifecycle } from "./lifecycle.js"
+
+const trackerIntent = {
+  family: "TaskTracker" as const,
+  operationId: OperationId.make("application-exit-tracker-boundary")
+}
+
+const gitIntent = { family: "Git" as const, operationId: OperationId.make("application-exit-git-boundary") }
 
 it.effect("rolls back a preparing reservation when Exit closes admission before owner registration", () =>
   Effect.gen(function* () {
@@ -61,5 +69,91 @@ it.effect("joins repeated Exit requests to one result and never registers a late
     expect(yield* lifecycle.completeExit(succeeded)).toBe(true)
     expect(yield* Deferred.await(first.result)).toEqual(succeeded)
     expect(yield* Deferred.await(repeated.result)).toEqual(succeeded)
+  })
+)
+
+it.effect("leaves an interrupted tracker request behind its exact acknowledged intent", () =>
+  Effect.gen(function* () {
+    const lifecycle = yield* makeApplicationExitLifecycle()
+    const owner = yield* lifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
+    if (owner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong owner kind")
+    const callStarted = yield* Deferred.make<void>()
+    const callInterrupted = yield* Deferred.make<void>()
+    const request = yield* owner
+      .run(
+        trackerIntent,
+        Deferred.succeed(callStarted, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.succeed(callInterrupted, undefined))
+        ),
+        () => Effect.die("an interrupted request has no normalized result to record")
+      )
+      .pipe(Effect.forkChild)
+
+    yield* Deferred.await(callStarted)
+    yield* lifecycle.requestExit
+    yield* Deferred.await(callInterrupted)
+
+    expect((yield* Fiber.await(request))._tag).toBe("Failure")
+    expect(yield* owner.snapshot).toEqual({ _tag: "RecoverableAmbiguity", intent: trackerIntent })
+    yield* owner.release
+    yield* lifecycle.awaitForwardOwnersReleased
+  })
+)
+
+it.effect("records immediately available tracker and Git results before releasing their owners under Exit", () =>
+  Effect.forEach([trackerIntent, gitIntent], (intent) =>
+    Effect.gen(function* () {
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const owner = yield* lifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
+      if (owner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong owner kind")
+      const resultProduced = yield* Deferred.make<void>()
+      const recordMayFinish = yield* Deferred.make<void>()
+      const recorded = yield* Ref.make<ReadonlyArray<string>>([])
+      const result = `ready-${intent.family}`
+      const request = yield* owner
+        .run(intent, Effect.succeed(result), (produced) =>
+          Deferred.succeed(resultProduced, undefined).pipe(
+            Effect.andThen(Deferred.await(recordMayFinish)),
+            Effect.andThen(Ref.update(recorded, (values) => [...values, produced])),
+            Effect.as(produced)
+          )
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.await(resultProduced)
+      yield* lifecycle.requestExit
+      expect(yield* owner.snapshot).toEqual({ _tag: "BoundaryResultProduced", intent })
+      yield* Deferred.succeed(recordMayFinish, undefined)
+
+      expect((yield* Fiber.await(request))._tag).toBe("Failure")
+      expect(yield* Ref.get(recorded)).toEqual([result])
+      expect(yield* owner.snapshot).toEqual({ _tag: "BoundaryResultRecorded", intent })
+      yield* owner.release
+      yield* lifecycle.awaitForwardOwnersReleased
+    })
+  )
+)
+
+it.effect("starts no tracker or Git call whose acknowledged intent reaches the owner after cutoff", () =>
+  Effect.gen(function* () {
+    const lifecycle = yield* makeApplicationExitLifecycle()
+    const owner = yield* lifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
+    if (owner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong owner kind")
+    const calls = yield* Ref.make(0)
+    yield* lifecycle.requestExit
+
+    const result = yield* owner
+      .run(
+        trackerIntent,
+        Ref.update(calls, (count) => count + 1),
+        () => Effect.void
+      )
+      .pipe(Effect.exit)
+
+    expect(result._tag).toBe("Failure")
+    expect(yield* Ref.get(calls)).toBe(0)
+    expect(yield* owner.snapshot).toEqual({ _tag: "NoBoundaryCall" })
+    yield* owner.release
   })
 )

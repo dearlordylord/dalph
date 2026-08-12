@@ -63,6 +63,11 @@ import type {
   IdentityFreeDeliveryProposal
 } from "../../../coordination/delivery/delivery-action-proposal.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
+import type { InterruptibleWorkflowBoundaryExecution } from "../../interpretation/interpreter.js"
+
+const uninterruptedBoundary: InterruptibleWorkflowBoundaryExecution = {
+  run: (_intent, call, recordResult) => Effect.flatMap(call, recordResult)
+}
 
 const runId = RunId.make("verification-run")
 const trackerTarget = FixtureTarget.make("verification-tracker-target")
@@ -217,6 +222,7 @@ it.effect("keeps another target usable while exact M verifies and releases only 
                   acceptIntegrationTargetOwnership: Effect.void,
                   bindPlannedAttemptPosition: () => Effect.void,
                   integrationTargets: resources,
+                  interruptibleBoundary: uninterruptedBoundary,
                   recordIntent: () => Effect.void,
                   releasePlannedAttemptPosition: () => Effect.void,
                   withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
@@ -231,6 +237,7 @@ it.effect("keeps another target usable while exact M verifies and releases only 
                 acceptIntegrationTargetOwnership: Effect.void,
                 bindPlannedAttemptPosition: () => Effect.void,
                 integrationTargets: resources,
+                interruptibleBoundary: uninterruptedBoundary,
                 recordIntent: () => Effect.void,
                 releasePlannedAttemptPosition: () => Effect.void,
                 withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
@@ -452,6 +459,7 @@ it.effect("fails closed when referenced evidence cannot be reread", () => {
             acceptIntegrationTargetOwnership: Effect.void,
             bindPlannedAttemptPosition: () => Effect.void,
             integrationTargets: resources,
+            interruptibleBoundary: uninterruptedBoundary,
             recordIntent: () => Effect.void,
             releasePlannedAttemptPosition: () => Effect.void,
             withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")

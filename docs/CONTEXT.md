@@ -74,6 +74,16 @@ result or behind its acknowledged exact intent; an admitted atomic owner may
 only finish its current boundary inside the original Exit drain.
 _Avoid_: Tracker claim owner, durable workflow responsibility, replacement work
 
+**Interruptible tracker or Git boundary state**:
+The process-local phase of one admitted tracker or Git call after Dalph has
+acknowledged its exact workflow intent. It distinguishes waiting for the named
+outside family and `OperationId`, an already-produced result awaiting its
+ordinary journal record, a recorded result, and a recoverable ambiguity after
+the local wait was interrupted. It disappears with the owner and never replaces
+the durable intent or the outside system's result authority.
+_Avoid_: In-flight Boolean, persisted request state, inferred outside outcome,
+Exit recovery mode
+
 **Exit drain**:
 The short, bounded application-lifecycle interval after the Exit admission
 cutoff in which Dalph brings admitted work to a durably recoverable boundary.

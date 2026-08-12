@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Layer, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -35,6 +35,7 @@ import { AttemptWorktreeLost } from "../workflow/protocols/planned-attempt-workt
 import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { JournalStore } from "./store.js"
+import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const testInterpreter = (
@@ -68,6 +69,18 @@ const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/journaled-target-lineage.git"),
   ref: IntegrationTargetRef.make("refs/heads/master")
 })
+
+/** Supervisor-visible chronology around an interrupted Git wait and a fresh application incarnation. */
+const interruptedGitAuthoredCassette = [
+  "GitIntentAcknowledged",
+  "GitCallSent",
+  "ExitCutoffClosed",
+  "LocalGitWaitInterrupted",
+  "ApplicationProcessDied",
+  "OrdinaryRunEntry",
+  "GitCheckedBeforeRetry",
+  "GitObservationRecorded"
+] as const
 
 const journaledTestLayer = (base: Layer.Layer<WorkflowInterpreter>) =>
   journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provide(legacyMemoryJournalStoreLayer))
@@ -224,6 +237,93 @@ it.effect("reopens an intent-only Git read with the same operation identity", ()
       )
     ).toEqual([operation.operationId, operation.operationId])
   }).pipe(Effect.provide(retryingLostWorktreeLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("interrupts a Git wait under Exit and reopens its exact intent through the ordinary protocol", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const firstCallStarted = yield* Deferred.make<void>()
+    const chronology = yield* Ref.make<Array<(typeof interruptedGitAuthoredCassette)[number]>>([])
+    const record = (event: (typeof interruptedGitAuthoredCassette)[number]) =>
+      Ref.update(chronology, (events) => [...events, event])
+    const base = Layer.succeed(
+      WorkflowInterpreter,
+      testInterpreter(() =>
+        Ref.updateAndGet(calls, (count) => count + 1).pipe(
+          Effect.flatMap((count) =>
+            count === 1
+              ? record("GitCallSent").pipe(
+                  Effect.andThen(Deferred.succeed(firstCallStarted, undefined)),
+                  Effect.andThen(Effect.never)
+                )
+              : record("GitCheckedBeforeRetry").pipe(
+                  Effect.as(
+                    AuthoritativePlannedAttemptWorktreeObserved.make({
+                      observation: AttemptWorktreeLost.make({ plannedAttempt })
+                    })
+                  )
+                )
+          )
+        )
+      )
+    )
+    const journaled = journaledWorkflowInterpreterLayer(runId, base)
+    yield* Effect.gen(function* () {
+      const journal = yield* JournalStore
+      yield* journal.beginRun(
+        runId,
+        target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      )
+      const interpreter = yield* WorkflowInterpreter
+      const operation = makeTaskWorktreeObservationOperation({
+        operationId: OperationId.make("application-exit-interrupted-git-read"),
+        plannedAttempt,
+        predecessorOperationIds: []
+      })
+      const exitingLifecycle = yield* makeApplicationExitLifecycle()
+      const exitingOwner = yield* exitingLifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
+      if (exitingOwner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong owner kind")
+      const inFlight = yield* interpreter
+        .readTaskWorktree(operation, record("GitIntentAcknowledged"), exitingOwner)
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.await(firstCallStarted)
+      yield* exitingLifecycle.requestExit
+      yield* record("ExitCutoffClosed")
+      expect((yield* Fiber.await(inFlight))._tag).toBe("Failure")
+      yield* record("LocalGitWaitInterrupted")
+      expect(yield* exitingOwner.snapshot).toEqual({
+        _tag: "RecoverableAmbiguity",
+        intent: { family: "Git", operationId: operation.operationId }
+      })
+      yield* exitingOwner.release
+      expect(
+        (yield* journal.read(runId))
+          .map(({ event }) => event._tag)
+          .filter((tag) => tag === "GitReadIntentRecorded" || tag === "PlannedAttemptWorktreeObserved")
+      ).toEqual(["GitReadIntentRecorded"])
+
+      yield* record("ApplicationProcessDied")
+      yield* record("OrdinaryRunEntry")
+      const reopenedLifecycle = yield* makeApplicationExitLifecycle()
+      const reopenedOwner = yield* reopenedLifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
+      if (reopenedOwner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong reopened owner kind")
+      expect((yield* interpreter.readTaskWorktree(operation, Effect.void, reopenedOwner))._tag).toBe(
+        "AuthoritativePlannedAttemptWorktreeObserved"
+      )
+      yield* record("GitObservationRecorded")
+      yield* reopenedOwner.release
+
+      expect(yield* Ref.get(calls)).toBe(2)
+      expect(
+        (yield* journal.read(runId))
+          .map(({ event }) => event._tag)
+          .filter((tag) => tag === "GitReadIntentRecorded" || tag === "PlannedAttemptWorktreeObserved")
+      ).toEqual(["GitReadIntentRecorded", "PlannedAttemptWorktreeObserved"])
+      expect(yield* Ref.get(chronology)).toEqual(interruptedGitAuthoredCassette)
+    }).pipe(Effect.provide(journaled))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
 it.effect("retains the ready worktree while retrying a failed target-lineage read with the same identity", () =>

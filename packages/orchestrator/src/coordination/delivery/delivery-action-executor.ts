@@ -6,7 +6,11 @@ import {
 } from "@dalph/contracts"
 import { Context, type Effect, Schema } from "effect"
 import type { InRunJournalService } from "../../workflow-journal/store.js"
-import type { WorkflowInterpreterService, WorkflowTraceService } from "../../workflow/interpretation/interpreter.js"
+import type {
+  InterruptibleWorkflowBoundaryExecution,
+  WorkflowInterpreterService,
+  WorkflowTraceService
+} from "../../workflow/interpretation/interpreter.js"
 import type { TaskClaimAcquisitionPlannerService } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import type {
   PlannedAttemptExecutorCommandReconciliationRequired,
@@ -97,6 +101,7 @@ export interface DeliveryActionExecutionLease {
   readonly acceptIntegrationTargetOwnership: Effect.Effect<void>
   readonly bindPlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
   readonly integrationTargets: IntegrationTargetResourceController
+  readonly interruptibleBoundary: InterruptibleWorkflowBoundaryExecution
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
   readonly releasePlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
   readonly withPlannedAttemptProtocol: <A, E, R>(

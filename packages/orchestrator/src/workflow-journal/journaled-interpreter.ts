@@ -1,7 +1,7 @@
 import { Effect, Layer, Option } from "effect"
 import { type RunId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
-import { InRunJournal, type InRunJournalService } from "./store.js"
+import { InRunJournal } from "./store.js"
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
@@ -28,9 +28,7 @@ import {
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../workflow/task-tracker-facts/observation.js"
-import { makeTaskTrackerFactsObservedFromRead } from "../workflow/protocols/task-tracker-read/protocol.js"
 import {
-  reconstructedTaskGraphFromEvents,
   reconstructedTaskWorkSpecificationFor,
   TaskTrackerKnowledgeUnavailable
 } from "../coordination/reconstruction/graph-knowledge.js"
@@ -38,61 +36,20 @@ import {
   AuthoritativePlannedAttemptWorktreeObserved,
   AuthoritativeTargetLineageObserved,
   WorkflowInterpreter,
-  type WorkflowInterpreterService
+  type InterruptibleWorkflowBoundaryExecution
 } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
 import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
 import { taskClaimObservationAttemptBound } from "../workflow/protocols/task-claim-observation/bound.js"
+import { journaledTrackerGraphRead, runInterruptibleBoundary } from "./journaled-interruptible-boundary.js"
 
-const requireTaskTrackerKnowledge = <A>(
+const requireTaskWorkSpecification = <A>(
   knowledge: Option.Option<A>,
-  operationId: (typeof WorkflowOperation.cases.ReadTrackerGraph.Type)["operationId"],
-  kind: "TaskGraph" | "TaskWorkSpecification"
+  operationId: (typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type)["operationId"]
 ): Effect.Effect<A, TaskTrackerKnowledgeUnavailable> =>
   Option.match(knowledge, {
-    onNone: () => Effect.fail(new TaskTrackerKnowledgeUnavailable({ knowledge: kind, operationId })),
+    onNone: () => Effect.fail(new TaskTrackerKnowledgeUnavailable({ knowledge: "TaskWorkSpecification", operationId })),
     onSome: Effect.succeed
-  })
-
-const journaledTrackerGraphRead = (
-  runId: RunId,
-  interpreter: WorkflowInterpreterService,
-  journal: InRunJournalService
-) =>
-  Effect.fn("WorkflowInterpreter.Journaled.readTrackerGraph")(function* (
-    operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
-  ) {
-    const key = intentRecordKey(operation.operationId)
-    yield* journal.append(runId, key, taskTrackerReadIntent(operation))
-    const records = yield* journal.read(runId)
-    const existingObservationIndex = records.findIndex(
-      ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
-    )
-    if (existingObservationIndex >= 0) {
-      return yield* requireTaskTrackerKnowledge(
-        reconstructedTaskGraphFromEvents(
-          records.slice(0, existingObservationIndex + 1).map(({ event }) => event),
-          operation.target
-        ),
-        operation.operationId,
-        "TaskGraph"
-      )
-    }
-    const snapshot = yield* interpreter.readTrackerGraph(operation)
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(operation.operationId),
-      makeTaskTrackerFactsObservedFromRead(records, operation, snapshot)
-    )
-    const recorded = yield* journal.read(runId)
-    return yield* requireTaskTrackerKnowledge(
-      reconstructedTaskGraphFromEvents(
-        recorded.map(({ event }) => event),
-        operation.target
-      ),
-      operation.operationId,
-      "TaskGraph"
-    )
   })
 
 /** Adds durable intent and outcomes to the generic pre-executor operations. */
@@ -110,7 +67,8 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
 
       const acquireTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.acquireTaskClaim")(function* (
         operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
-        onIntentRecorded: Effect.Effect<void> = Effect.void
+        onIntentRecorded: Effect.Effect<void> = Effect.void,
+        interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
@@ -122,36 +80,49 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
             yield* onIntentRecorded
           })
         )
-        const result = yield* interpreter
-          .acquireTaskClaim(operation)
-          .pipe(
+        return yield* runInterruptibleBoundary(
+          interruptibleBoundary,
+          { family: "TaskTracker", operationId: operation.acquisition.operationId },
+          interpreter.acquireTaskClaim(operation).pipe(
+            Effect.map((result) => ({ _tag: "Acquired" as const, result })),
             Effect.catchTag("TrackerMutation.TaskClaimConflict", (failure) =>
-              journal
-                .append(
-                  runId,
-                  outcomeRecordKey(operation.acquisition.operationId),
-                  TaskClaimAcquisitionRejectedEvent.make({
-                    observed: failure.observed,
-                    operationId: operation.acquisition.operationId,
-                    reason: "ForeignClaim",
-                    version: workflowJournalEventVersion
-                  })
-                )
-                .pipe(Effect.andThen(Effect.fail(failure)))
+              Effect.succeed({ _tag: "Rejected" as const, failure })
             )
-          )
-        yield* journal.append(
-          runId,
-          outcomeRecordKey(operation.acquisition.operationId),
-          TaskClaimAcquiredEvent.make({ claim: result.claim, version: workflowJournalEventVersion })
+          ),
+          (outcome) =>
+            outcome._tag === "Acquired"
+              ? journal
+                  .append(
+                    runId,
+                    outcomeRecordKey(operation.acquisition.operationId),
+                    TaskClaimAcquiredEvent.make({ claim: outcome.result.claim, version: workflowJournalEventVersion })
+                  )
+                  .pipe(Effect.as(outcome.result))
+              : journal
+                  .append(
+                    runId,
+                    outcomeRecordKey(operation.acquisition.operationId),
+                    TaskClaimAcquisitionRejectedEvent.make({
+                      observed: outcome.failure.observed,
+                      operationId: operation.acquisition.operationId,
+                      reason: "ForeignClaim",
+                      version: workflowJournalEventVersion
+                    })
+                  )
+                  .pipe(Effect.andThen(Effect.fail(outcome.failure)))
         )
-        return result
       })
 
       const readTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.readTaskClaim")(function* (
-        operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+        operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type,
+        onIntentRecorded: Effect.Effect<void> = Effect.void,
+        interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
-        yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        yield* Effect.uninterruptible(
+          journal
+            .append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+            .pipe(Effect.andThen(onIntentRecorded))
+        )
         const existing = (yield* journal.read(runId)).find(
           ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
         )?.event
@@ -165,31 +136,44 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
                 taskId: operation.taskId
               }
         }
-        const result = yield* interpreter.readTaskClaim(operation)
-        const observation =
-          result._tag === "AuthoritativeTaskClaimObserved"
-            ? makeFocusedTaskClaimFactsObserved(operation, result.observation)
-            : makeFocusedTaskClaimFactsUnreadable(operation)
-        yield* journal.append(
-          runId,
-          outcomeRecordKey(operation.operationId),
-          taskTrackerFactsObservedEvent(operation.operationId, observation)
+        return yield* runInterruptibleBoundary(
+          interruptibleBoundary,
+          { family: "TaskTracker", operationId: operation.operationId },
+          interpreter.readTaskClaim(operation),
+          (result) => {
+            const observation =
+              result._tag === "AuthoritativeTaskClaimObserved"
+                ? makeFocusedTaskClaimFactsObserved(operation, result.observation)
+                : makeFocusedTaskClaimFactsUnreadable(operation)
+            return journal
+              .append(
+                runId,
+                outcomeRecordKey(operation.operationId),
+                taskTrackerFactsObservedEvent(operation.operationId, observation)
+              )
+              .pipe(Effect.as(result))
+          }
         )
-        return result
       })
 
       const readTaskWorktree = Effect.fn("WorkflowInterpreter.Journaled.readTaskWorktree")(function* (
-        operation: typeof WorkflowOperation.cases.ReadTaskWorktree.Type
+        operation: typeof WorkflowOperation.cases.ReadTaskWorktree.Type,
+        onIntentRecorded: Effect.Effect<void> = Effect.void,
+        interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
-        yield* journal.append(
-          runId,
-          intentRecordKey(operation.operationId),
-          GitReadIntentRecordedEvent.make({
-            initiatedBy: { _tag: "DalphCoordinator" },
-            occurrenceClassification: "InitiatedAction",
-            operation,
-            version: workflowJournalEventVersion
-          })
+        yield* Effect.uninterruptible(
+          journal
+            .append(
+              runId,
+              intentRecordKey(operation.operationId),
+              GitReadIntentRecordedEvent.make({
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                operation,
+                version: workflowJournalEventVersion
+              })
+            )
+            .pipe(Effect.andThen(onIntentRecorded))
         )
         const existing = (yield* journal.read(runId)).find(
           ({ event }) => event._tag === "PlannedAttemptWorktreeObserved" && event.operationId === operation.operationId
@@ -197,32 +181,44 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         if (existing?._tag === "PlannedAttemptWorktreeObserved") {
           return AuthoritativePlannedAttemptWorktreeObserved.make({ observation: existing.observation })
         }
-        const result = yield* interpreter.readTaskWorktree(operation)
-        yield* journal.append(
-          runId,
-          outcomeRecordKey(operation.operationId),
-          PlannedAttemptWorktreeObservedEvent.make({
-            observation: result.observation,
-            occurrenceClassification: "NonActionOccurrence",
-            operationId: operation.operationId,
-            version: workflowJournalEventVersion
-          })
+        return yield* runInterruptibleBoundary(
+          interruptibleBoundary,
+          { family: "Git", operationId: operation.operationId },
+          interpreter.readTaskWorktree(operation),
+          (result) =>
+            journal
+              .append(
+                runId,
+                outcomeRecordKey(operation.operationId),
+                PlannedAttemptWorktreeObservedEvent.make({
+                  observation: result.observation,
+                  occurrenceClassification: "NonActionOccurrence",
+                  operationId: operation.operationId,
+                  version: workflowJournalEventVersion
+                })
+              )
+              .pipe(Effect.as(result))
         )
-        return result
       })
 
       const readTargetLineage = Effect.fn("WorkflowInterpreter.Journaled.readTargetLineage")(function* (
-        operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type
+        operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type,
+        onIntentRecorded: Effect.Effect<void> = Effect.void,
+        interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
-        yield* journal.append(
-          runId,
-          intentRecordKey(operation.operationId),
-          GitReadIntentRecordedEvent.make({
-            initiatedBy: { _tag: "DalphCoordinator" },
-            occurrenceClassification: "InitiatedAction",
-            operation,
-            version: workflowJournalEventVersion
-          })
+        yield* Effect.uninterruptible(
+          journal
+            .append(
+              runId,
+              intentRecordKey(operation.operationId),
+              GitReadIntentRecordedEvent.make({
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                operation,
+                version: workflowJournalEventVersion
+              })
+            )
+            .pipe(Effect.andThen(onIntentRecorded))
         )
         const existing = (yield* journal.read(runId)).find(
           ({ event }) => event._tag === "TargetLineageObserved" && event.operationId === operation.operationId
@@ -230,31 +226,43 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         if (existing?._tag === "TargetLineageObserved") {
           return AuthoritativeTargetLineageObserved.make({ observation: existing.observation })
         }
-        const result = yield* interpreter.readTargetLineage(operation)
-        yield* journal.append(
-          runId,
-          outcomeRecordKey(operation.operationId),
-          TargetLineageObservedEvent.make({
-            observation: result.observation,
-            occurrenceClassification: "NonActionOccurrence",
-            operationId: operation.operationId,
-            plannedAttempt: operation.plannedAttempt,
-            version: workflowJournalEventVersion
-          })
+        return yield* runInterruptibleBoundary(
+          interruptibleBoundary,
+          { family: "Git", operationId: operation.operationId },
+          interpreter.readTargetLineage(operation),
+          (result) =>
+            journal
+              .append(
+                runId,
+                outcomeRecordKey(operation.operationId),
+                TargetLineageObservedEvent.make({
+                  observation: result.observation,
+                  occurrenceClassification: "NonActionOccurrence",
+                  operationId: operation.operationId,
+                  plannedAttempt: operation.plannedAttempt,
+                  version: workflowJournalEventVersion
+                })
+              )
+              .pipe(Effect.as(result))
         )
-        return result
       })
 
       const readTaskWorkSpecification = Effect.fn("WorkflowInterpreter.Journaled.readTaskWorkSpecification")(function* (
-        operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type
+        operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type,
+        onIntentRecorded: Effect.Effect<void> = Effect.void,
+        interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
-        yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        yield* Effect.uninterruptible(
+          journal
+            .append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+            .pipe(Effect.andThen(onIntentRecorded))
+        )
         const existingRecords = yield* journal.read(runId)
         const existingObservationIndex = existingRecords.findIndex(
           ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
         )
         if (existingObservationIndex >= 0) {
-          return yield* requireTaskTrackerKnowledge(
+          return yield* requireTaskWorkSpecification(
             reconstructedTaskWorkSpecificationFor(
               {
                 taskTrackerFacts: existingRecords
@@ -263,54 +271,71 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
               },
               operation.taskId
             ),
-            operation.operationId,
-            "TaskWorkSpecification"
+            operation.operationId
           )
         }
-        const specification = yield* interpreter.readTaskWorkSpecification(operation)
-        yield* journal.append(
-          runId,
-          outcomeRecordKey(operation.operationId),
-          taskTrackerFactsObservedEvent(
-            operation.operationId,
-            makeFocusedTaskWorkSpecificationFactsObserved(operation, specification)
-          )
-        )
-        const records = yield* journal.read(runId)
-        return yield* requireTaskTrackerKnowledge(
-          reconstructedTaskWorkSpecificationFor(
-            {
-              taskTrackerFacts: records.flatMap(({ event }) =>
-                event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
+        return yield* runInterruptibleBoundary(
+          interruptibleBoundary,
+          { family: "TaskTracker", operationId: operation.operationId },
+          interpreter.readTaskWorkSpecification(operation),
+          (specification) =>
+            Effect.gen(function* () {
+              yield* journal.append(
+                runId,
+                outcomeRecordKey(operation.operationId),
+                taskTrackerFactsObservedEvent(
+                  operation.operationId,
+                  makeFocusedTaskWorkSpecificationFactsObserved(operation, specification)
+                )
               )
-            },
-            operation.taskId
-          ),
-          operation.operationId,
-          "TaskWorkSpecification"
+              const records = yield* journal.read(runId)
+              return yield* requireTaskWorkSpecification(
+                reconstructedTaskWorkSpecificationFor(
+                  {
+                    taskTrackerFacts: records.flatMap(({ event }) =>
+                      event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
+                    )
+                  },
+                  operation.taskId
+                ),
+                operation.operationId
+              )
+            })
         )
       })
 
       const releaseTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.releaseTaskClaim")(function* (
-        operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+        operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type,
+        onIntentRecorded: Effect.Effect<void> = Effect.void,
+        interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
-        yield* journal.append(
-          runId,
-          intentRecordKey(operation.release.operationId),
-          TaskClaimReleaseIntendedEvent.make({ operation, version: workflowJournalEventVersion })
+        yield* Effect.uninterruptible(
+          journal
+            .append(
+              runId,
+              intentRecordKey(operation.release.operationId),
+              TaskClaimReleaseIntendedEvent.make({ operation, version: workflowJournalEventVersion })
+            )
+            .pipe(Effect.andThen(onIntentRecorded))
         )
         const existing = (yield* journal.read(runId)).some(
           ({ event }) =>
             event._tag === "TaskClaimReleased" && event.release.operationId === operation.release.operationId
         )
         if (existing) return AuthoritativeTaskClaimReleased.make({ release: operation.release })
-        const result = yield* interpreter.releaseTaskClaim(operation)
-        yield* journal.append(
-          runId,
-          outcomeRecordKey(operation.release.operationId),
-          TaskClaimReleasedEvent.make({ release: operation.release, version: workflowJournalEventVersion })
+        return yield* runInterruptibleBoundary(
+          interruptibleBoundary,
+          { family: "TaskTracker", operationId: operation.release.operationId },
+          interpreter.releaseTaskClaim(operation),
+          (result) =>
+            journal
+              .append(
+                runId,
+                outcomeRecordKey(operation.release.operationId),
+                TaskClaimReleasedEvent.make({ release: operation.release, version: workflowJournalEventVersion })
+              )
+              .pipe(Effect.as(result))
         )
-        return result
       })
 
       const recordTaskAttemptPlan = Effect.fn("WorkflowInterpreter.Journaled.recordTaskAttemptPlan")(function* (
@@ -332,7 +357,9 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
       })
 
       const reconcileTaskWorktree = Effect.fn("WorkflowInterpreter.Journaled.reconcileTaskWorktree")(function* (
-        operation: typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type
+        operation: typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type,
+        onIntentRecorded: Effect.Effect<void> = Effect.void,
+        interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
         if (operation.plannedAttempt.runId !== runId) {
           return yield* new TaskAttemptPlanRunContradiction({
@@ -348,22 +375,32 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           operation.operationId,
           operation.predecessorOperationIds
         )
-        yield* journal.append(
-          runId,
-          intentRecordKey(operation.operationId),
-          TaskWorktreeReconciliationIntendedEvent.make({ operation, version: workflowJournalEventVersion })
+        yield* Effect.uninterruptible(
+          journal
+            .append(
+              runId,
+              intentRecordKey(operation.operationId),
+              TaskWorktreeReconciliationIntendedEvent.make({ operation, version: workflowJournalEventVersion })
+            )
+            .pipe(Effect.andThen(onIntentRecorded))
         )
-        const result = yield* interpreter.reconcileTaskWorktree(operation)
-        yield* journal.append(
-          runId,
-          outcomeRecordKey(operation.operationId),
-          TaskWorktreeReadyEvent.make({
-            operationId: operation.operationId,
-            proof: result.proof,
-            version: workflowJournalEventVersion
-          })
+        return yield* runInterruptibleBoundary(
+          interruptibleBoundary,
+          { family: "Git", operationId: operation.operationId },
+          interpreter.reconcileTaskWorktree(operation),
+          (result) =>
+            journal
+              .append(
+                runId,
+                outcomeRecordKey(operation.operationId),
+                TaskWorktreeReadyEvent.make({
+                  operationId: operation.operationId,
+                  proof: result.proof,
+                  version: workflowJournalEventVersion
+                })
+              )
+              .pipe(Effect.as(result))
         )
-        return result
       })
 
       return WorkflowInterpreter.of({

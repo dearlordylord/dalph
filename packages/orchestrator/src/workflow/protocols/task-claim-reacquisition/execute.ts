@@ -1,7 +1,11 @@
 import { type RunId, TaskId } from "@dalph/contracts"
 import { Effect, Option, Schema } from "effect"
 import { OperationSelected } from "../../../presentation/tracker-workflow-trace.js"
-import type { WorkflowInterpreterService, WorkflowTrace } from "../../interpretation/interpreter.js"
+import type {
+  InterruptibleWorkflowBoundaryExecution,
+  WorkflowInterpreterService,
+  WorkflowTrace
+} from "../../interpretation/interpreter.js"
 import { type OperationId } from "../../identity.js"
 import { makeTaskClaimAcquisitionOperation } from "../../registry/operation.js"
 import type { InRunJournal } from "../../../workflow-journal/store.js"
@@ -30,7 +34,10 @@ const planningFailureDetail = (failure: unknown): string =>
 
 /** Executes one graph-selected explicit claim reacquisition through its action-owned protocol. */
 export const runTaskClaimReacquisition = Effect.fn("TaskClaimReacquisition.run")(function* (input: {
-  readonly execution: { readonly recordIntent: (operationId: OperationId) => Effect.Effect<void, never, never> }
+  readonly execution: {
+    readonly interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
+    readonly recordIntent: (operationId: OperationId) => Effect.Effect<void, never, never>
+  }
   readonly interpreter: WorkflowInterpreterService
   readonly journal: InRunJournal["Service"]
   readonly planner: Option.Option<TaskClaimAcquisitionPlanner["Service"]>
@@ -74,5 +81,9 @@ export const runTaskClaimReacquisition = Effect.fn("TaskClaimReacquisition.run")
   if (Option.isSome(input.trace)) {
     yield* input.trace.value.emit(OperationSelected.make({ operation }))
   }
-  yield* input.interpreter.acquireTaskClaim(operation, input.execution.recordIntent(operationId))
+  yield* input.interpreter.acquireTaskClaim(
+    operation,
+    input.execution.recordIntent(operationId),
+    input.execution.interruptibleBoundary
+  )
 })

@@ -9,6 +9,7 @@ import {
   type ApplicationProcessEndDecision
 } from "./lifecycle-decision.js"
 import { makeApplicationExitLifecycle } from "./lifecycle.js"
+import { OperationId } from "../../workflow/identity.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import {
   ApplicationExitDrainFailure,
@@ -116,6 +117,40 @@ it.effect("closes admission before success and waits for a pre-cutoff owner befo
         "local-resources-closed",
         "coordinator-lock-released"
       ])
+    })
+  )
+)
+
+it.effect("can exit successfully with a recoverable ambiguous tracker outcome", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const owner = yield* lifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
+      if (owner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong owner kind")
+      const intent = {
+        family: "TaskTracker" as const,
+        operationId: OperationId.make("application-shell-ambiguous-tracker")
+      }
+      const callStarted = yield* Deferred.make<void>()
+      const releasedAt = yield* Ref.make<unknown>(undefined)
+      yield* owner
+        .run(intent, Deferred.succeed(callStarted, undefined).pipe(Effect.andThen(Effect.never)), () =>
+          Effect.die("the interrupted tracker request produced no normalized result")
+        )
+        .pipe(
+          Effect.ensuring(owner.snapshot.pipe(Effect.tap((snapshot) => Ref.set(releasedAt, snapshot)))),
+          Effect.ensuring(owner.release),
+          Effect.forkChild
+        )
+      yield* Deferred.await(callStarted)
+      const boundary = yield* makeApplicationExitRequestBoundary(
+        lifecycle,
+        successfulDrain(() => Effect.void, lifecycle.awaitForwardOwnersReleased),
+        { requestEnd: () => Effect.void }
+      )
+
+      expect(yield* boundary.requestExit).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(yield* Ref.get(releasedAt)).toEqual({ _tag: "RecoverableAmbiguity", intent })
     })
   )
 )

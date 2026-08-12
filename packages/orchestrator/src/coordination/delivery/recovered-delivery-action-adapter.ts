@@ -20,6 +20,7 @@ type AcceptedRecoveryTransition = TransitionForAcceptedExecution<"Recovery">
 
 type AcceptedObservationTransition = TransitionForAcceptedExecution<"Observation">
 type StoppedClaimReleaseRetryTransition = TransitionForAcceptedExecution<"StoppedClaimReleaseRetry">
+type BoundaryExecutionLease = Pick<DeliveryActionExecutionLease, "interruptibleBoundary" | "recordIntent">
 
 const isAcceptedRecoveryTransition = (
   transition: AcceptedWorkflowTransition
@@ -30,12 +31,12 @@ const isStoppedClaimReleaseRetryTransition = (
 ): transition is StoppedClaimReleaseRetryTransition =>
   acceptedTransitionExecutionOf(transition) === "StoppedClaimReleaseRetry"
 
-const executeAcceptedRecovery = (runId: RunId, transition: AcceptedRecoveryTransition) =>
+const executeAcceptedRecovery = (runId: RunId, transition: AcceptedRecoveryTransition, lease: BoundaryExecutionLease) =>
   Match.valueTags(transition, {
-    CheckTaskClaim: ({ operationId }) => recoverTaskClaimOperation(runId, operationId),
-    ReconcileTaskClaim: ({ operationId }) => recoverTaskClaimOperation(runId, operationId),
-    ReconcileTaskClaimRelease: ({ operationId }) => recoverTaskClaimReleaseOperation(runId, operationId),
-    ReconcileTaskWorktree: ({ operationId }) => recoverTaskWorktreeOperation(runId, operationId)
+    CheckTaskClaim: ({ operationId }) => recoverTaskClaimOperation(runId, operationId, lease),
+    ReconcileTaskClaim: ({ operationId }) => recoverTaskClaimOperation(runId, operationId, lease),
+    ReconcileTaskClaimRelease: ({ operationId }) => recoverTaskClaimReleaseOperation(runId, operationId, lease),
+    ReconcileTaskWorktree: ({ operationId }) => recoverTaskWorktreeOperation(runId, operationId, lease)
   })
 
 const executeRecoveredObservation = Effect.fn("DeliveryAction.executeRecoveredObservation")(function* (
@@ -46,7 +47,8 @@ const executeRecoveredObservation = Effect.fn("DeliveryAction.executeRecoveredOb
       { readonly _tag: "TaskClaimReacquisition" | "ReleaseExternallyCompletedTaskClaim" | "ReleaseStoppedAttemptClaim" }
     >
   >,
-  operationId: OperationId
+  operationId: OperationId,
+  lease: BoundaryExecutionLease
 ) {
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
@@ -55,49 +57,77 @@ const executeRecoveredObservation = Effect.fn("DeliveryAction.executeRecoveredOb
       Effect.gen(function* () {
         const operation = { ...action.operation, operationId }
         yield* trace.emit(OperationSelected.make({ operation }))
-        return yield* interpreter.readTrackerGraph(operation)
+        return yield* interpreter.readTrackerGraph(
+          operation,
+          lease.recordIntent(operationId),
+          lease.interruptibleBoundary
+        )
       }),
     ReadTaskClaim: (action) =>
       Effect.gen(function* () {
         const operation = { ...action.operation, operationId }
         yield* trace.emit(OperationSelected.make({ operation }))
-        return yield* interpreter.readTaskClaim(operation)
+        return yield* interpreter.readTaskClaim(operation, lease.recordIntent(operationId), lease.interruptibleBoundary)
       }),
     ReadTaskWorkSpecification: (action) =>
       Effect.gen(function* () {
         const operation = { ...action.operation, operationId }
         yield* trace.emit(OperationSelected.make({ operation }))
-        return yield* interpreter.readTaskWorkSpecification(operation)
+        return yield* interpreter.readTaskWorkSpecification(
+          operation,
+          lease.recordIntent(operationId),
+          lease.interruptibleBoundary
+        )
       }),
     ReadTaskWorktree: (action) =>
       Effect.gen(function* () {
         const operation = { ...action.operation, operationId }
         yield* trace.emit(OperationSelected.make({ operation }))
-        return yield* interpreter.readTaskWorktree(operation)
+        return yield* interpreter.readTaskWorktree(
+          operation,
+          lease.recordIntent(operationId),
+          lease.interruptibleBoundary
+        )
       }),
     ReadTargetLineage: (action) =>
       Effect.gen(function* () {
         const operation = { ...action.operation, operationId }
         yield* trace.emit(OperationSelected.make({ operation }))
-        return yield* interpreter.readTargetLineage(operation)
+        return yield* interpreter.readTargetLineage(
+          operation,
+          lease.recordIntent(operationId),
+          lease.interruptibleBoundary
+        )
       })
   })
 })
 
 const executeAcceptedObservation = Effect.fn("DeliveryAction.executeAcceptedObservation")(function* (
-  transition: AcceptedObservationTransition
+  transition: AcceptedObservationTransition,
+  lease: BoundaryExecutionLease
 ) {
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
   yield* trace.emit(OperationSelected.make({ operation: transition.operation }))
   return yield* Match.valueTags(transition, {
-    ObservePlannedAttemptContinuationClaim: ({ operation }) => interpreter.readTaskClaim(operation),
-    ObserveResponsibleTaskClaim: ({ operation }) => interpreter.readTaskClaim(operation),
-    ObserveStoppedAttemptClaim: ({ operation }) => interpreter.readTaskClaim(operation),
-    ObservePlannedAttemptContinuationGraph: ({ operation }) => interpreter.readTrackerGraph(operation),
-    ObservePlannedAttemptContinuationSpecification: ({ operation }) => interpreter.readTaskWorkSpecification(operation),
-    ObservePlannedAttemptContinuationTargetLineage: ({ operation }) => interpreter.readTargetLineage(operation),
-    ObservePlannedAttemptContinuationWorktree: ({ operation }) => interpreter.readTaskWorktree(operation)
+    ObservePlannedAttemptContinuationClaim: ({ operation }) =>
+      interpreter.readTaskClaim(operation, lease.recordIntent(operation.operationId), lease.interruptibleBoundary),
+    ObserveResponsibleTaskClaim: ({ operation }) =>
+      interpreter.readTaskClaim(operation, lease.recordIntent(operation.operationId), lease.interruptibleBoundary),
+    ObserveStoppedAttemptClaim: ({ operation }) =>
+      interpreter.readTaskClaim(operation, lease.recordIntent(operation.operationId), lease.interruptibleBoundary),
+    ObservePlannedAttemptContinuationGraph: ({ operation }) =>
+      interpreter.readTrackerGraph(operation, lease.recordIntent(operation.operationId), lease.interruptibleBoundary),
+    ObservePlannedAttemptContinuationSpecification: ({ operation }) =>
+      interpreter.readTaskWorkSpecification(
+        operation,
+        lease.recordIntent(operation.operationId),
+        lease.interruptibleBoundary
+      ),
+    ObservePlannedAttemptContinuationTargetLineage: ({ operation }) =>
+      interpreter.readTargetLineage(operation, lease.recordIntent(operation.operationId), lease.interruptibleBoundary),
+    ObservePlannedAttemptContinuationWorktree: ({ operation }) =>
+      interpreter.readTaskWorktree(operation, lease.recordIntent(operation.operationId), lease.interruptibleBoundary)
   })
 })
 
@@ -133,22 +163,27 @@ export const executeNewRecoveredAction = Effect.fn("DeliveryAction.executeNewRec
       release: { ...action.operation.release, operationId }
     })
     yield* trace.emit(OperationSelected.make({ operation }))
-    yield* interpreter.releaseTaskClaim(operation)
+    yield* interpreter.releaseTaskClaim(operation, lease.recordIntent(operationId), lease.interruptibleBoundary)
     return
   }
-  return yield* executeRecoveredObservation(action, operationId)
+  return yield* executeRecoveredObservation(action, operationId, lease)
 })
 
 export const executeAcceptedWorkflowAction = Effect.fn("DeliveryAction.executeAcceptedWorkflow")(function* (
   runId: RunId,
-  transition: AcceptedWorkflowTransition
+  transition: AcceptedWorkflowTransition,
+  lease: BoundaryExecutionLease
 ) {
   if (isStoppedClaimReleaseRetryTransition(transition)) {
     const interpreter = yield* WorkflowInterpreter
     const trace = yield* WorkflowTrace
     yield* trace.emit(OperationSelected.make({ operation: transition.operation }))
-    return yield* interpreter.releaseTaskClaim(transition.operation)
+    return yield* interpreter.releaseTaskClaim(
+      transition.operation,
+      lease.recordIntent(transition.operation.release.operationId),
+      lease.interruptibleBoundary
+    )
   }
-  if (isAcceptedRecoveryTransition(transition)) return yield* executeAcceptedRecovery(runId, transition)
-  return yield* executeAcceptedObservation(transition)
+  if (isAcceptedRecoveryTransition(transition)) return yield* executeAcceptedRecovery(runId, transition, lease)
+  return yield* executeAcceptedObservation(transition, lease)
 })

@@ -35,6 +35,7 @@ import {
 } from "../../authorities/task-tracker/claim-mutation.js"
 import * as TrackerTrace from "../../presentation/tracker-workflow-trace.js"
 import type { WorkflowOperation } from "../registry/operation.js"
+import type { OperationId } from "../identity.js"
 import { taskClaimObservationAttemptBound } from "../protocols/task-claim-observation/bound.js"
 import {
   AuthoritativeTaskClaimReleased,
@@ -51,11 +52,29 @@ import { TargetLineageObservation } from "../../authorities/git/target-lineage.j
 
 type TaskAttemptPlanRecordingError = JournalAppendError | TaskAttemptPlan.TaskAttemptPlanRunContradiction
 
+export type InterruptibleWorkflowBoundaryFamily = "Git" | "TaskTracker"
+
+/** Exact acknowledged workflow intent and owning external family for one interruptible local wait. */
+export interface InterruptibleWorkflowBoundaryIntent {
+  readonly family: InterruptibleWorkflowBoundaryFamily
+  readonly operationId: OperationId
+}
+
+/** Runtime capability that keeps a produced result and its recording inside one Exit-safe boundary. */
+export interface InterruptibleWorkflowBoundaryExecution {
+  readonly run: <A, E, R, B, E2, R2>(
+    intent: InterruptibleWorkflowBoundaryIntent,
+    call: Effect.Effect<A, E, R>,
+    recordResult: (result: A) => Effect.Effect<B, E2, R2>
+  ) => Effect.Effect<B, E | E2, R | R2>
+}
+
 /** The generic operation handlers used before complete-attempt executor work. */
 export interface WorkflowInterpreterService {
   readonly acquireTaskClaim: (
     operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
-    onIntentRecorded?: Effect.Effect<void>
+    onIntentRecorded?: Effect.Effect<void>,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
   ) => Effect.Effect<
     TaskClaimAcquisitionResult,
     | CoordinatorOwnershipError
@@ -67,7 +86,9 @@ export interface WorkflowInterpreterService {
     | TaskClaimRequestFailure
   >
   readonly readTrackerGraph: (
-    operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
+    operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type,
+    onIntentRecorded?: Effect.Effect<void>,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
   ) => Effect.Effect<
     TaskDagSnapshot,
     | FixtureReadError
@@ -78,16 +99,24 @@ export interface WorkflowInterpreterService {
     | TrackerReadError
   >
   readonly readTaskClaim: (
-    operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+    operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type,
+    onIntentRecorded?: Effect.Effect<void>,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
   ) => Effect.Effect<TaskClaimObservationResult, JournalAppendError>
   readonly readTaskWorktree: (
-    operation: typeof WorkflowOperation.cases.ReadTaskWorktree.Type
+    operation: typeof WorkflowOperation.cases.ReadTaskWorktree.Type,
+    onIntentRecorded?: Effect.Effect<void>,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
   ) => Effect.Effect<PlannedAttemptWorktreeObservationResult, GitWorktreeReadFailure | JournalAppendError>
   readonly readTargetLineage: (
-    operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type
+    operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type,
+    onIntentRecorded?: Effect.Effect<void>,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
   ) => Effect.Effect<TargetLineageObservationResult, GitTargetLineageReadFailure | JournalAppendError>
   readonly releaseTaskClaim: (
-    operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+    operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type,
+    onIntentRecorded?: Effect.Effect<void>,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
   ) => Effect.Effect<
     TaskClaimReleaseResult,
     | CoordinatorOwnershipError
@@ -98,13 +127,17 @@ export interface WorkflowInterpreterService {
     | TaskClaimReleaseFailure
   >
   readonly readTaskWorkSpecification: (
-    operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type
+    operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type,
+    onIntentRecorded?: Effect.Effect<void>,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
   ) => Effect.Effect<
     TaskWorkSpecification,
     FixtureReadError | JournalAppendError | TaskTrackerKnowledgeUnavailable | TrackerAdapterReadError | TrackerReadError
   >
   readonly reconcileTaskWorktree: (
-    operation: typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type
+    operation: typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type,
+    onIntentRecorded?: Effect.Effect<void>,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
   ) => Effect.Effect<
     TaskWorktree.TaskWorktreeReconciliationResult,
     | CoordinatorOwnershipError

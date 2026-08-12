@@ -29,7 +29,11 @@ import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.j
 import { TaskLifecycle, type Task, TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
+import {
+  type InterruptibleWorkflowBoundaryExecution,
+  WorkflowInterpreter,
+  WorkflowTrace
+} from "../../workflow/interpretation/interpreter.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import {
   intentRecordKey,
@@ -206,6 +210,10 @@ const proposalsFor = (transition: Transition, acceptedOperationIds: ReadonlySet<
   return { issues: result.issues, proposals: [...result.ticketDelivery, ...result.deliverySettlement] }
 }
 
+const uninterruptedBoundary: InterruptibleWorkflowBoundaryExecution = {
+  run: (_intent, call, recordResult) => Effect.flatMap(call, recordResult)
+}
+
 const inertLease: DeliveryActionExecutionLease = {
   acceptIntegrationTargetOwnership: Effect.void,
   bindPlannedAttemptPosition: () => Effect.void,
@@ -218,6 +226,7 @@ const inertLease: DeliveryActionExecutionLease = {
     snapshot: Effect.succeed({ activeResponsibilityPositions: new Set(), heldResponsibilityPositions: new Set() }),
     withPermit: (_responsibility, effect) => effect
   },
+  interruptibleBoundary: uninterruptedBoundary,
   recordIntent: () => Effect.void,
   releasePlannedAttemptPosition: () => Effect.void,
   withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol lease")
@@ -1700,7 +1709,7 @@ describe("delivery proposal route matrix", () => {
         yield* withAdapterServices(
           executeNewRecoveredAction(fresh.route.action, OperationId.make(`fresh:${transition._tag}`), inertLease, runId)
         )
-        yield* withAdapterServices(executeAcceptedWorkflowAction(runId, transition))
+        yield* withAdapterServices(executeAcceptedWorkflowAction(runId, transition, inertLease))
       }
 
       const recoveryOperationId = OperationId.make("adapter-recovery-operation")
@@ -1710,7 +1719,7 @@ describe("delivery proposal route matrix", () => {
         RunnableFrontierTransition.ReconcileTaskClaimRelease({ operationId: recoveryOperationId, taskId }),
         RunnableFrontierTransition.ReconcileTaskWorktree({ operationId: recoveryOperationId, taskId })
       ]) {
-        yield* withAdapterServices(executeAcceptedWorkflowAction(runId, transition))
+        yield* withAdapterServices(executeAcceptedWorkflowAction(runId, transition, inertLease))
       }
 
       const acceptedTransition = RunnableFrontierTransition.CheckTaskClaim({ operationId: recoveryOperationId, taskId })
