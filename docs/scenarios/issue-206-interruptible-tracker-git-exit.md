@@ -27,10 +27,11 @@ under the same operation identity.
 Acceptance evidence:
 
 - `interrupts an admitted tracker owner under Exit and starts no successor action`
-- `survives process death and reopens an Exit-interrupted tracker request before retry`
+- `rebuilds the tracker application from its recovery projection and records the available response`
+- `records the authored tracker interruption and ordinary replay cassette`
 - `leaves an interrupted tracker request behind its exact acknowledged intent`
 
-The second test replays the maintained supervisor-visible authored cassette
+The cassette test replays the maintained supervisor-visible authored cassette
 and compares its recorded Run cassette: intent only at the death cut, then the
 same intent plus one observation after ordinary reopening.
 
@@ -46,6 +47,7 @@ Acceptance evidence:
 
 - `records a produced Git result under Exit and starts no later protocol phase`
 - `records immediately available tracker and Git results before releasing their owners under Exit`
+- `rebuilds the Git application from its recovery projection and records the available response`
 
 ## Exit interrupts a Git wait and a later process reopens the Run
 
@@ -58,12 +60,18 @@ mode appears.
 
 Acceptance evidence:
 
-- `interrupts a Git wait under Exit and reopens its exact intent through the ordinary protocol`
+- `records the authored Git interruption and ordinary replay cassette`
 
 Its authored cassette records the supervisor Exit, local Git interruption,
 process death, ordinary Run entry, and Git check before retry. Its journal tag
 sequence is the recorded cassette: `GitReadIntentRecorded` at the interruption
 cut, then `PlannedAttemptWorktreeObserved` after reopening.
+
+The tracker and Git rebuild tests close the first application scope, cross the
+raw journal's ordinary `readRunForRecovery` boundary, assert the exact pending
+delivery or recovery-frontier projection, and construct a fresh lifecycle and
+journaled interpreter over the same durable journal before recording the
+available outside response.
 
 ## Cutoff reaches an acknowledged intent before its outside call starts
 

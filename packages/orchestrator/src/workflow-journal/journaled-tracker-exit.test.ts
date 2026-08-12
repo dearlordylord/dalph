@@ -35,7 +35,7 @@ const interruptedTrackerAuthoredCassette = [
   "TrackerObservationRecorded"
 ] as const
 
-it.effect("survives process death and reopens an Exit-interrupted tracker request before retry", () =>
+it.effect("records the authored tracker interruption and ordinary replay cassette", () =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0)
     const firstCallStarted = yield* Deferred.make<void>()

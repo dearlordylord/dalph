@@ -239,7 +239,7 @@ it.effect("reopens an intent-only Git read with the same operation identity", ()
   }).pipe(Effect.provide(retryingLostWorktreeLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
-it.effect("interrupts a Git wait under Exit and reopens its exact intent through the ordinary protocol", () =>
+it.effect("records the authored Git interruption and ordinary replay cassette", () =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0)
     const firstCallStarted = yield* Deferred.make<void>()
