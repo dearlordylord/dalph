@@ -9,6 +9,7 @@ import {
   PlannedTaskAttempt,
   RunId,
   TaskExecutorLocator,
+  TaskId,
   WorktreeLocator
 } from "@dalph/contracts"
 import {
@@ -16,6 +17,8 @@ import {
   makeTaskAttemptPlanOperation,
   makeTaskWorktreeReconciliationOperation,
   OperationId,
+  PlannedTaskAttemptOrdinal,
+  PlannedTaskAttemptPlanRequest,
   PlannedTaskAttemptPlanner,
   taskRevisionFor,
   TrackerTask,
@@ -40,8 +43,8 @@ it.effect("binds every exact attempt identity and resource locator", () =>
     const taskRevision = specification.fingerprint
 
     const planner = yield* PlannedTaskAttemptPlanner
-    const plan = yield* planner.plan(specification)
-    const retryPlan = yield* planner.plan(specification)
+    const plan = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification }))
+    const retryPlan = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification }))
 
     expect(plan).toEqual({
       attemptId: AttemptId.make("attempt:task-44:0"),
@@ -68,6 +71,52 @@ it.effect("binds every exact attempt identity and resource locator", () =>
   )
 )
 
+it.effect("keeps exact replacement Base SHA and ordinal in one indivisible planning request", () =>
+  Effect.promise(() =>
+    fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 10_000 }), async (selectedOrdinal) => {
+        const specification = makeTaskWorkSpecification({
+          body: "Replacement body",
+          taskId: TaskId.make("task-44"),
+          title: "Replacement title"
+        })
+        const selectedBaseSha = GitCommitSha.make(selectedOrdinal.toString(16).padStart(40, "0"))
+        const [replacement, fresh] = await Effect.runPromise(
+          Effect.gen(function* () {
+            const planner = yield* PlannedTaskAttemptPlanner
+            const replacement = yield* planner.plan(
+              PlannedTaskAttemptPlanRequest.ExactReplacement({
+                baseSha: selectedBaseSha,
+                ordinal: PlannedTaskAttemptOrdinal.make(selectedOrdinal),
+                specification
+              })
+            )
+            const fresh = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification }))
+            return [replacement, fresh] as const
+          }).pipe(
+            Effect.provide(
+              deterministicPlannedTaskAttemptLayer({
+                baseSha: GitCommitSha.make("f".repeat(40)),
+                executor: TaskExecutorLocator.make("executor:deterministic"),
+                runId: RunId.make("run-44"),
+                worktreeRoot: WorktreeLocator.make("/worktrees/run-44")
+              })
+            )
+          )
+        )
+
+        expect(replacement).toMatchObject({
+          attemptId: AttemptId.make(`attempt:task-44:${selectedOrdinal}`),
+          baseSha: selectedBaseSha,
+          branch: `refs/heads/dalph/attempt-task-44-${selectedOrdinal}`,
+          worktree: `/worktrees/run-44/attempt-task-44-${selectedOrdinal}`
+        })
+        expect(fresh.attemptId).toBe(AttemptId.make(`attempt:task-44:${selectedOrdinal + 1}`))
+      })
+    )
+  )
+)
+
 it("binds the focused task-work-specification fingerprint inside the planner", () =>
   Effect.gen(function* () {
     const task = Schema.decodeUnknownSync(TrackerTask)({
@@ -79,7 +128,9 @@ it("binds the focused task-work-specification fingerprint inside the planner", (
     const specification = makeTaskWorkSpecification({ body: "Exact body", taskId: task.id, title: "Exact title" })
     const planner = yield* PlannedTaskAttemptPlanner
 
-    expect((yield* planner.plan(specification)).taskRevision).toBe(specification.fingerprint)
+    expect((yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification }))).taskRevision).toBe(
+      specification.fingerprint
+    )
   }).pipe(
     Effect.provide(
       deterministicPlannedTaskAttemptLayer({

@@ -62,7 +62,7 @@ const executeAttemptStoppageTransition = Effect.fn("DeliveryAction.executeAttemp
 type ExecutorTransition = Exclude<
   NonRestartPlannedAttemptTransition,
   | AttemptStoppageTransition
-  | Extract<PlannedAttemptTransition, { readonly _tag: "AdvanceAttemptRestart" | "RecordStoppedAttemptClaimNoRelease" }>
+  | Extract<NonRestartPlannedAttemptTransition, { readonly _tag: "RecordStoppedAttemptClaimNoRelease" }>
 >
 
 export const executeAttemptRestartTransition = Effect.fn("DeliveryAction.executeAttemptRestartTransition")(function* (

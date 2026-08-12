@@ -1,5 +1,9 @@
 import { Effect } from "effect"
-import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
+import {
+  OperationIdAllocator,
+  PlannedTaskAttemptPlanner,
+  PlannedTaskAttemptPlanRequest
+} from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { OperationId } from "../../workflow/identity.js"
 import type {
@@ -52,7 +56,9 @@ export const materializeDeliveryAction = Effect.fn("DeliveryRuntime.materializeA
   return {
     _tag: "FreshAttemptAction" as const,
     operationId: yield* allocator.allocate(),
-    plannedAttempt: yield* planner.plan(proposal.route.step.specification),
+    plannedAttempt: yield* planner.plan(
+      PlannedTaskAttemptPlanRequest.Fresh({ specification: proposal.route.step.specification })
+    ),
     proposal
   }
 })

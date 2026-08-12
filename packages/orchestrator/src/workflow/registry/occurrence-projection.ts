@@ -36,7 +36,8 @@ import {
 } from "../protocols/attempt-choice/events.js"
 import {
   AttemptRestartAuthorityReadFailure,
-  PlannedAttemptReplacementWitness
+  PlannedAttemptReplacementWitness,
+  restartAuthorityReadOperationMatches
 } from "../protocols/attempt-choice/replacement-events.js"
 import {
   IntegrationResponsibilityBegan,
@@ -358,19 +359,6 @@ const invalidExecutorRelationship = (
       }
 }
 
-const trackerOperationMatchesRestartFailure = (
-  operation: TaskTrackerReadInitiated["operation"],
-  occurrence: AttemptRestartAuthorityReadFailed
-): boolean => {
-  if (occurrence.failure._tag !== "AttemptRestartTaskFactsReadFailure") return false
-  const taskId = occurrence.subject.plannedAttempt.taskId
-  const coversTask =
-    operation._tag === "ReadTrackerGraph"
-      ? operation.readShape.explicitlyCoveredTaskIds.includes(taskId)
-      : operation._tag === "ReadTaskWorkSpecification" && operation.taskId === taskId
-  return coversTask && taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(occurrence.failure.target)
-}
-
 const exactTrackerReadForRestartFailure = (
   trackerActions: ReadonlyMap<string, IndexedRelationship<TaskTrackerReadInitiated>>,
   occurrence: AttemptRestartAuthorityReadFailed
@@ -380,7 +368,7 @@ const exactTrackerReadForRestartFailure = (
   if (action === undefined || action === ambiguousRelationship || action.recordedAt >= occurrence.recordedAt) {
     return false
   }
-  return trackerOperationMatchesRestartFailure(action.operation, occurrence)
+  return restartAuthorityReadOperationMatches(action.operation, occurrence.failure, occurrence.subject)
 }
 
 const isExactEarlierGitReadForRestartFailure =
@@ -389,27 +377,7 @@ const isExactEarlierGitReadForRestartFailure =
     candidate._tag === "GitReadInitiated" &&
     candidate.runId === occurrence.runId &&
     candidate.operation.operationId === occurrence.originatingActionOperationId &&
-    candidate.recordedAt < occurrence.recordedAt &&
-    plannedTaskAttemptEquivalence(candidate.operation.plannedAttempt, occurrence.subject.plannedAttempt)
-
-const gitOperationMatchesRestartFailure = (
-  operation: GitReadInitiated["operation"],
-  occurrence: AttemptRestartAuthorityReadFailed
-): boolean => {
-  if (occurrence.failure._tag === "AttemptRestartTaskFactsReadFailure") return false
-  if (occurrence.failure._tag === "GitWorktreeReadFailure") {
-    return (
-      operation._tag === "ReadTaskWorktree" &&
-      occurrence.failure.worktree === occurrence.subject.plannedAttempt.worktree
-    )
-  }
-  if (operation._tag !== "ReadTargetLineage") return false
-  return [
-    occurrence.failure.plannedBaseSha === occurrence.subject.plannedAttempt.baseSha,
-    operation.integrationTarget.repository === occurrence.failure.target.repository,
-    operation.integrationTarget.ref === occurrence.failure.target.ref
-  ].every(Boolean)
-}
+    candidate.recordedAt < occurrence.recordedAt
 
 const exactGitReadForRestartFailure = (
   occurrences: ReadonlyArray<WorkflowOccurrence>,
@@ -420,7 +388,7 @@ const exactGitReadForRestartFailure = (
   if (actions.length !== 1) return false
   const operation = actions[0]?.operation
   if (operation === undefined) return false
-  return gitOperationMatchesRestartFailure(operation, occurrence)
+  return restartAuthorityReadOperationMatches(operation, occurrence.failure, occurrence.subject)
 }
 
 const restartFailureHasExactEarlierRead = (

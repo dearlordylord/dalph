@@ -31,6 +31,7 @@ import {
   makeTrackerGraphObservationOperation,
   nodeGitCommandLayer,
   OperationIdAllocator,
+  PlannedTaskAttemptPlanRequest,
   PlannedTaskAttemptPlanner,
   PlannedWorktreeAbsent,
   projectTrackerSnapshot,
@@ -76,8 +77,8 @@ it.effect("allocates deterministic operation and planned-attempt identities", ()
     const task = firstSnapshot.eligibleTasks()[0]
     if (task === undefined) return yield* Effect.die("missing eligible task")
     const planner = yield* PlannedTaskAttemptPlanner
-    const first = yield* planner.plan(supportSpecification)
-    const second = yield* planner.plan(supportSpecification)
+    const first = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification: supportSpecification }))
+    const second = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification: supportSpecification }))
     expect(first.attemptId).toBe("attempt:support-task:0")
     expect(second.attemptId).toBe("attempt:support-task:1")
     expect(first.worktree).toContain("attempt-support-task-0")
@@ -112,7 +113,9 @@ it.effect("substitutes controlled Layers without changing public delivery values
     const task = firstSnapshot.eligibleTasks()[0]
     if (task === undefined) return yield* Effect.die("missing eligible task")
     const planner = yield* PlannedTaskAttemptPlanner
-    const plannedAttempt = yield* planner.plan(supportSpecification)
+    const plannedAttempt = yield* planner.plan(
+      PlannedTaskAttemptPlanRequest.Fresh({ specification: supportSpecification })
+    )
     const graph = makeTrackerGraphObservationOperation(
       PublicApi.OperationId.make("support-read"),
       FixtureTarget.make("support-fixture")
@@ -186,7 +189,9 @@ it.effect("guards generic tracker and Git mutations with coordinator ownership",
     const planner = yield* PlannedTaskAttemptPlanner
     const task = firstSnapshot.eligibleTasks()[0]
     if (task === undefined) return yield* Effect.die("missing eligible task")
-    const plannedAttempt = yield* planner.plan(supportSpecification)
+    const plannedAttempt = yield* planner.plan(
+      PlannedTaskAttemptPlanRequest.Fresh({ specification: supportSpecification })
+    )
     const tracker = yield* TrackerMutation
     const acquisition = {
       operationId: PublicApi.OperationId.make("owned-claim"),

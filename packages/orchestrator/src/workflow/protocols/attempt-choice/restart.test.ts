@@ -490,16 +490,15 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       Effect.provideService(
         PlannedTaskAttemptPlanner,
         PlannedTaskAttemptPlanner.of({
-          plan: (_specification, selectedBaseSha, selectedOrdinal) =>
-            Ref.update(plannerCalls, (count) => count + 1).pipe(
-              Effect.andThen(
-                Ref.update(plannerOrdinals, (ordinals) => [
-                  ...ordinals,
-                  selectedOrdinal === undefined ? -1 : Number(selectedOrdinal)
-                ])
-              ),
-              Effect.as(PlannedTaskAttempt.make({ ...successorAttempt, baseSha: selectedBaseSha ?? targetHeadSha }))
-            )
+          plan: (planningRequest) =>
+            planningRequest._tag === "Fresh"
+              ? Effect.die("Restart must request one exact replacement plan")
+              : Ref.update(plannerCalls, (count) => count + 1).pipe(
+                  Effect.andThen(
+                    Ref.update(plannerOrdinals, (ordinals) => [...ordinals, Number(planningRequest.ordinal)])
+                  ),
+                  Effect.as(PlannedTaskAttempt.make({ ...successorAttempt, baseSha: planningRequest.baseSha }))
+                )
         })
       ),
       Effect.provideService(
@@ -568,10 +567,12 @@ it.effect("atomically supersedes exact P1 with clean P2 from fresh F2 K1 W1 and 
       })
     )
     const planner = PlannedTaskAttemptPlanner.of({
-      plan: (_specification, selectedBaseSha) =>
-        Ref.update(plannerCalls, (count) => count + 1).pipe(
-          Effect.as(PlannedTaskAttempt.make({ ...successorAttempt, baseSha: selectedBaseSha ?? targetHeadSha }))
-        )
+      plan: (planningRequest) =>
+        planningRequest._tag === "Fresh"
+          ? Effect.die("Restart must request one exact replacement plan")
+          : Ref.update(plannerCalls, (count) => count + 1).pipe(
+              Effect.as(PlannedTaskAttempt.make({ ...successorAttempt, baseSha: planningRequest.baseSha }))
+            )
     })
     const allocator = OperationIdAllocator.of({
       allocate: () => Effect.succeed(OperationId.make("attempt-restart-plan-P2"))

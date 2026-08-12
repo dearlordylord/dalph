@@ -46,6 +46,10 @@ import type {
   CompletionTaskRequest
 } from "../../workflow/protocols/integration-finality/events.js"
 import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
+import type {
+  AttemptRestartRejectedReason,
+  AttemptRestartWaitReason
+} from "../../workflow/protocols/attempt-choice/restart-reasons.js"
 import type { PlannedAttemptContinuationWitness } from "../../workflow/protocols/planned-attempt-continuation/events.js"
 import type { CompletionTaskConflictReason } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 
@@ -285,27 +289,12 @@ export const transitionTrackerGraphRequirement = (
 export type FrontierExplanation = Data.TaggedEnum<{
   AttemptRestartRejected: {
     readonly correlation: PlannedAttemptExecutorCorrelation
-    readonly reason:
-      | "CompletedDoesNotAuthorizeReplacement"
-      | "FailedDoesNotAuthorizeReplacement"
-      | "NewFingerprintChoiceRequired"
+    readonly reason: AttemptRestartRejectedReason
     readonly taskId: TaskId
   }
   AttemptRestartWait: {
     readonly correlation: PlannedAttemptExecutorCorrelation
-    readonly reason:
-      | "ClaimAbsent"
-      | "ClaimForeign"
-      | "ClaimUnreadable"
-      | "ExecutorContradictory"
-      | "ExecutorRunning"
-      | "ExecutorUnavailable"
-      | "IntegrationTargetUnavailable"
-      | "OldWorktreeNotReady"
-      | "OldWorktreeUnreadable"
-      | "TargetHeadUnreadable"
-      | "TaskFactsUnreadable"
-      | "TaskNotEligible"
+    readonly reason: AttemptRestartWaitReason
     readonly taskId: TaskId
     readonly wakeCondition: "ProcessRestartedOrAcceptedFactsChanged"
   }

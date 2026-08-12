@@ -22,6 +22,7 @@ import {
   sameAttemptChoiceRequestId,
   sameAttemptChoiceSubject
 } from "./events.js"
+import type { AttemptRestartPendingReason, AttemptRestartRejectedReason } from "./restart-reasons.js"
 
 /** Restart cannot advance without its exact durable applied Operator choice. */
 export class AttemptRestartChoiceContradiction extends Schema.TaggedError<AttemptRestartChoiceContradiction>()(
@@ -40,28 +41,15 @@ export type AttemptRestartAdvanceResult =
   | { readonly _tag: "AttemptRestartRejected"; readonly reason: AttemptRestartRejectedReason }
   | { readonly _tag: "PlannedAttemptReplacementRecorded"; readonly replacement: JournalRecord }
 
-export type AttemptRestartPendingReason =
-  | "ClaimAbsent"
-  | "ClaimForeign"
-  | "ClaimUnreadable"
-  | "ExecutorContradictory"
-  | "ExecutorRunning"
-  | "ExecutorUnavailable"
-  | "OldWorktreeNotReady"
-  | "OldWorktreeUnreadable"
-  | "TargetHeadUnreadable"
-  | "TaskFactsUnreadable"
-  | "TaskNotEligible"
-
-export type AttemptRestartRejectedReason =
-  | "CompletedDoesNotAuthorizeReplacement"
-  | "FailedDoesNotAuthorizeReplacement"
-  | "NewFingerprintChoiceRequired"
-
 export type RestartApplicationRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
     readonly choice: "RestartTaskImplementation"
   }
+}
+
+/** The one durable atomic P1-to-P2 replacement record recovered for an applied Restart. */
+export type PlannedAttemptReplacementRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
 }
 
 export const exactAppliedRestart = (
@@ -77,11 +65,14 @@ export const exactAppliedRestart = (
       sameAttemptChoiceSubject(record.event.subject, subject)
   )
 
-export const recordedReplacement = (records: ReadonlyArray<JournalRecord>, subject: AttemptChoiceSubject) =>
+export const recordedReplacement = (
+  records: ReadonlyArray<JournalRecord>,
+  subject: AttemptChoiceSubject
+): PlannedAttemptReplacementRecord | undefined =>
   records.find(
-    ({ event }) =>
-      event._tag === "PlannedAttemptReplaced" &&
-      plannedTaskAttemptEquivalence(event.subject.plannedAttempt, subject.plannedAttempt)
+    (record): record is PlannedAttemptReplacementRecord =>
+      record.event._tag === "PlannedAttemptReplaced" &&
+      plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, subject.plannedAttempt)
   )
 
 /**

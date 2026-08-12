@@ -16,6 +16,10 @@ import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/t
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
+import type {
+  AttemptRestartRejectedReason,
+  AttemptRestartWaitReason
+} from "../../workflow/protocols/attempt-choice/restart-reasons.js"
 import type { OperationId } from "../../workflow/identity.js"
 
 /** Exact accepted executor fact from which one continuation is authorized. */
@@ -31,27 +35,8 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
   }
-  AttemptRestartRejected: {
-    readonly reason:
-      | "CompletedDoesNotAuthorizeReplacement"
-      | "FailedDoesNotAuthorizeReplacement"
-      | "NewFingerprintChoiceRequired"
-  }
-  AttemptRestartWait: {
-    readonly reason:
-      | "ClaimAbsent"
-      | "ClaimForeign"
-      | "ClaimUnreadable"
-      | "ExecutorContradictory"
-      | "ExecutorRunning"
-      | "ExecutorUnavailable"
-      | "IntegrationTargetUnavailable"
-      | "OldWorktreeNotReady"
-      | "OldWorktreeUnreadable"
-      | "TargetHeadUnreadable"
-      | "TaskFactsUnreadable"
-      | "TaskNotEligible"
-  }
+  AttemptRestartRejected: { readonly reason: AttemptRestartRejectedReason }
+  AttemptRestartWait: { readonly reason: AttemptRestartWaitReason }
   AttemptStoppageRequired: {
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject

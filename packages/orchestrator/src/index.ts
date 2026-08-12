@@ -361,6 +361,7 @@ export {
   freshOperationIdAllocatorLayer,
   OperationIdAllocator,
   PlannedTaskAttemptOrdinal,
+  PlannedTaskAttemptPlanRequest,
   PlannedTaskAttemptError,
   PlannedTaskAttemptPlanner
 } from "./workflow/protocols/task-attempt-planning/plan.js"

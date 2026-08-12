@@ -663,14 +663,16 @@ const taskFactReconciliationDriver = defineDriver(
     const provideInterpreter = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       provideJournal(effect.pipe(Effect.provide(interpreterLayer)))
     const replacementPlanner = PlannedTaskAttemptPlanner.of({
-      plan: (specification, selectedBaseSha) =>
-        Effect.succeed(
-          PlannedTaskAttempt.make({
-            ...successorAttempt,
-            baseSha: selectedBaseSha ?? replacementTargetHead,
-            taskRevision: specification.fingerprint
-          })
-        )
+      plan: (planningRequest) =>
+        planningRequest._tag === "Fresh"
+          ? Effect.die("Restart MBT must request one exact replacement plan")
+          : Effect.succeed(
+              PlannedTaskAttempt.make({
+                ...successorAttempt,
+                baseSha: planningRequest.baseSha,
+                taskRevision: planningRequest.specification.fingerprint
+              })
+            )
     })
     const replacementOperationIds = OperationIdAllocator.of({
       allocate: () => Effect.succeed(OperationId.make("task-fact-model-plan-P2"))

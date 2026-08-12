@@ -58,6 +58,7 @@ import {
 import { reconstructedTaskGraphFromEvents } from "./graph-knowledge.js"
 import { recordedTaskAttemptPlanFor } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
+import { restartAuthorityReadOperationMatches } from "../../workflow/protocols/attempt-choice/replacement-events.js"
 import {
   restartChoiceWasInvalidatedByLaterSpecification,
   restartClaimAuthorityAtApplication,
@@ -885,47 +886,12 @@ type RestartAuthorityReadFailureEvent = Extract<
   { readonly _tag: "AttemptRestartAuthorityReadFailed" }
 >
 
-const restartTaskFactsFailureIntentIsExact = (
-  event: RestartAuthorityReadFailureEvent,
-  operation: WorkflowOperation | undefined
-): boolean => {
-  if (event.failure._tag !== "AttemptRestartTaskFactsReadFailure") return false
-  return (
-    operation !== undefined &&
-    ((operation._tag === "ReadTrackerGraph" &&
-      operation.readShape.explicitlyCoveredTaskIds.includes(event.subject.plannedAttempt.taskId)) ||
-      (operation._tag === "ReadTaskWorkSpecification" && operation.taskId === event.subject.plannedAttempt.taskId)) &&
-    taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(event.failure.target)
-  )
-}
-
-const restartGitFailureIntentIsExact = (
-  event: RestartAuthorityReadFailureEvent,
-  operation: WorkflowOperation | undefined
-): boolean => {
-  if (operation === undefined) return false
-  if (operation._tag === "ReadTaskWorktree") {
-    return (
-      event.failure._tag === "GitWorktreeReadFailure" &&
-      plannedTaskAttemptEquivalence(operation.plannedAttempt, event.subject.plannedAttempt)
-    )
-  }
-  if (operation._tag !== "ReadTargetLineage" || event.failure._tag !== "GitTargetLineageReadFailure") return false
-  if (!plannedTaskAttemptEquivalence(operation.plannedAttempt, event.subject.plannedAttempt)) return false
-  return (
-    operation.integrationTarget.repository === event.failure.target.repository &&
-    operation.integrationTarget.ref === event.failure.target.ref
-  )
-}
-
 const restartFailureIntentIsExact = (event: RestartAuthorityReadFailureEvent, intent: JournalRecord | undefined) => {
   const operation =
     intent?.event._tag === "TaskTrackerReadIntentRecorded" || intent?.event._tag === "GitReadIntentRecorded"
       ? intent.event.operation
       : undefined
-  return event.failure._tag === "AttemptRestartTaskFactsReadFailure"
-    ? restartTaskFactsFailureIntentIsExact(event, operation)
-    : restartGitFailureIntentIsExact(event, operation)
+  return operation !== undefined && restartAuthorityReadOperationMatches(operation, event.failure, event.subject)
 }
 
 /** Rejects a forged failure that is not the result of this exact applied Restart read. */

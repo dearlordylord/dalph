@@ -5,7 +5,7 @@ import {
   type IntegrationTarget,
   type PlannedTaskAttempt
 } from "@dalph/contracts"
-import { Effect, Match } from "effect"
+import { Data, Effect, Match } from "effect"
 import { type PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { isExactTaskClaim, type ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { type TaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
@@ -30,7 +30,8 @@ import {
 import {
   OperationIdAllocator,
   PlannedTaskAttemptOrdinal,
-  PlannedTaskAttemptPlanner
+  PlannedTaskAttemptPlanner,
+  PlannedTaskAttemptPlanRequest
 } from "../task-attempt-planning/plan.js"
 import { recordedTaskAttemptPlans } from "../task-attempt-planning/journal-evidence.js"
 import {
@@ -48,10 +49,11 @@ import {
   recordedReplacement,
   restartClaimAuthorityAtApplication,
   restartChoiceWasInvalidatedByLaterSpecification,
-  type AttemptRestartPendingReason,
+  type PlannedAttemptReplacementRecord,
   type RestartApplicationRecord,
   terminalOrSafeRestartQuiescence
 } from "./restart-authority.js"
+import type { AttemptRestartPendingReason } from "./restart-reasons.js"
 import {
   AttemptRestartAuthorityReadFailedEvent,
   type AttemptRestartAuthorityReadFailure,
@@ -63,34 +65,48 @@ import {
 export {
   AttemptRestartAuthorityContradiction,
   type AttemptRestartAdvanceResult,
-  AttemptRestartChoiceContradiction,
-  type AttemptRestartPendingReason,
-  type AttemptRestartRejectedReason
+  AttemptRestartChoiceContradiction
 } from "./restart-authority.js"
+export type { AttemptRestartPendingReason, AttemptRestartRejectedReason } from "./restart-reasons.js"
 
 const lastRecordOffset = -1
+
+type RecordedReplacementLookup = Data.TaggedEnum<{
+  Absent: Record<never, never>
+  Contradictory: { readonly replacement: PlannedAttemptReplacementRecord }
+  Exact: { readonly replacement: PlannedAttemptReplacementRecord }
+}>
+
+const RecordedReplacementLookup = Data.taggedEnum<RecordedReplacementLookup>()
 
 const exactRecordedReplacement = (
   records: ReadonlyArray<JournalRecord>,
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject
-) => {
+): RecordedReplacementLookup => {
   const replacement = recordedReplacement(records, subject)
-  if (replacement?.event._tag !== "PlannedAttemptReplaced") return undefined
+  if (replacement === undefined) return RecordedReplacementLookup.Absent()
   return [
     sameAttemptChoiceRequestId(replacement.event.requestId, requestId),
     sameAttemptChoiceSubject(replacement.event.subject, subject)
   ].every(Boolean)
-    ? replacement
-    : false
+    ? RecordedReplacementLookup.Exact({ replacement })
+    : RecordedReplacementLookup.Contradictory({ replacement })
 }
+
+/** Every post-application Restart phase derives its exact request and subject from this one durable record. */
+interface ExactRestartContext {
+  readonly application: RestartApplicationRecord
+}
+
+const restartRequestFor = (context: ExactRestartContext) => context.application.event
 
 const recordRestartAuthorityReadFailure = Effect.fn("AttemptRestart.recordAuthorityReadFailure")(function* (
   operationId: ReturnType<typeof makeTrackerGraphObservationOperation>["operationId"],
   failure: AttemptRestartAuthorityReadFailure,
-  requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject
+  context: ExactRestartContext
 ) {
+  const { requestId, subject } = restartRequestFor(context)
   const journal = yield* InRunJournal
   yield* journal.append(
     subject.plannedAttempt.runId,
@@ -111,18 +127,15 @@ const unreadableTaskFacts = (
   source: AttemptRestartTaskFactsReadFailure["source"],
   detail: string,
   target: AttemptRestartTaskFactsReadFailure["target"],
-  requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject
+  context: ExactRestartContext
 ) =>
   recordRestartAuthorityReadFailure(
     operationId,
     AttemptRestartTaskFactsReadFailure.make({ detail, source, target }),
-    requestId,
-    subject
+    context
   ).pipe(Effect.as({ _tag: "Unreadable" as const }))
 
-interface RestartBasis {
-  readonly application: RestartApplicationRecord
+interface RestartBasis extends ExactRestartContext {
   readonly quiescenceEvidence: PlannedAttemptExecutorEvidence
 }
 
@@ -167,13 +180,9 @@ type RestartQuiescence =
   | Exclude<EstablishedRestartQuiescence, { readonly _tag: "Pending" }>
   | { readonly _tag: "Pending"; readonly reason: AttemptRestartPendingReason }
 
-const preparedRestartFrom = (
-  quiescence: RestartQuiescence,
-  application: RestartApplicationRecord,
-  requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject
-) =>
-  Match.valueTags(quiescence, {
+const preparedRestartFrom = (quiescence: RestartQuiescence, application: RestartApplicationRecord) => {
+  const { requestId, subject } = application.event
+  return Match.valueTags(quiescence, {
     Pending: ({ reason }) => Effect.succeed({ _tag: "AttemptRestartPending" as const, reason }),
     Proof: ({ evidence }) =>
       Effect.succeed({ _tag: "RestartPrepared" as const, application, quiescenceEvidence: evidence }),
@@ -187,6 +196,7 @@ const preparedRestartFrom = (
         })
       )
   })
+}
 
 const prepareAttemptRestart = Effect.fn("AttemptRestart.prepare")(function* (
   requestId: AttemptChoiceRequestId,
@@ -196,9 +206,11 @@ const prepareAttemptRestart = Effect.fn("AttemptRestart.prepare")(function* (
   const journal = yield* InRunJournal
   const records = yield* journal.read(subject.plannedAttempt.runId)
   const existing = exactRecordedReplacement(records, requestId, subject)
-  if (existing === false) return yield* new AttemptRestartChoiceContradiction({ requestId, subject })
-  if (existing?.event._tag === "PlannedAttemptReplaced") {
-    return { _tag: "PlannedAttemptReplacementRecorded" as const, replacement: existing }
+  if (existing._tag === "Contradictory") {
+    return yield* new AttemptRestartChoiceContradiction({ requestId, subject })
+  }
+  if (existing._tag === "Exact") {
+    return { _tag: "PlannedAttemptReplacementRecorded" as const, replacement: existing.replacement }
   }
   const application = exactAppliedRestart(records, requestId, subject)
   if (application === undefined) return yield* new AttemptRestartChoiceContradiction({ requestId, subject })
@@ -215,14 +227,11 @@ const prepareAttemptRestart = Effect.fn("AttemptRestart.prepare")(function* (
         Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const })
     })
   )
-  return yield* preparedRestartFrom(quiescence, application, requestId, subject)
+  return yield* preparedRestartFrom(quiescence, application)
 })
 
-const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (
-  prepared: RestartPrepared,
-  requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject
-) {
+const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (prepared: RestartPrepared) {
+  const { requestId, subject } = restartRequestFor(prepared)
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const records = yield* journal.read(subject.plannedAttempt.runId)
@@ -245,41 +254,19 @@ const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (
     Effect.map((graph) => ({ _tag: "Readable" as const, graph })),
     Effect.catchTags({
       "FixtureReader.FixtureReadError": (failure) =>
-        unreadableTaskFacts(
-          graphOperation.operationId,
-          failure._tag,
-          failure.detail,
-          graphOperation.target,
-          requestId,
-          subject
-        ),
+        unreadableTaskFacts(graphOperation.operationId, failure._tag, failure.detail, graphOperation.target, prepared),
       "TaskDag.GraphProjectionError": (failure) =>
         unreadableTaskFacts(
           graphOperation.operationId,
           failure._tag,
           JSON.stringify(failure.issues),
           graphOperation.target,
-          requestId,
-          subject
+          prepared
         ),
       "TrackerGraphReader.AdapterReadError": (failure) =>
-        unreadableTaskFacts(
-          graphOperation.operationId,
-          failure._tag,
-          failure.detail,
-          graphOperation.target,
-          requestId,
-          subject
-        ),
+        unreadableTaskFacts(graphOperation.operationId, failure._tag, failure.detail, graphOperation.target, prepared),
       "TrackerGraphReader.TrackerReadError": (failure) =>
-        unreadableTaskFacts(
-          graphOperation.operationId,
-          failure._tag,
-          failure.detail,
-          graphOperation.target,
-          requestId,
-          subject
-        ),
+        unreadableTaskFacts(graphOperation.operationId, failure._tag, failure.detail, graphOperation.target, prepared),
       TaskTrackerKnowledgeUnavailable: (failure) =>
         Effect.fail(
           new AttemptRestartAuthorityContradiction({
@@ -300,11 +287,8 @@ const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (
   return { ...prepared, _tag: "RestartGraphFacts" as const, graphOperation }
 })
 
-const readRestartTaskFacts = Effect.fn("AttemptRestart.readTaskFacts")(function* (
-  facts: RestartGraphFacts,
-  requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject
-) {
+const readRestartTaskFacts = Effect.fn("AttemptRestart.readTaskFacts")(function* (facts: RestartGraphFacts) {
+  const { requestId, subject } = restartRequestFor(facts)
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const records = yield* journal.read(subject.plannedAttempt.runId)
@@ -328,8 +312,7 @@ const readRestartTaskFacts = Effect.fn("AttemptRestart.readTaskFacts")(function*
           failure._tag,
           failure.detail,
           specificationOperation.target,
-          requestId,
-          subject
+          facts
         ),
       "TrackerGraphReader.AdapterReadError": (failure) =>
         unreadableTaskFacts(
@@ -337,8 +320,7 @@ const readRestartTaskFacts = Effect.fn("AttemptRestart.readTaskFacts")(function*
           failure._tag,
           failure.detail,
           specificationOperation.target,
-          requestId,
-          subject
+          facts
         ),
       "TrackerGraphReader.TrackerReadError": (failure) =>
         unreadableTaskFacts(
@@ -346,8 +328,7 @@ const readRestartTaskFacts = Effect.fn("AttemptRestart.readTaskFacts")(function*
           failure._tag,
           failure.detail,
           specificationOperation.target,
-          requestId,
-          subject
+          facts
         ),
       TaskTrackerKnowledgeUnavailable: (failure) =>
         Effect.fail(
@@ -369,11 +350,8 @@ const readRestartTaskFacts = Effect.fn("AttemptRestart.readTaskFacts")(function*
   return { ...facts, _tag: "RestartTaskFacts" as const, specification, specificationOperation }
 })
 
-const readRestartClaim = Effect.fn("AttemptRestart.readClaim")(function* (
-  facts: RestartTaskFacts,
-  requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject
-) {
+const readRestartClaim = Effect.fn("AttemptRestart.readClaim")(function* (facts: RestartTaskFacts) {
+  const { requestId, subject } = restartRequestFor(facts)
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const records = yield* journal.read(subject.plannedAttempt.runId)
@@ -412,11 +390,8 @@ const readRestartClaim = Effect.fn("AttemptRestart.readClaim")(function* (
   return { ...facts, _tag: "RestartClaimFacts" as const, claimOperation, expectedClaim }
 })
 
-const readRestartWorktree = Effect.fn("AttemptRestart.readWorktree")(function* (
-  facts: RestartClaimFacts,
-  requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject
-) {
+const readRestartWorktree = Effect.fn("AttemptRestart.readWorktree")(function* (facts: RestartClaimFacts) {
+  const { requestId, subject } = restartRequestFor(facts)
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const records = yield* journal.read(subject.plannedAttempt.runId)
@@ -437,7 +412,7 @@ const readRestartWorktree = Effect.fn("AttemptRestart.readWorktree")(function* (
   const worktreeRead = yield* interpreter.readTaskWorktree(worktreeOperation).pipe(
     Effect.map((worktree) => ({ _tag: "Readable" as const, worktree })),
     Effect.catchTag("GitWorktreeReadFailure", (failure) =>
-      recordRestartAuthorityReadFailure(worktreeOperation.operationId, failure, requestId, subject).pipe(
+      recordRestartAuthorityReadFailure(worktreeOperation.operationId, failure, facts).pipe(
         Effect.as({ _tag: "Unreadable" as const })
       )
     )
@@ -454,11 +429,11 @@ const readRestartWorktree = Effect.fn("AttemptRestart.readWorktree")(function* (
 
 const successorIsExact = (
   successor: PlannedTaskAttempt,
-  facts: Pick<RestartTaskFacts, "specification">,
-  subject: AttemptChoiceSubject,
+  facts: Pick<RestartTaskFacts, "application" | "specification">,
   targetHeadSha: GitCommitSha
-): boolean =>
-  [
+): boolean => {
+  const { subject } = restartRequestFor(facts)
+  return [
     successor.runId === subject.plannedAttempt.runId,
     successor.taskId === subject.plannedAttempt.taskId,
     successor.taskRevision === facts.specification.fingerprint,
@@ -467,17 +442,19 @@ const successorIsExact = (
     successor.branch !== subject.plannedAttempt.branch,
     successor.worktree !== subject.plannedAttempt.worktree
   ].every(Boolean)
+}
 
 const replacementDispositionBeforeAllocation = Effect.fn("AttemptRestart.dispositionBeforeAllocation")(function* (
   records: ReadonlyArray<JournalRecord>,
-  facts: RestartAuthorityFacts,
-  requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject
+  facts: RestartAuthorityFacts
 ) {
+  const { requestId, subject } = restartRequestFor(facts)
   const recorded = exactRecordedReplacement(records, requestId, subject)
-  if (recorded === false) return yield* new AttemptRestartChoiceContradiction({ requestId, subject })
-  if (recorded?.event._tag === "PlannedAttemptReplaced") {
-    return { _tag: "PlannedAttemptReplacementRecorded" as const, replacement: recorded }
+  if (recorded._tag === "Contradictory") {
+    return yield* new AttemptRestartChoiceContradiction({ requestId, subject })
+  }
+  if (recorded._tag === "Exact") {
+    return { _tag: "PlannedAttemptReplacementRecorded" as const, replacement: recorded.replacement }
   }
   return restartChoiceWasInvalidatedByLaterSpecification(records, facts.application.position, subject)
     ? { _tag: "AttemptRestartRejected" as const, reason: "NewFingerprintChoiceRequired" as const }
@@ -486,10 +463,9 @@ const replacementDispositionBeforeAllocation = Effect.fn("AttemptRestart.disposi
 
 const recordAttemptReplacement = Effect.fn("AttemptRestart.recordReplacement")(function* (
   facts: RestartAuthorityFacts,
-  requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject,
   integrationTarget: IntegrationTarget
 ) {
+  const { requestId, subject } = restartRequestFor(facts)
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   let records = yield* journal.read(subject.plannedAttempt.runId)
@@ -507,7 +483,7 @@ const recordAttemptReplacement = Effect.fn("AttemptRestart.recordReplacement")(f
   const targetRead = yield* interpreter.readTargetLineage(targetOperation).pipe(
     Effect.map((target) => ({ _tag: "Readable" as const, target })),
     Effect.catchTag("GitTargetLineageReadFailure", (failure) =>
-      recordRestartAuthorityReadFailure(targetOperation.operationId, failure, requestId, subject).pipe(
+      recordRestartAuthorityReadFailure(targetOperation.operationId, failure, facts).pipe(
         Effect.as({ _tag: "Unreadable" as const })
       )
     )
@@ -518,7 +494,7 @@ const recordAttemptReplacement = Effect.fn("AttemptRestart.recordReplacement")(f
   const target = targetRead.target
 
   records = yield* journal.read(subject.plannedAttempt.runId)
-  const disposition = yield* replacementDispositionBeforeAllocation(records, facts, requestId, subject)
+  const disposition = yield* replacementDispositionBeforeAllocation(records, facts)
   if (disposition !== undefined) return disposition
   const planner = yield* PlannedTaskAttemptPlanner
   const allocator = yield* OperationIdAllocator
@@ -526,11 +502,13 @@ const recordAttemptReplacement = Effect.fn("AttemptRestart.recordReplacement")(f
     ({ plannedAttempt }) => plannedAttempt.taskId === subject.plannedAttempt.taskId
   ).length
   const successor = yield* planner.plan(
-    facts.specification,
-    target.observation.targetHeadSha,
-    PlannedTaskAttemptOrdinal.make(priorRecordedAttemptCount)
+    PlannedTaskAttemptPlanRequest.ExactReplacement({
+      baseSha: target.observation.targetHeadSha,
+      ordinal: PlannedTaskAttemptOrdinal.make(priorRecordedAttemptCount),
+      specification: facts.specification
+    })
   )
-  if (!successorIsExact(successor, facts, subject, target.observation.targetHeadSha)) {
+  if (!successorIsExact(successor, facts, target.observation.targetHeadSha)) {
     return yield* new AttemptRestartAuthorityContradiction({
       detail: "successor planner did not return a distinct exact F2/H2 attempt",
       requestId,
@@ -584,15 +562,15 @@ const advanceAttemptRestartUnserialized = Effect.fn("AttemptRestart.advanceUnser
 ) {
   const prepared = yield* prepareAttemptRestart(requestId, subject, permit)
   if (prepared._tag !== "RestartPrepared") return prepared
-  const graphFacts = yield* readRestartGraph(prepared, requestId, subject)
+  const graphFacts = yield* readRestartGraph(prepared)
   if (graphFacts._tag !== "RestartGraphFacts") return graphFacts
-  const taskFacts = yield* readRestartTaskFacts(graphFacts, requestId, subject)
+  const taskFacts = yield* readRestartTaskFacts(graphFacts)
   if (taskFacts._tag !== "RestartTaskFacts") return taskFacts
-  const claimFacts = yield* readRestartClaim(taskFacts, requestId, subject)
+  const claimFacts = yield* readRestartClaim(taskFacts)
   if (claimFacts._tag !== "RestartClaimFacts") return claimFacts
-  const authorityFacts = yield* readRestartWorktree(claimFacts, requestId, subject)
+  const authorityFacts = yield* readRestartWorktree(claimFacts)
   if (authorityFacts._tag !== "RestartAuthorityFacts") return authorityFacts
-  return yield* recordAttemptReplacement(authorityFacts, requestId, subject, integrationTarget)
+  return yield* recordAttemptReplacement(authorityFacts, integrationTarget)
 })
 
 export const advanceAttemptRestartWithPermit = (

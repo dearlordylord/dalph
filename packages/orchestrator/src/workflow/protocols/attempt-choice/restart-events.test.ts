@@ -2,6 +2,9 @@ import { it } from "@effect/vitest"
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -12,15 +15,28 @@ import {
 } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
-import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
+import { GitWorktreeReadFailure, PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
+import { GitTargetLineageReadFailure } from "../../../authorities/git/target-lineage.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
+import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { decodeJournalEvent, encodeJournalEvent } from "../../../workflow-journal/event-codec.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { makeTaskAttemptPlanOperation } from "../../registry/operation.js"
+import {
+  makeTargetLineageObservationOperation,
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimObservationOperation,
+  makeTaskWorktreeObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../registry/operation.js"
 import { AttemptChoiceRequestId } from "./events.js"
-import { PlannedAttemptReplacedEvent, PlannedAttemptReplacementWitness } from "./replacement-events.js"
+import {
+  AttemptRestartTaskFactsReadFailure,
+  PlannedAttemptReplacedEvent,
+  PlannedAttemptReplacementWitness,
+  restartAuthorityReadOperationMatches
+} from "./replacement-events.js"
 import { PlannedAttemptExecutorReportOrdinal } from "../planned-attempt-executor-work/events.js"
 
 const runId = RunId.make("restart-event-run")
@@ -128,3 +144,50 @@ it.effect("rejects a successor plan that omits retained K1 from its causal histo
     })
   })
 )
+
+it("matches all exact Restart read-failure operations and rejects a different boundary", () => {
+  const trackerTarget = FixtureTarget.make("restart-event-target")
+  const integrationTarget = IntegrationTarget.make({
+    repository: GitRepositoryLocator.make("/repositories/restart-event.git"),
+    ref: IntegrationTargetRef.make("refs/heads/main")
+  })
+  const graphOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("restart-event-graph"),
+    trackerTarget,
+    [],
+    [taskId]
+  )
+  const taskFailure = AttemptRestartTaskFactsReadFailure.make({
+    detail: "tracker unreadable",
+    source: "FixtureReader.FixtureReadError",
+    target: trackerTarget
+  })
+  const worktreeOperation = makeTaskWorktreeObservationOperation({
+    operationId: OperationId.make("restart-event-worktree"),
+    plannedAttempt: p1,
+    predecessorOperationIds: []
+  })
+  const worktreeFailure = new GitWorktreeReadFailure({ detail: "Git unreadable", worktree: p1.worktree })
+  const targetOperation = makeTargetLineageObservationOperation({
+    integrationTarget,
+    operationId: OperationId.make("restart-event-target-lineage"),
+    plannedAttempt: p1,
+    predecessorOperationIds: []
+  })
+  const targetFailure = new GitTargetLineageReadFailure({
+    detail: "target unreadable",
+    plannedBaseSha: p1.baseSha,
+    target: integrationTarget
+  })
+
+  expect(restartAuthorityReadOperationMatches(graphOperation, taskFailure, subject)).toBe(true)
+  expect(restartAuthorityReadOperationMatches(worktreeOperation, worktreeFailure, subject)).toBe(true)
+  expect(restartAuthorityReadOperationMatches(targetOperation, targetFailure, subject)).toBe(true)
+  expect(
+    restartAuthorityReadOperationMatches(
+      makeTaskClaimObservationOperation(OperationId.make("restart-event-claim-read"), trackerTarget, taskId),
+      taskFailure,
+      subject
+    )
+  ).toBe(false)
+})

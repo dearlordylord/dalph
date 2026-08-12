@@ -1,8 +1,8 @@
-import { GitCommitSha } from "@dalph/contracts"
-import { Schema } from "effect"
+import { GitCommitSha, plannedTaskAttemptEquivalence } from "@dalph/contracts"
+import { Match, Schema } from "effect"
 import { GitTargetLineageReadFailure } from "../../../authorities/git/target-lineage.js"
 import { GitWorktreeReadFailure, PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
-import { TrackerTarget } from "../../../authorities/task-tracker/target.js"
+import { taskTrackerTargetKey, TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -62,6 +62,61 @@ export const AttemptRestartAuthorityReadFailure = Schema.Union([
   GitTargetLineageReadFailure
 ])
 export type AttemptRestartAuthorityReadFailure = typeof AttemptRestartAuthorityReadFailure.Type
+
+const restartTaskFactsReadOperationMatches = (
+  operation: WorkflowOperation,
+  failure: AttemptRestartTaskFactsReadFailure,
+  subject: AttemptChoiceSubject
+): boolean => {
+  const taskId = subject.plannedAttempt.taskId
+  if (operation._tag === "ReadTrackerGraph") {
+    return (
+      operation.readShape.explicitlyCoveredTaskIds.includes(taskId) &&
+      taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(failure.target)
+    )
+  }
+  return (
+    operation._tag === "ReadTaskWorkSpecification" &&
+    operation.taskId === taskId &&
+    taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(failure.target)
+  )
+}
+
+const restartWorktreeReadOperationMatches = (
+  operation: WorkflowOperation,
+  failure: GitWorktreeReadFailure,
+  subject: AttemptChoiceSubject
+): boolean =>
+  operation._tag === "ReadTaskWorktree" &&
+  failure.worktree === subject.plannedAttempt.worktree &&
+  plannedTaskAttemptEquivalence(operation.plannedAttempt, subject.plannedAttempt)
+
+const restartTargetReadOperationMatches = (
+  operation: WorkflowOperation,
+  failure: GitTargetLineageReadFailure,
+  subject: AttemptChoiceSubject
+): boolean =>
+  operation._tag === "ReadTargetLineage" &&
+  failure.plannedBaseSha === subject.plannedAttempt.baseSha &&
+  plannedTaskAttemptEquivalence(operation.plannedAttempt, subject.plannedAttempt) &&
+  operation.integrationTarget.repository === failure.target.repository &&
+  operation.integrationTarget.ref === failure.target.ref
+
+/**
+ * Matches one Restart read failure to the exact typed task or Git operation
+ * that could have produced it. Chronology remains owned by each consuming
+ * journal or occurrence boundary.
+ */
+export const restartAuthorityReadOperationMatches = (
+  operation: WorkflowOperation,
+  failure: AttemptRestartAuthorityReadFailure,
+  subject: AttemptChoiceSubject
+): boolean =>
+  Match.valueTags(failure, {
+    AttemptRestartTaskFactsReadFailure: (failure) => restartTaskFactsReadOperationMatches(operation, failure, subject),
+    GitTargetLineageReadFailure: (failure) => restartTargetReadOperationMatches(operation, failure, subject),
+    GitWorktreeReadFailure: (failure) => restartWorktreeReadOperationMatches(operation, failure, subject)
+  })
 
 /**
  * Dalph durably observed one typed Restart authority-read failure. The exact

@@ -16,13 +16,22 @@ import { expect } from "vitest"
 import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
+import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { decodeJournalEvent, encodeJournalEvent } from "../../../workflow-journal/event-codec.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { makeTaskAttemptPlanOperation } from "../../registry/operation.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTaskWorkSpecificationObservationOperation
+} from "../../registry/operation.js"
 import { PlannedAttemptExecutorReportOrdinal } from "../planned-attempt-executor-work/events.js"
 import { AttemptChoiceRequestId } from "./events.js"
-import { PlannedAttemptReplacedEvent, PlannedAttemptReplacementWitness } from "./replacement-events.js"
+import {
+  AttemptRestartTaskFactsReadFailure,
+  PlannedAttemptReplacedEvent,
+  PlannedAttemptReplacementWitness,
+  restartAuthorityReadOperationMatches
+} from "./replacement-events.js"
 
 const runId = RunId.make("restart-event-property-run")
 const taskId = TaskId.make("restart-event-property-task")
@@ -133,3 +142,29 @@ it.effect("round-trips generated exact replacement identities and Git heads", ()
     )
   )
 )
+
+it("matches only the generated task read that produced an exact Restart failure", () => {
+  fc.assert(
+    fc.property(fc.integer({ min: 1, max: 10_000 }), (identity) => {
+      const target = FixtureTarget.make(`restart-event-target-${identity}`)
+      const operation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make(`restart-event-specification-${identity}`),
+        target,
+        taskId
+      )
+      const failure = AttemptRestartTaskFactsReadFailure.make({
+        detail: "generated unreadable task facts",
+        source: "FixtureReader.FixtureReadError",
+        target
+      })
+      const wrongTaskOperation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make(`restart-event-wrong-specification-${identity}`),
+        target,
+        TaskId.make(`restart-event-other-task-${identity}`)
+      )
+
+      expect(restartAuthorityReadOperationMatches(operation, failure, subject)).toBe(true)
+      expect(restartAuthorityReadOperationMatches(wrongTaskOperation, failure, subject)).toBe(false)
+    })
+  )
+})

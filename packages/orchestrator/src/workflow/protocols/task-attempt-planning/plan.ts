@@ -1,5 +1,5 @@
 // @effect-diagnostics lazyEffect:off
-import { Context, Crypto, Effect, Layer, Ref, Schema } from "effect"
+import { Context, Crypto, Data, Effect, Layer, Ref, Schema } from "effect"
 import { type GitCommitSha, type RunId, type TaskExecutorLocator } from "@dalph/contracts"
 import { AttemptId, PlannedTaskAttempt, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import { OperationId } from "../../identity.js"
@@ -50,12 +50,19 @@ export const PlannedTaskAttemptOrdinal = Schema.Int.check(Schema.isGreaterThanOr
 )
 export type PlannedTaskAttemptOrdinal = typeof PlannedTaskAttemptOrdinal.Type
 
+/** One fresh plan or one replacement whose exact Base SHA and durable task-local slot travel together. */
+export type PlannedTaskAttemptPlanRequest = Data.TaggedEnum<{
+  ExactReplacement: {
+    readonly baseSha: GitCommitSha
+    readonly ordinal: PlannedTaskAttemptOrdinal
+    readonly specification: TaskWorkSpecification
+  }
+  Fresh: { readonly specification: TaskWorkSpecification }
+}>
+export const PlannedTaskAttemptPlanRequest = Data.taggedEnum<PlannedTaskAttemptPlanRequest>()
+
 export interface PlannedTaskAttemptPlannerService {
-  readonly plan: (
-    specification: TaskWorkSpecification,
-    baseSha?: GitCommitSha,
-    ordinal?: PlannedTaskAttemptOrdinal
-  ) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>
+  readonly plan: (request: PlannedTaskAttemptPlanRequest) => Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError>
 }
 
 /** Selects one exact Base SHA and worktree/branch locator set for a task attempt. */
@@ -77,26 +84,25 @@ export const deterministicPlannedTaskAttemptLayer = (options: DeterministicPlann
     Effect.gen(function* () {
       const nextAttemptOrdinal = yield* Ref.make(0)
       return PlannedTaskAttemptPlanner.of({
-        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(
-          function* (specification, selectedBaseSha, selectedOrdinal) {
-            const ordinal = yield* Ref.modify(nextAttemptOrdinal, (current) => {
-              const selected = selectedOrdinal === undefined ? current : Number(selectedOrdinal)
-              return [selected, Math.max(current, selected + 1)] as const
-            })
-            const attemptId = AttemptId.make(`attempt:${specification.taskId}:${ordinal}`)
-            const resourceSegment = `attempt-${encodeURIComponent(specification.taskId)}-${ordinal}`
-            return PlannedTaskAttempt.make({
-              attemptId,
-              baseSha: selectedBaseSha ?? options.baseSha,
-              branch: TaskBranchRef.make(`refs/heads/dalph/${resourceSegment}`),
-              executor: options.executor,
-              runId: options.runId,
-              taskId: specification.taskId,
-              taskRevision: specification.fingerprint,
-              worktree: WorktreeLocator.make(`${options.worktreeRoot}/${resourceSegment}`)
-            })
-          }
-        )
+        plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function* (request) {
+          const ordinal = yield* Ref.modify(nextAttemptOrdinal, (current) => {
+            const selected = request._tag === "Fresh" ? current : Number(request.ordinal)
+            return [selected, Math.max(current, selected + 1)] as const
+          })
+          const specification = request.specification
+          const attemptId = AttemptId.make(`attempt:${specification.taskId}:${ordinal}`)
+          const resourceSegment = `attempt-${encodeURIComponent(specification.taskId)}-${ordinal}`
+          return PlannedTaskAttempt.make({
+            attemptId,
+            baseSha: request._tag === "Fresh" ? options.baseSha : request.baseSha,
+            branch: TaskBranchRef.make(`refs/heads/dalph/${resourceSegment}`),
+            executor: options.executor,
+            runId: options.runId,
+            taskId: specification.taskId,
+            taskRevision: specification.fingerprint,
+            worktree: WorktreeLocator.make(`${options.worktreeRoot}/${resourceSegment}`)
+          })
+        })
       })
     })
   )
