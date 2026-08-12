@@ -6561,6 +6561,7 @@ it.effect(
         CompletionClaimReplaced: true,
         CompletionClaimDeletionIntended: true,
         CompletionClaimDeletionAttemptIntended: true,
+        CompletionClaimDeletionReadObserved: true,
         CompletionClaimDeleted: true,
         IntegrationFinalitySettled: true,
         CompletionTaskIntended: true,
@@ -7375,6 +7376,7 @@ it.effect("replays definite completion-claim boundary rejections as terminal typ
               "TaskTrackerReadIntentRecorded",
               "TaskTrackerFactsObserved",
               "CompletionClaimDeletionIntended",
+              "CompletionClaimDeletionReadObserved",
               "CompletionClaimDeletionAttemptIntended"
             ],
             readCalls: 2,
@@ -7507,6 +7509,16 @@ it.effect("deletes only the exact completion claim after focused task success", 
       )
     ).toBe(true)
     expect(run.journalTags).toContain("IntegrationFinalitySettled")
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(recorded.entries).toContainEqual(
+      expect.objectContaining({
+        _tag: "CompletionClaimDeletionReadObserved",
+        observation: replaced.claim,
+        purpose: { _tag: "BeforeDeletionAttempt", attemptOrdinal: 1, readOrdinal: 1 }
+      })
+    )
+    expectRecordedRoundTrip(run.records, recorded)
+    expect(renderRecordedCassetteLyrics(recorded)).toContain("completion-claim cleanup BeforeDeletionAttempt")
   })
 )
 

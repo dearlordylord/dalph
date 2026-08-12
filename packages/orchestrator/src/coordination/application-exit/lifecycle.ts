@@ -4,6 +4,7 @@ import type {
   InterruptibleWorkflowBoundaryFamily,
   InterruptibleWorkflowBoundaryIntent
 } from "../../workflow/interpretation/interpreter.js"
+import { continuesCompletionClaimCleanup } from "../../workflow/protocols/integration-finality/cleanup-boundary-transition.js"
 import { ApplicationExiting, type ApplicationExitResult, type ForwardOwnerKind } from "./lifecycle-decision.js"
 
 type ForwardOwnerId = number
@@ -40,6 +41,17 @@ interface ApplicationExitLifecycleStateFields {
 type ApplicationExitLifecycleState =
   | (ApplicationExitLifecycleStateFields & { readonly phase: "Serving" })
   | (ApplicationExitLifecycleStateFields & { readonly cutoffAt: bigint; readonly phase: "Exiting" })
+
+type RegisteredInterruptibleOwner = Extract<ForwardOwnerState, { readonly kind: "InterruptibleBoundary" }>
+
+const registeredInterruptibleOwner = (
+  owner: ForwardOwnerState | undefined
+): RegisteredInterruptibleOwner | undefined =>
+  owner?.phase === "Registered" && owner.kind === "InterruptibleBoundary" ? owner : undefined
+
+const boundaryAccepts = (owner: RegisteredInterruptibleOwner, intent: InterruptibleBoundaryIntent): boolean =>
+  owner.boundary._tag === "NoBoundaryCall" ||
+  (owner.boundary._tag === "BoundaryResultRecorded" && continuesCompletionClaimCleanup(owner.boundary.intent, intent))
 
 export interface ApplicationExitRequest {
   readonly cutoffAt: bigint
@@ -163,23 +175,12 @@ export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.
   ): Effect.Effect<B, E | E2, R | R2> =>
     Effect.gen(function* () {
       const admitted = yield* Ref.modify(state, (current) => {
-        const owner = current.owners.get(ownerId)
-        const continuesSameIntent =
-          owner?.phase === "Registered" &&
-          owner.kind === "InterruptibleBoundary" &&
-          owner.boundary._tag === "BoundaryResultRecorded" &&
-          owner.boundary.intent === intent &&
-          intent.boundaryCallSequence === "SameIntentCalls"
-        if (
-          current.phase !== "Serving" ||
-          owner?.phase !== "Registered" ||
-          owner.kind !== "InterruptibleBoundary" ||
-          (owner.boundary._tag !== "NoBoundaryCall" && !continuesSameIntent)
-        ) {
+        const admissibleOwner = registeredInterruptibleOwner(current.owners.get(ownerId))
+        if (current.phase !== "Serving" || admissibleOwner === undefined || !boundaryAccepts(admissibleOwner, intent)) {
           return [false, current] as const
         }
         const owners = new Map(current.owners).set(ownerId, {
-          ...owner,
+          ...admissibleOwner,
           boundary: InterruptibleBoundaryOwnerSnapshot.AwaitingBoundaryResult({ intent })
         })
         return [true, { ...current, owners }] as const

@@ -59,6 +59,7 @@ import {
   type CompletionTaskRequest,
   type CompletionTaskRequestLookup,
   type CompletionClaimObservation,
+  type CompletionClaimDeletionRequest,
   type CompletionSuccessObservation,
   type FocusedTaskCompletionFacts,
   type FocusedCompletedTaskObservation,
@@ -443,6 +444,15 @@ const renameCandidateAgentReport = (
   )
 }
 
+const renameCompletionClaimDeletionRequest = (
+  request: CompletionClaimDeletionRequest,
+  maps: IdentityRenamingMaps
+): CompletionClaimDeletionRequest => ({
+  claim: renameCompletionTaskClaim(request.claim, maps),
+  operationId: renamed(request.operationId, maps.operationIds),
+  successObservation: renameCompletionSuccessObservation(request.successObservation, maps)
+})
+
 // eslint-disable-next-line complexity -- Distinct worktree facts carry different generated locators and require exhaustive renaming.
 const renamePlannedAttemptWorktreeObservation = (
   observation: PlannedAttemptWorktreeObservation,
@@ -822,6 +832,15 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           operationId: renamed(entry.operationId, maps.operationIds),
           successObservation: renameCompletionSuccessObservation(entry.successObservation, maps)
+        }),
+      CompletionClaimDeletionReadObserved: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "CompletionClaimDeletionReadObserved",
+          observation: renameCompletionClaimObservation(entry.observation, maps),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          purpose: entry.purpose,
+          replacementOperationId: renamed(entry.replacementOperationId, maps.operationIds),
+          request: renameCompletionClaimDeletionRequest(entry.request, maps)
         }),
       CompletionClaimDeleted: (entry) =>
         completeFields<typeof entry>({

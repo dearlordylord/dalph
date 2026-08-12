@@ -418,6 +418,7 @@ const nonProjectedJournalEventKinds = {
   CompletionClaimDeletionIntended: true,
   CompletionClaimDeletionAttemptIntended: true,
   CompletionClaimDeleted: true,
+  CompletionClaimDeletionReadObserved: true,
   IntegrationFinalitySettled: true,
   CompletionTaskIntended: true,
   CompletionTaskAttemptIntended: true,

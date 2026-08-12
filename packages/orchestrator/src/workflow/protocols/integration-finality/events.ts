@@ -16,6 +16,7 @@ import {
 import { EvidenceReference } from "../target-verification/evidence-store.js"
 import {
   CompletionClaimDeletionRequest,
+  CompletionClaimObservation,
   CompletionClaimReplacementRequest,
   CompletionSuccessObservation,
   completionTaskClaimEquals,
@@ -195,6 +196,12 @@ export const CompletionClaimRequestOrdinal = Schema.Int.check(Schema.isGreaterTh
 )
 export type CompletionClaimRequestOrdinal = typeof CompletionClaimRequestOrdinal.Type
 
+/** Positive restart-distinct ordinal for one cleanup reread serving a numbered deletion attempt. */
+export const CompletionClaimCleanupReadOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand("CompletionClaimCleanupReadOrdinal")
+)
+export type CompletionClaimCleanupReadOrdinal = typeof CompletionClaimCleanupReadOrdinal.Type
+
 /** The fixed request bound for each completion-claim mutation. */
 export const completionClaimRequestLimit = 3 as const // eslint-disable-line no-magic-numbers
 export const CompletionClaimRequestLimit = Schema.Literal(completionClaimRequestLimit)
@@ -249,6 +256,45 @@ export const CompletionClaimDeletionAttemptIntendedEvent = Schema.TaggedStruct(
   }
 )
 export type CompletionClaimDeletionAttemptIntendedEvent = typeof CompletionClaimDeletionAttemptIntendedEvent.Type
+
+/** Why Dalph reread the exact completion claim during its bounded deletion cleanup. */
+export const CompletionClaimDeletionReadPurpose = Schema.TaggedUnion({
+  BeforeDeletionAttempt: {
+    attemptOrdinal: CompletionClaimRequestOrdinal,
+    readOrdinal: CompletionClaimCleanupReadOrdinal
+  },
+  AfterDeletionAttemptsExhausted: {
+    attemptOrdinal: CompletionClaimRequestOrdinal,
+    readOrdinal: CompletionClaimCleanupReadOrdinal
+  }
+}).check(
+  Schema.makeFilter((purpose) =>
+    purpose._tag !== "AfterDeletionAttemptsExhausted" || purpose.attemptOrdinal === completionClaimRequestLimit
+      ? undefined
+      : "exhausted completion-claim cleanup read must follow the final bounded attempt"
+  )
+)
+export type CompletionClaimDeletionReadPurpose = typeof CompletionClaimDeletionReadPurpose.Type
+
+/** The exact claim state returned by one cleanup reread before deletion or terminal reconciliation. */
+export const CompletionClaimDeletionReadObservedEvent = Schema.TaggedStruct("CompletionClaimDeletionReadObserved", {
+  observation: CompletionClaimObservation,
+  purpose: CompletionClaimDeletionReadPurpose,
+  replacementOperationId: OperationId,
+  request: CompletionClaimDeletionRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+}).check(
+  Schema.makeFilter((event) => {
+    const observedTaskId =
+      event.observation._tag === "CompletionTaskClaim"
+        ? event.observation.plannedAttempt.taskId
+        : event.observation.taskId
+    return observedTaskId === event.request.claim.plannedAttempt.taskId
+      ? undefined
+      : "completion-claim cleanup read must observe the exact requested task"
+  })
+)
+export type CompletionClaimDeletionReadObservedEvent = typeof CompletionClaimDeletionReadObservedEvent.Type
 
 /** The deletion response or a later fresh read proved the exact completion claim absent. */
 export const CompletionClaimDeletedEvent = Schema.TaggedStruct("CompletionClaimDeleted", {
@@ -373,6 +419,7 @@ export type CompletionClaimFinalityJournalEvent = typeof CompletionClaimFinality
 /** Closed completion-claim and task-settlement event vocabulary. */
 export const IntegrationFinalityJournalEvent = Schema.Union([
   CompletionClaimFinalityJournalEvent,
+  CompletionClaimDeletionReadObservedEvent,
   CompletionTaskIntendedEvent,
   CompletionTaskAttemptIntendedEvent,
   CompletionTaskAcknowledgedEvent,

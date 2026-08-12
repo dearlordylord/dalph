@@ -11,6 +11,17 @@ import {
 import { makeApplicationExitLifecycle } from "./lifecycle.js"
 import { OperationId } from "../../workflow/identity.js"
 import { InterruptibleWorkflowBoundaryIntent } from "../../workflow/interpretation/interpreter.js"
+import { CompletionClaimCleanupBoundaryCall } from "../../workflow/interpretation/interruptible-boundary.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import {
+  CompletionClaimRequestOrdinal,
+  completionClaimDeletionRequestFor,
+  completionClaimReplacementOperationIdFor
+} from "../../workflow/protocols/integration-finality/events.js"
+import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { TaskId } from "@dalph/contracts"
+import { makeTaskClaimReleaseOperation, TaskClaimReleaseAuthority } from "../../workflow/registry/operation.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import {
   ApplicationExitDrainFailure,
@@ -22,6 +33,33 @@ import {
 } from "./application-shell.js"
 
 const defaultOwnership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+
+const atomicCleanupClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("application-exit-atomic-cleanup-acquisition"),
+  owner: ClaimOwner.make("dalph"),
+  taskId: TaskId.make("application-exit-atomic-cleanup-task"),
+  token: ClaimToken.make("application-exit-atomic-cleanup-token")
+})
+const atomicTaskClaimCleanup = InterruptibleWorkflowBoundaryIntent.TaskClaimCleanup({
+  family: "TaskTracker",
+  operation: makeTaskClaimReleaseOperation({
+    authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+    predecessorOperationIds: [atomicCleanupClaim.operationId],
+    release: TaskClaimRelease.make({
+      claim: atomicCleanupClaim,
+      operationId: OperationId.make("application-exit-atomic-cleanup-release")
+    })
+  })
+})
+const atomicCompletionClaimCleanup = InterruptibleWorkflowBoundaryIntent.CompletionClaimCleanup({
+  call: CompletionClaimCleanupBoundaryCall.DeleteAttempt({ attemptOrdinal: CompletionClaimRequestOrdinal.make(1) }),
+  family: "TaskTracker",
+  replacementOperationId: completionClaimReplacementOperationIdFor(integrationFinalityFixture.claim),
+  request: completionClaimDeletionRequestFor(
+    integrationFinalityFixture.claim,
+    integrationFinalityFixture.successObservation
+  )
+})
 
 const successfulDrain = (
   record: (event: string) => Effect.Effect<void>,
@@ -186,6 +224,47 @@ it.effect("coalesces repeated Exit requests without resetting the fixed five-sec
       expect(firstResult).toEqual(repeatedResult)
       expect(firstResult).toEqual(ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 }))
       expect(yield* Ref.get(processEnds)).toEqual([{ _tag: "RequestForcedTermination", status: 1 }])
+    })
+  )
+)
+
+it.effect("forces process death when either cleanup family is stuck recording an already-produced result", () =>
+  Effect.forEach([atomicTaskClaimCleanup, atomicCompletionClaimCleanup], (intent) =>
+    Effect.gen(function* () {
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const owner = yield* lifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
+      if (owner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong atomic cleanup owner kind")
+      const atomicRecordingEntered = yield* Deferred.make<void>()
+      const allowAtomicRecording = yield* Deferred.make<void>()
+      const processEnds = yield* Ref.make<ReadonlyArray<ApplicationProcessEndDecision>>([])
+      const cleanup = yield* owner
+        .run(intent, Effect.succeed("already-produced"), (result) =>
+          Deferred.succeed(atomicRecordingEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(allowAtomicRecording)),
+            Effect.as(result)
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(atomicRecordingEntered)
+      expect(yield* owner.snapshot).toEqual({ _tag: "BoundaryResultProduced", intent })
+      const boundary = yield* makeApplicationExitRequestBoundary(
+        lifecycle,
+        successfulDrain(() => Effect.void, lifecycle.awaitForwardOwnersReleased),
+        { requestEnd: (decision) => Ref.update(processEnds, (decisions) => [...decisions, decision]) }
+      )
+      const exiting = yield* boundary.requestExit.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust("5 seconds")
+
+      expect(yield* Fiber.join(exiting)).toEqual(
+        ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
+      )
+      expect(yield* Ref.get(processEnds)).toEqual([{ _tag: "RequestForcedTermination", status: 1 }])
+      expect(yield* owner.snapshot).toEqual({ _tag: "BoundaryResultProduced", intent })
+      yield* Deferred.succeed(allowAtomicRecording, undefined)
+      expect((yield* Fiber.await(cleanup))._tag).toBe("Failure")
+      expect(yield* owner.snapshot).toEqual({ _tag: "BoundaryResultRecorded", intent })
+      yield* owner.release
     })
   )
 )

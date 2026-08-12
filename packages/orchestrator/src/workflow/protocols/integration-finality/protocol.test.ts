@@ -6,6 +6,7 @@ import { InRunJournal, type JournalRecord } from "../../../workflow-journal/stor
 import {
   completionClaimDeletionAttemptIntentRecordKey,
   completionClaimDeletionIntentRecordKey,
+  completionClaimDeletionReadObservedRecordKey,
   completionClaimDeletedRecordKey,
   completionClaimReplacementAttemptIntentRecordKey,
   completionClaimReplacementIntentRecordKey,
@@ -21,6 +22,9 @@ import {
   CompletionClaimDeletionAttemptIntendedEvent,
   CompletionClaimDeletedEvent,
   CompletionClaimDeletionIntendedEvent,
+  CompletionClaimDeletionReadObservedEvent,
+  CompletionClaimDeletionReadPurpose,
+  CompletionClaimCleanupReadOrdinal,
   CompletionClaimDeletionFailure,
   type CompletionClaimDeletionRequest,
   type CompletionClaimObservation,
@@ -51,9 +55,12 @@ import {
 import { integrationFinalityFixture as fixture } from "./fixtures.js"
 import { makeApplicationExitLifecycle } from "../../../coordination/application-exit/lifecycle.js"
 import { InterruptibleWorkflowBoundaryIntent } from "../../interpretation/interpreter.js"
+import { CompletionClaimCleanupBoundaryCall } from "../../interpretation/interruptible-boundary.js"
+import { deriveIntegrationFinalityStateFor } from "./state.js"
 
 const deletionOperationFor = completionClaimDeletionOperationIdFor
 const replacementOperationFor = completionClaimReplacementOperationIdFor
+const firstCleanupReadOrdinal = CompletionClaimCleanupReadOrdinal.make(1)
 
 type MutationOutcome = "Applied" | "DefinitelyNotApplied" | "Unknown" | "UnknownApplied"
 
@@ -136,6 +143,16 @@ it("describes every completion-finality event with its stable record key", () =>
       successObservation: focusedSuccessObservation,
       version: workflowJournalEventVersion
     }),
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: fixture.claim,
+      purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+        attemptOrdinal: ordinal,
+        readOrdinal: firstCleanupReadOrdinal
+      }),
+      replacementOperationId,
+      request: completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation),
+      version: workflowJournalEventVersion
+    }),
     CompletionClaimDeletionAttemptIntendedEvent.make({
       attemptOrdinal: ordinal,
       claim: fixture.claim,
@@ -162,6 +179,13 @@ it("describes every completion-finality event with its stable record key", () =>
     completionClaimReplacementAttemptIntentRecordKey(replacementOperationId, ordinal),
     replacedKey(replacementOperationId),
     completionClaimDeletionIntentRecordKey(deletionOperationId),
+    completionClaimDeletionReadObservedRecordKey(
+      deletionOperationId,
+      CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+        attemptOrdinal: ordinal,
+        readOrdinal: firstCleanupReadOrdinal
+      })
+    ),
     completionClaimDeletionAttemptIntentRecordKey(deletionOperationId, ordinal),
     completionClaimDeletedRecordKey(deletionOperationId),
     integrationFinalitySettledRecordKey(fixture.claim.promotionCorrelation.requestId)
@@ -650,6 +674,7 @@ it.effect("deletes only the exact completion claim after actual fresh success an
       "TaskTrackerReadIntentRecorded",
       "TaskTrackerFactsObserved",
       "CompletionClaimDeletionIntended",
+      "CompletionClaimDeletionReadObserved",
       "CompletionClaimDeletionAttemptIntended",
       "CompletionClaimDeleted",
       "IntegrationFinalitySettled"
@@ -669,13 +694,26 @@ it.effect("deletes only the exact completion claim after actual fresh success an
 
 it.effect("records an already-produced completion-claim cleanup result under Exit and starts no later retry", () =>
   Effect.gen(function* () {
+    const replacementOperationId = replacementOperationFor(fixture.claim)
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
+      recordOf(
+        1,
+        targetPromotionObservedSuccessRecordKey(fixture.promotionCorrelation.requestId),
+        fixture.promotionSuccess
+      ),
+      recordOf(
+        1,
+        completionClaimReplacementIntentRecordKey(replacementOperationId),
+        CompletionClaimReplacementIntendedEvent.make({
+          claim: fixture.claim,
+          operationId: replacementOperationId,
+          version: workflowJournalEventVersion
+        })
+      ),
       replacementRecord(),
       ...focusedSuccessRecords
     ])
     const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
-    const replacementOperationId = replacementOperationFor(fixture.claim)
     const lifecycle = yield* makeApplicationExitLifecycle()
     const owner = yield* lifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
     if (owner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong cleanup owner kind")
@@ -684,6 +722,7 @@ it.effect("records an already-produced completion-claim cleanup result under Exi
     const deletionCalls = yield* Ref.make(0)
     const reads = yield* Ref.make(0)
     const boundaryCalls = yield* Ref.make(0)
+    const boundaryIntents = yield* Ref.make<ReadonlyArray<InterruptibleWorkflowBoundaryIntent>>([])
     const boundary = CompletionClaimBoundary.of({
       readTaskClaim: () =>
         Ref.updateAndGet(reads, (count) => count + 1).pipe(
@@ -699,15 +738,21 @@ it.effect("records an already-produced completion-claim cleanup result under Exi
         )
     })
     const intent = InterruptibleWorkflowBoundaryIntent.CompletionClaimCleanup({
+      call: CompletionClaimCleanupBoundaryCall.DeleteAttempt({ attemptOrdinal: CompletionClaimRequestOrdinal.make(1) }),
       family: "TaskTracker",
       replacementOperationId,
       request
     })
     const execution = {
-      run: <A, E, R, B, E2, R2>(call: Effect.Effect<A, E, R>, recordResult: (result: A) => Effect.Effect<B, E2, R2>) =>
-        Ref.updateAndGet(boundaryCalls, (count) => count + 1).pipe(
+      run: <A, E, R, B, E2, R2>(
+        boundaryIntent: InterruptibleWorkflowBoundaryIntent,
+        call: Effect.Effect<A, E, R>,
+        recordResult: (result: A) => Effect.Effect<B, E2, R2>
+      ) =>
+        Ref.update(boundaryIntents, (intents) => [...intents, boundaryIntent]).pipe(
+          Effect.andThen(Ref.updateAndGet(boundaryCalls, (count) => count + 1)),
           Effect.flatMap((count) =>
-            owner.run(intent, call, (result) =>
+            owner.run(boundaryIntent, call, (result) =>
               count === 1
                 ? recordResult(result)
                 : Deferred.await(allowRecording).pipe(Effect.andThen(recordResult(result)))
@@ -727,6 +772,32 @@ it.effect("records an already-produced completion-claim cleanup result under Exi
     expect(yield* Ref.get(deletionCalls)).toBe(1)
     expect(tags(yield* Ref.get(records))).toContain("CompletionClaimDeleted")
     expect(yield* owner.snapshot).toEqual({ _tag: "BoundaryResultRecorded", intent })
+    const intents = yield* Ref.get(boundaryIntents)
+    expect(intents).toHaveLength(2)
+    expect(intents[0]).not.toBe(intents[1])
+    expect(intents[0]).toMatchObject({
+      _tag: "CompletionClaimCleanup",
+      call: { _tag: "ReadBeforeDeletionAttempt", attemptOrdinal: 1 }
+    })
+    expect(intents[1]).toMatchObject({
+      _tag: "CompletionClaimCleanup",
+      call: { _tag: "DeleteAttempt", attemptOrdinal: 1 }
+    })
+    if (intents[0]?._tag !== "CompletionClaimCleanup" || intents[1]?._tag !== "CompletionClaimCleanup") {
+      return yield* Effect.die("completion cleanup did not preserve exact per-call intents")
+    }
+    expect(intents[0].sequenceId).toBe(intents[1].sequenceId)
+    expect(intents[0].callId).not.toBe(intents[1].callId)
+    const readObservation = (yield* Ref.get(records)).find(
+      ({ event }) => event._tag === "CompletionClaimDeletionReadObserved"
+    )?.event
+    expect(readObservation).toMatchObject({
+      _tag: "CompletionClaimDeletionReadObserved",
+      observation: fixture.claim,
+      purpose: { _tag: "BeforeDeletionAttempt", attemptOrdinal: 1 },
+      replacementOperationId,
+      request
+    })
     yield* owner.release
   })
 )
@@ -751,13 +822,17 @@ it.effect("preserves an interrupted completion-claim deletion behind its exact a
       deleteTaskClaim: () => Deferred.succeed(deletionStarted, undefined).pipe(Effect.andThen(Effect.never))
     })
     const intent = InterruptibleWorkflowBoundaryIntent.CompletionClaimCleanup({
+      call: CompletionClaimCleanupBoundaryCall.DeleteAttempt({ attemptOrdinal: CompletionClaimRequestOrdinal.make(1) }),
       family: "TaskTracker",
       replacementOperationId,
       request
     })
     const execution = {
-      run: <A, E, R, B, E2, R2>(call: Effect.Effect<A, E, R>, recordResult: (result: A) => Effect.Effect<B, E2, R2>) =>
-        owner.run(intent, call, recordResult)
+      run: <A, E, R, B, E2, R2>(
+        boundaryIntent: InterruptibleWorkflowBoundaryIntent,
+        call: Effect.Effect<A, E, R>,
+        recordResult: (result: A) => Effect.Effect<B, E2, R2>
+      ) => owner.run(boundaryIntent, call, recordResult)
     }
     const running = yield* runWith(
       runCompletionClaimDeletionProtocol(boundary, request, replacementOperationId, execution),
@@ -772,6 +847,113 @@ it.effect("preserves an interrupted completion-claim deletion behind its exact a
     expect(yield* Ref.get(reads)).toBe(1)
     expect(yield* owner.snapshot).toEqual({ _tag: "RecoverableAmbiguity", intent })
     yield* owner.release
+  })
+)
+
+it.effect("recomposes and reopens an interrupted completion cleanup through authored and recorded cassettes", () =>
+  Effect.gen(function* () {
+    const replacementOperationId = replacementOperationFor(fixture.claim)
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+      recordOf(
+        1,
+        targetPromotionObservedSuccessRecordKey(fixture.promotionCorrelation.requestId),
+        fixture.promotionSuccess
+      ),
+      recordOf(
+        1,
+        completionClaimReplacementIntentRecordKey(replacementOperationId),
+        CompletionClaimReplacementIntendedEvent.make({
+          claim: fixture.claim,
+          operationId: replacementOperationId,
+          version: workflowJournalEventVersion
+        })
+      ),
+      replacementRecord(),
+      ...focusedSuccessRecords
+    ])
+    const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
+    const authored = yield* Ref.make<ReadonlyArray<string>>([])
+    const record = (item: string) => Ref.update(authored, (items) => [...items, item])
+    const firstLifecycle = yield* makeApplicationExitLifecycle()
+    const firstOwner = yield* firstLifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
+    if (firstOwner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong first cleanup owner kind")
+    const deletionStarted = yield* Deferred.make<void>()
+    const firstBoundary = CompletionClaimBoundary.of({
+      readTaskClaim: () => record("ExactCompletionClaimReread").pipe(Effect.as(fixture.claim)),
+      replaceTaskClaim: () => Effect.die("cleanup must not replace the claim"),
+      deleteTaskClaim: () =>
+        record("CompletionClaimDeletionSent").pipe(
+          Effect.andThen(Deferred.succeed(deletionStarted, undefined)),
+          Effect.andThen(Effect.never)
+        )
+    })
+    const firstRun = yield* runWith(
+      runCompletionClaimDeletionProtocol(firstBoundary, request, replacementOperationId, firstOwner),
+      records
+    ).pipe(Effect.forkChild)
+
+    yield* Deferred.await(deletionStarted)
+    yield* record("ExitCutoffClosed")
+    yield* firstLifecycle.requestExit
+    expect((yield* Fiber.await(firstRun))._tag).toBe("Failure")
+    yield* record("LocalDeletionWaitInterrupted")
+    const ambiguous = yield* firstOwner.snapshot
+    expect(ambiguous).toMatchObject({
+      _tag: "RecoverableAmbiguity",
+      intent: { _tag: "CompletionClaimCleanup", call: { _tag: "DeleteAttempt", attemptOrdinal: 1 } }
+    })
+    yield* firstOwner.release
+    const interruptedRecords = yield* Ref.get(records)
+    expect(deriveIntegrationFinalityStateFor(interruptedRecords, fixture.claim)).toMatchObject({
+      _tag: "DeletionPending",
+      deletionAttempts: [{ attemptOrdinal: 1 }]
+    })
+    expect(
+      interruptedRecords.map(({ event }) => event._tag).filter((tag) => tag.startsWith("CompletionClaimDeletion"))
+    ).toEqual([
+      "CompletionClaimDeletionIntended",
+      "CompletionClaimDeletionReadObserved",
+      "CompletionClaimDeletionAttemptIntended"
+    ])
+
+    yield* record("ApplicationProcessDied")
+    yield* record("OrdinaryRunEntry")
+    const restartedLifecycle = yield* makeApplicationExitLifecycle()
+    const restartedOwner = yield* restartedLifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
+    if (restartedOwner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong restarted cleanup owner kind")
+    const restartedBoundary = CompletionClaimBoundary.of({
+      readTaskClaim: () =>
+        record("TrackerReconciledDeletion").pipe(Effect.as({ _tag: "UnclaimedTask" as const, taskId: fixture.taskId })),
+      replaceTaskClaim: () => Effect.die("cleanup must not replace the claim"),
+      deleteTaskClaim: () => Effect.die("reopening must not repeat an already-applied deletion")
+    })
+    yield* runWith(
+      runCompletionClaimDeletionProtocol(restartedBoundary, request, replacementOperationId, restartedOwner),
+      records
+    )
+    yield* record("DeletionAndSettlementRecorded")
+    expect(yield* restartedOwner.snapshot).toMatchObject({
+      _tag: "BoundaryResultRecorded",
+      intent: { _tag: "CompletionClaimCleanup", call: { _tag: "ReadBeforeDeletionAttempt", attemptOrdinal: 2 } }
+    })
+    yield* restartedOwner.release
+    const completedRecords = yield* Ref.get(records)
+    expect(deriveIntegrationFinalityStateFor(completedRecords, fixture.claim)?._tag).toBe("IntegrationFinalitySettled")
+    expect(
+      completedRecords.every(
+        (journalRecord) => describeJournalEvent(journalRecord.event).expectedKey === journalRecord.key
+      )
+    ).toBe(true)
+    expect(yield* Ref.get(authored)).toEqual([
+      "ExactCompletionClaimReread",
+      "CompletionClaimDeletionSent",
+      "ExitCutoffClosed",
+      "LocalDeletionWaitInterrupted",
+      "ApplicationProcessDied",
+      "OrdinaryRunEntry",
+      "TrackerReconciledDeletion",
+      "DeletionAndSettlementRecorded"
+    ])
   })
 )
 
@@ -797,15 +979,23 @@ it.effect("starts no completion-claim deletion after Exit closes between its rea
       deleteTaskClaim: () => Ref.update(deletionCalls, (count) => count + 1)
     })
     const intent = InterruptibleWorkflowBoundaryIntent.CompletionClaimCleanup({
+      call: CompletionClaimCleanupBoundaryCall.ReadBeforeDeletionAttempt({
+        attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+        readOrdinal: firstCleanupReadOrdinal
+      }),
       family: "TaskTracker",
       replacementOperationId,
       request
     })
     const execution = {
-      run: <A, E, R, B, E2, R2>(call: Effect.Effect<A, E, R>, recordResult: (result: A) => Effect.Effect<B, E2, R2>) =>
+      run: <A, E, R, B, E2, R2>(
+        boundaryIntent: InterruptibleWorkflowBoundaryIntent,
+        call: Effect.Effect<A, E, R>,
+        recordResult: (result: A) => Effect.Effect<B, E2, R2>
+      ) =>
         Ref.updateAndGet(boundaryCalls, (count) => count + 1).pipe(
           Effect.flatMap((count) =>
-            owner.run(intent, call, recordResult).pipe(
+            owner.run(boundaryIntent, call, recordResult).pipe(
               Effect.tap(() => (count === 1 ? Deferred.succeed(readRecorded, undefined) : Effect.void)),
               Effect.tap(() => (count === 1 ? Deferred.await(continueAfterRead) : Effect.void))
             )
@@ -822,7 +1012,7 @@ it.effect("starts no completion-claim deletion after Exit closes between its rea
     yield* Deferred.succeed(continueAfterRead, undefined)
     expect((yield* Fiber.await(running))._tag).toBe("Failure")
     expect(yield* Ref.get(deletionCalls)).toBe(0)
-    expect(tags(yield* Ref.get(records))).not.toContain("CompletionClaimDeletionAttemptIntended")
+    expect(tags(yield* Ref.get(records))).toContain("CompletionClaimDeletionAttemptIntended")
     expect(yield* owner.snapshot).toEqual({ _tag: "BoundaryResultRecorded", intent })
     yield* owner.release
   })

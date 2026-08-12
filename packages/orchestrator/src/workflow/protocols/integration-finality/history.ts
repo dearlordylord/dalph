@@ -1,4 +1,4 @@
-/* eslint-disable functional/immutable-data -- A chronological validator owns private indexes for one fold. */
+/* eslint-disable functional/immutable-data, max-lines -- One chronological validator owns its private indexes and exact causal checks. */
 import { type RunId } from "@dalph/contracts"
 import { type JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
@@ -10,6 +10,7 @@ import {
   completionTaskClaimEquals,
   completionSuccessObservationEquals,
   completionClaimRequestLimit,
+  type CompletionClaimDeletionRequest,
   type CompletionClaimFinalityJournalEvent,
   type CompletionTaskClaim,
   type CompletionSuccessObservation
@@ -29,12 +30,13 @@ type DeletionIntent = Extract<WorkflowJournalEvent, { readonly _tag: "Completion
 type DeletionAttempt = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimDeletionAttemptIntended" }>
 type DeletionOutcome = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimDeleted" }>
 type Settlement = Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationFinalitySettled" }>
+type DeletionRead = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimDeletionReadObserved" }>
 type IntegrationFinalityEvent = CompletionClaimFinalityJournalEvent
 
 export interface IntegrationFinalityHistoryIndexes {
   readonly replacementIntents: Map<OperationId, JournalRecord & { readonly event: ReplacementIntent }>
   readonly replacementAttempts: Map<OperationId, Map<number, JournalRecord & { readonly event: ReplacementAttempt }>>
-  readonly replacementTerminals: Set<OperationId>
+  readonly replacementTerminals: Map<OperationId, JournalRecord & { readonly event: ReplacementOutcome }>
   readonly deletionIntents: Map<OperationId, JournalRecord & { readonly event: DeletionIntent }>
   readonly deletionAttempts: Map<OperationId, Map<number, JournalRecord & { readonly event: DeletionAttempt }>>
   readonly deletionTerminals: Set<OperationId>
@@ -48,7 +50,7 @@ export const makeIntegrationFinalityHistoryIndexes = (): IntegrationFinalityHist
   deletionTerminals: new Set(),
   replacementAttempts: new Map(),
   replacementIntents: new Map(),
-  replacementTerminals: new Set(),
+  replacementTerminals: new Map(),
   settlements: new Set()
 })
 
@@ -207,7 +209,7 @@ const invalidReplacementOutcome = (
 ): string | undefined => {
   const intent = indexes.replacementIntents.get(event.operationId)
   const duplicate = indexes.replacementTerminals.has(event.operationId)
-  indexes.replacementTerminals.add(event.operationId)
+  indexes.replacementTerminals.set(event.operationId, { ..._record, event })
   return !duplicate && intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim)
     ? undefined
     : `completion-claim replacement outcome ${event.operationId} has no unique matching intent`
@@ -220,7 +222,7 @@ const invalidDeletionIntent = (
   event: DeletionIntent
 ): string | undefined => {
   const duplicate = indexes.deletionIntents.has(event.operationId)
-  const replacement = [...indexes.replacementTerminals]
+  const replacement = [...indexes.replacementTerminals.keys()]
     .map((operationId) => indexes.replacementIntents.get(operationId))
     .find((intent) => intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim))
   indexes.deletionIntents.set(event.operationId, { ...record, event })
@@ -331,6 +333,75 @@ const integrationFinalityEventBindsRun = (event: IntegrationFinalityEvent, runId
     event.claim.promotionCorrelation.verificationCorrelation.candidateCorrelation.runId === runId
   ].every(Boolean)
 
+const invalidDeletionRead = (
+  record: JournalRecord,
+  indexes: IntegrationFinalityHistoryIndexes,
+  event: DeletionRead,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): string | undefined => {
+  const request = event.request
+  if (request.claim.plannedAttempt.runId !== runId) {
+    return `completion claim cleanup read binds run ${request.claim.plannedAttempt.runId}`
+  }
+  const intent = indexes.deletionIntents.get(request.operationId)?.event
+  const priorAttempts = indexes.deletionAttempts.get(request.operationId)?.size ?? 0
+  const priorReads = countPriorDeletionReads(records, record.position, event)
+  return deletionReadIsValid(intent, indexes, event, priorAttempts, priorReads)
+    ? undefined
+    : `completion claim cleanup read ${record.key} lacks its exact deletion intent, replacement, or ordinal`
+}
+
+const deletionReadIsValid = (
+  intent: DeletionIntent | undefined,
+  indexes: IntegrationFinalityHistoryIndexes,
+  event: DeletionRead,
+  priorAttempts: number,
+  priorReads: number
+): boolean =>
+  [
+    intent !== undefined && deletionIntentMatches(intent, event.request),
+    replacementOutcomeMatches(indexes, event),
+    deletionReadPurposeMatches(event, priorAttempts),
+    Number(event.purpose.readOrdinal) === priorReads + 1
+  ].every(Boolean)
+
+const replacementOutcomeMatches = (indexes: IntegrationFinalityHistoryIndexes, event: DeletionRead): boolean => {
+  const outcome = indexes.replacementTerminals.get(event.replacementOperationId)?.event
+  return outcome !== undefined && completionTaskClaimEquals(outcome.claim, event.request.claim)
+}
+
+const countPriorDeletionReads = (
+  records: ReadonlyArray<JournalRecord>,
+  position: JournalPosition,
+  event: DeletionRead
+): number => prior(records, position).filter((candidate) => matchesDeletionRead(candidate.event, event)).length
+
+const matchesDeletionRead = (candidate: WorkflowJournalEvent, expected: DeletionRead): boolean =>
+  candidate._tag === "CompletionClaimDeletionReadObserved" &&
+  candidate.request.operationId === expected.request.operationId &&
+  candidate.purpose._tag === expected.purpose._tag &&
+  candidate.purpose.attemptOrdinal === expected.purpose.attemptOrdinal
+
+const deletionIntentMatches = (intent: DeletionIntent, request: CompletionClaimDeletionRequest): boolean =>
+  completionTaskClaimEquals(intent.claim, request.claim) &&
+  completionSuccessObservationEquals(intent.successObservation, request.successObservation)
+
+const deletionReadPurposeMatches = (event: DeletionRead, priorAttempts: number): boolean =>
+  event.purpose._tag === "BeforeDeletionAttempt"
+    ? Number(event.purpose.attemptOrdinal) === priorAttempts + 1
+    : Number(event.purpose.attemptOrdinal) === completionClaimRequestLimit &&
+      priorAttempts === completionClaimRequestLimit
+
+const recordCompletionTaskIssue = (
+  issue: ReturnType<typeof invalidCompletionTaskHistory>,
+  recordIdentityIssue: (detail: string) => void,
+  recordSemanticIssue: (detail: string) => void
+): void => {
+  if (issue?.kind === "Identity") recordIdentityIssue(issue.detail)
+  if (issue?.kind === "Semantic") recordSemanticIssue(issue.detail)
+}
+
 /** Validates one finality event against exact promotion, claim, and tracker chronology. */
 export const invalidIntegrationFinalityHistory = (
   record: JournalRecord,
@@ -352,6 +423,11 @@ export const invalidIntegrationFinalityHistory = (
 
 /** Applies run binding and causal validation for one finality event. */
 export const invalidIntegrationFinalityRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | undefined => {
+  if (event._tag === "CompletionClaimDeletionReadObserved") {
+    return event.request.claim.plannedAttempt.runId === runId
+      ? undefined
+      : `completion claim cleanup read binds run ${event.request.claim.plannedAttempt.runId}`
+  }
   if (!isIntegrationFinalityEvent(event)) return undefined
   return integrationFinalityEventBindsRun(event, runId)
     ? undefined
@@ -366,11 +442,17 @@ export const validateIntegrationFinalityHistoryRecord = (
   recordIdentityIssue: (detail: string) => void,
   recordSemanticIssue: (detail: string) => void
 ): void => {
-  const completionTaskIssue = invalidCompletionTaskHistory(record, records, runId)
-  if (completionTaskIssue?.kind === "Identity") recordIdentityIssue(completionTaskIssue.detail)
-  if (completionTaskIssue?.kind === "Semantic") recordSemanticIssue(completionTaskIssue.detail)
+  recordCompletionTaskIssue(
+    invalidCompletionTaskHistory(record, records, runId),
+    recordIdentityIssue,
+    recordSemanticIssue
+  )
   const bindingIssue = invalidIntegrationFinalityRunBinding(record.event, runId)
   if (bindingIssue !== undefined) recordIdentityIssue(bindingIssue)
+  if (record.event._tag === "CompletionClaimDeletionReadObserved") {
+    const readIssue = invalidDeletionRead(record, indexes, record.event, runId, records)
+    if (readIssue !== undefined) recordSemanticIssue(readIssue)
+  }
   const historyIssue = invalidIntegrationFinalityHistory(record, records, indexes)
   if (historyIssue !== undefined) recordSemanticIssue(historyIssue)
 }

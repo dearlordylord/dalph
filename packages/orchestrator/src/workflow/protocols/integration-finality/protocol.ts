@@ -8,6 +8,7 @@ import {
 import {
   completionClaimDeletionAttemptIntentRecordKey,
   completionClaimDeletionIntentRecordKey,
+  completionClaimDeletionReadObservedRecordKey,
   completionClaimDeletedRecordKey,
   completionClaimReplacementAttemptIntentRecordKey,
   completionClaimReplacementIntentRecordKey,
@@ -19,6 +20,9 @@ import {
   CompletionClaimDeletedEvent,
   CompletionClaimDeletionAttemptIntendedEvent,
   CompletionClaimDeletionIntendedEvent,
+  CompletionClaimDeletionReadObservedEvent,
+  CompletionClaimDeletionReadPurpose,
+  CompletionClaimCleanupReadOrdinal,
   CompletionClaimOwnershipConflict,
   CompletionClaimReplacedEvent,
   CompletionClaimReplacementAttemptIntendedEvent,
@@ -41,6 +45,12 @@ import {
 import { targetPromotionCorrelationEquals } from "../target-promotion/events.js"
 import { OperationId } from "../../identity.js"
 import { latestFocusedCompletedTaskObservationFor } from "./state.js"
+import {
+  CompletionClaimCleanupBoundaryCall,
+  InterruptibleWorkflowBoundaryIntent,
+  runInterruptibleBoundary,
+  type InterruptibleWorkflowBoundaryExecution
+} from "../../interpretation/interruptible-boundary.js"
 
 /** The offered claim is not the exact claim authorized by promotion history. */
 export class CompletionClaimPremiseContradiction extends Schema.TaggedError<CompletionClaimPremiseContradiction>()(
@@ -85,22 +95,19 @@ export type CompletionClaimReplacementResult = typeof CompletionClaimReplacement
 export const IntegrationFinalityResult = IntegrationFinalitySettledEvent
 export type IntegrationFinalityResult = typeof IntegrationFinalityResult.Type
 
-/** Exit-aware execution of one cleanup tracker call and its already-produced result recording. */
-export interface CompletionClaimCleanupExecution {
-  readonly run: <A, E, R, B, E2, R2>(
-    call: Effect.Effect<A, E, R>,
-    recordResult: (result: A) => Effect.Effect<B, E2, R2>
-  ) => Effect.Effect<B, E | E2, R | R2>
-}
-
-const runCleanupCall = <A, E, R, B, E2, R2>(
-  execution: CompletionClaimCleanupExecution | undefined,
-  call: Effect.Effect<A, E, R>,
-  recordResult: (result: A) => Effect.Effect<B, E2, R2>
-): Effect.Effect<B, E | E2, R | R2> =>
-  execution === undefined ? call.pipe(Effect.flatMap(recordResult)) : execution.run(call, recordResult)
-
 const ordinalFor = (value: number): CompletionClaimRequestOrdinal => CompletionClaimRequestOrdinal.make(value)
+
+const completionClaimCleanupIntent = (
+  request: CompletionClaimDeletionRequest,
+  replacementOperationId: OperationId,
+  call: CompletionClaimCleanupBoundaryCall
+) =>
+  InterruptibleWorkflowBoundaryIntent.CompletionClaimCleanup({
+    call,
+    family: "TaskTracker",
+    replacementOperationId,
+    request
+  })
 
 const latestAttemptOrdinal = (
   records: ReadonlyArray<JournalRecord>,
@@ -113,6 +120,22 @@ const latestAttemptOrdinal = (
         ? Math.max(latest, Number(record.event.attemptOrdinal))
         : latest,
     0
+  )
+
+const nextCleanupReadOrdinal = (
+  records: ReadonlyArray<JournalRecord>,
+  operationId: OperationId,
+  purposeTag: CompletionClaimDeletionReadPurpose["_tag"],
+  attemptOrdinal: CompletionClaimRequestOrdinal
+): CompletionClaimCleanupReadOrdinal =>
+  CompletionClaimCleanupReadOrdinal.make(
+    records.filter(
+      ({ event }) =>
+        event._tag === "CompletionClaimDeletionReadObserved" &&
+        event.request.operationId === operationId &&
+        event.purpose._tag === purposeTag &&
+        event.purpose.attemptOrdinal === attemptOrdinal
+    ).length + 1
   )
 
 const replacementIntent = (
@@ -472,6 +495,26 @@ const deletionFailureResult = Effect.fn("IntegrationFinality.deletionFailureResu
   return undefined
 })
 
+const appendDeletionReadObservation = Effect.fn("IntegrationFinality.appendDeletionReadObservation")(function* (
+  request: CompletionClaimDeletionRequest,
+  replacementOperationId: OperationId,
+  purpose: CompletionClaimDeletionReadPurpose,
+  observation: CompletionClaimObservation
+) {
+  yield* append(
+    request.claim.plannedAttempt.runId,
+    completionClaimDeletionReadObservedRecordKey(request.operationId, purpose),
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation,
+      purpose,
+      replacementOperationId,
+      request,
+      version: workflowJournalEventVersion
+    })
+  )
+  return observation
+})
+
 type DeletionOutcomeEvent = Extract<JournalRecord["event"], { readonly _tag: "CompletionClaimDeleted" }>
 
 /* v8 ignore start -- @preserve Accepted history validates these exact premises before delivery; the comparisons defend direct replay over a hostile journal. */
@@ -567,7 +610,7 @@ const runDeletionAttempt = Effect.fn("IntegrationFinality.runDeletionAttempt")(f
   request: CompletionClaimDeletionRequest,
   replacementOperationId: OperationId,
   attemptOrdinal: CompletionClaimRequestOrdinal,
-  execution?: CompletionClaimCleanupExecution
+  execution?: InterruptibleWorkflowBoundaryExecution
 ) {
   const journal = yield* InRunJournal
   const records = yield* journal.read(request.claim.plannedAttempt.runId)
@@ -583,11 +626,22 @@ const runDeletionAttempt = Effect.fn("IntegrationFinality.runDeletionAttempt")(f
     return yield* appendSettlementAndResult(request, currentDeleted, replacementOperationId)
   }
   /* v8 ignore stop */
-  const continueToDeletion = yield* runCleanupCall(
+  const readOrdinal = nextCleanupReadOrdinal(records, request.operationId, "BeforeDeletionAttempt", attemptOrdinal)
+  const readPurpose = CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+    attemptOrdinal,
+    readOrdinal
+  })
+  const continueToDeletion = yield* runInterruptibleBoundary(
     execution,
+    completionClaimCleanupIntent(
+      request,
+      replacementOperationId,
+      CompletionClaimCleanupBoundaryCall.ReadBeforeDeletionAttempt({ attemptOrdinal, readOrdinal })
+    ),
     tracker.readTaskClaim(request.claim.plannedAttempt.taskId),
     (observed) =>
       Effect.gen(function* () {
+        yield* appendDeletionReadObservation(request, replacementOperationId, readPurpose, observed)
         if (observed._tag === "UnclaimedTask") {
           yield* appendDeletionOutcomeAndSettlement(request, replacementOperationId)
           return false
@@ -607,19 +661,25 @@ const runDeletionAttempt = Effect.fn("IntegrationFinality.runDeletionAttempt")(f
       version: workflowJournalEventVersion
     })
   }
-  return yield* runCleanupCall(
+  yield* append(
+    request.claim.plannedAttempt.runId,
+    completionClaimDeletionAttemptIntentRecordKey(request.operationId, attemptOrdinal),
+    CompletionClaimDeletionAttemptIntendedEvent.make({
+      attemptOrdinal,
+      claim: request.claim,
+      operationId: request.operationId,
+      successObservation: request.successObservation,
+      version: workflowJournalEventVersion
+    })
+  )
+  return yield* runInterruptibleBoundary(
     execution,
-    append(
-      request.claim.plannedAttempt.runId,
-      completionClaimDeletionAttemptIntentRecordKey(request.operationId, attemptOrdinal),
-      CompletionClaimDeletionAttemptIntendedEvent.make({
-        attemptOrdinal,
-        claim: request.claim,
-        operationId: request.operationId,
-        successObservation: request.successObservation,
-        version: workflowJournalEventVersion
-      })
-    ).pipe(Effect.andThen(tracker.deleteTaskClaim(request).pipe(Effect.result))),
+    completionClaimCleanupIntent(
+      request,
+      replacementOperationId,
+      CompletionClaimCleanupBoundaryCall.DeleteAttempt({ attemptOrdinal })
+    ),
+    tracker.deleteTaskClaim(request).pipe(Effect.result),
     (result) =>
       Effect.gen(function* () {
         if (result._tag === "Failure") return yield* deletionFailureResult(result.failure)
@@ -639,30 +699,51 @@ const reconcileExhaustedDeletion = Effect.fn("IntegrationFinality.reconcileExhau
   tracker: CompletionClaimBoundaryService,
   request: CompletionClaimDeletionRequest,
   replacementOperationId: OperationId,
-  execution?: CompletionClaimCleanupExecution
+  execution?: InterruptibleWorkflowBoundaryExecution
 ) {
-  return yield* runCleanupCall(execution, tracker.readTaskClaim(request.claim.plannedAttempt.taskId), (observed) =>
-    Effect.gen(function* () {
-      if (observed._tag === "UnclaimedTask") {
-        yield* appendDeletionOutcomeAndSettlement(request, replacementOperationId)
-        return IntegrationFinalityResult.make({
+  const attemptOrdinal = ordinalFor(completionClaimRequestLimit)
+  const records = yield* (yield* InRunJournal).read(request.claim.plannedAttempt.runId)
+  const readOrdinal = nextCleanupReadOrdinal(
+    records,
+    request.operationId,
+    "AfterDeletionAttemptsExhausted",
+    attemptOrdinal
+  )
+  const purpose = CompletionClaimDeletionReadPurpose.cases.AfterDeletionAttemptsExhausted.make({
+    attemptOrdinal,
+    readOrdinal
+  })
+  return yield* runInterruptibleBoundary(
+    execution,
+    completionClaimCleanupIntent(
+      request,
+      replacementOperationId,
+      CompletionClaimCleanupBoundaryCall.ReadAfterDeletionAttemptsExhausted({ attemptOrdinal, readOrdinal })
+    ),
+    tracker.readTaskClaim(request.claim.plannedAttempt.taskId),
+    (observed) =>
+      Effect.gen(function* () {
+        yield* appendDeletionReadObservation(request, replacementOperationId, purpose, observed)
+        if (observed._tag === "UnclaimedTask") {
+          yield* appendDeletionOutcomeAndSettlement(request, replacementOperationId)
+          return IntegrationFinalityResult.make({
+            claim: request.claim,
+            deletionOperationId: request.operationId,
+            replacementOperationId,
+            successObservation: request.successObservation,
+            version: workflowJournalEventVersion
+          })
+        }
+        if (observed._tag !== "CompletionTaskClaim" || !completionTaskClaimEquals(observed, request.claim)) {
+          return yield* new CompletionClaimOwnershipConflict({ attempted: request.claim, observed })
+        }
+        return yield* new CompletionClaimDidNotConverge({
+          attempts: completionClaimRequestLimit,
           claim: request.claim,
-          deletionOperationId: request.operationId,
-          replacementOperationId,
-          successObservation: request.successObservation,
-          version: workflowJournalEventVersion
+          operationId: request.operationId,
+          phase: "Deletion"
         })
-      }
-      if (observed._tag !== "CompletionTaskClaim" || !completionTaskClaimEquals(observed, request.claim)) {
-        return yield* new CompletionClaimOwnershipConflict({ attempted: request.claim, observed })
-      }
-      return yield* new CompletionClaimDidNotConverge({
-        attempts: completionClaimRequestLimit,
-        claim: request.claim,
-        operationId: request.operationId,
-        phase: "Deletion"
       })
-    })
   )
 })
 
@@ -672,7 +753,7 @@ export const runCompletionClaimDeletionProtocol = Effect.fn("IntegrationFinality
     tracker: CompletionClaimBoundaryService,
     request: CompletionClaimDeletionRequest,
     replacementOperationId: OperationId,
-    execution?: CompletionClaimCleanupExecution
+    execution?: InterruptibleWorkflowBoundaryExecution
   ) {
     const journal = yield* InRunJournal
     const records = yield* journal.read(request.claim.plannedAttempt.runId)

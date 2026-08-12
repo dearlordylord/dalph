@@ -9,6 +9,9 @@ import {
   CompletionClaimDeletionAttemptIntendedEvent,
   CompletionClaimDeletedEvent,
   CompletionClaimDeletionIntendedEvent,
+  CompletionClaimDeletionReadObservedEvent,
+  CompletionClaimDeletionReadPurpose,
+  CompletionClaimCleanupReadOrdinal,
   CompletionClaimReplacedEvent,
   CompletionClaimReplacementAttemptIntendedEvent,
   CompletionClaimReplacementIntendedEvent,
@@ -28,6 +31,7 @@ import { deriveIntegrationFinalityStateFor, latestFocusedCompletedTaskObservatio
 import { integrationFinalityFixture as fixture, prerequisiteRecordEvents } from "./fixtures.js"
 import { makeCompletionTaskFactsObservationOperation, makeTaskAttemptPlanOperation } from "../../registry/operation.js"
 import { taskTrackerReadIntent, TaskAttemptPlannedEvent } from "../../registry/event.js"
+import { describeJournalEvent } from "../../registry/event-descriptor.js"
 import { journaledIntegrationEvidenceOf } from "../../../coordination/delivery/delivery-evidence.js"
 import {
   makeFocusedTaskCompletionFactsObserved,
@@ -145,6 +149,53 @@ const validationErrors = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<
     return issue === undefined ? [] : [issue]
   })
 }
+
+it("accepts only the exact next cleanup reread identity after deletion intent", () => {
+  const prefix = validFinalityRecords().slice(0, 10)
+  const indexes = makeIntegrationFinalityHistoryIndexes()
+  for (const current of prefix) invalidIntegrationFinalityHistory(current, prefix, indexes)
+  const request = { claim: fixture.claim, operationId: deletionOperationId, successObservation }
+  const observed = CompletionClaimDeletionReadObservedEvent.make({
+    observation: fixture.claim,
+    purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+      readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+    }),
+    replacementOperationId,
+    request,
+    version: workflowJournalEventVersion
+  })
+  const read = record(11, observed, describeJournalEvent(observed).expectedKey)
+  const identities: Array<string> = []
+  const semantics: Array<string> = []
+  validateIntegrationFinalityHistoryRecord(
+    read,
+    fixture.runId,
+    [...prefix, read],
+    indexes,
+    (detail) => identities.push(detail),
+    (detail) => semantics.push(detail)
+  )
+  expect(identities).toEqual([])
+  expect(semantics).toEqual([])
+
+  const wrongOrdinal = CompletionClaimDeletionReadObservedEvent.make({
+    ...observed,
+    purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(2),
+      readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+    })
+  })
+  validateIntegrationFinalityHistoryRecord(
+    record(11, wrongOrdinal, describeJournalEvent(wrongOrdinal).expectedKey),
+    fixture.runId,
+    prefix,
+    indexes,
+    () => undefined,
+    (detail) => semantics.push(detail)
+  )
+  expect(semantics).toContainEqual(expect.stringContaining("lacks its exact deletion intent, replacement, or ordinal"))
+})
 
 const deletionIntentRecord = (position: number, observation: typeof fixture.successObservation): JournalRecord =>
   record(

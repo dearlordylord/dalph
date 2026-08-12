@@ -225,7 +225,7 @@ it.effect("preserves and reopens interrupted exact claim cleanup in authored and
   ).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
-it.effect("starts no task-claim cleanup after the application Exit cutoff", () =>
+it.effect("sends no task-claim cleanup call through a pre-cutoff owner after the Exit cutoff", () =>
   Effect.gen(function* () {
     const lifecycle = yield* makeApplicationExitLifecycle()
     const owner = yield* lifecycle.admission.acquireForwardOwner("InterruptibleBoundary")

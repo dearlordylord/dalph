@@ -508,6 +508,59 @@ it.effect("interrupts an admitted tracker owner under Exit and starts no success
   )
 )
 
+it.effect("rejects a proposed exact claim cleanup before it acquires any owner after the Exit cutoff", () =>
+  Effect.gen(function* () {
+    const claimOperationId = OperationId.make("runtime-late-cleanup-claim")
+    const claim = ActiveTaskClaim.make({
+      operationId: claimOperationId,
+      owner: ClaimOwner.make("dalph"),
+      taskId: plannedAttempt.taskId,
+      token: ClaimToken.make("runtime-late-cleanup-token")
+    })
+    const operation = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+      predecessorOperationIds: [claimOperationId],
+      release: { claim, operationId: OperationId.make("runtime-late-cleanup-release") }
+    })
+    const proposedCleanup = recoveredProposalFor(
+      RunnableFrontierTransition.ReleaseExternallyCompletedTaskClaim({ operation, plannedAttempt })
+    )
+    const relation = yield* dynamicEvaluationSignal(withProposals(yield* baseEvaluation, [proposedCleanup], 1))
+    const lifecycle = yield* makeApplicationExitLifecycle()
+    const capabilities = yield* makeCapabilitiesWithAdmission(
+      yield* makeIntegrationTargetResourceController(),
+      lifecycle.admission
+    )
+    const cleanupCalls = yield* Ref.make(0)
+    const executor = DeliveryActionExecutor.of({
+      execute: () =>
+        Ref.update(cleanupCalls, (count) => count + 1).pipe(
+          Effect.andThen(Effect.die("post-cutoff proposed cleanup acquired an owner"))
+        )
+    })
+    yield* lifecycle.requestExit
+    const result = yield* runDeliveryRuntimeDecision(relation).pipe(
+      Effect.provide(plannerLayer),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
+      Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+      Effect.provideService(
+        OperationIdAllocator,
+        OperationIdAllocator.of({ allocate: () => Effect.succeed(operation.release.operationId) })
+      ),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.exit
+    )
+
+    expect(result._tag).toBe("Failure")
+    expect(yield* Ref.get(cleanupCalls)).toBe(0)
+    expect(yield* lifecycle.admission.snapshot).toEqual({
+      cutoffClosed: true,
+      preparingOwnerCount: 0,
+      registeredOwnerCount: 0
+    })
+  })
+)
+
 it.effect("records a produced Git result under Exit and starts no later protocol phase", () =>
   Effect.scoped(
     Effect.gen(function* () {

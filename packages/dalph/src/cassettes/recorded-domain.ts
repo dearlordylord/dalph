@@ -65,6 +65,9 @@ import {
   TargetPromotionTerminalBasis,
   CompletionTaskClaim,
   CompletionClaimRequestOrdinal,
+  CompletionClaimDeletionReadPurpose,
+  CompletionClaimDeletionRequest,
+  CompletionClaimObservation,
   CompletionSuccessObservation,
   CompletionTaskAcknowledgement,
   CompletionTaskRequest,
@@ -242,6 +245,13 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     ...initiatedByCoordinator,
     operationId: OperationId,
     successObservation: CompletionSuccessObservation
+  },
+  CompletionClaimDeletionReadObserved: {
+    observation: CompletionClaimObservation,
+    ...nonActionOccurrence,
+    purpose: CompletionClaimDeletionReadPurpose,
+    replacementOperationId: OperationId,
+    request: CompletionClaimDeletionRequest
   },
   CompletionClaimDeleted: {
     claim: CompletionTaskClaim,

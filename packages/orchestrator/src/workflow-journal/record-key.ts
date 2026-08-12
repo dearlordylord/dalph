@@ -221,6 +221,19 @@ export const completionClaimDeletionAttemptIntentRecordKey = (
 ): JournalRecordKey =>
   JournalRecordKey.make(`${completionClaimRecordKeyPrefix(operationId)}:deletion-attempt:${attemptOrdinal}`)
 
+/** Stable journal key for one exact completion-claim cleanup reread result. */
+export const completionClaimDeletionReadObservedRecordKey = (
+  operationId: OperationId,
+  purpose: {
+    readonly _tag: string
+    readonly attemptOrdinal: CompletionClaimRequestOrdinal
+    readonly readOrdinal: number
+  }
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `${completionClaimRecordKeyPrefix(operationId)}:deletion-read:${purpose._tag}:${purpose.attemptOrdinal}:${purpose.readOrdinal}`
+  )
+
 /** Stable journal key for the one exact completion-claim deletion result. */
 export const completionClaimDeletedRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`${completionClaimRecordKeyPrefix(operationId)}:deleted`)

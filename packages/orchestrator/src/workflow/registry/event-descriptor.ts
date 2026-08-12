@@ -52,6 +52,7 @@ import {
   completionClaimReplacedRecordKey,
   completionClaimDeletionIntentRecordKey,
   completionClaimDeletionAttemptIntentRecordKey,
+  completionClaimDeletionReadObservedRecordKey,
   completionClaimDeletedRecordKey,
   integrationFinalitySettledRecordKey,
   completionTaskAcknowledgedRecordKey,
@@ -397,6 +398,10 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     CompletionClaimDeletionAttemptIntended: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: completionClaimDeletionAttemptIntentRecordKey(event.operationId, event.attemptOrdinal)
+    }),
+    CompletionClaimDeletionReadObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: completionClaimDeletionReadObservedRecordKey(event.request.operationId, event.purpose)
     }),
     CompletionClaimDeleted: (event) => ({
       _tag: "GenericEventDescriptor",

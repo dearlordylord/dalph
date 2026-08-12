@@ -31,6 +31,7 @@ import {
   CompletionClaimReplacedEvent,
   CompletionClaimDeletionIntendedEvent,
   CompletionClaimDeletionAttemptIntendedEvent,
+  CompletionClaimDeletionReadObservedEvent,
   CompletionClaimDeletedEvent,
   IntegrationFinalitySettledEvent,
   CompletionTaskAcknowledgedEvent,
@@ -419,6 +420,7 @@ const integrationFinalityTags = [
   "CompletionClaimReplaced",
   "CompletionClaimDeletionIntended",
   "CompletionClaimDeletionAttemptIntended",
+  "CompletionClaimDeletionReadObserved",
   "CompletionClaimDeleted",
   "IntegrationFinalitySettled",
   "CompletionTaskIntended",
@@ -481,6 +483,14 @@ const recordIntegrationFinalityEntry = (event: IntegrationFinalityEvent): Record
         occurrenceClassification: "InitiatedAction",
         operationId: value.operationId,
         successObservation: value.successObservation
+      }),
+      CompletionClaimDeletionReadObserved: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        observation: value.observation,
+        occurrenceClassification: "NonActionOccurrence",
+        purpose: value.purpose,
+        replacementOperationId: value.replacementOperationId,
+        request: value.request
       }),
       CompletionClaimDeleted: (value): RecordedIntegrationFinalityEntry => ({
         _tag: value._tag,
@@ -1197,6 +1207,14 @@ const eventForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntr
         successObservation: value.successObservation,
         version: workflowJournalEventVersion
       }),
+    CompletionClaimDeletionReadObserved: (value) =>
+      CompletionClaimDeletionReadObservedEvent.make({
+        observation: value.observation,
+        purpose: value.purpose,
+        replacementOperationId: value.replacementOperationId,
+        request: value.request,
+        version: workflowJournalEventVersion
+      }),
     CompletionClaimDeleted: (value) =>
       CompletionClaimDeletedEvent.make({
         claim: value.claim,
@@ -1482,6 +1500,8 @@ const lyricForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntr
       `Dalph coordinator intended to delete the exact completion claim for task ${value.claim.plannedAttempt.taskId} after fresh success.`,
     CompletionClaimDeletionAttemptIntended: (value) =>
       `Dalph coordinator sent completion-claim deletion attempt ${value.attemptOrdinal} for task ${value.claim.plannedAttempt.taskId}.`,
+    CompletionClaimDeletionReadObserved: (value) =>
+      `The task tracker returned ${value.observation._tag} for completion-claim cleanup ${value.purpose._tag}.`,
     CompletionClaimDeleted: (value) =>
       `The task tracker proved the exact completion claim absent for successful task ${value.claim.plannedAttempt.taskId}.`,
     IntegrationFinalitySettled: (value) =>

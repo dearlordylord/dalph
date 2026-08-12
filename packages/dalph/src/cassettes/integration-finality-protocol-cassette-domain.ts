@@ -171,6 +171,7 @@ const successfulSettlementExpectation: CompletionClaimProtocolTerminalExpectatio
     "CompletionClaimReplaced",
     ...focusedSuccessJournalTags,
     "CompletionClaimDeletionIntended",
+    "CompletionClaimDeletionReadObserved",
     "CompletionClaimDeletionAttemptIntended",
     "CompletionClaimDeleted",
     "IntegrationFinalitySettled"
@@ -264,7 +265,21 @@ export const reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess = Int
     CompletionClaimProtocolStoryItem.cases.ObserveFocusedTaskCompletionSuccess.make({}),
     CompletionClaimProtocolStoryItem.cases.RestartDeletion.make({}),
     CompletionClaimProtocolStoryItem.cases.AwaitSettlement.make({
-      expected: { ...successfulSettlementExpectation, readCalls: reconciledDeletionReadCalls }
+      expected: {
+        ...successfulSettlementExpectation,
+        journalTags: [
+          "CompletionClaimReplacementIntended",
+          "CompletionClaimReplaced",
+          ...focusedSuccessJournalTags,
+          "CompletionClaimDeletionIntended",
+          "CompletionClaimDeletionReadObserved",
+          "CompletionClaimDeletionAttemptIntended",
+          "CompletionClaimDeletionReadObserved",
+          "CompletionClaimDeleted",
+          "IntegrationFinalitySettled"
+        ],
+        readCalls: reconciledDeletionReadCalls
+      }
     })
   ]
 })
@@ -317,9 +332,13 @@ const deletionCannotConvergeExpectation: CompletionClaimProtocolTerminalExpectat
     "CompletionClaimReplaced",
     ...focusedSuccessJournalTags,
     "CompletionClaimDeletionIntended",
+    "CompletionClaimDeletionReadObserved",
     "CompletionClaimDeletionAttemptIntended",
+    "CompletionClaimDeletionReadObserved",
     "CompletionClaimDeletionAttemptIntended",
-    "CompletionClaimDeletionAttemptIntended"
+    "CompletionClaimDeletionReadObserved",
+    "CompletionClaimDeletionAttemptIntended",
+    "CompletionClaimDeletionReadObserved"
   ],
   readCalls: 5,
   replacementCalls: 0

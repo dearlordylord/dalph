@@ -47,7 +47,6 @@ import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.j
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
-import { InterruptibleWorkflowBoundaryIntent } from "../../workflow/interpretation/interpreter.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -123,16 +122,11 @@ const deleteCompletedTaskCompletionClaim = Effect.fn("DeliveryAction.deleteCompl
   transition: DeleteCompletedTaskCompletionClaim,
   lease: DeliveryActionExecutionLease
 ) {
-  const intent = InterruptibleWorkflowBoundaryIntent.CompletionClaimCleanup({
-    family: "TaskTracker",
-    replacementOperationId: transition.replacementOperationId,
-    request: transition.request
-  })
   return yield* runCompletionClaimDeletionProtocol(
     yield* completionClaimBoundary(),
     transition.request,
     transition.replacementOperationId,
-    { run: (call, recordResult) => interruptibleBoundaryOf(lease).run(intent, call, recordResult) }
+    interruptibleBoundaryOf(lease)
   ).pipe(
     Effect.as(deliveryActionCompleted(action.proposal.id)),
     Effect.catchTags({

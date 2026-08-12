@@ -36,13 +36,14 @@ import {
   AuthoritativePlannedAttemptWorktreeObserved,
   AuthoritativeTargetLineageObserved,
   InterruptibleWorkflowBoundaryIntent,
+  runInterruptibleBoundary,
   WorkflowInterpreter,
   type InterruptibleWorkflowBoundaryExecution
 } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
 import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
 import { taskClaimObservationAttemptBound } from "../workflow/protocols/task-claim-observation/bound.js"
-import { journaledTrackerGraphRead, runInterruptibleBoundary } from "./journaled-interruptible-boundary.js"
+import { journaledTrackerGraphRead } from "./journaled-interruptible-boundary.js"
 
 const requireTaskWorkSpecification = <A>(
   knowledge: Option.Option<A>,

@@ -5,6 +5,7 @@ import { taskTrackerReadIntent } from "../workflow/registry/event.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
 import {
   InterruptibleWorkflowBoundaryIntent,
+  runInterruptibleBoundary,
   type InterruptibleWorkflowBoundaryExecution,
   type WorkflowInterpreterService
 } from "../workflow/interpretation/interpreter.js"
@@ -14,14 +15,6 @@ import {
 } from "../coordination/reconstruction/graph-knowledge.js"
 import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import type { InRunJournalService } from "./store.js"
-
-export const runInterruptibleBoundary = <A, E, R, B, E2, R2>(
-  execution: InterruptibleWorkflowBoundaryExecution | undefined,
-  intent: InterruptibleWorkflowBoundaryIntent,
-  call: Effect.Effect<A, E, R>,
-  recordResult: (result: A) => Effect.Effect<B, E2, R2>
-): Effect.Effect<B, E | E2, R | R2> =>
-  execution === undefined ? call.pipe(Effect.flatMap(recordResult)) : execution.run(intent, call, recordResult)
 
 const requireTaskGraph = <A>(
   knowledge: Option.Option<A>,
