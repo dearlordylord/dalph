@@ -31,6 +31,7 @@ import {
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
+import { InterruptibleWorkflowBoundaryIntent } from "../../workflow/interpretation/interpreter.js"
 import {
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
@@ -473,7 +474,7 @@ it.effect("interrupts an admitted tracker owner under Exit and starts no success
             : Effect.gen(function* () {
                 yield* lease.recordIntent(operationId)
                 return yield* interruptibleBoundaryOf(lease).run(
-                  { family: "TaskTracker", operationId },
+                  InterruptibleWorkflowBoundaryIntent.AuthorityRequest({ family: "TaskTracker", operationId }),
                   Deferred.succeed(callStarted, undefined).pipe(
                     Effect.andThen(Effect.never),
                     Effect.onInterrupt(() => Deferred.succeed(callInterrupted, undefined))
@@ -533,7 +534,7 @@ it.effect("records a produced Git result under Exit and starts no later protocol
             : Effect.gen(function* () {
                 yield* lease.recordIntent(operationId)
                 return yield* interruptibleBoundaryOf(lease).run(
-                  { family: "Git", operationId },
+                  InterruptibleWorkflowBoundaryIntent.AuthorityRequest({ family: "Git", operationId }),
                   Effect.succeed("normalized-git-result"),
                   (result) =>
                     Deferred.succeed(resultProduced, undefined).pipe(

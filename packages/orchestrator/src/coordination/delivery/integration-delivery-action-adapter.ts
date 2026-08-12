@@ -21,6 +21,7 @@ import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotio
 import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import {
   type DeliveryActionExecutionLease,
+  interruptibleBoundaryOf,
   type MaterializedDeliveryAction,
   runAtomicDeliveryBoundary
 } from "./delivery-action-executor.js"
@@ -46,6 +47,7 @@ import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.j
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
+import { InterruptibleWorkflowBoundaryIntent } from "../../workflow/interpretation/interpreter.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -118,12 +120,19 @@ const replacePromotedTaskClaim = Effect.fn("DeliveryAction.replacePromotedTaskCl
 
 const deleteCompletedTaskCompletionClaim = Effect.fn("DeliveryAction.deleteCompletedTaskCompletionClaim")(function* (
   action: IdentityFreeAction,
-  transition: DeleteCompletedTaskCompletionClaim
+  transition: DeleteCompletedTaskCompletionClaim,
+  lease: DeliveryActionExecutionLease
 ) {
+  const intent = InterruptibleWorkflowBoundaryIntent.CompletionClaimCleanup({
+    family: "TaskTracker",
+    replacementOperationId: transition.replacementOperationId,
+    request: transition.request
+  })
   return yield* runCompletionClaimDeletionProtocol(
     yield* completionClaimBoundary(),
     transition.request,
-    transition.replacementOperationId
+    transition.replacementOperationId,
+    { run: (call, recordResult) => interruptibleBoundaryOf(lease).run(intent, call, recordResult) }
   ).pipe(
     Effect.as(deliveryActionCompleted(action.proposal.id)),
     Effect.catchTags({
@@ -359,7 +368,7 @@ const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvanc
     return yield* observeFocusedTaskCompletion(action, transition, target)
   }
   if (transition._tag === "DeleteCompletedTaskCompletionClaim") {
-    return yield* deleteCompletedTaskCompletionClaim(action, transition)
+    return yield* deleteCompletedTaskCompletionClaim(action, transition, lease)
   }
   return yield* continueIntegrationCandidate(action, transition, lease)
 })

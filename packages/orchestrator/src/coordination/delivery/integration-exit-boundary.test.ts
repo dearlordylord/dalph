@@ -2,6 +2,7 @@ import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { describe, expect } from "vitest"
 import { OperationId } from "../../workflow/identity.js"
+import { InterruptibleWorkflowBoundaryIntent } from "../../workflow/interpretation/interpreter.js"
 import { interruptibleBoundaryOf, runAtomicDeliveryBoundary } from "./delivery-action-executor.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
 
@@ -30,7 +31,10 @@ it.effect("defects when an atomic owner reaches an interruptible route while Ser
       forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } }
     })
       .run(
-        { family: "Git", operationId: OperationId.make("boundary-mismatch") },
+        InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+          family: "Git",
+          operationId: OperationId.make("boundary-mismatch")
+        }),
         Effect.succeed("outside-result"),
         Effect.succeed
       )

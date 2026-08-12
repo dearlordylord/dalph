@@ -9,7 +9,7 @@ import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { OperationId } from "../workflow/identity.js"
-import { WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
+import { InterruptibleWorkflowBoundaryIntent, WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation } from "../workflow/registry/operation.js"
 import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
@@ -94,7 +94,10 @@ it.effect("records the authored tracker interruption and ordinary replay cassett
       yield* record("LocalTrackerWaitInterrupted")
       expect(yield* exitingOwner.snapshot).toEqual({
         _tag: "RecoverableAmbiguity",
-        intent: { family: "TaskTracker", operationId: operation.operationId }
+        intent: InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+          family: "TaskTracker",
+          operationId: operation.operationId
+        })
       })
       yield* exitingOwner.release
       expect(

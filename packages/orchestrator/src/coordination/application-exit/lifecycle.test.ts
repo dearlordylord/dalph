@@ -2,15 +2,19 @@ import { it } from "@effect/vitest"
 import { Deferred, Effect, Fiber, Ref } from "effect"
 import { expect } from "vitest"
 import { OperationId } from "../../workflow/identity.js"
+import { InterruptibleWorkflowBoundaryIntent } from "../../workflow/interpretation/interpreter.js"
 import { ApplicationExitResult } from "./lifecycle-decision.js"
 import { makeApplicationExitLifecycle } from "./lifecycle.js"
 
-const trackerIntent = {
-  family: "TaskTracker" as const,
+const trackerIntent = InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+  family: "TaskTracker",
   operationId: OperationId.make("application-exit-tracker-boundary")
-}
+})
 
-const gitIntent = { family: "Git" as const, operationId: OperationId.make("application-exit-git-boundary") }
+const gitIntent = InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+  family: "Git",
+  operationId: OperationId.make("application-exit-git-boundary")
+})
 
 it.effect("rolls back a preparing reservation when Exit closes admission before owner registration", () =>
   Effect.gen(function* () {

@@ -24,6 +24,7 @@ import { OperationId } from "../workflow/identity.js"
 import {
   AuthoritativePlannedAttemptWorktreeObserved,
   AuthoritativeTargetLineageObserved,
+  InterruptibleWorkflowBoundaryIntent,
   WorkflowInterpreter,
   type WorkflowInterpreterService
 } from "../workflow/interpretation/interpreter.js"
@@ -295,7 +296,10 @@ it.effect("records the authored Git interruption and ordinary replay cassette", 
       yield* record("LocalGitWaitInterrupted")
       expect(yield* exitingOwner.snapshot).toEqual({
         _tag: "RecoverableAmbiguity",
-        intent: { family: "Git", operationId: operation.operationId }
+        intent: InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+          family: "Git",
+          operationId: operation.operationId
+        })
       })
       yield* exitingOwner.release
       expect(

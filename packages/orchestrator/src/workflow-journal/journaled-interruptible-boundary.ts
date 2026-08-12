@@ -4,8 +4,8 @@ import { makeTaskTrackerFactsObservedFromRead } from "../workflow/protocols/task
 import { taskTrackerReadIntent } from "../workflow/registry/event.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
 import {
+  InterruptibleWorkflowBoundaryIntent,
   type InterruptibleWorkflowBoundaryExecution,
-  type InterruptibleWorkflowBoundaryIntent,
   type WorkflowInterpreterService
 } from "../workflow/interpretation/interpreter.js"
 import {
@@ -61,7 +61,10 @@ export const journaledTrackerGraphRead = (
     }
     return yield* runInterruptibleBoundary(
       interruptibleBoundary,
-      { family: "TaskTracker", operationId: operation.operationId },
+      InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+        family: "TaskTracker",
+        operationId: operation.operationId
+      }),
       interpreter.readTrackerGraph(operation),
       (snapshot) =>
         Effect.gen(function* () {

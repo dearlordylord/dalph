@@ -49,15 +49,62 @@ import {
 } from "../protocols/planned-attempt-worktree-observation/protocol.js"
 import type { GitTargetLineageReadFailure, GitTargetLineageService } from "../../authorities/git/target-lineage.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import type { CompletionClaimDeletionRequest } from "../protocols/integration-finality/completion-claim.js"
 
 type TaskAttemptPlanRecordingError = JournalAppendError | TaskAttemptPlan.TaskAttemptPlanRunContradiction
 
 export type InterruptibleWorkflowBoundaryFamily = "Git" | "TaskTracker"
 
 /** Exact acknowledged workflow intent and owning external family for one interruptible local wait. */
-export interface InterruptibleWorkflowBoundaryIntent {
-  readonly family: InterruptibleWorkflowBoundaryFamily
-  readonly operationId: OperationId
+export type InterruptibleWorkflowBoundaryIntent =
+  | {
+      readonly _tag: "AuthorityRequest"
+      readonly boundaryCallSequence: "OneCall"
+      readonly family: InterruptibleWorkflowBoundaryFamily
+      readonly operationId: OperationId
+    }
+  | {
+      readonly _tag: "TaskClaimCleanup"
+      readonly boundaryCallSequence: "OneCall"
+      readonly family: "TaskTracker"
+      /** One exact tracker-owned claim and its unchanged workflow cleanup disposition. */
+      readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+    }
+  | {
+      readonly _tag: "CompletionClaimCleanup"
+      readonly boundaryCallSequence: "SameIntentCalls"
+      readonly family: "TaskTracker"
+      readonly replacementOperationId: OperationId
+      /** The exact completion claim, focused-success proof, and deletion identity. */
+      readonly request: CompletionClaimDeletionRequest
+    }
+
+export const InterruptibleWorkflowBoundaryIntent = {
+  AuthorityRequest: (fields: {
+    readonly family: InterruptibleWorkflowBoundaryFamily
+    readonly operationId: OperationId
+  }): Extract<InterruptibleWorkflowBoundaryIntent, { readonly _tag: "AuthorityRequest" }> => ({
+    _tag: "AuthorityRequest",
+    boundaryCallSequence: "OneCall",
+    ...fields
+  }),
+  TaskClaimCleanup: (fields: {
+    readonly family: "TaskTracker"
+    readonly operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type
+  }): Extract<InterruptibleWorkflowBoundaryIntent, { readonly _tag: "TaskClaimCleanup" }> => ({
+    _tag: "TaskClaimCleanup",
+    boundaryCallSequence: "OneCall",
+    ...fields
+  }),
+  CompletionClaimCleanup: (fields: {
+    readonly family: "TaskTracker"
+    readonly replacementOperationId: OperationId
+    readonly request: CompletionClaimDeletionRequest
+  }): Extract<InterruptibleWorkflowBoundaryIntent, { readonly _tag: "CompletionClaimCleanup" }> => ({
+    _tag: "CompletionClaimCleanup",
+    boundaryCallSequence: "SameIntentCalls",
+    ...fields
+  })
 }
 
 /** Runtime capability that keeps a produced result and its recording inside one Exit-safe boundary. */

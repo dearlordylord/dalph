@@ -24,6 +24,7 @@ import { InitialControlPolicy } from "../control/policy.js"
 import { OperationId } from "../workflow/identity.js"
 import {
   AuthoritativeTaskClaimAcquired,
+  InterruptibleWorkflowBoundaryIntent,
   WorkflowInterpreter,
   type WorkflowInterpreterService
 } from "../workflow/interpretation/interpreter.js"
@@ -139,7 +140,10 @@ it.effect("rebuilds the tracker application from its recovery projection and rec
       )
       expect(yield* restartedOwner.snapshot).toMatchObject({
         _tag: "BoundaryResultRecorded",
-        intent: { family: "TaskTracker", operationId: operation.acquisition.operationId }
+        intent: InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+          family: "TaskTracker",
+          operationId: operation.acquisition.operationId
+        })
       })
       yield* restartedOwner.release
       yield* Scope.close(restartedScope, Exit.void)
@@ -256,7 +260,10 @@ it.effect("rebuilds the Git application from its recovery projection and records
       )
       expect(yield* restartedOwner.snapshot).toMatchObject({
         _tag: "BoundaryResultRecorded",
-        intent: { family: "Git", operationId: operation.operationId }
+        intent: InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+          family: "Git",
+          operationId: operation.operationId
+        })
       })
       yield* restartedOwner.release
       yield* Scope.close(restartedScope, Exit.void)

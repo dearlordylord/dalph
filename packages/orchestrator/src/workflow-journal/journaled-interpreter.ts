@@ -35,6 +35,7 @@ import {
 import {
   AuthoritativePlannedAttemptWorktreeObserved,
   AuthoritativeTargetLineageObserved,
+  InterruptibleWorkflowBoundaryIntent,
   WorkflowInterpreter,
   type InterruptibleWorkflowBoundaryExecution
 } from "../workflow/interpretation/interpreter.js"
@@ -82,7 +83,10 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         )
         return yield* runInterruptibleBoundary(
           interruptibleBoundary,
-          { family: "TaskTracker", operationId: operation.acquisition.operationId },
+          InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+            family: "TaskTracker",
+            operationId: operation.acquisition.operationId
+          }),
           interpreter.acquireTaskClaim(operation).pipe(
             Effect.map((result) => ({ _tag: "Acquired" as const, result })),
             Effect.catchTag("TrackerMutation.TaskClaimConflict", (failure) =>
@@ -138,7 +142,10 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         }
         return yield* runInterruptibleBoundary(
           interruptibleBoundary,
-          { family: "TaskTracker", operationId: operation.operationId },
+          InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+            family: "TaskTracker",
+            operationId: operation.operationId
+          }),
           interpreter.readTaskClaim(operation),
           (result) => {
             const observation =
@@ -183,7 +190,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         }
         return yield* runInterruptibleBoundary(
           interruptibleBoundary,
-          { family: "Git", operationId: operation.operationId },
+          InterruptibleWorkflowBoundaryIntent.AuthorityRequest({ family: "Git", operationId: operation.operationId }),
           interpreter.readTaskWorktree(operation),
           (result) =>
             journal
@@ -228,7 +235,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         }
         return yield* runInterruptibleBoundary(
           interruptibleBoundary,
-          { family: "Git", operationId: operation.operationId },
+          InterruptibleWorkflowBoundaryIntent.AuthorityRequest({ family: "Git", operationId: operation.operationId }),
           interpreter.readTargetLineage(operation),
           (result) =>
             journal
@@ -276,7 +283,10 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         }
         return yield* runInterruptibleBoundary(
           interruptibleBoundary,
-          { family: "TaskTracker", operationId: operation.operationId },
+          InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+            family: "TaskTracker",
+            operationId: operation.operationId
+          }),
           interpreter.readTaskWorkSpecification(operation),
           (specification) =>
             Effect.gen(function* () {
@@ -325,7 +335,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         if (existing) return AuthoritativeTaskClaimReleased.make({ release: operation.release })
         return yield* runInterruptibleBoundary(
           interruptibleBoundary,
-          { family: "TaskTracker", operationId: operation.release.operationId },
+          InterruptibleWorkflowBoundaryIntent.TaskClaimCleanup({ family: "TaskTracker", operation }),
           interpreter.releaseTaskClaim(operation),
           (result) =>
             journal
@@ -386,7 +396,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         )
         return yield* runInterruptibleBoundary(
           interruptibleBoundary,
-          { family: "Git", operationId: operation.operationId },
+          InterruptibleWorkflowBoundaryIntent.AuthorityRequest({ family: "Git", operationId: operation.operationId }),
           interpreter.reconcileTaskWorktree(operation),
           (result) =>
             journal

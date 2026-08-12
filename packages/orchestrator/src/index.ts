@@ -604,6 +604,7 @@ export {
   AuthoritativePlannedAttemptWorktreeObserved,
   AuthoritativeTargetLineageObserved,
   AuthoritativeTaskClaimAcquired,
+  InterruptibleWorkflowBoundaryIntent,
   observePlannedAttemptWorktreeThrough,
   observeTargetLineageThrough,
   TraceItem,

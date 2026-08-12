@@ -164,11 +164,17 @@ export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.
     Effect.gen(function* () {
       const admitted = yield* Ref.modify(state, (current) => {
         const owner = current.owners.get(ownerId)
+        const continuesSameIntent =
+          owner?.phase === "Registered" &&
+          owner.kind === "InterruptibleBoundary" &&
+          owner.boundary._tag === "BoundaryResultRecorded" &&
+          owner.boundary.intent === intent &&
+          intent.boundaryCallSequence === "SameIntentCalls"
         if (
           current.phase !== "Serving" ||
           owner?.phase !== "Registered" ||
           owner.kind !== "InterruptibleBoundary" ||
-          owner.boundary._tag !== "NoBoundaryCall"
+          (owner.boundary._tag !== "NoBoundaryCall" && !continuesSameIntent)
         ) {
           return [false, current] as const
         }
