@@ -1,21 +1,9 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Ref } from "effect"
+import { Effect } from "effect"
 import { describe, expect } from "vitest"
-import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
+import { OperationId } from "../../workflow/identity.js"
+import { interruptibleBoundaryOf, runAtomicDeliveryBoundary } from "./delivery-action-executor.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
-
-const boundaryFamilies = [
-  "IntegrationCandidateConstruction",
-  "TargetVerificationAndEvidence",
-  "TargetPromotion"
-] as const
-
-type BoundaryFamily = (typeof boundaryFamilies)[number]
-type IntegrationExitCassetteEntry =
-  | { readonly _tag: "BoundaryEntered"; readonly family: BoundaryFamily }
-  | { readonly _tag: "BoundaryResultProduced"; readonly family: BoundaryFamily }
-  | { readonly _tag: "ExitCutoffClosed" }
-  | { readonly _tag: "OwnerReleasedWithoutSuccessor"; readonly family: BoundaryFamily }
 
 describe("application Exit integration boundary classification", () => {
   it.each([
@@ -36,45 +24,42 @@ describe("application Exit integration boundary classification", () => {
   })
 })
 
-it.effect(
-  "preserves candidate verification promotion and evidence chronologies in authored and recorded cassettes",
-  () =>
-    Effect.forEach(boundaryFamilies, (family) =>
-      Effect.gen(function* () {
-        const authored: ReadonlyArray<IntegrationExitCassetteEntry> = [
-          { _tag: "BoundaryEntered", family },
-          { _tag: "BoundaryResultProduced", family },
-          { _tag: "ExitCutoffClosed" },
-          { _tag: "OwnerReleasedWithoutSuccessor", family }
-        ]
-        const recorded = yield* Ref.make<ReadonlyArray<IntegrationExitCassetteEntry>>([])
-        const record = (entry: IntegrationExitCassetteEntry) => Ref.update(recorded, (entries) => [...entries, entry])
-        const lifecycle = yield* makeApplicationExitLifecycle()
-        const owner = yield* lifecycle.admission.acquireForwardOwner("AtomicBoundary")
-        if (owner.kind !== "AtomicBoundary") return yield* Effect.die("wrong integration boundary owner")
-        const produced = yield* Deferred.make<void>()
-        const mayReturn = yield* Deferred.make<void>()
-        const running = yield* owner
-          .run(
-            record({ _tag: "BoundaryEntered", family }).pipe(
-              Effect.andThen(record({ _tag: "BoundaryResultProduced", family })),
-              Effect.andThen(Deferred.succeed(produced, undefined)),
-              Effect.andThen(Deferred.await(mayReturn))
-            )
-          )
-          .pipe(
-            Effect.ensuring(owner.release),
-            Effect.ensuring(record({ _tag: "OwnerReleasedWithoutSuccessor", family })),
-            Effect.forkChild
-          )
+it.effect("defects when an atomic owner reaches an interruptible route while Serving", () =>
+  Effect.gen(function* () {
+    const defect = yield* interruptibleBoundaryOf({
+      forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } }
+    })
+      .run(
+        { family: "Git", operationId: OperationId.make("boundary-mismatch") },
+        Effect.succeed("outside-result"),
+        Effect.succeed
+      )
+      .pipe(Effect.catchDefect(Effect.succeed))
 
-        yield* Deferred.await(produced)
-        yield* lifecycle.requestExit
-        yield* record({ _tag: "ExitCutoffClosed" })
-        yield* Deferred.succeed(mayReturn, undefined)
+    expect(defect).toEqual({
+      _tag: "DeliveryActionForwardBoundaryMismatch",
+      actual: "AtomicBoundary",
+      expected: "InterruptibleBoundary"
+    })
+  })
+)
 
-        expect((yield* Fiber.await(running))._tag).toBe("Failure")
-        expect(yield* Ref.get(recorded)).toEqual(authored)
-      })
-    )
+it.effect("defects when an interruptible owner reaches an atomic route while Serving", () =>
+  Effect.gen(function* () {
+    const defect = yield* runAtomicDeliveryBoundary(
+      {
+        forwardBoundary: {
+          _tag: "InterruptibleBoundary",
+          execution: { run: (_intent, call, recordResult) => Effect.flatMap(call, recordResult) }
+        }
+      },
+      Effect.succeed("atomic-result")
+    ).pipe(Effect.catchDefect(Effect.succeed))
+
+    expect(defect).toEqual({
+      _tag: "DeliveryActionForwardBoundaryMismatch",
+      actual: "InterruptibleBoundary",
+      expected: "AtomicBoundary"
+    })
+  })
 )

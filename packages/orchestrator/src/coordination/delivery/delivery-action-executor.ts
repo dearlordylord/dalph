@@ -115,20 +115,27 @@ export interface DeliveryActionExecutionLease {
   ) => Effect.Effect<A, E | DeliveryActionProtocolAdmissionMissing, R>
 }
 
+const boundaryMismatch = (
+  expected: DeliveryActionForwardBoundary["_tag"],
+  actual: DeliveryActionForwardBoundary["_tag"]
+) => ({ _tag: "DeliveryActionForwardBoundaryMismatch", actual, expected })
+
 /** Fails closed if a route asks an atomic owner to perform an interruptible outside call. */
 export const interruptibleBoundaryOf = (
   lease: Pick<DeliveryActionExecutionLease, "forwardBoundary">
 ): InterruptibleWorkflowBoundaryExecution =>
   lease.forwardBoundary._tag === "InterruptibleBoundary"
     ? lease.forwardBoundary.execution
-    : { run: () => Effect.interrupt }
+    : { run: () => Effect.die(boundaryMismatch("InterruptibleBoundary", lease.forwardBoundary._tag)) }
 
 /** Fails closed if a route asks an interruptible owner to enter an atomic integration section. */
 export const runAtomicDeliveryBoundary = <A, E, R>(
-  lease: DeliveryActionExecutionLease,
+  lease: Pick<DeliveryActionExecutionLease, "forwardBoundary">,
   execution: Effect.Effect<A, E, R>
 ): Effect.Effect<A, E, R> =>
-  lease.forwardBoundary._tag === "AtomicBoundary" ? lease.forwardBoundary.execution.run(execution) : Effect.interrupt
+  lease.forwardBoundary._tag === "AtomicBoundary"
+    ? lease.forwardBoundary.execution.run(execution)
+    : Effect.die(boundaryMismatch("AtomicBoundary", lease.forwardBoundary._tag))
 
 /** A route attempted exact-attempt protocol work without declaring its admission requirement. */
 export class DeliveryActionProtocolAdmissionMissing extends Schema.TaggedError<DeliveryActionProtocolAdmissionMissing>()(

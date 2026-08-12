@@ -63,6 +63,14 @@ import { RunnableFrontierTransition } from "../../../coordination/frontier/front
 import { deliveryProposalsOf } from "../../../coordination/delivery/delivery-proposal-derivation.js"
 import { executeIntegrationAction } from "../../../coordination/delivery/integration-delivery-action-adapter.js"
 import { makeIntegrationTargetResourceController } from "../../../coordination/admission/integration-target-resource.js"
+import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacity.js"
+import { makeApplicationExitLifecycle } from "../../../coordination/application-exit/lifecycle.js"
+import { makeDeliveryRuntimeAdmissionController } from "../../../coordination/delivery/delivery-runtime-admission.js"
+import {
+  makeDeliveryRuntimeLiveOwner,
+  makeObservedDeliveryActionLease
+} from "../../../coordination/delivery/delivery-runtime-observation.js"
+import { plannedAttemptProtocolControllerLayer } from "../planned-attempt-executor-work/protocol-controller.js"
 import { TargetPromotionRuntime } from "./runtime.js"
 import { TargetPromotionRuntimeUnavailable } from "../../../coordination/delivery/target-promotion-boundary.js"
 import type {
@@ -403,6 +411,59 @@ it.effect("allows a different target while the exact promotion permit is active"
       expect(snapshot.heldResponsibilityPositions.has(responsibility.queuedAt)).toBe(false)
       expect(snapshot.heldResponsibilityPositions.has(other.queuedAt)).toBe(true)
       expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toContain("TargetPromotionObservedSuccess")
+    })
+  )
+)
+
+it.effect("records an applied promotion through production admission before Exit stops the successor", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const promotionEntered = yield* Deferred.make<void>()
+      const promotionMayReturn = yield* Deferred.make<void>()
+      const resources = yield* makeIntegrationTargetResourceController()
+      yield* resources.acquire(responsibility)
+      yield* resources.publishAcceptedOwnership(responsibility)
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const admission = yield* makeDeliveryRuntimeAdmissionController(
+        { capacity: defaultTaskWorkCapacity, held: [] },
+        resources,
+        lifecycle.admission
+      ).pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
+      const { action, transition } = promotionActionFor(responsibility)
+      const admitted = yield* admission.tryReserve(action.proposal)
+      if (admitted._tag !== "Admitted") return yield* Effect.die("promotion proposal was not admitted")
+      expect(admitted.reservation.forwardOwner.kind).toBe("AtomicBoundary")
+      const owner = yield* makeDeliveryRuntimeLiveOwner(admitted.reservation)
+      const lease = makeObservedDeliveryActionLease(admission, resources, owner, Effect.void)
+      const successors = yield* Ref.make(0)
+      const git = TargetPromotionGit.of({
+        compareAndSet: () =>
+          Deferred.succeed(promotionEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(promotionMayReturn)),
+            Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
+          ),
+        read: () =>
+          Effect.succeed(
+            TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+          )
+      })
+      const running = yield* executeIntegrationAction(action, transition, lease, trackerTarget).pipe(
+        Effect.provide(makeJournalLayer(records)),
+        Effect.provideService(TargetPromotionRuntime, TargetPromotionRuntime.of({ git })),
+        Effect.andThen(Ref.update(successors, (count) => count + 1)),
+        Effect.ensuring(owner.settle.pipe(Effect.andThen(admission.complete(admitted.reservation)))),
+        Effect.forkScoped
+      )
+
+      yield* Deferred.await(promotionEntered)
+      yield* lifecycle.requestExit
+      yield* Deferred.succeed(promotionMayReturn, undefined)
+
+      expect((yield* Fiber.await(running))._tag).toBe("Failure")
+      expect((yield* Ref.get(records)).some(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toBe(true)
+      expect(yield* Ref.get(successors)).toBe(0)
+      yield* lifecycle.awaitForwardOwnersReleased
     })
   )
 )
