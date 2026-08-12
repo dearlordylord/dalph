@@ -198,6 +198,36 @@ are not substitutes for this local-host exclusion rule.
 Filesystem qualification and lifecycle details are in
 [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md).
 
+## Graceful Application Exit
+
+An Operator command or process-supervisor signal enters one transport-neutral
+application-lifecycle protocol at the application shell. Accepting Exit
+atomically closes process-wide forward-progress admission. V1 contains at most
+one activated unfinished Run; discovery of several still fails closed before
+activation.
+
+Dalph then spends at most five seconds on fast non-LLM executor suspension,
+the suspension intent and report writes required by that exact protocol,
+already-produced journal writes, and process-local release. It does not wait
+for executor work to finish, start fresh reconciliation or stabilization, send
+an LLM request, or dispose a durable workflow resource. Exact safe-or-terminal
+executor evidence is required before releasing that attempt's task-work
+position. An interruptible tracker, Git, evidence, or cleanup call may instead
+leave a recoverable ambiguity behind its acknowledged intent.
+
+Exit request, result, failure, timeout, signal, and process death are
+application-lifecycle facts outside every Run workflow journal. Success requires
+no live action owner, unsafe executor, unacknowledged produced journal write,
+reservation, fiber, or held coordinator lock. A conclusive failure force-terminates after
+the remaining useful quick work settles; a drain still unresolved at five
+seconds force-terminates nonzero. Restart restores no Exit mode or timer and
+uses ordinary Run establishment and owning-boundary reconciliation.
+
+The accepted chronology and model/test mapping are in
+[issue-169-graceful-application-exit.md](scenarios/issue-169-graceful-application-exit.md),
+and the durable-boundary trade-off is recorded in
+[ADR 0013](adr/0013-bound-graceful-application-exit.md).
+
 ## Workflow Commands, Actions, Occurrences, and Events
 
 A proposed action is not proof that anything happened. A workflow event is the

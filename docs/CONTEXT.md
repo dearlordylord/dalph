@@ -37,12 +37,53 @@ _Avoid_: Dalph orchestrator, universal review pipeline
 **Operator**:
 The one logical V1 human actor that intentionally applies a Pause or Unpause
 direction, an exact Continue, Restart, or Stop choice for one changed attempt,
-or a task-claim reacquisition direction through Dalph. V1 records the actor
-class `Operator`, not an authenticated
+or a task-claim reacquisition direction, or requests graceful application Exit,
+through Dalph. V1 records the actor class `Operator`, not an authenticated
 person identity; a separately accepted transport request identity may identify
 a redeliverable request without identifying the person. Authentication and
 multiple operator identities require a separately accepted boundary design.
 _Avoid_: Authenticated operator identity, claim owner, provider user
+
+**Graceful application Exit request**:
+An Operator or process supervisor's transport-neutral request that the running
+Dalph application stop through its accepted lifecycle protocol.
+_Avoid_: Effect scope closure, process death, Pause, Run termination
+
+**Application lifecycle protocol**:
+The process-wide contract that accepts a graceful application Exit request and
+reports its completion, timeout, or failure outside every Run workflow journal.
+_Avoid_: Run workflow, applied control direction, Effect scope finalization
+
+**Graceful application Exit**:
+The application-lifecycle outcome in which Dalph reaches its accepted shutdown
+boundary, reports the result, and then ends its process.
+_Avoid_: Process disappearance, coordinator death, cancellation, Run termination
+
+**Exit admission cutoff**:
+The process-wide point at which an accepted graceful application Exit request
+prevents every later forward-progress admission while preserving earlier work.
+_Avoid_: Pause application, proposal selection, process interruption
+
+**Exit drain**:
+The short, bounded application-lifecycle interval after the Exit admission
+cutoff in which Dalph brings admitted work to a durably recoverable boundary.
+_Avoid_: Work completion, durable-resource cleanup, Run stabilization
+
+**Exit drain limit**:
+The fixed V1 maximum of five seconds allowed for one Exit drain on macOS and
+Linux, measured from its Exit admission cutoff without reset or extension.
+_Avoid_: Supervisor force deadline, configurable timeout, per-request duration
+
+**Exit drain failure**:
+The conclusive application-lifecycle result that graceful Exit is impossible
+after every remaining useful quick drain operation has settled.
+_Avoid_: Exit timeout, executor failure, Run failure
+
+**Forced application termination**:
+The non-graceful application-lifecycle outcome in which Dalph ends its process
+after an Exit drain failure or the Exit drain limit without claiming unresolved
+work reached safety.
+_Avoid_: Graceful application Exit, safe suspension, cancellation, Run termination
 
 **Workflow occurrence**:
 One concrete happening relevant to a Dalph run. Constructing a command,
