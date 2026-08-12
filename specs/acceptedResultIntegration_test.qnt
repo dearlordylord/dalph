@@ -32,6 +32,71 @@ module acceptedResultIntegrationTest {
       })
   }
 
+  run ordinaryAcceptedStillRecordsOneIntegrationResponsibilityTest = {
+    init
+      .then(acceptResult(1))
+      .expect(and {
+        state.results.get(1).phase == AcceptedResult,
+        state.results.get(1).acceptedEvidencePreserved,
+        not(state.results.get(1).restartChoiceCommittedBeforeTerminal),
+        not(state.results.get(1).integrationResponsibilityRecorded),
+        state.results.get(1).integrationResponsibilityCount == 0,
+      })
+      .then(queueAcceptedResult(1))
+      .expect(and {
+        state.results.get(1).phase == Queued,
+        state.results.get(1).integrationResponsibilityRecorded,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        state.results.get(1).queuePosition == 1,
+        state.results.get(1).preIntegrationCancellation,
+        ordinaryAcceptedAdmissionRecordsOneResponsibility,
+        acceptedEvidenceIsNeverDiscarded,
+      })
+  }
+
+  run lateAcceptedAfterRestartRemainsEvidenceWithoutIntegrationResponsibilityTest = {
+    init
+      .then(observeAppliedRestartBeforeAccepted(1))
+      .then(acceptResult(1))
+      .expect(and {
+        state.results.get(1).phase == LateAcceptedEvidence,
+        state.results.get(1).restartChoiceCommittedBeforeTerminal,
+        state.results.get(1).acceptedEvidencePreserved,
+        not(state.results.get(1).integrationResponsibilityRecorded),
+        state.results.get(1).integrationResponsibilityCount == 0,
+        state.results.get(1).queuePosition == 0,
+        not(state.results.get(1).preIntegrationCancellation),
+        not(state.results.get(1).targetHeld),
+        lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility,
+      })
+      .then(recoverCoordinator)
+      .expect(and {
+        state.results.get(1).phase == LateAcceptedEvidence,
+        state.results.get(1).acceptedEvidencePreserved,
+        state.results.get(1).integrationResponsibilityCount == 0,
+        not(state.targetReacquisitionRequired),
+        lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility,
+      })
+  }
+
+  run lateAcceptedEvidenceDoesNotChangeOrdinaryAcceptedAdmissionTest = {
+    init
+      .then(observeAppliedRestartBeforeAccepted(1))
+      .then(acceptResult(1))
+      .then(acceptResult(2))
+      .then(queueAcceptedResult(2))
+      .then(startIntegration(2))
+      .expect(and {
+        state.results.get(1).phase == LateAcceptedEvidence,
+        state.results.get(1).integrationResponsibilityCount == 0,
+        state.results.get(2).phase == Started,
+        state.results.get(2).integrationResponsibilityCount == 1,
+        state.results.get(2).targetHeld,
+        lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility,
+        ordinaryAcceptedAdmissionRecordsOneResponsibility,
+      })
+  }
+
   run restartRequiresFreshTrackerFactsBeforeStartTest = {
     init
       .then(acceptResult(1))

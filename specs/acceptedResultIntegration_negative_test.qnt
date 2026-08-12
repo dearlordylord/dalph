@@ -1,5 +1,5 @@
-// Negative controls for #59: each action performs one forbidden shortcut that
-// the accepted-result verification invariants must reject.
+// Negative controls for accepted-result admission and verification. Each
+// action performs one forbidden shortcut that a named invariant must reject.
 module acceptedResultIntegrationNegativeTest {
   import acceptedResultIntegration.* from "./acceptedResultIntegration"
 
@@ -13,6 +13,59 @@ module acceptedResultIntegrationNegativeTest {
           ...result,
           phase: PromotionPremise,
           promotionAuthorized: true,
+        }),
+      },
+    }
+  }
+
+  // This is the mutation control for removing queueAcceptedResult's
+  // ordinary-admission guard. It turns late Accepted evidence into the issue
+  // #56 responsibility that the pre-terminal Restart chronology forbids.
+  action queueLateAcceptedAfterRestart: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == LateAcceptedEvidence,
+      result.restartChoiceCommittedBeforeTerminal,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: Queued,
+          integrationResponsibilityRecorded: true,
+          integrationResponsibilityCount: 1,
+          queuePosition: state.nextJournalPosition,
+          preIntegrationCancellation: true,
+        }),
+        nextJournalPosition: state.nextJournalPosition + 1,
+      },
+    }
+  }
+
+  action discardOrdinaryAcceptedResponsibility: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == Queued,
+      result.integrationResponsibilityRecorded,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          integrationResponsibilityRecorded: false,
+          integrationResponsibilityCount: 0,
+        }),
+      },
+    }
+  }
+
+  action discardLateAcceptedEvidence: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == LateAcceptedEvidence,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          acceptedEvidencePreserved: false,
         }),
       },
     }
@@ -119,6 +172,33 @@ module acceptedResultIntegrationNegativeTest {
       .then(reportVerificationPassed(1))
       .then(authorizePromotionWithoutSealedEvidence)
       .expect(not(onlySealedPassedAuthorizesPromotion))
+  }
+
+  run lateAcceptedAfterRestartCannotBeQueuedForIntegrationTest = {
+    init
+      .then(observeAppliedRestartBeforeAccepted(1))
+      .then(acceptResult(1))
+      .then(queueLateAcceptedAfterRestart)
+      .expect(and {
+        not(ordinaryAcceptedAdmissionRecordsOneResponsibility),
+        not(lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility),
+      })
+  }
+
+  run ordinaryAcceptedCannotLoseItsOneResponsibilityTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(discardOrdinaryAcceptedResponsibility)
+      .expect(not(ordinaryAcceptedAdmissionRecordsOneResponsibility))
+  }
+
+  run lateAcceptedEvidenceCannotBeDiscardedTest = {
+    init
+      .then(observeAppliedRestartBeforeAccepted(1))
+      .then(acceptResult(1))
+      .then(discardLateAcceptedEvidence)
+      .expect(not(acceptedEvidenceIsNeverDiscarded))
   }
 
   run nonPassCannotAdvanceLaterSameTargetQueueTest = {

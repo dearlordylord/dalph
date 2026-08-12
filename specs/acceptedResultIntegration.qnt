@@ -1,13 +1,15 @@
-// Models issues #56, #57, and #59: accepted-result admission plus one fixed
-// integration session that accepts only an explicit submitted commit whose
-// ordered direct parents are [current target head, accepted result]. The
-// verification boundary is one public wrapper request with a fixed opaque
-// plan. Promotion is modelled as one durable exact compare-and-set protocol;
-// executor internals and post-milestone tracker settlement remain absent.
+// Models issues #56, #57, and #59: ordinary accepted-result admission plus one
+// fixed integration session that accepts only an explicit submitted commit
+// whose ordered direct parents are [current target head, accepted result]. Its
+// only issue-66 responsibility is the admission exception: Accepted arriving
+// after an already committed Restart remains evidence and creates no
+// integration responsibility. Replacement facts and P2 remain owned by
+// taskFactReconciliation.
 module acceptedResultIntegration {
   type Phase =
     | NoAcceptedResult
     | AcceptedResult
+    | LateAcceptedEvidence
     | Queued
     | Started
     | DependencyWait
@@ -78,6 +80,13 @@ module acceptedResultIntegration {
 
   type ResultState = {
     phase: Phase,
+    // The applied Restart direction and the late Accepted report are separate
+    // durable phenomena. The former must predate the latter to select the
+    // evidence-only admission exception.
+    restartChoiceCommittedBeforeTerminal: bool,
+    acceptedEvidencePreserved: bool,
+    integrationResponsibilityRecorded: bool,
+    integrationResponsibilityCount: int,
     queuePosition: int,
     // The finite model gives both accepted results one target. Keeping the
     // locator explicit makes the queue guard target-scoped if another target
@@ -218,7 +227,9 @@ module acceptedResultIntegration {
   pure def restartRequiresFreshAuthorityFacts(s: State): bool =
     RESULT_IDS.exists(id => {
       val phase = s.results.get(id).phase
-      phase != NoAcceptedResult and not(promotionTerminalPhase(phase))
+      phase != NoAcceptedResult
+        and phase != LateAcceptedEvidence
+        and not(promotionTerminalPhase(phase))
     })
 
   pure def canStart(s: State, id: int): bool = {
@@ -249,6 +260,12 @@ module acceptedResultIntegration {
 
   val acceptedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == AcceptedResult)
+
+  val restartCommittedBeforeAcceptedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).restartChoiceCommittedBeforeTerminal)
+
+  val lateAcceptedEvidenceReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == LateAcceptedEvidence)
 
   val queuedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == Queued)
@@ -382,6 +399,54 @@ module acceptedResultIntegration {
       state.results.get(id).preIntegrationCancellation
         == (state.results.get(id).phase == Queued)
     )
+
+  // Every ordinary phase after AcceptedResult is backed by one and only one
+  // integration responsibility. The late-Restart evidence phase is excluded
+  // explicitly instead of being smuggled into the ordinary queue predicate.
+  val ordinaryAcceptedAdmissionRecordsOneResponsibility: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      if (Set(NoAcceptedResult, AcceptedResult, LateAcceptedEvidence).contains(result.phase))
+        and {
+          not(result.integrationResponsibilityRecorded),
+          result.integrationResponsibilityCount == 0,
+        }
+      else
+        and {
+          result.acceptedEvidencePreserved,
+          not(result.restartChoiceCommittedBeforeTerminal),
+          result.integrationResponsibilityRecorded,
+          result.integrationResponsibilityCount == 1,
+          result.queuePosition > 0,
+        }
+    })
+
+  val acceptedEvidenceIsNeverDiscarded: bool =
+    RESULT_IDS.forall(id =>
+      state.results.get(id).phase == NoAcceptedResult
+        or state.results.get(id).acceptedEvidencePreserved
+    )
+
+  // This invariant deliberately restates the late-admission exclusion rather
+  // than sharing queueAcceptedResult's guard. Removing the guard makes it red.
+  val lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(
+        result.restartChoiceCommittedBeforeTerminal
+          and result.acceptedEvidencePreserved
+      ) or and {
+        result.phase == LateAcceptedEvidence,
+        result.restartChoiceCommittedBeforeTerminal,
+        result.acceptedEvidencePreserved,
+        not(result.integrationResponsibilityRecorded),
+        result.integrationResponsibilityCount == 0,
+        result.queuePosition == 0,
+        not(result.preIntegrationCancellation),
+        not(result.targetHeld),
+        result.integrationSession == 0,
+      }
+    })
 
   val queuePositionsAreUnique: bool =
     RESULT_IDS.forall(left =>
@@ -994,6 +1059,10 @@ module acceptedResultIntegration {
     state' = {
       results: RESULT_IDS.mapBy(id => {
         phase: NoAcceptedResult,
+        restartChoiceCommittedBeforeTerminal: false,
+        acceptedEvidencePreserved: false,
+        integrationResponsibilityRecorded: false,
+        integrationResponsibilityCount: 0,
         queuePosition: 0,
         integrationTarget: 1,
         preIntegrationCancellation: false,
@@ -1050,6 +1119,25 @@ module acceptedResultIntegration {
     }
   }
 
+  // taskFactReconciliation owns choice identity and replacement. This action
+  // carries only the exact chronological fact needed by issue #56 admission:
+  // result one has an applied Restart before its terminal report arrives.
+  action observeAppliedRestartBeforeAccepted(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == NoAcceptedResult,
+      not(result.restartChoiceCommittedBeforeTerminal),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          restartChoiceCommittedBeforeTerminal: true,
+        }),
+      },
+    }
+  }
+
   action acceptResult(id: int): bool = {
     val result = state.results.get(id)
     all {
@@ -1057,7 +1145,15 @@ module acceptedResultIntegration {
       result.phase == NoAcceptedResult,
       state' = {
         ...state,
-        results: state.results.put(id, { ...result, phase: AcceptedResult }),
+        results: state.results.put(id, {
+          ...result,
+          phase:
+            if (result.restartChoiceCommittedBeforeTerminal)
+              LateAcceptedEvidence
+            else
+              AcceptedResult,
+          acceptedEvidencePreserved: true,
+        }),
       },
     }
   }
@@ -1067,11 +1163,17 @@ module acceptedResultIntegration {
     all {
       RESULT_IDS.contains(id),
       result.phase == AcceptedResult,
+      not(result.restartChoiceCommittedBeforeTerminal),
+      result.acceptedEvidencePreserved,
+      not(result.integrationResponsibilityRecorded),
+      result.integrationResponsibilityCount == 0,
       state' = {
         ...state,
         results: state.results.put(id, {
           ...result,
           phase: Queued,
+          integrationResponsibilityRecorded: true,
+          integrationResponsibilityCount: 1,
           queuePosition: state.nextJournalPosition,
           preIntegrationCancellation: true,
         }),
@@ -2065,6 +2167,7 @@ module acceptedResultIntegration {
   // adapter an unambiguous production operation for every trace step.
   action acceptResultOne: bool = acceptResult(1)
   action acceptResultTwo: bool = acceptResult(2)
+  action observeAppliedRestartBeforeAcceptedOne: bool = observeAppliedRestartBeforeAccepted(1)
   action queueAcceptedResultOne: bool = queueAcceptedResult(1)
   action queueAcceptedResultTwo: bool = queueAcceptedResult(2)
   action startIntegrationOne: bool = startIntegration(1)
@@ -2156,6 +2259,7 @@ module acceptedResultIntegration {
     // Exhaustive exploration keeps result two at the queue/order boundary.
     // Collected two-result scenarios exercise its full independent-target
     // lifecycle without multiplying every result-one protocol state by it.
+    observeAppliedRestartBeforeAcceptedOne,
     acceptResultOne,
     acceptResultTwo,
     queueAcceptedResultOne,

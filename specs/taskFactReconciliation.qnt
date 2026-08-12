@@ -1,12 +1,88 @@
-// Models Alice's Continue-or-Stop choice for one exact changed-task attempt.
-// The choice is durable before fresh authority reads or boundary effects. A
-// Continue can resume only the immutable planned attempt P after every exact
-// authority agrees. A Stop abandons implementation only after exact unbroken
-// quiescence, preserves all artifacts, and reconciles claim release separately.
+// Models Alice's Continue, Restart, or Stop choice for one exact changed-task
+// attempt. The choice is durable before fresh authority reads or boundary
+// effects. Continue resumes only immutable P1. Restart atomically supersedes P1
+// and records clean P2 only after current executor quiescence and exact fresh
+// F2/K1/W1-H1-B1/H2 evidence. Stop abandons implementation only after exact
+// unbroken quiescence and reconciles claim release separately.
 module taskFactReconciliation {
   type Fingerprint = F1 | F2 | F3
   type Attempt = NoAttempt | AttemptP | AttemptQ
-  type Choice = NoChoice | ContinueChoice | StopChoice
+  type Choice = NoChoice | ContinueChoice | RestartChoice | StopChoice
+
+  // P2 is the one exact successor recorded by PlannedAttemptReplaced. P3 is
+  // present only so negative controls can prove that recovery never allocates
+  // another successor after P2 is durable.
+  type PlannedSuccessor = NoPlannedSuccessor | PlannedP2 | PlannedP3
+
+  // Git commits, branch identities, and worktree identities are different
+  // authority facts even in this finite model. Distinct types prevent a
+  // branch or locator from accidentally satisfying an exact-SHA guard.
+  type GitCommit = NoGitCommit | BaseB1Commit | HeadH1Commit | HeadH2Commit | OtherGitCommit
+  type BranchIdentity = NoBranch | P1Branch | P2Branch
+  type WorktreeIdentity = NoWorktree | W1Worktree | W2Worktree
+
+  // These phases are the journal- and boundary-visible chronology owned by
+  // issue #66. Waiting and rejection reasons remain separate below because a
+  // running writer, an unreadable owner, and a conclusive terminal outcome are
+  // different phenomena even though none authorizes P2.
+  type ReplacementPhase =
+    | ReplacementNotRequested
+    | RestartApplied
+    | NeedCurrentExecutorQuiescence
+    | NeedCurrentReplacementTaskFacts
+    | NeedCurrentReplacementClaim
+    | NeedCurrentOldWorktree
+    | NeedCurrentTargetHead
+    | ReplacementReadyToAppend
+    | PlannedAttemptReplacementRecorded
+    | SuccessorWaitingForAdmission
+    | SuccessorAdmitted
+    | SuccessorRunning
+    | ReplacementWaiting
+    | ReplacementRejected
+
+  type ReplacementDisposition =
+    | NoReplacementDisposition
+    | RunningWriterWait
+    | ExecutorUnreadableWait
+    | ExecutorCorrelationContradiction
+    | CompletedDoesNotAuthorizeReplacement
+    | FailedDoesNotAuthorizeReplacement
+    | NewFingerprintChoiceRequired
+    | TaskFactsUnreadableWait
+    | TaskNotEligibleWait
+    | ClaimAbsentWait
+    | ClaimForeignWait
+    | ClaimUnreadableWait
+    | OldWorktreeNotReadyWait
+    | OldWorktreeUnreadableWait
+    | TargetHeadUnreadableWait
+    | PastIntegrationCutoff
+
+  type ReplacementTaskFacts =
+    | ReplacementTaskFactsNotRead
+    | ExactF2OpenInClosureUnblocked
+    | ReplacementF3Observed
+    | ReplacementTaskFactsUnreadable
+    | ReplacementTaskNotEligible
+
+  type ReplacementClaimFacts =
+    | ReplacementClaimNotRead
+    | ExactK1Observed
+    | ReplacementClaimAbsent
+    | ReplacementClaimForeign
+    | ReplacementClaimUnreadable
+
+  type OldWorktreeFacts =
+    | OldWorktreeNotRead
+    | ExactW1Ready
+    | OldWorktreeNotReady
+    | OldWorktreeUnreadable
+
+  type ReplacementTargetHeadFacts =
+    | ReplacementTargetHeadNotRead
+    | ExactH2Observed
+    | ReplacementTargetHeadUnreadable
 
   type RequestId = { runId: int, nonce: int }
   type ChoiceSubject = {
@@ -30,6 +106,9 @@ module taskFactReconciliation {
   type ExecutorEvidence =
     | ExactSafelySuspended
     | ExactTerminal
+    | ExactCompletedTerminal
+    | ExactFailedTerminal
+    | ExactAcceptedTerminal
     | ExactRunning
     | ExecutorUnavailable
     | ExecutorContradiction
@@ -90,6 +169,7 @@ module taskFactReconciliation {
     | InitializedAction
     | F2ObservedAction
     | ContinueF2AppliedAction
+    | RestartF2AppliedAction
     | StopF2AppliedAction
     | ExactRedeliveredAction
     | RunMismatchRejectedAction
@@ -98,6 +178,7 @@ module taskFactReconciliation {
     | TerminalObservedAction
     | IntegrationStartedAction
     | PostCutoffContinueRejectedAction
+    | PostCutoffRestartRejectedAction
     | PostCutoffStopRejectedAction
     | FreshGraphReadAction
     | FreshSpecificationReadAction
@@ -108,6 +189,35 @@ module taskFactReconciliation {
     | ContinueAdmittedAction
     | F3ObservedAction
     | ContinueF3AppliedAction
+    | RestartFactsBeganAction
+    | RestartQuiescenceBrokenAction
+    | RestartRunningObservedAction
+    | RestartSafeObservedAction
+    | RestartAcceptedObservedAction
+    | RestartCompletedObservedAction
+    | RestartFailedObservedAction
+    | RestartExecutorUnavailableObservedAction
+    | RestartExecutorContradictionObservedAction
+    | ReplacementF2FactsObservedAction
+    | ReplacementF3FactsObservedAction
+    | ReplacementTaskFactsUnreadableAction
+    | ReplacementTaskNotEligibleAction
+    | ReplacementK1ObservedAction
+    | ReplacementClaimAbsentAction
+    | ReplacementClaimForeignAction
+    | ReplacementClaimUnreadableAction
+    | ReplacementClaimReadActivationRecoveredAction
+    | ReplacementW1ReadyAction
+    | ReplacementW1NotReadyAction
+    | ReplacementW1UnreadableAction
+    | ReplacementH2ObservedAction
+    | ReplacementH2UnreadableAction
+    | ReplacementAppendAbsentAfterCrashAction
+    | PlannedAttemptReplacementRecordedAction
+    | ReplacementAppendPresentAfterCrashAction
+    | SuccessorW2ReadyAction
+    | SuccessorOrdinarilyAdmittedAction
+    | SuccessorExecutorStartedAction
     | StoppageReconciliationRequiredAction
     | StoppageIntentRecordedAction
     | StoppageCalledAction
@@ -189,6 +299,7 @@ module taskFactReconciliation {
     claimReleaseAuthorizedByExactRead: bool,
     claimReleaseIntentRecorded: bool,
     claimReleaseCallCount: int,
+    claimReleaseCallCountAtRestart: int,
     // Boundary-call count when current claim authority last became non-exact.
     // Earlier calls authorized by an exact read remain valid history.
     claimReleaseCallCountAtNonExactObservation: int,
@@ -215,6 +326,42 @@ module taskFactReconciliation {
     lastClaimMutationTarget: ClaimMutationTarget,
     originalClaimIdentity: int,
     currentClaimIdentity: int,
+    replacementPhase: ReplacementPhase,
+    replacementDisposition: ReplacementDisposition,
+    replacementTaskFacts: ReplacementTaskFacts,
+    replacementClaimFacts: ReplacementClaimFacts,
+    replacementClaimReadsThisActivation: int,
+    oldWorktreeFacts: OldWorktreeFacts,
+    replacementTargetHeadFacts: ReplacementTargetHeadFacts,
+    observedOldWorktreeHead: GitCommit,
+    oldBaseB1IsAncestor: bool,
+    observedReplacementTargetHead: GitCommit,
+    p1Unsettled: bool,
+    p1Superseded: bool,
+    plannedSuccessor: PlannedSuccessor,
+    replacementEventRecorded: bool,
+    replacementEventCount: int,
+    successorAllocationCount: int,
+    successorBaseHead: GitCommit,
+    successorBranchIdentity: BranchIdentity,
+    successorWorktreeIdentity: WorktreeIdentity,
+    successorCarriesP1Content: bool,
+    successorWorktreeReady: bool,
+    successorAdmissionCount: int,
+    successorPositionHeld: bool,
+    successorExecutorStartCount: int,
+    successorExecutorResponsibilityRetained: bool,
+    replacementProcessLossCount: int,
+    completedResultPreserved: bool,
+    failedResultPreserved: bool,
+    lateAcceptedCommitPreserved: bool,
+    lateAcceptedEvidencePreserved: bool,
+    lateAcceptedIntegrationResponsibilityCount: int,
+    p1BranchPreserved: bool,
+    p1CommitsPreserved: bool,
+    p1JournalEvidencePreserved: bool,
+    replacementCleanupCallCount: int,
+    replacementClaimMutationCallCount: int,
     lastAction: ActionTag,
   }
 
@@ -222,6 +369,15 @@ module taskFactReconciliation {
   pure val OTHER_RUN = 66
   pure val TASK_A = 1
   pure val ATTEMPT_P = 1
+  pure val BASE_B1: GitCommit = BaseB1Commit
+  pure val CURRENT_W1_HEAD_H1: GitCommit = HeadH1Commit
+  pure val TARGET_HEAD_H2: GitCommit = HeadH2Commit
+  pure val BRANCH_P1: BranchIdentity = P1Branch
+  pure val BRANCH_P2: BranchIdentity = P2Branch
+  pure val WORKTREE_W1: WorktreeIdentity = W1Worktree
+  pure val WORKTREE_W2: WorktreeIdentity = W2Worktree
+  pure val TASK_WORK_CAPACITY = 1
+  pure val REPLACEMENT_CLAIM_READ_LIMIT = 3
   pure val STOP_COMMAND_LIMIT = 3
   pure val RECOVERY_LIMIT = 3
 
@@ -239,6 +395,9 @@ module taskFactReconciliation {
   pure val CONTINUE_D1: RequestId = { runId: RUN_R, nonce: 1 }
   pure val STOP_D2: RequestId = { runId: RUN_R, nonce: 2 }
   pure val CONTINUE_D3: RequestId = { runId: RUN_R, nonce: 3 }
+  // The finite nonce is only an encoding. This value is issue #66's exact D1
+  // Restart request identity and is distinct from the older #65 fixtures.
+  pure val RESTART_D1: RequestId = { runId: RUN_R, nonce: 4 }
   pure val WRONG_RUN_D1: RequestId = { runId: OTHER_RUN, nonce: 1 }
   pure val NO_REQUEST: RequestId = { runId: 0, nonce: 0 }
 
@@ -257,7 +416,27 @@ module taskFactReconciliation {
 
   pure def exactQuiescence(s: State): bool =
     s.quiescenceUnbroken
-      and (s.executorEvidence == ExactSafelySuspended or s.executorEvidence == ExactTerminal)
+      and Set(
+        ExactSafelySuspended,
+        ExactTerminal,
+        ExactCompletedTerminal,
+        ExactFailedTerminal,
+        ExactAcceptedTerminal,
+      ).contains(s.executorEvidence)
+
+  pure def replacementQuiescence(s: State): bool =
+    s.quiescenceUnbroken
+      and (s.executorEvidence == ExactSafelySuspended or s.executorEvidence == ExactAcceptedTerminal)
+
+  pure def replacementPendingBeforeAppend(s: State): bool =
+    Set(
+      RestartApplied,
+      NeedCurrentReplacementTaskFacts,
+      NeedCurrentReplacementClaim,
+      NeedCurrentOldWorktree,
+      NeedCurrentTargetHead,
+      ReplacementReadyToAppend,
+    ).contains(s.replacementPhase)
 
   pure def stopChoiceApplied(s: State): bool =
     s.f2WinningChoice == StopChoice or s.f3WinningChoice == StopChoice
@@ -286,12 +465,18 @@ module taskFactReconciliation {
   val postCutoffChoiceNeverApplies: bool =
     not(
       state.lastAction == PostCutoffContinueRejectedAction
+        or state.lastAction == PostCutoffRestartRejectedAction
         or state.lastAction == PostCutoffStopRejectedAction
     )
       or and {
         state.f2WinningChoice == NoChoice,
         state.continueStage == NotContinuing,
         state.stopStage == NotStopping,
+        not(state.replacementEventRecorded),
+        state.lastAction != PostCutoffRestartRejectedAction or and {
+          state.replacementPhase == ReplacementRejected,
+          state.replacementDisposition == PastIntegrationCutoff,
+        },
       }
 
   val terminalObservationAloneExposesNoChoice: bool =
@@ -306,6 +491,12 @@ module taskFactReconciliation {
   val changedAgainRequiresNewChoice: bool =
     state.currentFingerprint != F3
       or state.continueStage == NewChoiceRequired
+      or and {
+        state.f2WinningChoice == RestartChoice,
+        state.replacementPhase == ReplacementRejected,
+        state.replacementDisposition == NewFingerprintChoiceRequired,
+        not(state.replacementEventRecorded),
+      }
       or state.f3WinningChoice != NoChoice
 
   val projectedRunningSettlesOnlyItsIntent: bool =
@@ -345,10 +536,26 @@ module taskFactReconciliation {
       or state.stopRecoveryCount <= RECOVERY_LIMIT
 
   val abandonmentRequiresExactUnbrokenQuiescence: bool =
-    not(state.implementationResponsibilityRetained) implies and {
-      stopChoiceApplied(state),
-      exactQuiescence(state),
-      state.phase == PreIntegration,
+    not(state.implementationResponsibilityRetained) implies or {
+      and {
+        stopChoiceApplied(state),
+        exactQuiescence(state),
+        state.phase == PreIntegration,
+      },
+      and {
+        state.f2WinningChoice == RestartChoice,
+        state.phase == PreIntegration,
+        state.quiescenceUnbroken,
+        or {
+          state.executorEvidence == ExactAcceptedTerminal,
+          state.executorEvidence == ExactCompletedTerminal,
+          state.executorEvidence == ExactFailedTerminal,
+          and {
+            state.replacementEventRecorded,
+            state.executorEvidence == ExactSafelySuspended,
+          },
+        },
+      },
     }
 
   val stopPreservesEveryArtifact: bool = and {
@@ -433,8 +640,207 @@ module taskFactReconciliation {
   val foreignClaimIsNeverChanged: bool =
     state.claimState != ForeignClaim or state.lastClaimMutationTarget != ForeignClaimMutation
   val unreadableClaimCannotAuthorizeReplacement: bool =
-    state.claimState != UnreadableClaim
-      or and { not(state.reacquisitionDirectionApplied), not(state.replacementIntentRecorded) }
+    if (state.f2WinningChoice == RestartChoice)
+      state.replacementClaimFacts != ReplacementClaimUnreadable
+        or and {
+          not(state.replacementEventRecorded),
+          state.replacementClaimMutationCallCount == 0,
+        }
+    else
+      state.claimState != UnreadableClaim
+        or and { not(state.reacquisitionDirectionApplied), not(state.replacementIntentRecorded) }
+
+  // The action guard and this requirement deliberately spell the authorization
+  // separately. A weakened choice, task, claim, worktree, lineage, target, or
+  // quiescence guard must make this invariant fail.
+  val plannedAttemptReplacementRequiresExactCurrentEvidence: bool =
+    not(state.replacementEventRecorded) or and {
+      state.phase == PreIntegration,
+      state.f2WinningChoice == RestartChoice,
+      state.firstF2Choice == RestartChoice,
+      state.winningRequestId.runId == RUN_R,
+      state.winningRequestId.nonce == RESTART_D1.nonce,
+      state.winningSubject.runId == SUBJECT_F2.runId,
+      state.winningSubject.taskId == SUBJECT_F2.taskId,
+      state.winningSubject.attemptId == SUBJECT_F2.attemptId,
+      state.winningSubject.plannedFingerprint == F1,
+      state.winningSubject.observedFingerprint == F2,
+      state.currentFingerprint == F2,
+      state.quiescenceUnbroken,
+      state.executorEvidence == ExactSafelySuspended
+        or state.executorEvidence == ExactAcceptedTerminal,
+      state.replacementTaskFacts == ExactF2OpenInClosureUnblocked,
+      state.replacementClaimFacts == ExactK1Observed,
+      state.oldWorktreeFacts == ExactW1Ready,
+      state.observedOldWorktreeHead == CURRENT_W1_HEAD_H1,
+      state.oldBaseB1IsAncestor,
+      state.replacementTargetHeadFacts == ExactH2Observed,
+      state.observedReplacementTargetHead == TARGET_HEAD_H2,
+    }
+
+  // PlannedAttemptReplaced is one Journal event. No retained prefix can say
+  // that P1 is superseded without carrying P2 in that same event.
+  val plannedAttemptReplacementIsAtomic: bool = and {
+    state.p1Superseded == state.replacementEventRecorded,
+    not(state.p1Unsettled) == state.replacementEventRecorded,
+    (state.plannedSuccessor == PlannedP2) == state.replacementEventRecorded,
+    state.replacementEventCount == if (state.replacementEventRecorded) 1 else 0,
+    state.successorAllocationCount == if (state.replacementEventRecorded) 1 else 0,
+  }
+
+  val replacementLeavesAtMostOneUnsettledAttempt: bool = or {
+    and {
+      state.p1Unsettled,
+      not(state.p1Superseded),
+      state.plannedSuccessor == NoPlannedSuccessor,
+    },
+    and {
+      not(state.p1Unsettled),
+      state.p1Superseded,
+      state.plannedSuccessor == PlannedP2,
+    },
+  }
+
+  val replacementNeverAllocatesP3: bool = and {
+    state.plannedSuccessor != PlannedP3,
+    state.successorAllocationCount <= 1,
+  }
+
+  val restartPreservesP1Resources: bool =
+    state.f2WinningChoice != RestartChoice or and {
+      state.worktreePreserved,
+      state.wipPreserved,
+      state.p1BranchPreserved,
+      state.p1CommitsPreserved,
+      state.p1JournalEvidencePreserved,
+      state.sessionHistoryPreserved,
+      state.logsPreserved,
+      state.evidencePreserved,
+      not(state.cleanupSelected),
+      state.replacementCleanupCallCount == 0,
+    }
+
+  val restartRetainsExactK1WithoutTrackerMutation: bool =
+    state.f2WinningChoice != RestartChoice
+      or state.replacementClaimFacts != ExactK1Observed
+      or and {
+        state.exactClaimHeld,
+        state.currentClaimIdentity == state.originalClaimIdentity,
+        state.replacementClaimMutationCallCount == 0,
+        state.claimReleaseCallCount == state.claimReleaseCallCountAtRestart,
+      }
+
+  val restartSendsNoClaimMutation: bool =
+    state.f2WinningChoice != RestartChoice or and {
+      state.replacementClaimMutationCallCount == 0,
+      state.claimReleaseCallCount == state.claimReleaseCallCountAtRestart,
+    }
+
+  val replacementClaimReadsAreBounded: bool = and {
+    state.replacementClaimReadsThisActivation >= 0,
+    state.replacementClaimReadsThisActivation <= REPLACEMENT_CLAIM_READ_LIMIT,
+  }
+
+  val successorPlanIsCleanW2AtExactH2: bool =
+    not(state.replacementEventRecorded) or and {
+      state.plannedSuccessor == PlannedP2,
+      state.successorBaseHead == TARGET_HEAD_H2,
+      state.successorBranchIdentity == BRANCH_P2,
+      state.successorBranchIdentity != BRANCH_P1,
+      state.successorWorktreeIdentity == WORKTREE_W2,
+      state.successorWorktreeIdentity != WORKTREE_W1,
+      not(state.successorCarriesP1Content),
+    }
+
+  val replacementEventDoesNotClaimW2OrExecutorWork: bool =
+    state.lastAction != PlannedAttemptReplacementRecordedAction or and {
+      not(state.successorWorktreeReady),
+      state.successorAdmissionCount == 0,
+      not(state.successorPositionHeld),
+      state.successorExecutorStartCount == 0,
+      not(state.successorExecutorResponsibilityRetained),
+    }
+
+  val successorUsesOrdinaryBoundedAdmission: bool = and {
+    state.successorAdmissionCount >= 0,
+    state.successorAdmissionCount <= 1,
+    (if (state.successorPositionHeld) 1 else 0) <= TASK_WORK_CAPACITY,
+    not(state.successorPositionHeld) or state.successorAdmissionCount == 1,
+    state.successorExecutorStartCount == 0 or and {
+      state.replacementEventRecorded,
+      state.successorWorktreeReady,
+      state.successorAdmissionCount == 1,
+      state.successorPositionHeld,
+      state.successorExecutorResponsibilityRetained,
+      state.replacementPhase == SuccessorRunning,
+    },
+    state.successorExecutorStartCount <= 1,
+  }
+
+  val p1AndP2ExecutorResponsibilitiesNeverOverlap: bool =
+    state.successorExecutorResponsibilityRetained implies
+      not(state.implementationResponsibilityRetained)
+
+  val crashKeepsEitherNoP2OrTheSameP2: bool = and {
+    state.lastAction != ReplacementAppendAbsentAfterCrashAction or and {
+      state.p1Unsettled,
+      not(state.p1Superseded),
+      state.plannedSuccessor == NoPlannedSuccessor,
+      not(state.replacementEventRecorded),
+      state.successorAllocationCount == 0,
+    },
+    state.lastAction != ReplacementAppendPresentAfterCrashAction or and {
+      not(state.p1Unsettled),
+      state.p1Superseded,
+      state.plannedSuccessor == PlannedP2,
+      state.replacementEventRecorded,
+      state.successorAllocationCount == 1,
+    },
+  }
+
+  val replacementTerminalOutcomesRemainDistinct: bool = and {
+    state.lastAction != RestartCompletedObservedAction or and {
+      state.executorEvidence == ExactCompletedTerminal,
+      state.completedResultPreserved,
+      not(state.failedResultPreserved),
+      not(state.lateAcceptedCommitPreserved),
+    },
+    state.lastAction != RestartFailedObservedAction or and {
+      state.executorEvidence == ExactFailedTerminal,
+      state.failedResultPreserved,
+      not(state.completedResultPreserved),
+      not(state.lateAcceptedCommitPreserved),
+    },
+    state.lastAction != RestartAcceptedObservedAction or and {
+      state.executorEvidence == ExactAcceptedTerminal,
+      state.lateAcceptedCommitPreserved,
+      state.lateAcceptedEvidencePreserved,
+      not(state.completedResultPreserved),
+      not(state.failedResultPreserved),
+    },
+  }
+
+  val nonAuthorizingExecutorEvidenceNeverRecordsReplacement: bool =
+    not(Set(
+      ExactRunning,
+      ExecutorUnavailable,
+      ExecutorContradiction,
+      ExactCompletedTerminal,
+      ExactFailedTerminal,
+    ).contains(state.executorEvidence)) or not(state.replacementEventRecorded)
+
+  val lateAcceptedNeverCreatesIntegrationResponsibility: bool =
+    not(state.lateAcceptedCommitPreserved) or and {
+      state.lateAcceptedEvidencePreserved,
+      state.lateAcceptedIntegrationResponsibilityCount == 0,
+      not(state.integrationSelected),
+    }
+
+  val restartNeverSelectsIntegration: bool =
+    state.f2WinningChoice != RestartChoice or and {
+      not(state.integrationSelected),
+      state.lateAcceptedIntegrationResponsibilityCount == 0,
+    }
 
   val membershipWaitReached: bool = state.factDecision == MembershipWait
   val lifecycleWaitReached: bool = state.factDecision == LifecycleWait
@@ -449,6 +855,7 @@ module taskFactReconciliation {
       and state.factDecision == ContinueWork
 
   val continueF2AppliedReached: bool = state.lastAction == ContinueF2AppliedAction
+  val restartF2AppliedReached: bool = state.lastAction == RestartF2AppliedAction
   val f2ObservedReached: bool = state.lastAction == F2ObservedAction
   val stopF2AppliedReached: bool = state.lastAction == StopF2AppliedAction
   val exactRedeliveredReached: bool = state.lastAction == ExactRedeliveredAction
@@ -456,6 +863,7 @@ module taskFactReconciliation {
   val contentReuseRejectedReached: bool = state.lastAction == ContentReuseRejectedAction
   val losingChoiceRejectedReached: bool = state.lastAction == LosingChoiceRejectedAction
   val postCutoffContinueRejectedReached: bool = state.lastAction == PostCutoffContinueRejectedAction
+  val postCutoffRestartRejectedReached: bool = state.lastAction == PostCutoffRestartRejectedAction
   val postCutoffStopRejectedReached: bool = state.lastAction == PostCutoffStopRejectedAction
   val terminalObservedReached: bool = state.lastAction == TerminalObservedAction
   val integrationStartedReached: bool = state.lastAction == IntegrationStartedAction
@@ -516,6 +924,42 @@ module taskFactReconciliation {
     state.lastAction == ExternalSuccessClaimReleasedAction
   val ownedClaimMutationRequestedReached: bool = state.lastAction == OwnedClaimMutationRequestedAction
 
+  // Every enterable issue-66 replacement phase has a gated reachability
+  // witness. The reason-specific collected tests below prevent the shared
+  // waiting and rejection phases from hiding dead boundary branches.
+  val replacementNotRequestedReached: bool = state.replacementPhase == ReplacementNotRequested
+  val restartAppliedReached: bool = state.replacementPhase == RestartApplied
+  val replacementQuiescenceRequiredReached: bool =
+    state.replacementPhase == NeedCurrentExecutorQuiescence
+  val replacementTaskFactsRequiredReached: bool =
+    state.replacementPhase == NeedCurrentReplacementTaskFacts
+  val replacementClaimRequiredReached: bool =
+    state.replacementPhase == NeedCurrentReplacementClaim
+  val replacementClaimReadLimitReached: bool =
+    state.replacementClaimReadsThisActivation == REPLACEMENT_CLAIM_READ_LIMIT
+  val replacementClaimReadActivationRecoveredReached: bool =
+    state.lastAction == ReplacementClaimReadActivationRecoveredAction
+  val oldWorktreeFactsRequiredReached: bool =
+    state.replacementPhase == NeedCurrentOldWorktree
+  val replacementTargetHeadRequiredReached: bool =
+    state.replacementPhase == NeedCurrentTargetHead
+  val replacementAppendReadyReached: bool =
+    state.replacementPhase == ReplacementReadyToAppend
+  val plannedAttemptReplacementRecordedReached: bool =
+    state.replacementPhase == PlannedAttemptReplacementRecorded
+  val successorWaitingAdmissionReached: bool =
+    state.replacementPhase == SuccessorWaitingForAdmission
+  val successorAdmittedReached: bool = state.replacementPhase == SuccessorAdmitted
+  val successorRunningReached: bool = state.replacementPhase == SuccessorRunning
+  val replacementWaitingReached: bool = state.replacementPhase == ReplacementWaiting
+  val replacementRejectedReached: bool = state.replacementPhase == ReplacementRejected
+  val lateAcceptedReplacementEvidenceReached: bool =
+    state.executorEvidence == ExactAcceptedTerminal and state.lateAcceptedCommitPreserved
+  val completedReplacementEvidenceReached: bool =
+    state.executorEvidence == ExactCompletedTerminal and state.completedResultPreserved
+  val failedReplacementEvidenceReached: bool =
+    state.executorEvidence == ExactFailedTerminal and state.failedResultPreserved
+
   action init: bool = all {
     state' = {
       phase: PreIntegration,
@@ -560,6 +1004,7 @@ module taskFactReconciliation {
       claimReleaseAuthorizedByExactRead: false,
       claimReleaseIntentRecorded: false,
       claimReleaseCallCount: 0,
+      claimReleaseCallCountAtRestart: 0,
       claimReleaseCallCountAtNonExactObservation: 0,
       claimReleaseResponseAmbiguous: false,
       claimReleaseProjectionsThisActivation: 0,
@@ -584,6 +1029,42 @@ module taskFactReconciliation {
       lastClaimMutationTarget: NoClaimMutation,
       originalClaimIdentity: 1,
       currentClaimIdentity: 1,
+      replacementPhase: ReplacementNotRequested,
+      replacementDisposition: NoReplacementDisposition,
+      replacementTaskFacts: ReplacementTaskFactsNotRead,
+      replacementClaimFacts: ReplacementClaimNotRead,
+      replacementClaimReadsThisActivation: 0,
+      oldWorktreeFacts: OldWorktreeNotRead,
+      replacementTargetHeadFacts: ReplacementTargetHeadNotRead,
+      observedOldWorktreeHead: NoGitCommit,
+      oldBaseB1IsAncestor: false,
+      observedReplacementTargetHead: NoGitCommit,
+      p1Unsettled: true,
+      p1Superseded: false,
+      plannedSuccessor: NoPlannedSuccessor,
+      replacementEventRecorded: false,
+      replacementEventCount: 0,
+      successorAllocationCount: 0,
+      successorBaseHead: NoGitCommit,
+      successorBranchIdentity: NoBranch,
+      successorWorktreeIdentity: NoWorktree,
+      successorCarriesP1Content: false,
+      successorWorktreeReady: false,
+      successorAdmissionCount: 0,
+      successorPositionHeld: false,
+      successorExecutorStartCount: 0,
+      successorExecutorResponsibilityRetained: false,
+      replacementProcessLossCount: 0,
+      completedResultPreserved: false,
+      failedResultPreserved: false,
+      lateAcceptedCommitPreserved: false,
+      lateAcceptedEvidencePreserved: false,
+      lateAcceptedIntegrationResponsibilityCount: 0,
+      p1BranchPreserved: true,
+      p1CommitsPreserved: true,
+      p1JournalEvidencePreserved: true,
+      replacementCleanupCallCount: 0,
+      replacementClaimMutationCallCount: 0,
       lastAction: InitializedAction,
     }
   }
@@ -620,6 +1101,39 @@ module taskFactReconciliation {
     },
   }
 
+  action applyRestartF2: bool = all {
+    state.phase == PreIntegration,
+    state.f2WinningChoice == NoChoice,
+    state.currentFingerprint == F2,
+    state.executorEvidence == ExactSafelySuspended,
+    state.quiescenceUnbroken,
+    RESTART_D1.runId == SUBJECT_F2.runId,
+    state' = {
+      ...state,
+      f2WinningChoice: RestartChoice,
+      firstF2Choice: RestartChoice,
+      winningRequestId: RESTART_D1,
+      winningSubject: SUBJECT_F2,
+      appliedChoiceCount: 1,
+      lastControlResult: ChoiceApplied,
+      authorizedFingerprint: F2,
+      constraint: NoConstraint,
+      factDecision: ContinueWork,
+      replacementPhase: RestartApplied,
+      claimReleaseCallCountAtRestart: state.claimReleaseCallCount,
+      replacementDisposition: NoReplacementDisposition,
+      replacementTaskFacts: ReplacementTaskFactsNotRead,
+      replacementClaimFacts: ReplacementClaimNotRead,
+      replacementClaimReadsThisActivation: 0,
+      oldWorktreeFacts: OldWorktreeNotRead,
+      replacementTargetHeadFacts: ReplacementTargetHeadNotRead,
+      observedOldWorktreeHead: NoGitCommit,
+      oldBaseB1IsAncestor: false,
+      observedReplacementTargetHead: NoGitCommit,
+      lastAction: RestartF2AppliedAction,
+    },
+  }
+
   action applyStopF2: bool = all {
     state.phase == PreIntegration,
     state.f2WinningChoice == NoChoice,
@@ -643,7 +1157,6 @@ module taskFactReconciliation {
 
   action redeliverExactF2Choice: bool = all {
     state.f2WinningChoice != NoChoice,
-    state.lastControlResult == ChoiceApplied,
     state' = {
       ...state,
       lastControlResult: ExactRedelivery,
@@ -716,6 +1229,20 @@ module taskFactReconciliation {
       ...state,
       lastControlResult: ChoiceOutsidePreIntegration,
       lastAction: PostCutoffContinueRejectedAction,
+    },
+  }
+
+  action rejectRestartPastIntegrationCutoff: bool = all {
+    state.phase == IntegrationStarted,
+    state.currentFingerprint == F2,
+    state.f2WinningChoice == NoChoice,
+    state.lastControlResult != ChoiceOutsidePreIntegration,
+    state' = {
+      ...state,
+      lastControlResult: ChoiceOutsidePreIntegration,
+      replacementPhase: ReplacementRejected,
+      replacementDisposition: PastIntegrationCutoff,
+      lastAction: PostCutoffRestartRejectedAction,
     },
   }
 
@@ -837,9 +1364,521 @@ module taskFactReconciliation {
     },
   }
 
+  // The already applied Restart choice begins its read-only authorization
+  // sequence directly when the exact safe-suspension proof remains unbroken.
+  action beginReplacementFactsFromRetainedSafeSuspension: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == RestartApplied,
+    state.executorEvidence == ExactSafelySuspended,
+    state.quiescenceUnbroken,
+    state' = {
+      ...state,
+      replacementPhase: NeedCurrentReplacementTaskFacts,
+      replacementDisposition: NoReplacementDisposition,
+      lastAction: RestartFactsBeganAction,
+    },
+  }
+
+  // A later StartOrContinue command breaks the retained proof. Every task/Git
+  // observation made before this new writer fact is cleared so a later exact
+  // Accepted or safely-suspended report is followed by fresh reads.
+  action breakRestartSafeSuspension: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    replacementPendingBeforeAppend(state),
+    not(state.replacementEventRecorded),
+    state.implementationResponsibilityRetained,
+    state' = {
+      ...state,
+      replacementPhase: NeedCurrentExecutorQuiescence,
+      replacementDisposition: NoReplacementDisposition,
+      executorEvidence: ExactRunning,
+      quiescenceUnbroken: false,
+      positionHeld: true,
+      replacementTaskFacts: ReplacementTaskFactsNotRead,
+      replacementClaimFacts: ReplacementClaimNotRead,
+      replacementClaimReadsThisActivation: 0,
+      oldWorktreeFacts: OldWorktreeNotRead,
+      replacementTargetHeadFacts: ReplacementTargetHeadNotRead,
+      observedOldWorktreeHead: NoGitCommit,
+      oldBaseB1IsAncestor: false,
+      observedReplacementTargetHead: NoGitCommit,
+      lastAction: RestartQuiescenceBrokenAction,
+    },
+  }
+
+  action observeRestartRunning: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentExecutorQuiescence,
+    state.implementationResponsibilityRetained,
+    state' = {
+      ...state,
+      executorEvidence: ExactRunning,
+      quiescenceUnbroken: false,
+      positionHeld: true,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: RunningWriterWait,
+      lastAction: RestartRunningObservedAction,
+    },
+  }
+
+  action observeRestartExecutorUnavailable: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
+    state.implementationResponsibilityRetained,
+    state' = {
+      ...state,
+      executorEvidence: ExecutorUnavailable,
+      quiescenceUnbroken: false,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: ExecutorUnreadableWait,
+      lastAction: RestartExecutorUnavailableObservedAction,
+    },
+  }
+
+  action observeRestartExecutorContradiction: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
+    state.implementationResponsibilityRetained,
+    state' = {
+      ...state,
+      executorEvidence: ExecutorContradiction,
+      quiescenceUnbroken: false,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: ExecutorCorrelationContradiction,
+      lastAction: RestartExecutorContradictionObservedAction,
+    },
+  }
+
+  action observeRestartSafelySuspended: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
+    not(state.replacementEventRecorded),
+    state.implementationResponsibilityRetained,
+    state' = {
+      ...state,
+      executorEvidence: ExactSafelySuspended,
+      quiescenceUnbroken: true,
+      positionHeld: false,
+      replacementPhase: NeedCurrentReplacementTaskFacts,
+      replacementDisposition: NoReplacementDisposition,
+      replacementTaskFacts: ReplacementTaskFactsNotRead,
+      replacementClaimFacts: ReplacementClaimNotRead,
+      replacementClaimReadsThisActivation: 0,
+      oldWorktreeFacts: OldWorktreeNotRead,
+      replacementTargetHeadFacts: ReplacementTargetHeadNotRead,
+      observedOldWorktreeHead: NoGitCommit,
+      oldBaseB1IsAncestor: false,
+      observedReplacementTargetHead: NoGitCommit,
+      lastAction: RestartSafeObservedAction,
+    },
+  }
+
+  action observeRestartAccepted: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
+    not(state.replacementEventRecorded),
+    state.implementationResponsibilityRetained,
+    not(state.completedResultPreserved),
+    not(state.failedResultPreserved),
+    state' = {
+      ...state,
+      executorEvidence: ExactAcceptedTerminal,
+      quiescenceUnbroken: true,
+      implementationResponsibilityRetained: false,
+      positionHeld: false,
+      lateAcceptedCommitPreserved: true,
+      lateAcceptedEvidencePreserved: true,
+      lateAcceptedIntegrationResponsibilityCount: 0,
+      integrationSelected: false,
+      replacementPhase: NeedCurrentReplacementTaskFacts,
+      replacementDisposition: NoReplacementDisposition,
+      replacementTaskFacts: ReplacementTaskFactsNotRead,
+      replacementClaimFacts: ReplacementClaimNotRead,
+      replacementClaimReadsThisActivation: 0,
+      oldWorktreeFacts: OldWorktreeNotRead,
+      replacementTargetHeadFacts: ReplacementTargetHeadNotRead,
+      observedOldWorktreeHead: NoGitCommit,
+      oldBaseB1IsAncestor: false,
+      observedReplacementTargetHead: NoGitCommit,
+      lastAction: RestartAcceptedObservedAction,
+    },
+  }
+
+  action observeRestartCompleted: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
+    not(state.replacementEventRecorded),
+    state.implementationResponsibilityRetained,
+    not(state.lateAcceptedCommitPreserved),
+    not(state.failedResultPreserved),
+    state' = {
+      ...state,
+      executorEvidence: ExactCompletedTerminal,
+      quiescenceUnbroken: true,
+      implementationResponsibilityRetained: false,
+      positionHeld: false,
+      completedResultPreserved: true,
+      replacementPhase: ReplacementRejected,
+      replacementDisposition: CompletedDoesNotAuthorizeReplacement,
+      lastAction: RestartCompletedObservedAction,
+    },
+  }
+
+  action observeRestartFailed: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
+    not(state.replacementEventRecorded),
+    state.implementationResponsibilityRetained,
+    not(state.lateAcceptedCommitPreserved),
+    not(state.completedResultPreserved),
+    state' = {
+      ...state,
+      executorEvidence: ExactFailedTerminal,
+      quiescenceUnbroken: true,
+      implementationResponsibilityRetained: false,
+      positionHeld: false,
+      failedResultPreserved: true,
+      replacementPhase: ReplacementRejected,
+      replacementDisposition: FailedDoesNotAuthorizeReplacement,
+      lastAction: RestartFailedObservedAction,
+    },
+  }
+
+  action observeReplacementExactF2TaskFacts: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementTaskFacts,
+    state.currentFingerprint == F2,
+    replacementQuiescence(state),
+    state' = {
+      ...state,
+      replacementTaskFacts: ExactF2OpenInClosureUnblocked,
+      replacementClaimReadsThisActivation: 0,
+      replacementPhase: NeedCurrentReplacementClaim,
+      lastAction: ReplacementF2FactsObservedAction,
+    },
+  }
+
+  action observeReplacementF3TaskFacts: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementTaskFacts,
+    state' = {
+      ...state,
+      currentFingerprint: F3,
+      replacementTaskFacts: ReplacementF3Observed,
+      replacementPhase: ReplacementRejected,
+      replacementDisposition: NewFingerprintChoiceRequired,
+      continueStage: NewChoiceRequired,
+      constraint: SpecificationConstraint,
+      factDecision: SpecificationChoices,
+      lastAction: ReplacementF3FactsObservedAction,
+    },
+  }
+
+  action observeReplacementTaskFactsUnreadable: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementTaskFacts,
+    state' = {
+      ...state,
+      replacementTaskFacts: ReplacementTaskFactsUnreadable,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: TaskFactsUnreadableWait,
+      lastAction: ReplacementTaskFactsUnreadableAction,
+    },
+  }
+
+  action observeReplacementTaskNotEligible: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementTaskFacts,
+    state' = {
+      ...state,
+      replacementTaskFacts: ReplacementTaskNotEligible,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: TaskNotEligibleWait,
+      lastAction: ReplacementTaskNotEligibleAction,
+    },
+  }
+
+  action observeReplacementExactK1: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementClaim,
+    state' = {
+      ...state,
+      replacementClaimFacts: ExactK1Observed,
+      replacementClaimReadsThisActivation: state.replacementClaimReadsThisActivation + 1,
+      claimState: ExactClaim,
+      exactClaimHeld: true,
+      currentClaimIdentity: state.originalClaimIdentity,
+      replacementPhase: NeedCurrentOldWorktree,
+      lastAction: ReplacementK1ObservedAction,
+    },
+  }
+
+  action observeReplacementClaimAbsent: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementClaim,
+    state' = {
+      ...state,
+      replacementClaimFacts: ReplacementClaimAbsent,
+      replacementClaimReadsThisActivation: state.replacementClaimReadsThisActivation + 1,
+      claimState: MissingClaim,
+      exactClaimHeld: false,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: ClaimAbsentWait,
+      lastAction: ReplacementClaimAbsentAction,
+    },
+  }
+
+  action observeReplacementClaimForeign: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementClaim,
+    state' = {
+      ...state,
+      replacementClaimFacts: ReplacementClaimForeign,
+      replacementClaimReadsThisActivation: state.replacementClaimReadsThisActivation + 1,
+      claimState: ForeignClaim,
+      exactClaimHeld: false,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: ClaimForeignWait,
+      lastAction: ReplacementClaimForeignAction,
+    },
+  }
+
+  action observeReplacementClaimUnreadable: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementClaim,
+    state.replacementClaimReadsThisActivation < REPLACEMENT_CLAIM_READ_LIMIT,
+    state' = {
+      ...state,
+      replacementClaimFacts: ReplacementClaimUnreadable,
+      replacementClaimReadsThisActivation: state.replacementClaimReadsThisActivation + 1,
+      claimState: UnreadableClaim,
+      replacementPhase:
+        if (state.replacementClaimReadsThisActivation + 1 == REPLACEMENT_CLAIM_READ_LIMIT)
+          ReplacementWaiting
+        else
+          NeedCurrentReplacementClaim,
+      replacementDisposition: ClaimUnreadableWait,
+      lastAction: ReplacementClaimUnreadableAction,
+    },
+  }
+
+  // A coordinator loss discards only the per-activation read budget. It does
+  // not convert an unreadable observation into proof that K1 exists or is
+  // absent, and it crosses no tracker mutation boundary.
+  action recoverReplacementClaimReadActivation: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementClaim,
+    state.replacementClaimReadsThisActivation > 0,
+    state.replacementClaimReadsThisActivation < REPLACEMENT_CLAIM_READ_LIMIT,
+    state' = {
+      ...state,
+      replacementClaimFacts: ReplacementClaimNotRead,
+      replacementClaimReadsThisActivation: 0,
+      replacementProcessLossCount: state.replacementProcessLossCount + 1,
+      lastAction: ReplacementClaimReadActivationRecoveredAction,
+    },
+  }
+
+  action observeReplacementExactW1Ready: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentOldWorktree,
+    state' = {
+      ...state,
+      oldWorktreeFacts: ExactW1Ready,
+      observedOldWorktreeHead: CURRENT_W1_HEAD_H1,
+      oldBaseB1IsAncestor: true,
+      replacementPhase: NeedCurrentTargetHead,
+      lastAction: ReplacementW1ReadyAction,
+    },
+  }
+
+  action observeReplacementW1NotReady: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentOldWorktree,
+    state' = {
+      ...state,
+      oldWorktreeFacts: OldWorktreeNotReady,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: OldWorktreeNotReadyWait,
+      lastAction: ReplacementW1NotReadyAction,
+    },
+  }
+
+  action observeReplacementW1Unreadable: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentOldWorktree,
+    state' = {
+      ...state,
+      oldWorktreeFacts: OldWorktreeUnreadable,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: OldWorktreeUnreadableWait,
+      lastAction: ReplacementW1UnreadableAction,
+    },
+  }
+
+  action observeReplacementExactH2: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentTargetHead,
+    state' = {
+      ...state,
+      replacementTargetHeadFacts: ExactH2Observed,
+      observedReplacementTargetHead: TARGET_HEAD_H2,
+      replacementPhase: ReplacementReadyToAppend,
+      lastAction: ReplacementH2ObservedAction,
+    },
+  }
+
+  action observeReplacementH2Unreadable: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentTargetHead,
+    state' = {
+      ...state,
+      replacementTargetHeadFacts: ReplacementTargetHeadUnreadable,
+      replacementPhase: ReplacementWaiting,
+      replacementDisposition: TargetHeadUnreadableWait,
+      lastAction: ReplacementH2UnreadableAction,
+    },
+  }
+
+  // The absent crash prefix discards only process-local observations. No
+  // successor identity was durable, so retry must reread every authority and
+  // may still allocate only P2 in the later atomic append.
+  action recoverReplacementAppendAbsent: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == ReplacementReadyToAppend,
+    not(state.replacementEventRecorded),
+    state' = {
+      ...state,
+      replacementPhase: NeedCurrentReplacementTaskFacts,
+      replacementTaskFacts: ReplacementTaskFactsNotRead,
+      replacementClaimFacts: ReplacementClaimNotRead,
+      replacementClaimReadsThisActivation: 0,
+      oldWorktreeFacts: OldWorktreeNotRead,
+      replacementTargetHeadFacts: ReplacementTargetHeadNotRead,
+      observedOldWorktreeHead: NoGitCommit,
+      oldBaseB1IsAncestor: false,
+      observedReplacementTargetHead: NoGitCommit,
+      replacementProcessLossCount: state.replacementProcessLossCount + 1,
+      lastAction: ReplacementAppendAbsentAfterCrashAction,
+    },
+  }
+
+  // One state transition is the one Journal append: P1 becomes superseded and
+  // immutable P2 appears together. No W2 or executor fact is claimed here.
+  action recordPlannedAttemptReplacement: bool = all {
+    state.phase == PreIntegration,
+    state.f2WinningChoice == RestartChoice,
+    state.firstF2Choice == RestartChoice,
+    state.winningRequestId.runId == RUN_R,
+    state.winningRequestId.nonce == RESTART_D1.nonce,
+    state.winningSubject.runId == SUBJECT_F2.runId,
+    state.winningSubject.taskId == SUBJECT_F2.taskId,
+    state.winningSubject.attemptId == SUBJECT_F2.attemptId,
+    state.winningSubject.plannedFingerprint == F1,
+    state.winningSubject.observedFingerprint == F2,
+    state.replacementPhase == ReplacementReadyToAppend,
+    state.currentFingerprint == F2,
+    state.quiescenceUnbroken,
+    state.executorEvidence == ExactSafelySuspended
+      or state.executorEvidence == ExactAcceptedTerminal,
+    state.replacementTaskFacts == ExactF2OpenInClosureUnblocked,
+    state.replacementClaimFacts == ExactK1Observed,
+    state.oldWorktreeFacts == ExactW1Ready,
+    state.observedOldWorktreeHead == CURRENT_W1_HEAD_H1,
+    state.oldBaseB1IsAncestor,
+    state.replacementTargetHeadFacts == ExactH2Observed,
+    state.observedReplacementTargetHead == TARGET_HEAD_H2,
+    state.p1Unsettled,
+    not(state.p1Superseded),
+    state.plannedSuccessor == NoPlannedSuccessor,
+    not(state.replacementEventRecorded),
+    state' = {
+      ...state,
+      p1Unsettled: false,
+      p1Superseded: true,
+      plannedSuccessor: PlannedP2,
+      replacementEventRecorded: true,
+      replacementEventCount: 1,
+      successorAllocationCount: 1,
+      successorBaseHead: TARGET_HEAD_H2,
+      successorBranchIdentity: BRANCH_P2,
+      successorWorktreeIdentity: WORKTREE_W2,
+      successorCarriesP1Content: false,
+      implementationResponsibilityRetained: false,
+      positionHeld: false,
+      replacementPhase: PlannedAttemptReplacementRecorded,
+      replacementDisposition: NoReplacementDisposition,
+      lastAction: PlannedAttemptReplacementRecordedAction,
+    },
+  }
+
+  // The present crash prefix reconstructs exact P2 from the one event. It
+  // cannot allocate P3 merely because no P2 executor report exists yet.
+  action recoverReplacementAppendPresent: bool = all {
+    state.replacementPhase == PlannedAttemptReplacementRecorded,
+    state.replacementEventRecorded,
+    state.plannedSuccessor == PlannedP2,
+    state' = {
+      ...state,
+      replacementProcessLossCount: state.replacementProcessLossCount + 1,
+      lastAction: ReplacementAppendPresentAfterCrashAction,
+    },
+  }
+
+  action prepareCleanSuccessorW2: bool = all {
+    state.replacementPhase == PlannedAttemptReplacementRecorded,
+    state.replacementEventRecorded,
+    state.plannedSuccessor == PlannedP2,
+    state.successorWorktreeIdentity == WORKTREE_W2,
+    state.successorWorktreeIdentity != WORKTREE_W1,
+    state.successorBaseHead == TARGET_HEAD_H2,
+    not(state.successorCarriesP1Content),
+    not(state.successorWorktreeReady),
+    state' = {
+      ...state,
+      successorWorktreeReady: true,
+      replacementPhase: SuccessorWaitingForAdmission,
+      lastAction: SuccessorW2ReadyAction,
+    },
+  }
+
+  action admitSuccessorThroughOrdinaryCapacity: bool = all {
+    state.replacementPhase == SuccessorWaitingForAdmission,
+    state.successorWorktreeReady,
+    state.successorAdmissionCount == 0,
+    not(state.successorPositionHeld),
+    state.successorAdmissionCount < TASK_WORK_CAPACITY,
+    state' = {
+      ...state,
+      successorAdmissionCount: 1,
+      successorPositionHeld: true,
+      replacementPhase: SuccessorAdmitted,
+      lastAction: SuccessorOrdinarilyAdmittedAction,
+    },
+  }
+
+  action startSuccessorExecutor: bool = all {
+    state.replacementPhase == SuccessorAdmitted,
+    state.replacementEventRecorded,
+    state.plannedSuccessor == PlannedP2,
+    state.successorWorktreeReady,
+    state.successorAdmissionCount == 1,
+    state.successorPositionHeld,
+    state.successorExecutorStartCount == 0,
+    not(state.successorExecutorResponsibilityRetained),
+    state' = {
+      ...state,
+      successorExecutorStartCount: 1,
+      successorExecutorResponsibilityRetained: true,
+      replacementPhase: SuccessorRunning,
+      lastAction: SuccessorExecutorStartedAction,
+    },
+  }
+
   // A later exact Running projection breaks retained proof. Stop now needs its
   // durable stoppage intent and exact command-projection protocol.
   action requireStoppageReconciliation: bool = all {
+    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
     state.stopStage == NeedQuiescence,
     exactQuiescence(state),
     state' = {
@@ -853,6 +1892,7 @@ module taskFactReconciliation {
   }
 
   action recordStoppageIntent: bool = all {
+    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
     state.stopStage == NeedQuiescence,
     not(exactQuiescence(state)),
     not(stopCommandActive(state)),
@@ -867,6 +1907,7 @@ module taskFactReconciliation {
   }
 
   action callStoppage: bool = all {
+    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
     stopCommandActive(state),
     not(state.stopCommandCalled),
     state' = {
@@ -878,12 +1919,14 @@ module taskFactReconciliation {
   }
 
   action loseStoppageResponse: bool = all {
+    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
     state.stopCommandCalled,
     not(state.stopResponseAmbiguous),
     state' = { ...state, stopResponseAmbiguous: true, lastAction: StoppageResponseLostAction },
   }
 
   action projectExactRunningForStoppage: bool = all {
+    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
     state.stopCommandCalled,
     state.stopResponseAmbiguous,
     state.stopProjectionsThisActivation == 0,
@@ -904,6 +1947,7 @@ module taskFactReconciliation {
   }
 
   action projectExactSafeForStoppage: bool = all {
+    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
     state.stopCommandCalled,
     state.stopResponseAmbiguous,
     state.stopProjectionsThisActivation == 0,
@@ -924,6 +1968,7 @@ module taskFactReconciliation {
   }
 
   action projectExactTerminalForStoppage: bool = all {
+    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
     state.stopCommandCalled,
     state.stopResponseAmbiguous,
     state.stopProjectionsThisActivation == 0,
@@ -944,6 +1989,7 @@ module taskFactReconciliation {
   }
 
   action recoverStopActivation: bool = all {
+    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
     state.stopStage == NeedQuiescence,
     if (stopCommandActive(state) and state.stopCommandCalled and state.stopResponseAmbiguous)
       state.stopProjectionsThisActivation <= 1
@@ -967,6 +2013,7 @@ module taskFactReconciliation {
   }
 
   action projectReadOnlyExactSafeAfterStoppageLimit: bool = all {
+    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
     state.stopStage == NeedQuiescence,
     state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
     not(stopCommandActive(state)),
@@ -1155,6 +2202,7 @@ module taskFactReconciliation {
     state.independentTaskEligible,
     not(state.independentTaskSelected),
     (stopChoiceApplied(state) and state.stopStage != StopComplete)
+      or state.f2WinningChoice == RestartChoice
       or state.constraint == MissingClaimConstraint
       or state.constraint == ForeignClaimConstraint
       or state.constraint == UnreadableClaimConstraint,
@@ -1390,6 +2438,7 @@ module taskFactReconciliation {
 
   action requestOwnedClaimMutation: bool = all {
     state.claimState == ExactClaim or state.claimState == ReplacementClaim,
+    state.f2WinningChoice != RestartChoice,
     state' = {
       ...state,
       lastClaimMutationTarget: OwnedClaimMutation,
@@ -1400,6 +2449,7 @@ module taskFactReconciliation {
   action step: bool = any {
     observeF2Change,
     applyContinueF2,
+    applyRestartF2,
     applyStopF2,
     redeliverExactF2Choice,
     rejectRunMismatchedRequest,
@@ -1408,6 +2458,7 @@ module taskFactReconciliation {
     observeExactTerminal,
     beginIntegration,
     rejectContinuePastIntegrationCutoff,
+    rejectRestartPastIntegrationCutoff,
     rejectStopPastIntegrationCutoff,
     readFreshExactGraph,
     readFreshExactSpecification,
@@ -1418,6 +2469,35 @@ module taskFactReconciliation {
     admitSameAttemptP,
     observeF3BeforeContinuation,
     applyContinueF3,
+    beginReplacementFactsFromRetainedSafeSuspension,
+    breakRestartSafeSuspension,
+    observeRestartRunning,
+    observeRestartExecutorUnavailable,
+    observeRestartExecutorContradiction,
+    observeRestartSafelySuspended,
+    observeRestartAccepted,
+    observeRestartCompleted,
+    observeRestartFailed,
+    observeReplacementExactF2TaskFacts,
+    observeReplacementF3TaskFacts,
+    observeReplacementTaskFactsUnreadable,
+    observeReplacementTaskNotEligible,
+    observeReplacementExactK1,
+    observeReplacementClaimAbsent,
+    observeReplacementClaimForeign,
+    observeReplacementClaimUnreadable,
+    recoverReplacementClaimReadActivation,
+    observeReplacementExactW1Ready,
+    observeReplacementW1NotReady,
+    observeReplacementW1Unreadable,
+    observeReplacementExactH2,
+    observeReplacementH2Unreadable,
+    recoverReplacementAppendAbsent,
+    recordPlannedAttemptReplacement,
+    recoverReplacementAppendPresent,
+    prepareCleanSuccessorW2,
+    admitSuccessorThroughOrdinaryCapacity,
+    startSuccessorExecutor,
     requireStoppageReconciliation,
     recordStoppageIntent,
     callStoppage,

@@ -159,6 +159,7 @@ module taskFactReconciliationTest {
       .then(observeF2Change)
       .then(applyContinueF2)
       .then(redeliverExactF2Choice)
+      .then(redeliverExactF2Choice)
       .expect(and {
         state.lastControlResult == ExactRedelivery,
         state.appliedChoiceCount == 1,
@@ -475,6 +476,457 @@ module taskFactReconciliationTest {
         state.claimRecoveryCount == 2,
         state.stopStage == ClaimReleaseRetryWait,
         claimReleaseIsBoundedAndReconciled,
+      })
+  }
+
+  run restartIsTheThirdExactChoiceAndFirstJournaledWinnerTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(redeliverExactF2Choice)
+      .then(rejectLosingF2Choice)
+      .expect(and {
+        state.f2WinningChoice == RestartChoice,
+        state.firstF2Choice == RestartChoice,
+        state.winningRequestId.nonce == RESTART_D1.nonce,
+        state.appliedChoiceCount == 1,
+        state.lastControlResult == ChoiceAlreadyApplied,
+        firstJournaledChoiceWins,
+      })
+  }
+
+  run safeSuspensionAndExactFreshFactsAtomicallyRecordCleanP2Test = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeReplacementExactH2)
+      .then(recordPlannedAttemptReplacement)
+      .expect(and {
+        state.replacementPhase == PlannedAttemptReplacementRecorded,
+        state.p1Superseded,
+        not(state.p1Unsettled),
+        state.plannedSuccessor == PlannedP2,
+        state.replacementEventCount == 1,
+        state.successorAllocationCount == 1,
+        state.successorBaseHead == TARGET_HEAD_H2,
+        state.successorWorktreeIdentity == WORKTREE_W2,
+        not(state.successorWorktreeReady),
+        not(state.successorPositionHeld),
+        not(state.successorExecutorResponsibilityRetained),
+        plannedAttemptReplacementRequiresExactCurrentEvidence,
+        plannedAttemptReplacementIsAtomic,
+        replacementLeavesAtMostOneUnsettledAttempt,
+        restartPreservesP1Resources,
+        restartRetainsExactK1WithoutTrackerMutation,
+        restartSendsNoClaimMutation,
+        successorPlanIsCleanW2AtExactH2,
+        replacementEventDoesNotClaimW2OrExecutorWork,
+      })
+      .then(prepareCleanSuccessorW2)
+      .expect(and {
+        state.replacementPhase == SuccessorWaitingForAdmission,
+        state.successorWorktreeReady,
+        not(state.successorPositionHeld),
+        state.successorExecutorStartCount == 0,
+      })
+      .then(admitSuccessorThroughOrdinaryCapacity)
+      .expect(and {
+        state.replacementPhase == SuccessorAdmitted,
+        state.successorAdmissionCount == 1,
+        state.successorPositionHeld,
+        state.successorExecutorStartCount == 0,
+      })
+      .then(startSuccessorExecutor)
+      .expect(and {
+        state.replacementPhase == SuccessorRunning,
+        state.successorExecutorStartCount == 1,
+        state.successorExecutorResponsibilityRetained,
+        successorUsesOrdinaryBoundedAdmission,
+        p1AndP2ExecutorResponsibilitiesNeverOverlap,
+        restartNeverSelectsIntegration,
+      })
+  }
+
+  run absentReplacementAppendCrashRereadsFactsAndAllocatesOnlyP2Test = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeReplacementExactH2)
+      .then(recoverReplacementAppendAbsent)
+      .expect(and {
+        state.replacementPhase == NeedCurrentReplacementTaskFacts,
+        state.p1Unsettled,
+        not(state.p1Superseded),
+        state.plannedSuccessor == NoPlannedSuccessor,
+        not(state.replacementEventRecorded),
+        state.successorAllocationCount == 0,
+        crashKeepsEitherNoP2OrTheSameP2,
+      })
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeReplacementExactH2)
+      .then(recordPlannedAttemptReplacement)
+      .expect(and {
+        state.plannedSuccessor == PlannedP2,
+        state.successorAllocationCount == 1,
+        state.replacementEventCount == 1,
+        replacementNeverAllocatesP3,
+      })
+  }
+
+  run presentReplacementAppendCrashReusesExactP2WithoutP3Test = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeReplacementExactH2)
+      .then(recordPlannedAttemptReplacement)
+      .then(recoverReplacementAppendPresent)
+      .then(recoverReplacementAppendPresent)
+      .expect(and {
+        state.replacementProcessLossCount == 2,
+        state.plannedSuccessor == PlannedP2,
+        state.successorAllocationCount == 1,
+        state.replacementEventCount == 1,
+        crashKeepsEitherNoP2OrTheSameP2,
+        replacementNeverAllocatesP3,
+      })
+      .then(prepareCleanSuccessorW2)
+      .then(admitSuccessorThroughOrdinaryCapacity)
+      .then(startSuccessorExecutor)
+      .expect(successorUsesOrdinaryBoundedAdmission)
+  }
+
+  run brokenSafeProofCanUseExactSafeReportThenFreshFactsTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(breakRestartSafeSuspension)
+      .expect(and {
+        state.replacementPhase == NeedCurrentExecutorQuiescence,
+        state.replacementTaskFacts == ReplacementTaskFactsNotRead,
+        state.positionHeld,
+      })
+      .then(observeRestartSafelySuspended)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeReplacementExactH2)
+      .then(recordPlannedAttemptReplacement)
+      .expect(and {
+        state.executorEvidence == ExactSafelySuspended,
+        state.replacementEventRecorded,
+        plannedAttemptReplacementRequiresExactCurrentEvidence,
+      })
+  }
+
+  run lateAcceptedPreservesEvidenceSkipsIntegrationAndUsesFreshFactsTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(breakRestartSafeSuspension)
+      .then(observeRestartAccepted)
+      .expect(and {
+        state.executorEvidence == ExactAcceptedTerminal,
+        state.lateAcceptedCommitPreserved,
+        state.lateAcceptedEvidencePreserved,
+        not(state.implementationResponsibilityRetained),
+        state.replacementTaskFacts == ReplacementTaskFactsNotRead,
+        state.lateAcceptedIntegrationResponsibilityCount == 0,
+        lateAcceptedNeverCreatesIntegrationResponsibility,
+      })
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeReplacementExactH2)
+      .then(recordPlannedAttemptReplacement)
+      .expect(and {
+        state.replacementEventRecorded,
+        state.plannedSuccessor == PlannedP2,
+        state.lateAcceptedCommitPreserved,
+        state.lateAcceptedIntegrationResponsibilityCount == 0,
+        plannedAttemptReplacementRequiresExactCurrentEvidence,
+        restartNeverSelectsIntegration,
+      })
+  }
+
+  run runningWriterKeepsP1AndLetsIndependentCContinueTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(breakRestartSafeSuspension)
+      .then(observeRestartRunning)
+      .then(selectIndependentTaskB)
+      .expect(and {
+        state.replacementPhase == ReplacementWaiting,
+        state.replacementDisposition == RunningWriterWait,
+        state.implementationResponsibilityRetained,
+        state.p1Unsettled,
+        state.positionHeld,
+        not(state.replacementEventRecorded),
+        state.independentTaskSelected,
+        nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
+      })
+  }
+
+  run completedTerminalEndsOnlyP1ExecutorWorkWithoutReplacementTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(breakRestartSafeSuspension)
+      .then(observeRestartCompleted)
+      .expect(and {
+        state.replacementDisposition == CompletedDoesNotAuthorizeReplacement,
+        state.completedResultPreserved,
+        not(state.implementationResponsibilityRetained),
+        not(state.replacementEventRecorded),
+        replacementTerminalOutcomesRemainDistinct,
+        nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
+      })
+  }
+
+  run failedTerminalEndsOnlyP1ExecutorWorkWithoutReplacementTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(breakRestartSafeSuspension)
+      .then(observeRestartFailed)
+      .expect(and {
+        state.replacementDisposition == FailedDoesNotAuthorizeReplacement,
+        state.failedResultPreserved,
+        not(state.implementationResponsibilityRetained),
+        not(state.replacementEventRecorded),
+        replacementTerminalOutcomesRemainDistinct,
+        nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
+      })
+  }
+
+  run unreadableOrContradictoryExecutorCannotAuthorizeReplacementTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(breakRestartSafeSuspension)
+      .then(observeRestartExecutorUnavailable)
+      .expect(and {
+        state.replacementDisposition == ExecutorUnreadableWait,
+        not(state.replacementEventRecorded),
+        nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
+      })
+      .then(observeRestartExecutorContradiction)
+      .expect(and {
+        state.replacementDisposition == ExecutorCorrelationContradiction,
+        not(state.replacementEventRecorded),
+        nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
+      })
+  }
+
+  run F3AfterAppliedRestartRequiresNewChoiceAndRecordsNoP2Test = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementF3TaskFacts)
+      .expect(and {
+        state.currentFingerprint == F3,
+        state.replacementDisposition == NewFingerprintChoiceRequired,
+        state.continueStage == NewChoiceRequired,
+        state.constraint == SpecificationConstraint,
+        state.factDecision == SpecificationChoices,
+        state.f3WinningChoice == NoChoice,
+        not(state.replacementEventRecorded),
+        state.plannedSuccessor == NoPlannedSuccessor,
+        changedAgainRequiresNewChoice,
+      })
+  }
+
+  run unreadableOrNoneligibleTaskFactsRecordNoP2Test = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementTaskFactsUnreadable)
+      .expect(and {
+        state.replacementDisposition == TaskFactsUnreadableWait,
+        not(state.replacementEventRecorded),
+      })
+  }
+
+  run noneligibleTaskFactsRecordNoP2Test = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementTaskNotEligible)
+      .expect(and {
+        state.replacementDisposition == TaskNotEligibleWait,
+        not(state.replacementEventRecorded),
+      })
+  }
+
+  run absentK1RecordsNoP2AndSendsNoClaimMutationTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementClaimAbsent)
+      .expect(and {
+        state.replacementDisposition == ClaimAbsentWait,
+        state.claimState == MissingClaim,
+        not(state.exactClaimHeld),
+        not(state.replacementEventRecorded),
+        state.replacementClaimMutationCallCount == 0,
+        restartSendsNoClaimMutation,
+      })
+  }
+
+  run foreignK1RecordsNoP2AndSendsNoClaimMutationTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementClaimForeign)
+      .expect(and {
+        state.replacementDisposition == ClaimForeignWait,
+        state.claimState == ForeignClaim,
+        not(state.exactClaimHeld),
+        not(state.replacementEventRecorded),
+        state.replacementClaimMutationCallCount == 0,
+        restartSendsNoClaimMutation,
+      })
+  }
+
+  run unreadableK1RecordsNoP2AndSendsNoClaimMutationTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementClaimUnreadable)
+      .expect(and {
+        state.replacementPhase == NeedCurrentReplacementClaim,
+        state.replacementClaimReadsThisActivation == 1,
+        state.claimState == UnreadableClaim,
+        not(state.replacementEventRecorded),
+      })
+      .then(observeReplacementClaimUnreadable)
+      .expect(and {
+        state.replacementPhase == NeedCurrentReplacementClaim,
+        state.replacementClaimReadsThisActivation == 2,
+        not(state.replacementEventRecorded),
+      })
+      .then(observeReplacementClaimUnreadable)
+      .expect(and {
+        state.replacementPhase == ReplacementWaiting,
+        state.replacementDisposition == ClaimUnreadableWait,
+        state.replacementClaimReadsThisActivation == REPLACEMENT_CLAIM_READ_LIMIT,
+        not(state.replacementEventRecorded),
+        state.replacementClaimMutationCallCount == 0,
+        replacementClaimReadsAreBounded,
+        restartSendsNoClaimMutation,
+      })
+  }
+
+  run processLossResetsOnlyUnreadableK1ReadAllowanceTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementClaimUnreadable)
+      .then(observeReplacementClaimUnreadable)
+      .then(recoverReplacementClaimReadActivation)
+      .expect(and {
+        state.replacementPhase == NeedCurrentReplacementClaim,
+        state.replacementClaimFacts == ReplacementClaimNotRead,
+        state.replacementClaimReadsThisActivation == 0,
+        state.claimState == UnreadableClaim,
+        state.replacementProcessLossCount == 1,
+        state.replacementClaimMutationCallCount == 0,
+        replacementClaimReadsAreBounded,
+      })
+  }
+
+  run nonreadyW1DelegatesWithoutReplacementOrCleanupTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementW1NotReady)
+      .expect(and {
+        state.replacementDisposition == OldWorktreeNotReadyWait,
+        not(state.replacementEventRecorded),
+        state.replacementCleanupCallCount == 0,
+        restartPreservesP1Resources,
+      })
+  }
+
+  run unreadableW1DelegatesWithoutReplacementOrCleanupTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementW1Unreadable)
+      .expect(and {
+        state.replacementDisposition == OldWorktreeUnreadableWait,
+        not(state.replacementEventRecorded),
+        state.replacementCleanupCallCount == 0,
+        restartPreservesP1Resources,
+      })
+  }
+
+  run unreadableH2RecordsNoP2Test = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeReplacementH2Unreadable)
+      .expect(and {
+        state.replacementDisposition == TargetHeadUnreadableWait,
+        not(state.replacementEventRecorded),
+        state.plannedSuccessor == NoPlannedSuccessor,
+      })
+  }
+
+  run restartPastIntegrationCutoffCrossesNoBoundaryTest = {
+    init
+      .then(observeExactTerminal)
+      .then(beginIntegration)
+      .then(observeF2Change)
+      .then(rejectRestartPastIntegrationCutoff)
+      .expect(and {
+        state.lastControlResult == ChoiceOutsidePreIntegration,
+        state.f2WinningChoice == NoChoice,
+        state.replacementPhase == ReplacementRejected,
+        state.replacementDisposition == PastIntegrationCutoff,
+        not(state.replacementEventRecorded),
+        state.replacementClaimMutationCallCount == 0,
+        state.replacementCleanupCallCount == 0,
+        postCutoffChoiceNeverApplies,
       })
   }
 }
