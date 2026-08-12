@@ -2,7 +2,6 @@
 flowchart LR
   subgraph controls["Pause, drain, and dispositions"]
     i66["#66 Clean restart"]
-    i67["#67 Abandon or quarantine"]
   end
 
   subgraph milestone["Controlled-provider milestone"]
@@ -22,7 +21,6 @@ flowchart LR
   end
 
   i66 --> i167
-  i67 --> i167
   i167 --> i127
   i127 --> i168
   i167 --> i168

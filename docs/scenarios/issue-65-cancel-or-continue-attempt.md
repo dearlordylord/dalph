@@ -6,8 +6,9 @@ Status: accepted on 2026-08-01 before behavior-changing implementation.
 
 These scenarios begin after issue #136 has proved that tracker-authored task
 instructions changed while one immutable planned attempt remains unfinished.
-Issue #66 separately owns clean restart, and issue #67 owns later resource
-abandonment or quarantine. Each Continue or Stop request carries one immutable
+Issue #66 separately owns clean restart. The Stop chronology below is the exact
+abandonment behavior retained after issue #67 removed its duplicate Quarantine
+choice. Each Continue or Stop request carries one immutable
 attempt-choice request identity. Exact redelivery returns its recorded result;
 reuse for another Run, task, attempt, fingerprint pair, or choice is a typed
 contradiction. At most one valid choice may be applied to one exposed
@@ -186,7 +187,7 @@ whole Stop falsely fail or falsely complete. If the claim is absent or foreign,
 she also sees that Dalph made no claim change. Dalph must not release a foreign
 or replacement claim, reacquire a claim merely to stop, resume or integrate P
 because claim release is pending, delete or reset the worktree, discard
-evidence, start #66 clean restart, or start #67 disposition.
+evidence, start #66 clean restart, or start destructive cleanup.
 
 ### Acceptance-test seam
 
