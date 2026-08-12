@@ -1,11 +1,6 @@
 ```mermaid
 flowchart LR
-  subgraph integration["Integration"]
-    i61["#61 Complete tracker task"]
-  end
-
   subgraph controls["Pause, drain, and dispositions"]
-    i63["#63 Drain to quiescence"]
     i66["#66 Clean restart"]
     i67["#67 Abandon or quarantine"]
   end
@@ -26,8 +21,6 @@ flowchart LR
     effectWorkflow["Effect Workflow evaluation"]
   end
 
-  i61 --> i167
-  i63 --> i167
   i66 --> i167
   i67 --> i167
   i167 --> i127
