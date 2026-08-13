@@ -35,8 +35,10 @@ or treat A's executor result as tracker completion.
 
 Acceptance tests:
 
-- `continues the same run with B only after a recorded refresh reports A completed`
-  runs the authored cassette through the production activation loop.
+- `Dalph confirms A before a later graph read releases B` runs the maintained
+  delivery-finality cassette through the production activation loop. The test
+  also proves that the focused completion confirmation alone does not release
+  B.
 - `establishes an absent Run before its first tracker read and activates it once` runs the
   actual production startup composition and proves that A's newly recorded
   claim constrains duplicate acquisition without suppressing A's focused
@@ -65,8 +67,10 @@ attempt, infer A completed, or create B's claim.
 
 Acceptance test:
 
-- `returns control after one unchanged refresh without terminating the
-  unsettled Run` proves bounded activation and the recorded projection.
+- `performs one final tracker read before the current bounded activation
+  returns or terminates` and `keeps the maintained singleton Run active while
+  its tracker task remains open` prove bounded activation and the recorded
+  projection.
 
 ## Changed membership is local and invalid reads authorize nothing
 
@@ -103,11 +107,11 @@ Acceptance tests:
   constraint`;
 - `fresh-run journal facts expose membership constraints without recovered
   transitions`;
-- `an executor responsibility leaving complete membership becomes an
-  executor-local constraint`;
-- `keeps a membership-constrained recovered Run active after a quiescent
-  refresh`;
+- `keeps a removed task's executor responsibility behind a task-membership
+  constraint`;
+- `a task leaving complete membership safely suspends its executor work before
+  the local constraint`;
 - `an invalid quiescent refresh authorizes no new work`;
-- `serializes selection while capacity-N runners overlap` retains the existing
-  capacity-two proof while the cassette proves refreshed facts precede new
-  selection.
+- `consumes a staggered graph while reconstructed positions delay
+  restart-added X` retains the capacity-two overlap proof while the focused
+  cassette proves refreshed facts precede new selection.

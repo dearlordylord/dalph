@@ -27,6 +27,9 @@ no issue declares any file here outdated.
 | `issue-131-conflicting-capacity-observation.md` | 131 |
 | `issue-134-pause-whole-run.md` | 134 |
 | `issue-135-pause-task-grouping-descendants.md` | 135 |
+| `issue-53-refresh-complete-task-pipelines.md` | 53 |
+| `issue-136-reconcile-changed-task-facts.md` | 136 |
+| `issue-139-reconcile-git-facts.md` | 139 |
 | `issue-164-journal-first-tracker-observations.md` | 164 |
 | `issue-165-domain-readable-cassettes.md` | 165 |
 | `issue-167-controlled-provider-capstone.md` | 167 |
@@ -62,17 +65,14 @@ today.
 
 | File | Issue |
 |---|---|
-| `issue-53-refresh-complete-task-pipelines.md` | 53 |
 | `issue-54-resize-task-admission.md` | 54 |
 | `issue-55-localize-task-conflicts.md` | 55 |
 | `issue-56-queue-accepted-integration.md` | 56 |
 | `issue-63-observe-pause-progress.md` | 63 |
 | `issue-65-cancel-or-continue-attempt.md` | 65 |
 | `issue-66-clean-restart-changed-attempt.md` | 66 |
-| `issue-136-reconcile-changed-task-facts.md` | 136 |
 | `issue-137-reconcile-task-claims.md` | 137 |
 | `issue-138-reconcile-blockers-around-promotion.md` | 138 |
-| `issue-139-reconcile-git-facts.md` | 139 |
 
 **Accepted planning-only Wayfinder** — the owning issue resolves behavior,
 architecture, model ownership, and implementation-ticket edges without itself
