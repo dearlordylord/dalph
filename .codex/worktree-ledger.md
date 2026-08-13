@@ -10,7 +10,8 @@ worktree is the only integration point; task worktrees never merge one another.
 | --- | --- | --- | --- | --- | --- |
 | #214 | removed | removed | `798ca724210f07709417af5e9eed62bac6232b55` | `09b6e47d0` | integrated as `d8ebf65af`; cleaned after #73 branch creation |
 | #73 | `work/issue73` | `.worktrees/issue73` | `0ee1e4f8a` | `pending` | implementing after integrated #214 |
-| #213 | `work/issue213` | `.worktrees/issue213` | `798ca724210f07709417af5e9eed62bac6232b55` | `pending` | implementing |
+| #213 | `work/issue213` | `.worktrees/issue213` | `798ca724210f07709417af5e9eed62bac6232b55` | `433f7de13` | integrated as `5d64b4cb6`; ready for cleanup after #76 branch creation |
+| #76 | `work/issue76` | `.worktrees/issue76` | `5d64b4cb6` | `pending` | queued after integrated #213 |
 | #195 | `work/issue195` | `.worktrees/issue195` | `798ca724210f07709417af5e9eed62bac6232b55` | `21f75d13a` | audited complete; issue closed |
 | #215 | `work/issue215` | `.worktrees/issue215` | `a08f5b001dcaa0e871a453010655fba84e8079cd` | `pending` | queued after audited #195 |
 | #212 | `work/issue212` | `.worktrees/issue212` | `pending` | `pending` | queued independent tooling lane |
