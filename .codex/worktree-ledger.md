@@ -42,6 +42,20 @@ then:
 #140 -> #75
 ```
 
+## External prerequisite holds
+
+The second-wave arrows above describe only the requested local sequencing.
+Live tracker metadata adds these prerequisite holds, which must be cleared or
+explicitly re-decided before implementation starts:
+
+| Requested root | Additional open blocker(s) | Consequence |
+| --- | --- | --- |
+| #59 | #57 | Do not start #59 or downstream #78 yet. |
+| #69 | #168 and #68 | Do not start #69 or downstream #77 yet. |
+| #140 | #168 | Do not start #140 or downstream #75 yet. |
+
+#71, #72, #74, #103, and #104 have no remaining declared blockers.
+
 The tooling tickets #212 and #159 are logically independent but will not run
 concurrently with one another because both may edit verification scripts and
 quality-gate configuration.
