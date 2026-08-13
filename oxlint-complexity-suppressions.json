@@ -1,1 +1,7 @@
-{}
+{
+  "packages/orchestrator/src/authorities/verification/repository-resource-lock.ts": {
+    "complexity": {
+      "count": 1
+    }
+  }
+}

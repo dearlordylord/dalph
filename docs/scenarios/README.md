@@ -51,6 +51,7 @@ on the issue while later dependent work proceeds.
 | `issue-72-qualify-github-completion.md` | 72 |
 | `issue-73-qualify-real-git-lineage-candidate-ref.md` | 73 |
 | `issue-74-qualify-real-worktree-lease.md` | 74 |
+| `issue-78-qualify-repository-verification-locking.md` | 78 |
 | `issue-141-integration-finality.md` | 141 |
 | `issue-156-reject-stale-task-control.md` | 156 |
 | `issue-192-describe-delivery-actions.md` | 192 |
