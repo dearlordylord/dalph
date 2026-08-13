@@ -8,9 +8,9 @@ worktree is the only integration point; task worktrees never merge one another.
 
 | Issue | Branch | Worktree | Base | Tip | State |
 | --- | --- | --- | --- | --- | --- |
-| #214 | `work/issue214` | `.worktrees/issue214` | `pending` | `pending` | creating |
-| #213 | `work/issue213` | `.worktrees/issue213` | `pending` | `pending` | creating |
-| #195 | `work/issue195` | `.worktrees/issue195` | `pending` | `pending` | creating |
+| #214 | `work/issue214` | `.worktrees/issue214` | `798ca724210f07709417af5e9eed62bac6232b55` | `pending` | implementing |
+| #213 | `work/issue213` | `.worktrees/issue213` | `798ca724210f07709417af5e9eed62bac6232b55` | `pending` | implementing |
+| #195 | `work/issue195` | `.worktrees/issue195` | `798ca724210f07709417af5e9eed62bac6232b55` | `pending` | implementing |
 
 ## Dependency order
 
