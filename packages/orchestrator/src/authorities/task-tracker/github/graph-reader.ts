@@ -327,8 +327,8 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, neve
             `GitHub returned issue ${node.id} while reading ${issueNodeId}`
           )
         }
-        // Cross-repository closure policy is revisited by:
-        // https://github.com/dearlordylord/dalph/issues/71
+        // V1 target closure policy accepts only issues from the resolved root
+        // repository; a foreign relationship is not schedulable.
         if (node.repository.id !== rootRepositoryNodeId) {
           return yield* incomplete(
             "GithubTrackerGraphReader.readIssue",

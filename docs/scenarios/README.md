@@ -75,6 +75,7 @@ today.
 | `issue-76-production-evidence-store.md` | 76 |
 | `issue-137-reconcile-task-claims.md` | 137 |
 | `issue-138-reconcile-blockers-around-promotion.md` | 138 |
+| `issue-71-qualify-real-github-graph-membership-claims.md` | 71 |
 
 **Accepted planning-only Wayfinder** — the owning issue resolves behavior,
 architecture, model ownership, and implementation-ticket edges without itself

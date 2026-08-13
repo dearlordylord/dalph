@@ -529,6 +529,27 @@ trackerGraphReaderContract({
   name: "GitHub tracker reader"
 })
 
+it.effect("rejects a cross-repository native relationship without exposing a graph", () =>
+  Effect.gen(function* () {
+    const reader = yield* TrackerGraphReader
+    const error = yield* reader.read(target).pipe(Effect.flip, Effect.orDie)
+
+    expect(error._tag).toBe("TrackerGraphReader.AdapterReadError")
+    if (error._tag !== "TrackerGraphReader.AdapterReadError") return
+    expect(error.reason._tag).toBe("IncompleteSnapshot")
+    expect(error.detail).toContain("outside the root repository")
+  }).pipe(
+    Effect.provide(githubTrackerGraphReaderLayer),
+    Effect.provide(
+      clientLayerFor((request) =>
+        request._tag === "ReadIssue" && request.issueNodeId === "child-node"
+          ? issue("child-node", "root-node", "OPEN", null, "foreign-repository")
+          : responseFor(request)
+      )
+    )
+  )
+)
+
 it.effect("defers focused GitHub task-work qualification to the provider ticket", () =>
   Effect.gen(function* () {
     const reader = yield* TrackerGraphReader
