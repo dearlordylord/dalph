@@ -17,7 +17,7 @@ import {
 } from "@dalph/contracts"
 import { InRunJournal } from "../../workflow-journal/store.js"
 import {
-  AcceptedResultNotDurable,
+  AcceptedResultEvidenceUnavailable,
   IntegrationJournalUnavailable
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import { makeIntegrationStageContext } from "./integration-stage-context.js"
@@ -92,6 +92,11 @@ it("uses the ambient journal when a fresh accepted result is queued", async () =
   )
 
   expect(failure).toEqual(
-    new AcceptedResultNotDurable({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
+    new AcceptedResultEvidenceUnavailable({
+      attemptId: plannedAttempt.attemptId,
+      detail: "acceptance evidence store is not configured for this run activation",
+      reference: acceptedResultFixture(GitCommitSha.make("a".repeat(40))).evidenceManifest,
+      runId: plannedAttempt.runId
+    })
   )
 })

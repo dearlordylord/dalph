@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import {
   AcceptedResult,
+  AcceptedResultEvidenceManifest,
   AttemptId,
   IntegrationTarget,
   PlannedTaskAttempt,
@@ -17,6 +18,7 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
 import { acceptedResultEquivalence, integrationResponsibilityEquivalence } from "./responsibility.js"
 import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
+import { EvidenceReference, EvidenceStore, EvidenceStoreFailure } from "../target-verification/evidence-store.js"
 
 /**
  * Exists only before the exact integration-start occurrence. It is derived
@@ -90,6 +92,18 @@ export class AcceptedResultNotDurable extends Schema.TaggedError<AcceptedResultN
   { attemptId: AttemptId, runId: RunId }
 ) {}
 
+/** The immutable acceptance manifest could not be read, so admission may retry after a later reread. */
+export class AcceptedResultEvidenceUnavailable extends Schema.TaggedError<AcceptedResultEvidenceUnavailable>()(
+  "AcceptedResultEvidenceUnavailable",
+  { attemptId: AttemptId, detail: Schema.String, reference: EvidenceReference, runId: RunId }
+) {}
+
+/** The immutable acceptance manifest was readable but did not prove this exact accepted result. */
+export class AcceptedResultEvidenceConflict extends Schema.TaggedError<AcceptedResultEvidenceConflict>()(
+  "AcceptedResultEvidenceConflict",
+  { attemptId: AttemptId, detail: Schema.String, reference: EvidenceReference, runId: RunId }
+) {}
+
 /** An Accepted result published after exact Restart is preserved as evidence but never enters integration. */
 export class AcceptedResultSuppressedByRestart extends Schema.TaggedError<AcceptedResultSuppressedByRestart>()(
   "AcceptedResultSuppressedByRestart",
@@ -135,6 +149,71 @@ const hasDurableAcceptedResult = (
       acceptedResultEquivalence(event.report.result.acceptedResult, acceptedResult)
   )
 }
+
+const acceptanceEvidenceConflict = (
+  plannedAttempt: PlannedTaskAttempt,
+  reference: EvidenceReference,
+  detail: string
+): AcceptedResultEvidenceConflict =>
+  new AcceptedResultEvidenceConflict({
+    attemptId: plannedAttempt.attemptId,
+    detail,
+    reference,
+    runId: plannedAttempt.runId
+  })
+
+/** Reads and qualifies one immutable executor acceptance envelope before admission. */
+export const qualifyAcceptedResultEvidence = Effect.fn("IntegrationAdmission.qualifyAcceptedResultEvidence")(function* (
+  plannedAttempt: PlannedTaskAttempt,
+  acceptedResult: AcceptedResult
+) {
+  const reference = acceptedResult.evidenceManifest
+  const evidence = Context.getOption(yield* Effect.context<never>(), EvidenceStore)
+  if (evidence._tag === "None") {
+    return yield* new AcceptedResultEvidenceUnavailable({
+      attemptId: plannedAttempt.attemptId,
+      detail: "acceptance evidence store is not configured for this run activation",
+      reference,
+      runId: plannedAttempt.runId
+    })
+  }
+  const bytes = yield* evidence.value
+    .read(reference)
+    .pipe(
+      Effect.mapError(
+        (failure) =>
+          new AcceptedResultEvidenceUnavailable({
+            attemptId: plannedAttempt.attemptId,
+            detail: failure instanceof EvidenceStoreFailure ? failure.detail : String(failure),
+            reference,
+            runId: plannedAttempt.runId
+          })
+      )
+    )
+  const decoded = yield* Effect.try({
+    try: (): unknown => JSON.parse(new TextDecoder().decode(bytes)),
+    catch: (cause) => acceptanceEvidenceConflict(plannedAttempt, reference, `manifest is not JSON: ${String(cause)}`)
+  }).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(AcceptedResultEvidenceManifest)),
+    Effect.mapError((cause) =>
+      cause instanceof AcceptedResultEvidenceConflict
+        ? cause
+        : acceptanceEvidenceConflict(plannedAttempt, reference, `manifest has an invalid envelope: ${String(cause)}`)
+    )
+  )
+  if (
+    decoded.commit !== acceptedResult.commit ||
+    decoded.correlation.attemptId !== plannedAttempt.attemptId ||
+    decoded.correlation.runId !== plannedAttempt.runId
+  ) {
+    return yield* acceptanceEvidenceConflict(
+      plannedAttempt,
+      reference,
+      "manifest does not bind the exact accepted commit, RunId, and AttemptId"
+    )
+  }
+  return decoded
+})
 
 const startedFor = (
   records: ReadonlyArray<JournalRecord>,
@@ -286,6 +365,7 @@ export const queueAcceptedResultIntegrationResponsibility = Effect.fn(
   if (!hasDurableAcceptedResult(records, plannedAttempt, acceptedResult)) {
     return yield* new AcceptedResultNotDurable({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
   }
+  yield* qualifyAcceptedResultEvidence(plannedAttempt, acceptedResult)
   const record = yield* journal.append(
     plannedAttempt.runId,
     integrationResponsibilityBeganRecordKey(plannedAttempt.attemptId),

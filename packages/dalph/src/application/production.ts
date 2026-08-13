@@ -30,6 +30,7 @@ import {
   WorkflowInterpreter,
   WorkflowTrace,
   type TargetVerificationRuntimeInput,
+  type EvidenceStoreService,
   type TargetPromotionRuntimeInput,
   type CompletionClaimBoundaryService,
   type CompletionTaskBoundaryService
@@ -58,7 +59,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   targetVerification?: TargetVerificationRuntimeInput,
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinality?: CompletionClaimBoundaryService,
-  completionTask?: CompletionTaskBoundaryService
+  completionTask?: CompletionTaskBoundaryService,
+  acceptedResultEvidenceStore?: EvidenceStoreService
 ): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
@@ -106,7 +108,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           targetVerification,
           targetPromotion,
           integrationFinality,
-          completionTask
+          completionTask,
+          acceptedResultEvidenceStore
         ).pipe(
           Layer.provide(interpreterLayer),
           Layer.provide(operatorControlLayer),

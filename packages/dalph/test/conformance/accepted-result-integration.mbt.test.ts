@@ -932,6 +932,30 @@ const acceptedResultIntegrationDriver = defineDriver(
       Layer.succeed(IntegrationCandidateGit, candidateGit)
     )
     const journalLayer = Layer.succeed(InRunJournal, append)
+    const acceptanceEvidenceLayer = Layer.succeed(
+      EvidenceStore,
+      EvidenceStore.of({
+        put: (bytes) =>
+          Effect.succeed(
+            EvidenceReference.make({ byteLength: bytes.byteLength, digest: EvidenceDigest.make("a".repeat(64)) })
+          ),
+        read: (reference) => {
+          const id = BigInt(`0x${reference.digest}`)
+          const attempt = idFor(id)
+          const result = acceptedResultOf(id)
+          return Effect.succeed(
+            new TextEncoder().encode(
+              JSON.stringify({
+                commit: result.commit,
+                correlation: { attemptId: attempt.attemptId, runId },
+                formatVersion: 1,
+                outcome: "Accepted"
+              })
+            )
+          )
+        }
+      })
+    )
     const promotionIdForRequest = (request: TargetPromotionRequest): bigint =>
       numericCommit(request.candidateCorrelation.acceptedResultCommit) - 20n
     const recordPromotionReadObservation = (request: TargetPromotionRequest, step: PromotionReadStep): void => {
@@ -1298,6 +1322,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         id === 2n && independentTargetTwo ? independentTarget : target
       ).pipe(
         Effect.provide(journalLayer),
+        Effect.provide(acceptanceEvidenceLayer),
         Effect.orDie,
         Effect.tap(() => Effect.sync(() => modelQueueAcceptedResult(id)))
       )

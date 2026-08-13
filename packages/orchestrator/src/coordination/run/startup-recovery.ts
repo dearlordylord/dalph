@@ -43,6 +43,10 @@ import {
   type TargetVerificationRuntimeInput
 } from "../../workflow/protocols/target-verification/runtime.js"
 import {
+  EvidenceStore,
+  type EvidenceStoreService
+} from "../../workflow/protocols/target-verification/evidence-store.js"
+import {
   TargetPromotionRuntime,
   type TargetPromotionRuntimeInput
 } from "../../workflow/protocols/target-promotion/runtime.js"
@@ -104,16 +108,29 @@ export const inspectStartupRecovery = Effect.fn("StartupRecovery.inspect")(funct
   return reductions.find((reduction) => reduction._tag === "ValidWorkflowJournalHistory" && reduction.runId === runId)
 })
 
-const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function* (
-  runId: RunId,
-  integrationTarget: IntegrationTarget | undefined,
-  candidateCorrectionLimit: CandidateCorrectionLimit | undefined,
-  candidateContinuationLimit: CandidateContinuationLimit | undefined,
-  targetVerification: TargetVerificationRuntimeInput | undefined,
-  targetPromotion: TargetPromotionRuntimeInput | undefined,
-  integrationFinality: CompletionClaimBoundaryService | undefined,
-  completionTask: CompletionTaskBoundaryService | undefined
-) {
+interface RunActivationContextInput {
+  readonly runId: RunId
+  readonly integrationTarget: IntegrationTarget | undefined
+  readonly candidateCorrectionLimit: CandidateCorrectionLimit | undefined
+  readonly candidateContinuationLimit: CandidateContinuationLimit | undefined
+  readonly targetVerification: TargetVerificationRuntimeInput | undefined
+  readonly targetPromotion: TargetPromotionRuntimeInput | undefined
+  readonly integrationFinality: CompletionClaimBoundaryService | undefined
+  readonly completionTask: CompletionTaskBoundaryService | undefined
+  readonly acceptedResultEvidenceStore: EvidenceStoreService | undefined
+}
+
+const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function* ({
+  acceptedResultEvidenceStore,
+  candidateContinuationLimit,
+  candidateCorrectionLimit,
+  completionTask,
+  integrationFinality,
+  integrationTarget,
+  runId,
+  targetPromotion,
+  targetVerification
+}: RunActivationContextInput) {
   const ownership = yield* CoordinatorOwnership
   const inRunJournal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
@@ -152,7 +169,8 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     integrationFinality !== undefined,
     completionTask !== undefined
   )
-  const activationContext = Context.empty().pipe(
+  const evidenceStore = acceptedResultEvidenceStore ?? targetVerification?.evidenceStore
+  const requiredContext = Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
     Context.add(RunRecoveryProjection, recovery),
     Context.add(OperationIdAllocator, operationIdAllocator),
@@ -164,6 +182,9 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     Context.add(TaskWorkCapacityControl, taskWorkCapacityControl),
     Context.add(TaskClaimReacquisitionControl, taskClaimReacquisitionControl),
     Context.add(WorkflowTrace, trace),
+    Context.add(CoordinatorOwnership, ownership)
+  )
+  const optionalContext = Context.empty().pipe(
     Context.add(DeliveryRuntimeResources, runtimeResources),
     Context.add(DeliveryRuntimeObservationPublication, observationPublication),
     Context.addOrOmit(IntegrationCandidateAgent, candidateAgent),
@@ -172,6 +193,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
       TargetVerificationRuntime,
       Option.fromUndefinedOr(targetVerification).pipe(Option.map(TargetVerificationRuntime.of))
     ),
+    Context.addOrOmit(EvidenceStore, Option.fromUndefinedOr(evidenceStore).pipe(Option.map(EvidenceStore.of))),
     Context.addOrOmit(
       TargetPromotionRuntime,
       Option.fromUndefinedOr(targetPromotion).pipe(Option.map(TargetPromotionRuntime.of))
@@ -186,7 +208,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     ),
     Context.addOrOmit(IntegrationTargetSelection, Option.fromUndefinedOr(integrationTarget))
   )
-  return Context.add(activationContext, CoordinatorOwnership, ownership)
+  return Context.merge(requiredContext, optionalContext)
 })
 
 /** Builds ordinary in-Run services after bootstrap has already validated the complete accepted prefix. */
@@ -198,10 +220,11 @@ export const validatedRunActivationLayer = (
   targetVerification?: TargetVerificationRuntimeInput,
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinality?: CompletionClaimBoundaryService,
-  completionTask?: CompletionTaskBoundaryService
+  completionTask?: CompletionTaskBoundaryService,
+  acceptedResultEvidenceStore?: EvidenceStoreService
 ) =>
   Layer.effectContext(
-    makeRunActivationContext(
+    makeRunActivationContext({
       runId,
       integrationTarget,
       candidateCorrectionLimit,
@@ -209,6 +232,7 @@ export const validatedRunActivationLayer = (
       targetVerification,
       targetPromotion,
       integrationFinality,
-      completionTask
-    )
+      completionTask,
+      acceptedResultEvidenceStore
+    })
   )

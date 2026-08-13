@@ -1,6 +1,10 @@
 import { it } from "@effect/vitest"
-import { acceptedResultFixture } from "../../../../test/support/evidence.js"
-import { Effect, Option } from "effect"
+import {
+  acceptedResultEvidenceLayer,
+  acceptedResultFixture,
+  registerAcceptedResultEvidence
+} from "../../../../test/support/evidence.js"
+import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -230,6 +234,7 @@ const recordAcceptedTerminal = (
       })
     )
     yield* beforeTerminal
+    yield* registerAcceptedResultEvidence(attempt, result)
     const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
     yield* journal.append(
       runId,
@@ -244,6 +249,8 @@ const recordAcceptedTerminal = (
       })
     )
   })
+
+const protocolTestLayer = Layer.merge(acceptedResultEvidenceLayer, legacyMemoryJournalStoreLayer)
 
 it.effect("preserves a late Accepted report after Restart without offering or recording P1 integration", () =>
   Effect.gen(function* () {
@@ -280,7 +287,7 @@ it.effect("preserves a late Accepted report after Restart without offering or re
     expect((yield* journal.read(runId)).some(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toBe(
       false
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("retains the first Restart cutoff when a later malformed choice is also present", () =>
@@ -341,7 +348,7 @@ it.effect("retains the first Restart cutoff when a later malformed choice is als
         detail: `integration responsibility for attempt ${attempt.attemptId} follows an Accepted result suppressed by prior Restart`
       })
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("rejects a responsibility before the matching accepted terminal report is durable", () =>
@@ -354,7 +361,7 @@ it.effect("rejects a responsibility before the matching accepted terminal report
     )
 
     expect(failure).toEqual(new AcceptedResultNotDurable({ attemptId: attempt.attemptId, runId: attempt.runId }))
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("rejects a responsibility whose planned attempt differs from the durable executor responsibility", () =>
@@ -380,7 +387,7 @@ it.effect("rejects a responsibility whose planned attempt differs from the durab
         ({ event }) => event._tag === "IntegrationResponsibilityBegan"
       )
     ).toBe(false)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("rejects an accepted-result evidence substitution before queue and at the integration cutoff", () =>
@@ -418,7 +425,7 @@ it.effect("rejects an accepted-result evidence substitution before queue and at 
         detail: `integration start for attempt ${attempt.attemptId} has no exact earlier responsibility at ${queued.queuedAt}`
       })
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("rejects persisted integration responsibility without a prior accepted terminal result", () =>
@@ -446,7 +453,7 @@ it.effect("rejects persisted integration responsibility without a prior accepted
         detail: `integration responsibility for attempt ${attempt.attemptId} has no prior matching accepted terminal result`
       })
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("rejects persisted integration responsibility with substituted accepted evidence", () =>
@@ -476,7 +483,7 @@ it.effect("rejects persisted integration responsibility with substituted accepte
         detail: `integration responsibility for attempt ${attempt.attemptId} has no prior matching accepted terminal result`
       })
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("rejects a foreign-run responsibility and a start that points at itself", () =>
@@ -517,7 +524,7 @@ it.effect("rejects a foreign-run responsibility and a start that points at itsel
         `integration start for attempt ${attempt.attemptId} has no exact earlier responsibility at 3`
       ])
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("orders accepted results by committed responsibility position after restart", () =>
@@ -547,7 +554,7 @@ it.effect("orders accepted results by committed responsibility position after re
     expect(
       selectStartableIntegrationResponsibilities(recovered).map(({ plannedAttempt: attempt }) => attempt.taskId)
     ).toEqual(["A"])
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("reconciles durable accepted terminals in order and idempotently after restart", () =>
@@ -710,7 +717,7 @@ it.effect("reconciles durable accepted terminals in order and idempotently after
       transitions: [{ _tag: "StartQueuedIntegration", responsibility: { plannedAttempt: { taskId: "A" } } }]
     })
   }).pipe(
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(protocolTestLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -772,7 +779,7 @@ it.effect("composes exact integration start with process-local target acquisitio
     yield* resources.acquire(started)
     yield* resources.publishAcceptedOwnership(started)
     expect((yield* resources.snapshot).heldResponsibilityPositions).toEqual(new Set([queued.queuedAt]))
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("starts integration once and consumes only its pre-integration cancellation capability", () =>
@@ -799,7 +806,7 @@ it.effect("starts integration once and consumes only its pre-integration cancell
     expect("preIntegrationCancellation" in started).toBe(false)
     expect(selectStartableIntegrationResponsibilities(after)).toEqual([])
     expect((yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("preserves same-target order while a blocker wait leaves another target usable", () =>
@@ -826,7 +833,7 @@ it.effect("preserves same-target order while a blocker wait leaves another targe
     expect(
       selectStartableIntegrationResponsibilities(admission).map(({ plannedAttempt: attempt }) => attempt.taskId)
     ).toEqual(["C"])
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("fails closed without current tracker facts and orders authorized integration work", () =>
@@ -931,7 +938,7 @@ it.effect("fails closed without current tracker facts and orders authorized inte
         responsibility: expect.objectContaining({ queuedAt: queuedA.queuedAt })
       })
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("derives a target-rewrite constraint before proposing candidate construction", () =>
@@ -977,7 +984,7 @@ it.effect("derives a target-rewrite constraint before proposing candidate constr
       taskId: attempt.taskId,
       wakeCondition: "GitFactsObserved"
     })
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(protocolTestLayer))
 )
 
 it.effect("rereads target lineage after restart instead of authorizing a candidate from stale evidence", () =>
@@ -1078,7 +1085,7 @@ it.effect("rereads target lineage after restart instead of authorizing a candida
       expect(lineageRead.operation.operationId).not.toBe(staleRead.operationId)
     }
   }).pipe(
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(protocolTestLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,

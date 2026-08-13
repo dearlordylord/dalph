@@ -68,7 +68,7 @@ const candidate: ConstructedIntegrationCandidateOccurrence = {
   candidateCommit: GitCommitSha.make("4".repeat(40)),
   constructedAt: JournalPosition.make(11),
   correlation: {
-    acceptanceManifest: evidenceReferenceFixture,
+    acceptanceManifest: acceptedResultFixture(GitCommitSha.make("3".repeat(40))).evidenceManifest,
     acceptedResultCommit: GitCommitSha.make("3".repeat(40)),
     attemptId: AttemptId.make("promotion-history-attempt"),
     candidateId: IntegrationCandidateId.make("promotion-history-candidate"),

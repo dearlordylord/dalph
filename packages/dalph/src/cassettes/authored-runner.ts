@@ -1817,7 +1817,8 @@ const runAuthoredScenarioCassetteWith = (request: {
             : { boundary: targetVerificationBoundary, evidenceStore, plan: verificationPlan },
           targetPromotionStory ? { git: targetPromotionGit } : undefined,
           completionFinalityConfigured ? completionClaimBoundary : undefined,
-          completionTaskConfigured ? completionTaskBoundary : undefined
+          completionTaskConfigured ? completionTaskBoundary : undefined,
+          evidenceStore
         ).pipe(
           Layer.provide(candidateLayer),
           Layer.provide(interpreterLayer),

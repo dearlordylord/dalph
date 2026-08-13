@@ -26,6 +26,8 @@ import type {
 import type { PlannedAttemptContinuationAuthorizationRejected } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import type { PlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type {
+  AcceptedResultEvidenceConflict,
+  AcceptedResultEvidenceUnavailable,
   queueAcceptedResultIntegrationResponsibility,
   startQueuedIntegration
 } from "../../workflow/protocols/integration-admission/protocol.js"
@@ -159,6 +161,8 @@ export type DeliveryActionResult =
         | "CompletionTaskUnavailable"
         | "ContinuationAuthorizationStale"
         | "FocusedTaskCompletionSuccessRequired"
+        | AcceptedResultEvidenceConflict
+        | AcceptedResultEvidenceUnavailable
         | CompletionTaskAmbiguousWait
         | CompletionTaskAuthorizationConflict
         | CompletionTaskAuthorizationWait

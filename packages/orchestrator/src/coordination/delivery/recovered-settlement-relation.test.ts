@@ -1,4 +1,9 @@
-import { acceptedResultFixture, evidenceReferenceFixture } from "../../../test/support/evidence.js"
+import {
+  acceptedResultEvidenceLayer,
+  acceptedResultFixture,
+  evidenceReferenceFixture,
+  registerAcceptedResultEvidence
+} from "../../../test/support/evidence.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -16,7 +21,7 @@ import {
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { NodeServices } from "@effect/platform-node"
-import { Effect, Option, Ref, Stream } from "effect"
+import { Effect, Layer, Option, Ref, Stream } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
@@ -122,6 +127,7 @@ const claim = ActiveTaskClaim.make({
   token: ClaimToken.make("recovered-settlement-token")
 })
 const acceptedResult = acceptedResultFixture(acceptedCommit)
+const settlementTestLayer = Layer.merge(acceptedResultEvidenceLayer, legacyMemoryJournalStoreLayer)
 
 const seedTerminalAccepted = Effect.gen(function* () {
   const journal = yield* JournalStore
@@ -184,6 +190,7 @@ const seedTerminalAccepted = Effect.gen(function* () {
       version: workflowJournalEventVersion
     })
   )
+  yield* registerAcceptedResultEvidence(plannedAttempt, acceptedResult)
   return journal
 })
 
@@ -282,7 +289,7 @@ it.effect("restart after terminal append advances settlement proposals without r
           ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported"
         )
       ).toHaveLength(1)
-    }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(settlementTestLayer))
   )
 )
 
@@ -339,7 +346,7 @@ it.effect("releases a held target when constructed M has no selected verificatio
           })
         })
       )
-    }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(settlementTestLayer))
   )
 )
 
@@ -406,7 +413,7 @@ it.effect(
         ).toBe(false)
         expect(evaluation.current.settlements.settlements).toEqual([])
         expect(yield* Ref.get(agentRequests)).toBe(1)
-      }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+      }).pipe(Effect.provide(settlementTestLayer))
     )
 )
 
@@ -689,6 +696,6 @@ it.effect("restart rereads the exact target head before offering candidate verif
         expect.objectContaining({ _tag: "RunTargetVerification" })
       )
       expect(reduceWorkflowJournalHistory(runId, yield* journal.read(runId))._tag).toBe("ValidWorkflowJournalHistory")
-    }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(settlementTestLayer))
   )
 )

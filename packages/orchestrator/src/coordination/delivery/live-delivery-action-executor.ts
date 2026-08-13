@@ -2,7 +2,11 @@ import type { RunId } from "@dalph/contracts"
 import { Effect, Layer, Match } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { deliveryActionCompleted, executeFreshTrackerGraphRead } from "./delivery-action-adapter-common.js"
-import type { DeliveryActionAdapterEnvironment } from "./delivery-action-adapter-environment.js"
+import {
+  optionalEvidenceStoreOf,
+  provideOptionalEvidenceStore,
+  type DeliveryActionAdapterEnvironment
+} from "./delivery-action-adapter-environment.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import {
   DeliveryActionExecutor,
@@ -103,13 +107,15 @@ export const makeLiveDeliveryActionExecutor = Effect.fn("DeliveryActionExecutor.
   target: TrackerTarget
 ) {
   const dependencies = yield* Effect.context<DeliveryActionAdapterEnvironment>()
+  const evidenceStore = optionalEvidenceStoreOf(yield* Effect.context<never>())
   const acceptedFactPublication = yield* DeliveryAcceptedFactPublication
   return DeliveryActionExecutor.of({
-    execute: (action, lease) =>
-      executeLiveAction(action, lease, runId, target).pipe(
-        Effect.provide(dependencies),
+    execute: (action, lease) => {
+      const execution = executeLiveAction(action, lease, runId, target).pipe(Effect.provide(dependencies))
+      return provideOptionalEvidenceStore(execution, evidenceStore).pipe(
         Effect.tap(() => acceptedFactPublication.awaitCurrent)
       )
+    }
   })
 })
 

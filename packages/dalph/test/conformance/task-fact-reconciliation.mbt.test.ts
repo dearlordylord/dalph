@@ -4,6 +4,7 @@ import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect
 import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AcceptedResult,
+  AcceptedResultEvidenceManifest,
   AttemptId,
   EvidenceDigest,
   EvidenceReference,
@@ -33,6 +34,7 @@ import {
   ClaimOwner,
   ClaimToken,
   continuePlannedAttemptExecutorWork,
+  EvidenceStore,
   FixtureTarget,
   InitialControlPolicy,
   JournalPosition,
@@ -537,6 +539,28 @@ const taskFactReconciliationDriver = defineDriver(
     const journalLayer = legacyUnpublishedInRunJournalLayer.pipe(
       Layer.provideMerge(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
     )
+    const acceptanceEvidenceLayer = Layer.succeed(
+      EvidenceStore,
+      EvidenceStore.of({
+        put: (bytes) =>
+          Effect.succeed(
+            EvidenceReference.make({ byteLength: bytes.byteLength, digest: EvidenceDigest.make("a".repeat(64)) })
+          ),
+        read: () =>
+          Effect.succeed(
+            new TextEncoder().encode(
+              JSON.stringify(
+                AcceptedResultEvidenceManifest.make({
+                  commit: acceptedResult.commit,
+                  correlation: { attemptId: plannedAttempt.attemptId, runId },
+                  formatVersion: 1,
+                  outcome: "Accepted"
+                })
+              )
+            )
+          )
+      })
+    )
     const executor = PlannedAttemptExecutor.of({
       project: () => Effect.succeed(Option.fromUndefinedOr(executorAuthority)),
       requestSuspension: () =>
@@ -655,6 +679,7 @@ const taskFactReconciliationDriver = defineDriver(
         ? Effect.die("planned-attempt protocol controller not initialized")
         : effect.pipe(
             Effect.provide(journalLayer),
+            Effect.provide(acceptanceEvidenceLayer),
             Effect.provideService(PlannedAttemptProtocolController, protocolController),
             Effect.provideService(PlannedAttemptExecutor, executor)
           )

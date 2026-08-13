@@ -1,5 +1,6 @@
 import { Context, Effect, Option } from "effect"
 import {
+  AcceptedResultEvidenceUnavailable,
   queueAcceptedResultIntegrationResponsibility,
   startQueuedIntegration
 } from "../../workflow/protocols/integration-admission/protocol.js"
@@ -384,12 +385,32 @@ export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegra
   target: TrackerTarget
 ) {
   if (transition._tag === "QueueAcceptedResultIntegrationResponsibility") {
-    yield* queueAcceptedResultIntegrationResponsibility(
+    const context = yield* Effect.context<never>()
+    const evidenceStore = Context.getOption(context, EvidenceStore)
+    if (Option.isNone(evidenceStore)) {
+      return deliveryActionDeferred(
+        action.proposal.id,
+        new AcceptedResultEvidenceUnavailable({
+          attemptId: transition.accepted.plannedAttempt.attemptId,
+          detail: "acceptance evidence store is not configured for this run activation",
+          reference: transition.accepted.acceptedResult.evidenceManifest,
+          runId: transition.accepted.plannedAttempt.runId
+        })
+      )
+    }
+    return yield* queueAcceptedResultIntegrationResponsibility(
       transition.accepted.plannedAttempt,
       transition.accepted.acceptedResult,
       transition.integrationTarget
+    ).pipe(
+      Effect.provideService(EvidenceStore, evidenceStore.value),
+      Effect.as(deliveryActionCompleted(action.proposal.id)),
+      Effect.catchTags({
+        AcceptedResultEvidenceUnavailable: (failure) =>
+          Effect.succeed(deliveryActionDeferred(action.proposal.id, failure)),
+        AcceptedResultEvidenceConflict: (failure) => Effect.succeed(deliveryActionDeferred(action.proposal.id, failure))
+      })
     )
-    return deliveryActionCompleted(action.proposal.id)
   }
   if (transition._tag === "StartQueuedIntegration") {
     yield* startQueuedIntegration(transition.responsibility)
