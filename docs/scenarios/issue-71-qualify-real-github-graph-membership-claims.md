@@ -20,10 +20,11 @@ The live test is enabled only with
 `DALPH_GITHUB_QUALIFICATION=1`,
 `DALPH_GITHUB_QUALIFICATION_REPOSITORY=owner/repository`, and a
 `GITHUB_TOKEN` supplied by the test environment. The optional
-`DALPH_GITHUB_QUALIFICATION_BLOCKERS` value must be exactly 51 or omitted.
-GitHub rejects a source issue with more than 100 blocked-by relationships. The
-production reader requests 50 endpoints per page, so 51 is the smallest native
-fixture that proves a real second page without unnecessary issue creation. A maintainer
+`DALPH_GITHUB_QUALIFICATION_BLOCKERS` value must be exactly 2 or omitted. The
+native fixture proves GitHub's identity, grouping, dependency, lifecycle,
+membership, and claim behavior with the smallest useful dependency closure.
+Controlled provider tests prove generic multi-page traversal, repeated-cursor,
+and incomplete-page behavior without creating dozens of remote issues. A maintainer
 runs the focused test file with those variables; the token is never included in
 the test output or retained fixture locators.
 
@@ -43,13 +44,14 @@ journal responsibility exists for the fixture.
    creates one uniquely named root issue plus native sub-issues and
    same-repository blocked-by issues. It records each created repository and
    issue locator before creating the next relationship. The selected child has
-   51 dependency endpoints, while the production reader asks for 50 at a time,
-   forcing a second `blockedBy` GraphQL page; grouping
+   two dependency endpoints, which proves native relationship decoding without
+   a mutation-heavy fixture; grouping
    uses GitHub's native parent/sub-issue relation, not title text or labels.
 2. The lane asks the real `TrackerGraphReader` to read the root target. The
    adapter resolves the owner/name/issue-number target to GitHub's opaque
-   repository and issue node IDs, follows every `subIssues` and `blockedBy`
-   cursor, rereads each discovered issue, and rejects any page that is
+   repository and issue node IDs and rereads each discovered issue. The same
+   production reader's controlled tests follow every `subIssues` and
+   `blockedBy` cursor and reject any page that is
    incomplete, repeats a cursor, returns a different node, or crosses the root
    repository.
 3. The complete native result is projected through the provider-neutral read
@@ -90,9 +92,12 @@ prerequisite.
 
 ### Acceptance test
 
-`qualifies a complete paginated native GitHub closure, reconfirms unchanged
-and changed facts, and reconciles competing claims` runs the real reader,
-provider-neutral normalizer, and claim adapter against the disposable fixture.
+`qualifies a complete native GitHub closure, reconfirms unchanged and changed
+facts, and reconciles competing claims` runs the real reader, provider-neutral
+normalizer, and claim adapter against the disposable fixture.
+`projects paginated grouping and transitive prerequisite closure atomically`
+proves multi-page traversal through the same production reader with a controlled
+provider and no remote content creation.
 
 ## A comparable read reconfirms unchanged facts and a changed read replaces them
 
@@ -222,8 +227,8 @@ issue and is not part of #71.
 
 | Scenario | Concrete result | Acceptance test |
 | --- | --- | --- |
-| Complete paginated native closure | Native identity, pagination, grouping, prerequisites, closure, and provider-shaped boundary facts become one opaque normalized observation or no snapshot | `qualifies a complete paginated native GitHub closure, reconfirms unchanged and changed facts, and reconciles competing claims` |
-| Comparable unchanged and changed reads | Equal content becomes a compact reconfirmation; lifecycle/membership edits become fresh complete facts; failures never authorize a graph | `qualifies a complete paginated native GitHub closure, reconfirms unchanged and changed facts, and reconciles competing claims` |
-| Competing claims and ambiguous create | GitHub establishes one label owner; ambiguity is reread before retry and exact node cleanup protects replacements | `qualifies a complete paginated native GitHub closure, reconfirms unchanged and changed facts, and reconciles competing claims` |
+| Complete native closure and generic pagination | Native identity, grouping, prerequisites, closure, and provider-shaped boundary facts become one opaque normalized observation; controlled pages prove atomic traversal or no snapshot | `qualifies a complete native GitHub closure, reconfirms unchanged and changed facts, and reconciles competing claims`; `projects paginated grouping and transitive prerequisite closure atomically` |
+| Comparable unchanged and changed reads | Equal content becomes a compact reconfirmation; lifecycle/membership edits become fresh complete facts; failures never authorize a graph | `qualifies a complete native GitHub closure, reconfirms unchanged and changed facts, and reconciles competing claims` |
+| Competing claims and ambiguous create | GitHub establishes one label owner; ambiguity is reread before retry and exact node cleanup protects replacements | `qualifies a complete native GitHub closure, reconfirms unchanged and changed facts, and reconciles competing claims` |
 | Exact cleanup disposition | Failed cleanup retains exact repository/issue/label locators and never broadens deletion | `retains exact GitHub fixture locators when cleanup cannot finish` |
 | Same-repository policy | A cross-repository discovered issue fails the read before snapshot exposure | `rejects a cross-repository native relationship without exposing a graph` |

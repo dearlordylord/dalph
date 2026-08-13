@@ -176,7 +176,7 @@ it.effect("executes authenticated GitHub GraphQL requests", () =>
       const payload = yield* Schema.decodeUnknownEffect(
         Schema.Struct({ variables: Schema.Struct({ pageSize: Schema.Finite }) })
       )(JSON.parse(body))
-      expect(payload.variables.pageSize).toBe(50)
+      expect(payload.variables.pageSize).toBe(100)
     }
   })
 )

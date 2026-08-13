@@ -23,6 +23,8 @@ import {
 } from "../../../index.js"
 import {
   GithubGraphqlClient,
+  GithubGraphqlRequest,
+  GithubGraphqlResponse,
   GithubGraphqlRequestError,
   githubGraphqlClientNodeLayer,
   GithubIssueNodeId,
@@ -30,7 +32,6 @@ import {
   GithubLabelNodeId,
   GithubRepositoryNodeId
 } from "./graphql-client.js"
-import type { GithubGraphqlRequest } from "./graphql-client.js"
 import { githubTrackerGraphReaderLayer } from "./graph-reader.js"
 import { githubTrackerMutationLayer } from "./claim-mutation.js"
 import { githubTaskIdFor } from "./task-identity.js"
@@ -39,7 +40,7 @@ import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepos
 // oxlint-disable-next-line no-restricted-globals -- opt-in is evaluated before test registration.
 const qualificationEnabled = globalThis.process.env["DALPH_GITHUB_QUALIFICATION"] === "1"
 const qualificationTimeoutMilliseconds = 10 * 60 * 1_000
-const defaultBlockerCount = 51
+const defaultBlockerCount = 2
 
 const GithubQualificationRepository = Schema.Struct({ owner: GithubRepositoryOwner, repository: GithubRepositoryName })
 type GithubQualificationRepository = typeof GithubQualificationRepository.Type
@@ -639,6 +640,29 @@ it.effect("decodes GitHub mutation results under their exact GraphQL operation f
   })
 )
 
+it.effect("loses exactly the first native claim-create response after GitHub applies it", () =>
+  Effect.gen(function* () {
+    const createRequestCount = yield* Ref.make(0)
+    const lost = yield* Ref.make(false)
+    const underlying = GithubGraphqlClient.of({
+      execute: () => Effect.succeed(GithubGraphqlResponse.make({ body: {} }))
+    })
+    const client = responseLossGithubGraphqlClient(underlying, createRequestCount, lost)
+    const request = GithubGraphqlRequest.cases.CreateClaimLabel.make({
+      description: "fixture-description",
+      labelName: GithubLabelName.make("fixture-label"),
+      operationId: OperationId.make("fixture-create-claim"),
+      repositoryNodeId: GithubRepositoryNodeId.make("fixture-repository")
+    })
+
+    const first = yield* client.execute(request).pipe(Effect.result)
+    expect(first._tag).toBe("Failure")
+    expect(yield* Ref.get(createRequestCount)).toBe(1)
+    expect((yield* client.execute(request)).body).toEqual({})
+    expect(yield* Ref.get(createRequestCount)).toBe(2)
+  })
+)
+
 it.effect("retains exact GitHub fixture locators when cleanup cannot finish", () =>
   Effect.gen(function* () {
     const repository = GithubQualificationRepository.make({
@@ -674,7 +698,7 @@ it.effect("retains exact GitHub fixture locators when cleanup cannot finish", ()
 )
 
 it.effect.skipIf(!qualificationEnabled)(
-  "qualifies a complete paginated native GitHub closure, reconfirms unchanged and changed facts, and reconciles competing claims",
+  "qualifies a complete native GitHub closure, reconfirms unchanged and changed facts, and reconciles competing claims",
   () =>
     serializedQualification(
       Effect.scoped(
@@ -818,7 +842,7 @@ it.effect.skipIf(!qualificationEnabled)(
                 yield* Layer.build(githubGraphqlClientNodeLayer),
                 GithubGraphqlClient
               )
-              const ambiguousMutation = githubTrackerMutationLayer.pipe(
+              const ambiguousMutation = Layer.fresh(githubTrackerMutationLayer).pipe(
                 Layer.provide(
                   Layer.succeed(
                     GithubGraphqlClient,

@@ -52,6 +52,8 @@
 
 ## Verification and review
 
+- Do not spam live providers: use minimal fixtures, prove bulk behavior with
+  controlled tests, and do not retry throttled mutations.
 - In explanations and reviews, state the concrete actor, action, and boundary
   before using canonical shorthand. Prefer “try to create the claim up to
   three times” over “bounded acquisition,” “check GitHub again” over
