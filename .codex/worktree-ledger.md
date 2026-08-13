@@ -15,13 +15,14 @@ worktree is the only integration point; task worktrees never merge one another.
 | #76 | removed | removed | `5d64b4cb6` | `011f32baa` | integrated as `35c698b73`; reviewed and cleaned |
 | #195 | `work/issue195` | `.worktrees/issue195` | `798ca724210f07709417af5e9eed62bac6232b55` | `21f75d13a` | audited complete; issue closed |
 | #215 | removed | removed | `a08f5b001dcaa0e871a453010655fba84e8079cd` | `c72a9f1f2` | integrated as `911a0aa3e..074b7a4d4`; reviewed clean and cleaned |
-| #212 | `work/issue212` | `.worktrees/issue212` | `348731ae7` | `pending` | implementing independent tooling lane |
+| #212 | removed | removed | `348731ae7` | `28e9c52ca` | integrated as `d28e5a301`; reviewed and cleaned |
 | #216 | removed | removed | `da525987c` | `84b6528a0` | integrated as `a1f1a7bff`; reviewed and cleaned |
 | #159 | n/a | n/a | n/a | superseded by `360258012` | closed without code change |
 | #71 | removed | removed | `a1f1a7bff` | `034a1d60e` | integrated as `ae22e9dab`; native opt-in run still pending, issue remains open |
 | #72 | `work/issue72` | `.worktrees/issue72` | `35c698b73` | `pending` | queued after #76 lane completed |
 | #74 | removed | removed | `ae22e9dab` | `eeddf5e81` | integrated as `0d88259cd`; reviewed and cleaned |
 | #103 | `work/issue103` | `.worktrees/issue103` | `0d88259cd` | `pending` | queued after #74 lane completed |
+| #104 | `work/issue104` | `.worktrees/issue104` | `d28e5a301` | `pending` | queued after #212 tooling lane completed |
 
 ## Dependency order
 
