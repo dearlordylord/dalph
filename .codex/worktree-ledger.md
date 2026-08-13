@@ -20,7 +20,8 @@ worktree is the only integration point; task worktrees never merge one another.
 | #159 | n/a | n/a | n/a | superseded by `360258012` | closed without code change |
 | #71 | removed | removed | `a1f1a7bff` | `034a1d60e` | integrated as `ae22e9dab`; native opt-in run still pending, issue remains open |
 | #72 | `work/issue72` | `.worktrees/issue72` | `35c698b73` | `pending` | queued after #76 lane completed |
-| #74 | `work/issue74` | `.worktrees/issue74` | `ae22e9dab` | `pending` | queued after #71 harness integration |
+| #74 | removed | removed | `ae22e9dab` | `eeddf5e81` | integrated as `0d88259cd`; reviewed and cleaned |
+| #103 | `work/issue103` | `.worktrees/issue103` | `0d88259cd` | `pending` | queued after #74 lane completed |
 
 ## Dependency order
 
