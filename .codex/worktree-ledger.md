@@ -1,7 +1,8 @@
 # Parallel worktree ledger
 
 This temporary ledger tracks the dependency-ordered implementation of GitHub
-issues #214, #73, #213, #76, #195, #215, #216, #212, and #159. The primary
+issues #214, #73, #213, #76, #195, #215, #216, #212, and #159, followed by
+#71, #72, #74, #103, #104, #59, #78, #69, #77, #140, and #75. The primary
 worktree is the only integration point; task worktrees never merge one another.
 
 ## Active milestones
@@ -28,6 +29,17 @@ worktree is the only integration point; task worktrees never merge one another.
 
 #212 independent
 #159 independent
+
+then:
+
+#71 independent
+#72 independent
+#74 independent
+#103 independent
+#104 independent
+#59 -> #78
+#69 -> #77
+#140 -> #75
 ```
 
 The tooling tickets #212 and #159 are logically independent but will not run
