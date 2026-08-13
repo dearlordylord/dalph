@@ -28,7 +28,7 @@ if [[ $# -ne 0 ]]; then
 fi
 
 mkdir -p "$EVIDENCE_DIRECTORY"
-readonly EVIDENCE_FILE="$(mktemp "$EVIDENCE_DIRECTORY/issue-211-macos-evidence.XXXXXX.txt")"
+readonly EVIDENCE_FILE="$(mktemp "$EVIDENCE_DIRECTORY/issue-211-macos-evidence.XXXXXX")"
 readonly QUALIFICATION_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/dalph-macos-211.XXXXXX")"
 readonly QUALIFICATION_WORKTREE="$QUALIFICATION_ROOT/checkout"
 readonly OUTPUT_DIRECTORY="$QUALIFICATION_ROOT/output"
