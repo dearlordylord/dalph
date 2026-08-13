@@ -18,7 +18,9 @@ export const AcceptedResultEvidenceManifest = Schema.Struct({
   commit: GitCommitSha,
   correlation: PlannedAttemptExecutorCorrelation,
   formatVersion: Schema.Literal(1),
-  outcome: Schema.Literal("Accepted")
+  outcome: Schema.Literal("Accepted"),
+  /** The acceptance envelope is the root of the sealed workflow evidence chain. */
+  predecessor: Schema.Null
 })
 export type AcceptedResultEvidenceManifest = typeof AcceptedResultEvidenceManifest.Type
 

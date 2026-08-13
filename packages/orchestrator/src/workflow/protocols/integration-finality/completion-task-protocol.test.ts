@@ -81,7 +81,8 @@ const completionEvidenceRequest = (
           commit: acceptedCommit,
           correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
           formatVersion: 1,
-          outcome: "Accepted"
+          outcome: "Accepted",
+          predecessor: null
         })
       )
     )
@@ -95,13 +96,15 @@ const completionEvidenceRequest = (
           candidateCommit: fixture.promotionCorrelation.candidateCommit,
           correlation: candidateCorrelation,
           formatVersion: 1,
-          outcome: "Passed"
+          outcome: "Passed",
+          predecessor: acceptanceManifest
         })
       )
     )
     const verificationCorrelation = TargetVerificationCorrelation.make({
       ...fixture.promotionCorrelation.verificationCorrelation,
-      candidateCorrelation
+      candidateCorrelation,
+      reviewManifest: integrationReviewManifest
     })
     const verificationManifest = yield* store.put(
       encode(
@@ -109,7 +112,8 @@ const completionEvidenceRequest = (
           artifacts: [],
           correlation: verificationCorrelation,
           formatVersion: 1,
-          outcome: "Passed"
+          outcome: "Passed",
+          predecessor: integrationReviewManifest
         })
       )
     )
@@ -167,6 +171,59 @@ it.effect("refuses completion when required sealed evidence is missing, malforme
     expect(yield* rereadCompletionEvidence(malformed).pipe(Effect.flip)).toBeInstanceOf(
       CompletionTaskAuthorizationConflict
     )
+  }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
+)
+
+it.effect("rejects a reopened evidence chain whose review predecessor is foreign", () =>
+  Effect.gen(function* () {
+    const valid = yield* completionEvidenceRequest()
+    const store = yield* EvidenceStore
+    const unlinkedReview = yield* store.put(
+      encode(
+        IntegrationReviewManifest.make({
+          candidateCommit: valid.promotionCorrelation.candidateCommit,
+          correlation: valid.promotionCorrelation.candidateCorrelation,
+          formatVersion: 1,
+          outcome: "Passed",
+          predecessor: fixture.promotionCorrelation.reviewManifest
+        })
+      )
+    )
+    const verificationCorrelation = TargetVerificationCorrelation.make({
+      ...valid.promotionCorrelation.verificationCorrelation,
+      reviewManifest: unlinkedReview
+    })
+    const verification = yield* store.put(
+      encode(
+        TargetVerificationManifest.make({
+          artifacts: [],
+          correlation: verificationCorrelation,
+          formatVersion: 1,
+          outcome: "Passed",
+          predecessor: unlinkedReview
+        })
+      )
+    )
+    const promotionCorrelation = TargetPromotionCorrelation.make({
+      ...valid.promotionCorrelation,
+      reviewManifest: unlinkedReview,
+      verificationCorrelation,
+      verificationManifest: verification
+    })
+    const request = completionTaskRequestFor(
+      CompletionTaskClaim.make({
+        ...valid.claim,
+        integrationReviewManifest: unlinkedReview,
+        promotionCorrelation,
+        verificationManifest: verification
+      })
+    )
+    const failure = yield* rereadCompletionEvidence(request).pipe(Effect.flip)
+    expect(failure).toBeInstanceOf(CompletionTaskAuthorizationConflict)
+    if (failure instanceof CompletionTaskAuthorizationConflict) {
+      expect(failure.reason).toBe("SealedEvidenceChanged")
+      expect(failure.detail).toContain("predecessor chain")
+    }
   }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
 )
 

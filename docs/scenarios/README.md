@@ -72,6 +72,7 @@ today.
 | `issue-63-observe-pause-progress.md` | 63 |
 | `issue-65-cancel-or-continue-attempt.md` | 65 |
 | `issue-66-clean-restart-changed-attempt.md` | 66 |
+| `issue-76-production-evidence-store.md` | 76 |
 | `issue-137-reconcile-task-claims.md` | 137 |
 | `issue-138-reconcile-blockers-around-promotion.md` | 138 |
 

@@ -19,7 +19,9 @@ export const TargetVerificationManifest = Schema.Struct({
   artifacts: Schema.Array(TargetVerificationManifestArtifact),
   correlation: TargetVerificationCorrelation,
   formatVersion: Schema.Literal(1),
-  outcome: TargetVerificationOutcome
+  outcome: TargetVerificationOutcome,
+  /** Verification evidence follows the immutable integration-review envelope. */
+  predecessor: EvidenceReference
 })
 export type TargetVerificationManifest = typeof TargetVerificationManifest.Type
 

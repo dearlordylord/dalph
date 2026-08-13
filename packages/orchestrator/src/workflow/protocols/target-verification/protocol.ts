@@ -178,7 +178,8 @@ const sealManifest = Effect.fn("TargetVerification.sealManifest")(function* (ter
     artifacts,
     correlation: terminal.correlation,
     formatVersion: 1,
-    outcome: targetVerificationOutcomeFor(terminal)
+    outcome: targetVerificationOutcomeFor(terminal),
+    predecessor: terminal.correlation.reviewManifest
   })
   const bytes = yield* encodeTargetVerificationManifest(manifest)
   const reference = yield* evidence.put(bytes)

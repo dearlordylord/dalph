@@ -56,7 +56,9 @@ export const IntegrationReviewManifest = Schema.Struct({
   candidateCommit: GitCommitSha,
   correlation: IntegrationCandidateCorrelation,
   formatVersion: Schema.Literal(1),
-  outcome: Schema.Literal("Passed")
+  outcome: Schema.Literal("Passed"),
+  /** The review envelope must name the exact sealed acceptance envelope it follows. */
+  predecessor: EvidenceReference
 })
 export type IntegrationReviewManifest = typeof IntegrationReviewManifest.Type
 

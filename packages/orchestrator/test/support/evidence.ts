@@ -52,7 +52,8 @@ const encodedAcceptedResultEvidence = (
         commit: acceptedResult.commit,
         correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId },
         formatVersion: 1,
-        outcome: "Accepted"
+        outcome: "Accepted",
+        predecessor: null
       })
     )
   )

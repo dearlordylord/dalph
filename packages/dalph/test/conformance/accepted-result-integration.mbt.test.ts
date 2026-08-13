@@ -949,7 +949,8 @@ const acceptedResultIntegrationDriver = defineDriver(
                 commit: result.commit,
                 correlation: { attemptId: attempt.attemptId, runId },
                 formatVersion: 1,
-                outcome: "Accepted"
+                outcome: "Accepted",
+                predecessor: null
               })
             )
           )

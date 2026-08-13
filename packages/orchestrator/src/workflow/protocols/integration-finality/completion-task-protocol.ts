@@ -57,6 +57,7 @@ import {
   type FocusedTaskCompletionFactsObserved
 } from "../../task-tracker-facts/observation.js"
 import { EvidenceReference, EvidenceStore } from "../target-verification/evidence-store.js"
+import { EvidenceManifestChainLink, validateEvidenceManifestChain } from "../target-verification/evidence-chain.js"
 import { TargetPromotionGit, type TargetPromotionGitReadObservation } from "../target-promotion/events.js"
 import {
   IntegrationReviewManifest,
@@ -1100,6 +1101,20 @@ export const rereadCompletionEvidence = Effect.fn("IntegrationFinality.rereadCom
             reason: "SealedEvidenceUnavailableOrInvalid",
             request
           })
+    )
+  )
+  yield* validateEvidenceManifestChain([
+    EvidenceManifestChainLink.make({ predecessor: acceptance.predecessor, reference: request.acceptanceManifest }),
+    EvidenceManifestChainLink.make({ predecessor: review.predecessor, reference: request.integrationReviewManifest }),
+    EvidenceManifestChainLink.make({ predecessor: verification.predecessor, reference: request.verificationManifest })
+  ]).pipe(
+    Effect.mapError(
+      (failure) =>
+        new CompletionTaskAuthorizationConflict({
+          detail: `sealed evidence predecessor chain is invalid: ${failure.detail}`,
+          reason: "SealedEvidenceChanged",
+          request
+        })
     )
   )
   const promotion = request.promotionCorrelation

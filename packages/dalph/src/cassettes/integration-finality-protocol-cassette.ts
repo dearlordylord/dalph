@@ -133,7 +133,8 @@ const makePreparedFinality = Effect.fn("IntegrationFinalityProtocolCassette.make
       candidateCorrelation,
       candidateConstructedAt: JournalPosition.make(candidateConstructedPosition),
       planId: TargetVerificationPlanId.make("integration-finality-protocol-plan"),
-      requestId: TargetVerificationRequestId.make("integration-finality-protocol-verification")
+      requestId: TargetVerificationRequestId.make("integration-finality-protocol-verification"),
+      reviewManifest
     })
     const promotionCorrelation = TargetPromotionCorrelation.make({
       acceptanceManifest,

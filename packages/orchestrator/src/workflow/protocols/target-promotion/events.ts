@@ -60,6 +60,7 @@ export const TargetPromotionCorrelation = Schema.Struct({
       correlation.integrationTarget.ref === candidate.integrationTarget.ref,
       correlation.requestId === `target-promotion:${candidate.candidateId}`,
       evidenceReferenceEquals(correlation.acceptanceManifest, candidate.acceptanceManifest),
+      evidenceReferenceEquals(correlation.reviewManifest, verification.reviewManifest),
       integrationCandidateCorrelationEquals(candidate, verification.candidateCorrelation)
     ].every(Boolean)
     return isConsistent ? undefined : "promotion correlation must describe one exact candidate and verification"

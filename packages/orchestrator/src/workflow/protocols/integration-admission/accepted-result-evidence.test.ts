@@ -118,7 +118,8 @@ it.effect("admits a durable accepted result only after its exact manifest qualif
       commit: GitCommitSha.make("a".repeat(40)),
       correlation: { attemptId: attempt.attemptId, runId },
       formatVersion: 1,
-      outcome: "Accepted"
+      outcome: "Accepted",
+      predecessor: null
     })
     const reference = yield* store.put(bytesFor(manifest))
     const result = acceptedResultIn(reference)

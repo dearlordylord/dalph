@@ -252,7 +252,8 @@ const completionEvidenceStore: EvidenceStoreService = {
               runId: integrationFinalityFixture.runId
             },
             formatVersion: 1,
-            outcome: "Accepted"
+            outcome: "Accepted",
+            predecessor: null
           })
         )
       )
@@ -264,7 +265,8 @@ const completionEvidenceStore: EvidenceStoreService = {
             candidateCommit: integrationFinalityFixture.promotionCorrelation.candidateCommit,
             correlation: integrationFinalityFixture.promotionCorrelation.candidateCorrelation,
             formatVersion: 1,
-            outcome: "Passed"
+            outcome: "Passed",
+            predecessor: integrationFinalityFixture.claim.acceptanceManifest
           })
         )
       )
@@ -275,7 +277,8 @@ const completionEvidenceStore: EvidenceStoreService = {
           artifacts: [],
           correlation: integrationFinalityFixture.verificationCorrelation,
           formatVersion: 1,
-          outcome: "Passed"
+          outcome: "Passed",
+          predecessor: integrationFinalityFixture.claim.integrationReviewManifest
         })
       )
     )

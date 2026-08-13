@@ -36,7 +36,8 @@ const validManifest = AcceptedResultEvidenceManifest.make({
   commit: acceptedResult.commit,
   correlation: { attemptId: attempt.attemptId, runId },
   formatVersion: 1,
-  outcome: "Accepted"
+  outcome: "Accepted",
+  predecessor: null
 })
 const encode = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
 

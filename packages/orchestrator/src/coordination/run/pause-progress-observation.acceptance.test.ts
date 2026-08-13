@@ -702,7 +702,8 @@ it.effect("updates Alice's public task Pause view as accepted executor and Git f
         candidateConstructedAt: JournalPosition.make(42),
         candidateCorrelation,
         planId: TargetVerificationPlanId.make("pause-public-D-plan"),
-        requestId: TargetVerificationRequestId.make("pause-public-D-verification")
+        requestId: TargetVerificationRequestId.make("pause-public-D-verification"),
+        reviewManifest: integration.acceptedResult.evidenceManifest
       })
       const promotionRequest = TargetPromotionCorrelation.make({
         acceptanceManifest: integration.acceptedResult.evidenceManifest,

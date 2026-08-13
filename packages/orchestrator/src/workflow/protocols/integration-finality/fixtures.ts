@@ -102,7 +102,8 @@ export const integrationFinalityFixture = (() => {
     candidateCorrelation,
     candidateConstructedAt: JournalPosition.make(constructedPosition),
     planId: TargetVerificationPlanId.make("integration-finality-plan"),
-    requestId: TargetVerificationRequestId.make("integration-finality-verification")
+    requestId: TargetVerificationRequestId.make("integration-finality-verification"),
+    reviewManifest
   }
   const promotionCorrelation = TargetPromotionCorrelation.make({
     acceptanceManifest,

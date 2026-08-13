@@ -375,7 +375,8 @@ it.effect("attaches D's pending promotion only to its exact started integration 
       candidateConstructedAt: JournalPosition.make(10),
       candidateCorrelation,
       planId: TargetVerificationPlanId.make("pause-progress-exact-promotion-plan"),
-      requestId: TargetVerificationRequestId.make("pause-progress-exact-promotion-verification")
+      requestId: TargetVerificationRequestId.make("pause-progress-exact-promotion-verification"),
+      reviewManifest: integration.acceptedResult.evidenceManifest
     })
     const request = TargetPromotionCorrelation.make({
       acceptanceManifest: integration.acceptedResult.evidenceManifest,

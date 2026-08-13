@@ -1,5 +1,5 @@
 import { Context, type Effect, Schema } from "effect"
-import { GitCommitSha, IntegrationTarget } from "@dalph/contracts"
+import { evidenceReferenceEquals, GitCommitSha, IntegrationTarget } from "@dalph/contracts"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
   ConstructedIntegrationCandidateOccurrence,
@@ -36,7 +36,9 @@ export const TargetVerificationCorrelation = Schema.Struct({
   candidateCorrelation: IntegrationCandidateCorrelation,
   candidateConstructedAt: JournalPosition,
   planId: TargetVerificationPlanId,
-  requestId: TargetVerificationRequestId
+  requestId: TargetVerificationRequestId,
+  /** Carries the exact review envelope that verification is allowed to follow. */
+  reviewManifest: EvidenceReference
 })
 export type TargetVerificationCorrelation = typeof TargetVerificationCorrelation.Type
 
@@ -131,6 +133,7 @@ export const targetVerificationCorrelationEquals = (
   left.candidateCommit === right.candidateCommit &&
   left.candidateConstructedAt === right.candidateConstructedAt &&
   left.planId === right.planId &&
+  evidenceReferenceEquals(left.reviewManifest, right.reviewManifest) &&
   integrationCandidateCorrelationEquals(left.candidateCorrelation, right.candidateCorrelation)
 
 /** One initial request identity is deterministic and cannot be replaced after ambiguity. */
@@ -148,7 +151,8 @@ export const targetVerificationCorrelationFor = (
     candidateCorrelation: candidate.correlation,
     candidateConstructedAt: candidate.constructedAt,
     planId,
-    requestId: targetVerificationRequestIdForCandidate(candidate.correlation.candidateId)
+    requestId: targetVerificationRequestIdForCandidate(candidate.correlation.candidateId),
+    reviewManifest: candidate.reviewManifest
   })
 
 /** Converts a boundary terminal into its persisted manifest outcome. */

@@ -94,6 +94,101 @@ it.effect("reports temporary-file cleanup failure as a typed put failure", () =>
   )
 )
 
+it.effect("does not expose partial bytes after an interrupted filesystem publication", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const crypto = yield* Crypto.Crypto
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-evidence-partial-" })
+      const interruptedBytes = bytes("interrupted evidence")
+      const publicationFailure = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "EvidenceStoreTest",
+        method: "link"
+      })
+      const interruptedFileSystem = Layer.succeed(
+        FileSystem.FileSystem,
+        FileSystem.FileSystem.of({ ...fs, link: () => Effect.fail(publicationFailure) })
+      )
+      const digest = yield* crypto.digest("SHA-256", interruptedBytes)
+      const digestHex = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")
+      const reference = EvidenceReference.make({
+        byteLength: interruptedBytes.byteLength,
+        digest: EvidenceDigest.make(digestHex)
+      })
+      const failure = yield* Effect.gen(function* () {
+        return yield* (yield* EvidenceStore).put(interruptedBytes)
+      }).pipe(
+        Effect.provide(nodeEvidenceStoreLayer(EvidenceStoreLocator.make(root))),
+        Effect.provide(interruptedFileSystem),
+        Effect.flip
+      )
+      expect(failure).toBeInstanceOf(EvidenceStoreFailure)
+      const directory = `${root}/${digestHex.slice(0, 2)}`
+      yield* fs.makeDirectory(directory, { recursive: true })
+      yield* fs.writeFile(`${directory}/.${digestHex}.crashed.partial`, interruptedBytes)
+      expect(yield* fs.exists(`${directory}/${digestHex}`)).toBe(false)
+      const reopened = yield* Effect.gen(function* () {
+        return yield* (yield* EvidenceStore).read(reference)
+      }).pipe(Effect.provide(nodeEvidenceStoreLayer(EvidenceStoreLocator.make(root))), Effect.flip)
+      expect(reopened).toBeInstanceOf(EvidenceStoreFailure)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reopens an interrupted publication and republishes the same complete object", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-evidence-reopen-" })
+      const publicationFailure = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "EvidenceStoreTest",
+        method: "link"
+      })
+      const interruptedFileSystem = Layer.succeed(
+        FileSystem.FileSystem,
+        FileSystem.FileSystem.of({ ...fs, link: () => Effect.fail(publicationFailure) })
+      )
+      const firstAttempt = yield* Effect.gen(function* () {
+        return yield* (yield* EvidenceStore).put(bytes("reopenable evidence"))
+      }).pipe(
+        Effect.provide(nodeEvidenceStoreLayer(EvidenceStoreLocator.make(root))),
+        Effect.provide(interruptedFileSystem),
+        Effect.flip
+      )
+      expect(firstAttempt).toBeInstanceOf(EvidenceStoreFailure)
+
+      const reference = yield* Effect.gen(function* () {
+        return yield* (yield* EvidenceStore).put(bytes("reopenable evidence"))
+      }).pipe(Effect.provide(nodeEvidenceStoreLayer(EvidenceStoreLocator.make(root))))
+      const reopenedBytes = yield* Effect.gen(function* () {
+        return yield* (yield* EvidenceStore).read(reference)
+      }).pipe(Effect.provide(nodeEvidenceStoreLayer(EvidenceStoreLocator.make(root))))
+      expect(new TextDecoder().decode(reopenedBytes)).toBe("reopenable evidence")
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reopens a published object with the same reference and bytes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-evidence-reopen-published-" })
+      const locator = EvidenceStoreLocator.make(root)
+      const reference = yield* Effect.gen(function* () {
+        return yield* (yield* EvidenceStore).put(bytes("published across reopen"))
+      }).pipe(Effect.provide(nodeEvidenceStoreLayer(locator)))
+      const reopenedReference = yield* Effect.gen(function* () {
+        const store = yield* EvidenceStore
+        expect(new TextDecoder().decode(yield* store.read(reference))).toBe("published across reopen")
+        return yield* store.put(bytes("published across reopen"))
+      }).pipe(Effect.provide(nodeEvidenceStoreLayer(locator)))
+      expect(reopenedReference).toEqual(reference)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("reconciles a losing same-content publication race and rejects a corrupt winner", () =>
   Effect.scoped(
     Effect.gen(function* () {

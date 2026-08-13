@@ -2887,11 +2887,11 @@ const pauseExecutorAndPromotionG0 = {
 } as const
 
 const pauseExecutorAndPromotionRequestD = {
-  acceptanceManifest: { byteLength: 254, digest: "1111111111111111111111111111111111111111111111111111111111111111" },
+  acceptanceManifest: { byteLength: 273, digest: "1111111111111111111111111111111111111111111111111111111111111111" },
   candidateCommit: promotionCandidateCommit,
   candidateConstructedAt: 31,
   candidateCorrelation: {
-    acceptanceManifest: { byteLength: 254, digest: "1111111111111111111111111111111111111111111111111111111111111111" },
+    acceptanceManifest: { byteLength: 273, digest: "1111111111111111111111111111111111111111111111111111111111111111" },
     acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     attemptId: "attempt:D:0",
     candidateId: "integration-candidate:$authored-run:attempt:D:0:23",
@@ -2903,13 +2903,13 @@ const pauseExecutorAndPromotionRequestD = {
   },
   expectedTargetHead: promotionExpectedHead,
   integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
-  reviewManifest: { byteLength: 1141, digest: "2222222222222222222222222222222222222222222222222222222222222222" },
+  reviewManifest: { byteLength: 1250, digest: "2222222222222222222222222222222222222222222222222222222222222222" },
   requestId: "target-promotion:integration-candidate:$authored-run:attempt:D:0:23",
   verificationCorrelation: {
     candidateCommit: promotionCandidateCommit,
     candidateCorrelation: {
       acceptanceManifest: {
-        byteLength: 254,
+        byteLength: 273,
         digest: "1111111111111111111111111111111111111111111111111111111111111111"
       },
       acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -2923,9 +2923,10 @@ const pauseExecutorAndPromotionRequestD = {
     },
     candidateConstructedAt: 31,
     planId: "public-checks-v1",
-    requestId: "target-verification:integration-candidate:$authored-run:attempt:D:0:23"
+    requestId: "target-verification:integration-candidate:$authored-run:attempt:D:0:23",
+    reviewManifest: { byteLength: 1250, digest: "2222222222222222222222222222222222222222222222222222222222222222" }
   },
-  verificationManifest: { byteLength: 1554, digest: "3333333333333333333333333333333333333333333333333333333333333333" }
+  verificationManifest: { byteLength: 1777, digest: "3333333333333333333333333333333333333333333333333333333333333333" }
 } as const
 
 const pauseExecutorAndPromotionSuspendA = {

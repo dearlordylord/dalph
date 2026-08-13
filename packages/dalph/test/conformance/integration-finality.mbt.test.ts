@@ -602,7 +602,8 @@ const productionEvidenceObjects = new Map([
           runId: productionCompletionRequest.claim.plannedAttempt.runId
         },
         formatVersion: 1,
-        outcome: "Accepted"
+        outcome: "Accepted",
+        predecessor: null
       })
     )
   ],
@@ -613,7 +614,8 @@ const productionEvidenceObjects = new Map([
         candidateCommit: productionCompletionRequest.promotionCorrelation.candidateCommit,
         correlation: productionCompletionRequest.promotionCorrelation.candidateCorrelation,
         formatVersion: 1,
-        outcome: "Passed"
+        outcome: "Passed",
+        predecessor: productionCompletionRequest.acceptanceManifest
       })
     )
   ],
@@ -624,7 +626,8 @@ const productionEvidenceObjects = new Map([
         artifacts: [],
         correlation: productionCompletionRequest.promotionCorrelation.verificationCorrelation,
         formatVersion: 1,
-        outcome: "Passed"
+        outcome: "Passed",
+        predecessor: productionCompletionRequest.integrationReviewManifest
       })
     )
   ]

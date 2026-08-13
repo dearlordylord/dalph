@@ -311,7 +311,8 @@ const renameTargetVerificationCorrelation = (
     candidateCorrelation,
     candidateConstructedAt: preserveCassetteValue(correlation.candidateConstructedAt),
     planId: preserveCassetteValue(correlation.planId),
-    requestId: targetVerificationRequestIdForCandidate(candidateCorrelation.candidateId)
+    requestId: targetVerificationRequestIdForCandidate(candidateCorrelation.candidateId),
+    reviewManifest: preserveCassetteValue(correlation.reviewManifest)
   })
 }
 

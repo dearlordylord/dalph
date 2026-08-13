@@ -106,6 +106,7 @@ import {
   type TargetPromotionGitService,
   memoryEvidenceStoreLayer,
   EvidenceStore,
+  type EvidenceStoreFailure,
   EvidenceDigest,
   EvidenceReference,
   TestGitWorktree,
@@ -388,6 +389,7 @@ const authoredTargetPromotionRequestOf = (request: TargetPromotionRequest, runId
     reviewManifest: { ...normalized.reviewManifest, digest: authoredReviewManifestDigest },
     verificationCorrelation: {
       ...normalized.verificationCorrelation,
+      reviewManifest: { ...normalized.verificationCorrelation.reviewManifest, digest: authoredReviewManifestDigest },
       candidateCorrelation: {
         ...normalized.verificationCorrelation.candidateCorrelation,
         acceptanceManifest: {
@@ -1173,7 +1175,8 @@ const foreignTargetVerificationTerminalFrom = (
     correlation: TargetVerificationCorrelation.make({
       ...correlation,
       candidateCommit: GitCommitSha.make("f".repeat(gitCommitHexLength)),
-      requestId: TargetVerificationRequestId.make(`${correlation.requestId}:foreign`)
+      requestId: TargetVerificationRequestId.make(`${correlation.requestId}:foreign`),
+      reviewManifest: correlation.reviewManifest
     })
   })
 
@@ -1307,6 +1310,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const sharedJournal = Context.get(sharedContext, JournalStore)
       const evidenceStoreContext = yield* Layer.build(memoryEvidenceStoreLayer)
       const evidenceStore = Context.get(evidenceStoreContext, EvidenceStore)
+      const acceptedEvidencePublicationFailure = yield* Ref.make<EvidenceStoreFailure | undefined>(undefined)
       const prepareExecutorReport = Effect.fn("AuthoredCassette.sealAcceptedExecutorEvidence")(function* (
         report: PlannedAttemptExecutorReport
       ) {
@@ -1320,12 +1324,16 @@ const runAuthoredScenarioCassetteWith = (request: {
                   commit: acceptedResult.commit,
                   correlation: report.correlation,
                   formatVersion: 1,
-                  outcome: "Accepted"
+                  outcome: "Accepted",
+                  predecessor: null
                 })
               )
             )
           )
-          .pipe(Effect.orElseSucceed(() => acceptedResult.evidenceManifest))
+          .pipe(
+            Effect.tapError((failure) => Ref.set(acceptedEvidencePublicationFailure, failure)),
+            Effect.orElseSucceed(() => acceptedResult.evidenceManifest)
+          )
         return PlannedAttemptExecutorReport.cases.Terminal.make({
           correlation: report.correlation,
           result: { _tag: "Accepted", acceptedResult: { commit: acceptedResult.commit, evidenceManifest } }
@@ -1714,7 +1722,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                                   candidateCommit,
                                   correlation: request.correlation,
                                   formatVersion: 1,
-                                  outcome: "Passed"
+                                  outcome: "Passed",
+                                  predecessor: request.correlation.acceptanceManifest
                                 })
                               )
                             )
@@ -2501,8 +2510,14 @@ const runAuthoredScenarioCassetteWith = (request: {
           Fiber.join(coordinator).pipe(
             Effect.andThen(
               Effect.flatMap(cursor.storyPosition, (storyPosition) =>
-                Effect.die(
-                  `coordinator activation stopped at story position ${storyPosition} before the authored terminal assertions`
+                Ref.get(acceptedEvidencePublicationFailure).pipe(
+                  Effect.flatMap((failure) =>
+                    failure === undefined
+                      ? Effect.die(
+                          `coordinator activation stopped at story position ${storyPosition} before the authored terminal assertions`
+                        )
+                      : Effect.fail(failure)
+                  )
                 )
               )
             )

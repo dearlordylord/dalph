@@ -418,9 +418,14 @@ describe("target promotion history", () => {
   })
 
   it("rejects a promotion that substitutes the constructed review evidence byte length", () => {
+    const substitutedReviewManifest = changedByteLength(candidate.reviewManifest)
     const substituted = TargetPromotionCorrelation.make({
       ...promotionCorrelation,
-      reviewManifest: changedByteLength(candidate.reviewManifest)
+      reviewManifest: substitutedReviewManifest,
+      verificationCorrelation: {
+        ...promotionCorrelation.verificationCorrelation,
+        reviewManifest: substitutedReviewManifest
+      }
     })
     const result = validate(indexes(), [
       ...verificationRecords(),

@@ -554,7 +554,8 @@ const taskFactReconciliationDriver = defineDriver(
                   commit: acceptedResult.commit,
                   correlation: { attemptId: plannedAttempt.attemptId, runId },
                   formatVersion: 1,
-                  outcome: "Accepted"
+                  outcome: "Accepted",
+                  predecessor: null
                 })
               )
             )
