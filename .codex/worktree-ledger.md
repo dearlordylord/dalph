@@ -18,8 +18,8 @@ worktree is the only integration point; task worktrees never merge one another.
 | #212 | removed | removed | `348731ae7` | `28e9c52ca` | integrated as `d28e5a301`; reviewed and cleaned |
 | #216 | removed | removed | `da525987c` | `84b6528a0` | integrated as `a1f1a7bff`; reviewed and cleaned |
 | #159 | n/a | n/a | n/a | superseded by `360258012` | closed without code change |
-| #71 | removed | removed | `a1f1a7bff` | `034a1d60e` | integrated as `ae22e9dab`; native opt-in run still pending, issue remains open |
-| #72 | removed | removed | `35c698b73` | `089c9a35d` | integrated as `d6a9a63ae`; native opt-in run still pending, issue remains open |
+| #71 | removed | removed | `a1f1a7bff` | `034a1d60e` | harness integrated as `ae22e9dab`, native corrections as `88545e4da`; two-page graph passed, final full run pending GitHub create throttle cooldown; issue open |
+| #72 | removed | removed | `35c698b73` | `089c9a35d` | integrated as `d6a9a63ae`, native corrections as `88545e4da`; live qualification 1/1 green, cleanup verified, issue closed |
 | #74 | removed | removed | `ae22e9dab` | `eeddf5e81` | integrated as `0d88259cd`; reviewed and cleaned |
 | #103 | removed | removed | `0d88259cd` | `ac0226901` | integrated as `585019cc2`; reviewed and cleaned |
 | #104 | removed | removed | `d28e5a301` | `4d25e2e8a` | integrated as `07b37bdce`; reviewed and cleaned |
