@@ -159,6 +159,23 @@ the transport-neutral Exit behavior.
 Before installing, the macOS maintainer records the exact checkout and host
 facts in the attached terminal evidence:
 
+The minimum-action path is one command from the shared repository checkout:
+
+```sh
+./scripts/qualify-macos-application-exit.sh
+```
+
+The script creates a temporary detached worktree at the exact #210 fixture
+commit, records the host and tool versions below, installs from the frozen
+lockfile, builds the normal JavaScript fixture, drives every real-host boundary
+directly, and records its JSON lines, shell statuses, Git preservation reads,
+lock successors, and measured timeout. It writes one uniquely named evidence
+file under the ignored `.scratch/` directory and removes the temporary
+worktree. It does not switch the maintainer's current checkout or change its
+tracked files, branches, or refs. Attach the reported evidence file to #211.
+
+The equivalent individual setup commands are:
+
 ```sh
 git rev-parse HEAD
 sw_vers
