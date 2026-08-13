@@ -1,4 +1,4 @@
-import type { Effect, Option } from "effect"
+import type { Effect } from "effect"
 import { Context, Schema } from "effect"
 import type { PlannedTaskAttempt } from "./planned-attempt.js"
 import { AttemptId } from "./planned-attempt.js"
@@ -51,6 +51,44 @@ export const PlannedAttemptExecutorReport = Schema.TaggedUnion({
 })
 export type PlannedAttemptExecutorReport = typeof PlannedAttemptExecutorReport.Type
 
+/**
+ * The normalized result of asking the opaque executor for current state.
+ * Every outcome carries the executor-observed correlation so the outer
+ * protocol never has to infer identity from the request. NoReport means the
+ * executor returned no current normalized report for that exact correlation;
+ * it does not prove that the attempt is absent or replaceable. The opaque
+ * boundary exposes only this algebra, never executor-owned sessions,
+ * processes, or provider identities.
+ *
+ * The check below makes a contradictory encoding invalid when the outcome is
+ * decoded: a CorrelationContradiction must contain a genuinely foreign
+ * observed report. Exact identity is carried by the report itself.
+ */
+export const samePlannedAttemptExecutorCorrelation = (
+  left: PlannedAttemptExecutorCorrelation,
+  right: PlannedAttemptExecutorCorrelation
+): boolean => left.attemptId === right.attemptId && left.runId === right.runId
+
+const PlannedAttemptExecutorProjectionShape = Schema.TaggedUnion({
+  Exact: { report: PlannedAttemptExecutorReport },
+  NoReport: { correlation: PlannedAttemptExecutorCorrelation },
+  TemporarilyUnavailable: { correlation: PlannedAttemptExecutorCorrelation },
+  Unreadable: { correlation: PlannedAttemptExecutorCorrelation },
+  CorrelationContradiction: { expected: PlannedAttemptExecutorCorrelation, observed: PlannedAttemptExecutorReport }
+}).check(
+  Schema.makeFilter((projection) => {
+    if (projection._tag === "CorrelationContradiction") {
+      return samePlannedAttemptExecutorCorrelation(projection.expected, projection.observed.correlation)
+        ? "Correlation contradiction must contain a foreign observed report"
+        : undefined
+    }
+    return undefined
+  })
+)
+
+export const PlannedAttemptExecutorProjection = PlannedAttemptExecutorProjectionShape
+export type PlannedAttemptExecutorProjection = typeof PlannedAttemptExecutorProjection.Type
+
 export const plannedAttemptExecutorCorrelation = (
   plannedAttempt: PlannedTaskAttempt
 ): PlannedAttemptExecutorCorrelation =>
@@ -70,9 +108,7 @@ export class PlannedAttemptExecutorCommandFailure extends Schema.TaggedError<Pla
 ) {}
 
 export interface PlannedAttemptExecutorService {
-  readonly project: (
-    correlation: PlannedAttemptExecutorCorrelation
-  ) => Effect.Effect<Option.Option<PlannedAttemptExecutorReport>>
+  readonly project: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<PlannedAttemptExecutorProjection>
   readonly requestSuspension: (
     plannedAttempt: PlannedTaskAttempt
   ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>

@@ -4,6 +4,7 @@ import {
   GitCommitSha,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorCommandFailure,
+  PlannedAttemptExecutorProjection,
   type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport,
   PlannedAttemptExecutorReport as ExecutorReport,
@@ -15,7 +16,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Effect, Option, Ref } from "effect"
+import { Effect, Ref } from "effect"
 import { expect } from "vitest"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
@@ -83,29 +84,68 @@ const terminal = ExecutorReport.cases.Terminal.make({ correlation, result: { _ta
 const reportsFor = (
   scenario: ConformanceScenario
 ): {
-  readonly projection: Option.Option<PlannedAttemptExecutorReport>
+  readonly projection: PlannedAttemptExecutorProjection
   readonly starts: ReadonlyArray<PlannedAttemptExecutorReport>
   readonly suspensions: ReadonlyArray<PlannedAttemptExecutorReport>
 } => {
   switch (scenario) {
     case "ExactStart":
-      return { projection: Option.none(), starts: [running()], suspensions: [] }
+      return {
+        projection: PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
+        starts: [running()],
+        suspensions: []
+      }
     case "ForeignStart":
-      return { projection: Option.none(), starts: [running(foreignCorrelation)], suspensions: [] }
+      return {
+        projection: PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
+        starts: [running(foreignCorrelation)],
+        suspensions: []
+      }
     case "RunningThenSafeSuspension":
-      return { projection: Option.none(), starts: [], suspensions: [running(), safelySuspended] }
+      return {
+        projection: PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
+        starts: [],
+        suspensions: [running(), safelySuspended]
+      }
     case "ForeignSuspension":
-      return { projection: Option.none(), starts: [], suspensions: [running(foreignCorrelation)] }
+      return {
+        projection: PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
+        starts: [],
+        suspensions: [running(foreignCorrelation)]
+      }
     case "UnavailableSuspension":
-      return { projection: Option.none(), starts: [], suspensions: [] }
+      return {
+        projection: PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
+        starts: [],
+        suspensions: []
+      }
     case "TerminalSuspension":
-      return { projection: Option.none(), starts: [], suspensions: [terminal] }
+      return {
+        projection: PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
+        starts: [],
+        suspensions: [terminal]
+      }
     case "ExactProjection":
-      return { projection: Option.some(running()), starts: [], suspensions: [] }
+      return {
+        projection: PlannedAttemptExecutorProjection.cases.Exact.make({ report: running() }),
+        starts: [],
+        suspensions: []
+      }
     case "ForeignProjection":
-      return { projection: Option.some(running(foreignCorrelation)), starts: [], suspensions: [] }
+      return {
+        projection: PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+          expected: correlation,
+          observed: running(foreignCorrelation)
+        }),
+        starts: [],
+        suspensions: []
+      }
     case "MissingProjection":
-      return { projection: Option.none(), starts: [], suspensions: [] }
+      return {
+        projection: PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
+        starts: [],
+        suspensions: []
+      }
   }
 }
 
@@ -338,7 +378,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
           Effect.provideService(PlannedAttemptExecutor, missing.executor),
           Effect.flip
         )
-        expect(unavailable).toMatchObject({ _tag: "PlannedAttemptExecutorStateUnavailable", correlation })
+        expect(unavailable).toMatchObject({ _tag: "PlannedAttemptExecutorStateNoCurrentReport", correlation })
         expect(yield* missing.calls).toEqual([{ _tag: "Project", correlation }])
         expect((yield* journal.read(plannedAttempt.runId))[0]?.event._tag).toBe(
           "PlannedAttemptExecutorWorkResponsibilityBegan"
@@ -373,3 +413,45 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
 
 definePlannedAttemptExecutorConformanceSuite(requestScriptImplementation)
 definePlannedAttemptExecutorConformanceSuite(stateMachineImplementation)
+
+it.effect("reconstructs the task-work position when newer untrusted state invalidates an older safe report", () =>
+  Effect.forEach(
+    [
+      PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
+      PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation }),
+      PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation }),
+      PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+        expected: correlation,
+        observed: running(foreignCorrelation)
+      })
+    ],
+    (untrustedProjection) =>
+      Effect.gen(function* () {
+        const projections = yield* Ref.make<ReadonlyArray<PlannedAttemptExecutorProjection>>([
+          PlannedAttemptExecutorProjection.cases.Exact.make({ report: safelySuspended }),
+          untrustedProjection
+        ])
+        const executor = PlannedAttemptExecutor.of({
+          project: () =>
+            Ref.modify(projections, (remaining) => [remaining[0], remaining.slice(1)] as const).pipe(
+              Effect.map((projection) => projection ?? untrustedProjection)
+            ),
+          requestSuspension: () => unexpectedCall("Suspend"),
+          startOrContinue: () => unexpectedCall("StartOrContinue")
+        })
+        yield* beginPlannedAttemptExecutorResponsibility(plannedAttempt)
+        yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor)
+        )
+        expect(yield* requiredTaskWorkPositions).toEqual([])
+        yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor),
+          Effect.exit
+        )
+        expect(yield* requiredTaskWorkPositions).toEqual([
+          { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
+        ])
+      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer)),
+    { discard: true }
+  )
+)

@@ -10,7 +10,9 @@ import {
   IntegrationTargetRef,
   PlannedTaskAttempt,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
+  plannedAttemptExecutorCorrelation,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -20,7 +22,7 @@ import {
 } from "@dalph/contracts"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
-import { Effect, Option, Ref, Stream } from "effect"
+import { Effect, Ref, Stream } from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -1422,7 +1424,12 @@ describe("delivery proposal route matrix", () => {
         Effect.provideService(
           PlannedAttemptExecutor,
           PlannedAttemptExecutor.of({
-            project: () => Effect.succeed(Option.none()),
+            project: () =>
+              Effect.succeed(
+                PlannedAttemptExecutorProjection.cases.NoReport.make({
+                  correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+                })
+              ),
             requestSuspension: () => Effect.die("suspension was not requested"),
             startOrContinue: () => Effect.succeed(report)
           })
@@ -1619,7 +1626,7 @@ describe("delivery proposal route matrix", () => {
         Effect.provideService(
           PlannedAttemptExecutor,
           PlannedAttemptExecutor.of({
-            project: () => Effect.succeed(Option.some(report)),
+            project: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.Exact.make({ report })),
             requestSuspension: () => Effect.die("observation must not request suspension"),
             startOrContinue: () => Effect.die("observation must not continue executor work")
           })
@@ -1660,7 +1667,12 @@ describe("delivery proposal route matrix", () => {
           Effect.provideService(
             PlannedAttemptExecutor,
             PlannedAttemptExecutor.of({
-              project: () => Effect.succeed(Option.none()),
+              project: () =>
+                Effect.succeed(
+                  PlannedAttemptExecutorProjection.cases.NoReport.make({
+                    correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+                  })
+                ),
               requestSuspension: () => Effect.die("unused executor suspension"),
               startOrContinue: () => Effect.die("unused executor continuation")
             })

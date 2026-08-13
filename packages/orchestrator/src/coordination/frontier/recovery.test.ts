@@ -1,14 +1,16 @@
 // @effect-diagnostics multipleEffectProvide:off
 import { it } from "@effect/vitest"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../test/controlled-planned-attempt-executor.js"
-import { Effect, Layer, Option, Ref } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
+  plannedAttemptExecutorCorrelation,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -558,7 +560,12 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
     const claimReads = yield* Ref.make(0)
     const currentClaim = yield* Ref.make(ActiveTaskClaim.make(acquiredClaim.acquisition))
     const executor = PlannedAttemptExecutor.of({
-      project: () => Effect.succeed(Option.none()),
+      project: () =>
+        Effect.succeed(
+          PlannedAttemptExecutorProjection.cases.NoReport.make({
+            correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+          })
+        ),
       requestSuspension: () =>
         Effect.succeed(
           PlannedAttemptExecutorReport.cases.SafelySuspended.make({

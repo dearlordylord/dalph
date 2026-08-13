@@ -4,10 +4,12 @@ import {
   EvidenceDigest,
   EvidenceReference,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedAttemptExecutorResult,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
+  samePlannedAttemptExecutorCorrelation,
   type PlannedTaskAttempt,
   type RunId
 } from "@dalph/contracts"
@@ -286,18 +288,18 @@ export const controlledExecutorLayer = (
                 )
               )
             }
-            return Option.fromUndefinedOr(
-              (yield* Ref.get(reports)).get(plannedAttemptExecutorCorrelationKey(correlation))
-            )
-          }
-          if (projection.value.report.attemptId !== correlation.attemptId) {
-            return yield* Effect.die(
-              new Error(
-                `authored executor projection expected ${projection.value.report.attemptId}, received ${correlation.attemptId}`
-              )
-            )
+            const report = (yield* Ref.get(reports)).get(plannedAttemptExecutorCorrelationKey(correlation))
+            return report === undefined
+              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+              : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
           }
           const projectedReport = yield* prepareReport(executorReport(projection.value, runId))
+          if (!samePlannedAttemptExecutorCorrelation(projectedReport.correlation, correlation)) {
+            return PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+              expected: correlation,
+              observed: projectedReport
+            })
+          }
           yield* Ref.update(
             reports,
             (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), projectedReport]])
@@ -307,7 +309,7 @@ export const controlledExecutorLayer = (
             next.delete(plannedAttemptExecutorCorrelationKey(correlation))
             return next
           })
-          return Option.some(projectedReport)
+          return PlannedAttemptExecutorProjection.cases.Exact.make({ report: projectedReport })
         }),
       /* v8 ignore next -- Live Pause/Suspend production behavior is outside issue 170's maintained singleton. */
       requestSuspension: (plannedAttempt) => consume("Suspend", plannedAttempt),

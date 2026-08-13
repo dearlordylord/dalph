@@ -44,7 +44,9 @@ module plannedAttemptExecutor {
     | CommandProjectionExactRunning
     | CommandProjectionExactSafelySuspended
     | CommandProjectionExactTerminal
-    | CommandProjectionUnavailable
+    | CommandProjectionNoCurrentReport
+    | CommandProjectionTemporarilyUnavailable
+    | CommandProjectionUnreadable
     | CommandProjectionContradiction
 
   type CommandProjection = {
@@ -56,7 +58,10 @@ module plannedAttemptExecutor {
     | ExecutorStateRunning
     | ExecutorStateSafelySuspended
     | ExecutorStateTerminal
-    | ExecutorStateUnavailable
+    | ExecutorStateNoCurrentReport
+    | ExecutorStateTemporarilyUnavailable
+    | ExecutorStateUnreadable
+    | ExecutorStateContradiction
 
   type StateProjection = {
     correlation: Correlation,
@@ -153,7 +158,9 @@ module plannedAttemptExecutor {
     CommandProjectionExactRunning,
     CommandProjectionExactSafelySuspended,
     CommandProjectionExactTerminal,
-    CommandProjectionUnavailable,
+    CommandProjectionNoCurrentReport,
+    CommandProjectionTemporarilyUnavailable,
+    CommandProjectionUnreadable,
     CommandProjectionContradiction,
   )
 
@@ -161,7 +168,10 @@ module plannedAttemptExecutor {
     ExecutorStateRunning,
     ExecutorStateSafelySuspended,
     ExecutorStateTerminal,
-    ExecutorStateUnavailable,
+    ExecutorStateNoCurrentReport,
+    ExecutorStateTemporarilyUnavailable,
+    ExecutorStateUnreadable,
+    ExecutorStateContradiction,
   )
 
   pure def isPlannedAttempt(correlation: Correlation): bool =
@@ -219,7 +229,7 @@ module plannedAttemptExecutor {
     | CommandProjectionEvidence(projection) => projection
     | _ => {
         command: activeCommand(NoCommand),
-        outcome: CommandProjectionUnavailable,
+        outcome: CommandProjectionNoCurrentReport,
       }
   }
 
@@ -227,7 +237,7 @@ module plannedAttemptExecutor {
     | FreshStateProjection(projection) => projection
     | _ => {
         correlation: PLANNED_CORRELATION,
-        observation: ExecutorStateUnavailable,
+        observation: ExecutorStateNoCurrentReport,
       }
   }
 
@@ -242,7 +252,9 @@ module plannedAttemptExecutor {
     | CommandProjectionExactTerminal => ReportTerminal
     // These values are never consumed for unavailable or contradictory
     // projections; the settlement guard keeps the total helper away from them.
-    | CommandProjectionUnavailable => ReportRunning
+    | CommandProjectionNoCurrentReport => ReportRunning
+    | CommandProjectionTemporarilyUnavailable => ReportRunning
+    | CommandProjectionUnreadable => ReportRunning
     | CommandProjectionContradiction => ReportRunning
   }
 
@@ -815,7 +827,10 @@ module plannedAttemptExecutor {
           or and {
             isFreshStateProjectionEvidence(state.evidence),
             freshStateProjectionOf(state.evidence).observation == ExecutorStateRunning
-              or freshStateProjectionOf(state.evidence).observation == ExecutorStateUnavailable,
+              or freshStateProjectionOf(state.evidence).observation == ExecutorStateNoCurrentReport
+              or freshStateProjectionOf(state.evidence).observation == ExecutorStateTemporarilyUnavailable
+              or freshStateProjectionOf(state.evidence).observation == ExecutorStateUnreadable
+              or freshStateProjectionOf(state.evidence).observation == ExecutorStateContradiction,
           },
       },
     state.recoveryCount < RECOVERY_LIMIT

@@ -3,6 +3,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -78,6 +79,9 @@ import {
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
@@ -139,6 +143,8 @@ const claimOperation = makeTaskClaimAcquisitionOperation({
   predecessorOperationIds: []
 })
 const exactClaim = ActiveTaskClaim.make(claimOperation.acquisition)
+const exactExecutorProjection = (report: PlannedAttemptExecutorReport) =>
+  PlannedAttemptExecutorProjection.cases.Exact.make({ report })
 const unusedPlannedAttemptExecutor = PlannedAttemptExecutor.of({
   project: () => Effect.die("executor must not be called before Stop authority is established"),
   requestSuspension: () => Effect.die("executor must not be called before Stop authority is established"),
@@ -626,6 +632,22 @@ it.effect("rejects stopped-attempt events without their exact choice quiescence 
         ])
       },
       {
+        detail: "requires its exact safe or terminal executor proof",
+        records: recordsWithRows(records, [
+          forgedRow(
+            "newer-untrusted-executor-state",
+            PlannedAttemptExecutorStateObservedEvent.make({
+              observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({}),
+              occurrenceClassification: "NonActionOccurrence",
+              ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+              plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          ),
+          forgedRow("abandonment-after-untrusted-state", abandonment())
+        ])
+      },
+      {
         detail: "follows a later executor command",
         records: recordsWithRows(records, [
           forgedRow("later-executor-command", laterCommand),
@@ -722,7 +744,7 @@ it.effect("keeps Stop pending when a read-only executor projection still reports
           PlannedAttemptExecutor,
           PlannedAttemptExecutor.of({
             project: () =>
-              Effect.succeed(Option.some(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))),
+              Effect.succeed(exactExecutorProjection(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))),
             requestSuspension: () => Effect.die("read-only observation must not suspend"),
             startOrContinue: () => Effect.die("unused continuation")
           })
@@ -853,7 +875,9 @@ it.effect("rechecks the executor after restart before repeating Stop", () =>
         PlannedAttemptExecutor.of({
           project: () =>
             Ref.update(projectionCalls, (count) => count + 1).pipe(
-              Effect.as(Option.some(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })))
+              Effect.as(
+                exactExecutorProjection(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
+              )
             ),
           requestSuspension: () =>
             Ref.update(suspensionCalls, (count) => count + 1).pipe(
@@ -934,7 +958,9 @@ it.effect("issues three suspension commands, never a fourth, then abandons after
         PlannedAttemptExecutor.of({
           project: () =>
             Ref.update(projectionCalls, (count) => count + 1).pipe(
-              Effect.as(Option.some(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })))
+              Effect.as(
+                exactExecutorProjection(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
+              )
             ),
           requestSuspension: () => Effect.die("a fourth suspension command is forbidden"),
           startOrContinue: () => Effect.die("unused continuation")
@@ -988,7 +1014,8 @@ it.effect("reconciles a lost third suspension response before the bounded read-o
     )
     const suspensionCalls = yield* Ref.make(0)
     const executorWithLostThirdResponse = PlannedAttemptExecutor.of({
-      project: () => Effect.succeed(Option.some(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))),
+      project: () =>
+        Effect.succeed(exactExecutorProjection(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))),
       requestSuspension: () =>
         Ref.updateAndGet(suspensionCalls, (count) => count + 1).pipe(
           Effect.flatMap((count) =>
@@ -1034,7 +1061,9 @@ it.effect("reconciles a lost third suspension response before the bounded read-o
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
           project: () =>
-            Effect.succeed(Option.some(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))),
+            Effect.succeed(
+              exactExecutorProjection(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
+            ),
           requestSuspension: () => Effect.die("a fourth suspension command is forbidden"),
           startOrContinue: () => Effect.die("unused continuation")
         })

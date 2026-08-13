@@ -60,6 +60,7 @@ import type { TargetVerificationRuntimeInput } from "../../workflow/protocols/ta
 import type { TargetPromotionRuntimeInput } from "../../workflow/protocols/target-promotion/runtime.js"
 import {
   latestPlannedAttemptExecutorEvidence,
+  latestPlannedAttemptExecutorProjectionIssue,
   latestUnsettledPlannedAttemptExecutorCommand
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { defaultPlannedAttemptExecutorSuspensionLimit } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
@@ -177,7 +178,9 @@ const stopObservationIsRunning = (event: JournalRecord["event"]): boolean =>
 const stopObservationIsUnavailable = (event: JournalRecord["event"]): boolean =>
   (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
     event._tag === "PlannedAttemptExecutorStateObserved") &&
-  event.observation._tag === "ExecutorStateUnavailable"
+  (event.observation._tag === "ExecutorStateNoCurrentReport" ||
+    event.observation._tag === "ExecutorStateTemporarilyUnavailable" ||
+    event.observation._tag === "ExecutorStateUnreadable")
 
 const stopWaitReasonFor = (
   event: JournalRecord["event"]
@@ -926,6 +929,9 @@ const deriveJournalResponsibilityFacts = (
       return workflowOperationFreshFacts(responsibility)
     }
     const report = latestPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
+    const projectionIssue = latestPlannedAttemptExecutorProjectionIssue(records, responsibility.plannedAttempt)
+    const projectionWait =
+      projectionIssue !== undefined && (report === undefined || projectionIssue.observedAt > report.observedAt)
     const paused = reconstructedTaskIsPaused(
       runState.pause,
       responsibility.plannedAttempt.taskId,
@@ -1193,6 +1199,9 @@ const deriveJournalResponsibilityFacts = (
     const taskStateDisposition = (): PlannedAttemptExecutorDisposition | undefined => {
       if (restartDisposition !== undefined) return restartDisposition
       if (stopDisposition !== undefined) return stopDisposition
+      if (projectionWait) {
+        return ResponsibilityDisposition.PlannedAttemptExecutorProjectionWait({ reason: projectionIssue.reason })
+      }
       if (report?.report._tag === "Terminal") {
         return ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report: report.report })
       }
@@ -1974,6 +1983,34 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
           integrationTarget
         )
   })
+  /**
+   * A prior activation may have recorded a non-exact executor projection while
+   * its command remained unmatched. A later ordinary Run entry is itself a
+   * bounded reread boundary, so ask the opaque executor again before declaring
+   * the responsibility a permanent wait. The position gate prevents a fresh
+   * temporary/unreadable result from immediately retrying in the same entry.
+   */
+  const projectionRetryDecisions = responsibilityFacts.flatMap((facts) => {
+    if (
+      facts._tag !== "PlannedAttemptExecutorFreshFacts" ||
+      facts.disposition._tag !== "PlannedAttemptExecutorProjectionWait"
+    ) {
+      return []
+    }
+    const issue = latestPlannedAttemptExecutorProjectionIssue(
+      runState.workflowHistory.records,
+      facts.responsibility.plannedAttempt
+    )
+    return issue !== undefined && !positionIsAfter(issue.observedAt, activationBaselinePosition)
+      ? [
+          {
+            transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({
+              plannedAttempt: facts.responsibility.plannedAttempt
+            })
+          }
+        ]
+      : []
+  })
   const integrationResourceSnapshot = yield* integrationResources.snapshot
   const activationTargetLineage = runState.workflowHistory.records.flatMap(({ event, position }) => {
     if (event._tag !== "TargetLineageObserved") return []
@@ -2092,6 +2129,7 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
       ...pendingGitReadTransitions,
       ...claimObservationTransitions,
       ...continuationDecisions.flatMap(({ transition }) => (transition === undefined ? [] : [transition])),
+      ...projectionRetryDecisions.map(({ transition }) => transition),
       ...integrationLineageTransitions,
       ...integration.transitions
     ]

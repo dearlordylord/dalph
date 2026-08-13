@@ -454,7 +454,7 @@ it.effect("retains the exact position when a command-free state projection is un
       yield* appendExecutorResponsibility(journal)
       yield* appendStateProjection(
         journal,
-        PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnavailable.make({})
+        PlannedAttemptExecutorStateObservation.cases.ExecutorStateNoCurrentReport.make({})
       )
 
       const recovery = yield* makeRunRecoveryProjection(runId).pipe(Effect.provideService(InRunJournal, journal))

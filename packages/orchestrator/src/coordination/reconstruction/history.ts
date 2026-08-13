@@ -537,8 +537,11 @@ const validateAttemptStop = (
   const validateAbandonment = () => {
     if (event._tag === "AttemptImplementationAbandoned") {
       const evidence = proofEvidenceFor(prior, event.subject.plannedAttempt, event.proof)
+      const currentEvidence = latestPlannedAttemptExecutorEvidence(prior, event.subject.plannedAttempt)
       const evidenceProvesQuiescence = () =>
-        evidence !== undefined && (evidence.report._tag === "SafelySuspended" || evidence.report._tag === "Terminal")
+        evidence !== undefined &&
+        currentEvidence?.observedAt === evidence.observedAt &&
+        (evidence.report._tag === "SafelySuspended" || evidence.report._tag === "Terminal")
       if (!evidenceProvesQuiescence()) {
         semanticIssue(
           issues,
@@ -1873,25 +1876,39 @@ const validateExecutorEvent = (
         )
       }
       indexes.executorCommandProjectionOrdinals.set(projectionKey, event.projectionOrdinal)
-      if (event.observation._tag === "ExactExecutorReport") {
-        const correlation = event.observation.report.correlation
-        const correlationMatches = () =>
-          correlation.runId === event.plannedAttempt.runId && correlation.attemptId === attemptId
-        if (!correlationMatches()) {
+      const validateExactObservation = () => {
+        if (event.observation._tag !== "ExactExecutorReport") return
+        const report = event.observation.report
+        const correlationMatches =
+          report.correlation.runId === event.plannedAttempt.runId && report.correlation.attemptId === attemptId
+        if (!correlationMatches) {
           identityIssue(
             issues,
             runId,
             record.position,
             `executor command projection for attempt ${attemptId} returned a contradictory correlation`
           )
-        } else {
-          indexes.unsettledExecutorCommands.delete(attemptId)
-          if (event.observation.report._tag === "SafelySuspended") {
-            indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
-            indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
-          }
+          return
+        }
+        indexes.unsettledExecutorCommands.delete(attemptId)
+        if (report._tag === "SafelySuspended") {
+          indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
+          indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
         }
       }
+      const validateContradictoryObservation = () => {
+        if (event.observation._tag !== "ExecutorReportContradiction") return
+        const correlation = event.observation.observed.correlation
+        if (correlation.runId !== event.plannedAttempt.runId || correlation.attemptId !== attemptId) return
+        identityIssue(
+          issues,
+          runId,
+          record.position,
+          `executor command projection contradiction for attempt ${attemptId} contains the expected correlation`
+        )
+      }
+      validateExactObservation()
+      validateContradictoryObservation()
     }
   }
   const validateCommandResponseContradiction = () => {
@@ -1964,18 +1981,32 @@ const validateExecutorEvent = (
         )
       }
       indexes.executorStateObservationOrdinals.set(attemptId, event.ordinal)
-      const correlationContradicts = () =>
-        event.observation._tag === "ExactExecutorReport" &&
-        (event.observation.report.correlation.runId !== event.plannedAttempt.runId ||
-          event.observation.report.correlation.attemptId !== attemptId)
-      if (correlationContradicts()) {
-        identityIssue(
-          issues,
-          runId,
-          record.position,
-          `executor state observation for attempt ${attemptId} returned a contradictory correlation`
-        )
+      const validateExactObservationCorrelation = () => {
+        if (event.observation._tag !== "ExactExecutorReport") return
+        const correlation = event.observation.report.correlation
+        if (correlation.runId !== event.plannedAttempt.runId || correlation.attemptId !== attemptId) {
+          identityIssue(
+            issues,
+            runId,
+            record.position,
+            `executor state observation for attempt ${attemptId} returned a contradictory correlation`
+          )
+        }
       }
+      const validateContradictoryObservationCorrelation = () => {
+        if (event.observation._tag !== "ExecutorReportContradiction") return
+        const correlation = event.observation.observed.correlation
+        if (correlation.runId === event.plannedAttempt.runId && correlation.attemptId === attemptId) {
+          identityIssue(
+            issues,
+            runId,
+            record.position,
+            `executor state observation contradiction for attempt ${attemptId} contains the expected correlation`
+          )
+        }
+      }
+      validateExactObservationCorrelation()
+      validateContradictoryObservationCorrelation()
       const observedSafeSuspension = () =>
         event.observation._tag === "ExactExecutorReport" && event.observation.report._tag === "SafelySuspended"
       if (observedSafeSuspension()) {

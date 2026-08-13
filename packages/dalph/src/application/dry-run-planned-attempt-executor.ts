@@ -1,12 +1,13 @@
 import {
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   type PlannedAttemptExecutorReport as PlannedAttemptExecutorReportType,
   type PlannedTaskAttempt
 } from "@dalph/contracts"
-import { Effect, Layer, Option, Ref } from "effect"
+import { Effect, Layer, Ref } from "effect"
 
 /**
  * Deterministic executor boundary used only by the fixture dry-run command.
@@ -29,9 +30,12 @@ export const dryRunPlannedAttemptExecutorLayer = Layer.effect(
     return PlannedAttemptExecutor.of({
       project: (correlation) =>
         Ref.get(reports).pipe(
-          Effect.map((current) =>
-            Option.fromUndefinedOr(current.get(plannedAttemptExecutorCorrelationKey(correlation)))
-          )
+          Effect.map((current) => {
+            const report = current.get(plannedAttemptExecutorCorrelationKey(correlation))
+            return report === undefined
+              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+              : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+          })
         ),
       requestSuspension: (attempt) => {
         const correlation = plannedAttemptExecutorCorrelation(attempt)

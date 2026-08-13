@@ -16,11 +16,16 @@ import type {
   PlannedAttemptExecutorCommandReconciliationRequired,
   PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
-  PlannedAttemptExecutorProjectionUnavailable,
+  PlannedAttemptExecutorProjectionCorrelationMismatch,
+  PlannedAttemptExecutorProjectionTemporarilyUnavailable,
+  PlannedAttemptExecutorProjectionUnreadable,
+  PlannedAttemptExecutorProjectionNoCurrentReport,
   PlannedAttemptExecutorResponsibilityAbandoned,
   PlannedAttemptExecutorResponsibilityContradiction,
   PlannedAttemptExecutorResponsibilityMissing,
-  PlannedAttemptExecutorStateUnavailable,
+  PlannedAttemptExecutorStateNoCurrentReport,
+  PlannedAttemptExecutorStateTemporarilyUnavailable,
+  PlannedAttemptExecutorStateUnreadable,
   PlannedAttemptExecutorSuspensionLimitReached
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import type { PlannedAttemptContinuationAuthorizationRejected } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
@@ -221,11 +226,16 @@ export type DeliveryActionExecutionError =
   | PlannedAttemptExecutorContinuationLimitReached
   | PlannedAttemptExecutorCommandReconciliationRequired
   | PlannedAttemptExecutorCorrelationMismatch
-  | PlannedAttemptExecutorProjectionUnavailable
+  | PlannedAttemptExecutorProjectionCorrelationMismatch
+  | PlannedAttemptExecutorProjectionTemporarilyUnavailable
+  | PlannedAttemptExecutorProjectionUnreadable
+  | PlannedAttemptExecutorProjectionNoCurrentReport
   | PlannedAttemptExecutorResponsibilityAbandoned
   | PlannedAttemptExecutorResponsibilityContradiction
   | PlannedAttemptExecutorResponsibilityMissing
-  | PlannedAttemptExecutorStateUnavailable
+  | PlannedAttemptExecutorStateNoCurrentReport
+  | PlannedAttemptExecutorStateTemporarilyUnavailable
+  | PlannedAttemptExecutorStateUnreadable
   | PlannedAttemptContinuationAuthorizationRejected
   | PlannedAttemptExecutorSuspensionLimitReached
   | DeliveryRelationSourceError

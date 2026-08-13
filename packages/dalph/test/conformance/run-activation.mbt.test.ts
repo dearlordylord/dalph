@@ -6,6 +6,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -471,8 +472,10 @@ const makeRunActivationDriverImplementation = () => {
         return ambiguousExecutorProjectionAvailable &&
           correlation.attemptId === attemptA.attemptId &&
           correlation.runId === runId
-          ? Option.some(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
-          : Option.none()
+          ? PlannedAttemptExecutorProjection.cases.Exact.make({
+              report: PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+            })
+          : PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
       }),
     requestSuspension: () => Effect.die("Run activation reconstruction does not suspend executor work"),
     startOrContinue: () =>

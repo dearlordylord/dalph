@@ -21,6 +21,7 @@ import type {
   AttemptRestartWaitReason
 } from "../../workflow/protocols/attempt-choice/restart-reasons.js"
 import type { OperationId } from "../../workflow/identity.js"
+import type { PlannedAttemptExecutorProjectionWaitReason } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 
 /** Exact accepted executor fact from which one continuation is authorized. */
 export type AcceptedPlannedAttemptExecutorProgress =
@@ -53,6 +54,8 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   PlannedAttemptExecutorWorkTerminal: {
     readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
   }
+  /** A normalized executor projection was not trusted; retain the exact responsibility and resources. */
+  PlannedAttemptExecutorProjectionWait: { readonly reason: PlannedAttemptExecutorProjectionWaitReason }
   PlannedAttemptExecutorSuspensionRequested: Record<never, never>
   StoppedAttemptClaimNoReleaseRequired: {
     readonly observationOperationId: OperationId
@@ -127,6 +130,7 @@ export type PlannedAttemptExecutorDisposition =
         readonly _tag:
           | "PlannedAttemptExecutorWorkSafelySuspended"
           | "PlannedAttemptExecutorWorkTerminal"
+          | "PlannedAttemptExecutorProjectionWait"
           | "PlannedAttemptExecutorSuspensionRequested"
           | "AttemptStoppageRequired"
           | "AttemptRestartRequired"
@@ -163,6 +167,7 @@ type WorkflowOperationDisposition = Exclude<
     readonly _tag:
       | "PlannedAttemptExecutorWorkSafelySuspended"
       | "PlannedAttemptExecutorWorkTerminal"
+      | "PlannedAttemptExecutorProjectionWait"
       | "PlannedAttemptExecutorSuspensionRequested"
       | "AttemptStoppageRequired"
       | "AttemptRestartRequired"

@@ -2,6 +2,7 @@
 import { it } from "@effect/vitest"
 import {
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   plannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorReport,
   AttemptId,
@@ -101,6 +102,19 @@ const plannedAttempt = PlannedTaskAttempt.make({
 })
 
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+const stateObservationAttempt = PlannedTaskAttempt.make({
+  ...plannedAttempt,
+  attemptId: AttemptId.make("attempt-A-state-observation"),
+  branch: TaskBranchRef.make("refs/heads/dalph/attempt-A-state-observation"),
+  worktree: WorktreeLocator.make("/worktrees/attempt-A-state-observation")
+})
+const stateObservationCorrelation = plannedAttemptExecutorCorrelation(stateObservationAttempt)
+
+const noReport = () => PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+const exactProjection = (report: PlannedAttemptExecutorReport) =>
+  PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+const contradictoryProjection = (observed: PlannedAttemptExecutorReport) =>
+  PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({ expected: correlation, observed })
 
 const taskClaim = ActiveTaskClaim.make({
   operationId: OperationId.make("planned-attempt-executor-claim"),
@@ -167,7 +181,7 @@ it.effect("drives one planned attempt through the generic executor boundary", ()
       PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
     )
     expect(yield* executor.project(correlation)).toEqual(
-      Option.some(PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } }))
+      exactProjection(PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } }))
     )
     expect(yield* executor.project({ runId: correlation.runId, attemptId: correlation.attemptId })).toEqual(
       yield* executor.project(correlation)
@@ -191,7 +205,7 @@ it.effect("drives one planned attempt through the generic executor boundary", ()
 it.effect("rejects exhausted, wrong-kind, and wrong-correlation fake requests", () =>
   Effect.gen(function* () {
     const emptyExecutor = yield* PlannedAttemptExecutor
-    expect(yield* emptyExecutor.project(correlation)).toEqual(Option.none())
+    expect(yield* emptyExecutor.project(correlation)).toEqual(noReport())
     const exhausted = yield* emptyExecutor.startOrContinue(plannedAttempt).pipe(Effect.flip)
     expect(exhausted.detail).toContain("has no cassette entry")
 
@@ -226,10 +240,10 @@ it.effect("rejects exhausted, wrong-kind, and wrong-correlation fake requests", 
 it.effect("projects default fake reports and safely suspends without a survivor lookup", () =>
   Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    expect(yield* executor.project(correlation)).toEqual(Option.none())
+    expect(yield* executor.project(correlation)).toEqual(noReport())
     const suspended = yield* executor.requestSuspension(plannedAttempt)
     expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
-    expect(yield* executor.project(correlation)).toEqual(Option.some(suspended))
+    expect(yield* executor.project(correlation)).toEqual(exactProjection(suspended))
     expect(yield* executor.startOrContinue(plannedAttempt)).toEqual(
       PlannedAttemptExecutorReport.cases.Running.make({ correlation })
     )
@@ -262,7 +276,7 @@ it.effect("journals a contradictory executor response and reconciles its exact c
       Effect.provideService(
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
-          project: () => Effect.succeed(Option.none()),
+          project: () => Effect.succeed(noReport()),
           requestSuspension: () => Effect.die("unused"),
           startOrContinue: () => Effect.succeed(wrongReport)
         })
@@ -291,7 +305,7 @@ it.effect("journals a contradictory executor response and reconciles its exact c
         Effect.provideService(
           PlannedAttemptExecutor,
           PlannedAttemptExecutor.of({
-            project: () => Effect.succeed(Option.some(projectedReport)),
+            project: () => Effect.succeed(exactProjection(projectedReport)),
             requestSuspension: () => Effect.die("unused"),
             startOrContinue: () => Effect.die("must reconcile before another command")
           })
@@ -381,7 +395,7 @@ it.effect("projects one unmatched command without duplicating it and sends the n
       result: { _tag: "Completed" }
     })
     const executor = PlannedAttemptExecutor.of({
-      project: () => Effect.succeed(Option.some(projected)),
+      project: () => Effect.succeed(exactProjection(projected)),
       requestSuspension: () => Effect.die("unused suspension"),
       startOrContinue: () => Ref.update(commandCalls, (count) => count + 1).pipe(Effect.as(nextResponse))
     })
@@ -419,7 +433,7 @@ it.effect("does not manufacture executor-work responsibility from a read-only ob
       Effect.provideService(
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
-          project: () => Ref.update(projectionCalls, (count) => count + 1).pipe(Effect.as(Option.none())),
+          project: () => Ref.update(projectionCalls, (count) => count + 1).pipe(Effect.as(noReport())),
           requestSuspension: () => Effect.die("unused suspension"),
           startOrContinue: () => Effect.die("unused continuation")
         })
@@ -458,7 +472,7 @@ it.effect("requires exact command reconciliation before a generic executor-state
       Effect.provideService(
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
-          project: () => Ref.update(projectionCalls, (count) => count + 1).pipe(Effect.as(Option.none())),
+          project: () => Ref.update(projectionCalls, (count) => count + 1).pipe(Effect.as(noReport())),
           requestSuspension: () => Effect.die("unused suspension"),
           startOrContinue: () => Effect.die("unused continuation")
         })
@@ -506,14 +520,14 @@ it.effect("records unavailable and contradictory projections while reconciling o
       Effect.provideService(
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
-          project: () => Effect.succeed(Option.none()),
+          project: () => Effect.succeed(noReport()),
           requestSuspension: () => Effect.die("unused suspension"),
           startOrContinue: () => Effect.die("reconciliation must not start work")
         })
       ),
       Effect.flip
     )
-    expect(unavailable).toMatchObject({ _tag: "PlannedAttemptExecutorProjectionUnavailable", commandOrdinal })
+    expect(unavailable).toMatchObject({ _tag: "PlannedAttemptExecutorProjectionNoCurrentReport", commandOrdinal })
 
     const foreignCorrelation = { attemptId: AttemptId.make("foreign-projection"), runId: plannedAttempt.runId }
     const contradiction = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
@@ -522,7 +536,9 @@ it.effect("records unavailable and contradictory projections while reconciling o
         PlannedAttemptExecutor.of({
           project: () =>
             Effect.succeed(
-              Option.some(PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation }))
+              contradictoryProjection(
+                PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation })
+              )
             ),
           requestSuspension: () => Effect.die("unused suspension"),
           startOrContinue: () => Effect.die("reconciliation must not start work")
@@ -551,14 +567,14 @@ it.effect("records unavailable and contradictory read-only executor state", () =
       Effect.provideService(
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
-          project: () => Effect.succeed(Option.none()),
+          project: () => Effect.succeed(noReport()),
           requestSuspension: () => Effect.die("unused suspension"),
           startOrContinue: () => Effect.die("unused continuation")
         })
       ),
       Effect.flip
     )
-    expect(unavailable).toMatchObject({ _tag: "PlannedAttemptExecutorStateUnavailable", correlation })
+    expect(unavailable).toMatchObject({ _tag: "PlannedAttemptExecutorStateNoCurrentReport", correlation })
 
     const foreignCorrelation = { attemptId: AttemptId.make("foreign-state"), runId: plannedAttempt.runId }
     const contradiction = yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
@@ -567,7 +583,9 @@ it.effect("records unavailable and contradictory read-only executor state", () =
         PlannedAttemptExecutor.of({
           project: () =>
             Effect.succeed(
-              Option.some(PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation }))
+              contradictoryProjection(
+                PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation })
+              )
             ),
           requestSuspension: () => Effect.die("unused suspension"),
           startOrContinue: () => Effect.die("unused continuation")
@@ -594,6 +612,132 @@ it.effect("records unavailable and contradictory read-only executor state", () =
       Effect.flip
     )
     expect(divergentResponsibility).toMatchObject({ _tag: "PlannedAttemptExecutorResponsibilityContradiction" })
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("records temporary and unreadable outcomes without issuing an unmatched command", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: commandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const projection = (outcome: PlannedAttemptExecutorProjection) =>
+      PlannedAttemptExecutor.of({
+        project: () => Effect.succeed(outcome),
+        requestSuspension: () => Effect.die("unused suspension"),
+        startOrContinue: () => Effect.die("temporary or unreadable projection must not start work")
+      })
+    const temporary = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        projection(PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation }))
+      ),
+      Effect.flip
+    )
+    expect(temporary).toMatchObject({
+      _tag: "PlannedAttemptExecutorProjectionTemporarilyUnavailable",
+      commandOrdinal,
+      correlation
+    })
+
+    const unreadable = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        projection(PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation }))
+      ),
+      Effect.flip
+    )
+    expect(unreadable).toMatchObject({
+      _tag: "PlannedAttemptExecutorProjectionUnreadable",
+      commandOrdinal,
+      correlation
+    })
+    expect(
+      (yield* journal.read(plannedAttempt.runId)).flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ? [event.observation._tag] : []
+      )
+    ).toEqual(["ExecutorStateTemporarilyUnavailable", "ExecutorStateUnreadable"])
+    expect(
+      (yield* journal.read(plannedAttempt.runId)).filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
+      )
+    ).toHaveLength(1)
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("records temporary and unreadable current-state outcomes while retaining responsibility", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.append(
+      stateObservationAttempt.runId,
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(stateObservationAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt: stateObservationAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const projection = (outcome: PlannedAttemptExecutorProjection) =>
+      PlannedAttemptExecutor.of({
+        project: () => Effect.succeed(outcome),
+        requestSuspension: () => Effect.die("unused suspension"),
+        startOrContinue: () => Effect.die("unused continuation")
+      })
+    const temporary = yield* observePlannedAttemptExecutorState(stateObservationAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        projection(
+          PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({
+            correlation: stateObservationCorrelation
+          })
+        )
+      ),
+      Effect.flip
+    )
+    expect(temporary).toMatchObject({
+      _tag: "PlannedAttemptExecutorStateTemporarilyUnavailable",
+      correlation: stateObservationCorrelation
+    })
+
+    const unreadable = yield* observePlannedAttemptExecutorState(stateObservationAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        projection(PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation: stateObservationCorrelation }))
+      ),
+      Effect.flip
+    )
+    expect(unreadable).toMatchObject({
+      _tag: "PlannedAttemptExecutorStateUnreadable",
+      correlation: stateObservationCorrelation
+    })
+    expect(
+      (yield* journal.read(stateObservationAttempt.runId)).flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorStateObserved" ? [event.observation._tag] : []
+      )
+    ).toEqual(["ExecutorStateTemporarilyUnavailable", "ExecutorStateUnreadable"])
+    expect(
+      (yield* journal.read(stateObservationAttempt.runId)).some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          event.plannedAttempt.attemptId === stateObservationAttempt.attemptId
+      )
+    ).toBe(true)
   }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
@@ -631,11 +775,30 @@ it("rejects malformed executor command and projection chronology through the pub
       projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(projectionOrdinal),
       version: workflowJournalEventVersion
     })
+  const expectedCorrelationContradictionProjection = () =>
+    PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorReportContradiction.make({
+        observed: running
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+      version: workflowJournalEventVersion
+    })
   const state = (ordinal = 1, projectedReport: PlannedAttemptExecutorReport = running) =>
     PlannedAttemptExecutorStateObservedEvent.make({
       observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: projectedReport }),
       occurrenceClassification: "NonActionOccurrence",
       ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(ordinal),
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  const expectedCorrelationContradictionState = () =>
+    PlannedAttemptExecutorStateObservedEvent.make({
+      observation: PlannedAttemptExecutorStateObservation.cases.ExecutorReportContradiction.make({ observed: running }),
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
       plannedAttempt,
       version: workflowJournalEventVersion
     })
@@ -665,6 +828,10 @@ it("rejects malformed executor command and projection chronology through the pub
       detail: "returned a contradictory correlation",
       events: [responsibility, command(1), projection(1, foreignRunning)]
     },
+    {
+      detail: "contains the expected correlation",
+      events: [responsibility, command(1), expectedCorrelationContradictionProjection()]
+    },
     { detail: "has no prior matching executor-work responsibility", events: [responseContradiction()] },
     {
       detail: "does not name its unmatched command intent",
@@ -676,7 +843,8 @@ it("rejects malformed executor command and projection chronology through the pub
     },
     { detail: "has no prior matching executor-work responsibility", events: [state()] },
     { detail: "expected ordinal 1, found 2", events: [responsibility, state(2)] },
-    { detail: "returned a contradictory correlation", events: [responsibility, state(1, foreignRunning)] }
+    { detail: "returned a contradictory correlation", events: [responsibility, state(1, foreignRunning)] },
+    { detail: "contains the expected correlation", events: [responsibility, expectedCorrelationContradictionState()] }
   ] as const
 
   for (const scenario of malformed) {
@@ -689,14 +857,14 @@ it("rejects malformed executor command and projection chronology through the pub
 
   const unavailableProjection = PlannedAttemptExecutorCommandProjectionObservedEvent.make({
     commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
-    observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateUnavailable.make({}),
+    observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateNoCurrentReport.make({}),
     occurrenceClassification: "NonActionOccurrence",
     plannedAttempt,
     projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
     version: workflowJournalEventVersion
   })
   const unavailableState = PlannedAttemptExecutorStateObservedEvent.make({
-    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnavailable.make({}),
+    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateNoCurrentReport.make({}),
     occurrenceClassification: "NonActionOccurrence",
     ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
     plannedAttempt,
@@ -720,7 +888,7 @@ it.effect("rejects a divergent immutable plan before recording another executor 
       Effect.provideService(
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
-          project: () => Effect.succeed(Option.none()),
+          project: () => Effect.succeed(noReport()),
           requestSuspension: () => Effect.die("unused suspension"),
           startOrContinue: () => Effect.succeed(firstReport)
         })
@@ -751,7 +919,7 @@ it.effect("stops an always-Running executor at the durable continuation limit", 
   Effect.gen(function* () {
     const calls = yield* Ref.make(0)
     const alwaysRunning = PlannedAttemptExecutor.of({
-      project: () => Effect.succeed(Option.none()),
+      project: () => Effect.succeed(noReport()),
       requestSuspension: () => Effect.die("unused suspension"),
       startOrContinue: () =>
         Ref.update(calls, (count) => count + 1).pipe(
@@ -788,7 +956,7 @@ it.effect("counts lost start responses reconciled as Running against the durable
   Effect.gen(function* () {
     const calls = yield* Ref.make(0)
     const lostResponseExecutor = PlannedAttemptExecutor.of({
-      project: () => Effect.succeed(Option.some(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))),
+      project: () => Effect.succeed(exactProjection(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))),
       requestSuspension: () => Effect.die("unused suspension"),
       startOrContinue: () => Ref.update(calls, (count) => count + 1).pipe(Effect.andThen(Effect.die("response lost")))
     })

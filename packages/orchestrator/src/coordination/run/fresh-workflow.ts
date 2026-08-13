@@ -10,6 +10,10 @@ import type { CurrentDeliveryFrame } from "./current-delivery-frame.js"
 import { reconstructedTaskGraphFromEvents } from "../reconstruction/graph-knowledge.js"
 import { FreshWorkflowStep, type FreshWorkflowStep as FreshWorkflowStepType } from "../delivery/fresh-workflow-step.js"
 import { recordedTaskAttemptPlans } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
+import {
+  latestPlannedAttemptExecutorEvidence,
+  latestPlannedAttemptExecutorProjectionIssue
+} from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 
 const postClaimGraphRank = 0
 const claimRank = 1
@@ -190,19 +194,39 @@ const journaledStepFor = (
   return FreshWorkflowStep.ReadCurrentTaskGraph({ predecessorOperationId: latestGraphCoveringTask.operationId, task })
 }
 
-const responsibilityStillOwnsTask = (
+const executorResponsibilityStillOwnsTask = (
+  responsibility: Extract<WorkflowResponsibilityEntry, { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }>,
+  records: ReadonlyArray<JournalRecord>,
+  recoveredAttemptIds: ReadonlySet<AttemptId>
+): boolean => {
+  if (recoveredAttemptIds.has(responsibility.plannedAttempt.attemptId)) return true
+  const latestReport = records.findLast(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" &&
+      event.report.correlation.attemptId === responsibility.plannedAttempt.attemptId
+  )
+  const exactEvidence = latestPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
+  const projectionIssue = latestPlannedAttemptExecutorProjectionIssue(records, responsibility.plannedAttempt)
+  if (
+    projectionIssue !== undefined &&
+    (exactEvidence === undefined || projectionIssue.observedAt > exactEvidence.observedAt)
+  ) {
+    return true
+  }
+  return (
+    latestReport !== undefined &&
+    latestReport.event._tag === "PlannedAttemptExecutorWorkReported" &&
+    latestReport.event.report._tag !== "Running"
+  )
+}
+
+export const responsibilityStillOwnsTask = (
   responsibility: WorkflowResponsibilityEntry,
   records: ReadonlyArray<JournalRecord>,
   recoveredAttemptIds: ReadonlySet<AttemptId>
 ): boolean => {
   if (responsibility._tag === "PlannedAttemptExecutorWorkResponsibility") {
-    if (recoveredAttemptIds.has(responsibility.plannedAttempt.attemptId)) return true
-    const report = records.findLast(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report.correlation.attemptId === responsibility.plannedAttempt.attemptId
-    )?.event
-    return report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag !== "Running"
+    return executorResponsibilityStillOwnsTask(responsibility, records, recoveredAttemptIds)
   }
   if (responsibility._tag === "TaskClaimReleaseResponsibility") return true
   if (responsibility._tag === "TaskClaimResponsibility") {

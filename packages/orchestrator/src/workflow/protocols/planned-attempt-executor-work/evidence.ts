@@ -11,7 +11,7 @@ import type {
 const latestElementOffset = -1
 
 /** Provenance of one exact executor report, preserving command response vs read-only projection. */
-export type PlannedAttemptExecutorEvidenceSource =
+type PlannedAttemptExecutorEvidenceSource =
   | { readonly _tag: "CommandResponse"; readonly ordinal: PlannedAttemptExecutorReportOrdinal }
   | {
       readonly _tag: "CommandProjection"
@@ -24,6 +24,19 @@ export interface PlannedAttemptExecutorEvidence {
   readonly observedAt: JournalPosition
   readonly report: PlannedAttemptExecutorReport
   readonly source: PlannedAttemptExecutorEvidenceSource
+}
+
+/** The closed reasons why one normalized executor projection cannot authorize work. */
+export type PlannedAttemptExecutorProjectionWaitReason =
+  | "NoCurrentReport"
+  | "TemporarilyUnavailable"
+  | "Unreadable"
+  | "CorrelationContradiction"
+
+/** A normalized projection outcome that must remain nonterminal until reread. */
+type PlannedAttemptExecutorProjectionIssue = {
+  readonly observedAt: JournalPosition
+  readonly reason: PlannedAttemptExecutorProjectionWaitReason
 }
 
 const exactCorrelation = (report: PlannedAttemptExecutorReport, plannedAttempt: PlannedTaskAttempt): boolean =>
@@ -94,13 +107,55 @@ export const plannedAttemptExecutorEvidence = (
     after !== undefined && record.position <= after ? [] : evidenceFromRecord(record, plannedAttempt)
   )
 
-/** Returns the newest exact executor authority evidence while preserving its provenance. */
+const projectionIssueReason = (
+  observation:
+    | Extract<
+        JournalRecord["event"],
+        { readonly _tag: "PlannedAttemptExecutorCommandProjectionObserved" }
+      >["observation"]
+    | Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorStateObserved" }>["observation"]
+): PlannedAttemptExecutorProjectionIssue["reason"] | undefined => {
+  if (observation._tag === "ExecutorStateNoCurrentReport") return "NoCurrentReport"
+  if (observation._tag === "ExecutorStateTemporarilyUnavailable") return "TemporarilyUnavailable"
+  if (observation._tag === "ExecutorStateUnreadable") return "Unreadable"
+  if (observation._tag === "ExecutorReportContradiction") return "CorrelationContradiction"
+  return undefined
+}
+
+/** Returns the latest non-exact projection outcome for this exact responsibility. */
+export const latestPlannedAttemptExecutorProjectionIssue = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  plannedAttempt: PlannedTaskAttempt
+): PlannedAttemptExecutorProjectionIssue | undefined => {
+  for (const { event, position } of [...records].reverse()) {
+    if (
+      (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+        event._tag === "PlannedAttemptExecutorStateObserved") &&
+      event.plannedAttempt.runId === plannedAttempt.runId &&
+      event.plannedAttempt.attemptId === plannedAttempt.attemptId
+    ) {
+      const reason = projectionIssueReason(event.observation)
+      if (reason !== undefined) return { observedAt: position, reason }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Returns the newest exact executor authority that remains current.
+ * A later non-exact projection invalidates the report as authority without
+ * erasing its historical evidence; Dalph must reread before using it again.
+ */
 export const latestPlannedAttemptExecutorEvidence = (
   records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
   plannedAttempt: PlannedTaskAttempt,
   after?: JournalPosition
-): PlannedAttemptExecutorEvidence | undefined =>
-  plannedAttemptExecutorEvidence(records, plannedAttempt, after).at(latestElementOffset)
+): PlannedAttemptExecutorEvidence | undefined => {
+  const evidence = plannedAttemptExecutorEvidence(records, plannedAttempt, after).at(latestElementOffset)
+  if (evidence === undefined) return undefined
+  const issue = latestPlannedAttemptExecutorProjectionIssue(records, plannedAttempt)
+  return issue === undefined || evidence.observedAt > issue.observedAt ? evidence : undefined
+}
 
 /** Latest exact executor command whose boundary response is still ambiguous. */
 export const latestUnsettledPlannedAttemptExecutorCommand = (

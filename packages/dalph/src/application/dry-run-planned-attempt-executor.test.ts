@@ -3,6 +3,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -13,7 +14,7 @@ import {
   WorktreeLocator,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Effect, Option } from "effect"
+import { Effect } from "effect"
 import { expect } from "vitest"
 import { dryRunPlannedAttemptExecutorLayer } from "./dry-run-planned-attempt-executor.js"
 
@@ -32,19 +33,28 @@ const correlation = plannedAttemptExecutorCorrelation(attempt)
 it.effect("keeps the dry-run executor deterministic without selecting a production implementation", () =>
   Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    expect(yield* executor.project(correlation)).toEqual(Option.none())
+    expect(yield* executor.project(correlation)).toEqual(
+      PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+    )
 
     const running = yield* executor.startOrContinue(attempt)
     expect(running).toEqual(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
-    expect(yield* executor.project(correlation)).toEqual(Option.some(running))
+    expect(yield* executor.project(correlation)).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({ report: running })
+    )
 
     const terminal = yield* executor.startOrContinue(attempt)
     expect(terminal).toEqual(
       PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
     )
+    expect(yield* executor.project(correlation)).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({ report: terminal })
+    )
 
     const safelySuspended = yield* executor.requestSuspension(attempt)
     expect(safelySuspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
-    expect(yield* executor.project(correlation)).toEqual(Option.some(safelySuspended))
+    expect(yield* executor.project(correlation)).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({ report: safelySuspended })
+    )
   }).pipe(Effect.provide(dryRunPlannedAttemptExecutorLayer))
 )

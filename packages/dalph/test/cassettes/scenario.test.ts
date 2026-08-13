@@ -377,7 +377,7 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
         report: { _tag: "Running", attemptId: AttemptId.make("another-projected-attempt") }
       }
     ])
-    const contradictoryExit = yield* Effect.gen(function* () {
+    const contradictoryProjection = yield* Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
       return yield* executor.project(correlation)
     }).pipe(
@@ -389,13 +389,40 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
           yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()),
           yield* Ref.make<ReadonlySet<string>>(new Set())
         )
-      ),
-      Effect.exit
+      )
     )
-    expect(Exit.isFailure(contradictoryExit)).toBe(true)
-    if (Exit.isFailure(contradictoryExit)) {
-      expect(Cause.pretty(contradictoryExit.cause)).toContain("another-projected-attempt")
-    }
+    expect(contradictoryProjection).toMatchObject({
+      _tag: "CorrelationContradiction",
+      expected: correlation,
+      observed: { correlation: { attemptId: "another-projected-attempt", runId } }
+    })
+
+    const foreignRunId = RunId.make("coverage-executor-projection-foreign-run")
+    const foreignRunCursor = yield* makeStoryCursor([
+      {
+        _tag: "PlannedAttemptExecutorProjectionReturned",
+        report: { _tag: "Running", attemptId: correlation.attemptId }
+      }
+    ])
+    const foreignRunProjection = yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      return yield* executor.project(correlation)
+    }).pipe(
+      Effect.provide(
+        controlledExecutorLayer(
+          foreignRunCursor,
+          foreignRunId,
+          Effect.void,
+          yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()),
+          yield* Ref.make<ReadonlySet<string>>(new Set())
+        )
+      )
+    )
+    expect(foreignRunProjection).toMatchObject({
+      _tag: "CorrelationContradiction",
+      expected: correlation,
+      observed: { correlation: { attemptId: correlation.attemptId, runId: foreignRunId } }
+    })
   })
 )
 
@@ -458,7 +485,7 @@ it.effect("projects reacquisition and non-exact executor evidence through the au
     }
     const unavailable = PlannedAttemptExecutorCommandProjectionObservedEvent.make({
       commandOrdinal: projection.event.commandOrdinal,
-      observation: { _tag: "ExecutorStateUnavailable" },
+      observation: { _tag: "ExecutorStateNoCurrentReport" },
       occurrenceClassification: "NonActionOccurrence",
       plannedAttempt: projection.event.plannedAttempt,
       projectionOrdinal: projection.event.projectionOrdinal,
@@ -1845,11 +1872,23 @@ it.effect("finishes the exact safe suspension before fresh reads after Unpause",
   })
 )
 
-it.effect("continues Unpause in the next activation without competing executor work", () =>
+it.effect("reprojects the exact suspension on the second ordinary Run activation without a duplicate command", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)
     expect(run.activationOrdinals).toEqual([1, 2])
     expect(exactExecutorReportTags(run.records)).toEqual(["Running", "SafelySuspended", "Terminal"])
+    const commandIntents = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorCommandIntended" ? [event] : []
+    )
+    expect(commandIntents.map(({ command }) => command)).toEqual(["StartOrContinue", "Suspend", "StartOrContinue"])
+    expect(
+      run.records.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+          event.observation._tag === "ExactExecutorReport" &&
+          event.observation.report._tag === "SafelySuspended"
+      )
+    ).toHaveLength(1)
   })
 )
 
@@ -6720,12 +6759,12 @@ it.effect(
             ...projectionEntry,
             observation: { _tag: "ExecutorReportContradiction", observed: projectionEntry.observation.report }
           },
-          { ...projectionEntry, observation: { _tag: "ExecutorStateUnavailable" } },
+          { ...projectionEntry, observation: { _tag: "ExecutorStateNoCurrentReport" } },
           {
             ...stateEntry,
             observation: { _tag: "ExecutorReportContradiction", observed: stateEntry.observation.report }
           },
-          { ...stateEntry, observation: { _tag: "ExecutorStateUnavailable" } },
+          { ...stateEntry, observation: { _tag: "ExecutorStateNoCurrentReport" } },
           responseContradictionEntry
         ],
         runId: stoppageRecorded.runId,
@@ -6741,9 +6780,9 @@ it.effect(
         )
       ).toEqual([
         "ExecutorReportContradiction",
-        "ExecutorStateUnavailable",
+        "ExecutorStateNoCurrentReport",
         "ExecutorReportContradiction",
-        "ExecutorStateUnavailable",
+        "ExecutorStateNoCurrentReport",
         undefined
       ])
       expect(renamedExecutorObservationVariants.entries.at(-1)?._tag).toBe(

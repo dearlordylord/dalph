@@ -2,6 +2,7 @@ import {
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorCorrelation,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
@@ -9,7 +10,7 @@ import {
   type PlannedAttemptExecutorReport as PlannedAttemptExecutorReportType,
   type PlannedTaskAttempt
 } from "@dalph/contracts"
-import { Effect, Layer, Option, Ref, Schema } from "effect"
+import { Effect, Layer, Ref, Schema } from "effect"
 
 const sameCorrelation = (
   left: PlannedAttemptExecutorCorrelationType,
@@ -73,9 +74,12 @@ export const makeControlledFakePlannedAttemptExecutorLayer = (steps: ReadonlyArr
       return PlannedAttemptExecutor.of({
         project: (correlation) =>
           Ref.get(state).pipe(
-            Effect.map((current) =>
-              Option.fromUndefinedOr(current.reports.get(plannedAttemptExecutorCorrelationKey(correlation)))
-            )
+            Effect.map((current) => {
+              const report = current.reports.get(plannedAttemptExecutorCorrelationKey(correlation))
+              return report === undefined
+                ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+                : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+            })
           ),
         requestSuspension: (attempt) => consume("Suspend", attempt),
         startOrContinue: (attempt) => consume("StartOrContinue", attempt)
@@ -99,9 +103,12 @@ export const controlledFakePlannedAttemptExecutorLayer = Layer.effect(
     return PlannedAttemptExecutor.of({
       project: (correlation) =>
         Ref.get(reports).pipe(
-          Effect.map((current) =>
-            Option.fromUndefinedOr(current.get(plannedAttemptExecutorCorrelationKey(correlation)))
-          )
+          Effect.map((current) => {
+            const report = current.get(plannedAttemptExecutorCorrelationKey(correlation))
+            return report === undefined
+              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+              : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+          })
         ),
       requestSuspension: (attempt) => {
         const correlation = plannedAttemptExecutorCorrelation(attempt)

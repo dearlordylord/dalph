@@ -13,6 +13,7 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   plannedTaskAttemptEquivalence,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
@@ -119,6 +120,7 @@ import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  type PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
@@ -236,6 +238,38 @@ const independentOnlyGraphSnapshot = Option.getOrThrow(
 )
 
 const Variant = Schema.Struct({ tag: Schema.String, value: Schema.Unknown })
+
+type ExecutorObservationTag = PlannedAttemptExecutorStateObservation["_tag"]
+
+const executorEvidenceProjection = (
+  currentFailure: ExecutorObservationTag | undefined,
+  report: PlannedAttemptExecutorReport | undefined,
+  restartSelected: boolean
+): string => {
+  if (currentFailure === "ExecutorReportContradiction") return "ExecutorContradiction"
+  if (currentFailure !== undefined && currentFailure !== "ExactExecutorReport") return "ExecutorUnavailable"
+  if (report?._tag === "SafelySuspended") return "ExactSafelySuspended"
+  if (report?._tag === "Running") return "ExactRunning"
+  if (report?._tag !== "Terminal") return "ExecutorUnavailable"
+  if (!restartSelected) return "ExactTerminal"
+  if (report.result._tag === "Accepted") return "ExactAcceptedTerminal"
+  return report.result._tag === "Completed" ? "ExactCompletedTerminal" : "ExactFailedTerminal"
+}
+
+it("projects every newer non-exact executor observation instead of stale exact evidence", () => {
+  const staleRunning = PlannedAttemptExecutorReport.cases.Running.make({
+    correlation: { attemptId: plannedAttempt.attemptId, runId }
+  })
+  expect(executorEvidenceProjection("ExecutorReportContradiction", staleRunning, false)).toBe("ExecutorContradiction")
+  for (const outcome of [
+    "ExecutorStateNoCurrentReport",
+    "ExecutorStateTemporarilyUnavailable",
+    "ExecutorStateUnreadable"
+  ] as const) {
+    expect(executorEvidenceProjection(outcome, staleRunning, false)).toBe("ExecutorUnavailable")
+  }
+})
+
 const RequestIdProjection = Schema.Struct({ nonce: ITFBigInt, runId: ITFBigInt })
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
@@ -563,7 +597,20 @@ const taskFactReconciliationDriver = defineDriver(
       })
     )
     const executor = PlannedAttemptExecutor.of({
-      project: () => Effect.succeed(Option.fromUndefinedOr(executorAuthority)),
+      project: () =>
+        Effect.succeed(
+          executorAuthority === undefined
+            ? PlannedAttemptExecutorProjection.cases.NoReport.make({
+                correlation: { attemptId: plannedAttempt.attemptId, runId }
+              })
+            : executorAuthority.correlation.attemptId !== plannedAttempt.attemptId ||
+                executorAuthority.correlation.runId !== runId
+              ? PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+                  expected: { attemptId: plannedAttempt.attemptId, runId },
+                  observed: executorAuthority
+                })
+              : PlannedAttemptExecutorProjection.cases.Exact.make({ report: executorAuthority })
+        ),
       requestSuspension: () =>
         restartSuspensionBoundary
           ? Effect.sync(() => {
@@ -2371,24 +2418,11 @@ const taskFactReconciliationDriver = defineDriver(
             continueStage: continueStage(),
             currentFingerprint: fingerprintTag(currentSpecification.fingerprint),
             evidencePreserved: artifactsPreserved,
-            executorEvidence:
-              currentExecutorFailure === "ExecutorReportContradiction"
-                ? "ExecutorContradiction"
-                : currentExecutorFailure === "ExecutorStateUnavailable"
-                  ? "ExecutorUnavailable"
-                  : report?._tag === "SafelySuspended"
-                    ? "ExactSafelySuspended"
-                    : report?._tag === "Terminal"
-                      ? choice?.choice !== "RestartTaskImplementation"
-                        ? "ExactTerminal"
-                        : report.result._tag === "Accepted"
-                          ? "ExactAcceptedTerminal"
-                          : report.result._tag === "Completed"
-                            ? "ExactCompletedTerminal"
-                            : "ExactFailedTerminal"
-                      : report?._tag === "Running"
-                        ? "ExactRunning"
-                        : "ExecutorUnavailable",
+            executorEvidence: executorEvidenceProjection(
+              currentExecutorFailure,
+              report,
+              choice?.choice === "RestartTaskImplementation"
+            ),
             f2WinningChoice:
               f2Choice?._tag === "AttemptChoiceApplied"
                 ? f2Choice.choice === "ContinueExistingAttempt"
@@ -2636,7 +2670,9 @@ it.effect("requires command reconciliation before a generic executor-state proje
           project: () =>
             Effect.sync(() => {
               projectionCalls += 1
-              return Option.some(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
+              return PlannedAttemptExecutorProjection.cases.Exact.make({
+                report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+              })
             }),
           requestSuspension: () => Effect.die("unused suspension"),
           startOrContinue: () => Effect.die("unused continuation")

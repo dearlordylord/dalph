@@ -85,6 +85,22 @@ module plannedAttemptExecutorTest {
       })
   }
 
+  run everyNonExactFreshStateOutcomeRetainsPositionTest = {
+    init
+      .then(beginResponsibility)
+      .then(recordFreshStateProjection(ExecutorStateNoCurrentReport))
+      .expect(state.positionHeld and unsafeOrUnavailableNeverReleasesPosition)
+      .then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateTemporarilyUnavailable))
+      .expect(state.positionHeld and unsafeOrUnavailableNeverReleasesPosition)
+      .then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateUnreadable))
+      .expect(state.positionHeld and unsafeOrUnavailableNeverReleasesPosition)
+      .then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateContradiction))
+      .expect(state.positionHeld and unsafeOrUnavailableNeverReleasesPosition)
+  }
+
   run freshSafeStateProjectionWithNoCommandProvesQuiescenceTest = {
     init
       .then(beginResponsibility)
@@ -106,9 +122,15 @@ module plannedAttemptExecutorTest {
       .then(recordStartOrContinueIntent)
       .then(callStartOrContinue)
       .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionUnavailable))
+      .then(recordCommandProjection(CommandProjectionNoCurrentReport))
       .expect(not(canSettleCommandProjection(state)))
       .expect(state.positionHeld and isCalled(state.commandState))
+      .then(recoverActivation)
+      .then(recordCommandProjection(CommandProjectionTemporarilyUnavailable))
+      .expect(not(canSettleCommandProjection(state)))
+      .then(recoverActivation)
+      .then(recordCommandProjection(CommandProjectionUnreadable))
+      .expect(not(canSettleCommandProjection(state)))
       .then(recoverActivation)
       .then(recordCommandProjection(CommandProjectionContradiction))
       .expect(and {
@@ -126,7 +148,7 @@ module plannedAttemptExecutorTest {
       .then(recordStartOrContinueIntent)
       .then(callStartOrContinue)
       .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionUnavailable))
+      .then(recordCommandProjection(CommandProjectionNoCurrentReport))
       .expect(state.reconciliationProjectionsThisActivation == 1)
       .then(recoverActivation)
       .then(recordCommandProjection(CommandProjectionExactRunning))

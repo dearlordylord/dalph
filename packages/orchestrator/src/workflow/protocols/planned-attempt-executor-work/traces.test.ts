@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest"
 import {
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   plannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorReport,
   AttemptId,
@@ -17,7 +18,7 @@ import {
   ControlledFakeExecutorStep,
   makeControlledFakePlannedAttemptExecutorLayer
 } from "../../../../test/controlled-planned-attempt-executor.js"
-import { Effect, Option } from "effect"
+import { Effect } from "effect"
 import { expect } from "vitest"
 
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -61,7 +62,11 @@ it.effect("accepts representative coarse executor report traces", () =>
         for (const report of reports) {
           expect(yield* executor.startOrContinue(plannedAttempt)).toEqual(report)
         }
-        expect(yield* executor.project(correlation)).toEqual(Option.some(reports.at(-1)))
+        const lastReport = reports.at(-1)
+        if (lastReport === undefined) return yield* Effect.die("executor trace must include a terminal report")
+        expect(yield* executor.project(correlation)).toEqual(
+          PlannedAttemptExecutorProjection.cases.Exact.make({ report: lastReport })
+        )
       }).pipe(Effect.provide(layer))
     }
   })

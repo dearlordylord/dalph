@@ -7,6 +7,7 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -338,19 +339,22 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
         : options.executor === "Failed"
           ? PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
           : PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    const exactProjection = (report: PlannedAttemptExecutorReport) =>
+      PlannedAttemptExecutorProjection.cases.Exact.make({ report })
     const executor = PlannedAttemptExecutor.of({
       project: () =>
         options.executor === "Unavailable"
-          ? Effect.succeed(Option.none())
+          ? Effect.succeed(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }))
           : options.executor === "RunningUntilReadOnlySafe"
-            ? Effect.succeed(Option.some(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })))
+            ? Effect.succeed(exactProjection(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })))
             : options.executor === "Contradictory"
               ? Effect.succeed(
-                  Option.some(
-                    PlannedAttemptExecutorReport.cases.Running.make({
+                  PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+                    expected: correlation,
+                    observed: PlannedAttemptExecutorReport.cases.Running.make({
                       correlation: { attemptId: AttemptId.make("attempt-restart-other"), runId }
                     })
-                  )
+                  })
                 )
               : unused(),
       requestSuspension: () => Ref.update(suspensionCalls, (count) => count + 1).pipe(Effect.as(executorReport)),

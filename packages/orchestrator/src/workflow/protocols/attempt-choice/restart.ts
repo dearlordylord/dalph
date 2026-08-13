@@ -221,9 +221,19 @@ const prepareAttemptRestart = Effect.fn("AttemptRestart.prepare")(function* (
     Effect.catchTags({
       PlannedAttemptExecutorCorrelationMismatch: () =>
         Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorContradictory" as const }),
-      PlannedAttemptExecutorProjectionUnavailable: () =>
+      PlannedAttemptExecutorProjectionCorrelationMismatch: () =>
+        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorContradictory" as const }),
+      PlannedAttemptExecutorProjectionNoCurrentReport: () =>
         Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const }),
-      PlannedAttemptExecutorStateUnavailable: () =>
+      PlannedAttemptExecutorProjectionTemporarilyUnavailable: () =>
+        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const }),
+      PlannedAttemptExecutorProjectionUnreadable: () =>
+        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const }),
+      PlannedAttemptExecutorStateNoCurrentReport: () =>
+        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const }),
+      PlannedAttemptExecutorStateTemporarilyUnavailable: () =>
+        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const }),
+      PlannedAttemptExecutorStateUnreadable: () =>
         Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const })
     })
   )

@@ -285,11 +285,16 @@ export {
   PlannedAttemptExecutorCommandReconciliationRequired,
   PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
-  PlannedAttemptExecutorProjectionUnavailable,
+  PlannedAttemptExecutorProjectionCorrelationMismatch,
+  PlannedAttemptExecutorProjectionTemporarilyUnavailable,
+  PlannedAttemptExecutorProjectionUnreadable,
+  PlannedAttemptExecutorProjectionNoCurrentReport,
   PlannedAttemptExecutorResponsibilityAbandoned,
   PlannedAttemptExecutorResponsibilityContradiction,
   PlannedAttemptExecutorResponsibilityMissing,
-  PlannedAttemptExecutorStateUnavailable,
+  PlannedAttemptExecutorStateNoCurrentReport,
+  PlannedAttemptExecutorStateTemporarilyUnavailable,
+  PlannedAttemptExecutorStateUnreadable,
   PlannedAttemptExecutorSuspensionLimitReached
 } from "./workflow/protocols/planned-attempt-executor-work/protocol.js"
 export {

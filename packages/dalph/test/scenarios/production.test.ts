@@ -5,6 +5,9 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorCommandFailure,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   plannedAttemptExecutorCorrelation,
@@ -29,6 +32,8 @@ import {
   GitCommonDirectoryTarget,
   intentRecordKey,
   JournalDatabaseLocator,
+  type JournalRecord,
+  type JournalStoreError,
   JournalPosition,
   JournaledRunBootstrap,
   JournalStore,
@@ -52,6 +57,9 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   PlannedWorktreeReady,
   PlannedTaskAttemptPlanner,
+  PlannedAttemptExecutorCorrelationMismatch,
+  PlannedAttemptExecutorProjectionTemporarilyUnavailable,
+  PlannedAttemptExecutorProjectionUnreadable,
   projectTrackerSnapshot,
   runWorkflow,
   legacySqliteJournalStoreLayer,
@@ -83,6 +91,596 @@ const productionIntegrationTarget = (repository: string): IntegrationTarget =>
     repository: GitRepositoryLocator.make(repository),
     ref: IntegrationTargetRef.make("refs/heads/master")
   })
+
+type PublicExecutorProjectionPlan = (
+  correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>
+) => ReadonlyArray<PlannedAttemptExecutorProjection>
+
+type PublicExecutorProjectionForApplication = (
+  applicationOrdinal: number,
+  correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>
+) => Effect.Effect<PlannedAttemptExecutorProjection>
+
+// eslint-disable-next-line functional/no-mixed-types -- Public Run fixture intentionally groups boundary effects and observations for each scenario.
+interface PublicRunFixture {
+  readonly activate: () => ReturnType<typeof runWorkflow>
+  readonly attempt: PlannedTaskAttempt
+  readonly commandCalls: Effect.Effect<ReadonlyArray<"StartOrContinue" | "Suspend">>
+  readonly applicationBuilds: () => number
+  readonly projectionCalls: Effect.Effect<number>
+  readonly readRecords: Effect.Effect<ReadonlyArray<JournalRecord>, JournalStoreError>
+  readonly runId: RunId
+  readonly target: FixtureTarget
+}
+
+/**
+ * Seeds the same exact Run facts that ordinary bootstrap recovers after a
+ * coordinator process loss, leaving one StartOrContinue intent unmatched.
+ * The returned `activate` function still crosses the public runWorkflow
+ * boundary; only the opaque executor projection sequence is controlled.
+ */
+const makePublicRunFixture = (
+  projectionPlan: PublicExecutorProjectionPlan,
+  projectionForApplication?: PublicExecutorProjectionForApplication
+) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-executor-projection-" })
+    const git = yield* GitCommand
+    yield* git.runInWorktree(directory, ["init"])
+    yield* git.runInWorktree(directory, ["config", "user.email", "dalph@example.invalid"])
+    yield* git.runInWorktree(directory, ["config", "user.name", "Dalph Test"])
+    yield* fileSystem.writeFileString(`${directory}/README.md`, "public executor projection\n")
+    yield* git.runInWorktree(directory, ["add", "README.md"])
+    yield* git.runInWorktree(directory, ["commit", "-m", "initial"])
+    yield* git.runInWorktree(directory, ["branch", "-M", "master"])
+    const baseSha = GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
+    const runId = RunId.make("production-executor-projection-run")
+    const target = FixtureTarget.make("production-executor-projection-target")
+    const taskId = TaskId.make("A")
+    const specification = makeTaskWorkSpecification({ body: "Complete A.", taskId, title: "Complete A" })
+    const attempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("production-executor-projection-attempt"),
+      baseSha,
+      branch: TaskBranchRef.make("refs/heads/dalph/production-executor-projection"),
+      executor: TaskExecutorLocator.make("executor:production-controlled-projection"),
+      runId,
+      taskId,
+      taskRevision: specification.fingerprint,
+      worktree: WorktreeLocator.make(`${directory}/worktree`)
+    })
+    const correlation = plannedAttemptExecutorCorrelation(attempt)
+    const projected = projectTrackerSnapshot({
+      revision: "production-executor-projection-current",
+      tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+    })
+    if (projected._tag === "Invalid") return yield* Effect.die("current graph must be valid")
+    const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+    yield* git.runInWorktree(directory, [
+      "worktree",
+      "add",
+      "-b",
+      attempt.branch.slice("refs/heads/".length),
+      attempt.worktree,
+      attempt.baseSha
+    ])
+
+    const acquisition = {
+      operationId: OperationId.make("production-executor-projection-claim"),
+      owner: ClaimOwner.make("dalph"),
+      taskId,
+      token: ClaimToken.make("production-executor-projection-token")
+    }
+    const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
+    const observation = makeTrackerGraphObservationOperation(
+      OperationId.make("production-executor-projection-graph"),
+      target,
+      [claimOperation.acquisition.operationId],
+      [taskId]
+    )
+    const plan = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("production-executor-projection-plan"),
+      plannedAttempt: attempt,
+      predecessorOperationIds: [observation.operationId]
+    })
+    const worktree = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make("production-executor-projection-worktree"),
+      plannedAttempt: attempt,
+      predecessorOperationIds: [plan.operationId]
+    })
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* Effect.gen(function* () {
+      const journal = yield* JournalStore
+      yield* journal.beginRun(
+        runId,
+        target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(acquisition.operationId),
+        TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(acquisition.operationId),
+        TaskClaimAcquiredEvent.make({ claim: ActiveTaskClaim.make(acquisition), version: workflowJournalEventVersion })
+      )
+      yield* journal.append(runId, intentRecordKey(observation.operationId), taskTrackerReadIntent(observation))
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(observation.operationId),
+        taskTrackerGraphFactsObserved(observation, {
+          revision: TrackerRevision.make("production-executor-projection-seed"),
+          taskIds: [taskId]
+        })
+      )
+      yield* journal.append(
+        runId,
+        attemptPlanRecordKey(attempt.attemptId),
+        TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(worktree.operationId),
+        TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(worktree.operationId),
+        TaskWorktreeReadyEvent.make({
+          operationId: worktree.operationId,
+          proof: PlannedWorktreeReady.make({
+            baseSha: attempt.baseSha,
+            branch: attempt.branch,
+            headSha: attempt.baseSha,
+            worktree: attempt.worktree
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorWorkResponsibilityBeganRecordKey(attempt.attemptId),
+        PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt: attempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorCommandIntendedRecordKey(attempt.attemptId, commandOrdinal),
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "StartOrContinue",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: commandOrdinal,
+          plannedAttempt: attempt,
+          version: workflowJournalEventVersion
+        })
+      )
+    }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+
+    const projections = yield* Ref.make(projectionPlan(correlation))
+    const commandCallsRef = yield* Ref.make<ReadonlyArray<"StartOrContinue" | "Suspend">>([])
+    const projectionCallsRef = yield* Ref.make(0)
+    const consumeCommand = (command: "StartOrContinue" | "Suspend", planned: PlannedTaskAttempt) =>
+      Effect.gen(function* () {
+        yield* Ref.update(commandCallsRef, (calls) => [...calls, command])
+        return yield* new PlannedAttemptExecutorCommandFailure({
+          command,
+          correlation: plannedAttemptExecutorCorrelation(planned),
+          detail: `public projection fixture has no ${command} response`
+        })
+      })
+    const executorForApplication = (applicationOrdinal: number) =>
+      PlannedAttemptExecutor.of({
+        project: (requested) =>
+          Effect.gen(function* () {
+            yield* Ref.update(projectionCallsRef, (calls) => calls + 1)
+            if (projectionForApplication !== undefined) {
+              return yield* projectionForApplication(applicationOrdinal, requested)
+            }
+            const next = yield* Ref.modify(projections, (remaining) => {
+              const projection = remaining[0]
+              return [projection, remaining.slice(1)] as const
+            })
+            if (next !== undefined) return next
+            return PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation: requested })
+          }),
+        requestSuspension: (planned) => consumeCommand("Suspend", planned),
+        startOrContinue: (planned) => consumeCommand("StartOrContinue", planned)
+      })
+    const trackerLayer = Layer.succeed(
+      TrackerMutation,
+      TrackerMutation.of({
+        acquireTaskClaim: () => Effect.die("projection fixture must not acquire a successor claim"),
+        readTaskClaim: () => Effect.succeed(ActiveTaskClaim.make(acquisition)),
+        releaseTaskClaim: () => Effect.die("projection fixture must retain the exact claim")
+      })
+    )
+    let applicationBuilds = 0
+    const makeApplication = () => {
+      applicationBuilds += 1
+      const applicationOrdinal = applicationBuilds
+      return productionWorkflowInterpreterLayer(
+        runId,
+        GitCommonDirectoryTarget.make(`${directory}/.git`),
+        productionIntegrationTarget(`${directory}/.git`),
+        trackerLayer,
+        Layer.succeed(PlannedAttemptExecutor, executorForApplication(applicationOrdinal))
+      ).pipe(
+        Layer.provide(
+          Layer.succeed(
+            TrackerGraphReader,
+            TrackerGraphReader.of({
+              read: () => Effect.succeed(projected.snapshot),
+              readTaskWorkSpecification: () => Effect.succeed(specification)
+            })
+          )
+        ),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+    }
+    const nextOperation = yield* Ref.make(0)
+    const activate = () =>
+      runWorkflow(
+        target,
+        Effect.die("existing history must supply the initial control policy"),
+        AllocatedWorkflowRunId.make(runId)
+      ).pipe(
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({
+            allocate: () =>
+              Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+                Effect.map((value) => OperationId.make(`production-executor-projection-operation-${value}`))
+              )
+          })
+        ),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("projection fixture must not claim fresh work") })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("projection fixture must not plan a successor") })
+        ),
+        Effect.provide(makeApplication()),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+      )
+    const readRecords = Effect.gen(function* () {
+      return yield* (yield* JournalStore).read(runId)
+    }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+    return {
+      activate,
+      attempt,
+      applicationBuilds: () => applicationBuilds,
+      commandCalls: Ref.get(commandCallsRef),
+      projectionCalls: Ref.get(projectionCallsRef),
+      readRecords,
+      runId,
+      target
+    } satisfies PublicRunFixture
+  })
+
+it.effect("reconciles an exact projected executor report through ordinary Run entry (Running)", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makePublicRunFixture((correlation) => [
+        PlannedAttemptExecutorProjection.cases.Exact.make({
+          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+        })
+      ])
+      const activation = yield* fixture.activate().pipe(Effect.flip)
+      const records = yield* fixture.readRecords
+      expect(activation._tag).toBe("PlannedAttemptExecutorCommandFailure")
+      const projection = records.find(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved" && event.commandOrdinal === 1
+      )
+      expect(projection?.event).toMatchObject({
+        commandOrdinal: 1,
+        plannedAttempt: { runId: fixture.runId, attemptId: fixture.attempt.attemptId },
+        observation: {
+          _tag: "ExactExecutorReport",
+          report: { _tag: "Running", correlation: { runId: fixture.runId, attemptId: fixture.attempt.attemptId } }
+        }
+      })
+      expect(yield* fixture.projectionCalls).toBe(1)
+      expect(fixture.applicationBuilds()).toBe(1)
+      expect(yield* fixture.commandCalls).toEqual(["StartOrContinue"])
+      expect(
+        records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
+      ).toHaveLength(1)
+      expect(
+        records
+          .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+          .map(({ event }) => (event._tag === "PlannedAttemptExecutorCommandIntended" ? event.ordinal : undefined))
+      ).toEqual([1, 2])
+      expect(records.some(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toBe(false)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reconciles an exact projected executor report through ordinary Run entry (SafelySuspended)", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makePublicRunFixture((correlation) => [
+        PlannedAttemptExecutorProjection.cases.Exact.make({
+          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+        })
+      ])
+      yield* fixture.activate().pipe(Effect.exit)
+      const records = yield* fixture.readRecords
+      const projection = records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
+      expect(projection?.event).toMatchObject({
+        commandOrdinal: 1,
+        plannedAttempt: { runId: fixture.runId, attemptId: fixture.attempt.attemptId },
+        observation: {
+          _tag: "ExactExecutorReport",
+          report: {
+            _tag: "SafelySuspended",
+            correlation: { runId: fixture.runId, attemptId: fixture.attempt.attemptId }
+          }
+        }
+      })
+      expect(yield* fixture.projectionCalls).toBe(1)
+      expect(fixture.applicationBuilds()).toBe(1)
+      expect(yield* fixture.commandCalls).toEqual(["StartOrContinue"])
+      expect(
+        records
+          .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+          .map(({ event }) => (event._tag === "PlannedAttemptExecutorCommandIntended" ? event.ordinal : undefined))
+      ).toEqual([1, 2])
+      expect(records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reconciles an exact projected executor report through ordinary Run entry (Terminal)", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makePublicRunFixture((correlation) => [
+        PlannedAttemptExecutorProjection.cases.Exact.make({
+          report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+        })
+      ])
+      yield* fixture.activate().pipe(Effect.exit)
+      const records = yield* fixture.readRecords
+      const projection = records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
+      expect(projection?.event).toMatchObject({
+        commandOrdinal: 1,
+        plannedAttempt: { runId: fixture.runId, attemptId: fixture.attempt.attemptId },
+        observation: {
+          _tag: "ExactExecutorReport",
+          report: {
+            _tag: "Terminal",
+            correlation: { runId: fixture.runId, attemptId: fixture.attempt.attemptId },
+            result: { _tag: "Completed" }
+          }
+        }
+      })
+      expect(yield* fixture.projectionCalls).toBe(1)
+      expect(fixture.applicationBuilds()).toBe(1)
+      expect(yield* fixture.commandCalls).toEqual([])
+      expect(records.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect(
+  "retains responsibility after temporary executor unavailability; later ordinary Run entry retries projection",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makePublicRunFixture((correlation) => [
+          PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation }),
+          PlannedAttemptExecutorProjection.cases.Exact.make({
+            report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+          })
+        ])
+        const first = yield* fixture.activate().pipe(Effect.flip)
+        expect(first).toMatchObject({
+          _tag: "PlannedAttemptExecutorProjectionTemporarilyUnavailable",
+          commandOrdinal: 1,
+          correlation: { runId: fixture.runId, attemptId: fixture.attempt.attemptId }
+        })
+        expect(first).toBeInstanceOf(PlannedAttemptExecutorProjectionTemporarilyUnavailable)
+        const firstRecords = yield* fixture.readRecords
+        expect(firstRecords.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(
+          1
+        )
+        expect(
+          firstRecords.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+              event.commandOrdinal === 1 &&
+              event.plannedAttempt.runId === fixture.runId &&
+              event.plannedAttempt.attemptId === fixture.attempt.attemptId &&
+              event.observation._tag === "ExecutorStateTemporarilyUnavailable"
+          )
+        ).toBe(true)
+        expect(firstRecords.some(({ event }) => event._tag === "TaskClaimReleased")).toBe(false)
+        expect(firstRecords.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
+        expect(firstRecords.some(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toBe(false)
+        expect(firstRecords.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+
+        yield* fixture.activate().pipe(Effect.exit)
+        const secondRecords = yield* fixture.readRecords
+        expect(
+          secondRecords.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+        ).toHaveLength(1)
+        expect(
+          secondRecords.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+              event.observation._tag === "ExactExecutorReport" &&
+              event.observation.report._tag === "Terminal" &&
+              event.observation.report.correlation.runId === fixture.runId &&
+              event.observation.report.correlation.attemptId === fixture.attempt.attemptId
+          )
+        ).toBe(true)
+        expect(yield* fixture.projectionCalls).toBe(2)
+        expect(secondRecords.some(({ event }) => event._tag === "TaskClaimReleased")).toBe(false)
+        expect(secondRecords.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
+        expect(secondRecords.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+      }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+    )
+)
+
+it.effect("retains resources after an unreadable executor projection; ordinary Run entry authorizes no successor", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makePublicRunFixture((correlation) => [
+        PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
+      ])
+      const failure = yield* fixture.activate().pipe(Effect.flip)
+      expect(failure).toMatchObject({
+        _tag: "PlannedAttemptExecutorProjectionUnreadable",
+        commandOrdinal: 1,
+        correlation: { runId: fixture.runId, attemptId: fixture.attempt.attemptId }
+      })
+      expect(failure).toBeInstanceOf(PlannedAttemptExecutorProjectionUnreadable)
+      const records = yield* fixture.readRecords
+      expect(
+        records.some(
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+            event.commandOrdinal === 1 &&
+            event.plannedAttempt.runId === fixture.runId &&
+            event.plannedAttempt.attemptId === fixture.attempt.attemptId &&
+            event.observation._tag === "ExecutorStateUnreadable"
+        )
+      ).toBe(true)
+      expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(1)
+      expect(records.some(({ event }) => event._tag === "TaskClaimReleased")).toBe(false)
+      expect(
+        records.some(
+          ({ event }) =>
+            event._tag === "TaskAttemptPlanned" &&
+            event.operation.plannedAttempt.attemptId !== fixture.attempt.attemptId
+        )
+      ).toBe(false)
+      expect(records.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
+      expect(records.some(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toBe(false)
+      expect(records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("preserves the original responsibility after a foreign executor projection", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makePublicRunFixture((correlation) => [
+        PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+          expected: correlation,
+          observed: PlannedAttemptExecutorReport.cases.Running.make({
+            correlation: { runId: correlation.runId, attemptId: AttemptId.make("foreign-projection-attempt") }
+          })
+        })
+      ])
+      const failure = yield* fixture.activate().pipe(Effect.flip)
+      expect(failure).toMatchObject({
+        _tag: "PlannedAttemptExecutorCorrelationMismatch",
+        expected: { runId: fixture.runId, attemptId: fixture.attempt.attemptId },
+        observed: { runId: fixture.runId, attemptId: "foreign-projection-attempt" }
+      })
+      expect(failure).toBeInstanceOf(PlannedAttemptExecutorCorrelationMismatch)
+      const records = yield* fixture.readRecords
+      expect(
+        records.some(
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+            event.observation._tag === "ExecutorReportContradiction" &&
+            event.commandOrdinal === 1 &&
+            event.plannedAttempt.runId === fixture.runId &&
+            event.plannedAttempt.attemptId === fixture.attempt.attemptId &&
+            event.observation.observed.correlation.runId === fixture.runId &&
+            event.observation.observed.correlation.attemptId === "foreign-projection-attempt"
+        )
+      ).toBe(true)
+      expect(
+        records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")
+      ).toHaveLength(1)
+      expect(records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
+      expect(records.some(({ event }) => event._tag === "TaskClaimReleased")).toBe(false)
+      expect(records.some(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toBe(false)
+      expect(
+        records.some(
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+            event.plannedAttempt.attemptId === "foreign-projection-attempt"
+        )
+      ).toBe(false)
+      expect(
+        records.some(
+          ({ event }) =>
+            event._tag === "TaskAttemptPlanned" &&
+            event.operation.plannedAttempt.attemptId === "foreign-projection-attempt"
+        )
+      ).toBe(false)
+      expect(records.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
+      expect(records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect(
+  "reprojects the exact executor state after process loss on a second ordinary Run activation without a duplicate command",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstProcessResultAvailable = yield* Deferred.make<PlannedAttemptExecutorProjection>()
+        const fixture = yield* makePublicRunFixture(
+          () => [],
+          (applicationOrdinal, correlation) => {
+            const exact = PlannedAttemptExecutorProjection.cases.Exact.make({
+              report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+            })
+            return applicationOrdinal === 1
+              ? Deferred.succeed(firstProcessResultAvailable, exact).pipe(Effect.andThen(Effect.never))
+              : Effect.succeed(exact)
+          }
+        )
+        const firstProcess = yield* fixture.activate().pipe(Effect.forkScoped)
+        expect(yield* Deferred.await(firstProcessResultAvailable)).toMatchObject({
+          _tag: "Exact",
+          report: { correlation: { attemptId: fixture.attempt.attemptId, runId: fixture.runId } }
+        })
+        yield* Fiber.interrupt(firstProcess)
+        const firstRecords = yield* fixture.readRecords
+        expect(firstRecords.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(
+          1
+        )
+        expect(firstRecords.some(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")).toBe(
+          false
+        )
+
+        yield* fixture.activate().pipe(Effect.exit)
+        const secondRecords = yield* fixture.readRecords
+        expect(fixture.applicationBuilds()).toBe(2)
+        expect(
+          secondRecords.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+        ).toHaveLength(1)
+        expect(
+          secondRecords.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+              event.observation._tag === "ExactExecutorReport" &&
+              event.observation.report._tag === "Terminal" &&
+              event.observation.report.correlation.runId === fixture.runId &&
+              event.observation.report.correlation.attemptId === fixture.attempt.attemptId &&
+              event.observation.report.result._tag === "Completed"
+          )
+        ).toBe(true)
+        expect(yield* fixture.projectionCalls).toBe(2)
+        expect(yield* fixture.commandCalls).toEqual([])
+        expect(secondRecords.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
+        expect(secondRecords.some(({ event }) => event._tag === "TaskClaimReleased")).toBe(false)
+        expect(secondRecords.some(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toBe(false)
+      }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+    )
+)
 
 const absentHistoryApplicationScenario = "establishes an absent Run before its first tracker read and activates it once"
 

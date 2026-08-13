@@ -52,6 +52,7 @@ import type {
 } from "../../workflow/protocols/attempt-choice/restart-reasons.js"
 import type { PlannedAttemptContinuationWitness } from "../../workflow/protocols/planned-attempt-continuation/events.js"
 import type { CompletionTaskConflictReason } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
+import type { PlannedAttemptExecutorProjectionWaitReason } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
@@ -367,6 +368,12 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
     readonly taskId: TaskId
   }
+  PlannedAttemptExecutorProjectionWait: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly reason: PlannedAttemptExecutorProjectionWaitReason
+    readonly taskId: TaskId
+    readonly wakeCondition: "LaterRunActivationOrAcceptedFactsChanged"
+  }
   PlannedAttemptExecutorWorkTypedIssue: {
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly reason: "DuplicateFreshFacts" | "MissingFreshFacts"
@@ -583,6 +590,14 @@ const executorDecisionFor = (
         explanation: FrontierExplanation.PlannedAttemptExecutorWorkTerminal({
           report,
           taskId: facts.responsibility.plannedAttempt.taskId
+        })
+      }),
+      PlannedAttemptExecutorProjectionWait: ({ reason }) => ({
+        explanation: FrontierExplanation.PlannedAttemptExecutorProjectionWait({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          reason,
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "LaterRunActivationOrAcceptedFactsChanged"
         })
       }),
       PlannedAttemptExecutorSuspensionRequested: () => ({

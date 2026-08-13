@@ -60,7 +60,6 @@ import {
   type CompletionTaskRequestLookup,
   type CompletionClaimObservation,
   type CompletionClaimDeletionRequest,
-  type CompletionSuccessObservation,
   type FocusedTaskCompletionFacts,
   type FocusedCompletedTaskObservation,
   type CompletionClaimRequestOrdinal,
@@ -211,32 +210,28 @@ const renameExecutorReport = (
 const renameExecutorCommandProjectionObservation = (
   observation: PlannedAttemptExecutorCommandProjectionObservation,
   maps: IdentityRenamingMaps
-): PlannedAttemptExecutorCommandProjectionObservation =>
-  Match.value(observation).pipe(
-    Match.tagsExhaustive({
-      ExactExecutorReport: (value) => ({ _tag: value._tag, report: renameExecutorReport(value.report, maps) }),
-      ExecutorReportContradiction: (value) => ({
-        _tag: value._tag,
-        observed: renameExecutorReport(value.observed, maps)
-      }),
-      ExecutorStateUnavailable: (value) => preserveCassetteValue(value)
-    })
-  )
+): PlannedAttemptExecutorCommandProjectionObservation => {
+  if (observation._tag === "ExactExecutorReport") {
+    return { _tag: observation._tag, report: renameExecutorReport(observation.report, maps) }
+  }
+  if (observation._tag === "ExecutorReportContradiction") {
+    return { _tag: observation._tag, observed: renameExecutorReport(observation.observed, maps) }
+  }
+  return observation
+}
 
 const renameExecutorStateObservation = (
   observation: PlannedAttemptExecutorStateObservation,
   maps: IdentityRenamingMaps
-): PlannedAttemptExecutorStateObservation =>
-  Match.value(observation).pipe(
-    Match.tagsExhaustive({
-      ExactExecutorReport: (value) => ({ _tag: value._tag, report: renameExecutorReport(value.report, maps) }),
-      ExecutorReportContradiction: (value) => ({
-        _tag: value._tag,
-        observed: renameExecutorReport(value.observed, maps)
-      }),
-      ExecutorStateUnavailable: (value) => preserveCassetteValue(value)
-    })
-  )
+): PlannedAttemptExecutorStateObservation => {
+  if (observation._tag === "ExactExecutorReport") {
+    return { _tag: observation._tag, report: renameExecutorReport(observation.report, maps) }
+  }
+  if (observation._tag === "ExecutorReportContradiction") {
+    return { _tag: observation._tag, observed: renameExecutorReport(observation.observed, maps) }
+  }
+  return observation
+}
 
 const renameActiveTaskClaim = (claim: ActiveTaskClaim, maps: IdentityRenamingMaps): ActiveTaskClaim => ({
   ...claim,
@@ -253,12 +248,11 @@ const renameTaskClaimObservation = (
 const renameCompletionClaimObservation = (
   observation: CompletionClaimObservation,
   maps: IdentityRenamingMaps
-): CompletionClaimObservation =>
-  Match.valueTags(observation, {
-    ActiveTaskClaim: (value) => renameActiveTaskClaim(value, maps),
-    CompletionTaskClaim: (value) => renameCompletionTaskClaim(value, maps),
-    UnclaimedTask: (value) => preserveCassetteValue(value)
-  })
+): CompletionClaimObservation => {
+  if (observation._tag === "ActiveTaskClaim") return renameActiveTaskClaim(observation, maps)
+  if (observation._tag === "CompletionTaskClaim") return renameCompletionTaskClaim(observation, maps)
+  return observation
+}
 
 const renameFocusedTaskCompletionFacts = (
   facts: FocusedTaskCompletionFacts,
@@ -383,10 +377,7 @@ const renameFocusedCompletedTaskObservation = (
     target: preserveCassetteValue(observation.target)
   })
 
-const renameCompletionSuccessObservation = (
-  observation: CompletionSuccessObservation,
-  maps: IdentityRenamingMaps
-): CompletionSuccessObservation => renameFocusedCompletedTaskObservation(observation, maps)
+const renameCompletionSuccessObservation = renameFocusedCompletedTaskObservation
 
 const renameCompletionTaskRequestLookup = (
   lookup: CompletionTaskRequestLookup,

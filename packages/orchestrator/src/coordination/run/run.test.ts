@@ -5,6 +5,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   plannedAttemptExecutorCorrelation,
@@ -181,7 +182,7 @@ it.effect("stops an always-Running controlled workflow at the shared continuatio
           Layer.succeed(
             PlannedAttemptExecutor,
             PlannedAttemptExecutor.of({
-              project: () => Effect.succeed(Option.none()),
+              project: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })),
               requestSuspension: () => Effect.die("controlled workflow is not paused"),
               startOrContinue: () =>
                 Ref.update(executorCalls, (calls) => calls + 1).pipe(

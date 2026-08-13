@@ -138,9 +138,44 @@ module plannedAttemptExecutorNegativeTest {
     all {
       isCommandProjectionEvidence(state.evidence),
       projection.outcome == CommandProjectionExactRunning
-        or projection.outcome == CommandProjectionUnavailable,
+        or projection.outcome == CommandProjectionNoCurrentReport
+        or projection.outcome == CommandProjectionTemporarilyUnavailable
+        or projection.outcome == CommandProjectionUnreadable
+        or projection.outcome == CommandProjectionContradiction,
       state' = { ...state, positionHeld: false },
     }
+  }
+
+  action releaseFromTemporaryFreshStateProjection: bool = all {
+    state.evidence == FreshStateProjection({
+      correlation: PLANNED_CORRELATION,
+      observation: ExecutorStateTemporarilyUnavailable,
+    }),
+    state' = { ...state, positionHeld: false },
+  }
+
+  action releaseFromNoCurrentFreshStateProjection: bool = all {
+    state.evidence == FreshStateProjection({
+      correlation: PLANNED_CORRELATION,
+      observation: ExecutorStateNoCurrentReport,
+    }),
+    state' = { ...state, positionHeld: false },
+  }
+
+  action releaseFromUnreadableFreshStateProjection: bool = all {
+    state.evidence == FreshStateProjection({
+      correlation: PLANNED_CORRELATION,
+      observation: ExecutorStateUnreadable,
+    }),
+    state' = { ...state, positionHeld: false },
+  }
+
+  action releaseFromContradictoryFreshStateProjection: bool = all {
+    state.evidence == FreshStateProjection({
+      correlation: PLANNED_CORRELATION,
+      observation: ExecutorStateContradiction,
+    }),
+    state' = { ...state, positionHeld: false },
   }
 
   action recordFourthSuspendCommand: bool = all {
@@ -198,7 +233,7 @@ module plannedAttemptExecutorNegativeTest {
       .then(recordStartOrContinueIntent)
       .then(callStartOrContinue)
       .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionUnavailable))
+      .then(recordCommandProjection(CommandProjectionNoCurrentReport))
       .then(countProjectionAsCommandResponse)
       .expect(not(projectionsAreNotCommandResponses))
   }
@@ -266,8 +301,40 @@ module plannedAttemptExecutorNegativeTest {
       .then(recordStartOrContinueIntent)
       .then(callStartOrContinue)
       .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionUnavailable))
+      .then(recordCommandProjection(CommandProjectionNoCurrentReport))
       .then(releaseFromUnsafeCommandProjection)
+      .expect(not(unsafeOrUnavailableNeverReleasesPosition))
+  }
+
+  run temporaryFreshStateProjectionCannotReleasePositionTest = {
+    init
+      .then(beginResponsibility)
+      .then(recordFreshStateProjection(ExecutorStateTemporarilyUnavailable))
+      .then(releaseFromTemporaryFreshStateProjection)
+      .expect(not(unsafeOrUnavailableNeverReleasesPosition))
+  }
+
+  run noCurrentFreshStateProjectionCannotReleasePositionTest = {
+    init
+      .then(beginResponsibility)
+      .then(recordFreshStateProjection(ExecutorStateNoCurrentReport))
+      .then(releaseFromNoCurrentFreshStateProjection)
+      .expect(not(unsafeOrUnavailableNeverReleasesPosition))
+  }
+
+  run unreadableFreshStateProjectionCannotReleasePositionTest = {
+    init
+      .then(beginResponsibility)
+      .then(recordFreshStateProjection(ExecutorStateUnreadable))
+      .then(releaseFromUnreadableFreshStateProjection)
+      .expect(not(unsafeOrUnavailableNeverReleasesPosition))
+  }
+
+  run contradictoryFreshStateProjectionCannotReleasePositionTest = {
+    init
+      .then(beginResponsibility)
+      .then(recordFreshStateProjection(ExecutorStateContradiction))
+      .then(releaseFromContradictoryFreshStateProjection)
       .expect(not(unsafeOrUnavailableNeverReleasesPosition))
   }
 

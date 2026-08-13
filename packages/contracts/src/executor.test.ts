@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import { expect } from "vitest"
 import {
   PlannedAttemptExecutorCommandFailure,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey
@@ -43,6 +44,37 @@ it.each([
       Schema.encodeUnknownSync(PlannedAttemptExecutorReport)(report)
     )
   ).toEqual(report)
+})
+
+it.each([
+  PlannedAttemptExecutorProjection.cases.Exact.make({
+    report: PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+  }),
+  PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
+  PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation }),
+  PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation }),
+  PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+    expected: correlation,
+    observed: PlannedAttemptExecutorReport.cases.Running.make({
+      correlation: { attemptId: AttemptId.make("foreign-attempt"), runId: correlation.runId }
+    })
+  })
+])("roundtrips the $._tag normalized executor projection", (projection) => {
+  expect(
+    Schema.decodeUnknownSync(PlannedAttemptExecutorProjection)(
+      Schema.encodeUnknownSync(PlannedAttemptExecutorProjection)(projection)
+    )
+  ).toEqual(projection)
+})
+
+it("rejects a contradiction that does not contain a foreign observed report", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(PlannedAttemptExecutorProjection)({
+      _tag: "CorrelationContradiction",
+      expected: correlation,
+      observed: { _tag: "Running", correlation }
+    })
+  ).toThrow()
 })
 
 it("roundtrips a provider-neutral exact command failure", () => {

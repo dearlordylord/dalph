@@ -6,6 +6,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -31,7 +32,7 @@ import {
   requestPlannedAttemptExecutorSuspension,
   TaskWorkCapacity
 } from "../../../orchestrator/src/index.js"
-import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
 import {
   makeDeliveryRuntimeAdmissionController,
   type DeliveryRuntimeAdmissionController
@@ -130,6 +131,7 @@ const executorConformanceDriver = defineDriver(
     let controller: DeliveryRuntimeAdmissionController | undefined
     let protocolController: PlannedAttemptProtocolControllerService | undefined
     let authorityReport: PlannedAttemptExecutorReport | undefined
+    let currentProjection: PlannedAttemptExecutorProjection | undefined
     let commandKind: "StartOrContinue" | "Suspend" = "StartOrContinue"
     let commandIntentGate = Deferred.makeUnsafe<void>()
     let commandIntentSignal = Deferred.makeUnsafe<void>()
@@ -198,7 +200,15 @@ const executorConformanceDriver = defineDriver(
       Layer.provideMerge(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
     )
     const executor = PlannedAttemptExecutor.of({
-      project: () => Effect.succeed(Option.fromUndefinedOr(authorityReport)),
+      project: () =>
+        Effect.succeed(
+          currentProjection ??
+            (authorityReport === undefined
+              ? PlannedAttemptExecutorProjection.cases.NoReport.make({
+                  correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+                })
+              : PlannedAttemptExecutorProjection.cases.Exact.make({ report: authorityReport }))
+        ),
       requestSuspension: () =>
         Effect.gen(function* () {
           commandCalls += 1
@@ -361,6 +371,7 @@ const executorConformanceDriver = defineDriver(
           if (pendingState !== undefined) yield* Fiber.interrupt(pendingState)
           records = []
           authorityReport = undefined
+          currentProjection = undefined
           commandCalls = 0
           recoveryCount = 0
           projectionBaseline = 0
@@ -412,18 +423,42 @@ const executorConformanceDriver = defineDriver(
           projectionGate = Deferred.makeUnsafe<void>()
           projectionSignal = Deferred.makeUnsafe<void>()
           pauseProjection = true
+          const tag = pickedTag(commandProjection)
+          const foreignReport = PlannedAttemptExecutorReport.cases.Running.make({
+            correlation: { attemptId: AttemptId.make("other"), runId: plannedAttempt.runId }
+          })
+          currentProjection =
+            tag === "CommandProjectionNoCurrentReport"
+              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+              : tag === "CommandProjectionTemporarilyUnavailable"
+                ? PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation })
+                : tag === "CommandProjectionUnreadable"
+                  ? PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
+                  : tag === "CommandProjectionContradiction"
+                    ? PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+                        expected: correlation,
+                        observed: foreignReport
+                      })
+                    : tag === "CommandProjectionExactSafelySuspended"
+                      ? PlannedAttemptExecutorProjection.cases.Exact.make({
+                          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+                        })
+                      : tag === "CommandProjectionExactTerminal"
+                        ? PlannedAttemptExecutorProjection.cases.Exact.make({
+                            report: PlannedAttemptExecutorReport.cases.Terminal.make({
+                              correlation,
+                              result: { _tag: "Completed" }
+                            })
+                          })
+                        : PlannedAttemptExecutorProjection.cases.Exact.make({
+                            report: PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+                          })
           authorityReport =
-            pickedTag(commandProjection) === "CommandProjectionUnavailable"
-              ? undefined
-              : pickedTag(commandProjection) === "CommandProjectionContradiction"
-                ? PlannedAttemptExecutorReport.cases.Running.make({
-                    correlation: { attemptId: AttemptId.make("other"), runId: plannedAttempt.runId }
-                  })
-                : pickedTag(commandProjection) === "CommandProjectionExactSafelySuspended"
-                  ? PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-                  : pickedTag(commandProjection) === "CommandProjectionExactTerminal"
-                    ? PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-                    : PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+            currentProjection._tag === "Exact"
+              ? currentProjection.report
+              : currentProjection._tag === "CorrelationContradiction"
+                ? currentProjection.observed
+                : undefined
           pendingProjection = yield* workflow().pipe(Effect.forkDetach({ startImmediately: true }))
           yield* Deferred.await(projectionSignal)
         }).pipe(Effect.orDie),
@@ -439,14 +474,42 @@ const executorConformanceDriver = defineDriver(
           stateGate = Deferred.makeUnsafe<void>()
           stateSignal = Deferred.makeUnsafe<void>()
           pauseState = true
+          const tag = pickedTag(stateObservation)
+          const foreignReport = PlannedAttemptExecutorReport.cases.Running.make({
+            correlation: { attemptId: AttemptId.make("other"), runId: plannedAttempt.runId }
+          })
+          currentProjection =
+            tag === "ExecutorStateNoCurrentReport"
+              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+              : tag === "ExecutorStateTemporarilyUnavailable"
+                ? PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation })
+                : tag === "ExecutorStateUnreadable"
+                  ? PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
+                  : tag === "ExecutorStateContradiction"
+                    ? PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+                        expected: correlation,
+                        observed: foreignReport
+                      })
+                    : tag === "ExecutorStateSafelySuspended"
+                      ? PlannedAttemptExecutorProjection.cases.Exact.make({
+                          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+                        })
+                      : tag === "ExecutorStateTerminal"
+                        ? PlannedAttemptExecutorProjection.cases.Exact.make({
+                            report: PlannedAttemptExecutorReport.cases.Terminal.make({
+                              correlation,
+                              result: { _tag: "Completed" }
+                            })
+                          })
+                        : PlannedAttemptExecutorProjection.cases.Exact.make({
+                            report: PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+                          })
           authorityReport =
-            pickedTag(stateObservation) === "ExecutorStateUnavailable"
-              ? undefined
-              : pickedTag(stateObservation) === "ExecutorStateSafelySuspended"
-                ? PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-                : pickedTag(stateObservation) === "ExecutorStateTerminal"
-                  ? PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-                  : PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+            currentProjection._tag === "Exact"
+              ? currentProjection.report
+              : currentProjection._tag === "CorrelationContradiction"
+                ? currentProjection.observed
+                : undefined
           pendingState = yield* provideWorkflow(observePlannedAttemptExecutorState(plannedAttempt)).pipe(
             Effect.forkDetach({ startImmediately: true })
           )

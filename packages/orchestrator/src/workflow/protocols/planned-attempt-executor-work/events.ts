@@ -30,7 +30,9 @@ export type PlannedAttemptExecutorCommandIntendedEvent = typeof PlannedAttemptEx
 
 export const PlannedAttemptExecutorCommandProjectionObservation = Schema.TaggedUnion({
   ExactExecutorReport: { report: PlannedAttemptExecutorReport },
-  ExecutorStateUnavailable: {},
+  ExecutorStateNoCurrentReport: {},
+  ExecutorStateTemporarilyUnavailable: {},
+  ExecutorStateUnreadable: {},
   ExecutorReportContradiction: { observed: PlannedAttemptExecutorReport }
 })
 export type PlannedAttemptExecutorCommandProjectionObservation =
@@ -81,7 +83,9 @@ export type PlannedAttemptExecutorStateObservationOrdinal = typeof PlannedAttemp
 
 export const PlannedAttemptExecutorStateObservation = Schema.TaggedUnion({
   ExactExecutorReport: { report: PlannedAttemptExecutorReport },
-  ExecutorStateUnavailable: {},
+  ExecutorStateNoCurrentReport: {},
+  ExecutorStateTemporarilyUnavailable: {},
+  ExecutorStateUnreadable: {},
   ExecutorReportContradiction: { observed: PlannedAttemptExecutorReport }
 })
 export type PlannedAttemptExecutorStateObservation = typeof PlannedAttemptExecutorStateObservation.Type
