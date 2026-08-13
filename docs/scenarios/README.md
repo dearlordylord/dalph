@@ -89,11 +89,17 @@ implementing runtime behavior.
 |---|---|
 | `issue-104-control-plane-latency-and-responsiveness.md` | 104 |
 | `issue-169-graceful-application-exit.md` | 169 |
+| `issue-219-codex-app-server-executor.md` | 219 |
 
 `issue-104-control-plane-latency-and-responsiveness.md` is the accepted
 planning chronology for timing budgets. It classifies existing local timing
 contracts and remote-boundary policies; it does not promise hard real-time
 behavior or an end-to-end latency SLA.
+
+`issue-219-codex-app-server-executor.md` selects the first concrete executor
+behind the unchanged generic boundary. It accepts persistent Codex app-server
+threads, their private process/session lifecycle, and the focused ticket map;
+it does not claim that implementation has shipped.
 
 **Milestone-scoped** — accepted against a milestone rather than one issue.
 `authored-cassette-abstraction-levels.md` refines the vocabulary accepted in
