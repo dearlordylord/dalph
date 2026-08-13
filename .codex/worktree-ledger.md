@@ -9,6 +9,7 @@ worktree is the only integration point; task worktrees never merge one another.
 | Issue | Branch | Worktree | Base | Tip | State |
 | --- | --- | --- | --- | --- | --- |
 | #214 | `work/issue214` | `.worktrees/issue214` | `798ca724210f07709417af5e9eed62bac6232b55` | `09b6e47d0` | integrated as `d8ebf65af`; ready for cleanup after #73 branches |
+| #73 | `work/issue73` | `.worktrees/issue73` | `0ee1e4f8a` | `pending` | implementing after integrated #214 |
 | #213 | `work/issue213` | `.worktrees/issue213` | `798ca724210f07709417af5e9eed62bac6232b55` | `pending` | implementing |
 | #195 | `work/issue195` | `.worktrees/issue195` | `798ca724210f07709417af5e9eed62bac6232b55` | `21f75d13a` | audited complete; issue closed |
 | #215 | `work/issue215` | `.worktrees/issue215` | `a08f5b001dcaa0e871a453010655fba84e8079cd` | `pending` | queued after audited #195 |
