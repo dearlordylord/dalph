@@ -140,6 +140,7 @@ export {
   GitCommand,
   GitCommandInvocationFailure,
   GitCommandResult,
+  type GitCommandService,
   nodeGitCommandLayer
 } from "./authorities/git/command.js"
 export {
@@ -150,6 +151,7 @@ export {
   TestGitTargetLineage
 } from "./authorities/git/target-lineage.js"
 export { nodeGitIntegrationCandidateLayer } from "./authorities/git/integration-candidate.js"
+export { nodeGitTargetPromotionLayer } from "./authorities/git/target-promotion.js"
 export { runIntegrationCandidateConstruction } from "./coordination/run/integration-candidate-runtime.js"
 export {
   CompetingWorktreeRegistrations,

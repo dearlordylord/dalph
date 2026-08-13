@@ -1,0 +1,139 @@
+import { Effect, Layer, Schema } from "effect"
+import { GitCommitSha } from "@dalph/contracts"
+import { GitCommand, type GitCommandService } from "./command.js"
+import {
+  TargetPromotionCompareAndSetFailure,
+  TargetPromotionCompareAndSetResult,
+  TargetPromotionGit,
+  TargetPromotionGitReadFailure,
+  TargetPromotionGitReadObservation,
+  type TargetPromotionRequest
+} from "../../workflow/protocols/target-promotion/events.js"
+
+/** Resolves the configured target ref to one complete commit before any ancestry decision. */
+const readCurrentHead = Effect.fn("TargetPromotionGit.Node.readCurrentHead")(function* (
+  commands: GitCommandService,
+  request: TargetPromotionRequest
+) {
+  const result = yield* commands
+    .run(request.integrationTarget.repository, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `${request.integrationTarget.ref}^{commit}`
+    ])
+    .pipe(
+      Effect.mapError(
+        (failure) =>
+          new TargetPromotionGitReadFailure({
+            candidateCommit: request.candidateCommit,
+            detail: failure.detail,
+            target: request.integrationTarget
+          })
+      )
+    )
+  if (result.exitCode !== 0) {
+    return yield* new TargetPromotionGitReadFailure({
+      candidateCommit: request.candidateCommit,
+      detail: result.stderr.trim() || `git exited ${result.exitCode}`,
+      target: request.integrationTarget
+    })
+  }
+  return yield* Schema.decodeUnknownEffect(GitCommitSha)(result.stdout.trim()).pipe(
+    Effect.mapError(
+      (failure) =>
+        new TargetPromotionGitReadFailure({
+          candidateCommit: request.candidateCommit,
+          detail: `Git returned an invalid target commit: ${String(failure)}`,
+          target: request.integrationTarget
+        })
+    )
+  )
+})
+
+const compareAndSetFailure = (request: TargetPromotionRequest, detail: string): TargetPromotionCompareAndSetFailure =>
+  new TargetPromotionCompareAndSetFailure({
+    candidateCommit: request.candidateCommit,
+    detail,
+    expectedHead: request.expectedTargetHead,
+    target: request.integrationTarget
+  })
+
+/**
+ * Real Git target promotion: reads classify exact ancestry, and update-ref
+ * receives the expected old object so stale work can never overwrite it.
+ */
+export const nodeGitTargetPromotionLayer = Layer.effect(
+  TargetPromotionGit,
+  Effect.gen(function* () {
+    const commands = yield* GitCommand
+
+    const read = Effect.fn("TargetPromotionGit.Node.read")(function* (request: TargetPromotionRequest) {
+      const currentHeadSha = yield* readCurrentHead(commands, request)
+      if (currentHeadSha === request.candidateCommit) {
+        return TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha })
+      }
+      const ancestry = yield* commands
+        .run(request.integrationTarget.repository, [
+          "merge-base",
+          "--is-ancestor",
+          request.candidateCommit,
+          currentHeadSha
+        ])
+        .pipe(
+          Effect.mapError(
+            (failure) =>
+              new TargetPromotionGitReadFailure({
+                candidateCommit: request.candidateCommit,
+                detail: failure.detail,
+                target: request.integrationTarget
+              })
+          )
+        )
+      if (ancestry.exitCode !== 0 && ancestry.exitCode !== 1) {
+        return yield* new TargetPromotionGitReadFailure({
+          candidateCommit: request.candidateCommit,
+          detail: ancestry.stderr.trim() || `git exited ${ancestry.exitCode}`,
+          target: request.integrationTarget
+        })
+      }
+      return ancestry.exitCode === 0
+        ? TargetPromotionGitReadObservation.cases.CandidateAncestor.make({ currentHeadSha })
+        : TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha })
+    })
+
+    const compareAndSet = Effect.fn("TargetPromotionGit.Node.compareAndSet")(function* (
+      request: TargetPromotionRequest
+    ) {
+      const result = yield* commands
+        .run(request.integrationTarget.repository, [
+          "update-ref",
+          request.integrationTarget.ref,
+          request.candidateCommit,
+          request.expectedTargetHead
+        ])
+        .pipe(Effect.mapError((failure) => compareAndSetFailure(request, failure.detail)))
+      if (result.exitCode === 0) {
+        return TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: request.candidateCommit })
+      }
+
+      const observedHead = yield* readCurrentHead(commands, request).pipe(
+        Effect.mapError((failure) =>
+          compareAndSetFailure(
+            request,
+            `${result.stderr.trim() || `git update-ref exited ${result.exitCode}`}; unable to reconcile current target: ${failure.detail}`
+          )
+        )
+      )
+      if (observedHead !== request.expectedTargetHead) {
+        return TargetPromotionCompareAndSetResult.cases.RejectedExpectedHead.make({ observedHeadSha: observedHead })
+      }
+      return yield* compareAndSetFailure(
+        request,
+        result.stderr.trim() || "Git rejected compare-and-set while the expected head remained current"
+      )
+    })
+
+    return TargetPromotionGit.of({ compareAndSet, read })
+  })
+)

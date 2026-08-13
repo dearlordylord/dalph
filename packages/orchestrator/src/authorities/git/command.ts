@@ -9,7 +9,7 @@ export class GitCommandInvocationFailure extends Schema.TaggedError<GitCommandIn
   { detail: Schema.String }
 ) {}
 
-interface GitCommandService {
+export interface GitCommandService {
   readonly run: (
     gitDirectory: string,
     args: ReadonlyArray<string>
