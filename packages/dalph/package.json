@@ -21,7 +21,6 @@
   },
   "dependencies": {
     "@dalph/contracts": "workspace:*",
-    "@dalph/executor": "workspace:*",
     "@dalph/orchestrator": "workspace:*",
     "@effect/platform-node": "4.0.0-beta.106",
     "effect": "4.0.0-beta.106"

@@ -5,6 +5,15 @@ Status: Implemented and verified in compiling structural slices
 Implementation base: successive local `master` integration through
 `3df566f3a31117b3470435f88d49e9458d0ddeef`
 
+Current executor-boundary update: issue #168 supersedes this proposal's
+four-package executor placement. Generic Dalph now receives the opaque
+`PlannedAttemptExecutor` through application composition, controlled
+implementations live only in test support, and no concrete executor package is
+selected. Issue #219 owns the later choice and may introduce an implementation
+package only if its accepted scenarios require one. The historical package
+tree and migration disposition below remain evidence of the earlier #158
+slice, not the current dependency graph.
+
 This proposal changes no Dalph runtime behavior. It reorganizes production
 source and tests so that the filesystem reflects the behavior and authority
 model already accepted in `docs/CONTEXT.md`, `docs/ARCHITECTURE.md`, and the
@@ -952,17 +961,18 @@ reconstruction replay.
 
 ### Executor request mismatch
 
-Contradicted assumption: the current `PlannedAttemptExecutor` interface exposes
-`ControlledFakeExecutorMismatch`, so its error channel is not separable from
-the fake by moving files alone. Moving that error into `@dalph/executor` would
-reverse the dependency; silently renaming it would change the exported Effect
-contract.
+At the time of this migration, the `PlannedAttemptExecutor` interface exposed
+the fake-specific `ControlledFakeExecutorMismatch`, so its error channel was
+not separable from the fake by moving files alone. Moving that error into
+`@dalph/executor` would have reversed the dependency; silently renaming it would
+have changed the exported Effect contract.
 
 The viable placements were a new provider-neutral request failure or preserving
 the existing typed mismatch in contracts. This behavior-neutral migration
-preserves its class name, `_tag`, fields, and failure behavior in
-`@dalph/contracts`; `@dalph/executor` constructs it and orchestrator consumes
-only the shared interface. A later executor behavior ticket may replace that
+preserved its class name, `_tag`, fields, and failure behavior in
+`@dalph/contracts`; `@dalph/executor` constructed it and orchestrator consumed
+only the shared interface. Issue #168 later replaced that fake-specific error
+with the provider-neutral `PlannedAttemptExecutorCommandFailure`. A later executor behavior ticket may replace that
 provisional name with accepted semantics. Focused validation: executor contract
 round trip, wrong-kind/wrong-correlation fake requests, service-tag identity,
 and emitted declaration checks.
@@ -1043,25 +1053,28 @@ These are recorded deferrals, not claims that the suggested end states are
 undesirable. The migration's behavior-neutral constraint is the concrete
 reason they are outside this implementation.
 
-Validation for this disposition is the named scenario suite above plus clean
-four-package builds, public emitted declarations, the source/import package
+Validation for this historical disposition was the named scenario suite above
+plus clean four-package builds, public emitted declarations, the source/import package
 gate, zero runtime cycles, codec/property round trips, and the built CLI smoke
 path. Vitest explicitly excludes nested workspace `node_modules` so each test
 is discovered once after adding package-local workspace links.
 
-## Recommendation
+## Historical recommendation
 
-Adopt the two-axis hybrid together with the four-package dependency graph:
+The migration originally recommended the two-axis hybrid together with a
+four-package dependency graph:
 
 - `@dalph/contracts` owns only shared cross-package contracts;
 - `@dalph/orchestrator` owns generic workflow coordination;
 - `@dalph/executor` owns the concrete executor implementation; and
 - `@dalph/dalph` owns executable composition and presentation.
 
-This split is required to avoid an immediate orchestrator/executor dependency
-cycle. It also gives chronological behavior the locality needed to understand
-and test a protocol while making authority ownership and adapter replacement
-visible.
+Issue #168 supersedes the concrete executor-package part of that recommendation.
+The current three-package graph keeps the opaque contract in
+`@dalph/contracts`, generic workflow coordination in `@dalph/orchestrator`, and
+caller injection plus application composition in `@dalph/dalph`. No executor
+implementation package exists until #219 deliberately chooses one. The
+protocol/authority locality principles remain current.
 
 Do not add a second generic `shared` package. New values enter
 `@dalph/contracts` only when at least two production packages must compile

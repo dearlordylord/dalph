@@ -1,6 +1,5 @@
 import { NodeServices } from "@effect/platform-node"
 import { type IntegrationTarget, PlannedAttemptExecutor, type RunId } from "@dalph/contracts"
-import { controlledFakePlannedAttemptExecutorLayer } from "@dalph/executor"
 import {
   type JournaledRunBootstrap,
   type JournaledRuntimeLayerInput,
@@ -39,8 +38,8 @@ import type { FileSystem } from "effect"
 import { Crypto, Effect, Layer } from "effect"
 
 /**
- * Composes the production-shaped milestone with live tracker/Git boundaries
- * and one same-process coarse fake executor.
+ * Composes live tracker/Git boundaries with the caller-selected executor
+ * implementation through the ordinary Effect Layer environment.
  */
 type ProductionWorkflowLayer<TrackerError, TrackerRequirements> = Layer.Layer<
   ApplicationExitRequestBoundary | JournaledRunBootstrap,
@@ -56,6 +55,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   target: GitCommonDirectoryTarget,
   integrationTarget: IntegrationTarget,
   trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>,
+  plannedAttemptExecutorLayer: Layer.Layer<PlannedAttemptExecutor>,
   targetVerification?: TargetVerificationRuntimeInput,
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinality?: CompletionClaimBoundaryService,
@@ -79,7 +79,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     Layer.provide(gitTargetLineageLayer),
     Layer.provide(gitWorktreeLayer)
   )
-  const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, controlledFakePlannedAttemptExecutorLayer)
+  const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, plannedAttemptExecutorLayer)
 
   return Layer.unwrap(
     Effect.gen(function* () {

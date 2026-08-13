@@ -54,7 +54,6 @@
   "devDependencies": {
     "@dalph/contracts": "workspace:*",
     "@dalph/dalph": "workspace:*",
-    "@dalph/executor": "workspace:*",
     "@dalph/orchestrator": "workspace:*",
     "@effect/tsgo": "0.24.3",
     "@effect/vitest": "4.0.0-beta.106",

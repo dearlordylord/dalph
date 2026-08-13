@@ -226,12 +226,13 @@ be inferred from another obligation on the same ticket.
 _Avoid_: Generic draining reason, ticket-level blocker, progress percentage
 
 **Planned-attempt executor work**:
-The selected executor's complete course of work for one planned task attempt.
+The injected executor implementation's complete course of work for one planned task attempt.
 Dalph may start, continue, ask to suspend, or receive the outcome of that work
 without learning an internal stage. In v1, the planned task attempt identifies
 this work at the generic executor boundary; Dalph does not allocate a second
-outer-invocation identity. The controlled fake has no coding-agent, reviewer,
-evidence, handback, retry, or restoration stages.
+outer-invocation identity. The injected implementation's agents, reviewers,
+sessions, provider calls, commits, retries, and other private stages are not
+part of this outer contract.
 _Avoid_: Executor outer invocation, review stage, worker process, workflow
 operation
 
@@ -295,9 +296,9 @@ _Avoid_: Capacity command receipt, executor capacity, preemptive contraction
 The executor's proof that its complete work for one exact planned task attempt
 is safely stopped, has preserved what it needs to resume the same attempt, and
 has no executor-owned activity for that attempt still running. Dalph may
-therefore make the task-work position available. The controlled fake executor
+therefore make the task-work position available. The injected executor
 produces this proof after Dalph asks it to stop for resume, such as during a
-task pause, run pause, or safety stop. A coding-agent, reviewer, session, or
+task pause, run pause, or safety stop. An agent, reviewer, session, or
 worker-process interruption alone is an executor-internal fact and does not
 prove suspension.
 _Avoid_: Executor interruption, process exit alone, coordinator cancellation,
@@ -311,10 +312,11 @@ evidence defined below.
 _Avoid_: Internal review result, raw provider response
 
 **Planned-attempt executor-work projection**:
-The controlled fake executor's current declaration that its complete work for
-one exact `(RunId, AttemptId)` is running, safely suspended, or terminal with a
-normalized result. Starting or resuming is a Dalph request, not another
-persisted executor state.
+The injected executor's current normalized declaration that its complete work
+for one exact `(RunId, AttemptId)` is running, safely suspended, or terminal.
+The implementation remains opaque. Starting or resuming is a Dalph request,
+not another persisted executor state, and a missing projection does not prove
+that the responsibility is safe or terminal.
 _Avoid_: Generic inspection of executor-specific journal events, internal wait
 
 **Historical Ralph harness**:

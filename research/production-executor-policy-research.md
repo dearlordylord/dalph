@@ -580,13 +580,13 @@ requestSuspension(plannedAttempt) -> exact report
 project(runId, attemptId) -> optional exact report
 ```
 
-The production error channel must stop mentioning
-`ControlledFakeExecutorMismatch`. An implementation ticket should introduce
-the provider-neutral failures needed by the selected adapter: incompatible
-policy, temporary authority outage, unreadable exact state, and correlation
-contradiction. `UnsupportedLocator` belongs with a later real selection seam,
-not the single-adapter implementation. Provider-specific diagnostics remain
-behind the adapter.
+The production error channel now uses the provider-neutral
+`PlannedAttemptExecutorCommandFailure` for a declined outer command. Detailed
+policy incompatibility, temporary authority outage, unreadable exact state,
+and correlation-contradiction decisions remain with #140 and the later selected
+adapter. `UnsupportedLocator` belongs with a later real selection seam, not the
+single-adapter implementation. Provider-specific diagnostics remain behind the
+adapter.
 
 ## Protocol configurability
 

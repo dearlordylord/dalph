@@ -949,9 +949,12 @@ it.effect("preserves every exact resource when executor stoppage is unproved", (
   })
 )
 
-it.effect("reconstructs an ambiguous executor command before activating its continuation", () =>
+it.effect("uses the injected projection when the public Run entry reconstructs an ambiguous executor command", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette)
+    const authoredProjections = changedAttemptStopLostThirdSuspensionAuthoredCassette.story.filter(
+      (item) => item._tag === "PlannedAttemptExecutorProjectionReturned"
+    )
     const stopAt = run.records.findIndex(({ event }) => event._tag === "AttemptChoiceApplied")
     const startIntents = run.records.flatMap(({ event }, index) =>
       index > stopAt && event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "StartOrContinue"
@@ -971,11 +974,26 @@ it.effect("reconstructs an ambiguous executor command before activating its cont
       ({ event }, index) =>
         index > stopAt && event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
     )
+    const recordedProjections = run.records.filter(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+        event._tag === "PlannedAttemptExecutorStateObserved"
+    )
 
     expect(run.activationOrdinals.filter((ordinal) => ordinal > 1).length).toBeGreaterThan(1)
     expect(startIntents).toHaveLength(1)
     expect(projectionAt).toBeGreaterThan(start.index)
     expect(firstSuspendAt).toBeGreaterThan(projectionAt)
+    expect(recordedProjections).toHaveLength(authoredProjections.length)
+    expect(
+      recordedProjections.every(
+        ({ event }) =>
+          (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+            event._tag === "PlannedAttemptExecutorStateObserved") &&
+          event.plannedAttempt.runId === start.event.plannedAttempt.runId &&
+          event.plannedAttempt.attemptId === start.event.plannedAttempt.attemptId
+      )
+    ).toBe(true)
     const recorded = yield* projectRecordedCassette(run.records)
     expectRecordedRoundTrip(run.records, recorded)
   })
@@ -4982,7 +5000,7 @@ it.effect("reports mismatches through the surface that owns the current story it
       )
     }
     expect((yield* runAuthoredScenarioCassette(wrongExecutorItem).pipe(Effect.flip))._tag).toBe(
-      "ControlledFakeExecutorMismatch"
+      "PlannedAttemptExecutorCommandFailure"
     )
 
     const wrongAttempt = {
@@ -4994,7 +5012,7 @@ it.effect("reports mismatches through the surface that owns the current story it
       )
     }
     expect((yield* runAuthoredScenarioCassette(wrongAttempt).pipe(Effect.flip))._tag).toBe(
-      "ControlledFakeExecutorMismatch"
+      "PlannedAttemptExecutorCommandFailure"
     )
 
     const lifecycleFailure = {

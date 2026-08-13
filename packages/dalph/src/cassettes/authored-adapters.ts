@@ -1,6 +1,6 @@
 import { Effect, Layer, Match, Option, Ref, Schema } from "effect"
 import {
-  ControlledFakeExecutorMismatch,
+  PlannedAttemptExecutorCommandFailure,
   EvidenceDigest,
   EvidenceReference,
   PlannedAttemptExecutor,
@@ -236,7 +236,9 @@ export const controlledExecutorLayer = (
     const item = yield* cursor.consumeExecutorReport.pipe(
       Effect.mapError(
         (failure) =>
-          new ControlledFakeExecutorMismatch({
+          new PlannedAttemptExecutorCommandFailure({
+            command: request,
+            correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
             detail:
               `${failure._tag} at story position ${failure.storyPosition}: ` +
               `expected ${failure.expected}, received ${failure.actual} while handling ${request} for ` +
@@ -246,7 +248,9 @@ export const controlledExecutorLayer = (
     )
     const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
     if (item.request !== request || item.report.attemptId !== correlation.attemptId) {
-      return yield* new ControlledFakeExecutorMismatch({
+      return yield* new PlannedAttemptExecutorCommandFailure({
+        command: request,
+        correlation,
         detail:
           `at story position ${storyPosition}: authored executor expected ${item.request} for ${item.report.attemptId}, ` +
           `received ${request} for ${correlation.attemptId}`

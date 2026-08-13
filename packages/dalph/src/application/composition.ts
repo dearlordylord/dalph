@@ -1,4 +1,3 @@
-import { controlledFakePlannedAttemptExecutorLayer } from "@dalph/executor"
 import { GitCommitSha, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
 import {
   ClaimOwner,
@@ -9,12 +8,13 @@ import {
   workflowInterpreterLayer
 } from "@dalph/orchestrator"
 import { Layer } from "effect"
+import { dryRunPlannedAttemptExecutorLayer } from "./dry-run-planned-attempt-executor.js"
 
 export { workflowInterpreterLayer }
 
 export const dryRunWorkflowInterpreterLayer = Layer.mergeAll(
   controlledWorkflowInterpreterLayer,
-  controlledFakePlannedAttemptExecutorLayer
+  dryRunPlannedAttemptExecutorLayer
 )
 
 export const dryRunOperationIdAllocatorLayer = deterministicOperationIdAllocatorLayer("dry-run-operation")

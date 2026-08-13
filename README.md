@@ -29,7 +29,6 @@ work, integrate accepted results, or establish a terminal run disposition.
 - `docs/` — stable Dalph context and architecture.
 - `packages/contracts/` — exact contracts shared by orchestration and executor implementations.
 - `packages/orchestrator/` — generic Effect V4 workflow coordination and authority adapters.
-- `packages/executor/` — concrete planned-attempt executor adapters.
 - `packages/dalph/` — the CLI, application composition, and concrete presentation.
 - `research/` — completed Wayfinder decisions and market/tool evaluations.
 - `prototypes/control-plane/` — disposable Effect V4 seam evidence.

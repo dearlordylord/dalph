@@ -17,30 +17,14 @@ import { URL, pathToFileURL } from "node:url"
 const forbiddenPathFragments = [".test."]
 const allowedWorkspaceDependencies = {
   contracts: [],
-  dalph: ["contracts", "executor", "orchestrator"],
-  executor: ["contracts"],
+  dalph: ["contracts", "orchestrator"],
   orchestrator: ["contracts"]
 }
 const forbiddenSourceImports = {
   contracts: ["dalph", "executor", "orchestrator"],
   dalph: [],
-  executor: ["dalph", "orchestrator"],
   orchestrator: ["dalph", "executor"]
 }
-
-const executorForbiddenSourceFragments = [
-  "@dalph/dalph",
-  "@dalph/orchestrator",
-  "integration-candidate",
-  "integration-candidate-construction",
-  "target-verification",
-  "target-promotion",
-  "integration-finality",
-  "completion",
-  "integration-target-resource",
-  "/cleanup",
-  "\\/cleanup"
-]
 
 const passiveSourceFiles = (relativePath) =>
   /^(?:packages\/orchestrator\/src\/coordination\/delivery\/(?:delivery|relations|ticket-delivery-projection|delivery-evidence|delivery-action-planning|delivery-action-proposal|delivery-proposal(?:-derivation|-identity|-route)?|delivery-transition-policy|fresh-workflow-step)\.ts|packages\/(?:orchestrator|dalph)\/src\/presentation\/[^/]+\.ts|packages\/(?:orchestrator|dalph)\/src\/(?:[^/]+-)?presentation\.ts|packages\/dalph\/src\/cassettes\/authored-presentation\.ts)$/u.test(
@@ -152,21 +136,6 @@ const findSourceBoundaryViolations = (files) => {
   const violations = []
   for (const file of files) {
     const references = importReferencesIn(file.source)
-
-    if (file.packageName === "executor") {
-      for (const reference of references) {
-        if (hasFragment(reference.specifier, executorForbiddenSourceFragments)) {
-          violations.push(
-            sourceViolation(
-              file,
-              reference.index,
-              "executor-source-boundary",
-              `executor code cannot import integration, tracker-completion, resource, cleanup, or application implementations (${reference.specifier})`
-            )
-          )
-        }
-      }
-    }
 
     const isOrchestrator = file.packageName === "orchestrator"
 

@@ -18,7 +18,6 @@ export default defineConfig(({ mode }) => ({
     alias: {
       "@dalph/contracts": fileURLToPath(new URL("./packages/contracts/src/index.ts", import.meta.url)),
       "@dalph/dalph": fileURLToPath(new URL("./packages/dalph/src/index.ts", import.meta.url)),
-      "@dalph/executor": fileURLToPath(new URL("./packages/executor/src/index.ts", import.meta.url)),
       "@dalph/orchestrator": fileURLToPath(new URL("./packages/orchestrator/src/index.ts", import.meta.url))
     }
   },

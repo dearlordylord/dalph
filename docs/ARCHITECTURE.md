@@ -167,8 +167,11 @@ entry it establishes the exact Run idempotently: absent history receives one
 beginning; existing history is validated in full and reduced to the latest
 policy and exact outstanding responsibilities. It then obtains current
 evidence from each owning seam wherever the accepted protocol provides and
-requires that observation. The current same-process executor is recreated
-rather than inspected after process loss.
+requires that observation. The planned-attempt executor is injected at the
+application boundary. After process loss, Dalph asks it only for the normalized
+current report for the exact `(RunId, AttemptId)`; it does not inspect or
+reconstruct implementation-private stages, and no report preserves the
+outstanding responsibility.
 
 Task-work positions are reconstructed from exact unfinished responsibilities
 before the activation admits new work. The position map itself does not

@@ -1,8 +1,8 @@
 import { it } from "@effect/vitest"
-import { Effect, Layer, Option, Schema } from "effect"
+import { Schema } from "effect"
 import { expect } from "vitest"
 import {
-  PlannedAttemptExecutor,
+  PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey
@@ -45,23 +45,15 @@ it.each([
   ).toEqual(report)
 })
 
-it.effect("defines an executor interface that a local adapter can implement without another production package", () => {
-  const running = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-  const suspended = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-  const terminal = PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-  const localAdapter = Layer.succeed(
-    PlannedAttemptExecutor,
-    PlannedAttemptExecutor.of({
-      project: () => Effect.succeed(Option.some(running)),
-      requestSuspension: () => Effect.succeed(suspended),
-      startOrContinue: () => Effect.succeed(terminal)
-    })
-  )
-
-  return Effect.gen(function* () {
-    const executor = yield* PlannedAttemptExecutor
-    expect(yield* executor.project(correlation)).toEqual(Option.some(running))
-    expect(yield* executor.requestSuspension(plannedAttempt)).toEqual(suspended)
-    expect(yield* executor.startOrContinue(plannedAttempt)).toEqual(terminal)
-  }).pipe(Effect.provide(localAdapter))
+it("roundtrips a provider-neutral exact command failure", () => {
+  const failure = new PlannedAttemptExecutorCommandFailure({
+    command: "StartOrContinue",
+    correlation,
+    detail: "the injected boundary declined the command"
+  })
+  expect(
+    Schema.decodeUnknownSync(PlannedAttemptExecutorCommandFailure)(
+      Schema.encodeUnknownSync(PlannedAttemptExecutorCommandFailure)(failure)
+    )
+  ).toEqual(failure)
 })

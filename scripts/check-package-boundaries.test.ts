@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { readFileSync, readdirSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { expect, it } from "vitest"
 
@@ -6,6 +6,13 @@ import { expect, it } from "vitest"
 import { sourceBoundaryViolations } from "./check-package-boundaries.mjs"
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url))
+
+const productionTypeScriptFilesUnder = (directory: string): ReadonlyArray<string> =>
+  readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${directory}${entry.name}`
+    if (entry.isDirectory()) return productionTypeScriptFilesUnder(`${path}/`)
+    return entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts") ? [path] : []
+  })
 
 it("accepts the checked-in package source roles", () => {
   const source = readFileSync(new URL("./fixtures/issue216-forbidden-dispatch.fixture.ts.txt", import.meta.url), "utf8")
@@ -56,17 +63,20 @@ it("rejects a dispatch fixture that imports and invokes target promotion", () =>
   ])
 })
 
-it("rejects integration dependencies crossing the executor package boundary", () => {
-  const violations = sourceBoundaryViolations([
-    {
-      packageName: "executor",
-      relativePath: "packages/executor/src/forbidden-integration-import.ts",
-      source:
-        'import { runTargetPromotion } from "../../orchestrator/src/workflow/protocols/target-promotion/protocol.js"'
-    }
-  ])
+it("keeps implementation-private executor vocabulary outside the generic boundary", () => {
+  const genericSources = [
+    `${repositoryRoot}packages/contracts/src/executor.ts`,
+    `${repositoryRoot}packages/dalph/src/application/composition.ts`,
+    `${repositoryRoot}packages/dalph/src/application/production.ts`,
+    ...productionTypeScriptFilesUnder(`${repositoryRoot}packages/orchestrator/src/`)
+  ].map((path) => readFileSync(path, "utf8"))
 
-  expect(violations).toEqual([expect.stringContaining("executor-source-boundary")])
+  for (const source of genericSources) {
+    expect(source).not.toContain("@dalph/executor")
+    expect(source).not.toMatch(
+      /\b(?:Codex|Claude|ReviewAgent|ReviewerInvocation|Reviewer|AgentSession|ProviderSession|ProviderRequest|SubprocessId|CommitStage|RetryPolicy)\b/u
+    )
+  }
 })
 
 it("rejects mutation capabilities in passive, planning, and adapter roles", () => {

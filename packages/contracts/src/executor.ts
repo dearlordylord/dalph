@@ -59,10 +59,14 @@ export const plannedAttemptExecutorCorrelation = (
 export const plannedAttemptExecutorCorrelationKey = (correlation: PlannedAttemptExecutorCorrelation): string =>
   JSON.stringify({ attemptId: correlation.attemptId, runId: correlation.runId })
 
-/** The controlled milestone executor received a request that did not match its next expected step. */
-export class ControlledFakeExecutorMismatch extends Schema.TaggedError<ControlledFakeExecutorMismatch>()(
-  "ControlledFakeExecutorMismatch",
-  { detail: Schema.String }
+/** An injected executor could not complete the requested outer command. */
+export class PlannedAttemptExecutorCommandFailure extends Schema.TaggedError<PlannedAttemptExecutorCommandFailure>()(
+  "PlannedAttemptExecutorCommandFailure",
+  {
+    command: Schema.Literals(["StartOrContinue", "Suspend"]),
+    correlation: PlannedAttemptExecutorCorrelation,
+    detail: Schema.String
+  }
 ) {}
 
 export interface PlannedAttemptExecutorService {
@@ -71,10 +75,10 @@ export interface PlannedAttemptExecutorService {
   ) => Effect.Effect<Option.Option<PlannedAttemptExecutorReport>>
   readonly requestSuspension: (
     plannedAttempt: PlannedTaskAttempt
-  ) => Effect.Effect<PlannedAttemptExecutorReport, ControlledFakeExecutorMismatch>
+  ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
   readonly startOrContinue: (
     plannedAttempt: PlannedTaskAttempt
-  ) => Effect.Effect<PlannedAttemptExecutorReport, ControlledFakeExecutorMismatch>
+  ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
 }
 
 /** The injected boundary for all executor work on one exact planned attempt. */

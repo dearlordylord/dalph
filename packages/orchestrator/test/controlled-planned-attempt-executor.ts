@@ -1,5 +1,5 @@
 import {
-  ControlledFakeExecutorMismatch,
+  PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorReport,
@@ -49,12 +49,16 @@ export const makeControlledFakePlannedAttemptExecutorLayer = (steps: ReadonlyArr
           (current) => [current.remaining[0], { ...current, remaining: current.remaining.slice(1) }] as const
         )
         if (step === undefined) {
-          return yield* new ControlledFakeExecutorMismatch({
+          return yield* new PlannedAttemptExecutorCommandFailure({
+            command: requestTag,
+            correlation,
             detail: `${requestTag} for ${plannedAttemptExecutorCorrelationKey(correlation)} has no cassette entry`
           })
         }
         if (step._tag !== requestTag || !sameCorrelation(step.correlation, correlation)) {
-          return yield* new ControlledFakeExecutorMismatch({
+          return yield* new PlannedAttemptExecutorCommandFailure({
+            command: requestTag,
+            correlation,
             detail: `expected ${step._tag} for ${plannedAttemptExecutorCorrelationKey(
               step.correlation
             )}, received ${requestTag} for ${plannedAttemptExecutorCorrelationKey(correlation)}`

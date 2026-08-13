@@ -75,6 +75,7 @@ import {
 import { ConfigProvider, Deferred, Effect, Fiber, FileSystem, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
 import { taskTrackerGraphFactsObserved } from "../../../orchestrator/test/task-tracker-facts.js"
+import { controlledFakePlannedAttemptExecutorLayer } from "../../../orchestrator/test/controlled-planned-attempt-executor.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 
 const productionIntegrationTarget = (repository: string): IntegrationTarget =>
@@ -134,7 +135,8 @@ it.effect(absentHistoryApplicationScenario, () =>
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
-        controlledTrackerMutationLayer
+        controlledTrackerMutationLayer,
+        controlledFakePlannedAttemptExecutorLayer
       ).pipe(
         Layer.provide(trackerReaderLayer),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -256,7 +258,8 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
-        trackerLayer
+        trackerLayer,
+        controlledFakePlannedAttemptExecutorLayer
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -432,7 +435,8 @@ it.effect("ticket delivery reads Git after ambiguous worktree creation and prese
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
-        trackerLayer
+        trackerLayer,
+        controlledFakePlannedAttemptExecutorLayer
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -531,7 +535,8 @@ it.effect("records an Operator capacity change through the production compositio
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
-        controlledTrackerMutationLayer
+        controlledTrackerMutationLayer,
+        controlledFakePlannedAttemptExecutorLayer
       ).pipe(
         Layer.provide(trackerReaderLayer),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -634,7 +639,8 @@ it.effect("terminates once only after G2 proves the target complete and responsi
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
-        controlledTrackerMutationLayer
+        controlledTrackerMutationLayer,
+        controlledFakePlannedAttemptExecutorLayer
       ).pipe(
         Layer.provide(trackerReaderLayer),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -726,7 +732,8 @@ it.effect(
           runId,
           GitCommonDirectoryTarget.make(`${directory}/.git`),
           productionIntegrationTarget(`${directory}/.git`),
-          controlledTrackerMutationLayer
+          controlledTrackerMutationLayer,
+          controlledFakePlannedAttemptExecutorLayer
         ).pipe(
           Layer.provide(trackerReaderLayer),
           Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -947,7 +954,8 @@ it.effect("publishes each accepted executor report before continuing and stops a
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         continuationTarget,
-        trackerLayer
+        trackerLayer,
+        controlledFakePlannedAttemptExecutorLayer
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -1079,7 +1087,8 @@ it.effect("blocks Run establishment before activation when preserved history has
         requestedRunId,
         GitCommonDirectoryTarget.make(directory),
         productionIntegrationTarget(directory),
-        controlledTrackerMutationLayer
+        controlledTrackerMutationLayer,
+        controlledFakePlannedAttemptExecutorLayer
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -1151,7 +1160,8 @@ it.effect(
           requestedRunId,
           GitCommonDirectoryTarget.make(directory),
           productionIntegrationTarget(directory),
-          controlledTrackerMutationLayer
+          controlledTrackerMutationLayer,
+          controlledFakePlannedAttemptExecutorLayer
         ).pipe(
           Layer.provide(
             Layer.succeed(
@@ -1208,7 +1218,8 @@ it.effect("blocks a new Run when another Run crashed immediately after recording
         requestedRunId,
         GitCommonDirectoryTarget.make(directory),
         productionIntegrationTarget(directory),
-        controlledTrackerMutationLayer
+        controlledTrackerMutationLayer,
+        controlledFakePlannedAttemptExecutorLayer
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -1287,7 +1298,8 @@ it.effect("establishes a Run when another Run's responsibility is completed", ()
         requestedRunId,
         GitCommonDirectoryTarget.make(directory),
         productionIntegrationTarget(directory),
-        controlledTrackerMutationLayer
+        controlledTrackerMutationLayer,
+        controlledFakePlannedAttemptExecutorLayer
       ).pipe(
         Layer.provide(
           Layer.succeed(
