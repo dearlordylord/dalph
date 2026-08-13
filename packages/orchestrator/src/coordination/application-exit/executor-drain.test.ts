@@ -22,6 +22,7 @@ import { OperationId } from "../../workflow/identity.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import { makeCurrentSignal } from "../delivery/relations.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -146,7 +147,7 @@ it.effect("maps a failed Run-journal state read to one application Exit drain di
             Journal.of({
               append: () => Effect.die("the failed state read must prevent append"),
               read: () => Effect.die("the failed state read must prevent direct read"),
-              state: { changes: Stream.fail(journalFailure), get: Effect.fail(journalFailure) }
+              state: makeCurrentSignal({ changes: Stream.fail(journalFailure), get: Effect.fail(journalFailure) })
             })
           )
         )

@@ -24,6 +24,7 @@ import {
   DeliveryReflectionProjection,
   deliverySettlements,
   executorResponsibilities,
+  makeCurrentSignal,
   mapCurrentSignal,
   reflectDeliverySettlements,
   TrackerGraphState,
@@ -190,13 +191,13 @@ it.effect("emits one consequence per accepted publication without mixed graph po
       revision: initialRunPolicyRevision,
       taskExecutionCapacity: TaskWorkCapacity.make(2)
     })
-    const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
+    const coherent: CurrentSignal<DeliveryRelationInputBundle> = makeCurrentSignal({
       get: Effect.succeed(coherentBundle(graphOne, policyOne, [])),
       changes: Stream.fromIterable([
         coherentBundle(graphOne, policyOne, []),
         coherentBundle(graphTwo, policyTwo, [executorResponsibilityEvidence(TaskId.make("B"))])
       ])
-    }
+    })
     const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policyOne), coherent })
 
     const signal = yield* delivery.pipe(Effect.provide(layer))
@@ -231,10 +232,10 @@ it.effect("deduplicates one repeated accepted graph publication", () =>
   Effect.gen(function* () {
     const graph = journaledGraph("deduplicated-G1", [{ id: "A" }], "deduplicated-read", 7)
     const bundle = coherentBundle(graph, policy, [])
-    const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
+    const coherent: CurrentSignal<DeliveryRelationInputBundle> = makeCurrentSignal({
       get: Effect.succeed(bundle),
       changes: Stream.fromIterable([bundle, bundle])
-    }
+    })
     const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policy), coherent })
     const trackerGraph = yield* TrackerGraphRelation.pipe(Effect.provide(layer))
 
@@ -253,14 +254,14 @@ it.effect("publishes policy and exact evidence changes for one journaled graph",
       revision: initialRunPolicyRevision,
       taskExecutionCapacity: TaskWorkCapacity.make(2)
     })
-    const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
+    const coherent: CurrentSignal<DeliveryRelationInputBundle> = makeCurrentSignal({
       get: Effect.succeed(coherentBundle(graph, policyOne, [])),
       changes: Stream.fromIterable([
         coherentBundle(graph, policyOne, []),
         coherentBundle(graph, policyTwo, []),
         coherentBundle(graph, policyTwo, [executorResponsibilityEvidence(TaskId.make("A"))])
       ])
-    }
+    })
     const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policyOne), coherent })
 
     const signal = yield* delivery.pipe(Effect.provide(layer))
@@ -288,10 +289,10 @@ it.effect("publishes policy and exact evidence changes for one journaled graph",
 it.effect("evaluates every coherent projection owner from the shared publication", () =>
   Effect.gen(function* () {
     const graph = journaledGraph("coherent-projection", [{ id: "A" }], "coherent-projection-read", 9)
-    const coherent: CurrentSignal<DeliveryRelationInputBundle> = {
+    const coherent: CurrentSignal<DeliveryRelationInputBundle> = makeCurrentSignal({
       get: Effect.succeed(coherentBundle(graph, policy, [])),
       changes: Stream.fromIterable([coherentBundle(graph, policy, [])])
-    }
+    })
     const layer = makeDeliveryRelationsLayer({ ...deterministicDeliveryRuntimeSupport(policy), coherent })
 
     yield* Effect.gen(function* () {
@@ -370,10 +371,10 @@ it.effect("reacts to G2 while the composition remains running", () =>
     const graphTwo = journaledGraph("G2", [{ id: "A" }, { id: "B" }], "read-G2", 8)
     const layer = makeDeliveryRelationsLayer({
       ...deterministicDeliveryRuntimeSupport(policy),
-      coherent: {
+      coherent: makeCurrentSignal({
         get: Effect.succeed(coherentBundle(graphOne, policy, [])),
         changes: Stream.fromIterable([coherentBundle(graphOne, policy, []), coherentBundle(graphTwo, policy, [])])
-      }
+      })
     })
     const signal = yield* delivery.pipe(Effect.provide(layer))
     const values = Array.from(yield* signal.changes.pipe(Stream.runCollect))
@@ -400,10 +401,10 @@ it.effect("emits G1 and equal-content G2 with distinct accepted observation iden
     const graphTwo = journaledGraph("equal-content", [{ id: "A" }], "logical-read-G2", 11)
     const layer = makeDeliveryRelationsLayer({
       ...deterministicDeliveryRuntimeSupport(policy),
-      coherent: {
+      coherent: makeCurrentSignal({
         get: Effect.succeed(coherentBundle(graphOne, policy, [])),
         changes: Stream.fromIterable([coherentBundle(graphOne, policy, []), coherentBundle(graphTwo, policy, [])])
-      }
+      })
     })
     const signal = yield* delivery.pipe(Effect.provide(layer))
     const values = Array.from(yield* signal.changes.pipe(Stream.runCollect))

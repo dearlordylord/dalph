@@ -4,7 +4,7 @@ import type { DeliveryRuntimeInput, DeliveryRuntimeQuiescence } from "../deliver
 import { runDeliveryRuntimePhase } from "../delivery/run-delivery-runtime.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import type { DeliveryRuntimeEvaluation } from "../delivery/relations.js"
-import { deliveryFinalityOf } from "../delivery/relations.js"
+import { attachCurrentSignal, deliveryFinalityOf } from "../delivery/relations.js"
 import type { RunFinalityProof } from "../frontier/run-finality.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
@@ -32,11 +32,18 @@ const awaitAcceptedObservation = Effect.fn("RunStabilization.awaitAcceptedObserv
   operationId: ReturnType<typeof makeTrackerGraphObservationOperation>["operationId"],
   after: JournalPosition
 ) {
-  const accepted = yield* Stream.concat(Stream.fromEffect(evaluations.get), evaluations.changes).pipe(
-    Stream.filter((evaluation) => acceptsObservation(operationId, evaluation, after)),
-    Stream.runHead
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const attachment = yield* attachCurrentSignal(evaluations)
+      if (acceptsObservation(operationId, attachment.current, after)) return attachment.current
+      return Option.getOrThrow(
+        yield* attachment.changes.pipe(
+          Stream.filter((evaluation) => acceptsObservation(operationId, evaluation, after)),
+          Stream.runHead
+        )
+      )
+    })
   )
-  return Option.getOrThrow(accepted)
 })
 
 /**

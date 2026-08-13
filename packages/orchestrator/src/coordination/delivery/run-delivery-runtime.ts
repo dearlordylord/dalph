@@ -18,6 +18,7 @@ import { type DeliveryActionProposal, DeliveryProposalId } from "./delivery-acti
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
 import type { DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
 import {
+  attachCurrentSignal,
   type CurrentSignal,
   type DeliveryProposalFrontier,
   type DeliveryQuiescenceDisposition,
@@ -151,24 +152,22 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const latest = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
-      const first = yield* relation.get
+      const attachment = yield* attachCurrentSignal(relation)
+      const first = attachment.current
       yield* Ref.set(latest, Option.some(first))
       yield* runtimeObservation.publish(first, [])
       const admission = yield* resources.makeAdmissionController(first.taskWork)
       const evaluationsSubscribed = yield* Deferred.make<void>()
 
-      yield* relation.changes.pipe(
-        Stream.tap(() => Deferred.succeed(evaluationsSubscribed, undefined)),
-        Stream.drop(1),
+      yield* Stream.concat(
+        Stream.fromEffect(Deferred.succeed(evaluationsSubscribed, undefined)).pipe(Stream.drain),
+        attachment.changes
+      ).pipe(
         Stream.runForEach((evaluation) => Queue.offer(events, { _tag: "EvaluationChanged", evaluation })),
         Effect.catchCause((cause) => Queue.offer(events, { _tag: "RelationFailed", cause })),
         Effect.forkIn(scope)
       )
       yield* Deferred.await(evaluationsSubscribed)
-      // Close the interval between the initial sample and the live subscription.
-      const subscribedCurrent = yield* relation.get
-      yield* Ref.set(latest, Option.some(subscribedCurrent))
-      yield* admission.synchronize(subscribedCurrent.taskWork)
 
       const publishRuntimeObservationInsideGate = Effect.fn("DeliveryRuntime.publishObservationInsideGate")(
         function* () {

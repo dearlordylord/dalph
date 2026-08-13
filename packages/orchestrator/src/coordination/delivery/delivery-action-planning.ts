@@ -2,6 +2,7 @@ import { Context, Effect, Stream } from "effect"
 import type { DeliveryProposalDerivationIssue } from "./delivery-action-proposal.js"
 import {
   deliveryProposalFrontierOf,
+  makeCurrentSignal,
   mapCurrentSignal,
   type CurrentSignal,
   type DeliveryActionProposal,
@@ -82,14 +83,16 @@ export const deliveryActionPlanning = Effect.fn("Delivery.actionPlanning")(funct
   const coherent = inputs.withConsequences(consequences)
   const frontier = mapCurrentSignal(coherent, ([delivery, input]) => frontierOf(delivery, input))
   return {
+    ...makeCurrentSignal({
+      get: frontier.get,
+      changes: frontier.changes.pipe(Stream.changesWith((left, right) => frontierKey(left) === frontierKey(right)))
+    }),
     changesWithinStablePublication: coherent.changesWithinStablePublication.pipe(
       Stream.map(([delivery, input]) => frontierOf(delivery, input)),
       Stream.changesWith((left, right) => frontierKey(left) === frontierKey(right))
     ),
-    get: frontier.get,
     getWithinStablePublication: coherent.getWithinStablePublication.pipe(
       Effect.map(([delivery, input]) => frontierOf(delivery, input))
-    ),
-    changes: frontier.changes.pipe(Stream.changesWith((left, right) => frontierKey(left) === frontierKey(right)))
+    )
   } satisfies DeliveryActionPlanningSignal<E | DeliveryRelationSourceError>
 })

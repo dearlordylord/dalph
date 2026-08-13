@@ -517,6 +517,8 @@ export const staleTaskPauseRejectedAuthoredCassette: ScenarioCassette = Schema.d
     { _tag: "PauseProgressObserved", result: { _tag: "PauseNotApplied" }, subject: { _tag: "Task", taskId: "A" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: emptyTaskControlGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: emptyTaskControlGraph },
     {
       _tag: "ExpectedBehavior",
       orchestration: [],
@@ -548,9 +550,6 @@ export const unreadableTaskUnpauseRejectedAuthoredCassette: ScenarioCassette = S
     }
     if (item._tag === "OperatorControlDirectionFailed") {
       return [decodeStoryItem({ ...item, direction: "Unpause", reason: "IncompleteSnapshot" })]
-    }
-    if (item._tag === "ExpectedBehavior") {
-      return [...taskControlMembershipRead(emptyTaskControlGraph), item]
     }
     return [item]
   })

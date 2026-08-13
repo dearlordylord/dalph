@@ -1,7 +1,7 @@
 import { Context, Data, Effect, Match, Option, Ref, Stream, SubscriptionRef } from "effect"
 import type { OperationId } from "../../workflow/identity.js"
 import type { DeliveryAdmissionReservation, DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
-import type { CurrentSignal, DeliveryRuntimeEvaluation } from "./relations.js"
+import { makeCurrentSignal, type CurrentSignal, type DeliveryRuntimeEvaluation } from "./relations.js"
 import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
 import {
   DeliveryActionProtocolAdmissionMissing,
@@ -247,10 +247,10 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
             ? current
             : DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners: [...liveOwners] })
         ),
-      signal: {
+      signal: makeCurrentSignal({
         changes: SubscriptionRef.changes(state).pipe(Stream.takeUntil(({ _tag }) => _tag === "Closed")),
         get: SubscriptionRef.get(state)
-      }
+      })
     } satisfies DeliveryRuntimeObservationController
   }
 )

@@ -3,6 +3,7 @@ import { Effect, Schema, Stream } from "effect"
 import type { IntegrationTargetResourceSnapshot } from "../admission/integration-target-resource.js"
 import { DeliveryRuntimeObservationState } from "../delivery/delivery-runtime-observation.js"
 import type { DeliveryRuntimeResourcesService } from "../delivery/delivery-runtime-resources.js"
+import { attachCurrentSignal } from "../delivery/relations.js"
 import { ControlDirectionSubject } from "../../workflow/protocols/control-direction-application/events.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import {
@@ -70,7 +71,12 @@ export const observePauseProgress = (
           return Stream.fail(new PauseObservationRunMismatch({ expectedRunId, requestedRunId: subject.runId }))
         }
         const minimumAcceptedAt = acceptedBasis?.latestAcceptedAt ?? null
-        return Stream.zipLatest(resources.runtimeObservation.changes, currentResourceSnapshots(resources)).pipe(
+        const runtimeObservations = Stream.unwrap(
+          attachCurrentSignal(resources.runtimeObservation).pipe(
+            Effect.map(({ changes, current }) => Stream.scoped(Stream.concat(Stream.make(current), changes)))
+          )
+        )
+        return Stream.zipLatest(runtimeObservations, currentResourceSnapshots(resources)).pipe(
           Stream.takeUntil(([runtime]) => runtime._tag === "Closed"),
           Stream.map(([runtime, snapshot]) => [openRuntimeObservation(runtime), snapshot] as const),
           Stream.filter((entry): entry is [ReadyRuntimeObservation, IntegrationTargetResourceSnapshot] =>

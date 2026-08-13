@@ -23,12 +23,14 @@ import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import { DeliveryRelationPublicationObserver } from "./delivery-publication-observer.js"
 import {
+  attachCurrentSignal,
   type CurrentSignal,
   DeliveryRelationReconciliationError,
   type DeliveryRelationSourceError,
   type DeliveryRelationInputBundle,
   type TicketDeliveryEvidence,
-  type TrackerGraphActionProposal
+  type TrackerGraphActionProposal,
+  makeCurrentSignal
 } from "./relations.js"
 import type { JournalService } from "./journal.js"
 
@@ -193,22 +195,23 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
 
   const statusSignal = <A>(
     project: (bundle: ReactiveDeliveryBundle) => A
-  ): CurrentSignal<A, DeliveryRelationSourceError> => ({
-    get: SubscriptionRef.get(state).pipe(
-      Effect.flatMap((status) =>
-        status._tag === "ReactiveDeliveryOpen"
-          ? Effect.succeed(project(status.bundle))
-          : Effect.fail(new DeliveryRelationReconciliationError({ cause: status.cause }))
+  ): CurrentSignal<A, DeliveryRelationSourceError> =>
+    makeCurrentSignal({
+      get: SubscriptionRef.get(state).pipe(
+        Effect.flatMap((status) =>
+          status._tag === "ReactiveDeliveryOpen"
+            ? Effect.succeed(project(status.bundle))
+            : Effect.fail(new DeliveryRelationReconciliationError({ cause: status.cause }))
+        )
+      ),
+      changes: SubscriptionRef.changes(state).pipe(
+        Stream.mapEffect((status) =>
+          status._tag === "ReactiveDeliveryOpen"
+            ? Effect.succeed(project(status.bundle))
+            : Effect.fail(new DeliveryRelationReconciliationError({ cause: status.cause }))
+        )
       )
-    ),
-    changes: SubscriptionRef.changes(state).pipe(
-      Stream.mapEffect((status) =>
-        status._tag === "ReactiveDeliveryOpen"
-          ? Effect.succeed(project(status.bundle))
-          : Effect.fail(new DeliveryRelationReconciliationError({ cause: status.cause }))
-      )
-    )
-  })
+    })
 
   const initial = yield* deriveBundle()
   const state = yield* SubscriptionRef.make<ReactiveDeliveryStatus>({ _tag: "ReactiveDeliveryOpen", bundle: initial })
@@ -260,17 +263,21 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       const targetPosition = (yield* journal.state.get.pipe(
         Effect.mapError((failure) => new DeliveryRelationReconciliationError({ cause: Cause.fail(failure) }))
       )).position
-      yield* Stream.concat(Stream.fromEffect(SubscriptionRef.get(state)), SubscriptionRef.changes(state)).pipe(
-        Stream.mapEffect((status) =>
-          status._tag === "ReactiveDeliveryOpen"
-            ? Effect.succeed(
-                status.bundle.legacy.runtimeFacts.acceptedAt !== null &&
-                  status.bundle.legacy.runtimeFacts.acceptedAt >= targetPosition
-              )
-            : Effect.fail(new DeliveryRelationReconciliationError({ cause: status.cause }))
-        ),
-        Stream.filter((published) => published),
-        Stream.runHead
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const publication = yield* attachCurrentSignal(
+            statusSignal(
+              (bundle) =>
+                bundle.legacy.runtimeFacts.acceptedAt !== null &&
+                bundle.legacy.runtimeFacts.acceptedAt >= targetPosition
+            )
+          )
+          if (publication.current) return
+          yield* publication.changes.pipe(
+            Stream.filter((published) => published),
+            Stream.runHead
+          )
+        })
       )
     })
   })

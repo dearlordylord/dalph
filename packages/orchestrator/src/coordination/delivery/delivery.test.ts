@@ -34,6 +34,7 @@ import {
   deliveryFinalityOf,
   deliverySettlements,
   executorResponsibilities,
+  makeCurrentSignal,
   mapCurrentSignal,
   PlannedAttemptExecutorTerminalEvidence,
   TrackerGraphState,
@@ -475,7 +476,10 @@ it.effect("cannot carry an initial graph-read proposal into an established graph
         Effect.provide(
           makeDeliveryRelationsLayer({
             exactEvidence: currentSignalOf([]),
-            graph: { get: SubscriptionRef.get(graphState), changes: SubscriptionRef.changes(graphState) },
+            graph: makeCurrentSignal({
+              get: SubscriptionRef.get(graphState),
+              changes: SubscriptionRef.changes(graphState)
+            }),
             policy: currentSignalOf(policy),
             trackerGraphProposals: currentSignalOf([proposal])
           })
@@ -780,10 +784,10 @@ it.effect("changes the proposal frontier when its accepted fact signal changes",
         ticketDelivery: [proposal]
       }
       const acceptedFacts = yield* SubscriptionRef.make(initialContributions)
-      const proposalContributions = {
+      const proposalContributions = makeCurrentSignal({
         get: SubscriptionRef.get(acceptedFacts),
         changes: SubscriptionRef.changes(acceptedFacts)
-      }
+      })
       const layer = makeDeliveryRelationsLayer({
         exactEvidence: currentSignalOf([]),
         graph: currentSignalOf(journaledGraphState(journaledGraph("accepted-fact-graph", [task.id]))),
@@ -852,7 +856,7 @@ it.effect("preserves each causal graph revision through final reflection", () =>
     const graphOne = journaledGraphState(journaledGraph("graph-1"))
     const graphTwo = journaledGraphState(journaledGraph("graph-2"))
     const layer = makeDeliveryRelationsLayer({
-      graph: { get: Effect.succeed(graphOne), changes: Stream.fromIterable([graphOne, graphTwo]) },
+      graph: makeCurrentSignal({ get: Effect.succeed(graphOne), changes: Stream.fromIterable([graphOne, graphTwo]) }),
       exactEvidence: currentSignalOf([]),
       policy: currentSignalOf(policy)
     })
@@ -875,7 +879,10 @@ it.effect("recomputes the same flat relation when the current policy changes", (
     const layer = makeDeliveryRelationsLayer({
       graph: currentSignalOf(journaledGraphState(journaledGraph("graph-policy", [taskA, taskB]))),
       exactEvidence: currentSignalOf([]),
-      policy: { get: Effect.succeed(policy), changes: Stream.make(policy, capacityTwo).pipe(Stream.rechunk(1)) }
+      policy: makeCurrentSignal({
+        get: Effect.succeed(policy),
+        changes: Stream.make(policy, capacityTwo).pipe(Stream.rechunk(1))
+      })
     })
     const relation = yield* delivery.pipe(Effect.provide(layer))
 
@@ -894,10 +901,10 @@ it.effect("recomputes the same flat relation when exact responsibility evidence 
     const taskB = TaskId.make("B")
     const layer = makeDeliveryRelationsLayer({
       graph: currentSignalOf(journaledGraphState(journaledGraph("graph-evidence", [taskA, taskB]))),
-      exactEvidence: {
-        get: Effect.succeed([]),
+      exactEvidence: makeCurrentSignal({
+        get: Effect.succeed<ReadonlyArray<TicketDeliveryEvidence>>([]),
         changes: Stream.make([], [exactAttemptEvidence(taskB)]).pipe(Stream.rechunk(1))
-      },
+      }),
       policy: currentSignalOf(policy)
     })
     const relation = yield* delivery.pipe(Effect.provide(layer))

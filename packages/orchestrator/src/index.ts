@@ -570,10 +570,14 @@ export {
   makeReactiveDeliveryRelationsLayer
 } from "./coordination/delivery/reactive-delivery-relations.js"
 export {
+  attachCurrentSignal,
+  currentSignalOf,
   DeliveryReflectionError,
   DeliveryRelationReconciliationError,
   type DeliveryRelationSourceError,
   DeliverySettlementError,
+  makeCurrentSignal,
+  mapCurrentSignal,
   TicketDeliveryError,
   TrackerGraphRelationError,
   type JournaledTrackerGraphObservation,
@@ -582,7 +586,10 @@ export {
   type DeliveryGraphPublication,
   type DeliveryLegacyInputs,
   type DeliveryRelationInputBundle,
-  type DeliveryRuntimeEvaluation
+  type DeliveryRuntimeEvaluation,
+  type CurrentSignal,
+  type CurrentSignalAttachment,
+  zipCurrentSignals
 } from "./coordination/delivery/relations.js"
 export {
   DeliveryRuntimeProposalOwnershipConflict,

@@ -6,7 +6,8 @@ import {
   type TaskId,
   type TaskRevision
 } from "@dalph/contracts"
-import { Context, Effect, Schema, Stream } from "effect"
+import { Context, Effect, Option, Schema, Sink, Stream } from "effect"
+import type * as Scope from "effect/Scope"
 import type { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { JournaledTrackerGraphObservation } from "./journal.js"
@@ -51,21 +52,53 @@ export type {
 
 /** A descriptive latest-value source. Observing it never performs a Dalph action. */
 export interface CurrentSignal<A, E = never> {
+  /** Opens one loss-free current-first subscription in the caller's scope. */
+  readonly attach: Effect.Effect<CurrentSignalAttachment<A, E>, E, Scope.Scope>
   readonly get: Effect.Effect<A, E>
+  /** Current-first publication stream retained for declarative signal composition. */
   readonly changes: Stream.Stream<A, E>
 }
 
+/** One scoped current-first attachment; its changes stream is valid only inside the acquiring scope. */
+export interface CurrentSignalAttachment<A, E = never> {
+  readonly changes: Stream.Stream<A, E>
+  readonly current: A
+}
+
+/** Attaches once and peels the current value from the same subscription that carries later changes. */
+const attachmentOf = <A, E>(changes: Stream.Stream<A, E>): CurrentSignal<A, E>["attach"] =>
+  changes.pipe(
+    Stream.rechunk(1),
+    Stream.peel(Sink.head<A>()),
+    Effect.flatMap(([current, changes]) =>
+      Option.match(current, {
+        onNone: () => Effect.die(new Error("CurrentSignal ended before publishing its current value")),
+        onSome: (value) => Effect.succeed({ changes, current: value })
+      })
+    )
+  )
+
+/** Builds a CurrentSignal whose attachment and declarative stream share one current-first source. */
+export const makeCurrentSignal = <A, E>(input: {
+  readonly changes: Stream.Stream<A, E>
+  readonly get: Effect.Effect<A, E>
+}): CurrentSignal<A, E> => ({ ...input, attach: attachmentOf(input.changes) })
+
+/** Opens the signal's contract-owned current-first subscription. */
+export const attachCurrentSignal = <A, E>(signal: CurrentSignal<A, E>) => signal.attach
+
 /** Creates a deterministic current-first signal for controlled compositions. */
-export const currentSignalOf = <A>(value: A): CurrentSignal<A> => ({
-  get: Effect.succeed(value),
-  changes: Stream.make(value)
-})
+export const currentSignalOf = <A>(value: A): CurrentSignal<A> =>
+  makeCurrentSignal({ get: Effect.succeed(value), changes: Stream.make(value) })
 
 /** Projects every current value without changing the signal's descriptive colour. */
 export const mapCurrentSignal = <A, E, B>(
   signal: CurrentSignal<A, E>,
   project: (value: A) => B
 ): CurrentSignal<B, E> => ({
+  attach: signal.attach.pipe(
+    Effect.map(({ changes, current }) => ({ changes: changes.pipe(Stream.map(project)), current: project(current) }))
+  ),
   get: signal.get.pipe(Effect.map(project)),
   changes: signal.changes.pipe(Stream.map(project))
 })
@@ -75,6 +108,16 @@ export const zipCurrentSignals = <A, EA, B, EB>(
   left: CurrentSignal<A, EA>,
   right: CurrentSignal<B, EB>
 ): CurrentSignal<readonly [A, B], EA | EB> => ({
+  attach: Effect.all([left.attach, right.attach]).pipe(
+    Effect.flatMap(([leftAttachment, rightAttachment]) =>
+      attachmentOf(
+        Stream.zipLatest(
+          Stream.concat(Stream.make(leftAttachment.current), leftAttachment.changes),
+          Stream.concat(Stream.make(rightAttachment.current), rightAttachment.changes)
+        )
+      )
+    )
+  ),
   get: Effect.all([left.get, right.get]).pipe(
     Effect.map(([leftValue, rightValue]) => [leftValue, rightValue] as const)
   ),
@@ -709,8 +752,8 @@ export const reflectDeliverySettlements = Effect.fn("Delivery.reflectDeliverySet
 > {
   const projection = yield* DeliveryReflectionProjection
   const reflection = projection.of(settlements)
-  return {
+  return makeCurrentSignal({
     get: reflection.current.get.pipe(Effect.map(makeDeliveryConsequences)),
     changes: reflection.current.changes.pipe(Stream.map(makeDeliveryConsequences))
-  }
+  })
 })

@@ -9,6 +9,8 @@ const dalphSource = fileURLToPath(new URL("../../src/", import.meta.url))
 const runSourcePath = `${orchestratorSource}/coordination/run/run.ts`
 const stabilizationSourcePath = `${orchestratorSource}/coordination/run/run-stabilization.ts`
 const deliverySourcePath = `${orchestratorSource}/coordination/delivery/delivery.ts`
+const deliveryRuntimeSourcePath = `${orchestratorSource}/coordination/delivery/run-delivery-runtime.ts`
+const pauseObserverSourcePath = `${orchestratorSource}/coordination/run/pause-progress-observer.ts`
 
 const sourceFilesUnder = (root: string): ReadonlyArray<string> =>
   readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -29,6 +31,19 @@ it("one idempotent Run entry installs the delivery service contracts", () => {
   expect(runSource).not.toContain("bootstrap.fresh")
   expect(runSource).not.toContain("bootstrap.recovered")
   expect(runSource).not.toContain("bootstrap.controlled")
+})
+
+it("delivery consumers use the CurrentSignal attachment contract instead of local race protocols", () => {
+  const deliveryRuntimeSource = readFileSync(deliveryRuntimeSourcePath, "utf8")
+  const pauseObserverSource = readFileSync(pauseObserverSourcePath, "utf8")
+  const stabilizationSource = readFileSync(stabilizationSourcePath, "utf8")
+
+  expect(deliveryRuntimeSource).toContain("attachCurrentSignal(relation)")
+  expect(deliveryRuntimeSource).not.toContain("Stream.drop(1)")
+  expect(deliveryRuntimeSource).not.toContain("subscribedCurrent")
+  expect(pauseObserverSource).toContain("attachCurrentSignal(resources.runtimeObservation)")
+  expect(stabilizationSource).toContain("attachCurrentSignal(evaluations)")
+  expect(stabilizationSource).not.toContain("Stream.concat(Stream.fromEffect(evaluations.get), evaluations.changes)")
 })
 
 it("keeps shared delivery and authored cassettes free of implementation-mode vocabulary", () => {

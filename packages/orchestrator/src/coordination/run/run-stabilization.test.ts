@@ -39,6 +39,7 @@ import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from 
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import {
   currentSignalOf,
+  makeCurrentSignal,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
   TrackerGraphState
@@ -165,10 +166,8 @@ const freshGraphReadProposal = (trackerGraph: Extract<TrackerGraphState, { reado
   return proposal
 }
 
-const signalOf = (state: SubscriptionRef.SubscriptionRef<DeliveryRuntimeEvaluation>) => ({
-  get: SubscriptionRef.get(state),
-  changes: SubscriptionRef.changes(state)
-})
+const signalOf = (state: SubscriptionRef.SubscriptionRef<DeliveryRuntimeEvaluation>) =>
+  makeCurrentSignal({ get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) })
 
 const runtimeResourcesFor = Effect.fn("RunStabilizationTest.runtimeResourcesFor")(function* (
   lifecycle: ApplicationExitLifecycleService
@@ -331,24 +330,27 @@ it.effect("runs work published after G2 before phase two subscribes", () =>
       ])
       const g1 = graph("post-G2-G1", 1, openA)
       const state = yield* SubscriptionRef.make(evaluation(base, g1))
-      const getCount = yield* Ref.make(0)
+      const attachmentCount = yield* Ref.make(0)
       const executions = yield* Ref.make(0)
+      const underlying = makeCurrentSignal({ changes: SubscriptionRef.changes(state), get: SubscriptionRef.get(state) })
       const signal = {
-        changes: SubscriptionRef.changes(state),
-        get: Ref.updateAndGet(getCount, (count) => count + 1).pipe(
-          Effect.flatMap((count) =>
-            SubscriptionRef.get(state).pipe(
+        ...underlying,
+        attach: Ref.updateAndGet(attachmentCount, (count) => count + 1).pipe(
+          Effect.flatMap((count) => {
+            if (count !== 3) return underlying.attach
+            return SubscriptionRef.get(state).pipe(
               Effect.flatMap((current) => {
-                if (count !== 4 || current.current.trackerGraph._tag !== "GraphEstablished")
-                  return Effect.succeed(current)
-                const later = evaluation(base, current.current.trackerGraph, {
-                  ...emptyFrontier,
-                  proposals: [freshGraphReadProposal(current.current.trackerGraph)]
-                })
-                return SubscriptionRef.set(state, later).pipe(Effect.as(later))
+                if (current.current.trackerGraph._tag !== "GraphEstablished") return underlying.attach
+                return SubscriptionRef.set(
+                  state,
+                  evaluation(base, current.current.trackerGraph, {
+                    ...emptyFrontier,
+                    proposals: [freshGraphReadProposal(current.current.trackerGraph)]
+                  })
+                ).pipe(Effect.andThen(underlying.attach))
               })
             )
-          )
+          })
         )
       }
       const interpreter = Layer.mock(WorkflowInterpreter, {
@@ -396,7 +398,7 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
       yield* controller.publishAcceptedOwnership(responsibility)
       const releases = yield* Ref.make(0)
       const observedAfterG2 = yield* Ref.make(false)
-      const getCount = yield* Ref.make(0)
+      const attachmentCount = yield* Ref.make(0)
       const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
         {
           ...controller,
@@ -404,18 +406,19 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
         },
         (yield* makeApplicationExitLifecycle()).admission
       )
+      const underlying = makeCurrentSignal({ changes: SubscriptionRef.changes(state), get: SubscriptionRef.get(state) })
       const signal = {
-        changes: SubscriptionRef.changes(state),
-        get: Ref.updateAndGet(getCount, (count) => count + 1).pipe(
+        ...underlying,
+        attach: Ref.updateAndGet(attachmentCount, (count) => count + 1).pipe(
           Effect.flatMap((count) =>
-            count === 4
+            count === 3
               ? controller.snapshot.pipe(
                   Effect.tap(({ heldResponsibilityPositions }) =>
                     Ref.set(observedAfterG2, heldResponsibilityPositions.has(responsibility.queuedAt))
                   ),
-                  Effect.andThen(SubscriptionRef.get(state))
+                  Effect.andThen(underlying.attach)
                 )
-              : SubscriptionRef.get(state)
+              : underlying.attach
           )
         )
       }
