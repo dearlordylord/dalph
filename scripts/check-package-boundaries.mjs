@@ -114,7 +114,8 @@ const actionAdapterForbiddenBindings =
 
 const importReferencesIn = (source) => {
   const references = []
-  const staticImport = /^\s*(?<kind>import|export)\s+(?<typeOnly>type\s+)?(?<clause>[\s\S]*?)\s+from\s+["'](?<specifier>[^"']+)["']\s*;?/gmu
+  const staticImport =
+    /^\s*(?<kind>import|export)\s+(?<typeOnly>type\s+)?(?<clause>[\s\S]*?)\s+from\s+["'](?<specifier>[^"']+)["']\s*;?/gmu
   for (const match of source.matchAll(staticImport)) {
     const index = match.index ?? 0
     references.push({
@@ -203,8 +204,8 @@ const findSourceBoundaryViolations = (files) => {
     if (passiveSourceFiles(file.relativePath)) {
       for (const reference of references) {
         if (
-          hasFragment(reference.specifier, passiveForbiddenImportFragments)
-          && !(reference.specifier.includes("workflow-journal/store") && reference.typeOnly)
+          hasFragment(reference.specifier, passiveForbiddenImportFragments) &&
+          !(reference.specifier.includes("workflow-journal/store") && reference.typeOnly)
         ) {
           violations.push(
             sourceViolation(
@@ -261,9 +262,7 @@ const findSourceBoundaryViolations = (files) => {
           )
         )
       }
-      for (const identityConstructor of file.source.matchAll(
-        /\b(?:OperationId|AttemptId)\.make\s*\(/gu
-      )) {
+      for (const identityConstructor of file.source.matchAll(/\b(?:OperationId|AttemptId)\.make\s*\(/gu)) {
         violations.push(
           sourceViolation(
             file,
@@ -278,8 +277,8 @@ const findSourceBoundaryViolations = (files) => {
     if (isOrchestrator && dispatcherSourceFile(file.relativePath)) {
       for (const reference of references) {
         if (
-          hasFragment(reference.specifier, dispatcherForbiddenImportFragments)
-          && !(reference.typeOnly && reference.specifier.endsWith("/authorities/task-tracker/target.js"))
+          hasFragment(reference.specifier, dispatcherForbiddenImportFragments) &&
+          !(reference.typeOnly && reference.specifier.endsWith("/authorities/task-tracker/target.js"))
         ) {
           violations.push(
             sourceViolation(

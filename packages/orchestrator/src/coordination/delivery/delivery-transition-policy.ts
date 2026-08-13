@@ -1,13 +1,8 @@
 import type { RunnableFrontierTransition } from "../frontier/frontier.js"
 
-export type DeliveryTransitionRoute =
-  | "AcceptedOperation"
-  | "FreshProvenance"
-  | "IdentityFree"
-  | "NewOperation"
-  | "Observation"
+type DeliveryTransitionRoute = "AcceptedOperation" | "FreshProvenance" | "IdentityFree" | "NewOperation" | "Observation"
 
-export type AcceptedTransitionExecution = "Observation" | "Recovery" | "StoppedClaimReleaseRetry"
+type AcceptedTransitionExecution = "Observation" | "Recovery" | "StoppedClaimReleaseRetry"
 type PlannedAttemptProtocolSource = "None" | "PlannedAttempt" | "StopSubject"
 
 type DeliveryTransitionPolicy = {
@@ -76,14 +71,6 @@ type TransitionTagForRoute<Route extends DeliveryTransitionRoute> = {
     : never
 }[keyof typeof deliveryTransitionPolicy]
 
-type TransitionTagForAcceptedExecution<Execution extends AcceptedTransitionExecution> = {
-  [Tag in keyof typeof deliveryTransitionPolicy]: (typeof deliveryTransitionPolicy)[Tag] extends {
-    readonly acceptedExecution: Execution
-  }
-    ? Tag
-    : never
-}[keyof typeof deliveryTransitionPolicy]
-
 type TransitionTagForPlannedAttemptProtocol<Protocol extends PlannedAttemptProtocolSource> = {
   [Tag in keyof typeof deliveryTransitionPolicy]: (typeof deliveryTransitionPolicy)[Tag]["plannedAttemptProtocol"] extends Protocol
     ? Tag
@@ -95,22 +82,10 @@ export type TransitionForRoute<Route extends DeliveryTransitionRoute> = Extract<
   { readonly _tag: TransitionTagForRoute<Route> }
 >
 
-export type TransitionForAcceptedExecution<Execution extends AcceptedTransitionExecution> = Extract<
-  RunnableFrontierTransition,
-  { readonly _tag: TransitionTagForAcceptedExecution<Execution> }
->
-
 type TransitionForPlannedAttemptProtocol<Protocol extends PlannedAttemptProtocolSource> = Extract<
   RunnableFrontierTransition,
   { readonly _tag: TransitionTagForPlannedAttemptProtocol<Protocol> }
 >
-
-export const acceptedTransitionExecutionOf = (
-  transition: RunnableFrontierTransition
-): AcceptedTransitionExecution | undefined => {
-  const transitionPolicy: DeliveryTransitionPolicy = deliveryTransitionPolicy[transition._tag]
-  return transitionPolicy.acceptedExecution
-}
 
 export const usesPlannedAttemptProtocol = (
   transition: RunnableFrontierTransition
