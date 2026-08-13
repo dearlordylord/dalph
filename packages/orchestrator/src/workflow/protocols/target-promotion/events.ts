@@ -1,5 +1,6 @@
 import { Context, type Effect, Schema } from "effect"
 import { evidenceReferenceEquals, GitCommitSha, IntegrationTarget } from "@dalph/contracts"
+import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -108,7 +109,10 @@ export class TargetPromotionCompareAndSetFailure extends Schema.TaggedError<Targ
 export interface TargetPromotionGitService {
   readonly compareAndSet: (
     request: TargetPromotionRequest
-  ) => Effect.Effect<TargetPromotionCompareAndSetResult, TargetPromotionCompareAndSetFailure>
+  ) => Effect.Effect<
+    TargetPromotionCompareAndSetResult,
+    TargetPromotionCompareAndSetFailure | CoordinatorOwnershipError
+  >
   readonly read: (
     request: TargetPromotionRequest
   ) => Effect.Effect<TargetPromotionGitReadObservation, TargetPromotionGitReadFailure>

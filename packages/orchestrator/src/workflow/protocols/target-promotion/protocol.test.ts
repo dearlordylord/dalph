@@ -34,6 +34,13 @@ import {
   type TargetPromotionGitService
 } from "./events.js"
 import {
+  CoordinatorOwnership,
+  type CoordinatorOwnershipError,
+  CoordinatorOwnershipLost,
+  GitCommonDirectoryLocator,
+  guardCoordinatorMutation
+} from "../../../authorities/coordinator-ownership/ownership.js"
+import {
   deriveTargetPromotionState,
   runTargetPromotion,
   TargetPromotionPremiseContradiction,
@@ -71,7 +78,7 @@ import {
   makeObservedDeliveryActionLease
 } from "../../../coordination/delivery/delivery-runtime-observation.js"
 import { plannedAttemptProtocolControllerLayer } from "../planned-attempt-executor-work/protocol-controller.js"
-import { TargetPromotionRuntime } from "./runtime.js"
+import { coordinatorOwnedTargetPromotionGit, TargetPromotionRuntime } from "./runtime.js"
 import { TargetPromotionRuntimeUnavailable } from "../../../coordination/delivery/target-promotion-boundary.js"
 import type {
   DeliveryActionProposal,
@@ -344,6 +351,40 @@ it.effect("reports a typed failure when target-promotion runtime services are un
   })
 )
 
+it.effect("reports a typed failure when target-promotion coordinator ownership is unavailable", () =>
+  Effect.gen(function* () {
+    const resources = yield* makeIntegrationTargetResourceController()
+    const { action, transition } = promotionActionFor(responsibility)
+    const rawGit = TargetPromotionGit.of({
+      compareAndSet: () => Effect.die("missing ownership must fail before Git mutation"),
+      read: () => Effect.die("missing ownership must fail before Git observation")
+    })
+    const poisonJournal = InRunJournal.of({
+      append: () => Effect.die("missing ownership must fail before appending"),
+      read: () => Effect.die("missing ownership must fail before reading")
+    })
+    const failure = yield* executeIntegrationAction(
+      action,
+      transition,
+      {
+        acceptIntegrationTargetOwnership: Effect.void,
+        bindPlannedAttemptPosition: () => Effect.void,
+        forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } },
+        integrationTargets: resources,
+        recordIntent: () => Effect.void,
+        releasePlannedAttemptPosition: () => Effect.void,
+        withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
+      },
+      trackerTarget
+    ).pipe(
+      Effect.provideService(InRunJournal, poisonJournal),
+      Effect.provideService(TargetPromotionRuntime, TargetPromotionRuntime.of({ git: rawGit })),
+      Effect.flip
+    )
+    expect(failure).toBeInstanceOf(TargetPromotionRuntimeUnavailable)
+  })
+)
+
 it.effect("allows a different target while the exact promotion permit is active", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -381,6 +422,10 @@ it.effect("allows a different target while the exact promotion permit is active"
       ).pipe(
         Effect.provide(makeJournalLayer(records)),
         Effect.provideService(TargetPromotionRuntime, TargetPromotionRuntime.of({ git })),
+        Effect.provideService(
+          CoordinatorOwnership,
+          CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+        ),
         Effect.forkScoped
       )
       yield* Deferred.await(compareAndSetStarted)
@@ -460,6 +505,10 @@ it.effect("replays the authored promotion Exit cassette through production admis
       const running = yield* executeIntegrationAction(action, transition, lease, trackerTarget).pipe(
         Effect.provide(makeJournalLayer(records)),
         Effect.provideService(TargetPromotionRuntime, TargetPromotionRuntime.of({ git })),
+        Effect.provideService(
+          CoordinatorOwnership,
+          CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+        ),
         Effect.andThen(Ref.update(successors, (count) => count + 1)),
         Effect.ensuring(owner.settle.pipe(Effect.andThen(admission.complete(admitted.reservation)))),
         Effect.forkScoped
@@ -479,6 +528,54 @@ it.effect("replays the authored promotion Exit cassette through production admis
       expect(yield* Ref.get(recorded)).toEqual(authored)
     })
   )
+)
+
+it.effect("production admission does not install the raw promotion Git mutation capability", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const compareAndSetCalls = yield* Ref.make(0)
+    const ownershipCalls = yield* Ref.make(0)
+    const resources = yield* makeIntegrationTargetResourceController()
+    yield* resources.acquire(responsibility)
+    yield* resources.publishAcceptedOwnership(responsibility)
+    const rawGit = TargetPromotionGit.of({
+      compareAndSet: () =>
+        Ref.update(compareAndSetCalls, (count) => count + 1).pipe(
+          Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
+        ),
+      read: () =>
+        Effect.succeed(
+          TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+        )
+    })
+    const ownership = CoordinatorOwnership.of({
+      release: Effect.void,
+      runMutation: (mutation) => Ref.update(ownershipCalls, (count) => count + 1).pipe(Effect.andThen(mutation))
+    })
+    const { action, transition } = promotionActionFor(responsibility)
+    const result = yield* executeIntegrationAction(
+      action,
+      transition,
+      {
+        acceptIntegrationTargetOwnership: Effect.void,
+        bindPlannedAttemptPosition: () => Effect.void,
+        forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } },
+        integrationTargets: resources,
+        recordIntent: () => Effect.void,
+        releasePlannedAttemptPosition: () => Effect.void,
+        withPlannedAttemptProtocol: () => Effect.die("unused planned-attempt protocol")
+      },
+      trackerTarget
+    ).pipe(
+      Effect.provide(makeJournalLayer(records)),
+      Effect.provideService(TargetPromotionRuntime, TargetPromotionRuntime.of({ git: rawGit })),
+      Effect.provideService(CoordinatorOwnership, ownership)
+    )
+
+    expect(result._tag).toBe("ActionCompleted")
+    expect(yield* Ref.get(compareAndSetCalls)).toBe(1)
+    expect(yield* Ref.get(ownershipCalls)).toBe(1)
+  })
 )
 
 it.effect("restart reconciles promotion intent before another compare-and-set", () =>
@@ -815,5 +912,137 @@ it.effect("rejects equivalent content without exact M ancestry", () =>
         "TargetPromotionStale"
       ])
     }
+  )
+)
+
+const ownershipLoss = new CoordinatorOwnershipLost({
+  gitCommonDirectory: GitCommonDirectoryLocator.make("/repositories/promotion.git")
+})
+
+it.effect("promotes through the current coordinator ownership capability", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const mutationCalls = yield* Ref.make(0)
+    const ownership = CoordinatorOwnership.of({
+      release: Effect.void,
+      runMutation: (mutation) => Ref.update(mutationCalls, (count) => count + 1).pipe(Effect.andThen(mutation))
+    })
+    const rawGit = TargetPromotionGit.of({
+      compareAndSet: () =>
+        Effect.succeed(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })),
+      read: () =>
+        Effect.succeed(
+          TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+        )
+    })
+    const state = yield* runTargetPromotion(candidate, verification).pipe(
+      Effect.provide(makeJournalLayer(records)),
+      Effect.provideService(TargetPromotionGit, coordinatorOwnedTargetPromotionGit(rawGit, ownership))
+    )
+
+    expect(state._tag).toBe("PromotionSucceeded")
+    expect(yield* Ref.get(mutationCalls)).toBe(1)
+  })
+)
+
+it.effect("keeps target observations readable without coordinator mutation authority", () =>
+  Effect.gen(function* () {
+    const rawGit = TargetPromotionGit.of({
+      compareAndSet: () => Effect.die("the read-only observation must not mutate Git"),
+      read: () =>
+        Effect.succeed(
+          TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: candidateCommit })
+        )
+    })
+    const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: () => Effect.fail(ownershipLoss) })
+    const guardedGit = coordinatorOwnedTargetPromotionGit(rawGit, ownership)
+
+    expect(yield* guardedGit.read(request)).toEqual(
+      TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: candidateCommit })
+    )
+  })
+)
+
+it.effect("sends no compare-and-set after coordinator ownership is lost", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const compareAndSetCalls = yield* Ref.make(0)
+    const rawGit = TargetPromotionGit.of({
+      compareAndSet: () =>
+        Ref.update(compareAndSetCalls, (count) => count + 1).pipe(
+          Effect.andThen(Effect.die("the guarded compare-and-set must not cross Git"))
+        ),
+      read: () =>
+        Effect.succeed(
+          TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+        )
+    })
+    const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: () => Effect.fail(ownershipLoss) })
+    const state = yield* runTargetPromotion(candidate, verification).pipe(
+      Effect.provide(makeJournalLayer(records)),
+      Effect.provideService(TargetPromotionGit, coordinatorOwnedTargetPromotionGit(rawGit, ownership))
+    )
+
+    expect(state._tag).toBe("PromotionPending")
+    expect(yield* Ref.get(compareAndSetCalls)).toBe(0)
+    expect(eventTags(yield* Ref.get(records))).toEqual(["TargetPromotionIntended", "TargetPromotionAttemptIntended"])
+  })
+)
+
+it.effect("interrupts an in-flight compare-and-set and reconciles before a successor retry", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const compareAndSetCalls = yield* Ref.make(0)
+      const readCalls = yield* Ref.make(0)
+      const compareAndSetStarted = yield* Deferred.make<void>()
+      const ownershipSignal = yield* Deferred.make<never, CoordinatorOwnershipError>()
+      const rawGit = TargetPromotionGit.of({
+        compareAndSet: Effect.fn("TargetPromotionTest.inFlightCompareAndSet")(function* () {
+          const call = yield* Ref.getAndUpdate(compareAndSetCalls, (count) => count + 1)
+          if (call === 0) {
+            yield* Deferred.succeed(compareAndSetStarted, undefined)
+            return yield* Effect.never
+          }
+          return TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })
+        }),
+        read: () =>
+          Ref.update(readCalls, (count) => count + 1).pipe(
+            Effect.as(
+              TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+            )
+          )
+      })
+      const firstOwnership = CoordinatorOwnership.of({
+        release: Deferred.fail(ownershipSignal, ownershipLoss).pipe(Effect.asVoid),
+        runMutation: (mutation) => guardCoordinatorMutation(ownershipSignal, mutation)
+      })
+      const invoke = (git: TargetPromotionGitService) =>
+        runTargetPromotion(candidate, verification).pipe(
+          Effect.provide(makeJournalLayer(records)),
+          Effect.provideService(TargetPromotionGit, git)
+        )
+      const first = yield* invoke(coordinatorOwnedTargetPromotionGit(rawGit, firstOwnership)).pipe(Effect.forkScoped)
+      yield* Deferred.await(compareAndSetStarted)
+      yield* Deferred.fail(ownershipSignal, ownershipLoss)
+      const interrupted = yield* Fiber.join(first)
+
+      expect(interrupted._tag).toBe("PromotionPending")
+      expect(yield* Ref.get(compareAndSetCalls)).toBe(1)
+      expect(yield* Ref.get(readCalls)).toBe(1)
+
+      const successorOwnership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+      const retried = yield* invoke(coordinatorOwnedTargetPromotionGit(rawGit, successorOwnership))
+
+      expect(retried._tag).toBe("PromotionSucceeded")
+      expect(yield* Ref.get(compareAndSetCalls)).toBe(2)
+      expect(yield* Ref.get(readCalls)).toBe(2)
+      expect(eventTags(yield* Ref.get(records))).toEqual([
+        "TargetPromotionIntended",
+        "TargetPromotionAttemptIntended",
+        "TargetPromotionAttemptIntended",
+        "TargetPromotionObservedSuccess"
+      ])
+    })
   )
 )

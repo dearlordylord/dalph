@@ -114,7 +114,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   integrationFinality: CompletionClaimBoundaryService | undefined,
   completionTask: CompletionTaskBoundaryService | undefined
 ) {
-  yield* CoordinatorOwnership
+  const ownership = yield* CoordinatorOwnership
   const inRunJournal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const executor = yield* PlannedAttemptExecutor
@@ -152,7 +152,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     integrationFinality !== undefined,
     completionTask !== undefined
   )
-  return Context.empty().pipe(
+  const activationContext = Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
     Context.add(RunRecoveryProjection, recovery),
     Context.add(OperationIdAllocator, operationIdAllocator),
@@ -186,6 +186,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     ),
     Context.addOrOmit(IntegrationTargetSelection, Option.fromUndefinedOr(integrationTarget))
   )
+  return Context.add(activationContext, CoordinatorOwnership, ownership)
 })
 
 /** Builds ordinary in-Run services after bootstrap has already validated the complete accepted prefix. */
