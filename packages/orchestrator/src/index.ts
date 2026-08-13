@@ -121,6 +121,12 @@ export {
   JournalSchemaVersion
 } from "./workflow-journal/identity.js"
 export { defaultTaskWorkCapacity, TaskWorkCapacity } from "./coordination/admission/capacity.js"
+export {
+  ApplicationExitDrainDuration,
+  applicationExitDrainDuration,
+  CoordinatorOwnershipObservationInterval,
+  coordinatorOwnershipObservationInterval
+} from "./coordination/timing/control-plane-budgets.js"
 export * from "./coordination/application-exit/lifecycle-decision.js"
 export * from "./coordination/application-exit/lifecycle.js"
 export * from "./coordination/application-exit/executor-drain.js"

@@ -14,7 +14,6 @@ import type { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import {
   ApplicationExitDiagnostic,
   ApplicationExitResult,
-  applicationExitDrainLimitSeconds,
   type ApplicationExitResult as ApplicationExitResultType,
   type ApplicationProcessEndDecision,
   decideApplicationProcessEnd
@@ -25,6 +24,7 @@ import {
   makeApplicationExitLifecycle
 } from "./lifecycle.js"
 import type { CoordinatorOwnershipCapability } from "../../authorities/coordinator-ownership/ownership.js"
+import { applicationExitDrainDuration } from "../timing/control-plane-budgets.js"
 
 /** One application Exit drain boundary failed without creating a Run workflow fact. */
 export class ApplicationExitDrainFailure extends Schema.TaggedError<ApplicationExitDrainFailure>()(
@@ -83,7 +83,7 @@ export class ApplicationExitRequestBoundary extends Context.Service<
   ApplicationExitRequestBoundaryService
 >()("@dalph/ApplicationExitRequestBoundary") {}
 
-const applicationExitDrainLimit = Duration.seconds(applicationExitDrainLimitSeconds)
+const applicationExitDrainLimit = applicationExitDrainDuration
 const applicationExitDrainLimitNanos = Duration.toNanosUnsafe(applicationExitDrainLimit)
 
 /** One independently useful quick-work family whose diagnostic order remains stable under concurrent Exit drain. */

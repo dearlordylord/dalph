@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, Ref, Scope } from "effect"
+import { Deferred, Duration, Effect, Exit, Fiber, Ref, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import {
@@ -9,6 +9,7 @@ import {
   type ApplicationProcessEndDecision
 } from "./lifecycle-decision.js"
 import { makeApplicationExitLifecycle } from "./lifecycle.js"
+import { applicationExitDrainDuration } from "../timing/control-plane-budgets.js"
 import { OperationId } from "../../workflow/identity.js"
 import { InterruptibleWorkflowBoundaryIntent } from "../../workflow/interpretation/interpreter.js"
 import { CompletionClaimCleanupBoundaryCall } from "../../workflow/interpretation/interruptible-boundary.js"
@@ -233,7 +234,7 @@ it.effect("coalesces repeated Exit requests without resetting the fixed five-sec
       yield* TestClock.adjust("4 seconds")
       const repeated = yield* boundary.requestExit.pipe(Effect.forkChild)
       yield* Effect.yieldNow
-      yield* TestClock.adjust("1 second")
+      yield* TestClock.adjust(Duration.subtract(applicationExitDrainDuration, Duration.seconds(4)))
 
       const firstResult = yield* Fiber.join(first)
       const repeatedResult = yield* Fiber.join(repeated)

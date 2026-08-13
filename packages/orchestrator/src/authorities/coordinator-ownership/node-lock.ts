@@ -15,8 +15,9 @@ import {
   type GitCommonDirectoryLocator,
   type GitCommonDirectoryTarget
 } from "./ownership.js"
+import { coordinatorOwnershipObservationInterval } from "../../coordination/timing/control-plane-budgets.js"
 
-const ownershipObservationSchedule = Schedule.spaced("1 second")
+const ownershipObservationSchedule = Schedule.spaced(coordinatorOwnershipObservationInterval)
 const lockHeldCodes = new Set(["EACCES", "EAGAIN", "EWOULDBLOCK"])
 const NativeLockCause = Schema.Struct({ code: Schema.String })
 

@@ -197,6 +197,8 @@ are not substitutes for this local-host exclusion rule.
 
 Filesystem qualification and lifecycle details are in
 [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md).
+The local ownership interval and its distinction from remote latency are in
+[Control-plane latency and responsiveness budgets](architecture/control-plane-latency-and-responsiveness.md).
 
 ## Graceful Application Exit
 
@@ -236,6 +238,9 @@ the integration/evidence boundary mapping is in
 [issue-207-integration-evidence-exit.md](scenarios/issue-207-integration-evidence-exit.md),
 and the durable-boundary trade-off is recorded in
 [ADR 0013](adr/0013-bound-graceful-application-exit.md).
+The five-second local drain boundary and its separation from executor and
+tracker latency are listed in the
+[control-plane budget map](architecture/control-plane-latency-and-responsiveness.md).
 
 ## Workflow Commands, Actions, Occurrences, and Events
 
@@ -419,6 +424,7 @@ depart from the community knowledge base.
 | [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md) | exclusive coordinator ownership, Run establishment and activation, pause, frontier/admission separation, capacity, waits, and stabilization |
 | [Tracker Graph and Claims](architecture/tracker-graph-and-claims.md) | tracker closure, observation evidence, GitHub consistency limits, named reads, mutations, and claims |
 | [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, candidate construction, verification, and exact-head promotion |
+| [Control-plane latency and responsiveness](architecture/control-plane-latency-and-responsiveness.md) | tracker freshness, local derivation, admission, executor observation, local ownership contradiction, application drain, and recovery timing policy |
 | [CONTEXT.md](CONTEXT.md) | canonical domain vocabulary |
 | [scenarios/](scenarios/) | chronological behavior and acceptance-test mappings |
 | [adr/](adr/) | accepted design decisions and their trade-offs |

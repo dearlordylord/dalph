@@ -85,7 +85,13 @@ implementing runtime behavior.
 
 | File | Issue |
 |---|---|
+| `issue-104-control-plane-latency-and-responsiveness.md` | 104 |
 | `issue-169-graceful-application-exit.md` | 169 |
+
+`issue-104-control-plane-latency-and-responsiveness.md` is the accepted
+planning chronology for timing budgets. It classifies existing local timing
+contracts and remote-boundary policies; it does not promise hard real-time
+behavior or an end-to-end latency SLA.
 
 **Milestone-scoped** — accepted against a milestone rather than one issue.
 `authored-cassette-abstraction-levels.md` refines the vocabulary accepted in

@@ -3,11 +3,12 @@ import {
   type PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelationKey
 } from "@dalph/contracts"
-import { Data, Match, Schema } from "effect"
+import { Data, Duration, Match, Schema } from "effect"
+import { applicationExitDrainDuration } from "../timing/control-plane-budgets.js"
 
 const initialDrainTickValue = 0
 /** The fixed V1 number of monotonic seconds and abstract model ticks in one Exit drain. */
-export const applicationExitDrainLimitSeconds = 5
+export const applicationExitDrainLimitSeconds = Duration.toSeconds(applicationExitDrainDuration)
 const finalDrainTickValue = applicationExitDrainLimitSeconds
 const penultimateDrainTickValue = 4
 const successfulProcessStatus = 0
