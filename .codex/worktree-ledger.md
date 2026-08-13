@@ -25,6 +25,7 @@ worktree is the only integration point; task worktrees never merge one another.
 | #104 | removed | removed | `d28e5a301` | `4d25e2e8a` | integrated as `07b37bdce`; reviewed and cleaned |
 | #59 | removed | removed | `e4c97f028` | implemented by `87ce5512f` / `f616fff9c` | audited complete and closed; stale #57 edge did not block |
 | #78 | removed | removed | `1e04e677c` | `499e5ae15..7bb1b0948` | integrated as `aeb042a74..5992d0941`; reviewed clean and cleaned |
+| #168 | `work/issue168` | `.worktrees/issue168` | `cd06ef905` | `cd06ef905` | active; generic opaque-boundary production capability, no concrete executor selection |
 
 ## Dependency order
 
@@ -45,8 +46,8 @@ then:
 #103 independent
 #104 independent
 #59 -> #78
-#69 -> #77
-#140 -> #75
+#168 -> #140 -> #219 -> #75
+#168 -> #140 -> #219 -> #58 -> #68 -> #69 -> #77
 ```
 
 ## External prerequisite holds
@@ -58,8 +59,10 @@ explicitly re-decided before implementation starts:
 | Requested root | Additional open blocker(s) | Consequence |
 | --- | --- | --- |
 | #59 | #57 | #57 behavior is integrated; edge is administratively stale. Audit #59 completion before starting #78. |
-| #69 | #168 and #68 | Do not start #69 or downstream #77 yet. |
-| #140 | #168 | Do not start #140 or downstream #75 yet. |
+| #140 | #168 | Do not start #140 until #168 is integrated. |
+| #219 | #140 | Maintainer decision; never agent-ready until #140 is integrated and concrete scenarios are accepted. |
+| #58 and #75 | #219 | Labels removed; do not start unless #219 explicitly selects and scopes the concrete implementation. |
+| #69 | #68 | Do not start #69 or downstream #77 yet. |
 
 #71, #72, #74, #103, and #104 have no remaining declared blockers.
 
