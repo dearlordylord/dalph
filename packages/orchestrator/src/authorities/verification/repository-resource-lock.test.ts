@@ -35,13 +35,15 @@ import {
   nodeTargetVerificationBoundaryLayer,
   RepositoryVerificationWrapper,
   RepositoryVerificationWrapperFailure,
-  RepositoryVerificationWrapperInterrupted
+  RepositoryVerificationWrapperInterrupted,
+  TargetVerificationWrapperExecutable
 } from "./repository-resource-lock.js"
 
 const nodeWrapperLayer = (script: string, args: ReadonlyArray<string> = []) =>
-  nodeRepositoryVerificationWrapperLayer({ args: ["-e", script, ...args], executable: execPath }).pipe(
-    Layer.provide(NodeServices.layer)
-  )
+  nodeRepositoryVerificationWrapperLayer({
+    args: ["-e", script, ...args],
+    executable: TargetVerificationWrapperExecutable.make(execPath)
+  }).pipe(Layer.provide(NodeServices.layer))
 
 const evidence = EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("a".repeat(64)) })
 const target = IntegrationTarget.make({
@@ -106,6 +108,15 @@ const emit = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
 emit({ _tag: "Waiting", requestId: request.requestId })
 emit({ _tag: "Acquired", requestId: request.requestId })
 emit({ _tag: "Terminal", result: { _tag: "Passed", correlation: request, artifacts: [] } })
+`
+
+const signalWrapperScript = `
+const fs = require("node:fs")
+const request = JSON.parse(fs.readFileSync(0, "utf8"))
+const emit = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
+emit({ _tag: "Waiting", requestId: request.requestId })
+emit({ _tag: "Acquired", requestId: request.requestId })
+process.kill(process.pid, "SIGTERM")
 `
 
 const failedWrapperScript = `
@@ -188,7 +199,24 @@ describe("repository verification wrapper node adapter", () => {
 
       expect(failure).toBeInstanceOf(RepositoryVerificationWrapperInterrupted)
       expect(failure).toMatchObject({ requestId: request.requestId, signal: "SIGTERM" })
+      expect(failure.observations.map((observation) => observation._tag)).toEqual([
+        "Waiting",
+        "Acquired",
+        "Interrupted",
+        "Released"
+      ])
     }).pipe(Effect.provide(nodeWrapperLayer(interruptedWrapperScript)))
+  )
+
+  it.effect("maps an operating-system signal to a typed interruption with observed lifecycle", () =>
+    Effect.gen(function* () {
+      const wrapper = yield* RepositoryVerificationWrapper
+      const failure = yield* wrapper.runOrResume(request).pipe(Effect.flip)
+
+      expect(failure).toBeInstanceOf(RepositoryVerificationWrapperInterrupted)
+      expect(failure).toMatchObject({ requestId: request.requestId, signal: "SIGTERM" })
+      expect(failure.observations.map((observation) => observation._tag)).toEqual(["Waiting", "Acquired"])
+    }).pipe(Effect.provide(nodeWrapperLayer(signalWrapperScript)))
   )
 
   it.effect("rejects malformed or incomplete wrapper output", () =>
@@ -198,6 +226,7 @@ describe("repository verification wrapper node adapter", () => {
 
       expect(failure).toBeInstanceOf(RepositoryVerificationWrapperFailure)
       expect(failure).toMatchObject({ requestId: request.requestId })
+      expect(failure.observations.map((observation) => observation._tag)).toEqual(["Waiting", "Acquired"])
     }).pipe(Effect.provide(nodeWrapperLayer(malformedWrapperScript)))
   )
 
@@ -210,9 +239,10 @@ describe("repository verification wrapper node adapter", () => {
       expect(failure).toMatchObject({ requestId: request.requestId, detail: "guarded command failed" })
     }).pipe(
       Effect.provide(
-        nodeTargetVerificationBoundaryLayer({ args: ["-e", failedWrapperScript], executable: execPath }).pipe(
-          Layer.provide(NodeServices.layer)
-        )
+        nodeTargetVerificationBoundaryLayer({
+          args: ["-e", failedWrapperScript],
+          executable: TargetVerificationWrapperExecutable.make(execPath)
+        }).pipe(Layer.provide(NodeServices.layer))
       )
     )
   )

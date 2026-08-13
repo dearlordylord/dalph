@@ -12,14 +12,14 @@ The coordinator starts verification for `V`. Dalph records the durable verificat
 
 The wrapper boundary is one direct, non-shell child-process invocation. The request is one JSON document on standard input. The wrapper emits one JSON object per standard-output line: `Waiting`, `Acquired`, `Terminal`, and `Released` for a settled run (or `Interrupted`/`Failed` when it cannot settle). Terminal artifact bytes are base64 on the wire and are decoded only after the complete terminal object validates. The adapter exposes the typed lifecycle observations to its runtime contract and passes only the terminal result to the existing provider-neutral journal protocol.
 
-If the wrapper reports a complete `Passed` result whose correlation is exactly `V`, the visible result is a passing verification for `M` and later integration may use the sealed evidence. If the child process disappears before a truthful terminal/release observation, Dalph reports a typed boundary failure and leaves evidence unsealed; a later attempt first reconciles the wrapper's authoritative state and reuses request `V`. Dalph never acquires the repository lock itself, invokes a private guarded command, or wraps the public wrapper in another guarded command. A different target remains independently usable while `M` waits.
+If the wrapper reports a complete `Passed` result whose correlation is exactly `V`, the visible result is a passing verification for `M` and later integration may use the sealed evidence. If the child process disappears before a truthful terminal/release observation, Dalph reports a typed boundary failure and leaves evidence unsealed. Retry/reconciliation remains owned by the #59 provider-neutral protocol; this adapter only invokes the configured `runOrResume` wrapper operation and does not claim to prove whether a lost real wrapper run began. Dalph never acquires the repository lock itself, invokes a private guarded command, or wraps the public wrapper in another guarded command. A different target remains independently usable while `M` waits.
 
 Acceptance tests:
 
 - `invokes exactly one public wrapper and keeps lifecycle observations typed`
 - `waits for the wrapper-owned repository lock then releases it`
 - `keeps another target usable while exact M verifies and releases only M's target when it settles` (#59)
-- `reconciles a lost verification response by the same request identity` (#59)
+- #59's provider-neutral retry/reconciliation test remains the owner of lost-response behavior; this adapter has no real-wrapper retry claim.
 
 ## Scenario 2 — interruption and wrapper failure are observations, not success
 
@@ -27,20 +27,20 @@ At the start, `V` is still the only request for `M`. The wrapper is waiting for 
 
 The OS interrupts the wrapper, or the wrapper reports a typed failure while it owns the lock. The wrapper is responsible for releasing its lock; the adapter observes the wrapper's interruption/failure and the release (or reports that release was not observed). Dalph records a nonpass terminal when the wrapper supplies one, or a typed boundary failure when it cannot supply a truthful terminal. It preserves the exact candidate/request and does not promote or replace `M`.
 
-The forbidden result is a `Passed` evidence event inferred from process exit, partial output, lock release, or a stale artifact. Retry is allowed only after a fresh wrapper reconciliation, with the same `V`; Dalph does not reconstruct a lock lease or silently start a different request.
+The forbidden result is a `Passed` evidence event inferred from process exit, partial output, lock release, or a stale artifact. This adapter does not infer retry safety or reconstruct a lock lease; the #59 provider-neutral protocol owns retry/reconciliation after this boundary reports its typed observation.
 
 Acceptance tests:
 
 - `maps interruption to a typed observation and keeps success fail-closed`
 - `maps wrapper failure and missing release to a fail-closed boundary failure`
 - `seals failed killed partial and timed-out diagnostics without passing evidence` (#59)
-- `reconciles a lost verification response by the same request identity` (#59)
+- #59's provider-neutral retry/reconciliation test remains the owner of lost-response behavior; this adapter has no real-wrapper retry claim.
 
 ## Scenario 3 — partial or malformed output cannot seal success
 
 At the start, `V` has been sent to the public wrapper. The wrapper emits waiting/acquisition observations and either emits a `Partial`, `Failed`, `Killed`, or `TimedOut` terminal, or exits after only a prefix/malformed response. Artifact bytes may be present, but they are not proof of complete verification.
 
-Dalph accepts only a schema-valid terminal correlated to `V`. A valid nonpass terminal is journaled as stopped verification after artifacts are stored and reread; malformed, missing, foreign, or incomplete output is a typed boundary failure. In both cases no passing evidence is sealed and no integration promotion follows. The wrapper remains the sole owner of its heavy lock and any retry must reconcile the same request with the wrapper first.
+Dalph accepts only a schema-valid terminal correlated to `V`. A valid nonpass terminal is journaled as stopped verification after artifacts are stored and reread; malformed, missing, foreign, or incomplete output is a typed boundary failure. In both cases no passing evidence is sealed and no integration promotion follows. The wrapper remains the sole owner of its heavy lock; retry/reconciliation is outside this adapter and remains the #59 protocol's responsibility.
 
 Acceptance tests:
 
@@ -53,7 +53,7 @@ Acceptance tests:
 | Chronological scenario | Acceptance test(s) |
 | --- | --- |
 | Wrapper waits, acquires, verifies, and releases its own lock for exact `M` | `invokes exactly one public wrapper and keeps lifecycle observations typed`; `waits for the wrapper-owned repository lock then releases it`; `keeps another target usable while exact M verifies and releases only M's target when it settles` (#59) |
-| Wrapper/process interruption or failure | `maps interruption to a typed observation and keeps success fail-closed`; `maps wrapper failure and missing release to a fail-closed boundary failure`; `seals failed killed partial and timed-out diagnostics without passing evidence` (#59); `reconciles a lost verification response by the same request identity` (#59) |
+| Wrapper/process interruption or failure | `maps interruption to a typed observation and keeps success fail-closed`; `maps wrapper failure and missing release to a fail-closed boundary failure`; `seals failed killed partial and timed-out diagnostics without passing evidence` (#59); #59 owns lost-response retry/reconciliation |
 | Partial, malformed, or foreign output | `seals nonpass terminal observations without treating partial verification as success`; `rejects malformed or incomplete wrapper output`; `records a contradiction and fails closed for a foreign wrapper result` (#59) |
 
 The existing #59 conformance tests cover the provider-neutral journal/evidence consequences named above. The tests listed here cover the real child-process and repository-wrapper boundary added by #78.
