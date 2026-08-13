@@ -1,7 +1,7 @@
 // @effect-diagnostics multipleEffectProvide:off
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, FileSystem, Layer, PlatformError, Stream } from "effect"
+import { Deferred, Effect, FileSystem, Fiber, Layer, PlatformError, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { describe, expect } from "vitest"
 import {
@@ -31,6 +31,7 @@ import {
   WorktreeBaseMismatch
 } from "./worktree.js"
 import { nodeGitWorktreeLayer } from "./node-worktree.js"
+import { observePlannedAttemptWorktree } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 
 const run = Effect.fn("GitWorktree.Test.runGit")(function* (cwd: string, ...args: ReadonlyArray<string>) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -131,6 +132,108 @@ describe("node GitWorktree adapter", () => {
     )
   )
 
+  it.effect("rediscovers an exact dirty worktree without cleaning tracked or untracked files", () =>
+    Effect.scoped(
+      withRepository(({ baseSha, directory, gitDirectory }) =>
+        Effect.gen(function* () {
+          const repository = `${directory}/repository`
+          const fileSystem = yield* FileSystem.FileSystem
+          const git = yield* GitWorktree
+          const plan = makePlan(baseSha, "dirty", `${directory}/dirty`)
+
+          yield* runGitWorktreeReconciliation(git, plan)
+          yield* fileSystem.writeFileString(`${plan.worktree}/tracked.txt`, "committed")
+          yield* run(plan.worktree, "add", "tracked.txt")
+          yield* run(plan.worktree, "commit", "-m", "tracked change")
+          yield* fileSystem.writeFileString(`${plan.worktree}/tracked.txt`, "dirty tracked content")
+          yield* fileSystem.writeFileString(`${plan.worktree}/untracked.txt`, "untracked content")
+
+          const rediscovered = yield* runGitWorktreeReconciliation(git, plan)
+          expect(rediscovered).toMatchObject({
+            _tag: "PlannedWorktreeReady",
+            baseSha,
+            branch: plan.branch,
+            worktree: plan.worktree
+          })
+          expect(yield* fileSystem.readFileString(`${plan.worktree}/tracked.txt`)).toBe("dirty tracked content")
+          expect(yield* fileSystem.readFileString(`${plan.worktree}/untracked.txt`)).toBe("untracked content")
+
+          const status = yield* run(plan.worktree, "status", "--porcelain")
+          expect(status).toContain("M tracked.txt")
+          expect(status).toContain("?? untracked.txt")
+
+          const registrations = (yield* run(repository, "worktree", "list", "--porcelain"))
+            .split("\n")
+            .filter((line) => line.startsWith("worktree "))
+          expect(registrations.filter((line) => line === `worktree ${plan.worktree}`)).toHaveLength(1)
+        }).pipe(Effect.provide(adapterLayer(gitDirectory)))
+      )
+    )
+  )
+
+  it.effect("reports a lost exact worktree without recreating or deleting any path", () =>
+    Effect.scoped(
+      withRepository(({ baseSha, directory, gitDirectory }) =>
+        Effect.gen(function* () {
+          const repository = `${directory}/repository`
+          const fileSystem = yield* FileSystem.FileSystem
+          const git = yield* GitWorktree
+          const plan = makePlan(baseSha, "lost", `${directory}/lost`)
+
+          yield* runGitWorktreeReconciliation(git, plan)
+          yield* run(repository, "worktree", "remove", "--force", plan.worktree)
+          yield* run(repository, "worktree", "prune")
+
+          const observation = yield* observePlannedAttemptWorktree(git, plan)
+          expect(observation).toMatchObject({ _tag: "AttemptWorktreeLost", plannedAttempt: plan })
+          expect(yield* fileSystem.exists(plan.worktree)).toBe(false)
+          expect(yield* run(repository, "rev-parse", plan.branch)).toBe(baseSha)
+          expect(yield* run(repository, "worktree", "list", "--porcelain")).not.toContain(`worktree ${plan.worktree}`)
+        }).pipe(Effect.provide(adapterLayer(gitDirectory)))
+      )
+    )
+  )
+
+  it.effect("preserves the exact worktree when interrupted after Git creation", () =>
+    Effect.scoped(
+      withRepository(({ baseSha, directory, gitDirectory }) =>
+        Effect.gen(function* () {
+          const repository = `${directory}/repository`
+          const fileSystem = yield* FileSystem.FileSystem
+          const git = yield* GitWorktree
+          const plan = makePlan(baseSha, "interrupted", `${directory}/interrupted`)
+          const creationFinished = yield* Deferred.make<void>()
+          const releaseReconciliation = yield* Deferred.make<void>()
+          const gatedGit: GitWorktreeService = {
+            createPlannedWorktree: (attempt) =>
+              git
+                .createPlannedWorktree(attempt)
+                .pipe(
+                  Effect.andThen(Deferred.succeed(creationFinished, undefined)),
+                  Effect.andThen(Deferred.await(releaseReconciliation))
+                ),
+            readPlannedWorktree: git.readPlannedWorktree
+          }
+
+          const reconciliation = yield* Effect.forkScoped(runGitWorktreeReconciliation(gatedGit, plan))
+          yield* Deferred.await(creationFinished)
+          yield* Fiber.interrupt(reconciliation)
+
+          const observation = yield* git.readPlannedWorktree(plan)
+          expect(observation).toMatchObject({
+            _tag: "PlannedWorktreeReady",
+            baseSha,
+            branch: plan.branch,
+            worktree: plan.worktree
+          })
+          expect(yield* fileSystem.exists(plan.worktree)).toBe(true)
+          expect(yield* run(repository, "rev-parse", plan.branch)).toBe(baseSha)
+          expect(yield* run(repository, "worktree", "list", "--porcelain")).toContain(`worktree ${plan.worktree}`)
+        }).pipe(Effect.provide(adapterLayer(gitDirectory)))
+      )
+    )
+  )
+
   it.effect("preserves a mismatched branch without repair", () =>
     Effect.scoped(
       withRepository(({ baseSha, directory, gitDirectory }) =>
@@ -165,24 +268,42 @@ describe("node GitWorktree adapter", () => {
 
           const untracked = makePlan(baseSha, "untracked", `${directory}/untracked`)
           yield* fileSystem.makeDirectory(untracked.worktree)
+          yield* fileSystem.writeFileString(`${untracked.worktree}/do-not-delete.txt`, "untracked-preserved")
           expect(yield* Effect.flip(runGitWorktreeReconciliation(git, untracked))).toBeInstanceOf(UntrackedWorktreePath)
           expect(yield* fileSystem.exists(untracked.worktree)).toBe(true)
+          expect(yield* fileSystem.readFileString(`${untracked.worktree}/do-not-delete.txt`)).toBe(
+            "untracked-preserved"
+          )
 
           const foreignPath = `${directory}/foreign`
           yield* run(repository, "worktree", "add", "-b", "foreign", foreignPath, baseSha)
+          yield* fileSystem.writeFileString(`${foreignPath}/tracked.txt`, "foreign-base")
+          yield* run(foreignPath, "add", "tracked.txt")
+          yield* run(foreignPath, "commit", "-m", "foreign change")
+          yield* fileSystem.writeFileString(`${foreignPath}/tracked.txt`, "foreign-dirty")
+          yield* fileSystem.writeFileString(`${foreignPath}/do-not-delete.txt`, "foreign-untracked")
           const foreign = makePlan(baseSha, "foreign", `${directory}/expected-foreign`)
           expect(yield* Effect.flip(runGitWorktreeReconciliation(git, foreign))).toBeInstanceOf(
             ForeignWorktreeRegistration
           )
           expect(yield* fileSystem.exists(foreignPath)).toBe(true)
+          expect(yield* fileSystem.readFileString(`${foreignPath}/tracked.txt`)).toBe("foreign-dirty")
+          expect(yield* fileSystem.readFileString(`${foreignPath}/do-not-delete.txt`)).toBe("foreign-untracked")
 
           const conflictingPath = `${directory}/conflicting`
           yield* run(repository, "worktree", "add", "-b", "other", conflictingPath, baseSha)
+          yield* fileSystem.writeFileString(`${conflictingPath}/tracked.txt`, "conflicting-base")
+          yield* run(conflictingPath, "add", "tracked.txt")
+          yield* run(conflictingPath, "commit", "-m", "conflicting change")
+          yield* fileSystem.writeFileString(`${conflictingPath}/tracked.txt`, "conflicting-dirty")
+          yield* fileSystem.writeFileString(`${conflictingPath}/do-not-delete.txt`, "conflicting-untracked")
           const conflicting = makePlan(baseSha, "expected", conflictingPath)
           expect(yield* Effect.flip(runGitWorktreeReconciliation(git, conflicting))).toBeInstanceOf(
             ConflictingWorktreeRegistration
           )
           expect(yield* run(conflictingPath, "rev-parse", "--abbrev-ref", "HEAD")).toBe("other")
+          expect(yield* fileSystem.readFileString(`${conflictingPath}/tracked.txt`)).toBe("conflicting-dirty")
+          expect(yield* fileSystem.readFileString(`${conflictingPath}/do-not-delete.txt`)).toBe("conflicting-untracked")
         }).pipe(Effect.provide(adapterLayer(gitDirectory)))
       )
     )

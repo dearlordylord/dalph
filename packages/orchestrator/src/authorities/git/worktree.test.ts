@@ -25,6 +25,11 @@ import {
   TestGitWorktree,
   WorktreeBaseMismatch
 } from "./worktree.js"
+import {
+  CoordinatorLockObservationContradiction,
+  CoordinatorOwnershipLost,
+  GitCommonDirectoryLocator
+} from "../coordinator-ownership/ownership.js"
 
 const baseSha = GitCommitSha.make("0123456789abcdef0123456789abcdef01234567")
 const plan = PlannedTaskAttempt.make({
@@ -164,6 +169,52 @@ describe("GitWorktree contract", () => {
     return Effect.gen(function* () {
       const git = yield* GitWorktree
       expect(yield* Effect.flip(runGitWorktreeReconciliation(git, plan))).toEqual(conflict)
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("does not turn an ownership loss into a ready worktree proof", () => {
+    const ready = PlannedWorktreeReady.make({ baseSha, branch: plan.branch, headSha: baseSha, worktree: plan.worktree })
+    const ownershipLost = new CoordinatorOwnershipLost({
+      gitCommonDirectory: GitCommonDirectoryLocator.make("/repositories/example/.git")
+    })
+    let reads = 0
+    const layer = Layer.succeed(
+      GitWorktree,
+      GitWorktree.of({
+        createPlannedWorktree: () => Effect.fail(ownershipLost),
+        readPlannedWorktree: () =>
+          Effect.sync(() => {
+            reads += 1
+            return reads === 1 ? PlannedWorktreeAbsent.make({}) : ready
+          })
+      })
+    )
+    return Effect.gen(function* () {
+      const git = yield* GitWorktree
+      expect(yield* Effect.flip(runGitWorktreeReconciliation(git, plan))).toEqual(ownershipLost)
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("does not turn an ownership contradiction into a ready worktree proof", () => {
+    const ready = PlannedWorktreeReady.make({ baseSha, branch: plan.branch, headSha: baseSha, worktree: plan.worktree })
+    const ownershipContradiction = new CoordinatorLockObservationContradiction({
+      gitCommonDirectory: GitCommonDirectoryLocator.make("/repositories/example/.git")
+    })
+    let reads = 0
+    const layer = Layer.succeed(
+      GitWorktree,
+      GitWorktree.of({
+        createPlannedWorktree: () => Effect.fail(ownershipContradiction),
+        readPlannedWorktree: () =>
+          Effect.sync(() => {
+            reads += 1
+            return reads === 1 ? PlannedWorktreeAbsent.make({}) : ready
+          })
+      })
+    )
+    return Effect.gen(function* () {
+      const git = yield* GitWorktree
+      expect(yield* Effect.flip(runGitWorktreeReconciliation(git, plan))).toEqual(ownershipContradiction)
     }).pipe(Effect.provide(layer))
   })
 

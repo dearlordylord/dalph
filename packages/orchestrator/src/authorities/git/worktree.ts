@@ -185,7 +185,16 @@ export const runGitWorktreeReconciliation = Effect.fn("GitWorktree.runReconcilia
 
   const request = yield* git.createPlannedWorktree(plannedAttempt).pipe(Effect.result)
   const observed = yield* git.readPlannedWorktree(plannedAttempt).pipe(Effect.flatMap(requireExactObservation))
-  if (observed._tag === "PlannedWorktreeReady") return observed
+  if (observed._tag === "PlannedWorktreeReady") {
+    // A Git create failure is ambiguous and may have applied the exact request,
+    // so the matching read can reconcile it. Losing coordinator ownership is
+    // different: the process no longer has permission to continue the exact
+    // worktree request, even when the read finds a ready worktree.
+    if (request._tag === "Failure" && request.failure._tag !== "GitWorktreeCreateFailure") {
+      return yield* request.failure
+    }
+    return observed
+  }
   if (request._tag === "Failure") return yield* request.failure
   return yield* new GitWorktreeCreateFailure({
     detail: "Git acknowledged worktree creation but a fresh read still reports it absent",
