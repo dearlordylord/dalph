@@ -19,10 +19,11 @@ worktree is the only integration point; task worktrees never merge one another.
 | #216 | removed | removed | `da525987c` | `84b6528a0` | integrated as `a1f1a7bff`; reviewed and cleaned |
 | #159 | n/a | n/a | n/a | superseded by `360258012` | closed without code change |
 | #71 | removed | removed | `a1f1a7bff` | `034a1d60e` | integrated as `ae22e9dab`; native opt-in run still pending, issue remains open |
-| #72 | `work/issue72` | `.worktrees/issue72` | `35c698b73` | `pending` | queued after #76 lane completed |
+| #72 | removed | removed | `35c698b73` | `089c9a35d` | integrated as `d6a9a63ae`; native opt-in run still pending, issue remains open |
 | #74 | removed | removed | `ae22e9dab` | `eeddf5e81` | integrated as `0d88259cd`; reviewed and cleaned |
 | #103 | `work/issue103` | `.worktrees/issue103` | `0d88259cd` | `pending` | queued after #74 lane completed |
 | #104 | `work/issue104` | `.worktrees/issue104` | `d28e5a301` | `pending` | queued after #212 tooling lane completed |
+| blocker audit | `work/blocker-audit` | `.worktrees/blocker-audit` | `d6a9a63ae` | `pending` | auditing live #57/#168/#68 edges before #59/#69/#140 |
 
 ## Dependency order
 
