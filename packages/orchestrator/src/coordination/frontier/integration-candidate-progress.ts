@@ -13,16 +13,18 @@ export const acceptedCandidateProgressAt = (
   records: ReadonlyArray<JournalRecord>,
   responsibility: StartedIntegrationResponsibility
 ): JournalPosition | null => {
-  const intent = records.findLast(
+  const intentRecord = records.findLast(
     ({ event }) =>
       event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
-  )?.event
-  if (intent?._tag !== "IntegrationCandidateConstructionIntended") return null
+  )
+  const intent = intentRecord?.event
+  if (intentRecord === undefined || intent?._tag !== "IntegrationCandidateConstructionIntended") return null
   const isCandidateEvent = Schema.is(IntegrationCandidateConstructionJournalEvent)
   const relevant = records.findLast(
-    ({ event }) =>
+    ({ event, position }) =>
+      position > intentRecord.position &&
       isCandidateEvent(event) &&
       integrationCandidateCorrelationEquals(integrationCandidateConstructionEventCorrelation(event), intent.correlation)
   )
-  return Option.getOrThrow(Option.fromUndefinedOr(relevant)).position
+  return Option.match(Option.fromUndefinedOr(relevant), { onNone: () => null, onSome: ({ position }) => position })
 }

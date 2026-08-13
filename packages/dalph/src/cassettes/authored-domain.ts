@@ -3,6 +3,7 @@ import { Effect, Match, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
   IntegrationTarget,
   TaskExecutorLocator,
   TaskId,
@@ -729,6 +730,7 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   /** Git applies the planned-worktree create, but Dalph loses the response before the ordinary reread. */
   GitPlannedWorktreeCreateResponseLost: { detail: Schema.String },
   IntegrationCandidateAgentReported: {
+    attemptId: AttemptId,
     report: Schema.TaggedUnion({
       Conflict: {},
       CorrelationContradiction: {},
@@ -737,8 +739,16 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
       Working: {}
     })
   },
-  IntegrationCandidateGitValidationFailed: { detail: Schema.String },
-  IntegrationCandidateGitValidationReturned: { observation: IntegrationCandidateGitObservation },
+  IntegrationCandidateGitValidationFailed: {
+    candidateCommit: GitCommitSha,
+    detail: Schema.String,
+    repository: GitRepositoryLocator
+  },
+  IntegrationCandidateGitValidationReturned: {
+    candidateCommit: GitCommitSha,
+    observation: IntegrationCandidateGitObservation,
+    repository: GitRepositoryLocator
+  },
   /** The repository's public wrapper returns one terminal result for the selected plan. */
   TargetVerificationReturned: { result: AuthoredTargetVerificationResult },
   /** Git's exact H -> M compare-and-set result, or its lost response. */
@@ -748,13 +758,19 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   TargetPromotionCompareAndSetResponseLost: { detail: Schema.String },
   /** Git's complete candidate-ancestry reconciliation result, or an unreadable read. */
   TargetPromotionGitReadReturned: {
+    candidateCommit: GitCommitSha,
     observation: Schema.TaggedUnion({
       CandidateAncestor: { currentHeadSha: GitCommitSha },
       CandidateCurrent: { currentHeadSha: GitCommitSha },
       CandidateNotInAncestry: { currentHeadSha: GitCommitSha }
-    })
+    }),
+    repository: GitRepositoryLocator
   },
-  TargetPromotionGitReadFailed: { detail: Schema.String },
+  TargetPromotionGitReadFailed: {
+    candidateCommit: GitCommitSha,
+    detail: Schema.String,
+    repository: GitRepositoryLocator
+  },
   InitialControlPolicy: { policy: InitialControlPolicy },
   PlannedAttemptExecutorWorkReported: {
     report: AuthoredPlannedAttemptExecutorReport,

@@ -540,6 +540,7 @@ const trackerTargetIsSettled = (graph: TrackerGraphState): boolean =>
   graph.observation.snapshot.toWire().tasks.every(({ lifecycle }) => lifecycle._tag === "CompletedSuccessfully")
 
 const standingIsUnsettled = (standing: TicketDeliveryStanding): boolean => {
+  if (standing._tag === "IntegrationFinalitySettled") return false
   if (standing._tag === "ResponsibilitySituation") {
     return ![
       "FinalOutcome",

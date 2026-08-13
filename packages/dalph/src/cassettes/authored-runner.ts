@@ -57,6 +57,7 @@ import {
   freshWorkflowRunId,
   GitTargetLineage,
   IntegrationCandidateAgent,
+  IntegrationCandidateAgentFailure,
   IntegrationCandidateAgentReport,
   IntegrationCandidateResourceLocator,
   IntegrationCandidateGit,
@@ -1418,18 +1419,20 @@ const runAuthoredScenarioCassetteWith = (request: {
               )
               yield* Deferred.await(release)
             }
-            return yield* cursor.consumeTargetPromotionGitRead.pipe(
-              Effect.map(({ observation }) => TargetPromotionGitReadObservation.make(observation)),
-              Effect.mapError(
-                /* v8 ignore next -- @preserve Authored coordinator runs publish read failure through the runtime relation; the maintained direct protocol cassette owns the typed unreadable chronology. */
-                (failure) =>
-                  new TargetPromotionGitReadFailure({
-                    candidateCommit: request.candidateCommit,
-                    detail: `${failure._tag}: ${"detail" in failure ? failure.detail : "interaction mismatch"} at story position ${failure.storyPosition}`,
-                    target: request.integrationTarget
-                  })
+            return yield* cursor
+              .consumeTargetPromotionGitRead(request.integrationTarget.repository, request.candidateCommit)
+              .pipe(
+                Effect.map(({ observation }) => TargetPromotionGitReadObservation.make(observation)),
+                Effect.mapError(
+                  /* v8 ignore next -- @preserve Authored coordinator runs publish read failure through the runtime relation; the maintained direct protocol cassette owns the typed unreadable chronology. */
+                  (failure) =>
+                    new TargetPromotionGitReadFailure({
+                      candidateCommit: request.candidateCommit,
+                      detail: `${failure._tag}: ${"detail" in failure ? failure.detail : "interaction mismatch"} at story position ${failure.storyPosition}`,
+                      target: request.integrationTarget
+                    })
+                )
               )
-            )
           })
       }
       const observedExecutorLifecycleKeys = yield* Ref.make<ReadonlySet<string>>(new Set())
@@ -1674,7 +1677,14 @@ const runAuthoredScenarioCassetteWith = (request: {
           IntegrationCandidateAgent,
           IntegrationCandidateAgent.of({
             startOrContinue: (request) =>
-              cursor.consumeIntegrationCandidateAgentReport.pipe(
+              cursor.consumeIntegrationCandidateAgentReport(request.correlation.attemptId).pipe(
+                Effect.mapError(
+                  (failure) =>
+                    new IntegrationCandidateAgentFailure({
+                      detail: `${failure._tag} at story position ${failure.storyPosition}`,
+                      integrationSessionId: request.correlation.integrationSessionId
+                    })
+                ),
                 Effect.flatMap((candidateReport) => {
                   /* v8 ignore next -- @preserve Accepted authored candidate stories declare every report; this diagnostic keeps malformed runtime re-entry total. */
                   if (Option.isNone(candidateReport)) {
@@ -1684,9 +1694,9 @@ const runAuthoredScenarioCassetteWith = (request: {
                         Effect.orDie,
                         Effect.flatMap((candidateRecords) =>
                           Effect.die(
-                            `candidate frontier invoked the agent without an authored report: ${candidateRecords
+                            `candidate frontier invoked the agent without an authored report for ${JSON.stringify(request.correlation)} at ${request.candidateResource}: ${candidateRecords
                               .filter(({ event }) => event._tag.startsWith("IntegrationCandidate"))
-                              .map(({ event }) => event._tag)
+                              .map(({ event }) => JSON.stringify(event))
                               .join(",")}`
                           )
                         )
@@ -1759,7 +1769,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           IntegrationCandidateGit,
           IntegrationCandidateGit.of({
             readSubmittedCommit: (repository, candidateCommit) =>
-              cursor.consumeIntegrationCandidateGitValidation.pipe(
+              cursor.consumeIntegrationCandidateGitValidation(repository, candidateCommit).pipe(
                 Effect.map(({ observation }) => observation),
                 Effect.mapError(
                   (failure) =>

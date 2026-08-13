@@ -422,11 +422,12 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,
       GitWorktreeObservationChanged: (item) =>
         `Git changes the planned worktree observation to ${item.observation._tag}.`,
-      IntegrationCandidateAgentReported: (item) => `The integration agent reports ${item.report._tag}.`,
+      IntegrationCandidateAgentReported: (item) =>
+        `The integration agent reports ${item.report._tag} for ${item.attemptId}.`,
       IntegrationCandidateGitValidationFailed: (item) =>
-        `Git cannot validate the explicitly submitted candidate: ${item.detail}`,
+        `Git cannot validate candidate ${item.candidateCommit} in ${item.repository}: ${item.detail}`,
       IntegrationCandidateGitValidationReturned: (item) =>
-        `Git returns ${item.observation._tag} for the explicitly submitted candidate.`,
+        `Git returns ${item.observation._tag} for candidate ${item.candidateCommit} in ${item.repository}.`,
       CompletionTaskFocusedReadReturned: (item) =>
         `The task tracker reports task ${item.taskId} ${item.lifecycle} with ${item.unfinishedPrerequisiteTaskIds.length} unfinished prerequisites in the focused completion read.`,
       CompletionTaskRequestReturned: (item) =>
@@ -440,9 +441,9 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       TargetPromotionCompareAndSetResponseLost: (item) =>
         `Git may have applied the exact compare-and-set, but its response is lost: ${item.detail}`,
       TargetPromotionGitReadReturned: (item) =>
-        `Git returns ${item.observation._tag} from the current-head candidate-ancestry read.`,
+        `Git returns ${item.observation._tag} while reconciling candidate ${item.candidateCommit} in ${item.repository}.`,
       TargetPromotionGitReadFailed: (item) =>
-        `Git cannot complete the current-head candidate-ancestry read: ${item.detail}`,
+        `Git cannot reconcile candidate ${item.candidateCommit} in ${item.repository}: ${item.detail}`,
       TaskWorkSpecificationReadReturned: (item) => `The task tracker returns "${item.title}" for task ${item.taskId}.`,
       GitPlannedWorktreeCreateResponseLost: (item) =>
         `Git creates the exact planned worktree, but Dalph loses the response: ${item.detail}`,

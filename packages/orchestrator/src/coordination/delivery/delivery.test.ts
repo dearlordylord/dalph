@@ -121,13 +121,13 @@ const makeDeliveryRelationsLayer = (
   return makeDeliveryRelationsLayerWithRuntime({ ...deterministicDeliveryRuntimeSupport(policy), ...input, coherent })
 }
 
-const journaledGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = []) => {
+const journaledGraph = (revision: string, taskIds: ReadonlyArray<TaskId> = [], completed = false) => {
   const projected = TaskDagSnapshot.project(
     TrackerSnapshot.make({
       revision: TrackerRevision.make(revision),
       tasks: taskIds.map((id) => ({
         id,
-        lifecycle: TaskLifecycle.cases.Open.make({}),
+        lifecycle: completed ? TaskLifecycle.cases.CompletedSuccessfully.make({}) : TaskLifecycle.cases.Open.make({}),
         parentTaskId: null,
         prerequisiteIds: []
       }))
@@ -340,6 +340,46 @@ it.effect("keeps a proposed delivery unsettled until ordinary evidence advances 
         { _tag: "TrackerReconfirmationAllowed" }
       )
     ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+  })
+)
+
+it.effect("lets a completed tracker target terminate after exact integration finality settles", () =>
+  Effect.gen(function* () {
+    const fixture = integrationFinalityFixture
+    const relation = yield* deliveryRuntime.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          exactEvidence: currentSignalOf(releaseChronologyEvidence(5, true)),
+          graph: currentSignalOf(journaledGraphState(journaledGraph("finality-settled", [fixture.taskId], true))),
+          policy: currentSignalOf(policy)
+        })
+      )
+    )
+    const current = Option.getOrThrow(
+      yield* relation.changes.pipe(
+        Stream.map(({ current: snapshot }) => snapshot),
+        Stream.runHead
+      )
+    )
+
+    const delivery = current.ticketDeliveries.deliveries[0]
+    if (delivery === undefined) return yield* Effect.die("fixture must project one ticket delivery")
+    const settledStanding = delivery.standings.find((standing) => standing._tag === "IntegrationFinalitySettled")
+    if (settledStanding === undefined) return yield* Effect.die("fixture must project exact integration finality")
+    const settledCurrent = {
+      ...current,
+      ticketDeliveries: {
+        ...current.ticketDeliveries,
+        deliveries: [{ ...delivery, obligations: [] as const, standings: [settledStanding] as const }]
+      }
+    }
+    expect(
+      deliveryFinalityOf(
+        settledCurrent,
+        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "TrackerReconfirmationAllowed" }
+      )
+    ).toEqual({ _tag: "RunMayTerminate" })
   })
 )
 

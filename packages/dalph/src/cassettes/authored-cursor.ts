@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- One cursor atomically owns every authored story interaction and optional boundary probe. */
-import { Deferred, Effect, Option, Schema, Stream, SubscriptionRef } from "effect"
-import type { AttemptId, TaskId } from "@dalph/contracts"
+import { Deferred, Effect, Option, Ref, Schema, Stream, SubscriptionRef } from "effect"
+import type { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
 import {
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
@@ -47,6 +47,58 @@ export class AuthoredCoordinatorProcessDies extends Schema.TaggedError<AuthoredC
 ) {}
 
 type CursorFailure = AuthoredCassetteInteractionMismatch
+type GitRequestCorrelation = { readonly candidateCommit: GitCommitSha; readonly repository: GitRepositoryLocator }
+type CandidateGitStoryItem =
+  | typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationFailed.Type
+  | typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationReturned.Type
+type PromotionGitStoryItem =
+  | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadFailed.Type
+  | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadReturned.Type
+
+const gitRequestMatches = (
+  request: GitRequestCorrelation,
+  repository: GitRepositoryLocator,
+  candidateCommit: GitCommitSha
+): boolean => request.repository === repository && request.candidateCommit === candidateCommit
+
+const candidateGitStoryItem = (item: StoryItem | undefined): CandidateGitStoryItem | null =>
+  item?._tag === "IntegrationCandidateGitValidationFailed" || item?._tag === "IntegrationCandidateGitValidationReturned"
+    ? item
+    : null
+
+const candidateGitStoryItemMatches = (
+  item: StoryItem | undefined,
+  repository: GitRepositoryLocator,
+  candidateCommit: GitCommitSha
+): item is CandidateGitStoryItem => {
+  const candidate = candidateGitStoryItem(item)
+  return candidate !== null && gitRequestMatches(candidate, repository, candidateCommit)
+}
+
+const promotionGitStoryItem = (item: StoryItem | undefined): PromotionGitStoryItem | null =>
+  item?._tag === "TargetPromotionGitReadFailed" || item?._tag === "TargetPromotionGitReadReturned" ? item : null
+
+const promotionGitStoryItemMatches = (
+  item: StoryItem | undefined,
+  repository: GitRepositoryLocator,
+  candidateCommit: GitCommitSha
+): item is PromotionGitStoryItem => {
+  const candidate = promotionGitStoryItem(item)
+  return candidate !== null && gitRequestMatches(candidate, repository, candidateCommit)
+}
+
+const awaitsLaterStoryItem = (position: SubscriptionRef.SubscriptionRef<number>, index: number) =>
+  SubscriptionRef.changes(position).pipe(
+    Stream.filter((next) => next > index),
+    Stream.take(1),
+    Stream.runDrain
+  )
+
+const terminalStoryExpectation = (item: StoryItem | undefined): string | null => {
+  if (item === undefined) return "EndOfStory"
+  return item._tag === "ExpectedBehavior" ? item._tag : null
+}
+
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
   | { readonly _tag: "Mismatch"; readonly index: number; readonly item: StoryItem | undefined }
@@ -150,10 +202,16 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.InitialControlPolicy.Type,
     CursorFailure
   >
-  readonly consumeIntegrationCandidateAgentReport: Effect.Effect<
-    Option.Option<typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported.Type>
+  readonly consumeIntegrationCandidateAgentReport: (
+    attemptId: AttemptId
+  ) => Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported.Type>,
+    CursorFailure
   >
-  readonly consumeIntegrationCandidateGitValidation: Effect.Effect<
+  readonly consumeIntegrationCandidateGitValidation: (
+    repository: GitRepositoryLocator,
+    candidateCommit: GitCommitSha
+  ) => Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationReturned.Type,
     CursorFailure | AuthoredIntegrationCandidateGitValidationFailure
   >
@@ -165,7 +223,10 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.TargetPromotionCompareAndSetReturned.Type,
     CursorFailure | AuthoredTargetPromotionCompareAndSetFailure
   >
-  readonly consumeTargetPromotionGitRead: Effect.Effect<
+  readonly consumeTargetPromotionGitRead: (
+    repository: GitRepositoryLocator,
+    candidateCommit: GitCommitSha
+  ) => Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadReturned.Type,
     CursorFailure | AuthoredTargetPromotionGitReadFailure
   >
@@ -247,6 +308,13 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     Option.none()
   )
   const terminalAssertionsReached = yield* Deferred.make<void>()
+  const activeCandidateAgentRequests = yield* Ref.make<ReadonlySet<AttemptId>>(new Set())
+  const activeCandidateGitRequests = yield* Ref.make<
+    ReadonlyArray<{ readonly candidateCommit: GitCommitSha; readonly repository: GitRepositoryLocator }>
+  >([])
+  const activeTargetPromotionGitRequests = yield* Ref.make<
+    ReadonlyArray<{ readonly candidateCommit: GitCommitSha; readonly repository: GitRepositoryLocator }>
+  >([])
   const taskWorkSpecificationReadBoundaries = yield* SubscriptionRef.make<ReadonlyMap<TaskId, Deferred.Deferred<void>>>(
     new Map()
   )
@@ -499,37 +567,98 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.InitialControlPolicy)(item).pipe(Effect.orDie)
     )
   )
-  const consumeIntegrationCandidateAgentReport = Effect.gen(function* () {
+  const consumeIntegrationCandidateAgentReportLoop: (
+    attemptId: AttemptId
+  ) => Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported.Type>,
+    CursorFailure
+  > = Effect.fn("AuthoredCassette.consumeIntegrationCandidateAgentReportLoop")(function* (attemptId: AttemptId) {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported.Type =>
-        item?._tag === "IntegrationCandidateAgentReported"
+        item?._tag === "IntegrationCandidateAgentReported" && item.attemptId === attemptId
     )
-    /* v8 ignore next -- @preserve Candidate-report absence is an optional probe; maintained candidate stories exercise reports and the runner exercises the no-report outcome. */
-    return claimed._tag === "Mismatch"
-      ? Option.none()
-      : Option.some(
-          yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported)(
-            claimed.item
-          ).pipe(Effect.orDie)
-        )
+    if (claimed._tag === "Claimed") {
+      return Option.some(
+        yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported)(
+          claimed.item
+        ).pipe(Effect.orDie)
+      )
+    }
+    const current = story[claimed.index]
+    if (current?._tag === "DalphSelects" && current.operation._tag === "ReadTargetLineage") {
+      yield* SubscriptionRef.changes(position).pipe(
+        Stream.filter((next) => next > claimed.index),
+        Stream.take(1),
+        Stream.runDrain
+      )
+      return yield* consumeIntegrationCandidateAgentReportLoop(attemptId)
+    }
+    if (current?._tag !== "IntegrationCandidateAgentReported") {
+      return Option.none()
+    }
+    if (!(yield* Ref.get(activeCandidateAgentRequests)).has(current.attemptId)) {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: `IntegrationCandidateAgentReported/${attemptId}`,
+        expected: `IntegrationCandidateAgentReported/${current.attemptId}`,
+        storyPosition: claimed.index
+      })
+    }
+    yield* awaitsLaterStoryItem(position, claimed.index)
+    return yield* consumeIntegrationCandidateAgentReportLoop(attemptId)
   })
-  const consumeIntegrationCandidateGitValidation = Effect.gen(function* () {
+  const consumeIntegrationCandidateAgentReport = Effect.fn("AuthoredCassette.consumeIntegrationCandidateAgentReport")(
+    (attemptId: AttemptId) =>
+      Ref.update(activeCandidateAgentRequests, (current) => new Set(current).add(attemptId)).pipe(
+        Effect.andThen(consumeIntegrationCandidateAgentReportLoop(attemptId)),
+        Effect.ensuring(
+          Ref.update(
+            activeCandidateAgentRequests,
+            (current) => new Set([...current].filter((candidate) => candidate !== attemptId))
+          )
+        )
+      )
+  )
+  const consumeIntegrationCandidateGitValidationLoop: (
+    repository: GitRepositoryLocator,
+    candidateCommit: GitCommitSha
+  ) => Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationReturned.Type,
+    CursorFailure | AuthoredIntegrationCandidateGitValidationFailure
+  > = Effect.fn("AuthoredCassette.consumeIntegrationCandidateGitValidationLoop")(function* (
+    repository: GitRepositoryLocator,
+    candidateCommit: GitCommitSha
+  ) {
     const claimed = yield* claimNext(
       (
         item
       ): item is
         | typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationFailed.Type
         | typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationReturned.Type =>
-        item?._tag === "IntegrationCandidateGitValidationFailed" ||
-        item?._tag === "IntegrationCandidateGitValidationReturned"
+        candidateGitStoryItemMatches(item, repository, candidateCommit)
     )
-    /* v8 ignore next -- @preserve Candidate Git mismatch uses the same claimNext mismatch projection exercised by other authored boundaries. */
     if (claimed._tag === "Mismatch") {
-      return yield* new AuthoredCassetteInteractionMismatch({
-        actual: "IntegrationCandidateGitValidationFailed | IntegrationCandidateGitValidationReturned",
-        expected: claimed.item?._tag ?? "EndOfStory",
-        storyPosition: claimed.index
-      })
+      const current = story[claimed.index]
+      const expected = candidateGitStoryItem(current)
+      if (expected !== null) {
+        const owned = (yield* Ref.get(activeCandidateGitRequests)).some((request) =>
+          gitRequestMatches(request, expected.repository, expected.candidateCommit)
+        )
+        if (!owned) {
+          return yield* new AuthoredCassetteInteractionMismatch({
+            actual: `${repository}/${candidateCommit}`,
+            expected: `${expected.repository}/${expected.candidateCommit}`,
+            storyPosition: claimed.index
+          })
+        }
+      } else {
+        return yield* new AuthoredCassetteInteractionMismatch({
+          actual: `${repository}/${candidateCommit}`,
+          expected: terminalStoryExpectation(current) ?? current?._tag ?? "EndOfStory",
+          storyPosition: claimed.index
+        })
+      }
+      yield* awaitsLaterStoryItem(position, claimed.index)
+      return yield* consumeIntegrationCandidateGitValidationLoop(repository, candidateCommit)
     }
     if (claimed.item._tag === "IntegrationCandidateGitValidationFailed") {
       return yield* new AuthoredIntegrationCandidateGitValidationFailure({
@@ -539,6 +668,19 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     }
     return claimed.item
   })
+  const consumeIntegrationCandidateGitValidation = Effect.fn(
+    "AuthoredCassette.consumeIntegrationCandidateGitValidation"
+  )((repository: GitRepositoryLocator, candidateCommit: GitCommitSha) =>
+    Ref.update(activeCandidateGitRequests, (current) => [...current, { candidateCommit, repository }]).pipe(
+      Effect.andThen(consumeIntegrationCandidateGitValidationLoop(repository, candidateCommit)),
+      Effect.ensuring(
+        Ref.update(activeCandidateGitRequests, (current) => {
+          const index = current.findIndex((request) => gitRequestMatches(request, repository, candidateCommit))
+          return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)]
+        })
+      )
+    )
+  )
   const consumeTargetVerificationReturned = consume("TargetVerificationReturned").pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TargetVerificationReturned)(item).pipe(Effect.orDie)
@@ -570,19 +712,44 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     }
     return claimed.item
   })
-  const consumeTargetPromotionGitRead = Effect.gen(function* () {
+  const consumeTargetPromotionGitReadLoop: (
+    repository: GitRepositoryLocator,
+    candidateCommit: GitCommitSha
+  ) => Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadReturned.Type,
+    CursorFailure | AuthoredTargetPromotionGitReadFailure
+  > = Effect.fn("AuthoredCassette.consumeTargetPromotionGitReadLoop")(function* (
+    repository: GitRepositoryLocator,
+    candidateCommit: GitCommitSha
+  ) {
     const claimed = yield* claimNext(
       (
         item
       ): item is
         | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadReturned.Type
         | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadFailed.Type =>
-        item?._tag === "TargetPromotionGitReadReturned" || item?._tag === "TargetPromotionGitReadFailed"
+        promotionGitStoryItemMatches(item, repository, candidateCommit)
     )
     if (claimed._tag === "Mismatch") {
+      const current = story[claimed.index]
+      const expected = promotionGitStoryItem(current)
+      if (expected !== null) {
+        const owned = (yield* Ref.get(activeTargetPromotionGitRequests)).some((request) =>
+          gitRequestMatches(request, expected.repository, expected.candidateCommit)
+        )
+        if (!owned) {
+          return yield* new AuthoredCassetteInteractionMismatch({
+            actual: `${repository}/${candidateCommit}`,
+            expected: `${expected.repository}/${expected.candidateCommit}`,
+            storyPosition: claimed.index
+          })
+        }
+        yield* awaitsLaterStoryItem(position, claimed.index)
+        return yield* consumeTargetPromotionGitReadLoop(repository, candidateCommit)
+      }
       return yield* new AuthoredCassetteInteractionMismatch({
-        actual: "TargetPromotionGitReadReturned | TargetPromotionGitReadFailed",
-        expected: claimed.item?._tag ?? "EndOfStory",
+        actual: `${repository}/${candidateCommit}`,
+        expected: current?._tag ?? "EndOfStory",
         storyPosition: claimed.index
       })
     }
@@ -594,6 +761,18 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     }
     return claimed.item
   })
+  const consumeTargetPromotionGitRead = Effect.fn("AuthoredCassette.consumeTargetPromotionGitRead")(
+    (repository: GitRepositoryLocator, candidateCommit: GitCommitSha) =>
+      Ref.update(activeTargetPromotionGitRequests, (current) => [...current, { candidateCommit, repository }]).pipe(
+        Effect.andThen(consumeTargetPromotionGitReadLoop(repository, candidateCommit)),
+        Effect.ensuring(
+          Ref.update(activeTargetPromotionGitRequests, (current) => {
+            const index = current.findIndex((request) => gitRequestMatches(request, repository, candidateCommit))
+            return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)]
+          })
+        )
+      )
+  )
   /* v8 ignore stop -- @preserve */
   const atTerminalAssertions = SubscriptionRef.get(position).pipe(
     Effect.map((index) => story[index]?._tag === "ExpectedBehavior")

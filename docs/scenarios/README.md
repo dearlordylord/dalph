@@ -29,6 +29,7 @@ no issue declares any file here outdated.
 | `issue-135-pause-task-grouping-descendants.md` | 135 |
 | `issue-164-journal-first-tracker-observations.md` | 164 |
 | `issue-165-domain-readable-cassettes.md` | 165 |
+| `issue-167-controlled-provider-capstone.md` | 167 |
 | `issue-170-maintained-cassette-catalog.md` | 170 |
 | `issue-203-application-exit-model-mapping.md` | 203 |
 | `issue-204-application-exit-runtime-mapping.md` | 204 |

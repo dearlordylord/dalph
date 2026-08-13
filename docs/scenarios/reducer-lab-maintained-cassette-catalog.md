@@ -510,26 +510,22 @@ worktree, and integration responsibilities. Terms such as
 `IdentityFreeWorkflowRoute` stay in the secondary exact JSON rather than
 becoming the human action label.
 
-The linked `authored:deliveryInvariantStory` is a scheduling and restart
-chronology over the real production runtime, not the complete graph-delivery
-capstone owned by issue #167. The Lab states the boundary calls that are and are
-not present, so a maintainer does not infer accepted-result integration from a
-later tracker lifecycle or mistake this chronology for the finished normal path.
+The linked `authored:deliveryInvariantStory` is the normal controlled-provider
+delivery capstone. Every executor returns an accepted commit. Dalph then records
+the exact integration responsibility, constructs and validates its candidate,
+runs public verification, promotes by exact expected head, asks the tracker to
+complete the task, confirms completion in a later focused read, deletes the
+exact completion claim, and records settlement. Only a later complete graph
+observation releases dependants. The Lab states those concrete calls and facts
+without treating executor, Git, or mutation responses as tracker success.
 
-The controlled executor reports coarse `Completed` results without accepted
-commits. Later complete tracker reads report successful tasks; they prove
-tracker lifecycle and release dependants, but do not prove Dalph integrated
-those tasks. The cassette does not state who changed those tracker lifecycles,
-so the reader must not invent an outside actor or a Dalph action. No Git
-integration, verification, promotion, or completion-finality boundary is called
-in this slice. A coordinator crash does not change those facts: restart
-reconstructs exact executor-work responsibility, not integration responsibility.
-
-The returned successful tracker graphs are a test seam that lets the production
-frontier continue while issue #167 remains open. Issue #167 must replace that
-substitution with an accepted executor result and the real integration,
-verification, promotion, tracker-completion, and completion-finality calls for
-every task while preserving this graph and restart chronology.
+A coordinator crash after B and C occupy task-work positions does not become a
+workflow event. Restart reconstructs their exact Run, attempts, claims,
+worktrees, and integration progress from the journal and current authorities.
+The later observation that introduces X still cannot displace those retained
+positions. The cassette reaches all ten settlements and whole-Run termination;
+it no longer uses coarse `Completed` reports or unexplained successful tracker
+snapshots as a substitute for integration.
 
 The focused slice's initial tracker graph is
 `A -> {B, C} -> D -> {E -> H, F -> I} -> G`, and capacity is two. Production
@@ -781,10 +777,9 @@ task whose exact facts are correlated below.
   the B/C attempt correlations and anonymous occupied positions on both sides
   of restart through the actual served application. At phone width it also
   proves the exact restart correlations wrap without widening the document.
-  Before execution it also checks the visible explanation says the chronology
-  contains coarse executor completion and later tracker-success observations,
-  but no accepted-result integration, and names issue #167 as the owner of
-  replacing that test seam.
+  Before execution it also checks that the visible explanation names accepted
+  executor results, integration and completion-finality boundaries, later
+  tracker observations, and the restart-retained B/C correlations.
 - `does not fabricate a graph workbench for direct protocol cassettes` checks
   that target-promotion and integration-finality cassettes retain only their real
   protocol evidence.

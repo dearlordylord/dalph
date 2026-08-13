@@ -170,7 +170,7 @@ export const deliveryStoryManifest = {
     missing("DS-21", "No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology."),
     missing(
       "DS-22",
-      "The staggered ten-task cassette terminates after executor completion, but it does not finalize every retained integration result from this prose beat."
+      "The maintained staggered ten-task cassette finalizes all ten accepted results and terminates, but it is not the prose beat's seven-task G5 chronology for E, F, and G."
     )
   ] satisfies ReadonlyArray<DeliveryStoryBeatManifestEntry>
 } as const

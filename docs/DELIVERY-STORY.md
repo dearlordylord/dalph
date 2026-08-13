@@ -9,11 +9,12 @@ Both registers are prose. The maintained cassette
 one real Run consumes the staggered
 graph A → B+C → D → E+F → H+I → G with X added
 during process loss between A and G, and reconstructs the exact B and C
-task-work positions before newly observed X can use capacity. Its executor
-returns are coarse `Completed` reports; later controlled tracker reads report
-task success, and the chronology contains no accepted-result integration.
-Issue #167 must replace that test seam with integration and finality without
-changing the graph scenario. The separate
+task-work positions before newly observed X can use capacity. Every executor
+returns an immutable accepted commit; each result then crosses candidate
+construction, Git validation, public verification, exact-head promotion,
+tracker completion, exact completion-claim deletion, and delivery settlement.
+Later complete tracker graphs—not executor completion reports—release each
+dependent wave and finally authorize `RunMayTerminate`. The separate
 `authored:deliveryFinalitySpine` retains the real A promotion and
 completion-finality chronology while B remains open. Later graph answers report
 C through G successful, but that cassette contains no executor or integration
@@ -203,7 +204,8 @@ end.
 - `consumes a staggered graph while reconstructed positions delay restart-added
   X` checks the exact twelve prerequisite edges,
   ordered eligible waves A, B+C, B+C+X after restart, D+X, E+F, H+I, G, and empty, plus the held
-  sequence B+C, C, D+X, X, E+F, F, H+I, I, G and real terminal evidence.
+  sequence B+C, C, D+X, X, E+F, F, H+I, I, G; it also checks all ten accepted
+  results settle in order and that no coarse executor-completion result appears.
 - `preserves the double-diamond middle positions across coordinator restart` checks
   that B and C both hold task-work positions before death and that recovered
   publications retain the same Run and Attempt identities.
@@ -245,5 +247,5 @@ DS-18|NotImplemented|No maintained run reopens a tracker lifecycle wait for C; O
 DS-19|NotImplemented|No maintained run combines the retained C attempt with a later capacity increase.
 DS-20|NotImplemented|The maintained staggered graph adds X during process loss and delays it behind reconstructed B/C positions; it does not add F and G behind three running tasks.
 DS-21|NotImplemented|No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology.
-DS-22|NotImplemented|The staggered ten-task cassette terminates after executor completion, but it does not finalize every retained integration result from this prose beat.
+DS-22|NotImplemented|The maintained staggered ten-task cassette finalizes all ten accepted results and terminates, but it is not the prose beat's seven-task G5 chronology for E, F, and G.
 <!-- DELIVERY-STORY-MANIFEST:END -->
