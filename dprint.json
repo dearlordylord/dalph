@@ -9,16 +9,33 @@
     "expand": "never"
   },
   "includes": [
+    "*.config.js",
+    "*.config.mjs",
+    "*.config.ts",
+    "*.config.tsx",
+    "src/**/*.js",
+    "src/**/*.mjs",
     "src/**/*.ts",
+    "src/**/*.tsx",
+    "packages/**/*.js",
+    "packages/**/*.mjs",
     "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "scripts/**/*.js",
+    "scripts/**/*.mjs",
     "scripts/**/*.ts",
-    "test/**/*.ts"
+    "scripts/**/*.tsx",
+    "test/**/*.js",
+    "test/**/*.mjs",
+    "test/**/*.ts",
+    "test/**/*.tsx"
   ],
   "excludes": [
     "**/node_modules",
     "**/dist",
     "**/coverage",
-    "**/prototypes"
+    "**/prototypes",
+    "**/test/fixtures"
   ],
   "plugins": [
     "https://plugins.dprint.dev/oxc-0.32.0.wasm"

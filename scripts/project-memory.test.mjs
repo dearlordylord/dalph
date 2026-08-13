@@ -1,29 +1,14 @@
 import assert from "node:assert/strict"
 import { execFile, execFileSync, spawnSync } from "node:child_process"
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import { afterEach, test } from "node:test"
 
-import {
-  authoredTextLooksSensitive,
-  isMutatingCommand,
-  isPrimaryWorktree,
-} from "./project-memory.mjs"
-import {
-  assertUpdateBranch,
-  updateWith,
-} from "./update-project-memory-toolkit.mjs"
+import { authoredTextLooksSensitive, isMutatingCommand, isPrimaryWorktree } from "./project-memory.mjs"
+import { assertUpdateBranch, updateWith } from "./update-project-memory-toolkit.mjs"
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const execFileAsync = promisify(execFile)
@@ -57,24 +42,18 @@ const invoke = (root, args, cwd = join(root, "tools"), environment = {}) =>
   spawnSync(process.execPath, [join(repositoryRoot, "scripts", "project-memory.mjs"), ...args], {
     cwd,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      DALPH_PROJECT_MEMORY_TEST_ROOT: root,
-      NODE_ENV: "test",
-      ...environment,
-    },
+    env: { ...process.env, DALPH_PROJECT_MEMORY_TEST_ROOT: root, NODE_ENV: "test", ...environment }
   })
 
 test("loads the same checked-in memory from the repository root and a nested working directory", () => {
-  const fromRoot = spawnSync(
-    process.execPath,
-    [join(repositoryRoot, "scripts", "project-memory.mjs"), "wake"],
-    { cwd: repositoryRoot, encoding: "utf8" },
-  )
+  const fromRoot = spawnSync(process.execPath, [join(repositoryRoot, "scripts", "project-memory.mjs"), "wake"], {
+    cwd: repositoryRoot,
+    encoding: "utf8"
+  })
   const fromNestedDirectory = spawnSync(
     process.execPath,
     [join(repositoryRoot, "scripts", "project-memory.mjs"), "wake"],
-    { cwd: join(repositoryRoot, "scripts"), encoding: "utf8" },
+    { cwd: join(repositoryRoot, "scripts"), encoding: "utf8" }
   )
 
   assert.equal(fromRoot.status, 0)
@@ -114,7 +93,7 @@ test("master appends one note to the project store", () => {
   assert.match(result.stdout, /Saved as #0\./u)
   assert.match(
     readFileSync(join(root, ".codex", "memory", "LOG.txt"), "utf8"),
-    /Only master publishes project memory\./u,
+    /Only master publishes project memory\./u
   )
 })
 
@@ -125,19 +104,11 @@ test("parallel sessions sharing master's primary worktree append distinct positi
 
   await Promise.all(
     notes.map((note) =>
-      execFileAsync(
-        process.execPath,
-        [join(repositoryRoot, "scripts", "project-memory.mjs"), "note", note],
-        {
-          cwd: root,
-          env: {
-            ...process.env,
-            DALPH_PROJECT_MEMORY_TEST_ROOT: root,
-            NODE_ENV: "test",
-          },
-        },
-      ),
-    ),
+      execFileAsync(process.execPath, [join(repositoryRoot, "scripts", "project-memory.mjs"), "note", note], {
+        cwd: root,
+        env: { ...process.env, DALPH_PROJECT_MEMORY_TEST_ROOT: root, NODE_ENV: "test" }
+      })
+    )
   )
 
   const log = readFileSync(join(root, ".codex", "memory", "LOG.txt"), "utf8")
@@ -146,7 +117,7 @@ test("parallel sessions sharing master's primary worktree append distinct positi
   assert.equal(records.length, notes.length)
   assert.deepEqual(
     records.map((record) => Number(/^#(\d+)/u.exec(record)?.[1])).sort((left, right) => left - right),
-    notes.map((_, index) => index),
+    notes.map((_, index) => index)
   )
   for (const note of notes) {
     assert.match(log, new RegExp(note.replace(".", "\\."), "u"))
@@ -174,7 +145,7 @@ test("mutating config keeps its checked-in instruction portable", () => {
   assert.equal(result.status, 0)
   assert.match(
     readFileSync(join(root, ".codex", "memory", "config"), "utf8"),
-    /Edit with `pnpm memory -- config NAME=VALUE`\./u,
+    /Edit with `pnpm memory -- config NAME=VALUE`\./u
   )
 })
 
@@ -189,10 +160,7 @@ test("non-master worktrees can read but cannot mutate project memory", () => {
   assert.equal(read.status, 0)
   assert.equal(write.status, 1)
   assert.match(write.stderr, /serialized through master's primary worktree/u)
-  assert.doesNotMatch(
-    readFileSync(join(root, ".codex", "memory", "LOG.txt"), "utf8"),
-    /must not be appended/u,
-  )
+  assert.doesNotMatch(readFileSync(join(root, ".codex", "memory", "LOG.txt"), "utf8"), /must not be appended/u)
 })
 
 test("a second physical master worktree cannot mutate project memory", () => {
@@ -227,12 +195,7 @@ test("rewrites pending compression commands through the project wrapper", () => 
   assert.match(second.stdout, /Run: pnpm memory -- nap 0-1 "<your line>"/u)
   assert.doesNotMatch(second.stdout, /tools\/optmem\/memo nap/u)
 
-  const nap = invoke(
-    root,
-    ["nap", "0-1", "Two durable lessons were recorded."],
-    root,
-    environment,
-  )
+  const nap = invoke(root, ["nap", "0-1", "Two durable lessons were recorded."], root, environment)
 
   assert.equal(nap.status, 0)
   assert.equal(existsSync(join(root, ".codex", "memory", "TREE", "2")), true)
@@ -299,14 +262,8 @@ test("update refuses a dirty submodule", () => {
   }
 
   assert.throws(
-    () =>
-      updateWith({
-        git: fakeGit,
-        optMemDirectory: "/repo/tools/optmem",
-        root: "/repo",
-        runTests: () => true,
-      }),
-    /has local changes/u,
+    () => updateWith({ git: fakeGit, optMemDirectory: "/repo/tools/optmem", root: "/repo", runTests: () => true }),
+    /has local changes/u
   )
 })
 
@@ -319,14 +276,8 @@ test("update surfaces an upstream test failure", () => {
   }
 
   assert.throws(
-    () =>
-      updateWith({
-        git: fakeGit,
-        optMemDirectory: "/repo/tools/optmem",
-        root: "/repo",
-        runTests: () => false,
-      }),
-    /failed its upstream or local test suite/u,
+    () => updateWith({ git: fakeGit, optMemDirectory: "/repo/tools/optmem", root: "/repo", runTests: () => false }),
+    /failed its upstream or local test suite/u
   )
 })
 
@@ -352,7 +303,7 @@ test("update checks out the remote revision and runs both test suites", () => {
     runTests: () => {
       testsRan = true
       return true
-    },
+    }
   })
 
   assert.deepEqual(result, { after: "after-revision", before: "before-revision" })

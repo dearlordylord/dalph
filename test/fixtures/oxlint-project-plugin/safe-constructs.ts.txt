@@ -1,0 +1,7 @@
+import { Context, Effect, Schema } from "effect"
+
+const Service = Context.Service<unknown>()("FixtureService")
+const Failure = Schema.TaggedError<unknown>()("FixtureFailure", {})
+const mapInput = (input: readonly string[]) => input.map(String)
+
+void [Effect, Service, Failure, mapInput]

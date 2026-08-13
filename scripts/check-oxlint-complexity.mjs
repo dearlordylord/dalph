@@ -3,33 +3,26 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { relative, resolve } from "node:path"
 
 const suppressionPath = "oxlint-complexity-suppressions.json"
-const result = spawnSync(
-  "pnpm",
-  ["exec", "oxlint", "-c", "oxlint.complexity.json", "-f", "json", "src", "packages"],
-  { encoding: "utf8" }
-)
+const result = spawnSync("pnpm", ["exec", "oxlint", "-c", "oxlint.complexity.json", "-f", "json", "src", "packages"], {
+  encoding: "utf8"
+})
 
 if (result.error !== undefined || (result.status !== 0 && result.status !== 1)) {
   throw result.error ?? new Error(result.stderr)
 }
 
 const parsed = JSON.parse(result.stdout)
-if (
-  typeof parsed !== "object"
-  || parsed === null
-  || !("diagnostics" in parsed)
-  || !Array.isArray(parsed.diagnostics)
-) {
+if (typeof parsed !== "object" || parsed === null || !("diagnostics" in parsed) || !Array.isArray(parsed.diagnostics)) {
   throw new Error("Oxlint returned an unexpected JSON diagnostic shape")
 }
 
 const counts = new Map()
 for (const diagnostic of parsed.diagnostics) {
   if (
-    typeof diagnostic !== "object"
-    || diagnostic === null
-    || diagnostic.code !== "eslint(complexity)"
-    || typeof diagnostic.filename !== "string"
+    typeof diagnostic !== "object" ||
+    diagnostic === null ||
+    diagnostic.code !== "eslint(complexity)" ||
+    typeof diagnostic.filename !== "string"
   ) {
     continue
   }

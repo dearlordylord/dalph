@@ -14,6 +14,7 @@ const gates = [
   { args: ["build"], name: "build", timeout: 2 * 60 * SECOND },
   { args: ["check:package-boundary"], name: "production package boundary", timeout: 60 * SECOND },
   { args: ["typecheck"], name: "typecheck", timeout: 2 * 60 * SECOND },
+  { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },
   { args: ["check:format"], name: "format and lint", timeout: 2 * 60 * SECOND },
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
   { args: ["check:complexity"], name: "cyclomatic complexity", timeout: 60 * SECOND },

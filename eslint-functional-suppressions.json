@@ -1,0 +1,453 @@
+{
+  "packages/dalph/src/application/supervisor-exit.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    }
+  },
+  "packages/dalph/src/cassettes/authored-adapters.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    }
+  },
+  "packages/dalph/src/cassettes/authored-attempt-choice.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/dalph/src/cassettes/authored-cursor.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    },
+    "functional/no-mixed-types": {
+      "count": 1
+    },
+    "import-x/no-unused-modules": {
+      "count": 3
+    }
+  },
+  "packages/dalph/src/cassettes/authored-domain.ts": {
+    "import-x/no-unused-modules": {
+      "count": 11
+    }
+  },
+  "packages/dalph/src/cassettes/authored-runner.ts": {
+    "functional/immutable-data": {
+      "count": 3
+    },
+    "functional/prefer-tacit": {
+      "count": 2
+    },
+    "import-x/no-unused-modules": {
+      "count": 3
+    }
+  },
+  "packages/dalph/src/cassettes/recorded-integration-renaming.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/dalph/src/cassettes/recorded-renaming.ts": {
+    "functional/prefer-tacit": {
+      "count": 4
+    }
+  },
+  "packages/dalph/test/cassettes/scenario.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    }
+  },
+  "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    },
+    "functional/prefer-tacit": {
+      "count": 3
+    }
+  },
+  "packages/dalph/test/conformance/application-exit.mbt.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    }
+  },
+  "packages/dalph/test/conformance/control-direction-application.mbt.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 2
+    }
+  },
+  "packages/dalph/test/conformance/git-reconciliation.mbt.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 2
+    }
+  },
+  "packages/dalph/test/conformance/integration-finality.mbt.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 28
+    }
+  },
+  "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts": {
+    "functional/prefer-tacit": {
+      "count": 1
+    }
+  },
+  "packages/dalph/test/conformance/run-activation.mbt.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 6
+    }
+  },
+  "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 2
+    },
+    "functional/prefer-tacit": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/authorities/coordinator-ownership/ownership.ts": {
+    "functional/no-mixed-types": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/authorities/git/integration-candidate.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/authorities/git/real-git-qualification.test.ts": {
+    "functional/no-mixed-types": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/admission/integration-target-resource.ts": {
+    "functional/no-mixed-types": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/application-exit/application-shell.ts": {
+    "functional/immutable-data": {
+      "count": 4
+    },
+    "functional/no-mixed-types": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/application-exit/lifecycle.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    },
+    "functional/no-mixed-types": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-accepted-fact-publication.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-action-executor.ts": {
+    "functional/no-mixed-types": {
+      "count": 1
+    },
+    "import-x/no-unused-modules": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-action-planning.ts": {
+    "import-x/no-unused-modules": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-consequences.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-proposal-derivation.ts": {
+    "functional/immutable-data": {
+      "count": 3
+    },
+    "functional/type-declaration-immutability": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.ts": {
+    "functional/immutable-data": {
+      "count": 4
+    },
+    "functional/no-mixed-types": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-runtime-observation.ts": {
+    "functional/no-mixed-types": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-runtime-resources.ts": {
+    "functional/no-mixed-types": {
+      "count": 1
+    },
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-transition-policy.ts": {
+    "import-x/no-unused-modules": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/in-memory-relations.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/integration-exit-boundary.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/journal.ts": {
+    "functional/no-mixed-types": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/reactive-delivery-relations.ts": {
+    "functional/prefer-tacit": {
+      "count": 1
+    },
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/relations.ts": {
+    "functional/immutable-data": {
+      "count": 2
+    },
+    "import-x/no-unused-modules": {
+      "count": 16
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 2
+    },
+    "functional/prefer-tacit": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/ticket-delivery-projection.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/frontier/transition-task-work.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/reconstruction/integration-history.ts": {
+    "functional/immutable-data": {
+      "count": 9
+    },
+    "import-x/no-unused-modules": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/reconstruction/run-policy-history.ts": {
+    "import-x/no-unused-modules": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/run/fresh-workflow.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts": {
+    "functional/immutable-data": {
+      "count": 2
+    },
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/run/pause-progress-observation.acceptance.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/run/pause-progress-observation.coverage.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/run/pause-progress-observation.property.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/run/pause-progress-observation.ts": {
+    "functional/immutable-data": {
+      "count": 4
+    }
+  },
+  "packages/orchestrator/src/coordination/run/pause-progress-observer.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/run/recovery-activation.ts": {
+    "import-x/no-unused-modules": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/run/run-stabilization.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 4
+    }
+  },
+  "packages/orchestrator/src/coordination/run/run.ts": {
+    "functional/no-mixed-types": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow-journal/journaled-tracker-exit.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow-journal/run-lifecycle.ts": {
+    "import-x/no-unused-modules": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/workflow/interpretation/interpreter.ts": {
+    "import-x/no-unused-modules": {
+      "count": 3
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-admission/protocol.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-admission/responsibility.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-candidate-construction/protocol.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-history.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 14
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-history.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.ts": {
+    "import-x/no-unused-modules": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-finality/fixtures.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-finality/history.ts": {
+    "functional/prefer-tacit": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/protocol.ts": {
+    "functional/prefer-tacit": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/evidence.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/target-promotion/protocol.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/target-verification/evidence-store.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/target-verification/protocol.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/target-verification/protocol.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/task-attempt-planning/plan.ts": {
+    "import-x/no-unused-modules": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/registry/occurrence-projection.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 9
+    }
+  },
+  "packages/orchestrator/src/workflow/registry/occurrence-projection.ts": {
+    "import-x/no-unused-modules": {
+      "count": 4
+    }
+  },
+  "packages/orchestrator/src/workflow/task-tracker-facts/observation.property.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/task-tracker-facts/observation.test.ts": {
+    "functional/no-throw-statements": {
+      "count": 3
+    }
+  },
+  "packages/orchestrator/src/workflow/task-tracker-facts/reconfirmation.ts": {
+    "functional/immutable-data": {
+      "count": 1
+    }
+  }
+}

@@ -7,9 +7,7 @@ const terminate = (child, signal) => {
   if (child.pid === undefined) return
 
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-      stdio: "ignore"
-    })
+    spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" })
     return
   }
 
@@ -67,21 +65,13 @@ export const runBoundedCommand = ({
         return
       }
       if (process.platform === "win32") {
-        reject(
-          new Error(
-            `${name} exceeded ${timeoutMilliseconds / 1000} seconds`
-          )
-        )
+        reject(new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`))
         return
       }
       escalationTimer = setTimeout(() => {
         try {
           terminate(child, "SIGKILL")
-          reject(
-            new Error(
-              `${name} exceeded ${timeoutMilliseconds / 1000} seconds`
-            )
-          )
+          reject(new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`))
         } catch (error) {
           reject(error)
         }
@@ -110,9 +100,11 @@ export const runBoundedCommand = ({
             total + lineCounter.lineBreaks + (lineCounter.wasWritten && !lineCounter.endsWithLineBreak ? 1 : 0),
           0
         )
-        resolve(captureOutput
-          ? { exitCode: code, output: Buffer.concat(outputChunks).toString("utf8"), outputLineCount }
-          : { outputLineCount })
+        resolve(
+          captureOutput
+            ? { exitCode: code, output: Buffer.concat(outputChunks).toString("utf8"), outputLineCount }
+            : { outputLineCount }
+        )
       }
     })
   })

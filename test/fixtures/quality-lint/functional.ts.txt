@@ -1,0 +1,4 @@
+const values: Array<number> = []
+values.push(1)
+
+export const functionalFixture = values

@@ -20,8 +20,8 @@ const effectClassInheritanceOnly = {
       if (factory?.type !== "MemberExpression" || factory.computed) return false
       if (factory.object.type !== "Identifier" || factory.property.type !== "Identifier") return false
       return (
-        (factory.object.name === "Context" && factory.property.name === "Service")
-        || (factory.object.name === "Schema" && factory.property.name === "TaggedError")
+        (factory.object.name === "Context" && factory.property.name === "Service") ||
+        (factory.object.name === "Schema" && factory.property.name === "TaggedError")
       )
     }
 
@@ -31,10 +31,7 @@ const effectClassInheritanceOnly = {
       }
     }
 
-    return {
-      ClassDeclaration: checkInheritance,
-      ClassExpression: checkInheritance
-    }
+    return { ClassDeclaration: checkInheritance, ClassExpression: checkInheritance }
   }
 }
 
@@ -42,12 +39,16 @@ const noAmbientCapabilityBypass = {
   create: (context) => ({
     CallExpression: (node) => {
       if (isIdentifier(node.callee, "require")) {
-        report(context, node, "Use injected Effect services instead of loading ambient host capabilities with require().")
+        report(
+          context,
+          node,
+          "Use injected Effect services instead of loading ambient host capabilities with require()."
+        )
       }
       if (
-        node.callee.type === "MemberExpression"
-        && isIdentifier(node.callee.object, "Math")
-        && memberName(node.callee) === "random"
+        node.callee.type === "MemberExpression" &&
+        isIdentifier(node.callee.object, "Math") &&
+        memberName(node.callee) === "random"
       ) {
         report(context, node, "Inject randomness through Effect Random instead of calling Math.random().")
       }
@@ -64,9 +65,9 @@ const noClockRead = {
     },
     CallExpression: (node) => {
       if (
-        node.callee.type === "MemberExpression"
-        && isIdentifier(node.callee.object, "Date")
-        && memberName(node.callee) === "now"
+        node.callee.type === "MemberExpression" &&
+        isIdentifier(node.callee.object, "Date") &&
+        memberName(node.callee) === "now"
       ) {
         report(context, node, "Inject time through Effect Clock or a service instead of calling Date.now().")
       }
@@ -84,10 +85,7 @@ const noModuleMocks = {
         if (specifier.type === "ImportNamespaceSpecifier") {
           report(context, specifier, `Do not namespace-import ${node.source.value}; it bypasses the module-mock guard.`)
         }
-        if (
-          specifier.type === "ImportSpecifier"
-          && isIdentifier(specifier.imported, "vi")
-        ) {
+        if (specifier.type === "ImportSpecifier" && isIdentifier(specifier.imported, "vi")) {
           report(context, specifier, "Do not import vi. Substitute behavior through Effect services and Layers.")
         }
       }
@@ -96,8 +94,8 @@ const noModuleMocks = {
       if (node.callee.type !== "MemberExpression") return
       const name = memberName(node.callee)
       if (
-        (isIdentifier(node.callee.object, "vi") && forbiddenMockMembers.has(name))
-        || (isIdentifier(node.callee.object, "jest") && name === "mock")
+        (isIdentifier(node.callee.object, "vi") && forbiddenMockMembers.has(name)) ||
+        (isIdentifier(node.callee.object, "jest") && name === "mock")
       ) {
         report(context, node, "Module mocks are forbidden. Substitute behavior through Effect services and Layers.")
       }
@@ -105,7 +103,10 @@ const noModuleMocks = {
     VariableDeclarator: (node) => {
       if (!isIdentifier(node.init, "vi") || node.id.type !== "ObjectPattern") return
       for (const property of node.id.properties) {
-        if (property.type === "Property" && forbiddenMockMembers.has(memberName({ ...property, property: property.key }))) {
+        if (
+          property.type === "Property" &&
+          forbiddenMockMembers.has(memberName({ ...property, property: property.key }))
+        ) {
           report(context, property, "Do not destructure module-mocking APIs from vi.")
         }
       }
@@ -142,11 +143,19 @@ const noTypeAssertion = {
       const annotation = node.typeAnnotation
       const isConst = annotation.type === "TSTypeReference" && isIdentifier(annotation.typeName, "const")
       if (!isConst) {
-        report(context, node, "Unchecked type assertions are forbidden. Parse with Schema, use satisfies, or restructure.")
+        report(
+          context,
+          node,
+          "Unchecked type assertions are forbidden. Parse with Schema, use satisfies, or restructure."
+        )
       }
     },
     TSTypeAssertion: (node) => {
-      report(context, node, "Unchecked type assertions are forbidden. Parse with Schema, use satisfies, or restructure.")
+      report(
+        context,
+        node,
+        "Unchecked type assertions are forbidden. Parse with Schema, use satisfies, or restructure."
+      )
     }
   })
 }
@@ -160,9 +169,9 @@ const propertyTestPlacement = {
     },
     CallExpression: (node) => {
       if (
-        node.callee.type === "MemberExpression"
-        && isIdentifier(node.callee.object, "fc")
-        && memberName(node.callee) === "property"
+        node.callee.type === "MemberExpression" &&
+        isIdentifier(node.callee.object, "fc") &&
+        memberName(node.callee) === "property"
       ) {
         report(context, node, "Move fc.property tests to a *.property.test.ts file.")
       }
@@ -179,9 +188,9 @@ const requireCanonicalEffectImport = {
           report(context, specifier, "Import Effect modules by name; namespace imports hide enforceable boundaries.")
         }
         if (
-          specifier.type === "ImportSpecifier"
-          && isIdentifier(specifier.imported, "Schema")
-          && !isIdentifier(specifier.local, "Schema")
+          specifier.type === "ImportSpecifier" &&
+          isIdentifier(specifier.imported, "Schema") &&
+          !isIdentifier(specifier.local, "Schema")
         ) {
           report(context, specifier, "Keep the canonical Schema name so boundary rules remain visible.")
         }
@@ -200,10 +209,7 @@ const noRestrictedImportPath = {
             type: "array",
             items: {
               type: "object",
-              properties: {
-                message: { type: "string" },
-                pattern: { type: "string" }
-              },
+              properties: { message: { type: "string" }, pattern: { type: "string" } },
               required: ["message", "pattern"],
               additionalProperties: false
             }
@@ -224,11 +230,7 @@ const noRestrictedImportPath = {
         if (regex.test(node.source.value)) report(context, node.source, message)
       }
     }
-    return {
-      ExportAllDeclaration: checkSource,
-      ExportNamedDeclaration: checkSource,
-      ImportDeclaration: checkSource
-    }
+    return { ExportAllDeclaration: checkSource, ExportNamedDeclaration: checkSource, ImportDeclaration: checkSource }
   }
 }
 
@@ -256,25 +258,24 @@ const sortablePattern = (node) => {
   const keys = node.properties.map(patternKey)
   if (keys.some((key) => key === undefined)) return undefined
   const boundNames = new Set(keys.map((key) => key.name))
-  const orderSensitive = node.properties.some((property) =>
-    property.type === "Property"
-    && property.value.type === "AssignmentPattern"
-    && containsIdentifier(property.value.right, boundNames)
+  const orderSensitive = node.properties.some(
+    (property) =>
+      property.type === "Property" &&
+      property.value.type === "AssignmentPattern" &&
+      containsIdentifier(property.value.right, boundNames)
   )
   return orderSensitive ? undefined : keys
 }
 
 const sortDestructureKeys = {
-  meta: {
-    fixable: "code"
-  },
+  meta: { fixable: "code" },
   create: (context) => ({
     ObjectPattern: (node) => {
       const keys = sortablePattern(node)
       if (keys === undefined) return
       const indexed = node.properties.map((property, index) => ({ property, key: keys[index] }))
-      const sorted = indexed.toSorted((left, right) =>
-        left.key.order - right.key.order || naturalKeyCollator.compare(left.key.name, right.key.name)
+      const sorted = indexed.toSorted(
+        (left, right) => left.key.order - right.key.order || naturalKeyCollator.compare(left.key.name, right.key.name)
       )
       const mismatch = indexed.findIndex((entry, index) => entry.property !== sorted[index].property)
       if (mismatch === -1) return
@@ -284,16 +285,13 @@ const sortDestructureKeys = {
         message: `Expected object destructuring keys to be sorted; ${sorted[mismatch].key.name} belongs before ${indexed[mismatch].key.name}.`,
         fix: (fixer) => {
           const source = context.sourceCode.text
-          const separators = node.properties.slice(0, -1).map((property, index) =>
-            source.slice(property.range[1], node.properties[index + 1].range[0])
-          )
-          const text = sorted.map(({ property }, index) =>
-            context.sourceCode.getText(property) + (separators[index] ?? "")
-          ).join("")
-          return fixer.replaceTextRange(
-            [node.properties[0].range[0], node.properties.at(-1).range[1]],
-            text
-          )
+          const separators = node.properties
+            .slice(0, -1)
+            .map((property, index) => source.slice(property.range[1], node.properties[index + 1].range[0]))
+          const text = sorted
+            .map(({ property }, index) => context.sourceCode.getText(property) + (separators[index] ?? ""))
+            .join("")
+          return fixer.replaceTextRange([node.properties[0].range[0], node.properties.at(-1).range[1]], text)
         }
       })
     }
@@ -301,9 +299,7 @@ const sortDestructureKeys = {
 }
 
 export default {
-  meta: {
-    name: "dalph"
-  },
+  meta: { name: "dalph" },
   rules: {
     "effect-class-inheritance-only": effectClassInheritanceOnly,
     "no-ambient-capability-bypass": noAmbientCapabilityBypass,

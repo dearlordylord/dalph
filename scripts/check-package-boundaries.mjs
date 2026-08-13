@@ -323,10 +323,12 @@ const findSourceBoundaryViolations = (files) => {
 
 const filesBelow = async (directory) => {
   const entries = await readdir(directory, { withFileTypes: true })
-  const nested = await Promise.all(entries.map((entry) => {
-    const url = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory)
-    return entry.isDirectory() ? filesBelow(url) : [url]
-  }))
+  const nested = await Promise.all(
+    entries.map((entry) => {
+      const url = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory)
+      return entry.isDirectory() ? filesBelow(url) : [url]
+    })
+  )
   return nested.flat()
 }
 

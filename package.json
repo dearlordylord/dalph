@@ -16,10 +16,11 @@
     "memory:wake": "node scripts/project-memory.mjs wake",
     "test:memory": "node --test scripts/project-memory.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:effect": "node scripts/run-effect-diagnostics.mjs",
     "lint": "pnpm lint:code && pnpm check:duplicates",
-    "lint:code": "find packages scripts test -name '*.ts' -print0 | xargs -0 oxlint && DPRINT_CACHE_DIR=$PWD/node_modules/.cache/dprint dprint check",
-    "lint:fix": "find packages scripts test -name '*.ts' -print0 | xargs -0 oxlint --fix && DPRINT_CACHE_DIR=$PWD/node_modules/.cache/dprint dprint fmt",
-    "format": "DPRINT_CACHE_DIR=$PWD/node_modules/.cache/dprint dprint fmt",
+    "lint:code": "node scripts/run-quality-lint.mjs",
+    "lint:fix": "node scripts/run-quality-lint.mjs --fix",
+    "format": "node scripts/run-quality-lint.mjs --fix",
     "check:format": "pnpm lint:code",
     "check:circular": "dpdm --no-warning --no-tree --no-progress --exit-code circular:1 --transform 'src/**/*.ts' 'packages/**/*.ts' 'scripts/**/*.ts'",
     "check:complexity": "node scripts/check-oxlint-complexity.mjs",
@@ -36,10 +37,7 @@
     "check:all": "node scripts/run-quality-gate.mjs"
   },
   "lint-staged": {
-    "*.{ts,tsx}": [
-      "oxlint --fix",
-      "dprint fmt"
-    ]
+    "*.{js,mjs,ts,tsx}": "node scripts/run-quality-lint.mjs --staged --fix"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -63,17 +61,24 @@
     "@firfi/quint-connect": "2.0.2-effect4.1",
     "@informalsystems/quint": "0.32.0",
     "@types/node": "26.1.1",
+    "@typescript-eslint/parser": "8.65.0",
     "@typescript/native": "npm:typescript@7.0.2",
     "@vitest/coverage-v8": "4.1.10",
     "dpdm": "4.2.0",
     "dprint": "0.55.2",
     "effect": "4.0.0-beta.106",
+    "eslint": "9.39.2",
+    "eslint-import-resolver-typescript": "4.4.5",
+    "eslint-plugin-functional": "9.0.2",
+    "eslint-plugin-import": "2.32.0",
+    "eslint-plugin-import-x": "4.16.1",
     "fast-check": "4.9.0",
     "husky": "9.1.7",
     "jscpd": "5.0.14",
     "lint-staged": "17.3.0",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",
+    "typescript": "5.9.3",
     "vitest": "4.1.10",
     "zod": "4.1.12"
   }

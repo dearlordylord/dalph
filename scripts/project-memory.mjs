@@ -31,21 +31,17 @@ const sensitiveNotePatterns = [
   /\bAKIA[A-Z0-9]{16}\b/u,
   /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/u,
   /\bsk-[A-Za-z0-9_-]{16,}\b/u,
-  /\b(?:api[ _-]?key|password|passwd|secret|token)\s*[:=]\s*\S+/iu,
+  /\b(?:api[ _-]?key|password|passwd|secret|token)\s*[:=]\s*\S+/iu
 ]
 
 export const currentBranch = (root) =>
-  execFileSync("git", ["branch", "--show-current"], {
-    cwd: root,
-    encoding: "utf8",
-  }).trim()
+  execFileSync("git", ["branch", "--show-current"], { cwd: root, encoding: "utf8" }).trim()
 
 export const isPrimaryWorktree = (root) => {
-  const commonDirectory = execFileSync(
-    "git",
-    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    { cwd: root, encoding: "utf8" },
-  ).trim()
+  const commonDirectory = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    cwd: root,
+    encoding: "utf8"
+  }).trim()
 
   return realpathSync(dirname(commonDirectory)) === realpathSync(root)
 }
@@ -74,7 +70,7 @@ const normalizeConfigComment = (memoryDirectory) => {
   const path = join(memoryDirectory, "config")
   const config = readFileSync(path, "utf8").replace(
     /^# tool's default\. Edit with `.* config NAME=VALUE`\.$/mu,
-    "# tool's default. Edit with `pnpm memory -- config NAME=VALUE`.",
+    "# tool's default. Edit with `pnpm memory -- config NAME=VALUE`."
   )
   writeFileSync(path, config, "utf8")
 }
@@ -82,15 +78,11 @@ const normalizeConfigComment = (memoryDirectory) => {
 export const rewriteToolCommands = (output, tool) => {
   const relativeToHome = relative(homedir(), tool)
   const homeFoldedTool =
-    relativeToHome !== ".." &&
-    !relativeToHome.startsWith(`..${sep}`) &&
-    !isAbsolute(relativeToHome)
+    relativeToHome !== ".." && !relativeToHome.startsWith(`..${sep}`) && !isAbsolute(relativeToHome)
       ? `~${sep}${relativeToHome}`
       : tool
 
-  return output
-    .replaceAll(tool, "pnpm memory --")
-    .replaceAll(homeFoldedTool, "pnpm memory --")
+  return output.replaceAll(tool, "pnpm memory --").replaceAll(homeFoldedTool, "pnpm memory --")
 }
 
 export const run = (args) => {
@@ -99,35 +91,28 @@ export const run = (args) => {
   const memoryDirectory = join(root, ".codex", "memory")
 
   if (!existsSync(tool)) {
-    process.stderr.write(
-      "OptMem is not initialized. Run: git submodule update --init tools/optmem\n",
-    )
+    process.stderr.write("OptMem is not initialized. Run: git submodule update --init tools/optmem\n")
     return 1
   }
 
   if (args[0] === "import") {
     process.stderr.write(
-      "Bulk import is disabled for checked-in project memory. " +
-        "Review and append each durable lesson separately.\n",
+      "Bulk import is disabled for checked-in project memory. " + "Review and append each durable lesson separately.\n"
     )
     return 1
   }
 
-  if (
-    isMutatingCommand(args) &&
-    (currentBranch(root) !== "master" || !isPrimaryWorktree(root))
-  ) {
+  if (isMutatingCommand(args) && (currentBranch(root) !== "master" || !isPrimaryWorktree(root))) {
     process.stderr.write(
       "Project memory writes are serialized through master's primary worktree. " +
-        "Record the proposed memory in your handoff instead.\n",
+        "Record the proposed memory in your handoff instead.\n"
     )
     return 1
   }
 
   if (authoredTextLooksSensitive(args)) {
     process.stderr.write(
-      "Refusing project-memory text that resembles a credential or secret. " +
-        "Project memory is checked into Git.\n",
+      "Refusing project-memory text that resembles a credential or secret. " + "Project memory is checked into Git.\n"
     )
     return 1
   }
@@ -137,7 +122,7 @@ export const run = (args) => {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, MEMORY_DIR: memoryDirectory },
-    stdio: ["inherit", "pipe", "pipe"],
+    stdio: ["inherit", "pipe", "pipe"]
   })
 
   if (result.error) {
@@ -155,9 +140,7 @@ export const run = (args) => {
   return result.status ?? 1
 }
 
-const invokedDirectly =
-  process.argv[1] !== undefined &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+const invokedDirectly = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 
 if (invokedDirectly) {
   const args = process.argv.slice(2)

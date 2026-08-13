@@ -17,31 +17,24 @@ export const assertUpdateBranch = (branch) => {
 }
 
 const defaultTestRunner = ({ optMemDirectory: directory, root: repository }) => {
-  const python =
-    process.platform === "win32" ? ["py", ["-3", "test.py"]] : ["python3", ["test.py"]]
+  const python = process.platform === "win32" ? ["py", ["-3", "test.py"]] : ["python3", ["test.py"]]
   const upstream = spawnSync(python[0], python[1], {
     cwd: directory,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
-    stdio: "inherit",
+    stdio: "inherit"
   })
   if (upstream.error || upstream.status !== 0) {
     return false
   }
 
-  const local = spawnSync(
-    process.execPath,
-    ["--test", "scripts/project-memory.test.mjs"],
-    { cwd: repository, stdio: "inherit" },
-  )
+  const local = spawnSync(process.execPath, ["--test", "scripts/project-memory.test.mjs"], {
+    cwd: repository,
+    stdio: "inherit"
+  })
   return local.error === undefined && local.status === 0
 }
 
-export const updateWith = ({
-  git,
-  optMemDirectory: directory,
-  root: repository,
-  runTests,
-}) => {
+export const updateWith = ({ git, optMemDirectory: directory, root: repository, runTests }) => {
   assertUpdateBranch(git(["branch", "--show-current"], repository))
   git(["submodule", "update", "--init", "tools/optmem"], repository)
 
@@ -55,8 +48,7 @@ export const updateWith = ({
 
   if (!runTests({ after, optMemDirectory: directory, root: repository })) {
     throw new Error(
-      `OptMem ${after} failed its upstream or local test suite. ` +
-        "The gitlink remains changed for inspection.",
+      `OptMem ${after} failed its upstream or local test suite. ` + "The gitlink remains changed for inspection."
     )
   }
 
@@ -64,12 +56,7 @@ export const updateWith = ({
 }
 
 export const update = () => {
-  const { after, before } = updateWith({
-    git: runGit,
-    optMemDirectory,
-    root,
-    runTests: defaultTestRunner,
-  })
+  const { after, before } = updateWith({ git: runGit, optMemDirectory, root, runTests: defaultTestRunner })
 
   if (before === after) {
     process.stdout.write(`OptMem is already current at ${after}.\n`)
@@ -78,9 +65,7 @@ export const update = () => {
   }
 }
 
-const invokedDirectly =
-  process.argv[1] !== undefined &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+const invokedDirectly = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 
 if (invokedDirectly) {
   update()

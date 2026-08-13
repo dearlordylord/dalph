@@ -39,10 +39,7 @@ const run = async (name, args, options = {}) => {
   })
 }
 
-await run("planned-attempt executor model typecheck", [
-  "typecheck",
-  "specs/plannedAttemptExecutor.qnt"
-])
+await run("planned-attempt executor model typecheck", ["typecheck", "specs/plannedAttemptExecutor.qnt"])
 await run("planned-attempt executor deterministic tests", [
   "test",
   "specs/plannedAttemptExecutor_test.qnt",
@@ -76,25 +73,54 @@ await runPreparedTemporalCheck({
   // Quint's TLC backend loads TLC from the Apalache distribution. On a cold
   // runner this existing default-backend verification prepares/downloads that
   // versioned artifact before the temporal command is allowed to start.
-  prepareArtifact: () => run("planned-attempt executor TLC artifact preparation", [
-    "verify",
-    "specs/plannedAttemptExecutor_proof.qnt",
-    "--main",
-    "plannedAttemptExecutorEvidenceProof",
-    "--invariants",
-    "evidenceProofTypeOk",
-    "--max-steps",
-    "1",
-    "--apalache-version",
-    apalacheVersion,
-    "--verbosity",
-    "1"
-  ]),
+  prepareArtifact: () =>
+    run("planned-attempt executor TLC artifact preparation", [
+      "verify",
+      "specs/plannedAttemptExecutor_proof.qnt",
+      "--main",
+      "plannedAttemptExecutorEvidenceProof",
+      "--invariants",
+      "evidenceProofTypeOk",
+      "--max-steps",
+      "1",
+      "--apalache-version",
+      apalacheVersion,
+      "--verbosity",
+      "1"
+    ]),
   verifyTemporal: async () => {
     const property = "releasableEvidenceEventuallyReleasesPosition"
-    const verdict = await run(`planned-attempt executor temporal ${property} (TLC)`, [
+    const verdict = await run(
+      `planned-attempt executor temporal ${property} (TLC)`,
+      [
+        "verify",
+        "specs/plannedAttemptExecutor.qnt",
+        "--backend",
+        "tlc",
+        "--apalache-version",
+        apalacheVersion,
+        "--step",
+        "releasableEvidenceStep",
+        "--temporal",
+        property,
+        "--verbosity",
+        "1"
+      ],
+      { captureOutput: true }
+    )
+    assertCleanTemporalVerdict(verdict, property)
+  }
+})
+
+{
+  const property = "releasableEvidenceNeverReleasesPosition"
+  const verdict = await run(
+    `planned-attempt executor temporal mutant ${property} (TLC)`,
+    [
       "verify",
-      "specs/plannedAttemptExecutor.qnt",
+      "specs/plannedAttemptExecutor_temporal_negative.qnt",
+      "--main",
+      "plannedAttemptExecutorTemporalNegative",
       "--backend",
       "tlc",
       "--apalache-version",
@@ -105,29 +131,9 @@ await runPreparedTemporalCheck({
       property,
       "--verbosity",
       "1"
-    ], { captureOutput: true })
-    assertCleanTemporalVerdict(verdict, property)
-  }
-})
-
-{
-  const property = "releasableEvidenceNeverReleasesPosition"
-  const verdict = await run(`planned-attempt executor temporal mutant ${property} (TLC)`, [
-    "verify",
-    "specs/plannedAttemptExecutor_temporal_negative.qnt",
-    "--main",
-    "plannedAttemptExecutorTemporalNegative",
-    "--backend",
-    "tlc",
-    "--apalache-version",
-    apalacheVersion,
-    "--step",
-    "releasableEvidenceStep",
-    "--temporal",
-    property,
-    "--verbosity",
-    "1"
-  ], { acceptedExitCodes: [1], captureOutput: true })
+    ],
+    { acceptedExitCodes: [1], captureOutput: true }
+  )
   assertViolatedTemporalVerdict(verdict, property)
 }
 
@@ -277,10 +283,7 @@ for (const proof of plannedAttemptExecutorProofs) {
 
 const applicationExitCheck = applicationExitCheckRegistry.canonical
 
-await run("application Exit model typecheck", [
-  "typecheck",
-  applicationExitCheck.file
-])
+await run("application Exit model typecheck", ["typecheck", applicationExitCheck.file])
 await run("application Exit deterministic tests", [
   "test",
   applicationExitCheck.testFile,
@@ -314,10 +317,7 @@ await run("application Exit sampled model", [
 // attempts, five ticks, drain resources, process endings, and restart in one
 // production-backed model. ADR 0010 permits these smaller acyclic projections
 // to own complete enumeration while the canonical model retains behavior.
-await run("application Exit proof projection typecheck", [
-  "typecheck",
-  applicationExitCheckRegistry.proofFile
-])
+await run("application Exit proof projection typecheck", ["typecheck", applicationExitCheckRegistry.proofFile])
 for (const proof of applicationExitCheckRegistry.proofs) {
   await run(`${proof.title} deterministic tests`, [
     "test",
@@ -372,10 +372,7 @@ const controlDirectionApplicationInvariants = [
   "typeOk"
 ]
 
-await run("control-direction application model typecheck", [
-  "typecheck",
-  "specs/controlDirectionApplication.qnt"
-])
+await run("control-direction application model typecheck", ["typecheck", "specs/controlDirectionApplication.qnt"])
 await run("control-direction application deterministic tests", [
   "test",
   "specs/controlDirectionApplication_test.qnt",
@@ -424,16 +421,8 @@ await run("control-direction application exhaustive model", [
 const runActivationInvariants = runActivationObligations.invariants
 const runActivationWitnesses = runActivationObligations.witnesses
 
-await run("Run activation model typecheck", [
-  "typecheck",
-  "specs/runActivation.qnt"
-])
-await run("Run activation deterministic tests", [
-  "test",
-  "specs/runActivation_test.qnt",
-  "--main",
-  "runActivationTest"
-])
+await run("Run activation model typecheck", ["typecheck", "specs/runActivation.qnt"])
+await run("Run activation deterministic tests", ["test", "specs/runActivation_test.qnt", "--main", "runActivationTest"])
 await run("Run activation negative mutation profile", [
   "test",
   "specs/runActivation_negative_test.qnt",
@@ -471,10 +460,7 @@ await run("Run activation exhaustive model", [
 const taskFactReconciliationInvariants = taskFactReconciliationObligations.invariants
 const taskFactReconciliationWitnesses = taskFactReconciliationObligations.witnesses
 
-await run("task-fact reconciliation model typecheck", [
-  "typecheck",
-  "specs/taskFactReconciliation.qnt"
-])
+await run("task-fact reconciliation model typecheck", ["typecheck", "specs/taskFactReconciliation.qnt"])
 await run("task-fact reconciliation deterministic tests", [
   "test",
   "specs/taskFactReconciliation_test.qnt",
@@ -582,10 +568,7 @@ const taskFactProofs = [
   }
 ]
 
-await run("task-fact proof projection typecheck", [
-  "typecheck",
-  "specs/taskFactReconciliation_proof.qnt"
-])
+await run("task-fact proof projection typecheck", ["typecheck", "specs/taskFactReconciliation_proof.qnt"])
 for (const proof of taskFactProofs) {
   await run(`${proof.title} deterministic tests`, [
     "test",
@@ -648,10 +631,7 @@ const gitReconciliationInvariants = [
   "unverifiedCandidateNeverPromotes"
 ]
 
-await run("Git reconciliation model typecheck", [
-  "typecheck",
-  "specs/gitReconciliation.qnt"
-])
+await run("Git reconciliation model typecheck", ["typecheck", "specs/gitReconciliation.qnt"])
 await run("Git reconciliation deterministic tests", [
   "test",
   "specs/gitReconciliation_test.qnt",
@@ -709,10 +689,7 @@ await run("Git reconciliation exhaustive model", [
 const acceptedResultIntegrationInvariants = acceptedResultIntegrationObligations.invariants
 const acceptedResultIntegrationWitnesses = acceptedResultIntegrationObligations.witnesses
 
-await run("accepted-result integration model typecheck", [
-  "typecheck",
-  "specs/acceptedResultIntegration.qnt"
-])
+await run("accepted-result integration model typecheck", ["typecheck", "specs/acceptedResultIntegration.qnt"])
 await run("accepted-result integration deterministic tests", [
   "test",
   "specs/acceptedResultIntegration_test.qnt",
@@ -786,10 +763,7 @@ const integrationFinalityInvariants = [
   "dependantReleaseBoundaryRemainsExternal"
 ]
 
-await run("integration finality model typecheck", [
-  "typecheck",
-  "specs/integrationFinality.qnt"
-])
+await run("integration finality model typecheck", ["typecheck", "specs/integrationFinality.qnt"])
 await run("integration finality deterministic tests", [
   "test",
   "specs/integrationFinality_test.qnt",
@@ -864,9 +838,9 @@ await run("integration finality exhaustive model", [
 
 const elapsedMilliseconds = performance.now() - startedAt
 process.stdout.write(
-  `\nComplete Quint model gate: ${
-    (elapsedMilliseconds / 1000).toFixed(2)
-  }s (budget ${quintGateRegressionBudgetMilliseconds / 1000}s)\n`
+  `\nComplete Quint model gate: ${(elapsedMilliseconds / 1000).toFixed(
+    2
+  )}s (budget ${quintGateRegressionBudgetMilliseconds / 1000}s)\n`
 )
 if (elapsedMilliseconds > quintGateRegressionBudgetMilliseconds) {
   throw new Error("Quint models exceeded their regression budget")

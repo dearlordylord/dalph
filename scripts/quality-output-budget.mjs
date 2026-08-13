@@ -1,9 +1,4 @@
-export const addSuccessfulOutputLines = ({
-  currentOutputLines,
-  maximumOutputLines,
-  stageName,
-  stageOutputLines
-}) => {
+export const addSuccessfulOutputLines = ({ currentOutputLines, maximumOutputLines, stageName, stageOutputLines }) => {
   const nextOutputLines = currentOutputLines + stageOutputLines
   if (nextOutputLines > maximumOutputLines) {
     throw new Error(

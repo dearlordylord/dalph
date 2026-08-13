@@ -87,7 +87,17 @@ requires a setting that cannot correctly be shared.
 
 - `pnpm typecheck` runs the strict shared TypeScript program through Effect's
   TypeScript-Go compiler, including Effect language-service diagnostics.
-- `pnpm lint:code` runs type-aware Oxlint rules and dprint formatting checks.
+- `pnpm typecheck:effect` runs the dedicated Effect diagnostics pass with
+  `--strict --severity error,warning --format json`; this is the warning-fatal
+  owner because `tsc` intentionally leaves warnings visible without using them
+  as its exit status.
+- `pnpm lint:code` discovers authored `.js`, `.mjs`, `.ts`, `.tsx`, and root
+  `*.config.*` files, runs type-aware Oxlint with `--deny-warnings`, runs the
+  narrow type-aware ESLint compatibility rules with `--max-warnings 0`, and
+  checks dprint formatting. The same runner receives the staged file list from
+  lint-staged; a staged run also checks the full compatibility file set so an
+  unused-export or functional-policy violation cannot be hidden by staging only
+  one consumer.
 - `pnpm check:circular` rejects runtime dependency cycles.
 - `pnpm check:complexity` rejects an increase in the number of production
   functions above cyclomatic complexity eight in each file.
@@ -114,8 +124,41 @@ or removing repetitive diagnostics before increasing the checked-in budget.
 The native TypeScript 7 compiler is installed as `@typescript/native` and
 patched by `@effect/tsgo` during `pnpm install`. Oxlint's TypeScript-Go plugin
 performs type-aware linting without a legacy TypeScript JavaScript compiler
-API. Effect errors fail `pnpm typecheck`, while existing warning- and
-suggestion-level diagnostics remain visible without failing the command.
+API. Effect errors fail `pnpm typecheck`, while existing suggestion-level
+diagnostics remain visible without failing that command. The separate
+`typecheck:effect` command makes selected Effect warnings fatal and emits
+machine-readable JSON, so a warning cannot be mistaken for a clean quality
+gate.
+
+The Oxlint migration deliberately keeps one compatibility owner for policies
+that have no native type-aware Oxlint equivalent. `eslint.compat.config.mjs`
+contains only those functional and whole-project unused-export rules; native
+Oxlint owns overlapping syntax, import, and warning policies. The checked-in
+`eslint-functional-suppressions.json` is a finite baseline of findings already
+present at the migration boundary, keyed by exact file, rule, and count. It is
+not a blanket disable: an unlisted finding fails `pnpm lint:code`, and an
+obsolete suppression is reported by ESLint's suppression accounting. Update
+the baseline only after reviewing the affected policy and running the focused
+fixture tests. Test files retain the pre-migration throw restriction; the
+finite baseline entries for existing throws do not permit a new test throw.
+The same baseline records the finite set of exported
+declarations that existed without a source consumer at this migration
+boundary. They remain exported because package/test contracts and deep module
+consumers are not all represented by the source-only graph; the public package
+entry points are still the only blanket exceptions. A newly exported
+declaration, including one in a file with an existing baseline count, exceeds
+the recorded count and fails.
+
+Effect diagnostic severities are intentional. Production `floatingEffect` is
+an error. The test-only `multipleEffectProvide` and `unnecessaryEffectGen`
+overrides remain off because the current test suite deliberately composes
+layers and generator adapters in those forms; the dedicated command still
+fails every error or warning it actually reports. `lazyEffect` stays off
+because it is a suggestion about deferred service members, not a safety
+property, and the repository intentionally exposes lazy members in its Effect
+interfaces. Any new severity override must name the concrete fixture or source
+shape that requires it and add a regression test; broad warning suppression is
+not an acceptable migration shortcut.
 
 Duplication is a production-code gate. Tests are excluded because scenario and
 adapter contract setup intentionally repeats shapes across independent cases;
@@ -163,3 +206,8 @@ The repository-wide `dalph/effect-class-inheritance-only` Oxlint rule permits cl
 inheritance only for Effect `Context.Service` tags and
 `Schema.TaggedError` failures. Other inheritance remains forbidden; do not
 replace this policy with per-class suppressions.
+
+The compatibility lint baseline has the same review discipline as complexity
+suppression: use ESLint's `--prune-suppressions` against the explicit discovered
+file list after removing a violation, then inspect the diff before committing.
+The baseline is not a reason to add a new exception for a changed source file.

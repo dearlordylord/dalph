@@ -10,6 +10,7 @@
     "**/dist",
     "**/node_modules",
     "**/prototypes",
+    "**/test/fixtures",
     "**/*.md"
   ],
   "rules": {
@@ -118,7 +119,7 @@
   },
   "overrides": [
     {
-      "files": ["src/**/*.ts", "packages/*/src/**/*.ts"],
+      "files": ["src/**/*.{ts,tsx}", "packages/*/src/**/*.{ts,tsx}"],
       "rules": {
         "dalph/no-throw-statement": "error"
       }
@@ -172,7 +173,7 @@
       }
     },
     {
-      "files": ["**/*.test.ts", "**/*.spec.ts"],
+      "files": ["**/*.{test,spec}.{ts,tsx}"],
       "rules": {
         "dalph/no-double-type-assertion": "error",
         "dalph/no-throw-statement": "off",
@@ -184,14 +185,27 @@
       }
     },
     {
-      "files": ["**/*.test.ts", "**/*.spec.ts"],
+      "files": ["**/*.{test,spec}.{ts,tsx}"],
       "excludeFiles": ["**/*.property.test.ts"],
       "rules": {
         "dalph/property-test-placement": "error"
       }
     },
     {
-      "files": ["scripts/**/*.{ts,mjs}"],
+      "files": ["scripts/**/*.{ts,tsx,mjs}"],
+      "rules": {
+        "dalph/effect-class-inheritance-only": "off",
+        "dalph/no-ambient-capability-bypass": "off",
+        "dalph/no-throw-statement": "off",
+        "import/no-nodejs-modules": "off",
+        "max-lines": "off",
+        "no-console": "off",
+        "no-magic-numbers": "off",
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": ["packages/**/scripts/**/*.{js,mjs,ts,tsx}"],
       "rules": {
         "dalph/effect-class-inheritance-only": "off",
         "dalph/no-ambient-capability-bypass": "off",

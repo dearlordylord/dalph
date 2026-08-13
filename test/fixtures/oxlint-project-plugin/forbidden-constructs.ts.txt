@@ -1,0 +1,26 @@
+import * as vitest from "vitest"
+import { vi as importedVi } from "vitest"
+import * as EffectNamespace from "effect"
+import { Schema as RenamedSchema } from "effect"
+import * as fastCheck from "fast-check"
+
+const { mock: renamedMock, ["spyOn"]: renamedSpyOn } = vi
+const value = "value"
+const firstAssertion = value as unknown as string
+const secondAssertion = <string><unknown>value
+const wrapped = (input: unknown) => input
+const child = class Child extends Parent {}
+
+Date["now"]()
+new Date()
+Math["random"]()
+require("node:fs")
+vi.mock("module")
+vi["doMock"]("module")
+vitest.vi.mock("module")
+importedVi["unmock"]("module")
+jest["mock"]("module")
+fastCheck.property(() => true)
+throw new Error("expected failure")
+
+void [EffectNamespace, RenamedSchema, importedVi, renamedMock, renamedSpyOn, firstAssertion, secondAssertion, wrapped, child]

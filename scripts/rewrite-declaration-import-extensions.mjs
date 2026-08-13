@@ -18,10 +18,7 @@ const visit = (directory) => {
     if (!entry.name.endsWith(".d.ts")) continue
 
     const declaration = fs.readFileSync(absolutePath, "utf8")
-    const rewritten = declaration.replace(
-      /((?:from\s+|import\()["'][^"']+)\.ts(["'])/gu,
-      "$1.js$2"
-    )
+    const rewritten = declaration.replace(/((?:from\s+|import\()["'][^"']+)\.ts(["'])/gu, "$1.js$2")
     if (rewritten !== declaration) fs.writeFileSync(absolutePath, rewritten)
   }
 }

@@ -11,12 +11,7 @@ const performanceTestPattern = "packages/**/*.performance.test.ts"
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 20_000
 const ordinaryWorkerCount = 4
-const ordinaryTestIncludes = [
-  "src/**/*.test.ts",
-  "packages/**/*.test.ts",
-  "scripts/**/*.test.ts",
-  "test/**/*.test.ts"
-]
+const ordinaryTestIncludes = ["src/**/*.test.ts", "packages/**/*.test.ts", "scripts/**/*.test.ts", "test/**/*.test.ts"]
 
 export default defineConfig(({ mode }) => ({
   resolve: {
@@ -29,12 +24,7 @@ export default defineConfig(({ mode }) => ({
   },
   test: {
     coverage: {
-      exclude: [
-        "**/*.d.ts",
-        "**/*.test.ts",
-        "**/*.spec.ts",
-        "test/**"
-      ],
+      exclude: ["**/*.d.ts", "**/*.test.ts", "**/*.spec.ts", "test/**"],
       include: ["src/**/*.ts", "packages/*/src/**/*.ts"],
       provider: "v8",
       reporter: ["text", "json", "html"],
