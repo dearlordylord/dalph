@@ -14,23 +14,28 @@ import { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-r
 import { type DeliveryActionExecutionLease, interruptibleBoundaryOf } from "./delivery-action-executor.js"
 import type { AcceptedWorkflowTransition, NewRecoveredWorkflowAction } from "./delivery-action-proposal.js"
 import type { OperationId } from "../../workflow/identity.js"
-import { acceptedTransitionExecutionOf, type TransitionForAcceptedExecution } from "./delivery-transition-policy.js"
 
-type AcceptedRecoveryTransition = TransitionForAcceptedExecution<"Recovery">
+type AcceptedRecoveryTransition = Extract<
+  AcceptedWorkflowTransition,
+  { readonly _tag: "CheckTaskClaim" | "ReconcileTaskClaim" | "ReconcileTaskClaimRelease" | "ReconcileTaskWorktree" }
+>
 
-type AcceptedObservationTransition = TransitionForAcceptedExecution<"Observation">
-type StoppedClaimReleaseRetryTransition = TransitionForAcceptedExecution<"StoppedClaimReleaseRetry">
+type AcceptedObservationTransition = Extract<
+  AcceptedWorkflowTransition,
+  {
+    readonly _tag:
+      | "ObservePlannedAttemptContinuationClaim"
+      | "ObserveResponsibleTaskClaim"
+      | "ObserveStoppedAttemptClaim"
+      | "ObservePlannedAttemptContinuationGraph"
+      | "ObservePlannedAttemptContinuationSpecification"
+      | "ObservePlannedAttemptContinuationTargetLineage"
+      | "ObservePlannedAttemptContinuationWorktree"
+  }
+>
 type BoundaryExecutionLease = Pick<DeliveryActionExecutionLease, "forwardBoundary" | "recordIntent">
 
-const isAcceptedRecoveryTransition = (
-  transition: AcceptedWorkflowTransition
-): transition is AcceptedRecoveryTransition => acceptedTransitionExecutionOf(transition) === "Recovery"
-
-const isStoppedClaimReleaseRetryTransition = (
-  transition: AcceptedWorkflowTransition
-): transition is StoppedClaimReleaseRetryTransition =>
-  acceptedTransitionExecutionOf(transition) === "StoppedClaimReleaseRetry"
-
+/** Executes the protocol carried by each accepted transition without consulting planning policy. */
 const executeAcceptedRecovery = (runId: RunId, transition: AcceptedRecoveryTransition, lease: BoundaryExecutionLease) =>
   Match.valueTags(transition, {
     CheckTaskClaim: ({ operationId }) => recoverTaskClaimOperation(runId, operationId, lease),
@@ -143,6 +148,20 @@ const executeAcceptedObservation = Effect.fn("DeliveryAction.executeAcceptedObse
   })
 })
 
+const executeStoppedClaimReleaseRetry = Effect.fn("DeliveryAction.executeStoppedClaimReleaseRetry")(function* (
+  transition: Extract<AcceptedWorkflowTransition, { readonly _tag: "RetryStoppedAttemptClaimRelease" }>,
+  lease: BoundaryExecutionLease
+) {
+  const interpreter = yield* WorkflowInterpreter
+  const trace = yield* WorkflowTrace
+  yield* trace.emit(OperationSelected.make({ operation: transition.operation }))
+  return yield* interpreter.releaseTaskClaim(
+    transition.operation,
+    lease.recordIntent(transition.operation.release.operationId),
+    interruptibleBoundaryOf(lease)
+  )
+})
+
 export const executeNewRecoveredAction = Effect.fn("DeliveryAction.executeNewRecoveredAction")(function* (
   action: NewRecoveredWorkflowAction,
   operationId: OperationId,
@@ -186,16 +205,19 @@ export const executeAcceptedWorkflowAction = Effect.fn("DeliveryAction.executeAc
   transition: AcceptedWorkflowTransition,
   lease: BoundaryExecutionLease
 ) {
-  if (isStoppedClaimReleaseRetryTransition(transition)) {
-    const interpreter = yield* WorkflowInterpreter
-    const trace = yield* WorkflowTrace
-    yield* trace.emit(OperationSelected.make({ operation: transition.operation }))
-    return yield* interpreter.releaseTaskClaim(
-      transition.operation,
-      lease.recordIntent(transition.operation.release.operationId),
-      interruptibleBoundaryOf(lease)
-    )
-  }
-  if (isAcceptedRecoveryTransition(transition)) return yield* executeAcceptedRecovery(runId, transition, lease)
-  return yield* executeAcceptedObservation(transition, lease)
+  // Exhaustive transition matching keeps route/scheduling policy in planning and leaves this adapter protocol-only.
+  return yield* Match.valueTags(transition, {
+    CheckTaskClaim: (transition) => executeAcceptedRecovery(runId, transition, lease),
+    ReconcileTaskClaim: (transition) => executeAcceptedRecovery(runId, transition, lease),
+    ReconcileTaskClaimRelease: (transition) => executeAcceptedRecovery(runId, transition, lease),
+    ReconcileTaskWorktree: (transition) => executeAcceptedRecovery(runId, transition, lease),
+    RetryStoppedAttemptClaimRelease: (transition) => executeStoppedClaimReleaseRetry(transition, lease),
+    ObservePlannedAttemptContinuationClaim: (transition) => executeAcceptedObservation(transition, lease),
+    ObserveResponsibleTaskClaim: (transition) => executeAcceptedObservation(transition, lease),
+    ObserveStoppedAttemptClaim: (transition) => executeAcceptedObservation(transition, lease),
+    ObservePlannedAttemptContinuationGraph: (transition) => executeAcceptedObservation(transition, lease),
+    ObservePlannedAttemptContinuationSpecification: (transition) => executeAcceptedObservation(transition, lease),
+    ObservePlannedAttemptContinuationTargetLineage: (transition) => executeAcceptedObservation(transition, lease),
+    ObservePlannedAttemptContinuationWorktree: (transition) => executeAcceptedObservation(transition, lease)
+  })
 })

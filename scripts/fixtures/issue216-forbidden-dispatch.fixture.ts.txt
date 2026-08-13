@@ -1,0 +1,4 @@
+import { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
+
+export const forbiddenDispatchPromotion = (candidate, verification) =>
+  runTargetPromotion(candidate, verification)
