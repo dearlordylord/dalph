@@ -132,14 +132,16 @@ cassette <catalog-key> through the composed production coordinator`.
 | Five-task diamond | D starts only after B, C, and E have tracker-confirmed success; all five accepted results settle | `runs the five-task controlled-provider diamond through exact accepted-result finality` |
 | Ten-task restart story | Same B/C attempts survive restart and all ten tasks use accepted-result finality | `consumes a staggered graph while reconstructed positions delay restart-added X`; `preserves the double-diamond middle positions across coordinator restart` |
 | A-to-B maintained story | B starts only after A's accepted result reaches completion finality and a later complete graph releases it | `releases B only after A's accepted-result finality in one Run` |
-| Maintained catalog | Every shared registry entry executes through the public production runner | generated `runs maintained authored cassette <catalog-key> through the composed production coordinator` tests |
+| Maintained catalog | Every shared registry entry executes through the public production runner | generated `runs maintained authored cassette <catalog-key> through the composed production coordinator` tests, plus the three stronger capstone tests above |
 
 ## Included unhappy and recovery evidence
 
 The package law generates one named production-runner test per exact catalog
-key, so a failure retains its key. The accepted scenario documents indexed by
-`docs/scenarios/README.md` remain authoritative; #167 neither copies nor
-weakens them.
+key except the three capstone entries, whose stronger named tests above run the
+same public coordinator and assert exact dependency/finality chronology. A
+failure therefore retains either its catalog key or its capstone name. The
+accepted scenario documents indexed by `docs/scenarios/README.md` remain
+authoritative; #167 neither copies nor weakens them.
 
 | Accepted behavior owners | Maintained keys | Supporting focused/model evidence |
 |---|---|---|

@@ -32,7 +32,8 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
     readonly sourceFile: string
   }): boolean => {
     const source = readFileSync(new URL(`../${acceptance.sourceFile}`, import.meta.url), "utf8")
-    return source.includes(`${acceptance.declaration}("${acceptance.name}"`)
+    const declaration = acceptance.declaration.replace(".", "\\.")
+    return new RegExp(`${declaration}\\(\\s*${JSON.stringify(acceptance.name)}`).test(source)
   }
 
   expect(documentedBeatIds).toEqual(deliveryStoryManifest.beats.map(({ beatId }) => beatId))

@@ -224,8 +224,8 @@ end.
 
 <!-- DELIVERY-STORY-MANIFEST:START -->
 cassette|authored:deliveryInvariantStory
-cassette-test|packages/dalph/test/cassettes/scenario.test.ts#it.effect#consumes a staggered graph while reconstructed positions delay restart-added X
-cassette-test|packages/dalph/test/cassettes/scenario.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
+cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#consumes a staggered graph while reconstructed positions delay restart-added X
+cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
 DS-01|NotImplemented|The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks.
 DS-02|NotImplemented|No maintained run admits A, B, and C together yet.
 DS-03|NotImplemented|No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change.
@@ -233,7 +233,7 @@ DS-04|NotImplemented|No named acceptance test proves B's changed graph/specifica
 DS-05|NotImplemented|The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart.
 DS-06|NotImplemented|No maintained run admits D after B's changed-instruction suspension releases one of three held positions.
 DS-07|NotImplemented|No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held.
-DS-08|DemonstratedBySpine|authored:deliveryInvariantStory|packages/dalph/test/cassettes/scenario.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
+DS-08|DemonstratedBySpine|authored:deliveryInvariantStory|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
 DS-09|NotImplemented|The maintained double diamond recovers held B and C, not held A, C, and D plus retained B.
 DS-10|NotImplemented|No maintained run closes C without success and then asks its exact executor to suspend.
 DS-11|NotImplemented|No maintained run releases closed C's position while retaining its reversible lifecycle wait.

@@ -31,6 +31,7 @@ interface DeliveryStoryAcceptanceTest {
   readonly name: string
   readonly sourceFile:
     | "packages/dalph/test/cassettes/scenario.test.ts"
+    | "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
     | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
 }
 
@@ -66,8 +67,14 @@ const scenarioTest = (name: string): DeliveryStoryAcceptanceTest => ({
   sourceFile: "packages/dalph/test/cassettes/scenario.test.ts"
 })
 
-const topologyTest = scenarioTest("consumes a staggered graph while reconstructed positions delay restart-added X")
-const restartTest = scenarioTest("preserves the double-diamond middle positions across coordinator restart")
+const capstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
+  declaration: "it.effect",
+  name,
+  sourceFile: "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
+})
+
+const topologyTest = capstoneTest("consumes a staggered graph while reconstructed positions delay restart-added X")
+const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
 
 const spine = (
   beatId: DeliveryStoryBeatId,

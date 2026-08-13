@@ -2261,10 +2261,7 @@ const pipelineIntegrationFinality = (
   }),
   {
     _tag: "TargetVerificationReturned" as const,
-    result: {
-      _tag: "Passed" as const,
-      artifacts: [{ name: "controlled-provider-check", content: `verified ${taskId}` }]
-    }
+    result: { _tag: "Passed" as const, artifacts: [{ name: "acceptance-verification", content: `verified ${taskId}` }] }
   },
   targetPromotionGitReadReturned("/dalph/cassettes/pipeline.git", candidateCommit, {
     _tag: "CandidateNotInAncestry" as const,
@@ -2322,7 +2319,7 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/pipeline.git", ref: "refs/heads/master" },
       target: "pipeline-cassette-target",
-      verificationPlanId: "controlled-provider-check",
+      verificationPlanId: "acceptance-verification",
       worktreeRoot: "/dalph/cassettes/pipeline"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
@@ -3924,7 +3921,7 @@ const doubleDiamondAcceptedReport = (attempt: {
   request: "StartOrContinue" as const
 })
 
-/** Every accepted fake-executor result crosses the ordinary integration and completion-finality boundaries. */
+/** Every accepted executor result crosses the ordinary integration and completion-finality boundaries. */
 const doubleDiamondIntegrationFinality = (
   attempt: { readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] },
   graphBeforeCompletion: DoubleDiamondGraph,
@@ -3967,7 +3964,7 @@ const doubleDiamondIntegrationFinality = (
       _tag: "TargetVerificationReturned" as const,
       result: {
         _tag: "Passed" as const,
-        artifacts: [{ name: "controlled-provider-check", content: `verified ${attempt.taskId}` }]
+        artifacts: [{ name: "acceptance-verification", content: `verified ${attempt.taskId}` }]
       }
     },
     targetPromotionGitReadReturned(repository, candidateCommit, {
@@ -4059,7 +4056,7 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       executor: "executor:double-diamond",
       integrationTarget: { repository: "/dalph/cassettes/double-diamond.git", ref: "refs/heads/master" },
       target: "double-diamond-target",
-      verificationPlanId: "controlled-provider-check",
+      verificationPlanId: "acceptance-verification",
       worktreeRoot: "/dalph/cassettes/double-diamond"
     },
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.initialAEligible, [
@@ -4245,7 +4242,7 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
       executor: "executor:five-task-diamond",
       integrationTarget: { repository: "/dalph/cassettes/five-task-diamond.git", ref: "refs/heads/master" },
       target: "double-diamond-target",
-      verificationPlanId: "controlled-provider-check",
+      verificationPlanId: "acceptance-verification",
       worktreeRoot: "/dalph/cassettes/five-task-diamond"
     },
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(fiveTaskDiamondGraphs.noneComplete, [

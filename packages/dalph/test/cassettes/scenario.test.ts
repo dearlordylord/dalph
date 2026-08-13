@@ -216,20 +216,6 @@ it("renders every maintained authored cassette from its structured story", () =>
   }
 })
 
-for (const [key, cassette] of Object.entries(maintainedAuthoredCassetteCatalog)) {
-  it.effect(
-    `runs maintained authored cassette ${key} through the composed production coordinator`,
-    () =>
-      runAuthoredScenarioCassette(cassette).pipe(
-        Effect.tap((run) => Effect.sync(() => expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior"))),
-        Effect.catchCause((cause) =>
-          Effect.fail({ _tag: "MaintainedAuthoredCassetteExecutionFailed" as const, cause, key })
-        )
-      ),
-    600_000
-  )
-}
-
 const exactClaimAuthorities = (...attemptIds: ReadonlyArray<AttemptId>) =>
   new Map(attemptIds.map((attemptId) => [attemptId, { _tag: "Exact" as const }]))
 
@@ -238,6 +224,10 @@ const runAuthoredScenarioCassette = (
   input: unknown,
   options: Parameters<typeof runAuthoredScenarioCassetteWithCrypto>[1] = {}
 ) => runAuthoredScenarioCassetteWithCrypto(input, options).pipe(Effect.provide(NodeCrypto.layer))
+
+const cachedDependentTasksRun = Effect.runSync(
+  Effect.cached(runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette))
+)
 
 const expectRecordedRoundTrip = (records: ReadonlyArray<JournalRecord>, recorded: RecordedCassette) =>
   expect(
@@ -2804,115 +2794,6 @@ it.effect("settles a promoted authored task through the real completion-claim bo
 )
 
 it.effect(
-  "consumes a staggered graph while reconstructed positions delay restart-added X",
-  () =>
-    Effect.gen(function* () {
-      const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory)
-      const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
-      const completeTopology = established.find(
-        ({ graph }) => graph._tag === "Established" && graph.tasks.length === 10
-      )
-      const edges =
-        completeTopology?.graph._tag === "Established"
-          ? completeTopology.graph.tasks.flatMap(({ id, prerequisiteIds }) =>
-              prerequisiteIds.map((prerequisiteId) => `${prerequisiteId}->${id}`)
-            )
-          : []
-      const heldSets = run.deliveryFrames.map(({ heldPositions }) =>
-        heldPositions
-          .map(({ taskId }) => taskId)
-          .toSorted()
-          .join("+")
-      )
-      const eligibleSets = established.map(({ frontier }) =>
-        frontier
-          .filter(({ standing }) => standing === "Eligible")
-          .map(({ taskId }) => taskId)
-          .toSorted()
-          .join("+")
-      )
-      const expectedFrontiers = ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""]
-      let previousFrontier = -1
-      const frontierPositions = expectedFrontiers.map((frontier) => {
-        previousFrontier = eligibleSets.indexOf(frontier, previousFrontier + 1)
-        return previousFrontier
-      })
-      const expectedOverlaps = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"]
-      let previousOverlap = -1
-      const overlapPositions = expectedOverlaps.map((overlap) => {
-        previousOverlap = heldSets.indexOf(overlap, previousOverlap + 1)
-        return previousOverlap
-      })
-      const taskByAttempt = new Map(
-        run.records.flatMap(({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-            ? [[event.plannedAttempt.attemptId, event.plannedAttempt.taskId] as const]
-            : []
-        )
-      )
-      const taskWork = run.records.flatMap(({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-          ? [`began:${event.plannedAttempt.taskId}`]
-          : event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
-            ? [`terminal:${taskByAttempt.get(event.report.correlation.attemptId)}`]
-            : []
-      )
-      const taskIds = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X"]
-
-      expect(completeTopology).toBeDefined()
-      expect(edges.toSorted()).toEqual([
-        "A->B",
-        "A->C",
-        "A->X",
-        "B->D",
-        "C->D",
-        "D->E",
-        "D->F",
-        "E->H",
-        "F->I",
-        "H->G",
-        "I->G",
-        "X->G"
-      ])
-      expect(completeTopology?.frontier).toHaveLength(10)
-      expect(overlapPositions.every((position) => position >= 0)).toBe(true)
-      expect(frontierPositions.every((position) => position >= 0)).toBe(true)
-      expect(
-        run.deliveryFrames.every(({ capacity, heldPositions }) => capacity === 2 && heldPositions.length <= 2)
-      ).toBe(true)
-      expect(taskWork.toSorted()).toEqual(
-        taskIds.flatMap((taskId) => [`began:${taskId}`, `terminal:${taskId}`]).toSorted()
-      )
-      const aSettledAt = run.records.findIndex(
-        ({ event }) => event._tag === "IntegrationFinalitySettled" && event.claim.plannedAttempt.taskId === "A"
-      )
-      const bBeganAt = run.records.findIndex(
-        ({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.taskId === "B"
-      )
-      expect(aSettledAt).toBeGreaterThanOrEqual(0)
-      expect(bBeganAt).toBeGreaterThan(aSettledAt)
-      expect(
-        run.records.flatMap(({ event }) =>
-          event._tag === "IntegrationFinalitySettled" ? [event.claim.plannedAttempt.taskId] : []
-        )
-      ).toEqual(["A", "B", "C", "D", "X", "E", "F", "H", "I", "G"])
-      expect(
-        run.records.some(
-          ({ event }) =>
-            event._tag === "PlannedAttemptExecutorWorkReported" &&
-            event.report._tag === "Terminal" &&
-            event.report.result._tag === "Completed"
-        )
-      ).toBe(false)
-      expect(run.records.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
-      expect(run.deliveryFrames.at(-1)?.heldPositions).toEqual([])
-      expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
-    }),
-  600_000
-)
-
-it.effect(
   "runs the five-task controlled-provider diamond through exact accepted-result finality",
   () =>
     Effect.gen(function* () {
@@ -2937,47 +2818,6 @@ it.effect(
       expect(
         run.deliveryFrames.every(({ capacity, heldPositions }) => capacity === 2 && heldPositions.length <= 2)
       ).toBe(true)
-    }),
-  600_000
-)
-
-it.effect(
-  "preserves the double-diamond middle positions across coordinator restart",
-  () =>
-    Effect.gen(function* () {
-      const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory)
-      const initial = run.deliveryFrames.find(
-        ({ heldPositions }) =>
-          heldPositions.some(({ taskId }) => taskId === "B") && heldPositions.some(({ taskId }) => taskId === "C")
-      )
-      const later = run.deliveryFrames.find(
-        ({ activationOrdinal }) => initial !== undefined && activationOrdinal > initial.activationOrdinal
-      )
-      const correlations = (frame: NonNullable<typeof initial>) =>
-        frame.heldPositions
-          .filter(({ taskId }) => taskId === "B" || taskId === "C")
-          .map(({ attemptId, runId, taskId }) => `${taskId}:${runId}:${attemptId}`)
-          .toSorted()
-
-      expect(initial).toBeDefined()
-      expect(later).toBeDefined()
-      if (initial === undefined || later === undefined) return
-      expect(later.heldPositions.map(({ taskId }) => taskId).toSorted()).toEqual(["B", "C"])
-      expect(correlations(later)).toEqual(correlations(initial))
-      const xObservedWithBothPositions = run.deliveryFrames.findIndex(
-        ({ graph, heldPositions }) =>
-          graph._tag === "Established" &&
-          graph.tasks.some(({ id }) => id === "X") &&
-          ["B", "C"].every((taskId) => heldPositions.some((position) => position.taskId === taskId))
-      )
-      const xHeld = run.deliveryFrames.findIndex(({ heldPositions }) =>
-        heldPositions.some(({ taskId }) => taskId === "X")
-      )
-      expect(xObservedWithBothPositions).toBeGreaterThanOrEqual(0)
-      expect(xHeld).toBeGreaterThan(xObservedWithBothPositions)
-      expect(run.deliveryFrames[xHeld]?.heldPositions.some(({ taskId }) => taskId === "B" || taskId === "C")).toBe(
-        false
-      )
     }),
   600_000
 )
@@ -3630,7 +3470,7 @@ it.effect("starts a queued accepted result in the same live coordinator process"
 
 it.effect("releases B only after A's accepted-result finality in one Run", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette)
+    const run = yield* cachedDependentTasksRun
     const executorResponsibilities = run.records.flatMap(({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ? [event.plannedAttempt.taskId] : []
     )
@@ -3675,7 +3515,7 @@ it.effect(
   "captures every authored delivery frame from production and keeps desired tickets separate from held work",
   () =>
     Effect.gen(function* () {
-      const run = yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette)
+      const run = yield* cachedDependentTasksRun
       const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
 
       expect(run.deliveryFrames[0]?.graph).toEqual({ _tag: "NotEstablished" })
@@ -6111,7 +5951,9 @@ it.effect("matches optional orchestration and protocol evidence in exact order",
     })
     const terminalBoundaryLyrics = renderAuthoredCassetteLyrics(terminalBoundaryCassette)
     expect(terminalBoundaryLyrics).toContain("Operator request render-operator-reacquisition directs Dalph")
-    expect(terminalBoundaryLyrics).toContain("cannot complete the current-head candidate-ancestry read")
+    expect(terminalBoundaryLyrics).toContain(
+      "Git cannot reconcile candidate cccccccccccccccccccccccccccccccccccccccc in /dalph/cassettes/integration.git"
+    )
     expect(terminalBoundaryLyrics).toContain("returns RunMayTerminate")
   })
 )

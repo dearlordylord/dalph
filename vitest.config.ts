@@ -10,7 +10,6 @@ const mbtTestPattern = "packages/**/*.mbt.test.ts"
 const performanceTestPattern = "packages/**/*.performance.test.ts"
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 20_000
-const coverageWorkerCount = 2
 const ordinaryWorkerCount = 4
 const ordinaryTestIncludes = [
   "src/**/*.test.ts",
@@ -48,7 +47,7 @@ export default defineConfig(({ mode }) => ({
       ...(mode === "coverage" ? [mbtTestPattern, performanceTestPattern] : [])
     ],
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
-    maxWorkers: mode === "coverage" ? coverageWorkerCount : ordinaryWorkerCount,
+    maxWorkers: ordinaryWorkerCount,
     testTimeout: mode === "coverage" ? coverageTestTimeoutMilliseconds : ordinaryTestTimeoutMilliseconds
   }
 }))

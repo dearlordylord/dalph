@@ -1,9 +1,5 @@
 ```mermaid
 flowchart LR
-  subgraph milestone["Controlled-provider milestone"]
-    i167["#167 Complete controlled-provider behavior"]
-  end
-
   subgraph production["Production executor decision"]
     i127["#127 Decide production executor"]
     i168["#168 Reconcile experimental executor"]
@@ -16,18 +12,16 @@ flowchart LR
     effectWorkflow["Effect Workflow evaluation"]
   end
 
-  i167 --> i127
   i127 --> i168
-  i167 --> i168
   i168 --> i140
 
   i140 --> i142
-  i167 --> i142
   i142 --> i143
-  i167 --> i143
   i143 -. evaluation authorized .-> effectWorkflow
 ```
 
 Completed prerequisites are removed from the active graph. Issue #66 was
-integrated and closed on master at `147a1774b`; #167 is now the active entry
-node for the controlled-provider milestone.
+integrated and closed on master at `147a1774b`; #167 was integrated on master
+at `8fd47e052`. Issue #127 is now the active entry node for the production
+executor decision. Effect Workflow evaluation remains blocked by #127, #168,
+#140, #142, and #143 in that order.
