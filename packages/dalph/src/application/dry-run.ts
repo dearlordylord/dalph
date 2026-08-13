@@ -1,18 +1,18 @@
 import { NodeTerminal } from "@effect/platform-node"
-import { GitCommitSha, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
 import {
-  ClaimOwner,
-  deterministicOperationIdAllocatorLayer,
-  deterministicPlannedTaskAttemptLayer,
-  deterministicTaskClaimAcquisitionPlannerLayer,
   type FixtureReader,
   fixtureReaderFileLayer,
+  githubTrackerGraphReaderNodeLayer,
+  TrackerAdapterReadContext,
+  TrackerAdapterReadError,
+  TrackerAdapterReadFailureReason,
+  TrackerGraphReader,
   trackerGraphReaderLayer
 } from "@dalph/orchestrator"
-import { Effect, FileSystem, Layer, Path, PlatformError, Sink } from "effect"
+import { type Config, Effect, FileSystem, Layer, Path, PlatformError, Sink } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
-import { runCliFromStdio } from "./cli.js"
-import { dryRunWorkflowInterpreterLayer } from "./composition.js"
+import { githubTokenRequirementDetail, runCliFromStdio } from "./cli.js"
+import { dryRunOperationIdAllocatorLayer } from "./composition.js"
 import { traceOutputStdioLayer } from "../presentation/stdio-trace-output.js"
 import { workflowTraceOutputLayer } from "../presentation/workflow-trace.js"
 
@@ -58,32 +58,57 @@ export const dryCliEnvironmentLayer = Layer.mergeAll(
   Path.layer
 )
 
-const dryRunOperationIdAllocatorLayer = deterministicOperationIdAllocatorLayer("dry-run-operation")
-const dryRunTaskClaimPlannerLayer = deterministicTaskClaimAcquisitionPlannerLayer({
-  owner: ClaimOwner.make("dry-run"),
-  tokenPrefix: "dry-run-claim"
+/** A missing live-read credential is a typed adapter-selection failure, not a fixture fallback. */
+const githubTokenStartupFailure = new TrackerAdapterReadError({
+  context: TrackerAdapterReadContext.cases.Github.make({ operation: "GithubTrackerGraphReader.selectAdapter" }),
+  detail: githubTokenRequirementDetail,
+  reason: TrackerAdapterReadFailureReason.cases.Transport.make({})
 })
 
-const dryRunPlannedTaskAttemptLayer = deterministicPlannedTaskAttemptLayer({
-  baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
-  executor: TaskExecutorLocator.make("executor:dry-run"),
-  runId: RunId.make("dry-run"),
-  worktreeRoot: WorktreeLocator.make("/dalph/dry-run")
-})
+const readThrough = <A, E>(
+  readerLayer: Layer.Layer<TrackerGraphReader, Config.ConfigError, never>,
+  read: (reader: TrackerGraphReader["Service"]) => Effect.Effect<A, E>
+) =>
+  Effect.gen(function* () {
+    const reader = yield* TrackerGraphReader
+    return yield* read(reader)
+  }).pipe(
+    Effect.provide(readerLayer),
+    Effect.catchTag("ConfigError", () => Effect.fail(githubTokenStartupFailure))
+  )
 
-export const makeDryRunCliApplication = (fixtureReaderLayer: Layer.Layer<FixtureReader>) => {
-  const dryRunTrackerGraphReaderLayer = trackerGraphReaderLayer.pipe(Layer.provide(fixtureReaderLayer))
-  const dryRunInterpreterLayer = dryRunWorkflowInterpreterLayer.pipe(Layer.provide(dryRunTrackerGraphReaderLayer))
+/** Routes one already-decoded target to exactly one tracker adapter. */
+export const makeDryRunTrackerGraphReaderLayer = (
+  fixtureReaderLayer: Layer.Layer<FixtureReader>,
+  githubReaderLayer: Layer.Layer<TrackerGraphReader, Config.ConfigError, never> = githubTrackerGraphReaderNodeLayer
+) => {
+  const fixtureLayer = trackerGraphReaderLayer.pipe(Layer.provide(fixtureReaderLayer))
+  return Layer.succeed(
+    TrackerGraphReader,
+    TrackerGraphReader.of({
+      read: (target) =>
+        readThrough(typeof target === "string" ? fixtureLayer : githubReaderLayer, (reader) => reader.read(target)),
+      readTaskWorkSpecification: (target, taskId) =>
+        readThrough(typeof target === "string" ? fixtureLayer : githubReaderLayer, (reader) =>
+          reader.readTaskWorkSpecification(target, taskId)
+        )
+    })
+  )
+}
+
+export const makeDryRunCliApplication = (
+  fixtureReaderLayer: Layer.Layer<FixtureReader>,
+  githubReaderLayer: Layer.Layer<TrackerGraphReader, Config.ConfigError, never> = githubTrackerGraphReaderNodeLayer
+) => {
+  const dryRunTrackerGraphReaderLayer = makeDryRunTrackerGraphReaderLayer(fixtureReaderLayer, githubReaderLayer)
   const dryRunTraceLayer = workflowTraceOutputLayer.pipe(Layer.provide(traceOutputStdioLayer))
 
   return runCliFromStdio.pipe(
     Effect.provide(
       Layer.mergeAll(
-        dryRunInterpreterLayer,
+        dryRunTrackerGraphReaderLayer,
         dryRunTraceLayer,
         dryRunOperationIdAllocatorLayer,
-        dryRunTaskClaimPlannerLayer,
-        dryRunPlannedTaskAttemptLayer,
         dryCliEnvironmentLayer
       )
     )

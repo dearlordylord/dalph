@@ -1,11 +1,22 @@
 import { it } from "@effect/vitest"
-import { FixtureReader, FixtureTarget } from "@dalph/orchestrator"
+import { TaskId } from "@dalph/contracts"
+import {
+  FixtureReader,
+  FixtureTarget,
+  GithubIssueNumber,
+  GithubIssueTarget,
+  GithubRepositoryName,
+  GithubRepositoryOwner,
+  projectTrackerSnapshot,
+  TrackerGraphReader
+} from "@dalph/orchestrator"
 import type { PlatformError } from "effect"
-import { Effect, FileSystem, Layer, Ref, Sink, Stdio, Stream } from "effect"
+import { ConfigProvider, Effect, FileSystem, Layer, Ref, Sink, Stdio, Stream } from "effect"
 import type { Stdio as StdioService } from "effect/Stdio"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { expect } from "vitest"
 import { dryCliEnvironmentLayer, dryRunCliApplication, makeDryRunCliApplication } from "./dry-run.js"
+import { GithubTokenRequiredError } from "./cli.js"
 
 type IsExactly<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
@@ -17,6 +28,23 @@ const deniedFilesystemMutation = <A>(
   method: string,
   effect: Effect.Effect<A, PlatformError.PlatformError>
 ): readonly [string, Effect.Effect<void, PlatformError.PlatformError>] => [method, Effect.asVoid(effect)]
+
+const githubTarget = GithubIssueTarget.make({
+  issueNumber: GithubIssueNumber.make(42),
+  owner: GithubRepositoryOwner.make("octo"),
+  repository: GithubRepositoryName.make("dalph")
+})
+
+const githubSnapshot = (() => {
+  const projection = projectTrackerSnapshot({
+    revision: "github-dry-run-revision",
+    tasks: [
+      { id: TaskId.make("github-dry-run-root"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+    ]
+  })
+  if (projection._tag === "Valid") return projection.snapshot
+  throw new Error("the dry-run GitHub graph must be valid")
+})()
 
 it.effect("runs the complete dry CLI with only Stdio left to supply", () =>
   Effect.gen(function* () {
@@ -56,6 +84,59 @@ it.effect("replaces fixture reads at the complete dry CLI boundary", () =>
     yield* makeDryRunCliApplication(fixtureReaderLayer).pipe(Effect.provide(stdioLayer))
 
     expect(yield* Ref.get(requestedTargets)).toEqual([target, target])
+  })
+)
+
+it.effect("selects the production GitHub reader for an explicit GitHub target", () =>
+  Effect.gen(function* () {
+    const requestedTargets = yield* Ref.make<ReadonlyArray<unknown>>([])
+    const githubReaderLayer = Layer.succeed(
+      TrackerGraphReader,
+      TrackerGraphReader.of({
+        read: Effect.fn("TrackerGraphReader.GithubCliTest.read")(function* (target) {
+          yield* Ref.update(requestedTargets, (current) => [...current, target])
+          return githubSnapshot
+        }),
+        readTaskWorkSpecification: () => Effect.die("the GitHub dry run must not request focused task content")
+      })
+    )
+    const fixtureReaderLayer = Layer.succeed(
+      FixtureReader,
+      FixtureReader.of({ read: () => Effect.die("the GitHub target must not use fixture reads") })
+    )
+    const chunks = yield* Ref.make<ReadonlyArray<string>>([])
+    const stdioLayer = Stdio.layerTest({
+      args: Effect.succeed(["run", "github:octo/dalph#42", "--dry"]),
+      stdout: () =>
+        Sink.forEach((chunk: string | Uint8Array) => {
+          const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk)
+          return Ref.update(chunks, (current) => [...current, text])
+        })
+    })
+
+    yield* makeDryRunCliApplication(fixtureReaderLayer, githubReaderLayer).pipe(Effect.provide(stdioLayer))
+
+    expect(yield* Ref.get(requestedTargets)).toEqual([githubTarget])
+    expect((yield* Ref.get(chunks)).join("")).toContain('"TaskTrackerFactsObserved"')
+  })
+)
+
+it.effect("reports the missing GitHub token as a typed startup failure", () =>
+  Effect.gen(function* () {
+    const fixtureReaderLayer = Layer.succeed(
+      FixtureReader,
+      FixtureReader.of({ read: () => Effect.die("the GitHub target must not use fixture reads") })
+    )
+    const stdioLayer = Stdio.layerTest({ args: Effect.succeed(["run", "github:octo/dalph#42", "--dry"]) })
+    const failure = yield* makeDryRunCliApplication(fixtureReaderLayer).pipe(
+      Effect.provide(stdioLayer),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
+      Effect.flip
+    )
+
+    expect(failure).toBeInstanceOf(GithubTokenRequiredError)
+    if (failure._tag !== "Cli.GithubTokenRequired") return
+    expect(failure.variable).toBe("GITHUB_TOKEN")
   })
 )
 
