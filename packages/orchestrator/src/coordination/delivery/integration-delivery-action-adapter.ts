@@ -17,7 +17,10 @@ import { TargetVerificationRuntime } from "../../workflow/protocols/target-verif
 import { TargetVerificationRuntimeUnavailable } from "./target-verification-boundary.js"
 import { TargetPromotionGit } from "../../workflow/protocols/target-promotion/events.js"
 import { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
-import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotion/runtime.js"
+import {
+  coordinatorOwnedTargetPromotionGit,
+  TargetPromotionRuntime
+} from "../../workflow/protocols/target-promotion/runtime.js"
 import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import {
   type DeliveryActionExecutionLease,
@@ -47,6 +50,7 @@ import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.j
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
+import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -291,11 +295,16 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
   const context = yield* Effect.context<never>()
   const runtime = Context.getOption(context, TargetPromotionRuntime)
   if (Option.isNone(runtime)) return yield* new TargetPromotionRuntimeUnavailable()
+  const ownership = Context.getOption(context, CoordinatorOwnership)
+  if (Option.isNone(ownership)) return yield* new TargetPromotionRuntimeUnavailable()
   yield* lease.integrationTargets
     .withPermit(
       transition.responsibility,
       runTargetPromotion(transition.candidate, transition.verification).pipe(
-        Effect.provideService(TargetPromotionGit, runtime.value.git)
+        Effect.provideService(
+          TargetPromotionGit,
+          coordinatorOwnedTargetPromotionGit(runtime.value.git, ownership.value)
+        )
       )
     )
     .pipe(Effect.ensuring(lease.integrationTargets.release(transition.responsibility)))
