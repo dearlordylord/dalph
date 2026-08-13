@@ -94,7 +94,10 @@ export class GithubGraphqlClient extends Context.Service<GithubGraphqlClient, Gi
 
 const graphqlEndpoint = "https://api.github.com/graphql"
 const githubUserAgent = "dalph-orchestrator"
-const connectionPageSize = 100
+// GitHub permits at most 100 native issue relationships. Requesting half that
+// bound keeps pagination observable and qualified instead of making a second
+// page impossible to exercise against the real provider.
+const connectionPageSize = 50
 // Stable identity format guidance:
 // https://docs.github.com/en/graphql/guides/migrating-graphql-global-node-ids
 const nextGlobalIdHeaderValue = "1"

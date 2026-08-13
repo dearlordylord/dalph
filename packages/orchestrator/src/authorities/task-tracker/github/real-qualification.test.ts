@@ -30,7 +30,7 @@ import {
   GithubLabelNodeId,
   GithubRepositoryNodeId
 } from "./graphql-client.js"
-import type { GithubGraphqlRequest, GithubGraphqlResponse } from "./graphql-client.js"
+import type { GithubGraphqlRequest } from "./graphql-client.js"
 import { githubTrackerGraphReaderLayer } from "./graph-reader.js"
 import { githubTrackerMutationLayer } from "./claim-mutation.js"
 import { githubTaskIdFor } from "./task-identity.js"
@@ -39,7 +39,7 @@ import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepos
 // oxlint-disable-next-line no-restricted-globals -- opt-in is evaluated before test registration.
 const qualificationEnabled = globalThis.process.env["DALPH_GITHUB_QUALIFICATION"] === "1"
 const qualificationTimeoutMilliseconds = 10 * 60 * 1_000
-const defaultBlockerCount = 101
+const defaultBlockerCount = 51
 
 const GithubQualificationRepository = Schema.Struct({ owner: GithubRepositoryOwner, repository: GithubRepositoryName })
 type GithubQualificationRepository = typeof GithubQualificationRepository.Type
@@ -87,8 +87,15 @@ const graphqlEnvelope = Schema.Struct({
 })
 
 const repositoryResponse = Schema.Struct({ repository: Schema.NullOr(Schema.Struct({ id: GithubRepositoryNodeId })) })
-const issueResponse = Schema.Struct({ issue: Schema.Struct({ id: GithubIssueNodeId, number: GithubIssueNumber }) })
-const relationResponse = Schema.Struct({ clientMutationId: Schema.NullOr(Schema.String) })
+const mutationResult = Schema.Struct({ clientMutationId: Schema.NullOr(Schema.String) })
+const createIssueResponse = Schema.Struct({
+  createIssue: Schema.Struct({ issue: Schema.Struct({ id: GithubIssueNodeId, number: GithubIssueNumber }) })
+})
+const addBlockedByResponse = Schema.Struct({ addBlockedBy: mutationResult })
+const addSubIssueResponse = Schema.Struct({ addSubIssue: mutationResult })
+const closeIssueResponse = Schema.Struct({ closeIssue: mutationResult })
+const deleteIssueResponse = Schema.Struct({ deleteIssue: mutationResult })
+const removeSubIssueResponse = Schema.Struct({ removeSubIssue: mutationResult })
 const labelResponse = Schema.Struct({
   node: Schema.NullOr(
     Schema.Struct({
@@ -205,7 +212,11 @@ const decodeGraphqlData = <A>(
           ? Effect.fail(new GithubFixtureBoundaryFailure({ detail: "GitHub fixture response omitted data", operation }))
           : Schema.decodeUnknownEffect(schema)(envelope.data).pipe(
               Effect.mapError(
-                () => new GithubFixtureBoundaryFailure({ detail: "invalid GitHub fixture response data", operation })
+                (error) =>
+                  new GithubFixtureBoundaryFailure({
+                    detail: `invalid GitHub fixture response data: ${String(error)}`,
+                    operation
+                  })
               )
             )
     )
@@ -264,16 +275,17 @@ const makeGithubQualificationApi = Effect.fn("GithubQualification.makeApi")(func
       repositoryId,
       title
     })
-    return (yield* decodeGraphqlData("createIssue", issueResponse, data)).issue
+    return (yield* decodeGraphqlData("createIssue", createIssueResponse, data)).createIssue.issue
   })
 
   const relation = Effect.fn("GithubQualification.relation")(function* (
     operation: "addBlockedBy" | "addSubIssue" | "removeSubIssue",
     query: string,
-    variables: Readonly<Record<string, unknown>>
+    variables: Readonly<Record<string, unknown>>,
+    schema: Schema.Codec<unknown, unknown, never, never>
   ) {
     const data = yield* execute(operation, query, variables)
-    yield* decodeGraphqlData(operation, relationResponse, data)
+    yield* decodeGraphqlData(operation, schema, data)
   })
 
   const deleteIssue = Effect.fn("GithubQualification.deleteIssue")(function* (
@@ -281,7 +293,7 @@ const makeGithubQualificationApi = Effect.fn("GithubQualification.makeApi")(func
     mutationId: string
   ) {
     const data = yield* execute("deleteIssue", deleteIssueMutation, { clientMutationId: mutationId, issueId })
-    yield* decodeGraphqlData("deleteIssue", relationResponse, data)
+    yield* decodeGraphqlData("deleteIssue", deleteIssueResponse, data)
   })
 
   const deleteLabelByName = Effect.fn("GithubQualification.deleteLabelByName")(function* (
@@ -301,11 +313,26 @@ const makeGithubQualificationApi = Effect.fn("GithubQualification.makeApi")(func
   })
 
   const addSubIssue = (issueId: GithubIssueNodeId, subIssueId: GithubIssueNodeId, mutationId: string) =>
-    relation("addSubIssue", addSubIssueMutation, { clientMutationId: mutationId, issueId, subIssueId })
+    relation(
+      "addSubIssue",
+      addSubIssueMutation,
+      { clientMutationId: mutationId, issueId, subIssueId },
+      addSubIssueResponse
+    )
   const addBlockedBy = (issueId: GithubIssueNodeId, blockingIssueId: GithubIssueNodeId, mutationId: string) =>
-    relation("addBlockedBy", addBlockedByMutation, { blockingIssueId, clientMutationId: mutationId, issueId })
+    relation(
+      "addBlockedBy",
+      addBlockedByMutation,
+      { blockingIssueId, clientMutationId: mutationId, issueId },
+      addBlockedByResponse
+    )
   const removeSubIssue = (issueId: GithubIssueNodeId, subIssueId: GithubIssueNodeId, mutationId: string) =>
-    relation("removeSubIssue", removeSubIssueMutation, { clientMutationId: mutationId, issueId, subIssueId })
+    relation(
+      "removeSubIssue",
+      removeSubIssueMutation,
+      { clientMutationId: mutationId, issueId, subIssueId },
+      removeSubIssueResponse
+    )
 
   // GitHub's closeIssue mutation is deliberately isolated from the read/claim
   // adapter. The qualification only needs a native lifecycle edit.
@@ -320,7 +347,7 @@ const makeGithubQualificationApi = Effect.fn("GithubQualification.makeApi")(func
       }`,
       { clientMutationId: mutationId, issueId }
     )
-    yield* decodeGraphqlData("closeIssue", relationResponse, data)
+    yield* decodeGraphqlData("closeIssue", closeIssueResponse, data)
   })
 
   return {
@@ -352,10 +379,10 @@ const parseRepository = (
 
 const blockerCount = (value: string | undefined): Effect.Effect<number, GithubQualificationConfigurationFailure> => {
   const parsed = Number(value ?? defaultBlockerCount)
-  return Number.isSafeInteger(parsed) && parsed >= defaultBlockerCount
+  return parsed === defaultBlockerCount
     ? Effect.succeed(parsed)
     : Effect.fail(
-        new GithubQualificationConfigurationFailure({ detail: `blocker count must be at least ${defaultBlockerCount}` })
+        new GithubQualificationConfigurationFailure({ detail: `blocker count must equal ${defaultBlockerCount}` })
       )
 }
 
@@ -538,46 +565,26 @@ const claimLabelNameFor = Effect.fn("GithubQualification.claimLabelNameFor")(fun
 const qualificationGate = Effect.runSync(Semaphore.make(1))
 const serializedQualification = <A, E, R>(effect: Effect.Effect<A, E, R>) => qualificationGate.withPermit(effect)
 
-interface UnderlyingGithubGraphqlClient {
-  readonly execute: (request: GithubGraphqlRequest) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError>
-}
-
-class QualificationUnderlyingGithubGraphqlClient extends Context.Service<
-  QualificationUnderlyingGithubGraphqlClient,
-  UnderlyingGithubGraphqlClient
->()("@dalph/GithubQualification/UnderlyingGraphqlClient") {}
-
-const underlyingGithubGraphqlClientLayer = Layer.effect(
-  QualificationUnderlyingGithubGraphqlClient,
-  Effect.gen(function* () {
-    const client = yield* GithubGraphqlClient
-    return QualificationUnderlyingGithubGraphqlClient.of(client)
-  })
-).pipe(Layer.provide(githubGraphqlClientNodeLayer))
-
-const responseLossGithubGraphqlClientLayer = (createRequestCount: Ref.Ref<number>) =>
-  Layer.effect(
-    GithubGraphqlClient,
-    Effect.gen(function* () {
-      const underlying = yield* QualificationUnderlyingGithubGraphqlClient
-      const lost = yield* Ref.make(false)
-      return GithubGraphqlClient.of({
-        execute: Effect.fn("GithubQualification.ResponseLoss.execute")(function* (request: GithubGraphqlRequest) {
-          const response = yield* underlying.execute(request)
-          if (request._tag !== "CreateClaimLabel") return response
-          yield* Ref.update(createRequestCount, (count) => count + 1)
-          const alreadyLost = yield* Ref.getAndSet(lost, true)
-          if (!alreadyLost) {
-            return yield* new GithubGraphqlRequestError({
-              detail: "qualification response intentionally lost",
-              operation: request._tag
-            })
-          }
-          return response
+const responseLossGithubGraphqlClient = (
+  underlying: GithubGraphqlClient["Service"],
+  createRequestCount: Ref.Ref<number>,
+  lost: Ref.Ref<boolean>
+): GithubGraphqlClient["Service"] =>
+  GithubGraphqlClient.of({
+    execute: Effect.fn("GithubQualification.ResponseLoss.execute")(function* (request: GithubGraphqlRequest) {
+      const response = yield* underlying.execute(request)
+      if (request._tag !== "CreateClaimLabel") return response
+      yield* Ref.update(createRequestCount, (count) => count + 1)
+      const alreadyLost = yield* Ref.getAndSet(lost, true)
+      if (!alreadyLost) {
+        return yield* new GithubGraphqlRequestError({
+          detail: "qualification response intentionally lost",
+          operation: request._tag
         })
-      })
+      }
+      return response
     })
-  ).pipe(Layer.provide(underlyingGithubGraphqlClientLayer))
+  })
 
 const readGraphAndFacts = Effect.fn("GithubQualification.readGraphAndFacts")(function* (
   reader: TrackerGraphReader["Service"],
@@ -604,6 +611,33 @@ const noOpCleanupApi = (failAt: GithubIssueNodeId): GithubQualificationApi => ({
   removeSubIssue: () => Effect.void,
   repositoryNodeId: () => Effect.die("unused")
 })
+
+it.effect("decodes GitHub mutation results under their exact GraphQL operation fields", () =>
+  Effect.gen(function* () {
+    const issue = yield* decodeGraphqlData("createIssue", createIssueResponse, {
+      data: { createIssue: { issue: { id: "fixture-issue-node", number: 1 } } }
+    })
+    expect(issue.createIssue.issue).toEqual({ id: "fixture-issue-node", number: 1 })
+
+    yield* Effect.all([
+      decodeGraphqlData("addBlockedBy", addBlockedByResponse, {
+        data: { addBlockedBy: { clientMutationId: "fixture-add-blocker" } }
+      }),
+      decodeGraphqlData("addSubIssue", addSubIssueResponse, {
+        data: { addSubIssue: { clientMutationId: "fixture-add-child" } }
+      }),
+      decodeGraphqlData("closeIssue", closeIssueResponse, {
+        data: { closeIssue: { clientMutationId: "fixture-close" } }
+      }),
+      decodeGraphqlData("deleteIssue", deleteIssueResponse, {
+        data: { deleteIssue: { clientMutationId: "fixture-delete" } }
+      }),
+      decodeGraphqlData("removeSubIssue", removeSubIssueResponse, {
+        data: { removeSubIssue: { clientMutationId: "fixture-remove-child" } }
+      })
+    ])
+  })
+)
 
 it.effect("retains exact GitHub fixture locators when cleanup cannot finish", () =>
   Effect.gen(function* () {
@@ -779,17 +813,27 @@ it.effect.skipIf(!qualificationEnabled)(
                 token: ClaimToken.make("qualification-token-ambiguous")
               })
               const createRequestCount = yield* Ref.make(0)
+              const lost = yield* Ref.make(false)
+              const underlyingClient = Context.get(
+                yield* Layer.build(githubGraphqlClientNodeLayer),
+                GithubGraphqlClient
+              )
               const ambiguousMutation = githubTrackerMutationLayer.pipe(
-                Layer.provide(responseLossGithubGraphqlClientLayer(createRequestCount)),
+                Layer.provide(
+                  Layer.succeed(
+                    GithubGraphqlClient,
+                    responseLossGithubGraphqlClient(underlyingClient, createRequestCount, lost)
+                  )
+                ),
                 Layer.provide(NodeCrypto.layer)
               )
-              const ambiguous = yield* Effect.gen(function* () {
-                const tracker = yield* TrackerMutation
-                const claim = yield* runTaskClaimAcquisitionProtocol(tracker, ambiguousAcquisition)
-                expect(yield* tracker.readTaskClaim(childTaskId)).toEqual(claim)
-                yield* tracker.releaseTaskClaim({ claim, operationId: OperationId.make("issue-71-release-ambiguous") })
-                return claim
-              }).pipe(Effect.provide(ambiguousMutation))
+              const ambiguousTracker = Context.get(yield* Layer.build(ambiguousMutation), TrackerMutation)
+              const ambiguous = yield* runTaskClaimAcquisitionProtocol(ambiguousTracker, ambiguousAcquisition)
+              expect(yield* ambiguousTracker.readTaskClaim(childTaskId)).toEqual(ambiguous)
+              yield* ambiguousTracker.releaseTaskClaim({
+                claim: ambiguous,
+                operationId: OperationId.make("issue-71-release-ambiguous")
+              })
               expect(ambiguous.taskId).toBe(childTaskId)
               expect(yield* Ref.get(createRequestCount)).toBe(1)
 

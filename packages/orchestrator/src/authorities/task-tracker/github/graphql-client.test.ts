@@ -168,6 +168,16 @@ it.effect("executes authenticated GitHub GraphQL requests", () =>
         expect.stringContaining("mutation DeleteClaimLabel")
       ])
     )
+    const connectionRequests = requests.filter(
+      ({ body }) => body.includes("query ReadSubIssues") || body.includes("query ReadBlockedBy")
+    )
+    expect(connectionRequests).toHaveLength(2)
+    for (const { body } of connectionRequests) {
+      const payload = yield* Schema.decodeUnknownEffect(
+        Schema.Struct({ variables: Schema.Struct({ pageSize: Schema.Finite }) })
+      )(JSON.parse(body))
+      expect(payload.variables.pageSize).toBe(50)
+    }
   })
 )
 

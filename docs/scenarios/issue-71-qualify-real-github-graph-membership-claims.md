@@ -20,7 +20,10 @@ The live test is enabled only with
 `DALPH_GITHUB_QUALIFICATION=1`,
 `DALPH_GITHUB_QUALIFICATION_REPOSITORY=owner/repository`, and a
 `GITHUB_TOKEN` supplied by the test environment. The optional
-`DALPH_GITHUB_QUALIFICATION_BLOCKERS` value must be at least 101. A maintainer
+`DALPH_GITHUB_QUALIFICATION_BLOCKERS` value must be exactly 51 or omitted.
+GitHub rejects a source issue with more than 100 blocked-by relationships. The
+production reader requests 50 endpoints per page, so 51 is the smallest native
+fixture that proves a real second page without unnecessary issue creation. A maintainer
 runs the focused test file with those variables; the token is never included in
 the test output or retained fixture locators.
 
@@ -39,8 +42,9 @@ journal responsibility exists for the fixture.
 1. The qualification lane obtains its process-local serialization guard and
    creates one uniquely named root issue plus native sub-issues and
    same-repository blocked-by issues. It records each created repository and
-   issue locator before creating the next relationship. The root has enough
-   dependency endpoints to force a second `blockedBy` GraphQL page; grouping
+   issue locator before creating the next relationship. The selected child has
+   51 dependency endpoints, while the production reader asks for 50 at a time,
+   forcing a second `blockedBy` GraphQL page; grouping
    uses GitHub's native parent/sub-issue relation, not title text or labels.
 2. The lane asks the real `TrackerGraphReader` to read the root target. The
    adapter resolves the owner/name/issue-number target to GitHub's opaque

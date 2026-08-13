@@ -161,7 +161,9 @@ const runQualification = Effect.gen(function* () {
   const evidenceRoot = EvidenceStoreLocator.make(
     yield* fileSystem.makeTempDirectory({ prefix: "dalph-github-issue-72-" })
   )
-  const prefix = `dalph-issue-72-${(yield* crypto.randomUUIDv4).slice(0, 12)}`
+  const fixtureSuffix = (yield* crypto.randomUUIDv4).slice(0, 12)
+  const prefix = `dalph-issue-72-${fixtureSuffix}`
+  const claimIdentity = `q72-${fixtureSuffix}`
   const locators = yield* Ref.make<FixtureLocators>({
     claimLabelName: null,
     claimLabelNodeId: null,
@@ -249,10 +251,10 @@ const runQualification = Effect.gen(function* () {
     const childTaskId = githubTaskIdFor(repositoryNode.id, child.id)
     const claim = yield* tracker.acquireTaskClaim(
       TaskClaimAcquisition.make({
-        operationId: operationIdFor(prefix, "acquire-claim"),
-        owner: ClaimOwner.make(prefix),
+        operationId: operationIdFor(claimIdentity, "acquire"),
+        owner: ClaimOwner.make(claimIdentity),
         taskId: parentTaskId,
-        token: ClaimToken.make(`${prefix}-claim-token`)
+        token: ClaimToken.make(`${claimIdentity}-token`)
       })
     )
     yield* Ref.update(locators, (current) => ({ ...current, claimTaskId: parentTaskId }))
@@ -356,10 +358,13 @@ const runQualification = Effect.gen(function* () {
 })
 
 if (enabled) {
-  it.effect("qualifies GitHub evidence-backed completion, ambiguity, conflicts, and graph refresh", () =>
-    Effect.scoped(
-      runQualification.pipe(Effect.provide(githubGraphqlClientNodeLayer), Effect.provide(NodeServices.layer))
-    )
+  it.effect(
+    "qualifies GitHub evidence-backed completion, ambiguity, conflicts, and graph refresh",
+    () =>
+      Effect.scoped(
+        runQualification.pipe(Effect.provide(githubGraphqlClientNodeLayer), Effect.provide(NodeServices.layer))
+      ),
+    10 * 60 * 1_000
   )
 } else {
   it.skip("qualifies GitHub evidence-backed completion, ambiguity, conflicts, and graph refresh", () => undefined)
