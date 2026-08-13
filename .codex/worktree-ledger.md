@@ -21,7 +21,7 @@ worktree is the only integration point; task worktrees never merge one another.
 | #71 | removed | removed | `a1f1a7bff` | `034a1d60e` | integrated as `ae22e9dab`; native opt-in run still pending, issue remains open |
 | #72 | removed | removed | `35c698b73` | `089c9a35d` | integrated as `d6a9a63ae`; native opt-in run still pending, issue remains open |
 | #74 | removed | removed | `ae22e9dab` | `eeddf5e81` | integrated as `0d88259cd`; reviewed and cleaned |
-| #103 | `work/issue103` | `.worktrees/issue103` | `0d88259cd` | `pending` | queued after #74 lane completed |
+| #103 | removed | removed | `0d88259cd` | `ac0226901` | integrated as `585019cc2`; reviewed and cleaned |
 | #104 | `work/issue104` | `.worktrees/issue104` | `d28e5a301` | `pending` | queued after #212 tooling lane completed |
 | #59 audit | `work/issue59` | `.worktrees/issue59` | `e4c97f028` | `pending` | #57 edge audited stale; verify already-integrated #59 and close only if acceptance is complete |
 
