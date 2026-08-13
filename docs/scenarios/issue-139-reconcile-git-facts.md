@@ -59,9 +59,10 @@ Acceptance seams:
 - maintained authored/recorded cassette
   `compatibleTargetAdvanceContinues`
 - `continues after Git proves the target advanced from the planned Base`
-- `reopens an unfinished Git-facts read with the same operation identity`
-- `installs the running-then-terminal coarse fake in the production-shaped composition`
-  (typed target-lineage failure, wait, same-identity retry, then completion)
+- `reopens an intent-only Git read with the same operation identity`
+- `re-enters an unfinished Run through establishment and reconstructs policy
+  without evaluating the initial fallback` (typed target-lineage failure,
+  wait, same-identity retry, then completion)
 - Quint property `compatibleTargetAdvanceDoesNotConstrainAttempt`
 
 ## Scenario 12B: the integration target is rewritten outside the planned lineage
@@ -91,8 +92,9 @@ Acceptance seams:
 
 - maintained authored/recorded cassette
   `incompatibleTargetRewriteSafelySuspends`
-- `safely suspends only the attempt whose target left its planned lineage`
-- `preserves claim worktree and evidence after an incompatible target rewrite`
+- `records compatible target advancement and isolates a proven target rewrite
+  in maintained cassettes`
+- `preserves claim worktree and evidence for every read-only Git constraint`
 - Quint properties `incompatibleRewriteConstrainsOnlyAffectedAttempt` and
   `gitConstraintPreservesIndependentEligibility`
 
@@ -123,7 +125,7 @@ was disposable.
 Acceptance seams:
 
 - `records the exact planned worktree as lost and preserves its responsibilities`
-- `does not recreate a worktree that disappeared after it was ready`
+- `returns every exact read outcome without creating or repairing a worktree`
 - Quint property `lostWorktreeNeverAuthorizesRepair`
 
 ## Scenario 14B: the planned path or branch belongs to another Git registration
