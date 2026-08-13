@@ -61,9 +61,18 @@ const connection = (
 
 const responseFor = (request: GithubGraphqlRequest) => {
   return Match.valueTags(request, {
+    AddBlockedBy: () => page({ errors: [{ message: "unexpected mutation request" }] }),
+    AddIssueComment: () => page({ errors: [{ message: "unexpected mutation request" }] }),
+    AddSubIssue: () => page({ errors: [{ message: "unexpected mutation request" }] }),
+    CloseIssue: () => page({ errors: [{ message: "unexpected mutation request" }] }),
     FindClaimLabel: () => page({ errors: [{ message: "unexpected claim request" }] }),
     CreateClaimLabel: () => page({ errors: [{ message: "unexpected claim request" }] }),
+    CreateIssue: () => page({ errors: [{ message: "unexpected mutation request" }] }),
+    DeleteIssue: () => page({ errors: [{ message: "unexpected mutation request" }] }),
     DeleteClaimLabel: () => page({ errors: [{ message: "unexpected claim request" }] }),
+    ReadIssueDetails: () => page({ errors: [{ message: "unexpected detail request" }] }),
+    ReopenIssue: () => page({ errors: [{ message: "unexpected mutation request" }] }),
+    ResolveRepository: () => page({ errors: [{ message: "unexpected repository request" }] }),
     ResolveIssue: () => page({ data: { repository: { id: "repository-node", issue: { id: "root-node" } } } }),
     ReadIssue: (request) =>
       Match.value(request.issueNodeId).pipe(

@@ -45,6 +45,10 @@ const githubClaimFixtureLayer = Layer.effectContext(
     const client = GithubGraphqlClient.of({
       execute: Effect.fn("GithubGraphqlClient.ClaimFixture.execute")(function* (request: GithubGraphqlRequest) {
         return yield* Match.valueTags(request, {
+          AddBlockedBy: () => Effect.die("unexpected AddBlockedBy request"),
+          AddIssueComment: () => Effect.die("unexpected AddIssueComment request"),
+          AddSubIssue: () => Effect.die("unexpected AddSubIssue request"),
+          CloseIssue: () => Effect.die("unexpected CloseIssue request"),
           FindClaimLabel: () =>
             Effect.gen(function* () {
               const current = yield* Ref.get(label)
@@ -73,11 +77,16 @@ const githubClaimFixtureLayer = Layer.effectContext(
                 ? { body: { data: { createLabel: { label: yield* Ref.get(label) } } } }
                 : { body: { errors: [{ message: "label name already exists" }] } }
             }),
+          CreateIssue: () => Effect.die("unexpected CreateIssue request"),
+          DeleteIssue: () => Effect.die("unexpected DeleteIssue request"),
           DeleteClaimLabel: (request) =>
             Effect.gen(function* () {
               yield* Ref.update(label, (current) => (current?.id === request.labelNodeId ? null : current))
               return { body: { data: { deleteLabel: { clientMutationId: null } } } }
             }),
+          ReadIssueDetails: () => Effect.die("unexpected ReadIssueDetails request"),
+          ReopenIssue: () => Effect.die("unexpected ReopenIssue request"),
+          ResolveRepository: () => Effect.die("unexpected ResolveRepository request"),
           ResolveIssue: () => Effect.die("unexpected ResolveIssue request"),
           ReadIssue: () => Effect.die("unexpected ReadIssue request"),
           ReadSubIssues: () => Effect.die("unexpected ReadSubIssues request"),

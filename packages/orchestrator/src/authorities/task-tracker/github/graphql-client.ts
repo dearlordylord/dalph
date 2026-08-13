@@ -3,7 +3,7 @@ import { Config, Context, Effect, Layer, Match, type Redacted, Schema } from "ef
 import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
-import { GithubIssueTarget } from "./target.js"
+import { GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./target.js"
 import { OperationId } from "../../../workflow/identity.js"
 
 /** Identifies one GitHub issue node at the provider boundary, not a tracker-neutral task. */
@@ -27,6 +27,10 @@ export const GithubCursor = Schema.NonEmptyString.pipe(Schema.brand("GithubCurso
 export type GithubCursor = typeof GithubCursor.Type
 
 export const GithubGraphqlRequest = Schema.TaggedUnion({
+  AddBlockedBy: { blockingIssueNodeId: GithubIssueNodeId, issueNodeId: GithubIssueNodeId, operationId: OperationId },
+  AddIssueComment: { body: Schema.NonEmptyString, issueNodeId: GithubIssueNodeId, operationId: OperationId },
+  AddSubIssue: { operationId: OperationId, parentIssueNodeId: GithubIssueNodeId, subIssueNodeId: GithubIssueNodeId },
+  CloseIssue: { issueNodeId: GithubIssueNodeId, operationId: OperationId },
   FindClaimLabel: { labelName: GithubLabelName, repositoryNodeId: GithubRepositoryNodeId },
   CreateClaimLabel: {
     description: Schema.NonEmptyString,
@@ -34,7 +38,17 @@ export const GithubGraphqlRequest = Schema.TaggedUnion({
     operationId: OperationId,
     repositoryNodeId: GithubRepositoryNodeId
   },
+  CreateIssue: {
+    body: Schema.String,
+    operationId: OperationId,
+    repositoryNodeId: GithubRepositoryNodeId,
+    title: Schema.NonEmptyString
+  },
+  DeleteIssue: { issueNodeId: GithubIssueNodeId, operationId: OperationId },
   DeleteClaimLabel: { labelNodeId: GithubLabelNodeId, operationId: OperationId },
+  ReadIssueDetails: { issueNodeId: GithubIssueNodeId },
+  ReopenIssue: { issueNodeId: GithubIssueNodeId, operationId: OperationId },
+  ResolveRepository: { owner: GithubRepositoryOwner, repository: GithubRepositoryName },
   ResolveIssue: { target: GithubIssueTarget },
   ReadIssue: { issueNodeId: GithubIssueNodeId },
   ReadSubIssues: { cursor: Schema.NullOr(GithubCursor), issueNodeId: GithubIssueNodeId },
@@ -46,12 +60,21 @@ export const GithubGraphqlResponse = Schema.Struct({ body: Schema.Unknown })
 export type GithubGraphqlResponse = typeof GithubGraphqlResponse.Type
 
 const GithubGraphqlOperation = Schema.Literals([
+  "AddBlockedBy",
+  "AddIssueComment",
+  "AddSubIssue",
+  "CloseIssue",
   "CreateClaimLabel",
+  "CreateIssue",
+  "DeleteIssue",
   "DeleteClaimLabel",
   "FindClaimLabel",
   "ReadBlockedBy",
+  "ReadIssueDetails",
   "ReadIssue",
   "ReadSubIssues",
+  "ReopenIssue",
+  "ResolveRepository",
   "ResolveIssue"
 ])
 
@@ -64,7 +87,7 @@ interface GithubGraphqlClientService {
   readonly execute: (request: GithubGraphqlRequest) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError>
 }
 
-/** Executes GitHub GraphQL reads without granting tracker mutation authority. */
+/** Executes authenticated GitHub GraphQL requests; adapter services retain domain authority. */
 export class GithubGraphqlClient extends Context.Service<GithubGraphqlClient, GithubGraphqlClientService>()(
   "@dalph/GithubGraphqlClient"
 ) {}
@@ -83,6 +106,10 @@ const resolveIssueQuery = `query ResolveIssue($owner: String!, $repository: Stri
   }
 }`
 
+const resolveRepositoryQuery = `query ResolveRepository($owner: String!, $repository: String!) {
+  repository(owner: $owner, name: $repository) { id }
+}`
+
 const readIssueQuery = `query ReadIssue($issueNodeId: ID!) {
   node(id: $issueNodeId) {
     ... on Issue {
@@ -92,6 +119,25 @@ const readIssueQuery = `query ReadIssue($issueNodeId: ID!) {
       stateReason(enableDuplicate: true)
       repository { id }
       parent { id }
+    }
+  }
+}`
+
+const readIssueDetailsQuery = `query ReadIssueDetails($issueNodeId: ID!) {
+  node(id: $issueNodeId) {
+    ... on Issue {
+      __typename
+      id
+      number
+      state
+      stateReason(enableDuplicate: true)
+      repository { id }
+      body
+      updatedAt
+      url
+      comments(first: 100) {
+        nodes { id body }
+      }
     }
   }
 }`
@@ -143,10 +189,83 @@ const deleteClaimLabelMutation = `mutation DeleteClaimLabel($labelNodeId: ID!, $
   }
 }`
 
+const createIssueMutation = `mutation CreateIssue($repositoryNodeId: ID!, $title: String!, $body: String!, $operationId: String!) {
+  createIssue(input: { repositoryId: $repositoryNodeId, title: $title, body: $body, clientMutationId: $operationId }) {
+    clientMutationId
+    issue { id number state stateReason }
+  }
+}`
+
+const deleteIssueMutation = `mutation DeleteIssue($issueNodeId: ID!, $operationId: String!) {
+  deleteIssue(input: { issueId: $issueNodeId, clientMutationId: $operationId }) {
+    clientMutationId
+  }
+}`
+
+const addIssueCommentMutation = `mutation AddIssueComment($issueNodeId: ID!, $body: String!, $operationId: String!) {
+  addComment(input: { subjectId: $issueNodeId, body: $body, clientMutationId: $operationId }) {
+    clientMutationId
+  }
+}`
+
+const addSubIssueMutation = `mutation AddSubIssue($parentIssueNodeId: ID!, $subIssueNodeId: ID!, $operationId: String!) {
+  addSubIssue(input: { issueId: $parentIssueNodeId, subIssueId: $subIssueNodeId, clientMutationId: $operationId }) {
+    clientMutationId
+    issue { id }
+    subIssue { id }
+  }
+}`
+
+const addBlockedByMutation = `mutation AddBlockedBy($issueNodeId: ID!, $blockingIssueNodeId: ID!, $operationId: String!) {
+  addBlockedBy(input: { issueId: $issueNodeId, blockingIssueId: $blockingIssueNodeId, clientMutationId: $operationId }) {
+    clientMutationId
+    issue { id }
+    blockingIssue { id }
+  }
+}`
+
+const closeIssueMutation = `mutation CloseIssue($issueNodeId: ID!, $operationId: String!) {
+  closeIssue(input: { issueId: $issueNodeId, stateReason: COMPLETED, clientMutationId: $operationId }) {
+    clientMutationId
+    issue { id state stateReason }
+  }
+}`
+
+const reopenIssueMutation = `mutation ReopenIssue($issueNodeId: ID!, $operationId: String!) {
+  reopenIssue(input: { issueId: $issueNodeId, clientMutationId: $operationId }) {
+    clientMutationId
+    issue { id state stateReason }
+  }
+}`
+
 const requestBody = (
   request: GithubGraphqlRequest
 ): { readonly query: string; readonly variables: Readonly<Record<string, unknown>> } => {
   return Match.valueTags(request, {
+    AddBlockedBy: (request) => ({
+      query: addBlockedByMutation,
+      variables: {
+        blockingIssueNodeId: request.blockingIssueNodeId,
+        issueNodeId: request.issueNodeId,
+        operationId: request.operationId
+      }
+    }),
+    AddIssueComment: (request) => ({
+      query: addIssueCommentMutation,
+      variables: { body: request.body, issueNodeId: request.issueNodeId, operationId: request.operationId }
+    }),
+    AddSubIssue: (request) => ({
+      query: addSubIssueMutation,
+      variables: {
+        operationId: request.operationId,
+        parentIssueNodeId: request.parentIssueNodeId,
+        subIssueNodeId: request.subIssueNodeId
+      }
+    }),
+    CloseIssue: (request) => ({
+      query: closeIssueMutation,
+      variables: { issueNodeId: request.issueNodeId, operationId: request.operationId }
+    }),
     FindClaimLabel: (request) => ({
       query: findClaimLabelQuery,
       variables: { labelName: request.labelName, repositoryNodeId: request.repositoryNodeId }
@@ -160,9 +279,31 @@ const requestBody = (
         repositoryNodeId: request.repositoryNodeId
       }
     }),
+    CreateIssue: (request) => ({
+      query: createIssueMutation,
+      variables: {
+        body: request.body,
+        operationId: request.operationId,
+        repositoryNodeId: request.repositoryNodeId,
+        title: request.title
+      }
+    }),
+    DeleteIssue: (request) => ({
+      query: deleteIssueMutation,
+      variables: { issueNodeId: request.issueNodeId, operationId: request.operationId }
+    }),
     DeleteClaimLabel: (request) => ({
       query: deleteClaimLabelMutation,
       variables: { labelNodeId: request.labelNodeId, operationId: request.operationId }
+    }),
+    ReadIssueDetails: (request) => ({ query: readIssueDetailsQuery, variables: { issueNodeId: request.issueNodeId } }),
+    ReopenIssue: (request) => ({
+      query: reopenIssueMutation,
+      variables: { issueNodeId: request.issueNodeId, operationId: request.operationId }
+    }),
+    ResolveRepository: (request) => ({
+      query: resolveRepositoryQuery,
+      variables: { owner: request.owner, repository: request.repository }
     }),
     ResolveIssue: (request) => ({
       query: resolveIssueQuery,

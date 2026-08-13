@@ -51,9 +51,9 @@ non-ancestral target.
 
 ### Acceptance test
 
-`reads real compatible, rewritten, and unrelated target lineage without mutation`
-uses a temporary repository through the public `GitTargetLineage` seam and
-asserts the exact heads and typed observations.
+`reads real compatible, equivalent-content, rewritten, and unrelated target
+lineage without mutation` uses a temporary repository through the public
+`GitTargetLineage` seam and asserts the exact heads and typed observations.
 
 ## Dalph validates an explicit candidate's object and ordered parents
 
@@ -153,6 +153,6 @@ read that discovers `M`.
 
 | Scenario | Concrete result | Acceptance test |
 | --- | --- | --- |
-| Compatible, rewritten, and unrelated target lineage | Git returns exact target heads and ancestor/non-ancestor observations; no mutation or inferred absence | `reads real compatible, rewritten, and unrelated target lineage without mutation` |
+| Compatible, equivalent-content, rewritten, and unrelated target lineage | Git returns exact target heads and ancestor/non-ancestor observations; equal trees do not substitute for ancestry; no mutation or inferred absence | `reads real compatible, equivalent-content, rewritten, and unrelated target lineage without mutation` |
 | Explicit candidate object and ordered parents | `[H, C]` is accepted; missing, non-commit, wrong-parent, and unreadable outcomes stay distinct | `reads real candidate objects and preserves exact ordered parents and typed negative observations` |
 | Exact ref compare-and-set and lost response | `H -> M` is atomic; stale is typed; an applied-but-unacknowledged update is reread before any retry and is not duplicated | `applies a real exact-head compare-and-set and reconciles an applied update whose response was lost before retry` |

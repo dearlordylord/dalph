@@ -47,6 +47,7 @@ on the issue while later dependent work proceeds.
 | `issue-59-run-target-verification.md` | 59 |
 | `issue-60-promote-or-reconcile.md` | 60 |
 | `issue-61-complete-task-and-release-dependants.md` | 61 |
+| `issue-72-qualify-github-completion.md` | 72 |
 | `issue-73-qualify-real-git-lineage-candidate-ref.md` | 73 |
 | `issue-74-qualify-real-worktree-lease.md` | 74 |
 | `issue-141-integration-finality.md` | 141 |

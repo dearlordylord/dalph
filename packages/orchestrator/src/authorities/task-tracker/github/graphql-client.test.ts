@@ -30,7 +30,7 @@ const target = GithubIssueTarget.make({
   repository: GithubRepositoryName.make("dalph")
 })
 
-it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
+it.effect("executes authenticated GitHub GraphQL requests", () =>
   Effect.gen(function* () {
     const observed = yield* Ref.make<
       ReadonlyArray<{
@@ -72,11 +72,49 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
       return yield* Effect.forEach(
         [
           GithubGraphqlRequest.cases.ResolveIssue.make({ target }),
+          GithubGraphqlRequest.cases.ResolveRepository.make({
+            owner: GithubRepositoryOwner.make("octo"),
+            repository: GithubRepositoryName.make("dalph")
+          }),
           GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId: GithubIssueNodeId.make("issue") }),
+          GithubGraphqlRequest.cases.ReadIssueDetails.make({ issueNodeId: GithubIssueNodeId.make("issue") }),
           GithubGraphqlRequest.cases.ReadSubIssues.make({ cursor: null, issueNodeId: GithubIssueNodeId.make("issue") }),
           GithubGraphqlRequest.cases.ReadBlockedBy.make({
             cursor: GithubCursor.make("cursor"),
             issueNodeId: GithubIssueNodeId.make("issue")
+          }),
+          GithubGraphqlRequest.cases.CreateIssue.make({
+            body: "fixture body",
+            operationId: OperationId.make("create-issue-operation"),
+            repositoryNodeId: GithubRepositoryNodeId.make("repository-node"),
+            title: "fixture title"
+          }),
+          GithubGraphqlRequest.cases.AddSubIssue.make({
+            operationId: OperationId.make("sub-issue-operation"),
+            parentIssueNodeId: GithubIssueNodeId.make("parent-issue"),
+            subIssueNodeId: GithubIssueNodeId.make("sub-issue")
+          }),
+          GithubGraphqlRequest.cases.AddBlockedBy.make({
+            blockingIssueNodeId: GithubIssueNodeId.make("blocking-issue"),
+            issueNodeId: GithubIssueNodeId.make("blocked-issue"),
+            operationId: OperationId.make("blocked-by-operation")
+          }),
+          GithubGraphqlRequest.cases.AddIssueComment.make({
+            body: "fixture comment",
+            issueNodeId: GithubIssueNodeId.make("issue"),
+            operationId: OperationId.make("comment-operation")
+          }),
+          GithubGraphqlRequest.cases.CloseIssue.make({
+            issueNodeId: GithubIssueNodeId.make("issue"),
+            operationId: OperationId.make("close-operation")
+          }),
+          GithubGraphqlRequest.cases.ReopenIssue.make({
+            issueNodeId: GithubIssueNodeId.make("issue"),
+            operationId: OperationId.make("reopen-operation")
+          }),
+          GithubGraphqlRequest.cases.DeleteIssue.make({
+            issueNodeId: GithubIssueNodeId.make("issue"),
+            operationId: OperationId.make("delete-operation")
           }),
           GithubGraphqlRequest.cases.FindClaimLabel.make({
             labelName: GithubLabelName.make("dalph-claim-task"),
@@ -98,7 +136,7 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
     }).pipe(Effect.provide(clientLayer))
 
     const requests = yield* Ref.get(observed)
-    expect(requests).toHaveLength(7)
+    expect(requests).toHaveLength(16)
     const request = requests[0]
     expect(request).toBeDefined()
     if (request === undefined) return
@@ -112,9 +150,19 @@ it.effect("executes a read-only authenticated GitHub GraphQL request", () =>
     expect(payload.query).toContain("repository(owner: $owner, name: $repository)")
     expect(requests.map(({ body }) => body)).toEqual(
       expect.arrayContaining([
+        expect.stringContaining("query ResolveRepository"),
         expect.stringContaining("query ReadIssue"),
+        expect.stringContaining("query ReadIssueDetails"),
         expect.stringContaining("query ReadSubIssues"),
         expect.stringContaining("query ReadBlockedBy"),
+        expect.stringContaining("mutation CreateIssue"),
+        expect.stringContaining("mutation AddSubIssue"),
+        expect.stringContaining("mutation AddBlockedBy"),
+        expect.stringContaining("mutation AddIssueComment"),
+        expect.stringContaining("mutation CloseIssue"),
+        expect.stringContaining("stateReason: COMPLETED"),
+        expect.stringContaining("mutation ReopenIssue"),
+        expect.stringContaining("mutation DeleteIssue"),
         expect.stringContaining("query FindClaimLabel"),
         expect.stringContaining("mutation CreateClaimLabel"),
         expect.stringContaining("mutation DeleteClaimLabel")

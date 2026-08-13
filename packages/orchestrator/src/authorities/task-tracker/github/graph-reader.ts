@@ -32,9 +32,9 @@ interface IssueProjection {
   readonly prerequisiteNodeIds: ReadonlyArray<GithubIssueNodeId>
 }
 
-type GithubTrackerGraphReadRequest = Exclude<
+type GithubTrackerGraphReadRequest = Extract<
   GithubGraphqlRequest,
-  { readonly _tag: "CreateClaimLabel" | "DeleteClaimLabel" | "FindClaimLabel" }
+  { readonly _tag: "ReadBlockedBy" | "ReadIssue" | "ReadSubIssues" | "ResolveIssue" }
 >
 
 const adapterError = (operation: GithubTrackerReadOperation, reason: TrackerAdapterReadFailureReason, detail: string) =>

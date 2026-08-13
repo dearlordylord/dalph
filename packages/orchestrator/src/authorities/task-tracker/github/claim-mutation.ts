@@ -116,24 +116,27 @@ const decodeDescription = (taskId: TaskId, description: string) => {
   )
 }
 
+/** Derives the exact repository label name that represents one GitHub task claim. */
+export const githubClaimLabelNameFor = Effect.fn("GithubTrackerMutation.claimLabelName")(function* (
+  crypto: Crypto.Crypto,
+  taskId: TaskId
+) {
+  const digest = yield* crypto
+    .digest("SHA-256", new TextEncoder().encode(taskId))
+    .pipe(Effect.mapError((cause) => new TaskClaimReadFailure({ detail: String(cause), taskId })))
+  const hash = [...digest].map((byte) => byte.toString(hexadecimalRadix).padStart(hexadecimalByteLength, "0")).join("")
+  return GithubLabelName.make(`dalph-claim-${hash.slice(0, claimLabelDigestLength)}`)
+})
+
 export const githubTrackerMutationLayer = Layer.effect(
   TrackerMutation,
   Effect.gen(function* () {
     const client = yield* GithubGraphqlClient
     const crypto = yield* Crypto.Crypto
-    const claimLabelName = Effect.fn("GithubTrackerMutation.claimLabelName")(function* (taskId: TaskId) {
-      const digest = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(taskId))
-        .pipe(Effect.mapError((cause) => new TaskClaimReadFailure({ detail: String(cause), taskId })))
-      const hash = [...digest]
-        .map((byte) => byte.toString(hexadecimalRadix).padStart(hexadecimalByteLength, "0"))
-        .join("")
-      return GithubLabelName.make(`dalph-claim-${hash.slice(0, claimLabelDigestLength)}`)
-    })
 
     const readGithubClaim = Effect.fn("GithubTrackerMutation.readGithubClaim")(function* (taskId: TaskId) {
       const [repositoryNodeId] = yield* decodeCoordinates(taskId)
-      const labelName = yield* claimLabelName(taskId)
+      const labelName = yield* githubClaimLabelNameFor(crypto, taskId)
       const response = yield* client
         .execute(GithubGraphqlRequest.cases.FindClaimLabel.make({ labelName, repositoryNodeId }))
         .pipe(Effect.mapError((cause) => new TaskClaimReadFailure({ detail: cause.detail, taskId })))
@@ -188,7 +191,7 @@ export const githubTrackerMutationLayer = Layer.effect(
       acquisition: TaskClaimAcquisition
     ) {
       const [repositoryNodeId] = yield* decodeCoordinates(acquisition.taskId)
-      const labelName = yield* claimLabelName(acquisition.taskId)
+      const labelName = yield* githubClaimLabelNameFor(crypto, acquisition.taskId)
       const description = yield* descriptionFor(acquisition)
       const response = yield* client
         .execute(

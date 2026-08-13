@@ -243,12 +243,13 @@ const setupMerge = Effect.fn("RealGitQualification.setupMerge")(function* (repos
   return { accepted, base, candidate, candidateDescendant, concurrentHead, targetHead }
 })
 
-it.effect("reads real compatible, rewritten, and unrelated target lineage without mutation", () =>
+it.effect("reads real compatible, equivalent-content, rewritten, and unrelated target lineage without mutation", () =>
   Effect.scoped(
     withRepository(({ gitDirectory, run }) =>
       Effect.gen(function* () {
         yield* run("commit", "--allow-empty", "-m", "base")
         const base = GitCommitSha.make(yield* run("rev-parse", "HEAD"))
+        const baseTree = yield* run("rev-parse", `${base}^{tree}`)
         yield* run("commit", "--allow-empty", "-m", "target")
         const targetHead = GitCommitSha.make(yield* run("rev-parse", "HEAD"))
         yield* run("checkout", "-b", "concurrent")
@@ -284,9 +285,19 @@ it.effect("reads real compatible, rewritten, and unrelated target lineage withou
           plannedBaseSha: base,
           targetHeadSha: unrelatedHead
         })
+        yield* run("checkout", "--orphan", "equivalent-content")
+        yield* run("commit", "--allow-empty", "-m", "equivalent content")
+        const equivalentContentHead = GitCommitSha.make(yield* run("rev-parse", "HEAD"))
+        expect(yield* run("rev-parse", `${equivalentContentHead}^{tree}`)).toBe(baseTree)
+        yield* run("update-ref", target.ref, equivalentContentHead)
+        expect(yield* lineage.read(base, target)).toEqual({
+          plannedBaseIsAncestorOfTargetHead: false,
+          plannedBaseSha: base,
+          targetHeadSha: equivalentContentHead
+        })
         const contradictory = yield* lineage.read(GitCommitSha.make("0".repeat(40)), target).pipe(Effect.flip)
         expect(contradictory).toBeInstanceOf(GitTargetLineageReadFailure)
-        expect(yield* run("rev-parse", target.ref)).toBe(unrelatedHead)
+        expect(yield* run("rev-parse", target.ref)).toBe(equivalentContentHead)
       }).pipe(Effect.provide(nodeLineageLayer))
     )
   )
