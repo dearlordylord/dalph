@@ -23,7 +23,7 @@ worktree is the only integration point; task worktrees never merge one another.
 | #74 | removed | removed | `ae22e9dab` | `eeddf5e81` | integrated as `0d88259cd`; reviewed and cleaned |
 | #103 | `work/issue103` | `.worktrees/issue103` | `0d88259cd` | `pending` | queued after #74 lane completed |
 | #104 | `work/issue104` | `.worktrees/issue104` | `d28e5a301` | `pending` | queued after #212 tooling lane completed |
-| blocker audit | `work/blocker-audit` | `.worktrees/blocker-audit` | `d6a9a63ae` | `pending` | auditing live #57/#168/#68 edges before #59/#69/#140 |
+| #59 audit | `work/issue59` | `.worktrees/issue59` | `e4c97f028` | `pending` | #57 edge audited stale; verify already-integrated #59 and close only if acceptance is complete |
 
 ## Dependency order
 
@@ -56,7 +56,7 @@ explicitly re-decided before implementation starts:
 
 | Requested root | Additional open blocker(s) | Consequence |
 | --- | --- | --- |
-| #59 | #57 | Do not start #59 or downstream #78 yet. |
+| #59 | #57 | #57 behavior is integrated; edge is administratively stale. Audit #59 completion before starting #78. |
 | #69 | #168 and #68 | Do not start #69 or downstream #77 yet. |
 | #140 | #168 | Do not start #140 or downstream #75 yet. |
 
