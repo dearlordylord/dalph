@@ -13,7 +13,7 @@ worktree is the only integration point; task worktrees never merge one another.
 | #213 | removed | removed | `798ca724210f07709417af5e9eed62bac6232b55` | `433f7de13` | integrated as `5d64b4cb6`; cleaned after #76 branch creation |
 | #76 | `work/issue76` | `.worktrees/issue76` | `5d64b4cb6` | `pending` | queued after integrated #213 |
 | #195 | `work/issue195` | `.worktrees/issue195` | `798ca724210f07709417af5e9eed62bac6232b55` | `21f75d13a` | audited complete; issue closed |
-| #215 | `work/issue215` | `.worktrees/issue215` | `a08f5b001dcaa0e871a453010655fba84e8079cd` | `pending` | queued after audited #195 |
+| #215 | `work/issue215` | `.worktrees/issue215` | `a08f5b001dcaa0e871a453010655fba84e8079cd` | `c72a9f1f2` | integrated as `911a0aa3e..074b7a4d4`; reviewed clean |
 | #212 | `work/issue212` | `.worktrees/issue212` | `pending` | `pending` | queued independent tooling lane |
 | #159 | n/a | n/a | n/a | superseded by `360258012` | closed without code change |
 
