@@ -10,7 +10,8 @@ worktree is the only integration point; task worktrees never merge one another.
 | --- | --- | --- | --- | --- | --- |
 | #214 | `work/issue214` | `.worktrees/issue214` | `798ca724210f07709417af5e9eed62bac6232b55` | `pending` | implementing |
 | #213 | `work/issue213` | `.worktrees/issue213` | `798ca724210f07709417af5e9eed62bac6232b55` | `pending` | implementing |
-| #195 | `work/issue195` | `.worktrees/issue195` | `798ca724210f07709417af5e9eed62bac6232b55` | `pending` | implementing |
+| #195 | `work/issue195` | `.worktrees/issue195` | `798ca724210f07709417af5e9eed62bac6232b55` | `21f75d13a` | audited complete; issue closed |
+| #215 | `work/issue215` | `.worktrees/issue215` | `pending` | `pending` | creating |
 
 ## Dependency order
 
