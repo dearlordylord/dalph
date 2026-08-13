@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Stream } from "effect"
+import { Effect, Fiber, SubscriptionRef, Stream } from "effect"
 import * as fc from "fast-check"
 import { expect } from "vitest"
 import {
@@ -44,34 +44,45 @@ it.effect("mapping preserves every generated current-first publication and compo
   )
 )
 
-it.effect("zip-latest preserves generated current values and reaches both latest publications", () =>
+it.effect("zip-latest preserves every publication across generated left-right schedules", () =>
   Effect.promise(() =>
     fc.assert(
       fc.asyncProperty(
-        fc.integer({ min: 1, max: 20 }),
-        fc.integer({ min: 1, max: 20 }),
-        async (leftLength, rightLength) => {
-          const left: readonly [number, ...ReadonlyArray<number>] = [
-            0,
-            ...Array.from({ length: leftLength - 1 }, (_, index) => index + 1)
-          ]
-          const right: readonly [number, ...ReadonlyArray<number>] = [
-            1_000,
-            ...Array.from({ length: rightLength - 1 }, (_, index) => 1_001 + index)
-          ]
-          const zipped = zipCurrentSignals(
-            finiteSignal([left[0], ...left.slice(1)]),
-            finiteSignal([right[0], ...right.slice(1)])
+        fc.array(fc.constantFrom("L" as const, "R" as const), { minLength: 1, maxLength: 30 }),
+        async (schedule) => {
+          const observed = await Effect.runPromise(
+            Effect.scoped(
+              Effect.gen(function* () {
+                const left = yield* SubscriptionRef.make("L:0")
+                const right = yield* SubscriptionRef.make("R:0")
+                const attachment = yield* attachCurrentSignal(
+                  zipCurrentSignals(
+                    currentSignalFromCurrentFirstStream(SubscriptionRef.changes(left)),
+                    currentSignalFromCurrentFirstStream(SubscriptionRef.changes(right))
+                  )
+                )
+                const changes = yield* attachment.changes.pipe(
+                  Stream.take(schedule.length),
+                  Stream.runCollect,
+                  Effect.forkChild
+                )
+                let leftOrdinal = 0
+                let rightOrdinal = 0
+                for (const side of schedule) {
+                  if (side === "L") yield* SubscriptionRef.set(left, `L:${++leftOrdinal}`)
+                  else yield* SubscriptionRef.set(right, `R:${++rightOrdinal}`)
+                  yield* Effect.yieldNow
+                }
+                return [attachment.current, ...Array.from(yield* Fiber.join(changes))] as const
+              })
+            )
           )
-          const observed = await Effect.runPromise(attachedValues(zipped))
+          const expectedLeft = ["L:0", ...schedule.filter((side) => side === "L").map((_, index) => `L:${index + 1}`)]
+          const expectedRight = ["R:0", ...schedule.filter((side) => side === "R").map((_, index) => `R:${index + 1}`)]
 
-          expect(observed[0]).toEqual([left[0], right[0]])
-          expect(observed.at(-1)).toEqual([left.at(-1), right.at(-1)])
-          expect(new Set(observed.map(([leftValue]) => leftValue))).toEqual(new Set(left))
-          expect(new Set(observed.map(([, rightValue]) => rightValue))).toEqual(new Set(right))
-          expect(
-            observed.every(([leftValue, rightValue]) => left.includes(leftValue) && right.includes(rightValue))
-          ).toBe(true)
+          expect(observed[0]).toEqual(["L:0", "R:0"])
+          expect(new Set(observed.map(([leftValue]) => leftValue))).toEqual(new Set(expectedLeft))
+          expect(new Set(observed.map(([, rightValue]) => rightValue))).toEqual(new Set(expectedRight))
         }
       ),
       { numRuns: 100 }
