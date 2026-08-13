@@ -16,7 +16,7 @@ import {
   TrackerGraphReader,
   trackerGraphReaderFileLayer
 } from "@dalph/orchestrator"
-import { Console, Effect, Layer, Ref } from "effect"
+import { Console, Effect, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
 import { CliUsageError, dryRunWorkflowInterpreterLayer, runCli, workflowTraceOutputLayer } from "../index.js"
 
@@ -55,16 +55,19 @@ const githubTarget = GithubIssueTarget.make({
   repository: GithubRepositoryName.make("dalph")
 })
 
-const githubSnapshot = (() => {
-  const projection = projectTrackerSnapshot({
-    revision: "github-cli-revision",
-    tasks: [
-      { id: TaskId.make("github-cli-root"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
-    ]
-  })
-  if (projection._tag === "Valid") return projection.snapshot
-  throw new Error("the CLI test graph must be valid")
-})()
+const githubSnapshot = Option.getOrThrow(
+  Option.fromUndefinedOr(
+    (() => {
+      const projection = projectTrackerSnapshot({
+        revision: "github-cli-revision",
+        tasks: [
+          { id: TaskId.make("github-cli-root"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+        ]
+      })
+      return projection._tag === "Valid" ? projection.snapshot : undefined
+    })()
+  )
+)
 
 it.effect("runs the dry CLI through the planned-attempt workflow", () =>
   Effect.gen(function* () {

@@ -11,7 +11,7 @@ import {
   TrackerGraphReader
 } from "@dalph/orchestrator"
 import type { PlatformError } from "effect"
-import { ConfigProvider, Effect, FileSystem, Layer, Ref, Sink, Stdio, Stream } from "effect"
+import { ConfigProvider, Effect, FileSystem, Layer, Option, Ref, Sink, Stdio, Stream } from "effect"
 import type { Stdio as StdioService } from "effect/Stdio"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { expect } from "vitest"
@@ -35,16 +35,24 @@ const githubTarget = GithubIssueTarget.make({
   repository: GithubRepositoryName.make("dalph")
 })
 
-const githubSnapshot = (() => {
-  const projection = projectTrackerSnapshot({
-    revision: "github-dry-run-revision",
-    tasks: [
-      { id: TaskId.make("github-dry-run-root"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
-    ]
-  })
-  if (projection._tag === "Valid") return projection.snapshot
-  throw new Error("the dry-run GitHub graph must be valid")
-})()
+const githubSnapshot = Option.getOrThrow(
+  Option.fromUndefinedOr(
+    (() => {
+      const projection = projectTrackerSnapshot({
+        revision: "github-dry-run-revision",
+        tasks: [
+          {
+            id: TaskId.make("github-dry-run-root"),
+            lifecycle: { _tag: "Open" },
+            parentTaskId: null,
+            prerequisiteIds: []
+          }
+        ]
+      })
+      return projection._tag === "Valid" ? projection.snapshot : undefined
+    })()
+  )
+)
 
 it.effect("runs the complete dry CLI with only Stdio left to supply", () =>
   Effect.gen(function* () {
