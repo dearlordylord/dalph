@@ -24,7 +24,7 @@ worktree is the only integration point; task worktrees never merge one another.
 | #103 | removed | removed | `0d88259cd` | `ac0226901` | integrated as `585019cc2`; reviewed and cleaned |
 | #104 | removed | removed | `d28e5a301` | `4d25e2e8a` | integrated as `07b37bdce`; reviewed and cleaned |
 | #59 | removed | removed | `e4c97f028` | implemented by `87ce5512f` / `f616fff9c` | audited complete and closed; stale #57 edge did not block |
-| #78 | `work/issue78` | `.worktrees/issue78` | `1e04e677c` | `pending` | started after #59 completion audit; #167 already closed |
+| #78 | removed | removed | `1e04e677c` | `499e5ae15..7bb1b0948` | integrated as `aeb042a74..5992d0941`; reviewed clean and cleaned |
 
 ## Dependency order
 
