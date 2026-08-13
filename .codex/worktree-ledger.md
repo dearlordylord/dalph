@@ -12,13 +12,14 @@ worktree is the only integration point; task worktrees never merge one another.
 | #214 | removed | removed | `798ca724210f07709417af5e9eed62bac6232b55` | `09b6e47d0` | integrated as `d8ebf65af`; cleaned after #73 branch creation |
 | #73 | removed | removed | `0ee1e4f8a` | `24fcc3573` | integrated as `5e1dc210f`; reviewed clean and cleaned |
 | #213 | removed | removed | `798ca724210f07709417af5e9eed62bac6232b55` | `433f7de13` | integrated as `5d64b4cb6`; cleaned after #76 branch creation |
-| #76 | `work/issue76` | `.worktrees/issue76` | `5d64b4cb6` | `pending` | queued after integrated #213 |
+| #76 | removed | removed | `5d64b4cb6` | `011f32baa` | integrated as `35c698b73`; reviewed and cleaned |
 | #195 | `work/issue195` | `.worktrees/issue195` | `798ca724210f07709417af5e9eed62bac6232b55` | `21f75d13a` | audited complete; issue closed |
 | #215 | removed | removed | `a08f5b001dcaa0e871a453010655fba84e8079cd` | `c72a9f1f2` | integrated as `911a0aa3e..074b7a4d4`; reviewed clean and cleaned |
 | #212 | `work/issue212` | `.worktrees/issue212` | `348731ae7` | `pending` | implementing independent tooling lane |
 | #216 | removed | removed | `da525987c` | `84b6528a0` | integrated as `a1f1a7bff`; reviewed and cleaned |
 | #159 | n/a | n/a | n/a | superseded by `360258012` | closed without code change |
 | #71 | `work/issue71` | `.worktrees/issue71` | `a1f1a7bff` | `pending` | queued after first available lane completed |
+| #72 | `work/issue72` | `.worktrees/issue72` | `35c698b73` | `pending` | queued after #76 lane completed |
 
 ## Dependency order
 
