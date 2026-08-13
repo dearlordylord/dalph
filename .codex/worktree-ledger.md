@@ -18,8 +18,9 @@ worktree is the only integration point; task worktrees never merge one another.
 | #212 | `work/issue212` | `.worktrees/issue212` | `348731ae7` | `pending` | implementing independent tooling lane |
 | #216 | removed | removed | `da525987c` | `84b6528a0` | integrated as `a1f1a7bff`; reviewed and cleaned |
 | #159 | n/a | n/a | n/a | superseded by `360258012` | closed without code change |
-| #71 | `work/issue71` | `.worktrees/issue71` | `a1f1a7bff` | `pending` | queued after first available lane completed |
+| #71 | removed | removed | `a1f1a7bff` | `034a1d60e` | integrated as `ae22e9dab`; native opt-in run still pending, issue remains open |
 | #72 | `work/issue72` | `.worktrees/issue72` | `35c698b73` | `pending` | queued after #76 lane completed |
+| #74 | `work/issue74` | `.worktrees/issue74` | `ae22e9dab` | `pending` | queued after #71 harness integration |
 
 ## Dependency order
 
