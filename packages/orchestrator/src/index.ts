@@ -571,6 +571,7 @@ export {
 } from "./coordination/delivery/reactive-delivery-relations.js"
 export {
   attachCurrentSignal,
+  currentSignalFromCurrentFirstStream,
   currentSignalOf,
   DeliveryReflectionError,
   DeliveryRelationReconciliationError,

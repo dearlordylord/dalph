@@ -24,13 +24,13 @@ import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-public
 import { DeliveryRelationPublicationObserver } from "./delivery-publication-observer.js"
 import {
   attachCurrentSignal,
+  currentSignalFromCurrentFirstStream,
   type CurrentSignal,
   DeliveryRelationReconciliationError,
   type DeliveryRelationSourceError,
   type DeliveryRelationInputBundle,
   type TicketDeliveryEvidence,
-  type TrackerGraphActionProposal,
-  makeCurrentSignal
+  type TrackerGraphActionProposal
 } from "./relations.js"
 import type { JournalService } from "./journal.js"
 
@@ -196,22 +196,15 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   const statusSignal = <A>(
     project: (bundle: ReactiveDeliveryBundle) => A
   ): CurrentSignal<A, DeliveryRelationSourceError> =>
-    makeCurrentSignal({
-      get: SubscriptionRef.get(state).pipe(
-        Effect.flatMap((status) =>
-          status._tag === "ReactiveDeliveryOpen"
-            ? Effect.succeed(project(status.bundle))
-            : Effect.fail(new DeliveryRelationReconciliationError({ cause: status.cause }))
-        )
-      ),
-      changes: SubscriptionRef.changes(state).pipe(
+    currentSignalFromCurrentFirstStream(
+      SubscriptionRef.changes(state).pipe(
         Stream.mapEffect((status) =>
           status._tag === "ReactiveDeliveryOpen"
             ? Effect.succeed(project(status.bundle))
             : Effect.fail(new DeliveryRelationReconciliationError({ cause: status.cause }))
         )
       )
-    })
+    )
 
   const initial = yield* deriveBundle()
   const state = yield* SubscriptionRef.make<ReactiveDeliveryStatus>({ _tag: "ReactiveDeliveryOpen", bundle: initial })

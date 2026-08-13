@@ -20,7 +20,7 @@ import {
   InRunJournal,
   InRunJournalRunMismatch
 } from "../../workflow-journal/store.js"
-import { makeCurrentSignal, TrackerGraphState, type CurrentSignal } from "./relations.js"
+import { currentSignalFromCurrentFirstStream, TrackerGraphState, type CurrentSignal } from "./relations.js"
 import {
   journaledGraphObservationFieldsFromReceipt,
   type JournaledGraphObservationFields
@@ -251,9 +251,8 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
   })
   yield* Effect.addFinalizer(() => PubSub.shutdown(publicationState.pubsub))
   const publication = yield* Semaphore.make(1)
-  const state: CurrentSignal<JournalState, JournalError> = makeCurrentSignal({
-    get: SubscriptionRef.get(publicationState).pipe(Effect.flatMap(readOpenJournal)),
-    changes: SubscriptionRef.changes(publicationState).pipe(
+  const state: CurrentSignal<JournalState, JournalError> = currentSignalFromCurrentFirstStream(
+    SubscriptionRef.changes(publicationState).pipe(
       Stream.mapEffect((published) =>
         SubscriptionRef.get(publicationState).pipe(
           Effect.flatMap((latest) =>
@@ -262,7 +261,7 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
         )
       )
     )
-  })
+  )
   const failJournal = (failure: JournalError) =>
     SubscriptionRef.set(publicationState, { _tag: "JournalFailed", failure }).pipe(Effect.andThen(Effect.fail(failure)))
   const append = (run: RunId, key: JournalRecordKey, event: AppendableWorkflowJournalEvent) =>

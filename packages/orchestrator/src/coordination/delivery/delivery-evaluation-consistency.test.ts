@@ -14,7 +14,11 @@ import { makeTestJournaledTrackerGraphObservation } from "../../../test/journale
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
-import { makeCurrentSignal, type DeliveryRelationInputBundle, TrackerGraphState } from "./relations.js"
+import {
+  currentSignalFromCurrentFirstStream,
+  type DeliveryRelationInputBundle,
+  TrackerGraphState
+} from "./relations.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 
 const policy = RunControlPolicy.make({
@@ -58,7 +62,7 @@ it.effect("publishes graph and planned frontier as one coherent runtime evaluati
       const state = yield* SubscriptionRef.make(bundle(TrackerGraphState.cases.GraphNotEstablished.make({})))
       const layer = makeDeliveryRelationsLayer({
         ...deterministicDeliveryRuntimeSupport(policy),
-        coherent: makeCurrentSignal({ get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) })
+        coherent: currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
       })
       const evaluations = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const firstSeen = yield* Deferred.make<void>()

@@ -78,51 +78,51 @@ const attachmentOf = <A, E>(changes: Stream.Stream<A, E>): CurrentSignal<A, E>["
     )
   )
 
-/** Builds a CurrentSignal whose attachment and declarative stream share one current-first source. */
-export const makeCurrentSignal = <A, E>(input: {
-  readonly changes: Stream.Stream<A, E>
-  readonly get: Effect.Effect<A, E>
-}): CurrentSignal<A, E> => ({ ...input, attach: attachmentOf(input.changes) })
+/** Builds a CurrentSignal from its one authoritative scoped attachment operation. */
+export const makeCurrentSignal = <A, E>(attach: CurrentSignal<A, E>["attach"]): CurrentSignal<A, E> => ({
+  attach,
+  get: Effect.scoped(attach.pipe(Effect.map(({ current }) => current))),
+  changes: Stream.scoped(
+    Stream.unwrap(attach.pipe(Effect.map(({ changes, current }) => Stream.concat(Stream.make(current), changes))))
+  )
+})
+
+/** Adapts an internally-owned stream that intrinsically publishes one current value before later changes. */
+export const currentSignalFromCurrentFirstStream = <A, E>(changes: Stream.Stream<A, E>): CurrentSignal<A, E> =>
+  makeCurrentSignal(attachmentOf(changes))
 
 /** Opens the signal's contract-owned current-first subscription. */
 export const attachCurrentSignal = <A, E>(signal: CurrentSignal<A, E>) => signal.attach
 
 /** Creates a deterministic current-first signal for controlled compositions. */
 export const currentSignalOf = <A>(value: A): CurrentSignal<A> =>
-  makeCurrentSignal({ get: Effect.succeed(value), changes: Stream.make(value) })
+  makeCurrentSignal(Effect.succeed({ changes: Stream.empty, current: value }))
 
 /** Projects every current value without changing the signal's descriptive colour. */
-export const mapCurrentSignal = <A, E, B>(
-  signal: CurrentSignal<A, E>,
-  project: (value: A) => B
-): CurrentSignal<B, E> => ({
-  attach: signal.attach.pipe(
-    Effect.map(({ changes, current }) => ({ changes: changes.pipe(Stream.map(project)), current: project(current) }))
-  ),
-  get: signal.get.pipe(Effect.map(project)),
-  changes: signal.changes.pipe(Stream.map(project))
-})
+export const mapCurrentSignal = <A, E, B>(signal: CurrentSignal<A, E>, project: (value: A) => B): CurrentSignal<B, E> =>
+  makeCurrentSignal(
+    signal.attach.pipe(
+      Effect.map(({ changes, current }) => ({ changes: changes.pipe(Stream.map(project)), current: project(current) }))
+    )
+  )
 
 /** Relates two current sources so a revision of either recomputes their shared projection. */
 export const zipCurrentSignals = <A, EA, B, EB>(
   left: CurrentSignal<A, EA>,
   right: CurrentSignal<B, EB>
-): CurrentSignal<readonly [A, B], EA | EB> => ({
-  attach: Effect.all([left.attach, right.attach]).pipe(
-    Effect.flatMap(([leftAttachment, rightAttachment]) =>
-      attachmentOf(
-        Stream.zipLatest(
-          Stream.concat(Stream.make(leftAttachment.current), leftAttachment.changes),
-          Stream.concat(Stream.make(rightAttachment.current), rightAttachment.changes)
+): CurrentSignal<readonly [A, B], EA | EB> =>
+  makeCurrentSignal(
+    Effect.all([left.attach, right.attach]).pipe(
+      Effect.flatMap(([leftAttachment, rightAttachment]) =>
+        attachmentOf(
+          Stream.zipLatest(
+            Stream.concat(Stream.make(leftAttachment.current), leftAttachment.changes),
+            Stream.concat(Stream.make(rightAttachment.current), rightAttachment.changes)
+          )
         )
       )
     )
-  ),
-  get: Effect.all([left.get, right.get]).pipe(
-    Effect.map(([leftValue, rightValue]) => [leftValue, rightValue] as const)
-  ),
-  changes: Stream.zipLatest(left.changes, right.changes)
-})
+  )
 
 const DeliveryConsequencesTypeId: unique symbol = Symbol("DeliveryConsequences")
 
@@ -752,8 +752,5 @@ export const reflectDeliverySettlements = Effect.fn("Delivery.reflectDeliverySet
 > {
   const projection = yield* DeliveryReflectionProjection
   const reflection = projection.of(settlements)
-  return makeCurrentSignal({
-    get: reflection.current.get.pipe(Effect.map(makeDeliveryConsequences)),
-    changes: reflection.current.changes.pipe(Stream.map(makeDeliveryConsequences))
-  })
+  return mapCurrentSignal(reflection.current, makeDeliveryConsequences)
 })

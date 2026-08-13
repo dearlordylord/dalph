@@ -40,7 +40,7 @@ import {
 import { deliveryRuntimeResourceCapabilitiesOf as makeCapabilitiesWithAdmission } from "../delivery/delivery-runtime-resources.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import {
-  makeCurrentSignal,
+  currentSignalFromCurrentFirstStream,
   makeDeliveryReflection,
   type DeliveryRuntimeEvaluation,
   type ExactTicketDeliveryEvidence
@@ -561,7 +561,7 @@ it.effect("canonicalizes integration-target position sets without depending on i
     const views = yield* observePauseProgress(
       {
         integrationTargets: { changes: Stream.fromIterable(snapshots) },
-        runtimeObservation: makeCurrentSignal({ changes: Stream.make(ready), get: Effect.succeed(ready) })
+        runtimeObservation: currentSignalFromCurrentFirstStream(Stream.make(ready))
       },
       runId,
       null,

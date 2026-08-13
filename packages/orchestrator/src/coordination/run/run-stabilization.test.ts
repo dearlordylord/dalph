@@ -39,7 +39,7 @@ import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from 
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import {
   currentSignalOf,
-  makeCurrentSignal,
+  currentSignalFromCurrentFirstStream,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
   TrackerGraphState
@@ -167,7 +167,7 @@ const freshGraphReadProposal = (trackerGraph: Extract<TrackerGraphState, { reado
 }
 
 const signalOf = (state: SubscriptionRef.SubscriptionRef<DeliveryRuntimeEvaluation>) =>
-  makeCurrentSignal({ get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) })
+  currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
 
 const runtimeResourcesFor = Effect.fn("RunStabilizationTest.runtimeResourcesFor")(function* (
   lifecycle: ApplicationExitLifecycleService
@@ -332,7 +332,7 @@ it.effect("runs work published after G2 before phase two subscribes", () =>
       const state = yield* SubscriptionRef.make(evaluation(base, g1))
       const attachmentCount = yield* Ref.make(0)
       const executions = yield* Ref.make(0)
-      const underlying = makeCurrentSignal({ changes: SubscriptionRef.changes(state), get: SubscriptionRef.get(state) })
+      const underlying = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
       const signal = {
         ...underlying,
         attach: Ref.updateAndGet(attachmentCount, (count) => count + 1).pipe(
@@ -406,7 +406,7 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
         },
         (yield* makeApplicationExitLifecycle()).admission
       )
-      const underlying = makeCurrentSignal({ changes: SubscriptionRef.changes(state), get: SubscriptionRef.get(state) })
+      const underlying = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
       const signal = {
         ...underlying,
         attach: Ref.updateAndGet(attachmentCount, (count) => count + 1).pipe(

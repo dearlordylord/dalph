@@ -4,14 +4,14 @@ import * as fc from "fast-check"
 import { expect } from "vitest"
 import {
   attachCurrentSignal,
-  makeCurrentSignal,
+  currentSignalFromCurrentFirstStream,
   mapCurrentSignal,
   zipCurrentSignals,
   type CurrentSignal
 } from "./relations.js"
 
 const finiteSignal = <A>(values: readonly [A, ...ReadonlyArray<A>]): CurrentSignal<A> =>
-  makeCurrentSignal({ changes: Stream.fromIterable(values), get: Effect.succeed(values[0]) })
+  currentSignalFromCurrentFirstStream(Stream.fromIterable(values))
 
 const attachedValues = <A>(signal: CurrentSignal<A>) =>
   Effect.scoped(
@@ -67,6 +67,8 @@ it.effect("zip-latest preserves generated current values and reaches both latest
 
           expect(observed[0]).toEqual([left[0], right[0]])
           expect(observed.at(-1)).toEqual([left.at(-1), right.at(-1)])
+          expect(new Set(observed.map(([leftValue]) => leftValue))).toEqual(new Set(left))
+          expect(new Set(observed.map(([, rightValue]) => rightValue))).toEqual(new Set(right))
           expect(
             observed.every(([leftValue, rightValue]) => left.includes(leftValue) && right.includes(rightValue))
           ).toBe(true)

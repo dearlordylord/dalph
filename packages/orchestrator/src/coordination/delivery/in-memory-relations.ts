@@ -7,11 +7,11 @@ import {
 } from "./delivery-action-planning.js"
 import {
   BoundedParallelTicketsProjection,
+  currentSignalFromCurrentFirstStream,
   currentSignalOf,
   DeliveryReflectionProjection,
   DeliveryRuntimeAssembly,
   DeliverySettlementProjection,
-  makeCurrentSignal,
   makeDeliveryReflection,
   mapCurrentSignal,
   TicketDeliveryProjection,
@@ -78,9 +78,8 @@ const deliveryPublicationKeyOf = (publication: DeliveryGraphPublication): string
 const deduplicatedPublicationSignal = (
   signal: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError>
 ): CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError> =>
-  makeCurrentSignal({
-    get: signal.get,
-    changes: signal.changes.pipe(
+  currentSignalFromCurrentFirstStream(
+    signal.changes.pipe(
       Stream.mapAccum<string | undefined, DeliveryGraphPublication, DeliveryGraphPublication>(
         () => undefined,
         (previousKey, publication) => {
@@ -89,7 +88,7 @@ const deduplicatedPublicationSignal = (
         }
       )
     )
-  })
+  )
 
 /** Explicit non-reactive runtime facts for deterministic relation and shadow evaluation only. */
 export const deterministicDeliveryRuntimeSupport = (_policy: RunControlPolicy) => ({
@@ -117,9 +116,6 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
           releaseEligibleContributions(bundle, bundle.legacy.proposalContributions)
         )
       : (() => {
-          const get = Effect.all([input.coherent.get, rawProposalContributions.get]).pipe(
-            Effect.map(([bundle, contributions]) => releaseEligibleContributions(bundle, contributions))
-          )
           const changes = Stream.merge(
             input.coherent.changes.pipe(
               Stream.mapEffect((bundle) =>
@@ -134,7 +130,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
               )
             )
           ).pipe(Stream.changesWith((left, right) => JSON.stringify(left) === JSON.stringify(right)))
-          return makeCurrentSignal({ changes, get })
+          return currentSignalFromCurrentFirstStream(changes)
         })()
   const reflectionProposals = input.reflectionProposals ?? noActions
   const planningInputOf = (
@@ -235,7 +231,11 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
           planningInputs.changes.pipe(Stream.map(() => undefined))
         ).pipe(Stream.mapEffect(() => get))
         const changesWithinStablePublication = zipCurrentSignals(consequences, planningInputs).changes
-        return { ...makeCurrentSignal({ changes, get }), changesWithinStablePublication, getWithinStablePublication }
+        return {
+          ...currentSignalFromCurrentFirstStream(changes),
+          changesWithinStablePublication,
+          getWithinStablePublication
+        }
       }
     })
   )
@@ -281,19 +281,11 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
             current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
             proposedActions.changesWithinStablePublication.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
           )
-        const readCurrentEvaluation = (facts: DeliveryRuntimeFacts) =>
-          makeEvaluation(facts, current.get, proposedActions.getWithinStablePublication)
-        const readStableEvaluation = Effect.fn("DeliveryRelations.readStableEvaluation")(function* () {
-          return yield* input.publicationConsistency.withStablePublication(
-            facts.get.pipe(Effect.flatMap(readCurrentEvaluation))
-          )
-        })
-        const evaluations = makeCurrentSignal({
-          get: readStableEvaluation(),
-          changes: facts.changes.pipe(
+        const evaluations = currentSignalFromCurrentFirstStream(
+          facts.changes.pipe(
             Stream.mapEffect((facts) => input.publicationConsistency.withStablePublication(sampleEvaluation(facts)))
           )
-        })
+        )
         return evaluations
       }
     })

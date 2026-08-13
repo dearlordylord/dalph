@@ -62,7 +62,7 @@ import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from 
 import { liveActionIsPresent, liveActionKeyOf } from "./live-delivery-action.js"
 import {
   currentSignalOf,
-  makeCurrentSignal,
+  currentSignalFromCurrentFirstStream,
   type DeliveryActionProposal,
   type DeliveryProposalFrontier,
   type DeliveryRelationInputBundle,
@@ -234,7 +234,7 @@ const dynamicEvaluationSignal = Effect.fn("Test.dynamicEvaluationSignal")(functi
   onPublish?: (current: DeliveryRuntimeEvaluation, next: DeliveryRuntimeEvaluation) => DeliveryRuntimeEvaluation
 ) {
   const state = yield* SubscriptionRef.make(initial)
-  const signal = makeCurrentSignal({ get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) })
+  const signal = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
   return {
     ...signal,
     publish: (evaluation: DeliveryRuntimeEvaluation) =>
@@ -1118,11 +1118,8 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
     })
     const layer = makeDeliveryRelationsLayer({
       publicationConsistency: { withStablePublication: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect },
-      coherent: makeCurrentSignal({ changes: SubscriptionRef.changes(coherent), get: SubscriptionRef.get(coherent) }),
-      proposalContributions: makeCurrentSignal({
-        get: SubscriptionRef.get(proposalContributions),
-        changes: SubscriptionRef.changes(proposalContributions)
-      })
+      coherent: currentSignalFromCurrentFirstStream(SubscriptionRef.changes(coherent)),
+      proposalContributions: currentSignalFromCurrentFirstStream(SubscriptionRef.changes(proposalContributions))
     })
     const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
     const initial = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead))
@@ -1390,13 +1387,12 @@ it.effect("releases acquired integration ownership and its relation subscriber o
     }
     const evaluation = withProposals(yield* baseEvaluation, [acquired])
     const subscribers = yield* Ref.make(0)
-    const evaluations = makeCurrentSignal({
-      get: Effect.succeed(evaluation),
-      changes: Stream.fromEffect(Ref.update(subscribers, (count) => count + 1).pipe(Effect.as(evaluation))).pipe(
+    const evaluations = currentSignalFromCurrentFirstStream(
+      Stream.fromEffect(Ref.update(subscribers, (count) => count + 1).pipe(Effect.as(evaluation))).pipe(
         Stream.concat(Stream.never),
         Stream.ensuring(Ref.update(subscribers, (count) => count - 1))
       )
-    })
+    )
     const relation = evaluations satisfies DeliveryRuntimeInput
     const actionStarted = yield* Deferred.make<void>()
     const executor = DeliveryActionExecutor.of({
@@ -1483,10 +1479,9 @@ it.effect("rolls back acquired integration ownership when the action fails", () 
 it.effect("fails with the exact relation cause before admitting any proposal", () =>
   Effect.gen(function* () {
     const relationFailure = { _tag: "TestRelationFailure" as const }
-    const relation = makeCurrentSignal({
-      get: Effect.fail(relationFailure),
-      changes: Stream.fail(relationFailure)
-    }) satisfies DeliveryRuntimeInput<typeof relationFailure>
+    const relation = currentSignalFromCurrentFirstStream(Stream.fail(relationFailure)) satisfies DeliveryRuntimeInput<
+      typeof relationFailure
+    >
     const executor = DeliveryActionExecutor.of({ execute: () => Effect.die("no action may start") })
 
     const failure = yield* runDeliveryRuntimeDecision(relation).pipe(
@@ -1715,12 +1710,11 @@ it.effect("returns a relation failure published after actions have started", () 
     const initial = withProposals(yield* baseEvaluation, [actionProposal], 1)
     const fail = yield* Deferred.make<void>()
     const relationFailure = { _tag: "LaterRelationFailure" as const }
-    const evaluations = makeCurrentSignal({
-      get: Effect.succeed(initial),
-      changes: Stream.succeed(initial).pipe(
+    const evaluations = currentSignalFromCurrentFirstStream(
+      Stream.succeed(initial).pipe(
         Stream.concat(Stream.fromEffect(Deferred.await(fail).pipe(Effect.andThen(Effect.fail(relationFailure)))))
       )
-    })
+    )
     const relation = evaluations satisfies DeliveryRuntimeInput<typeof relationFailure>
     const started = yield* Deferred.make<void>()
     const executor = DeliveryActionExecutor.of({

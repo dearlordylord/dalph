@@ -38,7 +38,7 @@ import { DeliveryRelationPublicationObserver } from "../delivery/delivery-public
 import { makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
 import {
-  makeCurrentSignal,
+  currentSignalFromCurrentFirstStream,
   type CurrentSignal,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
@@ -337,10 +337,9 @@ const dynamicBundle = Effect.fn("PauseProgressAcceptance.dynamicBundle")(functio
 ) {
   const state = yield* SubscriptionRef.make(initial)
   return {
-    signal: makeCurrentSignal({
-      changes: SubscriptionRef.changes(state),
-      get: SubscriptionRef.get(state)
-    }) satisfies CurrentSignal<DeliveryRelationInputBundle>,
+    signal: currentSignalFromCurrentFirstStream(
+      SubscriptionRef.changes(state)
+    ) satisfies CurrentSignal<DeliveryRelationInputBundle>,
     publish: (next: DeliveryRelationInputBundle) => SubscriptionRef.set(state, next)
   }
 })

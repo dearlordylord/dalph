@@ -1,10 +1,10 @@
 import { it } from "@effect/vitest"
-import { Effect, Fiber, Option, SubscriptionRef, Stream } from "effect"
+import { Deferred, Effect, Fiber, Option, SubscriptionRef, Stream } from "effect"
 import { expect } from "vitest"
 import {
   attachCurrentSignal,
   currentSignalOf,
-  makeCurrentSignal,
+  currentSignalFromCurrentFirstStream,
   mapCurrentSignal,
   zipCurrentSignals
 } from "./relations.js"
@@ -22,7 +22,7 @@ it.effect("attaches after publication from the latest value and follows later ch
   Effect.scoped(
     Effect.gen(function* () {
       const state = yield* SubscriptionRef.make("A")
-      const signal = makeCurrentSignal({ get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) })
+      const signal = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
       yield* SubscriptionRef.set(state, "B")
 
       const attachment = yield* attachCurrentSignal(signal)
@@ -39,7 +39,7 @@ it.effect("reconnects from current state without replaying a process-local curso
   Effect.scoped(
     Effect.gen(function* () {
       const state = yield* SubscriptionRef.make("A")
-      const signal = makeCurrentSignal({ get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) })
+      const signal = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
       const first = yield* attachCurrentSignal(signal)
       expect(first.current).toBe("A")
 
@@ -56,7 +56,7 @@ it.effect("does not miss a publication racing with attachment", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const state = yield* SubscriptionRef.make("A")
-      const signal = makeCurrentSignal({ get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) })
+      const signal = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
       const attaching = yield* attachCurrentSignal(signal).pipe(Effect.forkChild)
 
       yield* SubscriptionRef.set(state, "B")
@@ -71,11 +71,58 @@ it.effect("does not miss a publication racing with attachment", () =>
   )
 )
 
+it.effect("uses a publication after attachment starts but before the current-first source subscribes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const state = yield* SubscriptionRef.make("A")
+      const attachmentStarted = yield* Deferred.make<void>()
+      const subscribe = yield* Deferred.make<void>()
+      const changes = Stream.fromEffect(
+        Deferred.succeed(attachmentStarted, undefined).pipe(Effect.andThen(Deferred.await(subscribe)))
+      ).pipe(Stream.drain, Stream.concat(SubscriptionRef.changes(state)))
+      const attaching = yield* attachCurrentSignal(currentSignalFromCurrentFirstStream(changes)).pipe(Effect.forkChild)
+
+      yield* Deferred.await(attachmentStarted)
+      yield* SubscriptionRef.set(state, "B")
+      yield* Deferred.succeed(subscribe, undefined)
+
+      expect((yield* Fiber.join(attaching)).current).toBe("B")
+    })
+  )
+)
+
+it.effect("retains a publication after the source subscribes but before attachment returns", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const state = yield* SubscriptionRef.make("A")
+      const currentPulled = yield* Deferred.make<void>()
+      const returnCurrent = yield* Deferred.make<void>()
+      const changes = SubscriptionRef.changes(state).pipe(
+        Stream.mapEffect((value) =>
+          Deferred.succeed(currentPulled, undefined).pipe(
+            Effect.andThen(Deferred.await(returnCurrent)),
+            Effect.as(value)
+          )
+        )
+      )
+      const attaching = yield* attachCurrentSignal(currentSignalFromCurrentFirstStream(changes)).pipe(Effect.forkChild)
+
+      yield* Deferred.await(currentPulled)
+      yield* SubscriptionRef.set(state, "B")
+      yield* Deferred.succeed(returnCurrent, undefined)
+      const attachment = yield* Fiber.join(attaching)
+
+      expect(attachment.current).toBe("A")
+      expect(Option.getOrThrow(yield* attachment.changes.pipe(Stream.runHead))).toBe("B")
+    })
+  )
+)
+
 it.effect("retains a publication after attachment returns and before the changes stream is consumed", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const state = yield* SubscriptionRef.make("A")
-      const signal = makeCurrentSignal({ get: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state) })
+      const signal = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
       const attachment = yield* attachCurrentSignal(signal)
 
       yield* SubscriptionRef.set(state, "B")
@@ -91,14 +138,8 @@ it.effect("mapped and zipped signals expose coherent get values and reactive upd
     Effect.gen(function* () {
       const leftState = yield* SubscriptionRef.make(1)
       const rightState = yield* SubscriptionRef.make("A")
-      const left = makeCurrentSignal({
-        get: SubscriptionRef.get(leftState),
-        changes: SubscriptionRef.changes(leftState)
-      })
-      const right = makeCurrentSignal({
-        get: SubscriptionRef.get(rightState),
-        changes: SubscriptionRef.changes(rightState)
-      })
+      const left = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(leftState))
+      const right = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(rightState))
       const mapped = mapCurrentSignal(left, (value) => value * 2)
       const zipped = zipCurrentSignals(mapped, right)
       const attachment = yield* attachCurrentSignal(zipped)
