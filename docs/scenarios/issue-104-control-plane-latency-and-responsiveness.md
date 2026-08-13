@@ -68,9 +68,9 @@ freshness from elapsed process time, or turn a metrics target into a timeout.
 
 ### Acceptance-test mapping
 
-- `control-plane budget document names each boundary and its timing policy`
-  is the reviewed document seam; the chronology is also checked by the
-  scenario-index guard.
+- `names every accepted boundary and its timing policy` checks all seven
+  boundary/policy rows, and `keeps the accepted scenarios discoverable from
+  the scenario and architecture maps` checks both documentation links.
 - `material local timing values decode as finite positive branded durations`
   checks the two existing local timing values at the Schema boundary.
 - Existing `interrupts every affected mutation after a contradictory
@@ -177,8 +177,8 @@ failure.
   executor-state observation`, and `releases capacity only after the planned
   attempt is safely suspended` prove exact correlation, reconciliation, and
   no timeout-derived quiescence.
-- `control-plane budget document names recovery as a boundary-specific bound`
-  ensures the document does not introduce a global recovery deadline.
+- `names every accepted boundary and its timing policy` checks that recovery
+  remains boundary-specific and has no global deadline.
 
 ## Scenario-to-test mapping required for implementation
 

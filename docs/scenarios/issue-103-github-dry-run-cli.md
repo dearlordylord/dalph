@@ -124,8 +124,9 @@ because no external effect was attempted.
 ### Acceptance test
 
 `advertises the GitHub token requirement in run help` checks the operator help,
-and `reports the missing GitHub token as a typed startup failure` checks the
-typed variable name and the no-fixture route.
+and `selects the default production GitHub reader and reports its missing
+token as a typed startup failure` checks the default registration, typed
+variable name, and no-fixture route.
 
 ## Scenario-to-test mapping
 
@@ -133,4 +134,4 @@ typed variable name and the no-fixture route.
 | --- | --- | --- |
 | Alice reads one live GitHub target closure | One explicit target is decoded once, routed to the production read-only graph reader, and observed as one complete normalized closure with no tracker mutation | `decodes a GitHub issue target once and reads it without tracker writes`; `selects the production GitHub reader for an explicit GitHub target` |
 | Alice keeps fixture targets on the fixture adapter | A non-GitHub locator remains a fixture target and preserves the controlled fixture dry workflow | `runs the complete dry CLI with only Stdio left to supply`; `replaces fixture reads at the complete dry CLI boundary` |
-| Alice discovers and corrects missing configuration | Help and startup failure identify `GITHUB_TOKEN`; no fixture fallback or tracker mutation is attempted | `advertises the GitHub token requirement in run help`; `reports the missing GitHub token as a typed startup failure` |
+| Alice discovers and corrects missing configuration | Help and startup failure identify `GITHUB_TOKEN`; no fixture fallback or tracker mutation is attempted | `advertises the GitHub token requirement in run help`; `selects the default production GitHub reader and reports its missing token as a typed startup failure` |

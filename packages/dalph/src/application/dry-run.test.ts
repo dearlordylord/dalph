@@ -129,7 +129,7 @@ it.effect("selects the production GitHub reader for an explicit GitHub target", 
   })
 )
 
-it.effect("reports the missing GitHub token as a typed startup failure", () =>
+it.effect("selects the default production GitHub reader and reports its missing token as a typed startup failure", () =>
   Effect.gen(function* () {
     const fixtureReaderLayer = Layer.succeed(
       FixtureReader,

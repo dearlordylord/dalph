@@ -106,6 +106,21 @@ The fixed V1 maximum of five seconds allowed for one Exit drain on macOS and
 Linux, measured from its Exit admission cutoff without reset or extension.
 _Avoid_: Supervisor force deadline, configurable timeout, per-request duration
 
+**Application Exit drain duration**:
+The finite-positive branded duration that materializes the Exit drain limit at
+the application-lifecycle clock boundary. It measures Dalph's local drain only;
+it is not a deadline for GitHub, Git, an executor session, or any other outside
+authority.
+_Avoid_: Remote request timeout, executor shutdown proof, configurable deadline
+
+**Coordinator ownership observation interval**:
+The finite-positive branded interval between local descriptor/path comparisons
+while Dalph holds one OS-backed coordinator lock. V1 starts the next comparison
+one second after the previous comparison completes; mutations still compare
+synchronously before crossing their boundary. It is not a remote lease or
+distributed fencing period.
+_Avoid_: Tracker claim TTL, network timeout, distributed lock lease
+
 **Exit drain failure**:
 The conclusive application-lifecycle result that graceful Exit is impossible
 after every remaining useful quick drain operation has settled.

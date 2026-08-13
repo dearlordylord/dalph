@@ -2,11 +2,9 @@ import type { RunnableFrontierTransition } from "../frontier/frontier.js"
 
 type DeliveryTransitionRoute = "AcceptedOperation" | "FreshProvenance" | "IdentityFree" | "NewOperation" | "Observation"
 
-type AcceptedTransitionExecution = "Observation" | "Recovery" | "StoppedClaimReleaseRetry"
 type PlannedAttemptProtocolSource = "None" | "PlannedAttempt" | "StopSubject"
 
 type DeliveryTransitionPolicy = {
-  readonly acceptedExecution?: AcceptedTransitionExecution
   readonly plannedAttemptProtocol: PlannedAttemptProtocolSource
   readonly route: DeliveryTransitionRoute
 }
@@ -16,20 +14,12 @@ const policy = <const Route extends DeliveryTransitionRoute, const Protocol exte
   plannedAttemptProtocol: Protocol
 ) => ({ plannedAttemptProtocol, route })
 
-const acceptedPolicy = <
-  const Route extends "AcceptedOperation" | "Observation",
-  const Execution extends AcceptedTransitionExecution
->(
-  route: Route,
-  acceptedExecution: Execution
-) => ({ acceptedExecution, plannedAttemptProtocol: "None" as const, route })
-
-/** One closed classification drives proposal identity, admission, accepted execution, and adapter transition types. */
+/** One closed classification drives proposal identity, admission, and adapter transition types. */
 export const deliveryTransitionPolicy = {
   AcquireStartedIntegrationTarget: policy("IdentityFree", "None"),
   AdvanceAttemptRestart: policy("IdentityFree", "PlannedAttempt"),
   AdvanceAttemptStoppage: policy("IdentityFree", "StopSubject"),
-  CheckTaskClaim: acceptedPolicy("AcceptedOperation", "Recovery"),
+  CheckTaskClaim: policy("AcceptedOperation", "None"),
   CommitFreshTaskClaimIntent: policy("FreshProvenance", "None"),
   CommitTaskClaimReacquisitionIntent: policy("NewOperation", "None"),
   ContinueFreshWorkflowOperation: policy("FreshProvenance", "None"),
@@ -44,21 +34,21 @@ export const deliveryTransitionPolicy = {
   CompletePromotedTask: policy("IdentityFree", "None"),
   ObserveFocusedTaskCompletion: policy("IdentityFree", "None"),
   DeleteCompletedTaskCompletionClaim: policy("IdentityFree", "None"),
-  ObservePlannedAttemptContinuationClaim: acceptedPolicy("Observation", "Observation"),
-  ObservePlannedAttemptContinuationGraph: acceptedPolicy("Observation", "Observation"),
-  ObservePlannedAttemptContinuationSpecification: acceptedPolicy("Observation", "Observation"),
-  ObservePlannedAttemptContinuationTargetLineage: acceptedPolicy("Observation", "Observation"),
-  ObservePlannedAttemptContinuationWorktree: acceptedPolicy("Observation", "Observation"),
-  ObserveResponsibleTaskClaim: acceptedPolicy("Observation", "Observation"),
-  ObserveStoppedAttemptClaim: acceptedPolicy("Observation", "Observation"),
+  ObservePlannedAttemptContinuationClaim: policy("Observation", "None"),
+  ObservePlannedAttemptContinuationGraph: policy("Observation", "None"),
+  ObservePlannedAttemptContinuationSpecification: policy("Observation", "None"),
+  ObservePlannedAttemptContinuationTargetLineage: policy("Observation", "None"),
+  ObservePlannedAttemptContinuationWorktree: policy("Observation", "None"),
+  ObserveResponsibleTaskClaim: policy("Observation", "None"),
+  ObserveStoppedAttemptClaim: policy("Observation", "None"),
   QueueAcceptedResultIntegrationResponsibility: policy("IdentityFree", "None"),
-  ReconcileTaskClaim: acceptedPolicy("AcceptedOperation", "Recovery"),
-  ReconcileTaskClaimRelease: acceptedPolicy("AcceptedOperation", "Recovery"),
-  ReconcileTaskWorktree: acceptedPolicy("AcceptedOperation", "Recovery"),
+  ReconcileTaskClaim: policy("AcceptedOperation", "None"),
+  ReconcileTaskClaimRelease: policy("AcceptedOperation", "None"),
+  ReconcileTaskWorktree: policy("AcceptedOperation", "None"),
   RecordStoppedAttemptClaimNoRelease: policy("IdentityFree", "None"),
   ReleaseExternallyCompletedTaskClaim: policy("NewOperation", "None"),
   ReleaseStoppedAttemptClaim: policy("NewOperation", "None"),
-  RetryStoppedAttemptClaimRelease: acceptedPolicy("AcceptedOperation", "StoppedClaimReleaseRetry"),
+  RetryStoppedAttemptClaimRelease: policy("AcceptedOperation", "None"),
   ReleaseStartedIntegrationTarget: policy("IdentityFree", "None"),
   StartPlannedAttemptExecutorWork: policy("FreshProvenance", "PlannedAttempt"),
   StartQueuedIntegration: policy("IdentityFree", "None"),
