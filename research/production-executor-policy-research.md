@@ -5,6 +5,13 @@ specification—for
 [#127](https://github.com/dearlordylord/dalph/issues/127), finalized against
 Dalph `4d6c610f5` on 2026-08-12 after #167 integration.
 
+Maintainer clarification on 2026-08-13: the executor implementation remains
+deliberately unspecified. This research inventories possible implementations;
+it does not select an adapter, review loop, commit-based workflow, agent
+topology, or provider topology. “Production executor adapter” below means
+possible implementation-specific boundary glue, never a generic Dalph
+algorithm.
+
 This document changes no Dalph runtime behavior. It does not accept a
 production executor, turn the experimental review loop into product policy, or
 close #127. Issue #167 is now integrated and closed; its maintained shared
@@ -38,8 +45,9 @@ coverage in the integrated gate.
 
 That evidence validates the intended coarse boundary: generic Dalph can carry
 exact planned-attempt identity, journal-first commands, current-state
-projection, safe suspension, terminal reports, accepted evidence, restart,
-and finality without knowing implementation/reviewer stages. It does **not**
+projection, safe suspension, terminal reports, an accepted Git commit and its
+accepted-result evidence manifest, restart, and finality without knowing
+implementation/reviewer stages. It does **not**
 select a production adapter, review count, provider topology, retry policy,
 survivor policy, or terminal-sealing implementation. Those remain #127's
 unaccepted product choices.
@@ -47,13 +55,12 @@ unaccepted product choices.
 The concrete event under investigation is this: Alice is observing a Run.
 Dalph selects an eligible tracker task, plans one attempt with an exact Base
 SHA and worktree, records that it is about to ask the selected executor to
-work, and then asks. The provider may edit files, run commands, review
-evidence, lose a response, or remain alive after Dalph dies. Before Dalph
-releases that attempt's capacity, the executor must either return an
-evidence-backed terminal result or prove that none of its activities can keep
-changing the attempt. What review, retry, restoration, and provider calls
-happen between those two outer events is the unaccepted policy this document
-investigates.
+work, and then asks. An executor implementation may edit files, run commands,
+use one or several agent sessions, review, lose a response, or survive Dalph;
+none of those possibilities is selected. Before Dalph releases that attempt's
+capacity, the executor must either return a terminal result or prove safe
+suspension through the outer contract. Generic Dalph does not know what
+internal evidence, if any, an implementation uses to reach either report.
 
 ## Question and evidence boundary
 
@@ -99,21 +106,17 @@ and the [`changed-attempt Restart scenarios`](../docs/scenarios/issue-66-clean-r
 Those sources establish the coarse boundary and accepted restart behavior;
 they do not establish any proposed inner production policy in this document.
 
-## Provisional conclusion
+## Boundary conclusion and unaccepted implementation questions
 
-Dalph should not specify a universal implementation/review pipeline. The
-current owner direction already selects one statically installed review-loop
-bundle for the first production implementation, without making its inner
-policy generic. #127 should preserve the existing planned-attempt boundary as
-genuinely opaque while deciding the later per-attempt selection,
-mixed-executor-history, unavailable-support, and explicit-switching behavior.
-The selected adapter may use a review loop, but its review count, model,
-evidence strategy, retry policy, and provider topology are an immutable
-executor-policy snapshot, not generic Dalph defaults
-([#127 single-bundle scope](https://github.com/dearlordylord/dalph/issues/127#issuecomment-5104706022),
- [#127 policy direction](https://github.com/dearlordylord/dalph/issues/127#issuecomment-5248007731)).
+Dalph must not specify a universal implementation or review pipeline. No first
+production implementation has been selected. The existing opaque executor
+locator does not imply a plugin system or authorize generic Dalph to learn how
+an executor implementation works. A direct implementation, one or several
+agent sessions, a review loop, a managed remote executor, or another algorithm
+remain possibilities rather than accepted product behavior.
 
-The smallest useful production policy is:
+If a later accepted scenario selects a concrete executor implementation, that
+implementation specification will need to answer questions such as:
 
 1. Resolve the planned attempt's existing opaque `TaskExecutorLocator` to one
    installed adapter and one immutable policy snapshot before crossing a
@@ -123,12 +126,13 @@ The smallest useful production policy is:
    same adapter after restart, but the immutable policy snapshot—not mutable
    process configuration—fixes the already-selected policy; generic Dalph
    should not parse its internal version or configuration.
-2. Give the adapter the exact planned attempt. The adapter owns the
-   implementation/review orchestration, lifecycle obligations, evidence
-   meaning, retry policy, and convergence decision. The execution substrate
-   remains authoritative for live sessions and processes; the evidence store
-   remains authoritative for immutable bytes. The adapter retains exact
-   references and rereads those authorities instead of copying their facts.
+2. Give the implementation the exact planned attempt. Its private protocol owns
+   any implementation orchestration, lifecycle obligations, evidence meaning,
+   retry policy, and convergence decision it actually introduces. The
+   execution substrate remains authoritative for live sessions and processes;
+   the evidence store remains authoritative for immutable bytes. The adapter
+   retains exact references and rereads those authorities instead of copying
+   their facts.
 3. Require the adapter to expose a read-only exact-attempt projection and to
    distinguish unsupported, temporarily unavailable, incompatible, running,
    safely suspended, and terminal conditions. Failure to resolve or project
@@ -139,15 +143,14 @@ The smallest useful production policy is:
    is restoration evidence, not suspension evidence. The adapter must also
    validate enough retained state to resume the same attempt; conversation
    persistence alone is insufficient.
-5. Put every terminal result through one adapter-owned sealing protocol.
-   `Accepted` carries the current immutable commit and evidence-manifest
-   reference; `Failed` carries sealed diagnostic evidence if #127 accepts that
-   outer reference; and any selected-adapter use of the existing `Completed`
-   variant must name and seal its completed disposition. Before any of the
-   three reports, the adapter must prove and seal that no owned provider
-   request, remote task, model turn, tool call, background terminal, or
-   subprocess can keep changing the attempt. A provider's clean exit, final
-   prose, review approval, or failure message alone is not terminal proof.
+5. Define how the implementation earns each terminal report without exposing
+   its inner workflow. Today `Accepted` carries the Git commit and an
+   accepted-result evidence manifest proving only that the exact attempt
+   accepted that commit; it does not prove review. `Failed` and `Completed`
+   expose no corresponding evidence reference. The accepted outer meaning
+   still requires that no executor-owned activity can keep changing the
+   attempt. Any private sealing, session, or process protocol belongs to the
+   selected implementation and cannot be inferred here.
 6. Bound semantic correction and transient technical retry independently.
    Exhausting either selects a failed disposition, but produces
    `Terminal(Failed)` only after the common terminal seal proves no owned
@@ -167,13 +170,13 @@ The smallest useful production policy is:
    identity for different policy. A new command that accepts other terminal
    states would be a novel product decision and amendment, not reuse of #66.
 
-This is deliberately a light later composition vision, not a V1 registry or
-plugin system. A map from opaque locators to a few statically installed Layers
-is sufficient if accepted scenarios eventually require more than the selected
-adapter. It must not be extracted merely because this research can describe
-it. The owner record permits one statically installed executor bundle but no
-registry or configuration, and defers multiple-executor selection until real
-V1 use creates the need
+This is an inventory of later composition questions, not a V1 registry, plugin
+system, or selected built-in implementation. A map from opaque locators to
+installed Layers would become relevant only if accepted scenarios eventually
+require more than one concrete implementation. It must not be extracted merely
+because this research can describe it. Earlier issue comments discussed one
+statically installed bundle while deferring multiple-executor selection; they
+do not select the bundle's inner algorithm
 ([#127 single-bundle scope](https://github.com/dearlordylord/dalph/issues/127#issuecomment-5104706022),
  [#127 composition constraint](https://github.com/dearlordylord/dalph/issues/127#issuecomment-5096059650)).
 
@@ -223,15 +226,15 @@ These are domain-specialist-readable research stories, not yet accepted
 operational scenarios. Each names the competing outcome that #127 still has to
 settle.
 
-They remain incomplete scenario candidates pending maintainer acceptance. The
+They remain incomplete examples pending maintainer acceptance. The
 integrated #167 cassette-registry reread confirms the coarse boundary but does
 not fill in production-executor policy. In particular, these stories do not
 yet settle the affected person's exact command or observation surface; the
 complete starting tracker, Git, executor, and Journal facts; one concrete
 trigger; the selected provider and every chronological boundary call; the
-durable location and schema of the adapter-protocol policy snapshot and request
-intent/observation records; the
-first adapter's exact review, semantic-round, and technical-retry limits; which
+durable location and schema of any implementation-private policy snapshot and
+request intent/observation records; whether an implementation reviews at all;
+any semantic-round and technical-retry limits; which
 remote activities may survive Dalph; every crash cut and retry result; the
 visible and forbidden results; concrete reasons when a person, boundary, crash,
 or retry does not apply; or the acceptance-test names and negative controls.
@@ -260,10 +263,13 @@ crash cut.
 The provider reports that it is finished. The adapter does not treat that text
 or process status as acceptance. It asks Git for W's current state, reads the
 diff from B, runs the policy's required verification, resolves one exact commit
-C, and seals a manifest correlating C with P. If the selected policy requires
-review, the adapter gives an independent reviewer that immutable evidence, not
-an unbounded live workspace view. The reviewer accepts it. The adapter returns
-`Terminal(Accepted(C, manifest))` only after the common terminal protocol has
+C, and seals a manifest correlating C with P. If a future selected
+implementation requires review, it gives a separate reviewer agent session the
+exact evidence selected by that implementation, not an unbounded live
+workspace view. The reviewer is instructed not to modify the worktree; a
+different model or provider is a possible later policy, not part of
+“independent,” and the role is not human. The reviewer accepts it. The adapter
+returns `Terminal(Accepted(C, manifest))` only after the common terminal protocol has
 enumerated every adapter-owned activity, proved none can continue changing W,
 and sealed that quiescence evidence with C and the manifest. Dalph records that
 report before the task-work position is released.
@@ -284,8 +290,9 @@ The historical Dalph review loop already demonstrated content-addressed diff,
 implementation-output, and review manifests, but its exact stages and limits
 remain evidence rather than requirements.
 
-Competing outcome still requiring owner acceptance: whether the first shipped
-adapter always reviews, conditionally reviews, or permits a no-review policy.
+This entire review chronology is only one investigated possibility. Choosing a
+reviewing implementation, a non-reviewing implementation, or some other inner
+algorithm still requires owner acceptance.
 
 ### 2. Findings cause bounded correction, then visible non-convergence
 
@@ -448,7 +455,7 @@ old attempt must have exact `SafelySuspended` evidence before Alice uses the
 existing Restart command, and its artifacts must remain disposition-owned. A
 new command accepting a terminal state needs its own accepted authority rule.
 
-## Recommended terminology and boundary shapes
+## Candidate terminology and boundary shapes
 
 These names are provisional. They describe distinct phenomena and should not
 be added to `docs/CONTEXT.md` until scenarios are accepted.
@@ -460,7 +467,9 @@ be added to `docs/CONTEXT.md` until scenarios are accepted.
   `Terminal` for the exact `RunId`/`AttemptId`.
 - **Task executor locator**: the opaque planned value already present in
   `PlannedTaskAttempt`. Generic code must compare and persist it, not parse it.
-- **Accepted result**: exact commit plus immutable evidence-manifest reference.
+- **Accepted result**: the exact Git commit plus its content-addressed
+  accepted-result evidence manifest. The manifest proves the exact attempt's
+  acceptance claim; it implies neither review nor later target verification.
 
 ### Add only if accepted stories require them
 
@@ -529,8 +538,8 @@ recompute unfinished P's policy from a newly installed default. Do not expose
 review rounds, models, provider session IDs, or retry schedules in
 `PlannedTaskAttempt` merely to make the fingerprint human-readable.
 
-If Alice must obtain failure diagnostics through generic Dalph, the smallest
-additional outer shape is:
+If a future accepted scenario requires Alice to obtain failure diagnostics
+through generic Dalph, one candidate additional outer shape is:
 
 ```text
 FailedResult = { diagnosticEvidence: EvidenceReference }
@@ -552,16 +561,15 @@ SafeSuspensionEvidence = executor-private manifest proving:
   and the evidence names the exact RunId/AttemptId.
 ```
 
-Generic Dalph needs the report, not this internal schema. A production adapter
-should nevertheless retain such evidence so its own `project` implementation
-can reproduce the report after process loss.
+Generic Dalph needs the report, not this candidate internal schema. Whether a
+concrete implementation retains such evidence, and what claim it proves, is an
+unaccepted implementation decision.
 
-Accepted, Failed, and any selected-adapter `Completed` result require the same
-survivor-proof fields as safe suspension, plus their distinct immutable result,
-diagnostic, or completed-disposition evidence. Terminal means the complete
-executor work ended; it is not merely a classification of the provider's last
-message. The adapter may share an internal sealing schema, but generic Dalph
-receives only its existing exact terminal report.
+Terminal means the complete executor work ended; it is not merely a
+classification of an inner provider's last message. Generic Dalph receives
+only its existing exact terminal report. A future implementation specification
+must explain how that implementation establishes the claim without exporting
+its private stages into the generic contract.
 
 The existing `PlannedAttemptExecutorService` operations remain the right
 coarse surface:
@@ -610,13 +618,14 @@ Tool-level support can then be required, optional, or forbidden
 Dalph should not assume queryable task restoration merely because the provider
 speaks MCP.
 
-## Review and convergence recommendation
+## Review and convergence evidence from one historical implementation
 
-The historical review loop contains useful mechanisms worth retaining as the
-first adapter candidate:
+The historical review loop demonstrates mechanisms that could be reused if a
+future accepted implementation chooses review:
 
 - seal the implementation diff and output before review;
-- run review from immutable evidence and an exact attempt;
+- run review from exact stored evidence for a named implementation claim and
+  an exact attempt;
 - use a distinct reviewer session or detached thread;
 - accumulate stable finding identities;
 - hand findings back to the implementer without allocating another Dalph
@@ -626,12 +635,11 @@ first adapter candidate:
 - return evidence-backed acceptance or coarse terminal failure with explicit
   adapter-owned bounded-non-convergence diagnostics.
 
-But none of the following should become generic requirements without an owner
-decision: mandatory independent review, a particular number of rounds, a
-fresh reviewer every round, one provider for both roles, exact handback prompt
-shape, or the old internal event vocabulary. A direct executor, a user-supplied
-flow, and a managed remote session should all be able to implement the same
-outer contract.
+None of the following is an accepted requirement: review itself, a particular
+number of rounds, a fresh reviewer every round, one provider for both roles,
+exact handback prompt shape, commits as internal milestones, or the old event
+vocabulary. Generic Dalph's outer contract does not distinguish these possible
+implementations.
 
 OpenAI Agents SDK's serializable `RunState` is useful evidence that internal
 approval/handoff state can survive a process boundary, but it is a runner
@@ -679,10 +687,12 @@ stories are accepted.
 
 ### A. Accept production-executor operational scenarios and policy ownership
 
-Planning/specification ticket. Choose the first adapter policy: whether review
-is required, how semantic convergence ends, what evidence is mandatory, which
-processes may survive Dalph, and whether policy change extends Restart or has a
-separate command. Publish canonical terminology and the scenario-to-test map.
+Planning/specification ticket. Decide only what the first concrete executor
+implementation must expose and deliberately leave its interior unspecified
+unless a user-visible or safety requirement forces a choice. If review,
+commits, evidence, process survival, or policy change is selected, publish its
+chronology and scenario-to-test map rather than implying it through the generic
+boundary.
 
 This is the missing decision gate; it must not be folded into implementation
 review after code exists.
@@ -772,20 +782,21 @@ acceptance specification.
 
 ## Tradeoffs and rejected shortcuts
 
-### One built-in adapter first
+### One concrete implementation, if later selected
 
-This minimizes configuration and compatibility surface and lets Dalph qualify
-one real process/session lifecycle deeply. It risks coupling policy to code,
-so the already-existing opaque locator must retain stable meaning. A static
-multi-adapter Layer map should be extracted only with the first real
-second-adapter use; that seam is architecture, not a promise of plugins.
+Selecting one concrete implementation before designing multiple-implementation
+composition would minimize configuration and compatibility surface. No such
+implementation is selected by this research. The existing opaque locator must
+retain stable meaning, and a static multi-implementation map belongs only to a
+later accepted use that actually needs it.
 
-### Review loop as adapter policy
+### Review loop as one investigated implementation option
 
-Independent review and immutable evidence can improve convergence and make an
-accepted commit auditable. They cost model calls and introduce more ambiguous
-provider boundaries. A fixed universal review loop would exclude direct or
-user-supplied flows and contradict the maintainer's explicit direction.
+A separate, read-only reviewer agent session and exact stored evidence may help
+one implementation assess its result. That is not a generic executor stage,
+does not require a Git commit as an internal milestone, and has not been
+selected. A different model or provider is a possible later option rather than
+part of the definition; the reviewer is not a human role.
 
 ### Resume provider session whenever possible
 
@@ -829,14 +840,17 @@ Before #127 can change from research to accepted design, verify:
    shared cassette registry exercises the complete generic planned-attempt
    boundary without internal-stage vocabulary. This does not accept an inner
    production policy.
-2. The chosen adapter policy is described as chronological person/system
+2. Any chosen implementation policy is described as chronological person/system
    stories, including every provider call, crash point, retry, and visible
    outcome.
 3. Safe suspension names every activity the selected adapter owns and the
    authoritative observation that proves each one stopped or became itself
    suspended and unable to keep changing the attempt.
-4. Terminal acceptance names the exact Git commit and immutable evidence, not
-   provider prose or process exit.
+4. Terminal acceptance names the exact Git commit and the content-addressed
+   accepted-result manifest proving that the exact attempt accepted that
+   commit. That outer manifest implies neither review nor later target
+   verification. Any additional implementation-private evidence must name the
+   claim it supports.
 5. Unsupported locator, unsupported required capability, incompatible policy,
    temporary authority outage, unreadable exact state, and correlation
    contradiction are distinct visible nonterminal outcomes.
@@ -857,7 +871,7 @@ Before #127 can change from research to accepted design, verify:
     terminal sealing rule; survivor negative controls prove none can release
     capacity while owned activity can still change the attempt.
 
-Until those checks pass, the recommendation remains provisional: **one
-statically installed, policy-snapshotted executor adapter behind the existing
-opaque planned-attempt boundary, with evidence-backed terminal results and a
-strict adapter-owned safe-suspension proof.**
+Until those checks pass, this research makes no production-implementation
+recommendation. The only settled conclusion is to preserve the opaque
+planned-attempt executor boundary and keep every unaccepted inner algorithm out
+of generic Dalph.

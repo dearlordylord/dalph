@@ -208,14 +208,17 @@ atomically closes process-wide forward-progress admission. V1 contains at most
 one activated unfinished Run; discovery of several still fails closed before
 activation.
 
-Dalph then spends at most five seconds on fast non-LLM executor suspension,
-the suspension intent and report writes required by that exact protocol,
-already-produced journal writes, and process-local release. It does not wait
-for executor work to finish, start fresh reconciliation or stabilization, send
-an LLM request, or dispose a durable workflow resource. Exact safe-or-terminal
-executor evidence is required before releasing that attempt's task-work
-position. An interruptible tracker or ordinary Git workflow call may instead
-leave a recoverable ambiguity behind its acknowledged intent. Candidate
+Dalph then spends at most five seconds asking the executor only to suspend the
+exact planned attempt, performing the suspension intent and report writes
+required by that protocol, acknowledging already-produced journal writes, and
+releasing process-local resources. Generic Dalph does not ask the executor to
+start or continue work, wait for terminal completion, start fresh
+reconciliation or stabilization, or dispose a durable workflow resource. An
+exact safe-or-terminal executor report is required before releasing that
+attempt's task-work position. How an executor implementation handles its
+suspension request remains behind the executor boundary. An interruptible
+tracker or ordinary Git workflow call may instead leave a recoverable ambiguity
+behind its acknowledged intent. Candidate
 construction, target verification plus immutable evidence sealing, and target
 promotion are separately classified atomic integration actions: one admitted
 action may finish only inside the original drain, then releases its local owner

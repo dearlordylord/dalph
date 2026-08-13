@@ -14,10 +14,11 @@ An Operator command and a process-supervisor signal enter one transport-neutral
 application-lifecycle protocol through different application-shell adapters.
 Accepting the request closes one process-wide admission gate. V1 activates at
 most one unfinished Run; startup fails closed before activation if it discovers
-several. The following five seconds are available only for fast suspension,
-the suspension intent and report writes required by that exact protocol,
-already-produced journal writes, and release of process-local resources. Dalph
-never sends an LLM message, waits for executor work to finish, starts fresh
+several. The following five seconds are available only for asking the executor
+to suspend exact running attempts, performing the suspension intent and report
+writes required by that protocol, acknowledging already-produced journal
+writes, and releasing process-local resources. Dalph never calls executor
+`startOrContinue`, waits for executor work to finish, starts fresh
 reconciliation merely to make shutdown cleaner, or disposes a durable workflow
 resource during this drain.
 
@@ -149,8 +150,9 @@ inner worker or interrupting a Dalph fiber does not prove that condition.
 1. Alice requests Exit and the shell closes the Exit admission cutoff.
 2. Dalph records the existing planned-attempt suspension-command intent required
    by the ordinary executor protocol, then calls `requestSuspension` for P.
-3. The production executor adapter uses a fast control path. It sends no LLM
-   message and does not ask the executor to finish its work.
+3. Dalph does not call `startOrContinue` and does not ask the executor to finish
+   its work. How the executor implementation handles `requestSuspension`
+   remains outside the generic Dalph protocol.
 4. If the executor reports exact `SafelySuspended` or `Terminal` before the
    drain limit, Dalph records that report. Only that report permits release of
    P's task-work position.
@@ -165,13 +167,13 @@ restart reconstructs it from the unfinished exact responsibility and consults
 the executor through its accepted recovery boundary.
 
 Alice sees either successful Exit after confirmed suspension or a non-graceful
-timeout result. Dalph must not send an LLM message, await terminal completion,
-infer suspension from process death, allocate a replacement attempt, or delete
-preserved work.
+timeout result. Dalph must not call `startOrContinue`, await terminal
+completion, infer suspension from process death, allocate a replacement
+attempt, or delete preserved work.
 
 ### Acceptance-test seam
 
-- `uses the fast non-LLM executor suspension path during Exit`
+- `calls requestSuspension without startOrContinue during Exit`
 - `exits successfully after every running attempt confirms exact safe suspension`
 - `retains the unfinished attempt when suspension is unresolved at timeout`
 - `never waits for executor completion during Exit`
@@ -292,9 +294,9 @@ operations may still be running within the original five-second limit.
    evidence. It records no invented workflow outcome for the failed operation.
 2. The error makes `Succeeded` unreachable for this drain, but Dalph does not
    interrupt independent useful quick drain operations merely to fail faster.
-3. Dalph starts no replacement operation, fresh reconciliation, LLM request, or
-   durable-resource cleanup. It only lets the already-started useful drain work
-   settle within the original limit.
+3. Dalph starts no replacement operation, executor `startOrContinue` request,
+   fresh reconciliation, or durable-resource cleanup. It only lets the
+   already-started useful drain work settle within the original limit.
 4. If no useful quick drain operation remains before the limit, the shell
    reports `Failed` with the accumulated diagnostics and forcefully terminates
    the process with a nonzero status immediately.
@@ -425,9 +427,10 @@ journal schema.
 
 The existing planned-attempt suspension command intent and exact executor
 report remain workflow facts. Exit reuses `requestSuspension`; its production
-adapter must establish that the call is a fast non-LLM control path. A new
-executor identity, executor-internal stage, cancellation outcome, or Exit-
-specific safe-suspension report is forbidden.
+orchestration must not call `startOrContinue` or require terminal completion.
+How the executor implementation handles `requestSuspension` remains opaque. A
+new executor identity, executor-internal stage, cancellation outcome, or
+Exit-specific safe-suspension report is forbidden.
 
 Already-sent evidence and cleanup calls follow their existing protocol shape.
 An interruptible call may leave a recoverable ambiguity only behind its
@@ -477,8 +480,9 @@ The model must prove at least:
 - success requires acknowledged produced writes, no live owner, no unsafe
   executor, no reservation or fiber, and a released coordinator lock;
 - repeated Exit joins one drain without resetting its clock;
-- Exit starts no LLM request, fresh reconciliation, stabilization read,
-  durable-resource cleanup, or later Run-termination action;
+- Exit starts no executor `startOrContinue` request, fresh reconciliation,
+  stabilization read, durable-resource cleanup, or later Run-termination
+  action;
 - failure terminates nonzero after useful quick work settles, while timeout
   terminates nonzero on the fifth tick; and
 - Exit request, result, timeout, failure, and process death never enter Run
@@ -490,7 +494,7 @@ The model must prove at least:
 | --- | --- | --- | --- |
 | Idle Exit | cutoff, empty drain, write flush, lock release, success-report ordering | coordinator-lock lifecycle | application-shell test with injected clock and lock |
 | In-flight tracker or Git call | typed interruptible owner becomes known result or durable recoverable ambiguity | tracker/Git reconcile-before-retry protocols | runtime cut-point test plus reopening reconciliation test |
-| Running executor | suspension intent, fast call, exact safe-or-terminal release; foreign report negative control | `plannedAttemptExecutor` | controlled-executor adapter proving no LLM call and exact report correlation |
+| Running executor | suspension intent, `requestSuspension` without `startOrContinue`, exact safe-or-terminal release; foreign report negative control | `plannedAttemptExecutor` | controlled executor proving the outer call and exact report correlation |
 | Non-interruptible atomic boundary | atomic owner finishes before tick five or remains until timed-out termination | owning integration, evidence, journal, or cleanup protocol | deterministic return/stuck cut-point tests |
 | Death before successful result | unexpected process loss cannot report success or persist lifecycle state | `runActivation` | authored cassette death cut points and ordinary reopening test |
 | Five-second timeout | ticks never reset; fifth tick atomically force-terminates | none; wall-clock mechanics are application-shell owned | injected monotonic-clock and nonzero-process-result tests |

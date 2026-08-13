@@ -34,6 +34,13 @@ terminal result required by generic orchestration. The production executor's
 inner algorithm is post-milestone design.
 _Avoid_: Dalph orchestrator, universal review pipeline
 
+**Executor implementation**:
+The opaque mechanism behind one Dalph executor. Generic Dalph neither observes
+nor prescribes whether it uses one agent session, several sessions, review,
+commits, provider sessions, or another algorithm.
+_Avoid_: Production executor adapter as a generic algorithm, generic review
+stage
+
 **Operator**:
 The one logical V1 human actor that intentionally applies a Pause or Unpause
 direction, an exact Continue, Restart, or Stop choice for one changed attempt,
@@ -708,16 +715,30 @@ cannot identify another Run, task, attempt, fingerprint pair, or choice.
 _Avoid_: Operator identity, attempt identity, operation identity, idempotency key
 
 **Accepted result**:
-The immutable Git commit returned by the executor after its whole bounded
-workflow accepts one planned attempt. It does not select repository policy,
-prove integration lineage, promote a ref, or complete the tracker task. An
-ordinary accepted result enters one integration responsibility after its
-terminal report is recorded and paired with the configured target. If an exact
-pre-integration Restart choice was already applied before that terminal report,
-the late accepted result is instead preserved as old-attempt evidence, creates
-no integration responsibility, and may supply current executor quiescence for
-the matching replacement only after fresh facts are checked.
+The exact Git commit and content-addressed executor evidence manifest returned
+after the executor's whole bounded workflow accepts one planned attempt. It
+does not imply review, select repository policy, prove integration lineage,
+promote a ref, or complete the tracker task. An ordinary accepted result enters
+one integration responsibility after its terminal report is recorded and
+paired with the configured target. If an exact pre-integration Restart choice
+was already applied before that terminal report, the late accepted result is
+instead preserved as old-attempt evidence, creates no integration
+responsibility, and may supply current executor quiescence for the matching
+replacement only after fresh facts are checked.
 _Avoid_: Completed task, integrated commit, promoted result
+
+**Accepted-result evidence manifest**:
+The executor-produced content-addressed envelope proving that one exact planned
+attempt reported acceptance of one exact Git commit. Its immutable bytes do not
+imply an internal review stage and are distinct from later target-verification
+evidence.
+_Avoid_: Verified commit, review approval, target verification evidence
+
+**Immutable evidence bytes**:
+Evidence-store bytes whose content digest is their identity, so different bytes
+necessarily have a different reference. “Immutable” describes that storage
+property; Dalph has no corresponding mutable-evidence category.
+_Avoid_: Editable evidence, current workspace state, review verdict
 
 **Integration responsibility**:
 The durable Dalph responsibility created after the exact accepted terminal

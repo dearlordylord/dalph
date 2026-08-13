@@ -22,7 +22,8 @@ is `Running`; it does not allocate an executor identity, operation identity, or
 replacement attempt. For each attempt, Dalph uses the ordinary executor
 protocol to append `PlannedAttemptExecutorCommandIntended` with command
 `Suspend` before it calls `requestSuspension`. That boundary cannot call
-`startOrContinue`, send an LLM request, or ask the executor to finish.
+`startOrContinue` or ask the executor to finish. How the executor implementation
+handles the suspension request is outside the generic Dalph protocol.
 
 When the executor returns the same correlation with `SafelySuspended` or
 `Terminal`, Dalph appends the ordinary report. That evidence makes the exact
@@ -53,7 +54,7 @@ append an application Exit fact to the Run journal.
 | Concrete outcome | Passing evidence |
 | --- | --- |
 | Derive the exact running attempt without another identity. | `discovers the exact running planned attempt from accepted Run history without another identity` |
-| Append the ordinary suspension intent before the fast non-LLM call, then append exact safe evidence. | `records the exact suspension intent before the fast call and records safe evidence afterward` |
+| Append the ordinary suspension intent before `requestSuspension`, then append exact safe evidence. | `records the exact suspension intent before the fast call and records safe evidence afterward` |
 | Treat an exact terminal response as a safe boundary without waiting for another executor outcome. | `accepts an exact Terminal suspension response as the attempt's safe Exit boundary` |
 | Request suspension independently for every exact running attempt retained by the Run. | `requests suspension for every running exact planned attempt retained by the Run` |
 | Reject a foreign executor report, record the contradiction, and retain unsafe status. | `rejects a foreign suspension report and records the contradiction without releasing safety` |

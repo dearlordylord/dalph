@@ -545,8 +545,9 @@ terminal report, every produced journal write to be acknowledged, and every
 process-local owner, reservation, fiber, task-work position, and coordinator
 lock to be released. An ambiguous outside effect may remain only behind its
 acknowledged exact intent and with no local owner able to send a successor.
-Exit never starts an LLM request, fresh reconciliation, stabilization,
-durable-resource cleanup, attempt replacement, or Run termination.
+Exit never starts an executor `startOrContinue` request, fresh reconciliation,
+stabilization, durable-resource cleanup, attempt replacement, or Run
+termination.
 → `applicationExit` states the typed owner-disposition and success guards;
 `plannedAttemptExecutor` retains exact suspension and position-release proof.
 

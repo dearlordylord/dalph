@@ -62,7 +62,7 @@ If the child dies before the report, the child does not synthesize safe
 suspension. Restart follows the existing planned-attempt recovery protocol.
 
 The supervisor sees success only after exact suspension evidence. Dalph must
-not wait for executor completion, send an LLM request, manufacture a report
+not wait for executor completion, call `startOrContinue`, manufacture a report
 from signal receipt, delete the registered worktree, or change/delete its
 uncommitted artifact.
 
