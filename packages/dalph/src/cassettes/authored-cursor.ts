@@ -109,6 +109,8 @@ export interface StoryCursor {
   readonly storyPosition: Effect.Effect<number>
   /** Current unconsumed authored item for the one sequential harness driver. */
   readonly currentStoryItem: Effect.Effect<StoryItem | undefined>
+  /** Waits until the current authored boundary has been consumed by its production adapter. */
+  readonly awaitCurrentStoryAdvance: Effect.Effect<void>
   readonly atTerminalAssertions: Effect.Effect<boolean>
   readonly awaitTerminalAssertions: Effect.Effect<void>
   readonly consumeCoordinatorActivationReturned: Effect.Effect<
@@ -380,10 +382,15 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
   }
 
   function claimNext<A extends StoryItem>(
-    predicate: (item: StoryItem | undefined) => item is A
+    predicate: (item: StoryItem | undefined) => item is A,
+    bypassControlBoundary = false
   ): Effect.Effect<ClaimedStoryItem<A>> {
     return Effect.gen(function* () {
-      if (yield* awaitControlBoundary()) return yield* claimNext(predicate)
+      // The coordinator-death probe runs from a durable journal append. It
+      // must be able to inspect the next crash boundary while a
+      // before-admission control gate is still awaiting completion; otherwise
+      // the append that proves the control read deadlocks behind its own gate.
+      if (!bypassControlBoundary && (yield* awaitControlBoundary())) return yield* claimNext(predicate)
       const claimed = yield* SubscriptionRef.modify(position, (index): readonly [ClaimedStoryItem<A>, number] => {
         const item = story[index]
         return predicate(item)
@@ -391,7 +398,7 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
           : [{ _tag: "Mismatch" as const, index, item }, index]
       })
       yield* announceTerminalAssertions
-      const advanced = yield* awaitBarrierAdvance(claimed)
+      const advanced = bypassControlBoundary ? false : yield* awaitBarrierAdvance(claimed)
       return advanced ? yield* claimNext(predicate) : claimed
     })
   }
@@ -977,9 +984,11 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     return yield* awaitInFlightOperatorItems
   })
   const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
+    const bypassControlBoundary = Option.isSome(yield* SubscriptionRef.get(controlDirectionBeforeAdmission))
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type =>
-        item?._tag === "CoordinatorProcessDies"
+        item?._tag === "CoordinatorProcessDies",
+      bypassControlBoundary
     )
     if (claimed._tag === "Mismatch") return
     yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorProcessDies)(claimed.item).pipe(
@@ -1113,6 +1122,9 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     }),
     storyPosition: SubscriptionRef.get(position),
     currentStoryItem: SubscriptionRef.get(position).pipe(Effect.map((index) => story[index])),
+    awaitCurrentStoryAdvance: SubscriptionRef.get(position).pipe(
+      Effect.flatMap((index) => awaitsLaterStoryItem(position, index))
+    ),
     atTerminalAssertions,
     awaitInFlightOperatorItems,
     awaitTerminalAssertions: Deferred.await(terminalAssertionsReached),

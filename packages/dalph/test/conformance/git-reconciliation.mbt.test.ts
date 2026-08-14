@@ -18,7 +18,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import {
   CandidateContinuationLimit,
   CandidateCorrectionLimit,
@@ -46,21 +46,30 @@ import {
   JournalStore,
   legacyMemoryJournalStoreLayer,
   makeIntegrationTargetResourceController,
-  makeCompleteTaskTrackerFactsObserved,
+  acquireStartedIntegrationTarget,
   makeTrackerGraphObservationOperation,
   makeTargetLineageObservationOperation,
+  latestReconstructedTaskGraph,
   OperationId,
   PromotionTargetObservation,
   projectTrackerSnapshot,
+  releaseStartedIntegrationTarget,
   reconstructRunState,
   responsibilityDispositionForTargetLineage,
   ResponsibilityDisposition,
   ResultCommitObservation,
   TaskWorkCapacity,
   TargetLineageObservation,
+  TargetVerificationPlan,
+  TargetVerificationPlanId,
+  TrackerAdapterReadContext,
+  TrackerAdapterReadError,
+  TrackerAdapterReadFailureReason,
+  TrackerGraphReader,
+  WorkflowInterpreter,
+  controlledWorkflowInterpreterLayer,
+  journaledWorkflowInterpreterLayer,
   TargetLineageObservedEvent,
-  taskTrackerFactsObservedEvent,
-  taskTrackerReadIntent,
   workflowJournalEventVersion,
   outcomeRecordKey
 } from "@dalph/orchestrator"
@@ -72,6 +81,10 @@ type Constraint =
   | "TargetRewriteConstraint"
 type Status = "Running" | "SafelySuspended"
 type TrackerBlocker = "NoTrackerBlocker" | "BeforePromotionBlocker" | "AfterPromotionBlocker" | "IncompleteTrackerFacts"
+type ResourceTransition = Extract<
+  ReturnType<typeof deriveIntegrationFrontier>["transitions"][number],
+  { readonly _tag: "AcquireStartedIntegrationTarget" | "ReleaseStartedIntegrationTarget" }
+>
 
 const base = GitCommitSha.make("1".repeat(40))
 const advanced = GitCommitSha.make("2".repeat(40))
@@ -138,6 +151,10 @@ const makeProductionReconciliationTrace = () => {
   }
   const candidateCorrectionLimit = CandidateCorrectionLimit.make(2)
   const candidateContinuationLimit = CandidateContinuationLimit.make(2)
+  const targetVerificationPlan = TargetVerificationPlan.make({
+    planId: TargetVerificationPlanId.make("git-reconciliation-production-plan"),
+    target: integrationTarget
+  })
   const candidateForHead = (head: GitCommitSha) => (head === base ? candidate : GitCommitSha.make("5".repeat(40)))
   const candidateAgent = IntegrationCandidateAgent.of({
     startOrContinue: (request) =>
@@ -157,8 +174,57 @@ const makeProductionReconciliationTrace = () => {
         })
       )
   })
-  const resource = Effect.runSync(makeIntegrationTargetResourceController())
+  let resource = Effect.runSync(makeIntegrationTargetResourceController())
   const physicalResponsibility = { integrationTarget, queuedAt: started.queuedAt }
+  const initialGraphProjection = projectTrackerSnapshot({
+    revision: "git-reconciliation-production-initial",
+    tasks: [
+      {
+        id: started.plannedAttempt.taskId,
+        lifecycle: { _tag: "Open" as const },
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
+    ]
+  })
+  if (initialGraphProjection._tag !== "Valid") return Effect.runSync(Effect.die("production MBT initial graph failed"))
+  const graphSnapshot = Effect.runSync(Ref.make(initialGraphProjection.snapshot))
+  const graphReadMode = Effect.runSync(Ref.make<"Complete" | "Incomplete">("Complete"))
+  const trackerReader = TrackerGraphReader.of({
+    read: Effect.fn("GitReconciliation.MBT.TrackerGraphReader.read")(function* () {
+      if ((yield* Ref.get(graphReadMode)) === "Incomplete") {
+        return yield* new TrackerAdapterReadError({
+          context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
+          detail: "controlled tracker read returned an incomplete target closure",
+          reason: TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
+        })
+      }
+      return yield* Ref.get(graphSnapshot)
+    }),
+    readTaskWorkSpecification: () =>
+      Effect.fail(
+        new TrackerAdapterReadError({
+          context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
+          detail: "the reconciliation model does not authorize task-work specification reads",
+          reason: TrackerAdapterReadFailureReason.cases.UnsupportedTarget.make({})
+        })
+      )
+  })
+  const trackerReaderLayer = Layer.succeed(TrackerGraphReader, trackerReader)
+  const workflowInterpreterLayer = controlledWorkflowInterpreterLayer.pipe(Layer.provide(trackerReaderLayer))
+  const makeJournaledInterpreter = () => {
+    const context = Effect.runSync(
+      Effect.scoped(
+        Layer.build(
+          journaledWorkflowInterpreterLayer(runId, workflowInterpreterLayer).pipe(
+            Layer.provide(Layer.succeed(InRunJournal, journal))
+          )
+        )
+      )
+    )
+    return Context.get(context, WorkflowInterpreter)
+  }
+  let interpreter = makeJournaledInterpreter()
   let targetLineage: TargetLineageObservation = TargetLineageObservation.make({
     plannedBaseIsAncestorOfTargetHead: true,
     plannedBaseSha: base,
@@ -180,14 +246,19 @@ const makeProductionReconciliationTrace = () => {
   const frontier = () => {
     const state = reconstruct()
     const resourceSnapshot = Effect.runSync(resource.snapshot)
+    const currentGraph = latestReconstructedTaskGraph(state.graphKnowledge)
+    const trackerReadUnavailable = state.graphKnowledge.taskTrackerFacts.at(-1)?._tag === "TaskTrackerFactsReadFailed"
     return {
       state,
       frontier: deriveIntegrationFrontier(state, {
-        currentTrackerTaskIds: new Set([started.plannedAttempt.taskId]),
+        currentTrackerTaskIds: trackerReadUnavailable
+          ? new Set()
+          : Option.match(currentGraph, { onNone: () => new Set(), onSome: (graph) => new Set(graph.taskIds()) }),
         heldResponsibilityPositions: resourceSnapshot.heldResponsibilityPositions,
         integrationTarget: Option.some(integrationTarget),
         candidateCorrectionLimit: Option.some(candidateCorrectionLimit),
         candidateContinuationLimit: Option.some(candidateContinuationLimit),
+        targetVerificationPlan: Option.some(targetVerificationPlan),
         targetLineageByAttemptId: new Map([[productionAttempt.attemptId, targetLineage]]),
         targetPromotionConfigured: true,
         taskClaimAuthorityByAttemptId: new Map([[productionAttempt.attemptId, { _tag: "Exact" as const }]])
@@ -196,7 +267,7 @@ const makeProductionReconciliationTrace = () => {
       records: records()
     }
   }
-  const graph = (revision: string, prerequisiteCleared: boolean, prerequisiteComplete: boolean) => {
+  const graphSnapshotFor = (revision: string, prerequisiteCleared: boolean, prerequisiteComplete: boolean) => {
     const blockerId = TaskId.make("git-reconciliation-production-B")
     const independentId = TaskId.make("git-reconciliation-production-C")
     const operation = makeTrackerGraphObservationOperation(
@@ -224,24 +295,62 @@ const makeProductionReconciliationTrace = () => {
       ]
     })
     if (projected._tag !== "Valid") return Effect.runSync(Effect.die("production MBT graph projection failed"))
-    append(intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-    append(
-      outcomeRecordKey(operation.operationId),
-      taskTrackerFactsObservedEvent(
-        operation.operationId,
-        makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
-      )
-    )
-    return frontier()
+    return { operation, snapshot: projected.snapshot }
   }
-  const incompleteGraphRead = () => {
+  const readGraph = (revision: string, prerequisiteCleared: boolean, prerequisiteComplete: boolean) => {
+    const { operation, snapshot } = graphSnapshotFor(revision, prerequisiteCleared, prerequisiteComplete)
+    Effect.runSync(Ref.set(graphSnapshot, snapshot))
+    Effect.runSync(Ref.set(graphReadMode, "Complete"))
+    return Effect.runSync(
+      interpreter.readTrackerGraph(operation).pipe(Effect.andThen(Effect.sync(frontier)), Effect.orDie)
+    )
+  }
+  const readIncompleteTrackerGraph = () => {
     const operation = makeTrackerGraphObservationOperation(
       OperationId.make(`git-reconciliation-production-incomplete-${++operationOrdinal}`),
       target,
       [],
       [started.plannedAttempt.taskId]
     )
-    append(intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+    Effect.runSync(Ref.set(graphReadMode, "Incomplete"))
+    const failure = Effect.runSync(interpreter.readTrackerGraph(operation).pipe(Effect.flip, Effect.orDie))
+    if (failure._tag !== "TrackerGraphReader.AdapterReadError") {
+      return Effect.runSync(Effect.die(`production MBT read failure changed surface to ${failure._tag}`))
+    }
+    interpreter = makeJournaledInterpreter()
+    const replay = Effect.runSync(interpreter.readTrackerGraph(operation).pipe(Effect.flip, Effect.orDie))
+    if (replay._tag !== "TaskTrackerFactsReadUnavailable") {
+      return Effect.runSync(Effect.die(`production MBT restart replay changed surface to ${replay._tag}`))
+    }
+    const blocked = frontier()
+    if (
+      !blocked.frontier.explanations.some(({ _tag }) => _tag === "IntegrationTrackerFactsWait") ||
+      blocked.held !== true
+    ) {
+      return Effect.runSync(Effect.die("production MBT incomplete read did not produce a held-resource wait"))
+    }
+    applyResourceTransition()
+    Effect.runSync(Ref.set(graphReadMode, "Complete"))
+    const recovery = makeTrackerGraphObservationOperation(
+      OperationId.make(`git-reconciliation-production-recovery-${++operationOrdinal}`),
+      target,
+      [operation.operationId]
+    )
+    Effect.runSync(interpreter.readTrackerGraph(recovery).pipe(Effect.orDie))
+    return frontier()
+  }
+  const applyResourceTransition = () => {
+    const isResourceTransition = (
+      candidate: ReturnType<typeof frontier>["frontier"]["transitions"][number]
+    ): candidate is ResourceTransition =>
+      candidate._tag === "AcquireStartedIntegrationTarget" || candidate._tag === "ReleaseStartedIntegrationTarget"
+    const transition = frontier().frontier.transitions.find(isResourceTransition)
+    if (transition === undefined) return Effect.runSync(Effect.die("production MBT expected a resource transition"))
+    if (transition._tag === "AcquireStartedIntegrationTarget") {
+      Effect.runSync(acquireStartedIntegrationTarget(resource, transition).pipe(Effect.orDie))
+    } else {
+      Effect.runSync(releaseStartedIntegrationTarget(resource, transition).pipe(Effect.orDie))
+    }
     return frontier()
   }
   const targetRead = (head: GitCommitSha, compatible: boolean) => {
@@ -386,19 +495,18 @@ const makeProductionReconciliationTrace = () => {
   candidateProtocol(targetLineage)
 
   return {
-    appendGraph: graph,
-    appendIncompleteGraphRead: incompleteGraphRead,
+    readGraph,
+    readIncompleteTrackerGraph,
     appendTargetRead: targetRead,
     candidateProtocol,
     recordUnrelatedSession,
     frontier,
     records,
-    releaseTarget: () => Effect.runSync(resource.release(physicalResponsibility)),
-    reacquireTarget: () => {
-      Effect.runSync(resource.acquire(physicalResponsibility))
-      Effect.runSync(resource.publishAcceptedOwnership(physicalResponsibility))
+    applyResourceTransition,
+    restart: () => {
+      resource = Effect.runSync(makeIntegrationTargetResourceController())
+      interpreter = makeJournaledInterpreter()
     },
-    restart: () => Effect.runSync(resource.releaseAll),
     started,
     targetLineage
   }
@@ -619,8 +727,8 @@ const gitReconciliationDriver = defineDriver(
         decidePromotion(PromotionTargetObservation.cases.AmbiguousTargetHead.make({}), true),
       observePrePromotionDependencyBlocker: () =>
         Effect.sync(() => {
-          const result = production.appendGraph("before-promotion-blocker", false, false)
-          production.releaseTarget()
+          const result = production.readGraph("before-promotion-blocker", false, false)
+          production.applyResourceTransition()
           const current = production.frontier()
           positionHeld = current.held
           decision = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
@@ -639,8 +747,8 @@ const gitReconciliationDriver = defineDriver(
         }),
       clearPrePromotionDependencyBlocker: () =>
         Effect.sync(() => {
-          production.appendGraph("clear-pre-promotion-edge", true, false)
-          production.reacquireTarget()
+          production.readGraph("clear-pre-promotion-edge", true, false)
+          production.applyResourceTransition()
           const current = production.frontier()
           positionHeld = current.held
           exactExpectedHeadObserved = false
@@ -700,8 +808,8 @@ const gitReconciliationDriver = defineDriver(
         }),
       observePostPromotionDependencyBlocker: () =>
         Effect.sync(() => {
-          const current = production.appendGraph("after-promotion-blocker", false, false)
-          production.releaseTarget()
+          const current = production.readGraph("after-promotion-blocker", false, false)
+          production.applyResourceTransition()
           positionHeld = production.frontier().held
           exactExpectedHeadObserved = false
           compareAndSetAuthorized = false
@@ -713,8 +821,8 @@ const gitReconciliationDriver = defineDriver(
         }),
       clearPostPromotionDependencyBlocker: () =>
         Effect.sync(() => {
-          production.appendGraph("clear-post-promotion-blocker", false, true)
-          production.reacquireTarget()
+          production.readGraph("clear-post-promotion-blocker", false, true)
+          production.applyResourceTransition()
           positionHeld = production.frontier().held
           exactExpectedHeadObserved = false
           compareAndSetAuthorized = false
@@ -738,22 +846,21 @@ const gitReconciliationDriver = defineDriver(
         }),
       observeIncompleteTrackerFacts: () =>
         Effect.sync(() => {
-          production.appendIncompleteGraphRead()
-          production.releaseTarget()
+          production.readIncompleteTrackerGraph()
           positionHeld = production.frontier().held
           decision = "GitConstraintWait"
           trackerBlocker = "IncompleteTrackerFacts"
         }),
       acceptCompletionAcrossPrerequisiteRace: () =>
         Effect.sync(() => {
-          const current = production.appendGraph("completion-race-reopened", false, false)
+          const current = production.readGraph("completion-race-reopened", false, false)
           completionAccepted = current.records.some(({ event }) => event._tag === "TaskTrackerFactsObserved")
           focusedCompletionConfirmed = completionAccepted
           completionWarning = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
         }),
       clearDerivedCompletionWarning: () =>
         Effect.sync(() => {
-          const current = production.appendGraph("completion-race-cleared", false, true)
+          const current = production.readGraph("completion-race-cleared", false, true)
           completionWarning = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
         }),
       observeCompatibleTargetAdvance: () =>

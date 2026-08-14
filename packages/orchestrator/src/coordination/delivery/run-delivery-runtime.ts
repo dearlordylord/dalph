@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- One runtime phase keeps admission, ownership, and completion transitions atomic. */
 import { Context, Deferred, Effect, Exit, Option, Queue, Ref, Schema, Semaphore, Stream } from "effect"
 import type * as Cause from "effect/Cause"
 import {
@@ -148,6 +149,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         Option.match(semanticTrace, { onNone: () => Effect.void, onSome: ({ emit }) => emit(event) })
       const events = yield* Queue.unbounded<RuntimeEvent<E>>()
       const owners = yield* Ref.make<ReadonlyMap<DeliveryProposalId, LiveOwner>>(new Map())
+      const startedProposalIds = yield* Ref.make<ReadonlySet<DeliveryProposalId>>(new Set())
       const deferredAt = yield* Ref.make<ReadonlyMap<DeliveryProposalId, JournalPosition | null>>(new Map())
       const latest = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
       const selectionGate = yield* Semaphore.make(1)
@@ -188,6 +190,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const proposal = reservation.proposal
         const owner = yield* RuntimeObservation.makeDeliveryRuntimeLiveOwner(reservation)
         yield* Ref.update(owners, (current) => new Map(current).set(proposal.id, owner))
+        yield* Ref.update(startedProposalIds, (current) => new Set([...current, proposal.id]))
         yield* publishRuntimeObservationInsideGate()
         yield* emit({ _tag: "ProposalAdmitted", proposalId: proposal.id })
         const run = Effect.gen(function* () {
@@ -257,7 +260,12 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         acceptedAt: JournalPosition | null
       ) {
         for (const independent of proposals.slice(deferredIndex + 1)) {
-          if (!proposalIsAvailable(independent, live, liveActionKeys, liveOperationIds, deferred, acceptedAt)) continue
+          const started = yield* Ref.get(startedProposalIds)
+          if (
+            !proposalIsAvailable(independent, live, liveActionKeys, liveOperationIds, deferred, acceptedAt, started)
+          ) {
+            continue
+          }
           const laterReservation = yield* reserveAndStart(independent)
           if (laterReservation._tag === "Started") {
             return laterReservation.started
@@ -284,8 +292,17 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             const liveOperationIds = new Set(
               (yield* Effect.forEach(live.values(), ({ operationId }) => operationId)).flatMap(Option.toArray)
             )
+            const started = yield* Ref.get(startedProposalIds)
             const proposal = proposedActions.proposals.find((candidate) =>
-              proposalIsAvailable(candidate, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)
+              proposalIsAvailable(
+                candidate,
+                live,
+                liveActionKeys,
+                liveOperationIds,
+                deferred,
+                current.acceptedAt,
+                started
+              )
             )
             if (proposal === undefined) return false
             const reservation = yield* reserveAndStart(proposal)
@@ -311,12 +328,11 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         frontier: DeliveryProposalFrontier
       ) {
         const current = yield* Ref.get(owners)
-        const removable: Array<LiveOwner> = []
-        for (const owner of current.values()) {
-          if ((yield* owner.isSettled) && !liveActionIsPresent(frontier, owner.proposal)) {
-            removable.push(owner)
-          }
-        }
+        const removable = (yield* Effect.forEach(current.values(), (owner) =>
+          Effect.map(owner.isSettled, (isSettled) =>
+            isSettled && !liveActionIsPresent(frontier, owner.proposal) ? owner : undefined
+          )
+        )).filter((owner): owner is LiveOwner => owner !== undefined)
         if (removable.length === 0) return
         const removableIds = new Set(removable.map(({ proposal }) => proposal.id))
         yield* Ref.update(owners, (current) => new Map([...current].filter(([id]) => !removableIds.has(id))))
@@ -365,7 +381,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               yield* emit({ _tag: "ActionOutcome", result: completion.exit.value })
               yield* owner.settle
               yield* publishRuntimeObservationInsideGate()
+              // Sample the accepted signal before deciding whether this owner coalesces with the next proposal.
               const current = Option.getOrThrow(yield* Ref.get(latest))
+              yield* Ref.set(latest, Option.some(current))
+              yield* admission.synchronize(current.taskWork)
               if (completion.exit.value._tag === "ActionDeferred") {
                 yield* Ref.update(deferredAt, (deferred) =>
                   new Map(deferred).set(completion.proposalId, current.acceptedAt)

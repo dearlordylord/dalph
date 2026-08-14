@@ -14,9 +14,13 @@ import { taskControlSubjectIsCurrent, TaskControlSubjectOutsideRun } from "./tas
 interface OperatorControlDirectionDependencies {
   readonly allocator: OperationIdAllocatorService
   readonly application: ControlDirectionApplication["Service"]
+  /** Keeps a task-control graph read ahead of concurrent delivery reads in a controlled boundary. */
+  readonly graphReadBoundary?: OperatorControlGraphReadBoundary
   readonly interpreter: WorkflowInterpreterService
   readonly trace: WorkflowTraceService
 }
+
+export type OperatorControlGraphReadBoundary = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 
 /** Reads and journals current task membership before delegating an accepted Operator direction to its action protocol. */
 export const applyOperatorControlDirection = Effect.fn("OperatorControlDirection.apply")(function* (
@@ -38,8 +42,12 @@ export const applyOperatorControlDirection = Effect.fn("OperatorControlDirection
     [],
     [request.subject.taskId]
   )
-  yield* dependencies.trace.emit(OperationSelected.make({ operation }))
-  const graph = yield* dependencies.interpreter.readTrackerGraph(operation)
+  const graph = yield* (dependencies.graphReadBoundary ?? identityOperatorControlGraphReadBoundary)(
+    Effect.gen(function* () {
+      yield* dependencies.trace.emit(OperationSelected.make({ operation }))
+      return yield* dependencies.interpreter.readTrackerGraph(operation)
+    })
+  )
   yield* dependencies.trace.emit(
     TaskTrackerFactsObservedTrace.make({
       observation: makeCompleteTaskTrackerFactsObserved(operation, graph),
@@ -56,3 +64,5 @@ export const applyOperatorControlDirection = Effect.fn("OperatorControlDirection
   }
   return yield* dependencies.application.apply(request)
 })
+
+const identityOperatorControlGraphReadBoundary: OperatorControlGraphReadBoundary = (effect) => effect

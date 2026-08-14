@@ -1,4 +1,4 @@
-import { Effect, Layer, Match, Option, Ref, Schema } from "effect"
+import { Deferred, Effect, Layer, Match, Option, Ref, Schema } from "effect"
 import {
   PlannedAttemptExecutorCommandFailure,
   EvidenceDigest,
@@ -13,7 +13,8 @@ import {
   samePlannedAttemptExecutorCorrelation,
   type PlannedTaskAttempt,
   type RunId,
-  makeTaskWorkSpecification
+  makeTaskWorkSpecification,
+  type TaskId
 } from "@dalph/contracts"
 import {
   projectTrackerSnapshot,
@@ -35,11 +36,14 @@ import type { StoryCursor } from "./authored-cursor.js"
 
 const evidenceDigestHexLength = 64
 
-const trackerReadFailure = (detail: string) =>
+const trackerReadFailure = (
+  detail: string,
+  reason: TrackerAdapterReadFailureReason = TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
+) =>
   new TrackerAdapterReadError({
     context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
     detail,
-    reason: TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
+    reason
   })
 
 export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
@@ -48,7 +52,12 @@ export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
     TrackerGraphReader.of({
       read: Effect.fn("AuthoredCassette.TrackerGraphReader.read")(function* () {
         const item = yield* cursor.consumeTrackerGraph.pipe(
-          Effect.mapError((failure) => trackerReadFailure(`${failure._tag} at story position ${failure.storyPosition}`))
+          Effect.mapError((failure) =>
+            trackerReadFailure(
+              `${failure._tag} at story position ${failure.storyPosition}`,
+              TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
+            )
+          )
         )
         if (item._tag === "TrackerGraphReadFailed") {
           return yield* trackerReadFailure(`authored cassette tracker graph read failed: ${item.reason}`)
@@ -57,14 +66,18 @@ export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
         return projection._tag === "Valid"
           ? projection.snapshot
           : yield* trackerReadFailure(
-              `authored cassette tracker graph is invalid: ${projection.issues.map(({ _tag }) => _tag).join(", ")}`
+              `authored cassette tracker graph is invalid: ${projection.issues.map(({ _tag }) => _tag).join(", ")}`,
+              TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
             )
       }),
       readTaskWorkSpecification: Effect.fn("AuthoredCassette.TrackerGraphReader.readTaskWorkSpecification")(
         function* (_target, taskId) {
           const item = yield* cursor.consumeTaskWorkSpecification.pipe(
             Effect.mapError((failure) =>
-              trackerReadFailure(`${failure._tag} at story position ${failure.storyPosition}`)
+              trackerReadFailure(
+                `${failure._tag} at story position ${failure.storyPosition}`,
+                TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
+              )
             )
           )
           if (item.taskId !== taskId) {
@@ -143,7 +156,19 @@ const actualDecision = (item: TraceItem): CassetteDecision | undefined => {
 const encodedDecision = (decision: CassetteDecision): string =>
   JSON.stringify(Schema.encodeUnknownSync(AuthoredCassetteDecision)(decision))
 
-export const controlledTrace = (cursor: StoryCursor): WorkflowTrace["Service"] =>
+interface ControlledTraceOptions {
+  /**
+   * A task-scoped Operator read has priority over a delivery read waiting on
+   * the same authored boundary.  The production control call remains the
+   * source of the read; this only preserves its declared cassette chronology.
+   */
+  readonly operatorControlGraphReadActive?: Ref.Ref<boolean>
+  readonly operatorControlGraphReadGate?: Ref.Ref<
+    Option.Option<{ readonly release: Deferred.Deferred<void>; readonly taskId: TaskId }>
+  >
+}
+
+export const controlledTrace = (cursor: StoryCursor, options: ControlledTraceOptions = {}): WorkflowTrace["Service"] =>
   WorkflowTrace.of({
     emit: Effect.fn("AuthoredCassette.WorkflowTrace.emit")(function* (item) {
       // Stabilization performs its final tracker read outside the delivery
@@ -152,8 +177,28 @@ export const controlledTrace = (cursor: StoryCursor): WorkflowTrace["Service"] =
       if (item._tag === "OperationSelected") yield* cursor.pauseAtCoordinatorProcessDeath
       const actual = actualDecision(item)
       if (actual === undefined) return
+      if (item._tag === "OperationSelected") {
+        const current = yield* cursor.currentStoryItem
+        if (
+          current?._tag === "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary" &&
+          item.operation._tag !== "ReadTargetLineage"
+        ) {
+          yield* cursor.awaitCurrentStoryAdvance
+        }
+      }
       if (actual._tag === "ReadTaskWorkSpecification") {
         yield* cursor.awaitTaskWorkSpecificationReadBoundary(actual.taskId)
+      }
+      const operatorControlGraphReadGate = options.operatorControlGraphReadGate
+      if (operatorControlGraphReadGate !== undefined) {
+        const gate = yield* Ref.get(operatorControlGraphReadGate)
+        const operatorControlGraphReadActive =
+          options.operatorControlGraphReadActive === undefined
+            ? false
+            : yield* Ref.get(options.operatorControlGraphReadActive)
+        const isOperatorGraphRead =
+          Option.isSome(gate) && operatorControlGraphReadActive && item._tag === "OperationSelected"
+        if (Option.isSome(gate) && !isOperatorGraphRead) yield* Deferred.await(gate.value.release)
       }
       const expected = yield* cursor.consumeDalphSelection.pipe(
         Effect.mapError(

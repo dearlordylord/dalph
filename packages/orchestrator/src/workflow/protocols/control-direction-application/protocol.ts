@@ -40,7 +40,7 @@ export const controlDirectionApplicationLayer = Layer.effect(
       const ordinal = ControlDirectionApplicationOrdinal.make(
         records.filter(({ event }) => event._tag === "ControlDirectionApplied").length + 1
       )
-      return yield* journal.append(
+      const appended = yield* journal.append(
         runId,
         controlDirectionAppliedRecordKey(ordinal),
         ControlDirectionAppliedEvent.make({
@@ -52,6 +52,7 @@ export const controlDirectionApplicationLayer = Layer.effect(
           version: workflowJournalEventVersion
         })
       )
+      return appended
     })
     const apply = (input: unknown) => applications.withPermit(applyUnserialized(input))
     return ControlDirectionApplication.of({ apply })

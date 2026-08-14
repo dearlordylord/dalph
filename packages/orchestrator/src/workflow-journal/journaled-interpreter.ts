@@ -43,7 +43,7 @@ import {
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
 import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
 import { taskClaimObservationAttemptBound } from "../workflow/protocols/task-claim-observation/bound.js"
-import { journaledTrackerGraphRead } from "./journaled-interruptible-boundary.js"
+import { journaledTrackerGraphRead } from "../workflow/protocols/task-tracker-read/protocol.js"
 
 const requireTaskWorkSpecification = <A>(
   knowledge: Option.Option<A>,

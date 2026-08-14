@@ -133,7 +133,9 @@ export * from "./coordination/application-exit/executor-drain.js"
 export * from "./coordination/application-exit/application-shell.js"
 export {
   IntegrationTargetResourceUnavailable,
+  acquireStartedIntegrationTarget,
   makeIntegrationTargetResourceController,
+  releaseStartedIntegrationTarget,
   type IntegrationTargetResourceController,
   type IntegrationTargetResourceSnapshot
 } from "./coordination/admission/integration-target-resource.js"
@@ -332,6 +334,7 @@ export * from "./workflow/protocols/integration-finality/state.js"
 export * from "./coordination/run/recovery-authority.js"
 export * from "./coordination/frontier/frontier.js"
 export { reconstructRunState } from "./coordination/reconstruction/reduce.js"
+export { latestReconstructedTaskGraph } from "./coordination/reconstruction/graph-knowledge.js"
 export {
   journalDatabaseLocatorConfig,
   legacySqliteJournalStoreLayer,
@@ -465,6 +468,7 @@ export {
 } from "./coordination/run/journaled-run-bootstrap.js"
 export { IntegrationCandidateBoundaryUnavailable } from "./coordination/delivery/integration-candidate-boundary.js"
 export { IntegrationFinalityRuntimeUnavailable } from "./coordination/delivery/integration-finality-boundary.js"
+export { TargetVerificationPlan, TargetVerificationPlanId } from "./workflow/protocols/target-verification/events.js"
 export {
   CompletionClaimBoundary,
   CompletionTaskBoundary,

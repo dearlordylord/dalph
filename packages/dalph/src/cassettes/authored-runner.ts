@@ -1374,7 +1374,11 @@ const runAuthoredScenarioCassetteWith = (request: {
       const coordinatorLifecycleBoundaryCount = cassette.story.filter(
         (item) => item._tag === "CoordinatorActivationReturned" || item._tag === "CoordinatorProcessDies"
       ).length
-      const trace = controlledTrace(cursor)
+      const operatorControlGraphReadGate = yield* Ref.make<
+        Option.Option<{ readonly release: Deferred.Deferred<void>; readonly taskId: TaskId }>
+      >(Option.none())
+      const operatorControlGraphReadActive = yield* Ref.make(false)
+      const trace = controlledTrace(cursor, { operatorControlGraphReadActive, operatorControlGraphReadGate })
       const sharedContext = yield* Layer.build(
         Layer.mergeAll(
           memoryJournalStoreLayer,
@@ -1555,6 +1559,14 @@ const runAuthoredScenarioCassetteWith = (request: {
                     // so restart tests do not collapse this seam into an
                     // unrelated Unpause or pre-read failure.
                     if (event._tag === "TaskTrackerFactsObserved") {
+                      // Restart authority reads are one compound protocol;
+                      // its authored crash boundary is the replacement
+                      // append, after all reads have completed.
+                      if (!event.operationId.startsWith("attempt-restart:")) {
+                        yield* cursor.pauseAtCoordinatorProcessDeath
+                      }
+                    }
+                    if (event._tag === "PlannedAttemptReplaced") {
                       yield* cursor.pauseAtCoordinatorProcessDeath
                     }
                     if (
@@ -1989,10 +2001,18 @@ const runAuthoredScenarioCassetteWith = (request: {
           )
         )
       const applicationExit = yield* makeApplicationExitShell(coordinatorOwnership, { requestEnd: () => Effect.void })
-      const application = journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(
-        Layer.provide(journalLayer),
-        Layer.provide(coordinatorOwnershipLayer)
-      )
+      const operatorControlGraphReadBoundary = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Effect.gen(function* () {
+          yield* Ref.set(operatorControlGraphReadActive, true)
+          const result = yield* effect
+          return result
+        }).pipe(Effect.ensuring(Ref.set(operatorControlGraphReadActive, false)))
+      const application = journaledRunBootstrapLayer(
+        runId,
+        runtimeLayer,
+        applicationExit,
+        operatorControlGraphReadBoundary
+      ).pipe(Layer.provide(journalLayer), Layer.provide(coordinatorOwnershipLayer))
 
       const withAuthoredOperatorDriver = <A, E, R>(program: Effect.Effect<A, E, R>) =>
         Effect.scoped(
@@ -2199,9 +2219,23 @@ const runAuthoredScenarioCassetteWith = (request: {
                 | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type
             ) =>
               Effect.gen(function* () {
+                const authoredItem = yield* cursor.currentStoryItem
+                const operatorGraphReadGate =
+                  expected._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission" &&
+                  authoredItem?._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission" &&
+                  authoredItem.subject._tag === "Task"
+                    ? Option.some({ release: yield* Deferred.make<void>(), taskId: authoredItem.subject.taskId })
+                    : Option.none<{ readonly release: Deferred.Deferred<void>; readonly taskId: TaskId }>()
+                yield* Ref.set(operatorControlGraphReadGate, operatorGraphReadGate)
                 const direction = yield* cursor.consumeControlDirection(expected)
                 /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
-                if (Option.isNone(direction)) return
+                if (Option.isNone(direction)) {
+                  if (Option.isSome(operatorGraphReadGate)) {
+                    yield* Ref.set(operatorControlGraphReadGate, Option.none())
+                    yield* Deferred.succeed(operatorGraphReadGate.value.release, undefined)
+                  }
+                  return
+                }
                 /* v8 ignore stop */
                 const result = bootstrap.operatorControl.applyControlDirection({
                   direction: direction.value.direction,
@@ -2235,10 +2269,24 @@ const runAuthoredScenarioCassetteWith = (request: {
                       })
                   })
                 )
+                if (Option.isSome(operatorGraphReadGate)) {
+                  yield* Ref.set(operatorControlGraphReadGate, Option.none())
+                  yield* Deferred.succeed(operatorGraphReadGate.value.release, undefined)
+                }
                 if (direction.value._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission") {
                   yield* cursor.completeControlDirectionBeforeDeliveryActionAdmission
                 }
-              }).pipe(Effect.orDie)
+              }).pipe(
+                Effect.ensuring(
+                  Effect.gen(function* () {
+                    const gate = yield* Ref.get(operatorControlGraphReadGate)
+                    if (Option.isNone(gate)) return
+                    yield* Ref.set(operatorControlGraphReadGate, Option.none())
+                    yield* Deferred.succeed(gate.value.release, undefined)
+                  })
+                ),
+                Effect.orDie
+              )
             const drivePauseObservationStart = Effect.gen(function* () {
               const authored = yield* cursor.consumePauseObservationStart
               /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current observation-start tag, and closure rejects overlapping starts. */

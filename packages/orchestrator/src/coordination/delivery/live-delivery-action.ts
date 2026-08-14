@@ -121,6 +121,14 @@ const recoveredReadSubject = (proposal: DeliveryActionProposal): RecoveredReadSu
   integrationReadSubject(proposal) ?? recoveredWorkflowReadSubject(proposal)
 
 export const liveActionKeyOf = (proposal: DeliveryActionProposal): LiveDeliveryActionKey => {
+  if (proposal.route._tag === "FreshExecutorWorkflowRoute") {
+    return liveActionKey([
+      "FreshExecutor",
+      proposal.route.step._tag,
+      proposal.route.step.plannedAttempt.runId,
+      proposal.route.step.plannedAttempt.attemptId
+    ])
+  }
   const subject = recoveredReadSubject(proposal)
   return subject === undefined
     ? liveActionKey(["DeliveryProposal", proposal.id])
@@ -148,10 +156,14 @@ export const proposalIsAvailable = (
   liveActionKeys: ReadonlySet<LiveDeliveryActionKey>,
   liveOperationIds: ReadonlySet<OperationId>,
   deferred: ReadonlyMap<DeliveryProposalId, JournalPosition | null>,
-  acceptedAt: JournalPosition | null
+  acceptedAt: JournalPosition | null,
+  startedProposalIds: ReadonlySet<DeliveryProposalId> = new Set()
 ): boolean =>
   !live.has(proposal.id) &&
   !liveActionKeys.has(liveActionKeyOf(proposal)) &&
+  (proposal.waitsForLiveProposalId === undefined ||
+    proposal.waitsForLiveProposalId === null ||
+    startedProposalIds.has(proposal.waitsForLiveProposalId)) &&
   deferred.get(proposal.id) !== acceptedAt &&
   (proposal.waitsForLiveOperationId === null || !liveOperationIds.has(proposal.waitsForLiveOperationId))
 

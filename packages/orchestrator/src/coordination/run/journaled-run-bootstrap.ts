@@ -4,7 +4,10 @@ import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
-import { applyOperatorControlDirection } from "../../workflow/protocols/control-direction-application/operator-control.js"
+import {
+  applyOperatorControlDirection,
+  type OperatorControlGraphReadBoundary
+} from "../../workflow/protocols/control-direction-application/operator-control.js"
 import {
   OperationIdAllocator,
   type OperationIdAllocatorService
@@ -77,6 +80,8 @@ interface RuntimeControlLease {
   readonly forwardOwner: ForwardOwnerLease
 }
 
+const identityOperatorControlGraphReadBoundary: OperatorControlGraphReadBoundary = (effect) => effect
+
 type RuntimeControlState =
   | { readonly _tag: "RuntimeInactive" }
   | {
@@ -111,7 +116,8 @@ const validateRun = Effect.fn("JournaledRunBootstrap.validateRun")(function* (
 export const journaledRunBootstrapLayer = (
   expectedRunId: RunId,
   runtimeLayer: (input: JournaledRuntimeLayerInput) => JournaledRuntimeLayer,
-  applicationExit: ApplicationExitShellService
+  applicationExit: ApplicationExitShellService,
+  operatorControlGraphReadBoundary: OperatorControlGraphReadBoundary = identityOperatorControlGraphReadBoundary
 ) =>
   Layer.effect(
     JournaledRunBootstrap,
@@ -347,6 +353,7 @@ export const journaledRunBootstrapLayer = (
               applyOperatorControlDirection(runId, target, input, {
                 allocator: operationIdAllocator,
                 application: controlDirection,
+                graphReadBoundary: operatorControlGraphReadBoundary,
                 interpreter: workflowInterpreter,
                 trace: workflowTrace
               })

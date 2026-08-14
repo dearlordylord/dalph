@@ -59,8 +59,10 @@ export const executeFreshTrackerGraphRead = Effect.fn("DeliveryAction.executeFre
         Effect.succeed(deliveryActionDeferred(action.proposal.id, "TrackerGraphReadUnavailable")),
       "TaskDag.GraphProjectionError": () =>
         Effect.succeed(deliveryActionDeferred(action.proposal.id, "TrackerGraphReadUnavailable")),
-      "TrackerGraphReader.AdapterReadError": () =>
-        Effect.succeed(deliveryActionDeferred(action.proposal.id, "TrackerGraphReadUnavailable")),
+      "TrackerGraphReader.AdapterReadError": (failure) =>
+        failure.reason._tag === "BoundaryDecode"
+          ? Effect.fail(failure)
+          : Effect.succeed(deliveryActionDeferred(action.proposal.id, "TrackerGraphReadUnavailable")),
       "TrackerGraphReader.TrackerReadError": () =>
         Effect.succeed(deliveryActionDeferred(action.proposal.id, "TrackerGraphReadUnavailable")),
       TaskTrackerFactsReadUnavailable: () =>

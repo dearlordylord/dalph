@@ -1,6 +1,7 @@
 import { Effect, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import { IntegrationTarget } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import type { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 
 export interface IntegrationTargetResourceResponsibility {
   readonly integrationTarget: IntegrationTarget
@@ -41,6 +42,33 @@ export interface IntegrationTargetResourceController {
     effect: Effect.Effect<A, E, R>
   ) => Effect.Effect<A, E, R>
 }
+
+/** The delivery frontier's acquire transition is executed by the resource owner, not by a test projection. */
+export const acquireStartedIntegrationTarget = Effect.fn("IntegrationTargetResource.acquireStartedIntegrationTarget")(
+  function* (
+    resources: IntegrationTargetResourceController,
+    transition: {
+      readonly _tag: "AcquireStartedIntegrationTarget"
+      readonly responsibility: StartedIntegrationResponsibility
+    }
+  ) {
+    yield* resources.acquire(transition.responsibility)
+    yield* resources.publishAcceptedOwnership(transition.responsibility)
+  }
+)
+
+/** The delivery frontier's release transition is executed by the resource owner, not by a test projection. */
+export const releaseStartedIntegrationTarget = Effect.fn("IntegrationTargetResource.releaseStartedIntegrationTarget")(
+  function* (
+    resources: IntegrationTargetResourceController,
+    transition: {
+      readonly _tag: "ReleaseStartedIntegrationTarget"
+      readonly responsibility: StartedIntegrationResponsibility
+    }
+  ) {
+    yield* resources.release(transition.responsibility)
+  }
+)
 
 const targetKey = (target: IntegrationTarget): string => JSON.stringify([target.repository, target.ref])
 
