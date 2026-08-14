@@ -129,7 +129,9 @@ export const CodexAttemptStoreOperation = Schema.Literals([
   "writeAttempt",
   "readServerLaunch",
   "writeServerLaunch",
-  "clearServerLaunch"
+  "clearServerLaunch",
+  "acquireServerLease",
+  "releaseServerLease"
 ])
 export type CodexAttemptStoreOperation = typeof CodexAttemptStoreOperation.Type
 
@@ -148,6 +150,9 @@ export interface CodexAttemptStoreService {
   readonly readServerLaunch: () => Effect.Effect<Option.Option<CodexServerLaunchRecord>, CodexAttemptStoreFailure>
   readonly writeServerLaunch: (record: CodexServerLaunchRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
   readonly clearServerLaunch: (incarnation: CodexServerIncarnation) => Effect.Effect<void, CodexAttemptStoreFailure>
+  /** Cross-process exclusive admission lease for the application child. */
+  readonly acquireServerLease: () => Effect.Effect<void, CodexAttemptStoreFailure>
+  readonly releaseServerLease: () => Effect.Effect<void, CodexAttemptStoreFailure>
 }
 
 export class CodexAttemptStore extends Context.Service<CodexAttemptStore, CodexAttemptStoreService>()(
@@ -155,6 +160,9 @@ export class CodexAttemptStore extends Context.Service<CodexAttemptStore, CodexA
 ) {}
 
 const emptySnapshot: CodexAttemptStoreSnapshot = { attempts: [], serverLaunch: null }
+
+const errorCode = (error: unknown): string =>
+  typeof error === "object" && error !== null && "code" in error ? String(error.code) : ""
 
 const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
   Layer.effectContext(
@@ -190,12 +198,24 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
           Option.isSome(current) && current.value.incarnation === incarnation ? Option.none() : current
         )
       })
+      const lease = yield* Ref.make(false)
+      const acquireServerLease = Effect.fn("CodexAttemptStore.Memory.acquireServerLease")(function* () {
+        const held = yield* Ref.get(lease)
+        if (held)
+          return yield* Effect.fail(
+            new CodexAttemptStoreFailure({ detail: "server lease is already held", operation: "acquireServerLease" })
+          )
+        yield* Ref.set(lease, true)
+      })
+      const releaseServerLease = () => Ref.set(lease, false)
       return Context.make(CodexAttemptStore, {
         readAttempt,
         writeAttempt,
         readServerLaunch,
         writeServerLaunch,
-        clearServerLaunch
+        clearServerLaunch,
+        acquireServerLease,
+        releaseServerLease
       })
     })
   )
@@ -356,12 +376,36 @@ export const nodeCodexAttemptStoreLayer = (locator: CodexAttemptStoreLocator | s
             )
           )
         )
+      const leaseFilename = `${filename}.lease`
+      const acquireServerLease: CodexAttemptStoreService["acquireServerLease"] = () =>
+        guard(
+          "acquireServerLease",
+          fs
+            .writeFileString(leaseFilename, "dalph-codex-server-lease", { flag: "wx" })
+            .pipe(
+              Effect.mapError(
+                (error) => new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
+              )
+            )
+        )
+      const releaseServerLease: CodexAttemptStoreService["releaseServerLease"] = () =>
+        fs
+          .remove(leaseFilename)
+          .pipe(
+            Effect.catch((error) =>
+              errorCode(error) === "ENOENT"
+                ? Effect.void
+                : Effect.fail(new CodexAttemptStoreFailure({ detail: String(error), operation: "releaseServerLease" }))
+            )
+          )
       return Context.make(CodexAttemptStore, {
         readAttempt,
         writeAttempt,
         readServerLaunch,
         writeServerLaunch,
-        clearServerLaunch
+        clearServerLaunch,
+        acquireServerLease,
+        releaseServerLease
       })
     })
   )

@@ -110,6 +110,28 @@ it.effect("durably records a spawned child before process identity reconciliatio
   )
 )
 
+it.effect("admits only one independent filesystem store lease", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-lease-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const first = yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        yield* store.acquireServerLease()
+        return store
+      }).pipe(Effect.provide(nodeLayer(storePath)))
+      const second = yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        return yield* store.acquireServerLease()
+      }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+      expect(Exit.isFailure(second)).toBe(true)
+      yield* first.releaseServerLease()
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("fails closed when the private snapshot is malformed", () =>
   Effect.scoped(
     Effect.gen(function* () {

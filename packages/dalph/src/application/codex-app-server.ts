@@ -538,6 +538,7 @@ const ownershipGate = Effect.fn("CodexAppServer.ownershipGate")(function* (
   incarnation: CodexServerIncarnation,
   command: ReadonlyArray<string>
 ) {
+  yield* store.acquireServerLease()
   const prior = yield* store.readServerLaunch()
   if (Option.isSome(prior)) {
     const observed = yield* ownership.observe(prior.value)
@@ -577,6 +578,7 @@ export const codexAppServerLayer = (
       const command = [selected.executable, "app-server"] as const
       const incarnation = newIncarnation()
       yield* ownershipGate(store, ownership, incarnation, command)
+      yield* Effect.addFinalizer(() => store.releaseServerLease().pipe(Effect.orDie))
       const handle = yield* spawner
         .spawn(
           ChildProcess.make(selected.executable, ["app-server"], {
