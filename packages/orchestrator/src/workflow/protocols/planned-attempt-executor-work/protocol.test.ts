@@ -2,6 +2,7 @@
 import { it } from "@effect/vitest"
 import {
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorRequest,
   PlannedAttemptExecutorProjection,
   plannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorReport,
@@ -40,7 +41,8 @@ import { type JournalRecord, JournalStore } from "../../../workflow-journal/stor
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
-  TaskClaimAcquisitionIntendedEvent
+  TaskClaimAcquisitionIntendedEvent,
+  taskTrackerReadIntent
 } from "../../registry/event.js"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { plannedAttemptProtocolControllerLayer } from "./protocol-controller.js"
@@ -68,7 +70,11 @@ import { plannedAttemptExecutorContinuationDisposition } from "./protocol.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
 import { deriveRunnableFrontier, RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
 import { makeSelectedTransitionIdentity } from "../../../coordination/activation/selected-transition.js"
-import { makeTaskAttemptPlanOperation, makeTaskClaimAcquisitionOperation } from "../../registry/operation.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation
+} from "../../registry/operation.js"
 import {
   AuthoritativePlannedAttemptWorktreeObserved,
   AuthoritativeTaskClaimObserved,
@@ -84,6 +90,10 @@ import { projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.
 import { journaledWorkflowInterpreterLayer } from "../../../workflow-journal/journaled-interpreter.js"
 import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
+import {
+  TaskTrackerFactsObservedEvent,
+  makeFocusedTaskWorkSpecificationFactsObserved
+} from "../../task-tracker-facts/observation.js"
 
 const currentSpecification = makeTaskWorkSpecification({
   body: "Complete task A.",
@@ -102,6 +112,8 @@ const plannedAttempt = PlannedTaskAttempt.make({
 })
 
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+const executorRequest = (attempt: PlannedTaskAttempt = plannedAttempt) =>
+  PlannedAttemptExecutorRequest.make({ plannedAttempt: attempt, specification: currentSpecification })
 const stateObservationAttempt = PlannedTaskAttempt.make({
   ...plannedAttempt,
   attemptId: AttemptId.make("attempt-A-state-observation"),
@@ -136,6 +148,30 @@ const appendTaskClaim = Effect.gen(function* () {
     TaskClaimAcquiredEvent.make({ claim: taskClaim, version: workflowJournalEventVersion })
   )
 })
+const appendTaskWorkSpecification = (specification = currentSpecification, suffix = "planned-attempt-executor") =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const operation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make(`${suffix}-specification`),
+      recoveryTarget,
+      specification.taskId,
+      []
+    )
+    yield* journal.append(
+      plannedAttempt.runId,
+      intentRecordKey(operation.operationId),
+      taskTrackerReadIntent(operation)
+    )
+    yield* journal.append(
+      plannedAttempt.runId,
+      outcomeRecordKey(operation.operationId),
+      TaskTrackerFactsObservedEvent.make({
+        observation: makeFocusedTaskWorkSpecificationFactsObserved(operation, specification),
+        operationId: operation.operationId,
+        version: workflowJournalEventVersion
+      })
+    )
+  })
 const recoveryTarget = FixtureTarget.make("planned-attempt-executor-recovery-target")
 const projectedCurrentGraph = projectTrackerSnapshot({
   revision: "planned-attempt-executor-current-graph",
@@ -170,14 +206,116 @@ const currentFactsProviderLayer = Layer.succeed(
 )
 const currentFactsInterpreterLayer = journaledWorkflowInterpreterLayer(plannedAttempt.runId, currentFactsProviderLayer)
 
+it.effect("supplies the exact planned task specification to the injected executor", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("planned-attempt-executor-specification"),
+      recoveryTarget,
+      plannedAttempt.taskId,
+      []
+    )
+    yield* journal.append(
+      plannedAttempt.runId,
+      JournalRecordKey.make("planned-attempt-executor-specification"),
+      TaskTrackerFactsObservedEvent.make({
+        observation: makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, currentSpecification),
+        operationId: specificationOperation.operationId,
+        version: workflowJournalEventVersion
+      })
+    )
+    const received = yield* Ref.make<unknown>(undefined)
+    const report = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.succeed(exactProjection(report)),
+          requestSuspension: () => Effect.die("unused"),
+          startOrContinue: (request) => Ref.set(received, request).pipe(Effect.as(report))
+        })
+      )
+    )
+    expect(yield* Ref.get(received)).toMatchObject({ plannedAttempt, specification: currentSpecification })
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("reconstructs the original specification when later and duplicate evidence coexist", () =>
+  Effect.gen(function* () {
+    const changedSpecification = makeTaskWorkSpecification({
+      body: "Changed F2 instructions.",
+      taskId: plannedAttempt.taskId,
+      title: "Changed F2"
+    })
+    yield* appendTaskWorkSpecification(currentSpecification, "original")
+    yield* appendTaskWorkSpecification(changedSpecification, "changed")
+    yield* appendTaskWorkSpecification(currentSpecification, "duplicate")
+    const received = yield* Ref.make<unknown>(undefined)
+    const report = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.succeed(noReport()),
+          requestSuspension: () => Effect.die("unused"),
+          startOrContinue: (request) => Ref.set(received, request).pipe(Effect.as(report))
+        })
+      )
+    )
+    expect(yield* Ref.get(received)).toEqual({ plannedAttempt, specification: currentSpecification })
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("passes the fresh selection value without rereading journal evidence", () =>
+  Effect.gen(function* () {
+    const received = yield* Ref.make<unknown>(undefined)
+    const report = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    yield* continuePlannedAttemptExecutorWork(plannedAttempt, undefined, currentSpecification).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.succeed(noReport()),
+          requestSuspension: () => Effect.die("unused"),
+          startOrContinue: (request) => Ref.set(received, request).pipe(Effect.as(report))
+        })
+      )
+    )
+    expect(yield* Ref.get(received)).toEqual({ plannedAttempt, specification: currentSpecification })
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects a fresh selected specification mismatch before executor contact", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const changedSpecification = makeTaskWorkSpecification({
+      body: "Changed F2 instructions.",
+      taskId: plannedAttempt.taskId,
+      title: "Changed F2"
+    })
+    const failure = yield* continuePlannedAttemptExecutorWork(plannedAttempt, undefined, changedSpecification).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.succeed(noReport()),
+          requestSuspension: () => Effect.die("unused"),
+          startOrContinue: () => Ref.update(calls, (count) => count + 1).pipe(Effect.die("must not contact"))
+        })
+      ),
+      Effect.flip
+    )
+    expect(failure._tag).toBe("PlannedAttemptExecutorTaskWorkSpecificationMismatch")
+    expect(yield* Ref.get(calls)).toBe(0)
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
 it.effect("drives one planned attempt through the generic executor boundary", () =>
   Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
 
-    expect(yield* executor.startOrContinue(plannedAttempt)).toEqual(
+    expect(yield* executor.startOrContinue(executorRequest())).toEqual(
       PlannedAttemptExecutorReport.cases.Running.make({ correlation })
     )
-    expect(yield* executor.startOrContinue(plannedAttempt)).toEqual(
+    expect(yield* executor.startOrContinue(executorRequest())).toEqual(
       PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
     )
     expect(yield* executor.project(correlation)).toEqual(
@@ -206,7 +344,7 @@ it.effect("rejects exhausted, wrong-kind, and wrong-correlation fake requests", 
   Effect.gen(function* () {
     const emptyExecutor = yield* PlannedAttemptExecutor
     expect(yield* emptyExecutor.project(correlation)).toEqual(noReport())
-    const exhausted = yield* emptyExecutor.startOrContinue(plannedAttempt).pipe(Effect.flip)
+    const exhausted = yield* emptyExecutor.startOrContinue(executorRequest()).pipe(Effect.flip)
     expect(exhausted.detail).toContain("has no cassette entry")
 
     const suspendStep = ControlledFakeExecutorStep.cases.Suspend.make({
@@ -214,7 +352,7 @@ it.effect("rejects exhausted, wrong-kind, and wrong-correlation fake requests", 
       report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
     })
     const wrongKind = yield* PlannedAttemptExecutor.pipe(
-      Effect.flatMap((executor) => executor.startOrContinue(plannedAttempt)),
+      Effect.flatMap((executor) => executor.startOrContinue(executorRequest())),
       Effect.provide(makeControlledFakePlannedAttemptExecutorLayer([suspendStep])),
       Effect.flip
     )
@@ -222,7 +360,7 @@ it.effect("rejects exhausted, wrong-kind, and wrong-correlation fake requests", 
 
     const otherAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, attemptId: AttemptId.make("other-attempt") })
     const wrongCorrelation = yield* PlannedAttemptExecutor.pipe(
-      Effect.flatMap((executor) => executor.startOrContinue(otherAttempt)),
+      Effect.flatMap((executor) => executor.startOrContinue(executorRequest(otherAttempt))),
       Effect.provide(
         makeControlledFakePlannedAttemptExecutorLayer([
           ControlledFakeExecutorStep.cases.StartOrContinue.make({
@@ -244,7 +382,7 @@ it.effect("projects default fake reports and safely suspends without a survivor 
     const suspended = yield* executor.requestSuspension(plannedAttempt)
     expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
     expect(yield* executor.project(correlation)).toEqual(exactProjection(suspended))
-    expect(yield* executor.startOrContinue(plannedAttempt)).toEqual(
+    expect(yield* executor.startOrContinue(executorRequest())).toEqual(
       PlannedAttemptExecutorReport.cases.Running.make({ correlation })
     )
   }).pipe(Effect.provide(controlledFakePlannedAttemptExecutorLayer))
@@ -269,6 +407,7 @@ it.effect("rejects a cassette response for a different planned attempt", () =>
 
 it.effect("journals a contradictory executor response and reconciles its exact command before retry", () =>
   Effect.gen(function* () {
+    yield* appendTaskWorkSpecification()
     const wrongReport = PlannedAttemptExecutorReport.cases.Running.make({
       correlation: { attemptId: AttemptId.make("wrong-attempt"), runId: plannedAttempt.runId }
     })
@@ -287,6 +426,8 @@ it.effect("journals a contradictory executor response and reconciles its exact c
     const journal = yield* JournalStore
     const afterContradiction = yield* journal.read(plannedAttempt.runId)
     expect(afterContradiction.map(({ event }) => event._tag)).toEqual([
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
       "PlannedAttemptExecutorWorkResponsibilityBegan",
       "PlannedAttemptExecutorCommandIntended",
       "PlannedAttemptExecutorCommandResponseContradicted"
@@ -313,6 +454,8 @@ it.effect("journals a contradictory executor response and reconciles its exact c
       )
     ).toEqual(projectedReport)
     expect((yield* journal.read(plannedAttempt.runId)).map(({ event }) => event._tag)).toEqual([
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
       "PlannedAttemptExecutorWorkResponsibilityBegan",
       "PlannedAttemptExecutorCommandIntended",
       "PlannedAttemptExecutorCommandResponseContradicted",
@@ -323,6 +466,7 @@ it.effect("journals a contradictory executor response and reconciles its exact c
 
 it.effect("continues an exact planned attempt through the executor protocol", () =>
   Effect.gen(function* () {
+    yield* appendTaskWorkSpecification()
     yield* (yield* JournalStore).append(
       plannedAttempt.runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
@@ -369,6 +513,7 @@ it.effect("continues an exact planned attempt through the executor protocol", ()
 
 it.effect("projects one unmatched command without duplicating it and sends the next command on a later call", () =>
   Effect.gen(function* () {
+    yield* appendTaskWorkSpecification()
     const journal = yield* JournalStore
     const commandCalls = yield* Ref.make(0)
     const firstCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
@@ -883,6 +1028,7 @@ it("rejects malformed executor command and projection chronology through the pub
 
 it.effect("rejects a divergent immutable plan before recording another executor command", () =>
   Effect.gen(function* () {
+    yield* appendTaskWorkSpecification()
     const firstReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
     yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
       Effect.provideService(
@@ -917,6 +1063,7 @@ it.effect("rejects a divergent immutable plan before recording another executor 
 
 it.effect("stops an always-Running executor at the durable continuation limit", () =>
   Effect.gen(function* () {
+    yield* appendTaskWorkSpecification()
     const calls = yield* Ref.make(0)
     const alwaysRunning = PlannedAttemptExecutor.of({
       project: () => Effect.succeed(noReport()),
@@ -954,6 +1101,7 @@ it.effect("stops an always-Running executor at the durable continuation limit", 
 
 it.effect("counts lost start responses reconciled as Running against the durable continuation limit", () =>
   Effect.gen(function* () {
+    yield* appendTaskWorkSpecification()
     const calls = yield* Ref.make(0)
     const lostResponseExecutor = PlannedAttemptExecutor.of({
       project: () => Effect.succeed(exactProjection(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))),
@@ -1055,6 +1203,7 @@ it("coalesces start, continuation, and suspension ownership by the same pair", (
 
 it.effect("recreates the fake executor and continues the same attempt after shared process death", () =>
   Effect.gen(function* () {
+    yield* appendTaskWorkSpecification()
     const firstProcess = makeControlledFakePlannedAttemptExecutorLayer([
       ControlledFakeExecutorStep.cases.StartOrContinue.make({
         correlation,
@@ -1077,6 +1226,8 @@ it.effect("recreates the fake executor and continues the same attempt after shar
 
     const records = yield* (yield* JournalStore).read(plannedAttempt.runId)
     expect(records.map(({ event }) => event._tag)).toEqual([
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
       "PlannedAttemptExecutorWorkResponsibilityBegan",
       "PlannedAttemptExecutorCommandIntended",
       "PlannedAttemptExecutorWorkReported",
@@ -1129,6 +1280,7 @@ it.effect("frees the exact task-work position after a terminal report", () =>
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendTaskWorkSpecification()
     yield* appendTaskClaim
     yield* journal.append(
       plannedAttempt.runId,
@@ -1182,6 +1334,7 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendTaskWorkSpecification()
     const planOperation = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("plan-before-suspension"),
       plannedAttempt,
@@ -1257,6 +1410,7 @@ it.effect("resumes the same planned attempt after unpause", () =>
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendTaskWorkSpecification()
     yield* appendTaskClaim
     yield* journal.append(
       plannedAttempt.runId,
@@ -1386,6 +1540,7 @@ it.effect("one recovered transition continues reconstructed work through the con
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendTaskWorkSpecification()
     yield* appendTaskClaim
     const planOperation = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("plan-attempt-A-3"),

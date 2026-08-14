@@ -2,6 +2,7 @@ import { Effect, Match } from "effect"
 import {
   type PlannedTaskAttempt,
   PlannedAttemptExecutor,
+  type TaskWorkSpecification,
   type PlannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport,
@@ -35,7 +36,11 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "./events.js"
-import { latestUnsettledPlannedAttemptExecutorCommand, plannedAttemptExecutorEvidence } from "./evidence.js"
+import {
+  latestUnsettledPlannedAttemptExecutorCommand,
+  plannedAttemptExecutorEvidence,
+  plannedAttemptExecutorRequestFor
+} from "./evidence.js"
 import { type PlannedAttemptProtocolPermit, withPlannedAttemptProtocolPermit } from "./protocol-controller.js"
 import {
   PlannedAttemptExecutorCommandReconciliationRequired,
@@ -213,7 +218,8 @@ export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecuto
   plannedAttempt: PlannedTaskAttempt,
   command: "StartOrContinue" | "Suspend",
   continuationLimit: PlannedAttemptExecutorContinuationLimit,
-  suspensionLimit: PlannedAttemptExecutorSuspensionLimit
+  suspensionLimit: PlannedAttemptExecutorSuspensionLimit,
+  selectedSpecification?: TaskWorkSpecification
 ) {
   const journal = yield* InRunJournal
   const executor = yield* PlannedAttemptExecutor
@@ -279,7 +285,9 @@ export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecuto
 
   const report: PlannedAttemptExecutorReport =
     command === "StartOrContinue"
-      ? yield* executor.startOrContinue(plannedAttempt)
+      ? yield* executor.startOrContinue(
+          yield* plannedAttemptExecutorRequestFor(records, plannedAttempt, selectedSpecification)
+        )
       : yield* executor.requestSuspension(plannedAttempt)
   if (!samePlannedAttemptExecutorCorrelation(correlation, report.correlation)) {
     yield* journal.append(

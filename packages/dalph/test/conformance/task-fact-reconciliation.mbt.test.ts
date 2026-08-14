@@ -14,6 +14,7 @@ import {
   IntegrationTargetRef,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
+  type PlannedAttemptExecutorRequest,
   plannedTaskAttemptEquivalence,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
@@ -623,8 +624,9 @@ const taskFactReconciliationDriver = defineDriver(
               yield* Deferred.succeed(commandCallSignal, undefined)
               return yield* Deferred.await(commandResponse)
             }),
-      startOrContinue: (attempt) =>
+      startOrContinue: (request: PlannedAttemptExecutorRequest) =>
         Effect.sync(() => {
+          const attempt = request.plannedAttempt
           if (plannedTaskAttemptEquivalence(attempt, successorAttempt)) {
             return PlannedAttemptExecutorReport.cases.Running.make({ correlation: successorCorrelation })
           }

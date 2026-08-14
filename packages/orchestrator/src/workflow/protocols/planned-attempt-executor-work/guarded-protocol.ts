@@ -1,4 +1,8 @@
-import { type PlannedTaskAttempt, plannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import {
+  type PlannedTaskAttempt,
+  plannedAttemptExecutorCorrelation,
+  type TaskWorkSpecification
+} from "@dalph/contracts"
 import { Effect } from "effect"
 import {
   defaultPlannedAttemptExecutorContinuationLimit,
@@ -27,11 +31,12 @@ export const observePlannedAttemptExecutorState = Effect.fn("PlannedAttemptExecu
 /** Starts or resumes exact executor work while excluding abandonment of that attempt. */
 export const continuePlannedAttemptExecutorWork = Effect.fn("PlannedAttemptExecutorWorkflow.continue")(function* (
   plannedAttempt: PlannedTaskAttempt,
-  continuationLimit: PlannedAttemptExecutorContinuationLimit = defaultPlannedAttemptExecutorContinuationLimit
+  continuationLimit: PlannedAttemptExecutorContinuationLimit = defaultPlannedAttemptExecutorContinuationLimit,
+  selectedSpecification?: TaskWorkSpecification
 ) {
   const controller = yield* PlannedAttemptProtocolController
   return yield* controller.withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
-    continuePlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, continuationLimit)
+    continuePlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, continuationLimit, selectedSpecification)
   )
 })
 

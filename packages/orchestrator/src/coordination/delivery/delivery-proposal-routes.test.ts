@@ -29,6 +29,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskLifecycle, type Task, TrackerRevision } from "../../authorities/task-tracker/task.js"
+import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
@@ -114,6 +115,8 @@ import {
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
 import {
   makeFocusedTaskCompletionFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  TaskTrackerFactsObservedEvent,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { IntegrationReviewManifest } from "../../workflow/protocols/integration-candidate-construction/events.js"
@@ -132,6 +135,7 @@ const runId = RunId.make("route-matrix-run")
 const taskId = TaskId.make("A")
 const target = FixtureTarget.make("route-matrix-target")
 const task: Task = { id: taskId, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
+const specification = makeTaskWorkSpecification({ body: "Route matrix body", taskId, title: "Route matrix task" })
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("route-matrix-attempt"),
   baseSha: GitCommitSha.make("1".repeat(40)),
@@ -139,7 +143,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:fake"),
   runId,
   taskId,
-  taskRevision: TaskRevision.make("route-matrix-revision"),
+  taskRevision: specification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/A")
 })
 const integrationTarget = IntegrationTarget.make({
@@ -656,7 +660,7 @@ describe("delivery proposal route matrix", () => {
 
   it("requires fresh provenance for all three fresh-only transition tags", () => {
     const start = RunnableFrontierTransition.StartPlannedAttemptExecutorWork({ plannedAttempt })
-    const step = FreshWorkflowStep.StartPlannedAttemptExecutorWork({ plannedAttempt, task })
+    const step = FreshWorkflowStep.StartPlannedAttemptExecutorWork({ plannedAttempt, specification, task })
     const [proposal] = deliveryProposalsOf({
       acceptedOperationIds: new Set(),
       fresh: [{ step, transition: start }],
@@ -1409,6 +1413,22 @@ describe("delivery proposal route matrix", () => {
       }
       const correlation = { attemptId: plannedAttempt.attemptId, runId }
       const report = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+      const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("route-matrix-executor-specification"),
+        target,
+        taskId,
+        []
+      )
+      const specificationRecord = {
+        event: TaskTrackerFactsObservedEvent.make({
+          observation: makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification),
+          operationId: specificationOperation.operationId,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("route-matrix-executor-specification"),
+        position: JournalPosition.make(1),
+        runId
+      }
       const result = yield* executePlannedAttemptTransition(
         { _tag: "IdentityFreeAction", proposal },
         transition,
@@ -1418,7 +1438,7 @@ describe("delivery proposal route matrix", () => {
           InRunJournal,
           InRunJournal.of({
             append: (_runId, key, event) => Effect.succeed({ event, key, position: JournalPosition.make(100), runId }),
-            read: () => Effect.succeed([])
+            read: () => Effect.succeed([specificationRecord])
           })
         ),
         Effect.provideService(

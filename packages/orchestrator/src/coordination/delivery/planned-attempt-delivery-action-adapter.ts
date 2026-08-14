@@ -129,7 +129,7 @@ export const executeFreshPlannedAttempt = Effect.fn("DeliveryAction.executeFresh
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   yield* lease.bindPlannedAttemptPosition(correlation)
   const report = yield* lease.withPlannedAttemptProtocol(correlation, (permit) =>
-    continuePlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt)
+    continuePlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, undefined, route.step.specification)
   )
   if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
     yield* lease.releasePlannedAttemptPosition(correlation)

@@ -6,6 +6,7 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
+  type PlannedAttemptExecutorRequest,
   PlannedAttemptExecutorResult,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
@@ -313,7 +314,7 @@ export const controlledExecutorLayer = (
         }),
       /* v8 ignore next -- Live Pause/Suspend production behavior is outside issue 170's maintained singleton. */
       requestSuspension: (plannedAttempt) => consume("Suspend", plannedAttempt),
-      startOrContinue: (plannedAttempt) => consume("StartOrContinue", plannedAttempt)
+      startOrContinue: (request: PlannedAttemptExecutorRequest) => consume("StartOrContinue", request.plannedAttempt)
     })
   )
 }

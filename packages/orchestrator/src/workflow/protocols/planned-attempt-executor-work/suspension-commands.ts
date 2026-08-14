@@ -1,4 +1,8 @@
-import { plannedAttemptExecutorCorrelation, type PlannedTaskAttempt } from "@dalph/contracts"
+import {
+  plannedAttemptExecutorCorrelation,
+  type PlannedTaskAttempt,
+  type TaskWorkSpecification
+} from "@dalph/contracts"
 import { Effect } from "effect"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import {
@@ -15,7 +19,8 @@ import { type PlannedAttemptProtocolPermit, withPlannedAttemptProtocolPermit } f
 export const continuePlannedAttemptExecutorWorkWithPermit = (
   permit: PlannedAttemptProtocolPermit,
   plannedAttempt: PlannedTaskAttempt,
-  continuationLimit: PlannedAttemptExecutorContinuationLimit = defaultPlannedAttemptExecutorContinuationLimit
+  continuationLimit: PlannedAttemptExecutorContinuationLimit = defaultPlannedAttemptExecutorContinuationLimit,
+  selectedSpecification?: TaskWorkSpecification
 ) =>
   withPlannedAttemptProtocolPermit(
     permit,
@@ -24,7 +29,8 @@ export const continuePlannedAttemptExecutorWorkWithPermit = (
       plannedAttempt,
       "StartOrContinue",
       continuationLimit,
-      defaultPlannedAttemptExecutorSuspensionLimit
+      defaultPlannedAttemptExecutorSuspensionLimit,
+      selectedSpecification
     )
   )
 

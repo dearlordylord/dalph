@@ -1,4 +1,16 @@
-import type { PlannedTaskAttempt, PlannedAttemptExecutorReport } from "@dalph/contracts"
+import { Effect } from "effect"
+import {
+  PlannedAttemptExecutorRequest,
+  TaskWorkSpecification,
+  type PlannedTaskAttempt,
+  type PlannedAttemptExecutorReport,
+  type TaskWorkSpecification as TaskWorkSpecificationType,
+  plannedAttemptExecutorCorrelation
+} from "@dalph/contracts"
+import {
+  PlannedAttemptExecutorTaskWorkSpecificationMissing,
+  PlannedAttemptExecutorTaskWorkSpecificationMismatch
+} from "./errors.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type {
@@ -9,6 +21,64 @@ import type {
 } from "./events.js"
 
 const latestElementOffset = -1
+
+/** Builds the exact executor request from fresh selection or accepted recovery evidence. */
+export const plannedAttemptExecutorRequestFor = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  selectedSpecification?: TaskWorkSpecificationType
+): Effect.Effect<
+  PlannedAttemptExecutorRequest,
+  PlannedAttemptExecutorTaskWorkSpecificationMissing | PlannedAttemptExecutorTaskWorkSpecificationMismatch
+> => {
+  if (selectedSpecification !== undefined) {
+    return selectedSpecification.taskId === plannedAttempt.taskId &&
+      selectedSpecification.fingerprint === plannedAttempt.taskRevision
+      ? Effect.succeed(PlannedAttemptExecutorRequest.make({ plannedAttempt, specification: selectedSpecification }))
+      : Effect.fail(
+          new PlannedAttemptExecutorTaskWorkSpecificationMismatch({
+            plannedAttempt,
+            specification: selectedSpecification
+          })
+        )
+  }
+  const specifications = plannedAttemptExecutorTaskWorkSpecifications(records)
+  const exact = specifications.findLast(
+    (specification) =>
+      specification.taskId === plannedAttempt.taskId && specification.fingerprint === plannedAttempt.taskRevision
+  )
+  if (exact !== undefined) {
+    return Effect.succeed(PlannedAttemptExecutorRequest.make({ plannedAttempt, specification: exact }))
+  }
+  const observed =
+    specifications.findLast((specification) => specification.taskId === plannedAttempt.taskId) ??
+    specifications.at(latestElementOffset)
+  return observed === undefined
+    ? Effect.fail(
+        new PlannedAttemptExecutorTaskWorkSpecificationMissing({
+          correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+        })
+      )
+    : Effect.fail(new PlannedAttemptExecutorTaskWorkSpecificationMismatch({ plannedAttempt, specification: observed }))
+}
+
+/** Reconstructs accepted focused task-work observations without substituting later tracker text. */
+export const plannedAttemptExecutorTaskWorkSpecifications = (
+  records: ReadonlyArray<Pick<JournalRecord, "event">>
+): ReadonlyArray<TaskWorkSpecificationType> =>
+  records.flatMap(({ event }) => {
+    if (event._tag !== "TaskTrackerFactsObserved" || event.observation._tag !== "FocusedTaskWorkSpecificationFacts") {
+      return []
+    }
+    return [
+      TaskWorkSpecification.make({
+        body: event.observation.factFamily.body,
+        fingerprint: event.observation.factFamily.fingerprint,
+        taskId: event.observation.factFamily.taskId,
+        title: event.observation.factFamily.title
+      })
+    ]
+  })
 
 /** Provenance of one exact executor report, preserving command response vs read-only projection. */
 type PlannedAttemptExecutorEvidenceSource =

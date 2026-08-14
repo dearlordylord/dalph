@@ -4,6 +4,7 @@ import {
   PlannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
+  type PlannedAttemptExecutorRequest,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   type PlannedAttemptExecutorCorrelation as PlannedAttemptExecutorCorrelationType,
@@ -42,8 +43,9 @@ export const makeControlledFakePlannedAttemptExecutorLayer = (steps: ReadonlyArr
       const state = yield* Ref.make<State>({ remaining: steps, reports: new Map() })
       const consume = Effect.fn("PlannedAttemptExecutor.Test.consume")(function* (
         requestTag: ControlledFakeExecutorStep["_tag"],
-        plannedAttempt: PlannedTaskAttempt
+        request: PlannedAttemptExecutorRequest | PlannedTaskAttempt
       ) {
+        const plannedAttempt = "plannedAttempt" in request ? request.plannedAttempt : request
         const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
         const step = yield* Ref.modify(
           state,
@@ -82,7 +84,7 @@ export const makeControlledFakePlannedAttemptExecutorLayer = (steps: ReadonlyArr
             })
           ),
         requestSuspension: (attempt) => consume("Suspend", attempt),
-        startOrContinue: (attempt) => consume("StartOrContinue", attempt)
+        startOrContinue: (request) => consume("StartOrContinue", request)
       })
     })
   )
@@ -114,7 +116,8 @@ export const controlledFakePlannedAttemptExecutorLayer = Layer.effect(
         const correlation = plannedAttemptExecutorCorrelation(attempt)
         return record(attempt, PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
       },
-      startOrContinue: (attempt) => {
+      startOrContinue: (request) => {
+        const attempt = request.plannedAttempt
         const correlation = plannedAttemptExecutorCorrelation(attempt)
         return Ref.get(reports).pipe(
           Effect.flatMap((current) =>

@@ -3,11 +3,16 @@ import * as fc from "fast-check"
 import { expect, it } from "vitest"
 import {
   PlannedAttemptExecutorCorrelation,
+  PlannedAttemptExecutorRequest,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport
 } from "./executor.js"
-import { AttemptId } from "./planned-attempt.js"
+import { AttemptId, PlannedTaskAttempt } from "./planned-attempt.js"
+import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "./git-locator.js"
+import { makeTaskWorkSpecification } from "./task-work-specification.js"
 import { RunId } from "./workflow-identity.js"
+import { TaskExecutorLocator } from "./executor-locator.js"
+import { TaskId } from "./task-identity.js"
 
 const nonEmptyId = fc.string({ minLength: 1, maxLength: 20 })
 const correlationArbitrary = fc
@@ -28,6 +33,37 @@ const reportFor = (correlation: PlannedAttemptExecutorCorrelation) =>
 const correlatedReportArbitrary = correlationArbitrary.chain((correlation) =>
   reportFor(correlation).map((report) => ({ correlation, report }))
 )
+
+const exactRequestArbitrary = fc
+  .record({
+    body: fc.string({ maxLength: 40 }),
+    suffix: fc.stringMatching(/^[a-z0-9]{1,16}$/),
+    title: fc.string({ minLength: 1, maxLength: 40 })
+  })
+  .map(({ body, suffix, title }) => {
+    const taskId = TaskId.make(`task-${suffix}`)
+    const specification = makeTaskWorkSpecification({ body, taskId, title })
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make(`attempt-${suffix}`),
+      baseSha: GitCommitSha.make("0".repeat(40)),
+      branch: TaskBranchRef.make(`refs/heads/task-${suffix}`),
+      executor: TaskExecutorLocator.make("executor:property"),
+      runId: RunId.make(`run-${suffix}`),
+      taskId,
+      taskRevision: specification.fingerprint,
+      worktree: WorktreeLocator.make(`/worktrees/task-${suffix}`)
+    })
+    return PlannedAttemptExecutorRequest.make({ plannedAttempt, specification })
+  })
+
+it("roundtrips every generated exact planned-attempt work request", () => {
+  fc.assert(
+    fc.property(exactRequestArbitrary, (request) => {
+      const encoded = Schema.encodeUnknownSync(PlannedAttemptExecutorRequest)(request)
+      expect(Schema.decodeUnknownSync(PlannedAttemptExecutorRequest)(encoded)).toEqual(request)
+    })
+  )
+})
 
 it("roundtrips all five normalized projection outcomes for arbitrary correlations", () => {
   fc.assert(

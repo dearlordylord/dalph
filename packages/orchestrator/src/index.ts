@@ -292,6 +292,8 @@ export {
   PlannedAttemptExecutorResponsibilityAbandoned,
   PlannedAttemptExecutorResponsibilityContradiction,
   PlannedAttemptExecutorResponsibilityMissing,
+  PlannedAttemptExecutorTaskWorkSpecificationMissing,
+  PlannedAttemptExecutorTaskWorkSpecificationMismatch,
   PlannedAttemptExecutorStateNoCurrentReport,
   PlannedAttemptExecutorStateTemporarilyUnavailable,
   PlannedAttemptExecutorStateUnreadable,

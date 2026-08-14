@@ -13,9 +13,9 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
+import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import { Effect, Ref } from "effect"
 import { expect } from "vitest"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
@@ -30,6 +30,11 @@ import {
 import { beginPlannedAttemptExecutorResponsibility } from "./protocol.js"
 import { plannedAttemptProtocolControllerLayer } from "./protocol-controller.js"
 
+const specification = makeTaskWorkSpecification({
+  body: "Opaque conformance body",
+  taskId: TaskId.make("opaque-conformance-task"),
+  title: "Opaque conformance task"
+})
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("attempt:opaque-conformance:0"),
   baseSha: GitCommitSha.make("1".repeat(40)),
@@ -37,7 +42,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:opaque-conformance"),
   runId: RunId.make("opaque-conformance-run"),
   taskId: TaskId.make("opaque-conformance-task"),
-  taskRevision: TaskRevision.make("opaque-conformance-revision"),
+  taskRevision: specification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/opaque-conformance")
 })
 
@@ -256,7 +261,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
         )
 
         expect(
-          yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+          yield* continuePlannedAttemptExecutorWork(plannedAttempt, undefined, specification).pipe(
             Effect.provideService(PlannedAttemptExecutor, harness.executor)
           )
         ).toEqual(running())
@@ -272,7 +277,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
     it.effect("records a foreign StartOrContinue response without advancing the exact attempt", () =>
       Effect.gen(function* () {
         const harness = yield* implementation.make("ForeignStart", () => Effect.void)
-        const failure = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+        const failure = yield* continuePlannedAttemptExecutorWork(plannedAttempt, undefined, specification).pipe(
           Effect.provideService(PlannedAttemptExecutor, harness.executor),
           Effect.flip
         )

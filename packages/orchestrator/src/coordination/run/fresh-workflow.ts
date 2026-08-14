@@ -1,5 +1,5 @@
 import { Option } from "effect"
-import type { AttemptId, TaskId } from "@dalph/contracts"
+import type { AttemptId, PlannedTaskAttempt, TaskId } from "@dalph/contracts"
 import type { Task } from "../../authorities/task-tracker/task.js"
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -12,7 +12,8 @@ import { FreshWorkflowStep, type FreshWorkflowStep as FreshWorkflowStepType } fr
 import { recordedTaskAttemptPlans } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 import {
   latestPlannedAttemptExecutorEvidence,
-  latestPlannedAttemptExecutorProjectionIssue
+  latestPlannedAttemptExecutorProjectionIssue,
+  plannedAttemptExecutorTaskWorkSpecifications
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 
 const postClaimGraphRank = 0
@@ -60,6 +61,12 @@ const observedOperationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySe
     )
   )
 
+const plannedSpecificationFor = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) =>
+  plannedAttemptExecutorTaskWorkSpecifications(records).findLast(
+    (specification) =>
+      specification.taskId === plannedAttempt.taskId && specification.fingerprint === plannedAttempt.taskRevision
+  )
+
 // eslint-disable-next-line complexity -- Closed journal occurrence families route to one next workflow operation.
 const journaledStepFor = (
   task: Task,
@@ -79,11 +86,17 @@ const journaledStepFor = (
         event._tag === "PlannedAttemptExecutorWorkReported" &&
         event.report.correlation.attemptId === executorResponsibility.plannedAttempt.attemptId
     )?.event
+    const specification = plannedSpecificationFor(records, executorResponsibility.plannedAttempt)
     /* v8 ignore start -- A fresh non-running report already transfers the task to terminal or integration responsibility. */
-    if (report?._tag === "PlannedAttemptExecutorWorkReported" && report.report._tag === "Running") {
+    if (
+      report?._tag === "PlannedAttemptExecutorWorkReported" &&
+      report.report._tag === "Running" &&
+      specification !== undefined
+    ) {
       return FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({
         acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: report.ordinal },
         plannedAttempt: executorResponsibility.plannedAttempt,
+        specification,
         task
       })
     }
@@ -99,8 +112,16 @@ const journaledStepFor = (
         event._tag === "TaskWorktreeReconciliationIntended" &&
         event.operation.plannedAttempt.attemptId === plan.plannedAttempt.attemptId
     )?.event
+    const specification = plannedSpecificationFor(records, plan.plannedAttempt)
     if (worktree?._tag === "TaskWorktreeReconciliationIntended" && observed.has(worktree.operation.operationId)) {
-      return FreshWorkflowStep.StartPlannedAttemptExecutorWork({ plannedAttempt: plan.plannedAttempt, task })
+      if (specification !== undefined) {
+        return FreshWorkflowStep.StartPlannedAttemptExecutorWork({
+          plannedAttempt: plan.plannedAttempt,
+          specification,
+          task
+        })
+      }
+      return FreshWorkflowStep.ReadTaskWorkSpecification({ predecessorOperationId: plan.operationId, task })
     }
     return FreshWorkflowStep.ReconcileTaskWorktree({
       plannedAttempt: plan.plannedAttempt,

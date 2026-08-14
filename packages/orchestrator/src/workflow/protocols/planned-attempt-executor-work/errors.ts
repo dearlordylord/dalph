@@ -3,7 +3,8 @@ import {
   type PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorCorrelation as PlannedAttemptExecutorCorrelationSchema,
   samePlannedAttemptExecutorCorrelation,
-  PlannedTaskAttempt as PlannedTaskAttemptSchema
+  PlannedTaskAttempt as PlannedTaskAttemptSchema,
+  TaskWorkSpecification as TaskWorkSpecificationSchema
 } from "@dalph/contracts"
 import { Schema } from "effect"
 import {
@@ -94,6 +95,18 @@ export class PlannedAttemptExecutorResponsibilityContradiction extends Schema.Ta
 export class PlannedAttemptExecutorResponsibilityMissing extends Schema.TaggedError<PlannedAttemptExecutorResponsibilityMissing>()(
   "PlannedAttemptExecutorResponsibilityMissing",
   { correlation: PlannedAttemptExecutorCorrelationSchema }
+) {}
+
+/** The journal has no accepted authored instructions for the exact planned attempt. */
+export class PlannedAttemptExecutorTaskWorkSpecificationMissing extends Schema.TaggedError<PlannedAttemptExecutorTaskWorkSpecificationMissing>()(
+  "PlannedAttemptExecutorTaskWorkSpecificationMissing",
+  { correlation: PlannedAttemptExecutorCorrelationSchema }
+) {}
+
+/** Accepted authored instructions do not match the immutable task or fingerprint in the plan. */
+export class PlannedAttemptExecutorTaskWorkSpecificationMismatch extends Schema.TaggedError<PlannedAttemptExecutorTaskWorkSpecificationMismatch>()(
+  "PlannedAttemptExecutorTaskWorkSpecificationMismatch",
+  { plannedAttempt: PlannedTaskAttemptSchema, specification: TaskWorkSpecificationSchema }
 ) {}
 
 const projectionCorrelation = (projection: PlannedAttemptExecutorProjection): PlannedAttemptExecutorCorrelation =>

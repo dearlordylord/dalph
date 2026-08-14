@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest"
 import {
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorRequest,
   PlannedAttemptExecutorProjection,
   plannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorReport,
@@ -11,9 +12,9 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
+import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import {
   ControlledFakeExecutorStep,
   makeControlledFakePlannedAttemptExecutorLayer
@@ -21,6 +22,11 @@ import {
 import { Effect } from "effect"
 import { expect } from "vitest"
 
+const modelSpecification = makeTaskWorkSpecification({
+  body: "Model body",
+  taskId: TaskId.make("model-task"),
+  title: "Model task"
+})
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("model-attempt"),
   baseSha: GitCommitSha.make("1".repeat(40)),
@@ -28,11 +34,12 @@ const plannedAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:model"),
   runId: RunId.make("model-run"),
   taskId: TaskId.make("model-task"),
-  taskRevision: TaskRevision.make("model-revision"),
+  taskRevision: modelSpecification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/model-attempt")
 })
 
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+const request = PlannedAttemptExecutorRequest.make({ plannedAttempt, specification: modelSpecification })
 
 it.effect("accepts representative coarse executor report traces", () =>
   Effect.gen(function* () {
@@ -60,7 +67,7 @@ it.effect("accepts representative coarse executor report traces", () =>
       yield* Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
         for (const report of reports) {
-          expect(yield* executor.startOrContinue(plannedAttempt)).toEqual(report)
+          expect(yield* executor.startOrContinue(request)).toEqual(report)
         }
         const lastReport = reports.at(-1)
         if (lastReport === undefined) return yield* Effect.die("executor trace must include a terminal report")

@@ -9,6 +9,7 @@ import {
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
+  type PlannedAttemptExecutorRequest,
   PlannedTaskAttempt,
   plannedAttemptExecutorCorrelation,
   RunId,
@@ -289,7 +290,8 @@ const makePublicRunFixture = (
             return PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation: requested })
           }),
         requestSuspension: (planned) => consumeCommand("Suspend", planned),
-        startOrContinue: (planned) => consumeCommand("StartOrContinue", planned)
+        startOrContinue: (request: PlannedAttemptExecutorRequest) =>
+          consumeCommand("StartOrContinue", request.plannedAttempt)
       })
     const trackerLayer = Layer.succeed(
       TrackerMutation,

@@ -1,10 +1,10 @@
 import type { Effect } from "effect"
 import { Context, Schema } from "effect"
-import type { PlannedTaskAttempt } from "./planned-attempt.js"
-import { AttemptId } from "./planned-attempt.js"
+import { AttemptId, PlannedTaskAttempt } from "./planned-attempt.js"
 import { RunId } from "./workflow-identity.js"
 import { GitCommitSha } from "./git-locator.js"
 import { EvidenceReference } from "./evidence.js"
+import { TaskWorkSpecification } from "./task-work-specification.js"
 
 /**
  * Identifies the executor's complete work for one planned task attempt.
@@ -97,6 +97,21 @@ export const plannedAttemptExecutorCorrelation = (
 export const plannedAttemptExecutorCorrelationKey = (correlation: PlannedAttemptExecutorCorrelation): string =>
   JSON.stringify({ attemptId: correlation.attemptId, runId: correlation.runId })
 
+/** The exact tracker-authored instructions supplied for one planned attempt's task turn. */
+export const PlannedAttemptExecutorRequest = Schema.Struct({
+  plannedAttempt: PlannedTaskAttempt,
+  specification: TaskWorkSpecification
+}).check(
+  Schema.makeFilter(({ plannedAttempt, specification }) =>
+    specification.taskId !== plannedAttempt.taskId
+      ? "executor work request specification task must match the planned attempt"
+      : specification.fingerprint !== plannedAttempt.taskRevision
+        ? "executor work request specification fingerprint must match the planned attempt"
+        : undefined
+  )
+)
+export type PlannedAttemptExecutorRequest = typeof PlannedAttemptExecutorRequest.Type
+
 /** An injected executor could not complete the requested outer command. */
 export class PlannedAttemptExecutorCommandFailure extends Schema.TaggedError<PlannedAttemptExecutorCommandFailure>()(
   "PlannedAttemptExecutorCommandFailure",
@@ -113,7 +128,7 @@ export interface PlannedAttemptExecutorService {
     plannedAttempt: PlannedTaskAttempt
   ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
   readonly startOrContinue: (
-    plannedAttempt: PlannedTaskAttempt
+    request: PlannedAttemptExecutorRequest
   ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
 }
 

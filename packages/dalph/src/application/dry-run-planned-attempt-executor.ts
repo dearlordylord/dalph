@@ -41,7 +41,8 @@ export const dryRunPlannedAttemptExecutorLayer = Layer.effect(
         const correlation = plannedAttemptExecutorCorrelation(attempt)
         return record(attempt, PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
       },
-      startOrContinue: (attempt) => {
+      startOrContinue: (request) => {
+        const attempt = request.plannedAttempt
         const correlation = plannedAttemptExecutorCorrelation(attempt)
         return Ref.get(reports).pipe(
           Effect.flatMap((current) =>
