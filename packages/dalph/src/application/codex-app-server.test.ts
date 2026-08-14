@@ -1,7 +1,8 @@
 /* eslint-disable import/no-nodejs-modules -- this test launches only a local protocol fixture, never OpenAI. */
+import nodeProcess from "node:process"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Path } from "effect"
+import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path } from "effect"
 import { expect } from "vitest"
 import {
   ApplicationExitDiagnostic,
@@ -19,9 +20,14 @@ import {
   controlledCodexProcessOwnershipLayer
 } from "./codex-app-server.js"
 import {
+  CodexAttemptStore,
+  CodexAttemptStoreFailure,
+  CodexThreadId,
+  CodexTurnId,
   CodexOwnedTurnToken,
   CodexServerIncarnation,
   CodexServerLaunchRecord,
+  type CodexAttemptStoreService,
   memoryCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
 
@@ -123,6 +129,116 @@ process.stdin.on("data", (chunk) => {
   }
 })
 `
+
+const controlledStoreWithFailure = (
+  failureMode: "lease-error" | "lease-observation" | "lease-exact" | "read-launch" | "release-lease"
+): CodexAttemptStoreService => ({
+  readAttempt: () => Effect.succeed(Option.none()),
+  writeAttempt: () => Effect.void,
+  readServerLaunch: () =>
+    failureMode === "read-launch"
+      ? Effect.fail(new CodexAttemptStoreFailure({ detail: "launch read failed", operation: "readServerLaunch" }))
+      : Effect.succeed(Option.none()),
+  writeServerLaunch: () => Effect.void,
+  clearServerLaunch: () => Effect.void,
+  acquireServerLease: (_owner, observe) =>
+    failureMode === "lease-error" || failureMode === "lease-observation" || failureMode === "lease-exact"
+      ? Effect.gen(function* () {
+          const projection = yield* observe(_owner)
+          if (failureMode === "lease-observation" && projection._tag !== "ExactLive") {
+            yield* new CodexAttemptStoreFailure({
+              detail: "lease owner cannot be reclaimed",
+              operation: "acquireServerLease"
+            })
+          }
+          if (failureMode === "lease-exact") {
+            yield* new CodexAttemptStoreFailure({ detail: "lease admission failed", operation: "acquireServerLease" })
+          }
+        })
+      : Effect.void,
+  releaseServerLease: () =>
+    failureMode === "release-lease"
+      ? Effect.fail(new CodexAttemptStoreFailure({ detail: "lease release failed", operation: "releaseServerLease" }))
+      : Effect.void
+})
+
+it.effect("fails before spawning when lease admission or launch reads are not authoritative", () =>
+  Effect.forEach(
+    [
+      { mode: "lease-error" as const, projection: { _tag: "Absent" as const } },
+      { mode: "lease-observation" as const, projection: { _tag: "Unreadable" as const, detail: "lease read failed" } },
+      { mode: "lease-exact" as const, projection: { _tag: "ExactLive" as const, pid: 1 } },
+      { mode: "read-launch" as const, projection: { _tag: "Absent" as const } }
+    ],
+    ({ mode, projection }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const appLayer = codexAppServerLayer().pipe(
+            Layer.provide(
+              controlledCodexProcessOwnershipLayer({
+                observe: () =>
+                  mode === "lease-error"
+                    ? Effect.fail(
+                        new CodexAppServerFailure({
+                          operation: "initialize",
+                          kind: "Ownership",
+                          detail: "lease observation failed"
+                        })
+                      )
+                    : Effect.succeed(projection),
+                discover: () => Effect.succeed({ _tag: "Absent" as const }),
+                stop: () => Effect.void
+              })
+            ),
+            Layer.provide(Layer.succeed(CodexAttemptStore, controlledStoreWithFailure(mode)))
+          )
+          const result = yield* Effect.gen(function* () {
+            yield* CodexAppServer
+          }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+          expect(Exit.isFailure(result)).toBe(true)
+        }).pipe(Effect.provide(NodeServices.layer))
+      )
+  )
+)
+
+it.effect("surfaces a server-lease release failure through application close", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-release-failure-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      let stopped = false
+      const appLayer = codexAppServerLayer({ executable }).pipe(
+        Layer.provide(
+          controlledCodexProcessOwnershipLayer({
+            observe: (target) =>
+              Effect.succeed(
+                "processIdentity" in target
+                  ? { _tag: "ExactLive" as const, pid: 1 }
+                  : stopped
+                    ? { _tag: "Absent" as const }
+                    : { _tag: "ExactLive" as const, pid: 1 }
+              ),
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
+            stop: () => Effect.sync(() => void (stopped = true))
+          })
+        ),
+        Layer.provide(Layer.succeed(CodexAttemptStore, controlledStoreWithFailure("release-lease")))
+      )
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        yield* app.startThread("/release-failure/worktree")
+        const closed = yield* Effect.exit(app.close)
+        expect(Exit.isFailure(closed)).toBe(true)
+        expect(stopped).toBe(true)
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
 
 it.effect("speaks the normalized app-server protocol with exact per-call cwd", () =>
   Effect.scoped(
@@ -348,6 +464,36 @@ it.effect("fails closed when initialization decodes to an invalid protocol shape
   )
 )
 
+it.effect("keeps every request boundary typed after initialization becomes unavailable", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-unavailable-operations-" })
+      const executable = path.join(root, "fixture-codex-unavailable")
+      yield* fileSystem.writeFileString(executable, malformedInitializationServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      const appLayer = codexAppServerNodeLayer({ executable }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        const operations: ReadonlyArray<Effect.Effect<unknown, CodexAppServerFailure>> = [
+          app.startThread("/unavailable/worktree"),
+          app.readThread(CodexThreadId.make("unavailable-thread")),
+          app.resumeThread(CodexThreadId.make("unavailable-thread"), "/unavailable/worktree"),
+          app.startTurn(CodexThreadId.make("unavailable-thread"), "/unavailable/worktree", "work"),
+          app.interruptTurn(CodexThreadId.make("unavailable-thread"), CodexTurnId.make("unavailable-turn")),
+          app.listBackgroundTerminals(CodexThreadId.make("unavailable-thread")),
+          app.terminateBackgroundTerminal(CodexThreadId.make("unavailable-thread"), "unavailable-process")
+        ]
+        for (const operation of operations) {
+          expect(Exit.isFailure(yield* Effect.exit(operation))).toBe(true)
+        }
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isSuccess(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("fails initialization closed when the server identity contradicts the host", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -364,6 +510,57 @@ it.effect("fails initialization closed when the server identity contradicts the 
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
       expect(Exit.isFailure(result)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("fails closed before starting an app-server on an unsupported host", () => {
+  const originalPlatform = nodeProcess.platform
+  Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "darwin" })
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const appLayer = codexAppServerLayer().pipe(
+        Layer.provide(
+          controlledCodexProcessOwnershipLayer({
+            observe: () => Effect.succeed({ _tag: "Absent" as const }),
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
+            stop: () => Effect.void
+          })
+        ),
+        Layer.provide(memoryCodexAttemptStoreLayer())
+      )
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        return yield* Effect.exit(app.startThread("/unsupported-host/worktree"))
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isSuccess(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  ).pipe(
+    Effect.ensuring(
+      Effect.sync(() => Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform }))
+    )
+  )
+})
+
+it.effect("fails closed when the recorded launch command cannot identify app-server", () =>
+  Effect.forEach([["fixture-codex"] as const, ["fixture-codex", "not-app-server"] as const], (command) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const prior = CodexServerLaunchRecord.make({
+          command,
+          incarnation: CodexServerIncarnation.make("malformed-launch-command"),
+          phase: "Live",
+          pid: nodeProcess.pid
+        })
+        const appLayer = codexAppServerNodeLayer({ executable: "fixture-codex" }).pipe(
+          Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+        )
+        const result = yield* Effect.gen(function* () {
+          const app = yield* CodexAppServer
+          return yield* Effect.exit(app.startThread("/malformed-launch/worktree"))
+        }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+        expect(Exit.isSuccess(result)).toBe(true)
+      }).pipe(Effect.provide(NodeServices.layer))
+    )
   )
 )
 

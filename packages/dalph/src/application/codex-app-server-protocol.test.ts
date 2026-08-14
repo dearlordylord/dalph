@@ -34,6 +34,9 @@ const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.
 const writeError = (id) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture failure" } }) + "\n")
 const responseFor = (method) => {
   if (mode === "initialize-rpc-error" && method === "initialize") return { error: true }
+  if (mode === "initialize-family-contradiction" && method === "initialize") {
+    return { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "windows", platformOs: "linux" }
+  }
   if (mode === "rpc-error" && method === "thread/start") return { error: true }
   if (mode === "response-not-object" && method === "thread/start") return "not-an-object"
   if (mode === "missing-thread" && method === "thread/start") return {}
@@ -344,7 +347,8 @@ it.effect("classifies transport protocol errors without fabricating a thread", (
     [
       ["rpc-error", "thread/start"],
       ["malformed-json", "thread/start"],
-      ["non-number-response-id", "initialize"]
+      ["non-number-response-id", "initialize"],
+      ["initialize-family-contradiction", "initialize"]
     ] as const,
     ([mode, operation]) =>
       withFixture(mode, (app) =>
