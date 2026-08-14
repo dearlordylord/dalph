@@ -1495,14 +1495,20 @@ const runAuthoredScenarioCassetteWith = (request: {
                       const expected = expectedExit.value
                       const attemptedTaskId = (yield* Ref.get(acquisitionTaskIds)).get(event.operationId)
                       if (
-                        (attemptedTaskId !== undefined && attemptedTaskId !== event.observed.taskId) ||
+                        attemptedTaskId === undefined ||
+                        expected.operationId !== event.operationId ||
+                        attemptedTaskId !== event.observed.taskId ||
                         JSON.stringify(expected.observed) !== JSON.stringify(event.observed)
                       ) {
                         yield* Ref.set(
                           authoredInteractionFailure,
                           new AuthoredCassetteInteractionMismatch({
                             actual: JSON.stringify(event.observed),
-                            expected: JSON.stringify({ attemptedTaskId, observed: expected.observed }),
+                            expected: JSON.stringify({
+                              operationId: expected.operationId,
+                              attemptedTaskId,
+                              observed: expected.observed
+                            }),
                             storyPosition: (yield* cursor.storyPosition) - 1
                           })
                         )
@@ -1658,7 +1664,15 @@ const runAuthoredScenarioCassetteWith = (request: {
           yield* awaitExecutorPublicationHold(plannedAttempt, request)
         })
       const trackerAuthority = yield* Layer.build(
-        controlledTrackerAuthorityLayer(cursor, Context.get(sharedContext, TrackerMutation))
+        controlledTrackerAuthorityLayer(
+          cursor,
+          Context.get(sharedContext, TrackerMutation),
+          (failure) => Ref.set(authoredInteractionFailure, failure),
+          (operationId) =>
+            Ref.get(acquisitionTaskIds).pipe(
+              Effect.map((operations) => Option.fromUndefinedOr(operations.get(operationId)))
+            )
+        )
       )
       const trackerMutationLayer = Layer.succeed(TrackerMutation, Context.get(trackerAuthority, TrackerMutation))
       const completionClaimBoundary = Context.get(trackerAuthority, CompletionClaimBoundary)

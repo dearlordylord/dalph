@@ -230,6 +230,12 @@ because K3 was acquired.
   remains covered by `records a foreign acquisition rejection as terminal and
   never reconstructs a retry` in
   `packages/orchestrator/src/workflow-journal/journaled-claim-acquisition.test.ts`.
+  The `alpha-renames every Dalph-generated identity and preserves tracker
+  revisions, task revisions, and Git SHAs` fixture proves Dalph's synthetic
+  rejected acquisition operation and token are renamed and asserted to change;
+  the foreign K2 operation and token remain tracker-owned world facts and are
+  intentionally preserved. This presentation transform does not authorize
+  mutation of K2.
 - `rereads tracker authority after an ambiguously applied acquisition` proves
   intent-before-effect reconciliation after a lost response.
 - `stops when atomic acquisition reports a competing claim` proves a foreign

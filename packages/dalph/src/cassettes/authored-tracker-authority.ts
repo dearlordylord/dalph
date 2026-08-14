@@ -18,10 +18,18 @@ import {
   TrackerMutation,
   UnclaimedTask
 } from "@dalph/orchestrator"
-import type { StoryCursor } from "./authored-cursor.js"
+import { AuthoredCassetteInteractionMismatch, type StoryCursor } from "./authored-cursor.js"
+
+type AuthoredInteractionMismatchReporter = (failure: AuthoredCassetteInteractionMismatch) => Effect.Effect<void>
+type AuthoredAcquisitionOperationLookup = (operationId: OperationId) => Effect.Effect<Option.Option<TaskId>>
 
 /** Owns one coherent authored tracker-claim authority across ordinary and completion-finality protocols. */
-export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: TrackerMutation["Service"]) =>
+export const controlledTrackerAuthorityLayer = (
+  cursor: StoryCursor,
+  tracker: TrackerMutation["Service"],
+  reportInteractionMismatch: AuthoredInteractionMismatchReporter = () => Effect.void,
+  lookupAcquisitionOperationTask: AuthoredAcquisitionOperationLookup = () => Effect.succeed(Option.none())
+) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const authoredObservations = yield* Ref.make<ReadonlyMap<TaskId, CompletionClaimObservation>>(new Map())
@@ -70,12 +78,31 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
                 tracker
                   .acquireTaskClaim(acquisition)
                   .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim))),
-              onSome: ({ observed }) =>
+              onSome: ({ observed, operationId }) =>
                 Effect.gen(function* () {
                   // A definite conflict is a provider observation, not a
                   // mutation. Retain K2 so a later activation's current read
                   // cannot regress to the earlier missing observation.
                   yield* setObservation(acquisition.taskId, observed)
+                  const mappedTaskId = yield* lookupAcquisitionOperationTask(operationId)
+                  if (
+                    Option.isNone(mappedTaskId) ||
+                    mappedTaskId.value !== acquisition.taskId ||
+                    operationId !== acquisition.operationId ||
+                    observed.taskId !== acquisition.taskId
+                  ) {
+                    yield* reportInteractionMismatch(
+                      new AuthoredCassetteInteractionMismatch({
+                        actual: JSON.stringify({
+                          operationId: acquisition.operationId,
+                          taskId: acquisition.taskId,
+                          mappedTaskId: Option.isSome(mappedTaskId) ? mappedTaskId.value : undefined
+                        }),
+                        expected: JSON.stringify({ operationId, taskId: observed.taskId }),
+                        storyPosition: (yield* cursor.storyPosition) - 1
+                      })
+                    )
+                  }
                   return yield* Effect.fail(new TaskClaimConflict({ attempted: acquisition, observed }))
                 })
             })

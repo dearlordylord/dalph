@@ -1637,6 +1637,7 @@ export const changedAttemptReacquisitionForeignConflictAuthoredCassette: Scenari
     { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
     {
       _tag: "TaskClaimAcquisitionConflictReturned",
+      operationId: "task-claim-reacquisition:coverage-reacquire-foreign-A",
       observed: {
         _tag: "ActiveTaskClaim",
         operationId: "foreign-reacquisition-operation-A",
@@ -1647,6 +1648,7 @@ export const changedAttemptReacquisitionForeignConflictAuthoredCassette: Scenari
     },
     {
       _tag: "TaskClaimAcquisitionRejected",
+      operationId: "task-claim-reacquisition:coverage-reacquire-foreign-A",
       observed: {
         _tag: "ActiveTaskClaim",
         operationId: "foreign-reacquisition-operation-A",

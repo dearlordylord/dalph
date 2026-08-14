@@ -5104,6 +5104,28 @@ it.effect("reports mismatches through the surface that owns the current story it
     expect(yield* runAuthoredScenarioCassette(mismatchedForeignRejection).pipe(Effect.flip)).toMatchObject({
       _tag: "AuthoredCassetteInteractionMismatch"
     })
+
+    const mismatchedForeignConflict = {
+      ...changedAttemptReacquisitionForeignConflictAuthoredCassette,
+      story: changedAttemptReacquisitionForeignConflictAuthoredCassette.story.map((item) =>
+        item._tag === "TaskClaimAcquisitionConflictReturned"
+          ? { ...item, operationId: "unexpected-acquisition-operation" }
+          : item
+      )
+    }
+    expect(yield* runAuthoredScenarioCassette(mismatchedForeignConflict).pipe(Effect.flip)).toMatchObject({
+      _tag: "AuthoredCassetteInteractionMismatch"
+    })
+
+    const unknownForeignRejection = {
+      ...changedAttemptReacquisitionForeignConflictAuthoredCassette,
+      story: changedAttemptReacquisitionForeignConflictAuthoredCassette.story.map((item) =>
+        item._tag === "TaskClaimAcquisitionRejected" ? { ...item, operationId: "unknown-acquisition-operation" } : item
+      )
+    }
+    expect(yield* runAuthoredScenarioCassette(unknownForeignRejection).pipe(Effect.flip)).toMatchObject({
+      _tag: "AuthoredCassetteInteractionMismatch"
+    })
   })
 )
 
@@ -6415,12 +6437,16 @@ it.effect(
         { _tag: "TaskClaimReleaseIntended" as const, operation: claimReleaseOperation },
         { _tag: "TaskClaimReleased" as const, release: claimReleaseOperation.release }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
+      const rejectedClaimOperationId = OperationId.make(`cassette-rejected-claim:${run.runId}`)
+      const rejectedClaimToken = ClaimToken.make(`cassette-rejected-token:${run.runId}`)
+      const foreignClaimOperationId = OperationId.make(`cassette-foreign-claim:${run.runId}`)
+      const foreignClaimToken = ClaimToken.make(`cassette-foreign-token:${run.runId}`)
       const rejectedClaimOperation = makeTaskClaimAcquisitionOperation({
         acquisition: {
-          operationId: OperationId.make(`cassette-rejected-claim:${run.runId}`),
+          operationId: rejectedClaimOperationId,
           owner: ClaimOwner.make("cassette-owner"),
           taskId: TaskId.make("A"),
-          token: ClaimToken.make(`cassette-rejected-token:${run.runId}`)
+          token: rejectedClaimToken
         },
         predecessorOperationIds: []
       })
@@ -6430,10 +6456,10 @@ it.effect(
           _tag: "TaskClaimAcquisitionRejected" as const,
           observed: {
             _tag: "ActiveTaskClaim" as const,
-            operationId: OperationId.make(`cassette-foreign-claim:${run.runId}`),
+            operationId: foreignClaimOperationId,
             owner: ClaimOwner.make("foreign-owner"),
             taskId: TaskId.make("A"),
-            token: ClaimToken.make(`cassette-foreign-token:${run.runId}`)
+            token: foreignClaimToken
           },
           operationId: rejectedClaimOperation.acquisition.operationId,
           reason: "ForeignClaim" as const
@@ -6567,7 +6593,10 @@ it.effect(
       const encodedBefore = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(recorded))
       const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
         attemptIds: [{ from: "attempt:A:0", to: "renamed-attempt-A" }],
-        claimTokens: [{ from: acquiredClaimEntry.claim.token, to: "renamed-claim-token-A" }],
+        claimTokens: [
+          { from: acquiredClaimEntry.claim.token, to: "renamed-claim-token-A" },
+          { from: rejectedClaimToken, to: "renamed-rejected-claim-token" }
+        ],
         integrationCandidateIds: [],
         integrationCandidateResourceLocators: [],
         integrationSessionIds: [],
@@ -6577,6 +6606,7 @@ it.effect(
             to: `renamed-operation:${ordinal}`
           })),
           { from: `cassette-release:${run.runId}`, to: "renamed-operation:claim-release" },
+          { from: rejectedClaimOperationId, to: "renamed-rejected-claim-operation" },
           { from: `cassette-worktree-read:${run.runId}`, to: "renamed-operation:worktree-read" },
           { from: `cassette-target-lineage-read:${run.runId}`, to: "renamed-operation:target-lineage-read" },
           { from: `cassette-unclaimed-claim-read:${run.runId}`, to: "renamed-operation:unclaimed-claim-read" }
@@ -6586,6 +6616,15 @@ it.effect(
         worktreeLocators: [{ from: "/dalph/cassettes/attempt-A-0", to: "/dalph/cassettes/renamed-attempt-A" }]
       })
       const renamed = yield* renameRecordedCassette(recorded, renaming)
+      const renamedRejectedEntry = renamed.entries.find((entry) => entry._tag === "TaskClaimAcquisitionRejected")
+      if (renamedRejectedEntry?._tag !== "TaskClaimAcquisitionRejected") {
+        return yield* Effect.die("alpha-renaming fixture requires the rejected claim entry")
+      }
+      expect(encodedBefore).toContain(`"${rejectedClaimOperationId}"`)
+      expect(encodedBefore).toContain(`"${rejectedClaimToken}"`)
+      expect(renamedRejectedEntry.operationId).toBe("renamed-rejected-claim-operation")
+      expect(renamedRejectedEntry.observed.operationId).toBe(foreignClaimOperationId)
+      expect(renamedRejectedEntry.observed.token).toBe(foreignClaimToken)
       const recordedHistory = foldRecordedCassette(recorded)
       if (recordedHistory._tag !== "ValidWorkflowJournalHistory") {
         return yield* Effect.die(

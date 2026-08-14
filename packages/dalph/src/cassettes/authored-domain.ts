@@ -866,9 +866,9 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
   /** The controlled tracker rejects this exact fresh acquisition with a current foreign claim. */
-  TaskClaimAcquisitionConflictReturned: { observed: ActiveTaskClaim },
+  TaskClaimAcquisitionConflictReturned: { observed: ActiveTaskClaim, operationId: OperationId },
   /** The journaled acquisition boundary exposes the tracker conflict as its terminal outcome. */
-  TaskClaimAcquisitionRejected: { observed: ActiveTaskClaim },
+  TaskClaimAcquisitionRejected: { observed: ActiveTaskClaim, operationId: OperationId },
   TaskClaimReadFailed: { reason: Schema.Literal("Unreadable"), taskId: TaskId },
   TaskClaimCurrentReadReturned: { taskId: TaskId },
   TaskClaimReadReturned: { observation: TaskClaimObservation },
