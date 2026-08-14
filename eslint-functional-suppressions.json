@@ -239,14 +239,6 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/coordination/reconstruction/integration-history.ts": {
-    "functional/immutable-data": {
-      "count": 9
-    },
-    "import-x/no-unused-modules": {
-      "count": 2
-    }
-  },
   "packages/orchestrator/src/coordination/reconstruction/run-policy-history.ts": {
     "import-x/no-unused-modules": {
       "count": 2

@@ -41,6 +41,7 @@ import {
   integrationFinalityTransitionsFor
 } from "./integration-finality-frontier.js"
 import { acceptedCandidateProgressAt } from "./integration-candidate-progress.js"
+import { claimAuthorityWaitsFor, queuedTargetWaitsFor } from "./integration-claim-waits.js"
 export { integrationFinalityTransitionsFor } from "./integration-finality-frontier.js"
 export { integrationDeliveryWaitsOf, type IntegrationDeliveryWait } from "./integration-delivery-waits.js"
 
@@ -263,7 +264,10 @@ export const deriveIntegrationFrontier = (
           if (durableIntent?._tag !== "IntegrationCandidateConstructionIntended" || lineage === undefined) return []
           return [
             RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
-              acceptedCandidateProgressAt: acceptedCandidateProgressAt(runState.workflowHistory.records, responsibility),
+              acceptedCandidateProgressAt: acceptedCandidateProgressAt(
+                runState.workflowHistory.records,
+                responsibility
+              ),
               correctionLimit: durableIntent.correctionLimit,
               continuationLimit: durableIntent.continuationLimit,
               lineage,
@@ -395,34 +399,22 @@ export const deriveIntegrationFrontier = (
       transitions: reconciliationTransitions
     }
   }
-  const trackerFactsWaits = [...started, ...queued]
-    .filter((responsibility) => !trackerFactsAreCurrentFor(responsibility))
-    .map((responsibility) =>
-      FrontierExplanation.IntegrationTrackerFactsWait({
-        plannedAttempt: responsibility.plannedAttempt,
-        wakeCondition: "TaskTrackerFactsObserved"
-      })
-    )
-  const claimAuthorityWaits = [...started, ...queued].flatMap((responsibility) => {
-    if (!trackerFactsAreCurrentFor(responsibility)) return []
-    if (responsibility._tag === "StartedIntegrationResponsibility" && succeededPromotionFor(responsibility)) return []
-    const constraint = claimConstraintFor(responsibility)
-    if (constraint === undefined) return []
-    const claimState = constraint._tag
-    return [
-      FrontierExplanation.IntegrationTaskClaimConstraint({
-        claimState,
-        plannedAttempt: responsibility.plannedAttempt,
-        wakeCondition:
-          claimState === "Missing" || claimState === "Foreign"
-            ? "ExplicitAppliedTaskClaimReacquisitionDirection"
-            : "TaskClaimFactsObserved"
-      })
-    ]
-  })
+  const claimAuthorityWaits = claimAuthorityWaitsFor(
+    [...started, ...queued],
+    runtimeFacts.currentTrackerTaskIds,
+    succeededPromotionFor,
+    claimConstraintFor
+  )
   return {
     explanations: [
-      ...trackerFactsWaits,
+      ...[...started, ...queued]
+        .filter((responsibility) => !trackerFactsAreCurrentFor(responsibility))
+        .map((responsibility) =>
+          FrontierExplanation.IntegrationTrackerFactsWait({
+            plannedAttempt: responsibility.plannedAttempt,
+            wakeCondition: "TaskTrackerFactsObserved"
+          })
+        ),
       ...claimAuthorityWaits,
       ...started
         .filter(
@@ -432,18 +424,7 @@ export const deriveIntegrationFrontier = (
             (claimIsExactFor(responsibility) || succeededPromotionFor(responsibility) !== undefined)
         )
         .map(explanationForStarted),
-      ...queued
-        .filter((responsibility) => trackerFactsAreCurrentFor(responsibility) && claimIsExactFor(responsibility))
-        .flatMap((responsibility) =>
-          transitions.some((transition) => transition.responsibility.queuedAt === responsibility.queuedAt)
-            ? []
-            : [
-                FrontierExplanation.IntegrationTargetWait({
-                  plannedAttempt: responsibility.plannedAttempt,
-                  wakeCondition: "IntegrationTargetReleased"
-                })
-              ]
-        )
+      ...queuedTargetWaitsFor(queued, runtimeFacts.currentTrackerTaskIds, claimIsExactFor, transitions)
     ],
     transitions: [...responsibilityTransitions, ...transitions]
   }

@@ -3,8 +3,7 @@ import {
   evidenceReferenceEquals,
   type AcceptedResult,
   type AttemptId,
-  type PlannedTaskAttempt,
-  type RunId
+  type PlannedTaskAttempt
 } from "@dalph/contracts"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -15,8 +14,7 @@ import {
 } from "../../workflow/protocols/integration-admission/responsibility.js"
 import {
   integrationCandidateCorrelationEquals,
-  integrationCandidateHasExactParents,
-  type IntegrationCandidateCorrelation
+  integrationCandidateHasExactParents
 } from "../../workflow/protocols/integration-candidate-construction/events.js"
 import {
   targetVerificationCorrelationEquals,
@@ -28,6 +26,13 @@ import {
   rememberPassedTargetVerification,
   type TargetPromotionHistoryIndexes
 } from "./target-promotion-history.js"
+import {
+  addSetValue,
+  candidateKey,
+  priorSessionSupersessionKey,
+  sessionSupersessionKey,
+  setMapValue
+} from "./integration-history-run-binding.js"
 
 export interface IntegrationHistoryIndexes {
   readonly acceptedExecutorResults: Map<AttemptId, AcceptedResult>
@@ -86,18 +91,6 @@ export interface IntegrationHistoryIndexes {
   readonly targetPromotionHistory: TargetPromotionHistoryIndexes
 }
 
-const candidateKey = (correlation: IntegrationCandidateCorrelation): string =>
-  JSON.stringify([correlation.runId, correlation.candidateId])
-const sessionSupersessionKey = (correlation: IntegrationCandidateCorrelation): string => candidateKey(correlation)
-const priorSessionSupersessionKey = (correlation: IntegrationCandidateCorrelation): string => candidateKey(correlation)
-const candidateCorrelatedEventTags: ReadonlySet<string> = new Set([
-  "IntegrationCandidateGitObserved",
-  "IntegrationCandidateGitValidationFailed",
-  "IntegrationCandidateConstructed",
-  "IntegrationCandidateCorrectionLimitReached",
-  "IntegrationCandidateContinuationLimitReached"
-])
-
 const invalidResponsibilityBeginning = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationResponsibilityBegan" }>,
   indexes: IntegrationHistoryIndexes
@@ -150,8 +143,8 @@ const invalidCandidateIntent = (
       intent.correlation.integrationSessionId === event.correlation.integrationSessionId ||
       intent.correlation.candidateResource === event.correlation.candidateResource
   )
-  indexes.integrationCandidateIntents.set(candidateKey(event.correlation), event)
-  indexes.integrationCandidateIntentsByStartedAt.set(event.startedAt, event)
+  setMapValue(indexes.integrationCandidateIntents, candidateKey(event.correlation), event)
+  setMapValue(indexes.integrationCandidateIntentsByStartedAt, event.startedAt, event)
   return (existingIntent !== undefined && supersession === undefined) ||
     reusesOpaqueIdentity ||
     started === undefined ||
@@ -175,7 +168,7 @@ const invalidCandidateAgentReport = (
   if (intent === undefined || !integrationCandidateCorrelationEquals(intent.correlation, event.expectedCorrelation)) {
     return `candidate agent report has no exact earlier intent for candidate ${event.expectedCorrelation.candidateId}`
   }
-  indexes.integrationCandidateSubmissions.set(record.position, event)
+  setMapValue(indexes.integrationCandidateSubmissions, record.position, event)
   return undefined
 }
 
@@ -194,7 +187,7 @@ const invalidCandidateGitResult = (
     integrationCandidateCorrelationEquals(submitted.report.correlation, event.correlation) &&
     submitted.report.candidateCommit === event.candidateCommit
   if (event._tag === "IntegrationCandidateGitObserved") {
-    indexes.integrationCandidateGitObservations.set(record.position, event)
+    setMapValue(indexes.integrationCandidateGitObservations, record.position, event)
   }
   return valid ? undefined : `candidate Git result has no exact submitted candidate at ${event.submissionAt}`
 }
@@ -231,7 +224,7 @@ const invalidConstructedCandidate = (
     observed === undefined ? undefined : indexes.integrationCandidateSubmissions.get(observed.submissionAt)
   const exact =
     isExactConstructedCandidateObservation(observed, event) && isExactConstructedCandidateSubmission(submitted, event)
-  indexes.integrationCandidatesConstructed.set(position, event)
+  setMapValue(indexes.integrationCandidatesConstructed, position, event)
   return exact ? undefined : `constructed candidate has no exact Git observation at ${event.gitObservationAt}`
 }
 
@@ -243,7 +236,7 @@ const invalidTargetVerificationIntent = (
   const correlation = event.correlation
   const constructed = indexes.integrationCandidatesConstructed.get(correlation.candidateConstructedAt)
   const existing = indexes.targetVerificationIntents.get(correlation.requestId)
-  indexes.targetVerificationIntents.set(correlation.requestId, event)
+  setMapValue(indexes.targetVerificationIntents, correlation.requestId, event)
   const exact =
     constructed !== undefined &&
     correlation.candidateConstructedAt < record.position &&
@@ -283,7 +276,7 @@ const invalidTargetVerificationTerminal = (
   const expected = terminalExpectedCorrelation(event)
   const intent = indexes.targetVerificationIntents.get(expected.requestId)
   const alreadyTerminal = indexes.targetVerificationTerminals.has(expected.requestId)
-  indexes.targetVerificationTerminals.add(expected.requestId)
+  addSetValue(indexes.targetVerificationTerminals, expected.requestId)
   const exactIntent = intent !== undefined && targetVerificationCorrelationEquals(intent.correlation, expected)
   const valid = exactIntent && !alreadyTerminal && isGenuineVerificationContradiction(event)
   if (valid && event._tag === "TargetVerificationEvidenceSealed" && event.terminal === "Passed") {
@@ -372,11 +365,17 @@ const invalidCandidateSessionSupersession = (
     evidenceReferenceEquals(event.priorCorrelation.acceptanceManifest, event.successorCorrelation.acceptanceManifest) &&
     event.successorCorrelation.acceptedResultCommit === started.acceptedResult.commit &&
     evidenceReferenceEquals(event.successorCorrelation.acceptanceManifest, started.acceptedResult.evidenceManifest) &&
-    JSON.stringify(event.priorCorrelation.integrationTarget) === JSON.stringify(event.successorCorrelation.integrationTarget) &&
+    JSON.stringify(event.priorCorrelation.integrationTarget) ===
+      JSON.stringify(event.successorCorrelation.integrationTarget) &&
     JSON.stringify(started.integrationTarget) === JSON.stringify(event.priorCorrelation.integrationTarget)
   if (valid) {
-    indexes.integrationCandidateSessionSupersessions.set(sessionSupersessionKey(event.successorCorrelation), event)
-    indexes.integrationCandidateSessionSupersessionsByPrior.set(
+    setMapValue(
+      indexes.integrationCandidateSessionSupersessions,
+      sessionSupersessionKey(event.successorCorrelation),
+      event
+    )
+    setMapValue(
+      indexes.integrationCandidateSessionSupersessionsByPrior,
       priorSessionSupersessionKey(event.priorCorrelation),
       event
     )
@@ -420,90 +419,22 @@ const invalidCandidateHistory = (record: JournalRecord, indexes: IntegrationHist
   return invalidTargetVerificationHistory(record, indexes)
 }
 
-/** Validates causal integration links while advancing the fold's private index. */
 export const invalidIntegrationHistoryEvent = (
   record: JournalRecord,
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
   const event = record.event
   if (event._tag === "IntegrationResponsibilityBegan") {
-    const issue = invalidResponsibilityBeginning(event, indexes)
-    indexes.integrationResponsibilitiesBegan.set(record.position, event)
-    return issue
+    setMapValue(indexes.integrationResponsibilitiesBegan, record.position, event)
+    return invalidResponsibilityBeginning(event, indexes)
   }
   if (event._tag === "IntegrationStarted") {
-    const issue = invalidIntegrationStart(event, record.position, indexes)
-    indexes.integrationStarted.set(record.position, event)
-    return issue
+    setMapValue(indexes.integrationStarted, record.position, event)
+    return invalidIntegrationStart(event, record.position, indexes)
   }
   if (event._tag === "IntegrationCandidateSessionSuperseded") {
     return invalidCandidateSessionSupersession(event, indexes)
   }
   return invalidCandidateHistory(record, indexes)
 }
-
-// eslint-disable-next-line complexity -- Each closed candidate event variant carries its run binding in a deliberately distinct shape.
-const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | undefined => {
-  if (
-    event._tag === "TargetPromotionIntended" ||
-    event._tag === "TargetPromotionAttemptIntended" ||
-    event._tag === "TargetPromotionObservedSuccess" ||
-    event._tag === "TargetPromotionStale" ||
-    event._tag === "TargetPromotionNonConvergence"
-  ) {
-    return event.correlation.candidateCorrelation.runId === runId &&
-      event.correlation.verificationCorrelation.candidateCorrelation.runId === runId
-      ? undefined
-      : `target promotion binds run ${event.correlation.candidateCorrelation.runId}`
-  }
-  if (event._tag === "TargetVerificationCorrelationContradicted") {
-    return event.expected.candidateCorrelation.runId === runId
-      ? undefined
-      : "target verification contradiction expectation binds a foreign run"
-  }
-  if (event._tag === "TargetVerificationIntended" || event._tag === "TargetVerificationEvidenceSealed") {
-    return event.correlation.candidateCorrelation.runId === runId
-      ? undefined
-      : `target verification binds run ${event.correlation.candidateCorrelation.runId}`
-  }
-  if (event._tag === "IntegrationCandidateConstructionIntended") {
-    return event.plannedAttempt.runId === runId && event.correlation.runId === runId
-      ? undefined
-      : `integration work for attempt ${event.plannedAttempt.attemptId} binds run ${event.plannedAttempt.runId}`
-  }
-  if (event._tag === "IntegrationCandidateSessionSuperseded") {
-    return event.priorCorrelation.runId === runId && event.successorCorrelation.runId === runId
-      ? undefined
-      : "candidate session supersession binds a foreign run"
-  }
-  if (event._tag === "IntegrationCandidateAgentReported") {
-    return event.expectedCorrelation.runId === runId
-      ? undefined
-      : `candidate report expectation binds run ${event.expectedCorrelation.runId}`
-  }
-  if (candidateCorrelatedEventTags.has(event._tag) && "correlation" in event)
-    return event.correlation.runId === runId ? undefined : `candidate event binds run ${event.correlation.runId}`
-  return undefined
-}
-
-export const invalidIntegrationRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | undefined => {
-  if (event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted") {
-    return event.plannedAttempt.runId === runId
-      ? undefined
-      : `integration work for attempt ${event.plannedAttempt.attemptId} binds run ${event.plannedAttempt.runId}`
-  }
-  return invalidCandidateRunBinding(event, runId)
-}
-
-export const validateIntegrationHistoryRecord = (
-  record: JournalRecord,
-  runId: RunId,
-  indexes: IntegrationHistoryIndexes,
-  recordIdentityIssue: (detail: string) => void,
-  recordSemanticIssue: (detail: string) => void
-): void => {
-  const bindingIssue = invalidIntegrationRunBinding(record.event, runId)
-  if (bindingIssue !== undefined) recordIdentityIssue(bindingIssue)
-  const historyIssue = invalidIntegrationHistoryEvent(record, indexes)
-  if (historyIssue !== undefined) recordSemanticIssue(historyIssue)
-}
+export { validateIntegrationHistoryRecord } from "./integration-history-validation.js"
