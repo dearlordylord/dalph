@@ -2,6 +2,8 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
+  EvidenceDigest,
+  EvidenceReference,
   GitCommitSha,
   RunId,
   TaskBranchRef,
@@ -11,18 +13,22 @@ import {
   makeTaskWorkSpecification,
   PlannedTaskAttempt
 } from "@dalph/contracts"
-import { ConfigProvider, Effect, Exit, FileSystem, Layer, Option, Path } from "effect"
+import { ConfigProvider, Crypto, Effect, Exit, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { expect } from "vitest"
 import {
   CodexAttemptRecord,
   CodexAttemptStore,
+  CodexOwnedTurnToken,
+  CodexSealedTerminal,
   CodexProcessIdentity,
   CodexServerIncarnation,
   CodexServerLeaseIncarnation,
   CodexServerLeaseRecord,
   CodexServerLaunchRecord,
   CodexThreadId,
+  CodexTurnId,
   defaultCodexStateDirectory,
+  memoryCodexAttemptStoreLayer,
   nodeCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
 
@@ -359,6 +365,84 @@ it.effect("rejects relative and traversal state directories before filesystem ac
   )
 )
 
+it.effect("fails closed for unsafe private directories and every sidecar file kind", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-shapes-" })
+      const expectLayerFailure = (stateDirectory: string) =>
+        Effect.gen(function* () {
+          yield* CodexAttemptStore
+          return true
+        }).pipe(Effect.provide(nodeCodexAttemptStoreLayer({ stateDirectory })), Effect.exit)
+
+      const rootFailure = yield* expectLayerFailure(path.parse(root).root)
+      expect(Exit.isFailure(rootFailure)).toBe(true)
+
+      const regularPath = path.join(root, "not-a-directory")
+      yield* fileSystem.writeFileString(regularPath, "regular")
+      const regularDirectory = yield* expectLayerFailure(regularPath)
+      expect(Exit.isFailure(regularDirectory)).toBe(true)
+
+      const directoryTarget = path.join(root, "directory-target")
+      const directoryLink = path.join(root, "directory-link")
+      yield* fileSystem.makeDirectory(directoryTarget)
+      yield* fileSystem.symlink(directoryTarget, directoryLink)
+      const symlinkDirectory = yield* expectLayerFailure(directoryLink)
+      expect(Exit.isFailure(symlinkDirectory)).toBe(true)
+
+      const modeDirectory = path.join(root, "mode-directory")
+      yield* fileSystem.makeDirectory(modeDirectory, { recursive: true, mode: 0o755 })
+      yield* fileSystem.chmod(modeDirectory, 0o755)
+      const unsafeMode = yield* expectLayerFailure(modeDirectory)
+      expect(Exit.isFailure(unsafeMode)).toBe(true)
+
+      const mainState = path.join(root, "main-state")
+      const mainDirectory = path.join(mainState, "executor-private-state.json")
+      yield* fileSystem.makeDirectory(mainState)
+      yield* fileSystem.chmod(mainState, 0o700)
+      yield* fileSystem.makeDirectory(mainDirectory)
+      const nonRegularMain = yield* expectLayerFailure(mainState)
+      expect(Exit.isFailure(nonRegularMain)).toBe(true)
+
+      const temporaryState = path.join(root, "temporary-state")
+      const temporaryStore = path.join(temporaryState, "executor-private-state.json")
+      yield* fileSystem.makeDirectory(temporaryState)
+      yield* fileSystem.chmod(temporaryState, 0o700)
+      yield* fileSystem.makeDirectory(`${temporaryStore}.next`)
+      const nonRegularTemporary = yield* expectLayerFailure(temporaryState)
+      expect(Exit.isFailure(nonRegularTemporary)).toBe(true)
+
+      const leaseState = path.join(root, "lease-state")
+      const leaseStore = path.join(leaseState, "executor-private-state.json")
+      yield* fileSystem.makeDirectory(leaseState)
+      yield* fileSystem.chmod(leaseState, 0o700)
+      yield* fileSystem.makeDirectory(`${leaseStore}.lease`)
+      const nonRegularLease = yield* expectLayerFailure(leaseState)
+      expect(Exit.isFailure(nonRegularLease)).toBe(true)
+
+      const sidecarTarget = path.join(root, "sidecar-target")
+      yield* writePrivateFile(fileSystem, sidecarTarget, "sidecar")
+      const symlinkTemporaryState = path.join(root, "symlink-temporary-state")
+      const symlinkStore = path.join(symlinkTemporaryState, "executor-private-state.json")
+      yield* fileSystem.makeDirectory(symlinkTemporaryState)
+      yield* fileSystem.chmod(symlinkTemporaryState, 0o700)
+      yield* fileSystem.symlink(sidecarTarget, `${symlinkStore}.next`)
+      const symlinkTemporary = yield* expectLayerFailure(symlinkTemporaryState)
+      expect(Exit.isFailure(symlinkTemporary)).toBe(true)
+
+      const symlinkLeaseState = path.join(root, "symlink-lease-state")
+      const symlinkLeaseStore = path.join(symlinkLeaseState, "executor-private-state.json")
+      yield* fileSystem.makeDirectory(symlinkLeaseState)
+      yield* fileSystem.chmod(symlinkLeaseState, 0o700)
+      yield* fileSystem.symlink(sidecarTarget, `${symlinkLeaseStore}.lease`)
+      const symlinkLease = yield* expectLayerFailure(symlinkLeaseState)
+      expect(Exit.isFailure(symlinkLease)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("creates and verifies owner-only private directory and snapshot permissions", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -432,6 +516,62 @@ it.effect("fails closed when a private snapshot path is swapped to a symlink bef
   )
 )
 
+it.effect("replays the newest complete checksummed snapshot after torn and invalid append records", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-checksum-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const payload = JSON.stringify({ attempts: [associated], serverLaunch: launch })
+      const crypto = yield* Crypto.Crypto
+      const digestBytes = yield* crypto.digest("SHA-256", new TextEncoder().encode(payload))
+      const digest = Array.from(digestBytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+      const valid = JSON.stringify({ digest, formatVersion: 1, payload })
+      const noVersion = JSON.stringify({ payload })
+      const invalidPayload = JSON.stringify({ digest: "", formatVersion: 1, payload: 42 })
+      const invalidDigest = JSON.stringify({ digest: "0".repeat(64), formatVersion: 1, payload })
+      yield* writePrivateFile(
+        fileSystem,
+        storePath,
+        `${valid}\n${noVersion}\n${invalidPayload}\n${invalidDigest}\nnot-json\n`
+      )
+
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(associated))
+        expect(yield* store.readServerLaunch()).toEqual(Option.some(launch))
+      }).pipe(Effect.provide(nodeLayer(storePath)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("retains a typed load failure for every later operation after no snapshot record is readable", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-load-failure-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      yield* writePrivateFile(
+        fileSystem,
+        storePath,
+        JSON.stringify({ digest: "0".repeat(64), formatVersion: 1, payload: "not-a-snapshot" })
+      )
+
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        const first = yield* store.readAttempt(attempt.runId, attempt.attemptId).pipe(Effect.exit)
+        const second = yield* store.readServerLaunch().pipe(Effect.exit)
+        const third = yield* store.writeServerLaunch(launch).pipe(Effect.exit)
+        expect(Exit.isFailure(first)).toBe(true)
+        expect(Exit.isFailure(second)).toBe(true)
+        expect(Exit.isFailure(third)).toBe(true)
+      }).pipe(Effect.provide(nodeLayer(storePath)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("reads the configured default state directory through Effect Config", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -455,3 +595,112 @@ it.effect("keeps the production default under the explicit Dalph state directory
   expect(defaultCodexStateDirectory).toBe("/var/lib/dalph")
   return Effect.succeed(undefined)
 })
+
+it.effect("keeps memory attempt, launch, and lease facts exact across replacement and release", () =>
+  Effect.gen(function* () {
+    const store = yield* CodexAttemptStore
+    expect(Option.isNone(yield* store.readAttempt(attempt.runId, attempt.attemptId))).toBe(true)
+
+    yield* store.writeAttempt(associated)
+    expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(associated))
+
+    yield* store.writeServerLaunch(launch)
+    expect(yield* store.readServerLaunch()).toEqual(Option.some(launch))
+    yield* store.clearServerLaunch(CodexServerIncarnation.make("foreign-incarnation"))
+    expect(yield* store.readServerLaunch()).toEqual(Option.some(launch))
+    yield* store.clearServerLaunch(launch.incarnation)
+    expect(Option.isNone(yield* store.readServerLaunch())).toBe(true)
+
+    yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+    yield* store.acquireServerLease(leaseOwner, () => Effect.die("same owner must not observe"))
+    const replaced = yield* store.acquireServerLease(otherLeaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+    expect(replaced).toBeUndefined()
+
+    const oldOwnerRelease = yield* store.releaseServerLease(leaseOwner).pipe(Effect.exit)
+    expect(Exit.isFailure(oldOwnerRelease)).toBe(true)
+    yield* store.releaseServerLease(otherLeaseOwner)
+    yield* store.releaseServerLease(otherLeaseOwner)
+
+    yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "ExactLive" as const })).pipe(Effect.exit)
+    const exactLive = yield* store
+      .acquireServerLease(otherLeaseOwner, () => Effect.succeed({ _tag: "ExactLive" as const }))
+      .pipe(Effect.exit)
+    expect(Exit.isFailure(exactLive)).toBe(true)
+    yield* store.releaseServerLease(leaseOwner)
+
+    yield* store
+      .acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Unreadable", detail: "memory unreadable" }))
+      .pipe(Effect.exit)
+    const unreadable = yield* store
+      .acquireServerLease(otherLeaseOwner, () =>
+        Effect.succeed({ _tag: "Unreadable", detail: "memory unreadable" } as const)
+      )
+      .pipe(Effect.exit)
+    expect(Exit.isFailure(unreadable)).toBe(true)
+    yield* store.releaseServerLease(leaseOwner)
+
+    yield* store
+      .acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Contradictory", detail: "memory contradiction" }))
+      .pipe(Effect.exit)
+    const contradictory = yield* store
+      .acquireServerLease(otherLeaseOwner, () =>
+        Effect.succeed({ _tag: "Contradictory", detail: "memory contradiction" } as const)
+      )
+      .pipe(Effect.exit)
+    expect(Exit.isFailure(contradictory)).toBe(true)
+  }).pipe(Effect.provide(memoryCodexAttemptStoreLayer()))
+)
+
+it.effect("rejects impossible private record and launch combinations before they can be stored", () =>
+  Effect.gen(function* () {
+    const acceptedReference = EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("a".repeat(64)) })
+    const validTerminal = {
+      _tag: "Terminal" as const,
+      attemptId: attempt.attemptId,
+      correlationAttemptId: attempt.attemptId,
+      correlationRunId: attempt.runId,
+      currentToken: CodexOwnedTurnToken.make("token-58"),
+      evidenceManifest: acceptedReference,
+      observedTurnId: CodexTurnId.make("turn-58"),
+      priorObservedTurnId: null,
+      terminal: CodexSealedTerminal.cases.Accepted.make({
+        commit: attempt.baseSha,
+        evidenceManifest: acceptedReference
+      }),
+      threadId: associated.threadId,
+      worktree: attempt.worktree
+    }
+    expect(Schema.decodeUnknownSync(CodexAttemptRecord)(validTerminal)).toEqual(validTerminal)
+    const invalidCorrelation = { ...associated, correlationAttemptId: AttemptId.make("attempt:issue-58-store:foreign") }
+    expect(() => Schema.decodeUnknownSync(CodexAttemptRecord)(invalidCorrelation)).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(CodexAttemptRecord)({
+        ...validTerminal,
+        terminal: validTerminal.terminal,
+        evidenceManifest: null
+      })
+    ).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(CodexAttemptRecord)({
+        ...validTerminal,
+        evidenceManifest: acceptedReference,
+        terminal: CodexSealedTerminal.cases.Failed.make({})
+      })
+    ).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(CodexAttemptRecord)({
+        ...validTerminal,
+        evidenceManifest: acceptedReference,
+        terminal: CodexSealedTerminal.cases.Accepted.make({
+          commit: attempt.baseSha,
+          evidenceManifest: EvidenceReference.make({ byteLength: 2, digest: EvidenceDigest.make("b".repeat(64)) })
+        })
+      })
+    ).toThrow()
+    expect(() => Schema.decodeUnknownSync(CodexServerLaunchRecord)({ ...launch, phase: "Launching", pid: 1 })).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(CodexServerLaunchRecord)({ ...launch, phase: "Spawned", pid: null })
+    ).toThrow()
+    yield* Effect.void
+  })
+)

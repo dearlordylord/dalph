@@ -5,6 +5,7 @@ import {
   EvidenceReference,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedAttemptExecutorRequest,
   PlannedTaskAttempt,
@@ -46,7 +47,7 @@ import {
   CodexAttemptStoreFailure,
   CodexOwnedTurnToken,
   CodexServerIncarnation,
-  type CodexAttemptRecord,
+  CodexAttemptRecord,
   type CodexAttemptStoreService,
   CodexThreadId,
   CodexTurnId
@@ -109,7 +110,12 @@ type Harness = {
   readonly associationAtTurn: () => CodexAttemptRecord | undefined
   readonly currentThread: () => CodexThreadSnapshot
   readonly currentRecord: () => CodexAttemptRecord | undefined
+  readonly setThread: (thread: CodexThreadSnapshot) => void
+  readonly preserveResumeCwd: () => void
+  readonly setRecord: (record: CodexAttemptRecord) => void
+  readonly setReadOverride: (record: CodexAttemptRecord | undefined) => void
   readonly complete: (message: string) => void
+  readonly completeWithItems: (items: ReadonlyArray<unknown>) => void
   readonly makeTerminalActivity: () => void
   readonly setActivityCensus: (projection: CodexOwnedActivityCensusProjection | undefined) => void
   readonly setActivityCensusSequence: (projections: ReadonlyArray<CodexOwnedActivityCensusProjection>) => void
@@ -121,8 +127,12 @@ type Harness = {
   readonly backgroundTerminationCount: () => number
   readonly descendantTerminationCount: () => number
   readonly makeResumeUnavailable: () => void
+  readonly setResumeFailure: (failure: CodexAppServerFailure | undefined) => void
+  readonly makeReadFailure: () => void
   readonly makeForeignResume: () => void
   readonly makeInterruptUnavailable: () => void
+  readonly makeInterruptSettleBeforeFailure: () => void
+  readonly makeBackgroundTerminationFail: () => void
   readonly addManualTurn: (position: "before" | "after") => void
   readonly reorderTurns: () => void
   readonly duplicateOwnedTurn: () => void
@@ -143,6 +153,9 @@ const makeHarness = (
     readonly manualAfterFirstTurn?: boolean
     readonly reorderTurnsOnResume?: boolean
     readonly foreignTurnCorrelation?: boolean
+    readonly terminalTurnStatus?: "completed" | "failed"
+    readonly omitOwnedTurnToken?: boolean
+    readonly wrongOwnedTurnToken?: boolean
     readonly keepTurnRunningOnInterruptCount?: number
     readonly interruptUnavailable?: boolean
   } = {}
@@ -164,10 +177,16 @@ const makeHarness = (
   let backgroundTerminationCount = 0
   let descendantTerminationCount = 0
   let associatedRecord: CodexAttemptRecord | undefined
+  let readOverride: CodexAttemptRecord | undefined
   let threadStartCount = 0
   let resumeUnavailable = false
+  let resumeFailure: CodexAppServerFailure | undefined
+  let readFailure = false
+  let preserveResumeCwdOnResume = false
   let foreignResume = false
   let interruptUnavailable = options.interruptUnavailable === true
+  let interruptSettlesBeforeFailure = false
+  let backgroundTerminationFailure = false
   let keepTurnRunningOnInterruptCount = options.keepTurnRunningOnInterruptCount ?? 0
   let associatedWriteFailure = false
 
@@ -191,6 +210,7 @@ const makeHarness = (
     readThread: () => Effect.succeed(currentThread),
     resumeThread: (threadIdValue, cwd) => {
       resumeCwds.push(cwd)
+      if (resumeFailure !== undefined) return Effect.fail(resumeFailure)
       if (threadIdValue !== threadId || resumeUnavailable) return Effect.fail(unavailable("thread/resume"))
       if (options.missingEmptyThread === true && currentThread.turns.length === 0) {
         return Effect.fail(
@@ -204,7 +224,7 @@ const makeHarness = (
       return Effect.sync(() => {
         currentThread = {
           ...currentThread,
-          cwd,
+          cwd: preserveResumeCwdOnResume ? currentThread.cwd : cwd,
           ...(foreignResume
             ? { correlation: { runId: RunId.make("foreign-run"), attemptId: AttemptId.make("foreign-attempt") } }
             : {})
@@ -225,9 +245,15 @@ const makeHarness = (
         if (turnNumber === 1 && options.manualBeforeFirstTurn === true) turns.push(manualTurn("manual-before"))
         currentTurn = {
           id: CodexTurnId.make(`codex-turn-${turnNumber}`),
-          status: "inProgress",
+          status: options.terminalTurnStatus ?? "inProgress",
           items: [],
-          ...(ownedTurnToken === undefined ? {} : { ownedTurnToken }),
+          ...(options.omitOwnedTurnToken || ownedTurnToken === undefined
+            ? {}
+            : {
+                ownedTurnToken: options.wrongOwnedTurnToken
+                  ? CodexOwnedTurnToken.make("wrong-owned-token")
+                  : ownedTurnToken
+              }),
           ...(options.foreignTurnCorrelation === true
             ? { correlation: { runId: RunId.make("foreign-run"), attemptId: AttemptId.make("foreign-attempt") } }
             : {})
@@ -246,6 +272,12 @@ const makeHarness = (
       }),
     interruptTurn: (threadIdValue, turnId) => {
       if (interruptUnavailable) {
+        if (interruptSettlesBeforeFailure && threadIdValue === threadId && currentTurn?.id === turnId) {
+          currentTurn = { ...currentTurn, status: "interrupted" }
+          const currentIndex = turns.findIndex((turn) => turn.id === currentTurn?.id)
+          if (currentIndex >= 0) turns[currentIndex] = currentTurn
+          currentThread = { ...currentThread, status: "idle", turns }
+        }
         return Effect.fail(unavailable("turn/interrupt"))
       }
       return Effect.sync(() => {
@@ -271,17 +303,19 @@ const makeHarness = (
         backgroundTerminationCount += 1
         const wasActive = terminalActivity
         terminalActivity = false
-        return wasActive
+        return backgroundTerminationFailure ? false : wasActive
       }),
     close: Effect.void
   }
 
   const store: CodexAttemptStoreService = {
     readAttempt: (runId, attemptId) =>
-      Effect.sync(() => {
-        const record = records.get(keyOf(runId, attemptId))
-        return record === undefined ? Option.none() : Option.some(record)
-      }),
+      readFailure
+        ? Effect.fail(new CodexAttemptStoreFailure({ detail: "read failed", operation: "readAttempt" }))
+        : Effect.sync(() => {
+            const record = readOverride ?? records.get(keyOf(runId, attemptId))
+            return record === undefined ? Option.none() : Option.some(record)
+          }),
     writeAttempt: (record) => {
       if (record._tag === "AssociatedPreTurn" && options.failAssociatedWriteOnce === true && !associatedWriteFailure) {
         associatedWriteFailure = true
@@ -312,6 +346,19 @@ const makeHarness = (
     associationAtTurn: () => associationAtTurn,
     currentThread: () => currentThread,
     currentRecord: () => records.get(keyOf(attempt.runId, attempt.attemptId)),
+    setThread: (thread) => {
+      currentThread = thread
+    },
+    preserveResumeCwd: () => {
+      preserveResumeCwdOnResume = true
+    },
+    setRecord: (record) => {
+      records.set(keyOf(record.correlationRunId, record.correlationAttemptId), record)
+      if (record._tag === "AssociatedPreTurn") associatedRecord = record
+    },
+    setReadOverride: (record) => {
+      readOverride = record
+    },
     complete: (message) => {
       if (currentTurn === undefined) return
       currentTurn = {
@@ -326,6 +373,13 @@ const makeHarness = (
       if (currentIndex >= 0) turns[currentIndex] = currentTurn
       currentThread = { ...currentThread, status: "idle", turns }
       if (options.manualAfterFirstTurn === true && turnNumber === 1) turns.push(manualTurn("manual-after"))
+    },
+    completeWithItems: (items) => {
+      if (currentTurn === undefined) return
+      currentTurn = { ...currentTurn, status: "completed", items }
+      const currentIndex = turns.findIndex((turn) => turn.id === currentTurn?.id)
+      if (currentIndex >= 0) turns[currentIndex] = currentTurn
+      currentThread = { ...currentThread, status: "idle", turns }
     },
     makeTerminalActivity: () => {
       terminalActivity = true
@@ -361,11 +415,24 @@ const makeHarness = (
     makeResumeUnavailable: () => {
       resumeUnavailable = true
     },
+    setResumeFailure: (failure) => {
+      resumeFailure = failure
+    },
+    makeReadFailure: () => {
+      readFailure = true
+    },
     makeForeignResume: () => {
       foreignResume = true
     },
     makeInterruptUnavailable: () => {
       interruptUnavailable = true
+    },
+    makeInterruptSettleBeforeFailure: () => {
+      interruptUnavailable = true
+      interruptSettlesBeforeFailure = true
+    },
+    makeBackgroundTerminationFail: () => {
+      backgroundTerminationFailure = true
     },
     addManualTurn: (position) => {
       const manual = manualTurn(`manual-${position}-${turns.length}`)
@@ -420,21 +487,32 @@ const defaultGitCommand: GitCommandService = {
 const layerFor = (
   harness: Harness,
   gitCommand: GitCommandService = defaultGitCommand,
-  evidenceStore: Layer.Layer<EvidenceStore> = memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer))
+  evidenceStore: Layer.Layer<EvidenceStore> | null = memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer))
 ) =>
   codexPlannedAttemptExecutorLayer.pipe(
     Layer.provide(
-      Layer.mergeAll(
-        controlledCodexAppServerLayer(harness.app),
-        controlledCodexOwnedActivityCensusLayer({
-          observe: (thread, backgroundTerminals) =>
-            Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
-          terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
-        }),
-        Layer.succeed(CodexAttemptStore, harness.store),
-        Layer.succeed(GitCommand, gitCommand),
-        evidenceStore
-      )
+      evidenceStore === null
+        ? Layer.mergeAll(
+            controlledCodexAppServerLayer(harness.app),
+            controlledCodexOwnedActivityCensusLayer({
+              observe: (thread, backgroundTerminals) =>
+                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+              terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
+            }),
+            Layer.succeed(CodexAttemptStore, harness.store),
+            Layer.succeed(GitCommand, gitCommand)
+          )
+        : Layer.mergeAll(
+            controlledCodexAppServerLayer(harness.app),
+            controlledCodexOwnedActivityCensusLayer({
+              observe: (thread, backgroundTerminals) =>
+                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+              terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
+            }),
+            Layer.succeed(CodexAttemptStore, harness.store),
+            Layer.succeed(GitCommand, gitCommand),
+            evidenceStore
+          )
     ),
     Layer.provide(NodeServices.layer)
   )
@@ -606,6 +684,196 @@ it.effect("fails closed when accepted evidence changes its manifest or content a
   })
 )
 
+it.effect("fails closed when evidence is unavailable or Git cannot prove the accepted head", () => {
+  const unavailableEvidenceHarness = makeHarness()
+  const failedHeadHarness = makeHarness()
+  const malformedHeadHarness = makeHarness()
+  const movingHeadHarness = makeHarness()
+  const failedHead: GitCommandService = {
+    ...defaultGitCommand,
+    runInWorktree: () => Effect.succeed({ exitCode: 1, stderr: "rev-parse failed", stdout: "" })
+  }
+  const malformedHead: GitCommandService = {
+    ...defaultGitCommand,
+    runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "not-a-commit\n" })
+  }
+  let headReads = 0
+  const movingHead: GitCommandService = {
+    ...defaultGitCommand,
+    runInWorktree: () =>
+      Effect.sync(() => ({ exitCode: 0, stderr: "", stdout: `${headReads++ === 0 ? head : otherHead}\n` }))
+  }
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    unavailableEvidenceHarness.complete(finalResponse(head))
+    const unavailableEvidence = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    expect(unavailableEvidence._tag).toBe("Failure")
+    expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+  }).pipe(
+    Effect.provide(layerFor(unavailableEvidenceHarness, defaultGitCommand, null)),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        failedHeadHarness.complete(finalResponse(head))
+        expect((yield* executor.startOrContinue(request).pipe(Effect.exit))._tag).toBe("Failure")
+      }).pipe(Effect.provide(layerFor(failedHeadHarness, failedHead)))
+    ),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        malformedHeadHarness.complete(finalResponse(head))
+        expect((yield* executor.startOrContinue(request).pipe(Effect.exit))._tag).toBe("Failure")
+      }).pipe(Effect.provide(layerFor(malformedHeadHarness, malformedHead)))
+    ),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        movingHeadHarness.complete(finalResponse(head))
+        expect((yield* executor.startOrContinue(request).pipe(Effect.exit))._tag).toBe("Failure")
+      }).pipe(Effect.provide(layerFor(movingHeadHarness, movingHead)))
+    )
+  )
+})
+
+it.effect("seals an immediate provider failure and rejects a turn that returns another owned token", () => {
+  const failedHarness = makeHarness({ terminalTurnStatus: "failed" })
+  const tokenHarness = makeHarness({ wrongOwnedTurnToken: true })
+  return Effect.gen(function* () {
+    const failedExecutor = yield* PlannedAttemptExecutor
+    const failed = yield* failedExecutor.startOrContinue(request)
+    expect(failed).toEqual(
+      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+    )
+  }).pipe(
+    Effect.provide(layerFor(failedHarness)),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const result = yield* executor.startOrContinue(request).pipe(Effect.exit)
+        expect(result._tag).toBe("Failure")
+      }).pipe(Effect.provide(layerFor(tokenHarness)))
+    )
+  )
+})
+
+it.effect("rejects malformed, foreign, ambiguous, and non-JSON terminal messages without accepting a commit", () =>
+  Effect.forEach(
+    [
+      [null, { type: "agentMessage", text: "{not-json" }],
+      [{ type: "agentMessage", text: 42 }],
+      [{ type: "agentMessage", text: "null" }],
+      [{ type: "agentMessage", text: "{}" }],
+      [{ type: "agentMessage", text: JSON.stringify({ correlation: { runId: "", attemptId: "" }, commit: head }) }],
+      [
+        {
+          type: "agentMessage",
+          text: JSON.stringify({ correlation: { runId: "foreign-run", attemptId: "foreign-attempt" }, commit: head })
+        }
+      ],
+      [{ type: "agentMessage", text: JSON.stringify({ correlation, commit: "not-a-commit" }) }],
+      [{ type: "agentMessage", text: JSON.stringify({ correlation, commit: head }) + ` ${"b".repeat(40)}` }],
+      [
+        { type: "other", text: finalResponse(head) },
+        { type: "agentMessage", text: "plain text" }
+      ]
+    ] as ReadonlyArray<ReadonlyArray<unknown>>,
+    (items) => {
+      const harness = makeHarness()
+      return Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        harness.completeWithItems(items)
+        const failed = yield* executor.startOrContinue(request)
+        expect(failed).toEqual(
+          PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+        )
+      }).pipe(Effect.provide(layerFor(harness)))
+    }
+  )
+)
+
+it.effect(
+  "rereads accepted terminal evidence and keeps it unresolved when the turn, Git head, or activity changes",
+  () => {
+    const activityHarness = makeHarness()
+    const turnHarness = makeHarness()
+    const headHarness = makeHarness()
+    let headMismatch = false
+    const rereadHead: GitCommandService = {
+      ...defaultGitCommand,
+      runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: `${headMismatch ? otherHead : head}\n` })
+    }
+    return Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.startOrContinue(request)
+      activityHarness.complete(finalResponse(head))
+      const accepted = yield* executor.startOrContinue(request)
+      expect(accepted._tag).toBe("Terminal")
+      activityHarness.setActivityCensus({
+        _tag: "ExactLive",
+        activities: [
+          {
+            _tag: "BackgroundTerminal",
+            terminal: {
+              processId: "accepted-background-58",
+              itemId: "accepted-item-58",
+              command: "npm test",
+              cwd: worktree
+            }
+          }
+        ]
+      })
+      expect((yield* executor.project(correlation))._tag).toBe("Exact")
+      activityHarness.setActivityCensus({ _tag: "Absent" })
+      expect((yield* executor.project(correlation))._tag).toBe("Exact")
+    }).pipe(
+      Effect.provide(layerFor(activityHarness)),
+      Effect.andThen(
+        Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          yield* executor.startOrContinue(request)
+          turnHarness.complete(finalResponse(head))
+          expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
+          turnHarness.complete(finalResponse(otherHead))
+          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+        }).pipe(Effect.provide(layerFor(turnHarness)))
+      ),
+      Effect.andThen(
+        Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          yield* executor.startOrContinue(request)
+          headHarness.complete(finalResponse(head))
+          expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
+          headMismatch = true
+          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+        }).pipe(Effect.provide(layerFor(headHarness, rereadHead)))
+      )
+    )
+  }
+)
+
+it.effect(
+  "reprojects a retained accepted terminal as unreadable when evidence service is unavailable after restart",
+  () => {
+    const harness = makeHarness()
+    const accepted = Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.startOrContinue(request)
+      harness.complete(finalResponse(head))
+      expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
+    }).pipe(Effect.provide(layerFor(harness)))
+    const restarted = Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+    }).pipe(Effect.provide(layerFor(harness, defaultGitCommand, null)))
+    return accepted.pipe(Effect.andThen(restarted))
+  }
+)
+
 it.effect("serializes same-attempt parallel admission behind one gate", () => {
   const harness = makeHarness()
   return Effect.gen(function* () {
@@ -775,6 +1043,181 @@ it.effect("does not report safe suspension while a process-group descendant surv
     const suspended = yield* executor.requestSuspension(attempt)
     expect(suspended._tag).toBe("SafelySuspended")
   }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("keeps suspension unresolved for contradictory, active, surviving, and failed activity cleanup", () => {
+  const contradictoryHarness = makeHarness()
+  const activeHarness = makeHarness()
+  const survivingHarness = makeHarness()
+  const failedTerminationHarness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    contradictoryHarness.setActivityCensus({ _tag: "Contradictory", detail: "contradictory activity" })
+    const contradictory = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+    expect(contradictory._tag).toBe("Failure")
+  }).pipe(
+    Effect.provide(layerFor(contradictoryHarness)),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        activeHarness.setActivityCensus({
+          _tag: "ExactLive",
+          activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("active-turn-58") }]
+        })
+        const active = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+        expect(active._tag).toBe("Failure")
+      }).pipe(Effect.provide(layerFor(activeHarness)))
+    ),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        survivingHarness.makeTerminalActivity()
+        survivingHarness.setActivityCensus({
+          _tag: "ExactLive",
+          activities: [
+            {
+              _tag: "BackgroundTerminal",
+              terminal: {
+                processId: "surviving-terminal-58",
+                itemId: "surviving-item-58",
+                command: "npm test",
+                cwd: worktree,
+                osPid: null
+              }
+            }
+          ]
+        })
+        const surviving = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+        expect(surviving._tag).toBe("Failure")
+      }).pipe(Effect.provide(layerFor(survivingHarness)))
+    ),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        failedTerminationHarness.makeTerminalActivity()
+        failedTerminationHarness.makeBackgroundTerminationFail()
+        const failedTermination = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+        expect(failedTermination._tag).toBe("Failure")
+      }).pipe(Effect.provide(layerFor(failedTerminationHarness)))
+    )
+  )
+})
+
+it.effect("reconciles an interrupted response that settled before its error and retains no duplicate interrupt", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.makeInterruptSettleBeforeFailure()
+    const suspended = yield* executor.requestSuspension(attempt)
+    expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("fails closed for malformed thread states and unresolved turn intents", () => {
+  const notLoadedHarness = makeHarness()
+  const systemErrorHarness = makeHarness()
+  const cwdMismatchHarness = makeHarness()
+  const associatedActivityHarness = makeHarness()
+  const unresolvedHarness = makeHarness()
+  const observedMissingHarness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    notLoadedHarness.setThread({ ...notLoadedHarness.currentThread(), status: "notLoaded" })
+    expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+    expect(yield* executor.startOrContinue(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
+  }).pipe(
+    Effect.provide(layerFor(notLoadedHarness)),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        systemErrorHarness.setThread({ ...systemErrorHarness.currentThread(), status: "systemError" })
+        expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+      }).pipe(Effect.provide(layerFor(systemErrorHarness)))
+    ),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        cwdMismatchHarness.setThread({ ...cwdMismatchHarness.currentThread(), cwd: "/tmp/foreign-worktree" })
+        cwdMismatchHarness.preserveResumeCwd()
+        expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+      }).pipe(Effect.provide(layerFor(cwdMismatchHarness)))
+    ),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        const current = associatedActivityHarness.currentRecord()
+        expect(current?._tag).toBe("Running")
+        if (current?._tag === "Running") {
+          associatedActivityHarness.setRecord(
+            CodexAttemptRecord.cases.AssociatedPreTurn.make({
+              attemptId: current.attemptId,
+              correlationAttemptId: current.correlationAttemptId,
+              correlationRunId: current.correlationRunId,
+              threadId: current.threadId,
+              worktree: current.worktree
+            })
+          )
+          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+        }
+      }).pipe(Effect.provide(layerFor(associatedActivityHarness)))
+    ),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        const current = unresolvedHarness.currentRecord()
+        expect(current?._tag).toBe("Running")
+        if (current?._tag === "Running") {
+          const intent = CodexAttemptRecord.cases.TurnIntentRecorded.make({
+            attemptId: current.attemptId,
+            correlationAttemptId: current.correlationAttemptId,
+            correlationRunId: current.correlationRunId,
+            currentToken: CodexOwnedTurnToken.make("missing-intent-token"),
+            priorObservedTurnId: current.priorObservedTurnId,
+            threadId: current.threadId,
+            worktree: current.worktree
+          })
+          unresolvedHarness.setRecord(intent)
+          unresolvedHarness.setThread({ id: current.threadId, cwd: current.worktree, status: "idle", turns: [] })
+          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+          expect(yield* executor.startOrContinue(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
+        }
+      }).pipe(Effect.provide(layerFor(unresolvedHarness)))
+    ),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        const current = observedMissingHarness.currentRecord()
+        expect(current?._tag).toBe("Running")
+        if (current?._tag === "Running") {
+          observedMissingHarness.setRecord(
+            CodexAttemptRecord.cases.TurnObserved.make({
+              attemptId: current.attemptId,
+              correlationAttemptId: current.correlationAttemptId,
+              correlationRunId: current.correlationRunId,
+              currentToken: current.currentToken,
+              observedTurnId: current.observedTurnId,
+              priorObservedTurnId: current.priorObservedTurnId,
+              threadId: current.threadId,
+              worktree: current.worktree
+            })
+          )
+          observedMissingHarness.setThread({ id: current.threadId, cwd: current.worktree, status: "idle", turns: [] })
+          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+        }
+      }).pipe(Effect.provide(layerFor(observedMissingHarness)))
+    )
+  )
 })
 
 it.effect("keeps a terminal attempt running when its activity census is unreadable", () => {
@@ -989,4 +1432,107 @@ it.effect("maps a foreign correlation on the owned token to a contradiction", ()
     expect(projected._tag).toBe("CorrelationContradiction")
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("projects no report, safe suspension, and an idle running record through the normalized boundary", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    expect((yield* executor.project(correlation))._tag).toBe("NoReport")
+
+    const associatedRecord = CodexAttemptRecord.cases.AssociatedPreTurn.make({
+      attemptId: attempt.attemptId,
+      correlationAttemptId: attempt.attemptId,
+      correlationRunId: attempt.runId,
+      threadId: CodexThreadId.make("codex-thread-issue-58"),
+      worktree
+    })
+    harness.setRecord(associatedRecord)
+    expect((yield* executor.project(correlation))._tag).toBe("NoReport")
+
+    const running = yield* executor.startOrContinue(request)
+    expect(running._tag).toBe("Running")
+    const suspended = yield* executor.requestSuspension(attempt)
+    expect(suspended._tag).toBe("SafelySuspended")
+    const projectedSuspension = yield* executor.project(correlation)
+    expect(projectedSuspension).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+      })
+    )
+
+    const current = harness.currentRecord()
+    expect(current?._tag).toBe("SafelySuspended")
+    if (current?._tag === "SafelySuspended") {
+      harness.setRecord(
+        CodexAttemptRecord.cases.Running.make({
+          attemptId: current.attemptId,
+          correlationAttemptId: current.correlationAttemptId,
+          correlationRunId: current.correlationRunId,
+          currentToken: current.currentToken,
+          observedTurnId: current.observedTurnId,
+          priorObservedTurnId: current.priorObservedTurnId,
+          threadId: current.threadId,
+          worktree: current.worktree
+        })
+      )
+      harness.setThread({
+        id: current.threadId,
+        cwd: current.worktree,
+        status: "idle",
+        turns: [{ id: current.observedTurnId, status: "interrupted", items: [], ownedTurnToken: current.currentToken }]
+      })
+      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+    }
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("normalizes stored failures, foreign records, and unusable app-server observations", () => {
+  const failureHarness = makeHarness()
+  const foreignHarness = makeHarness()
+  const protocolHarness = makeHarness()
+  return Effect.gen(function* () {
+    const failureExecutor = yield* PlannedAttemptExecutor
+    failureHarness.makeReadFailure()
+    expect((yield* failureExecutor.project(correlation))._tag).toBe("Unreadable")
+  }).pipe(
+    Effect.provide(layerFor(failureHarness)),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        const record = foreignHarness.currentRecord()
+        expect(record).toBeDefined()
+        if (record?._tag === "Running") {
+          foreignHarness.setReadOverride(
+            CodexAttemptRecord.cases.Running.make({
+              ...record,
+              correlationAttemptId: AttemptId.make("foreign-attempt"),
+              correlationRunId: RunId.make("foreign-run")
+            })
+          )
+        }
+        expect((yield* executor.project(correlation))._tag).toBe("CorrelationContradiction")
+        expect((yield* executor.startOrContinue(request))._tag).toBe("Running")
+      }).pipe(Effect.provide(layerFor(foreignHarness)))
+    ),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        protocolHarness.setResumeFailure(
+          new CodexAppServerFailure({ detail: "protocol response", kind: "Protocol", operation: "thread/resume" })
+        )
+        expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+        protocolHarness.setResumeFailure(
+          new CodexAppServerFailure({
+            detail: "initialization identity conflict",
+            kind: "CorrelationContradiction",
+            operation: "initialize"
+          })
+        )
+        expect((yield* executor.project(correlation))._tag).toBe("InitializationCorrelationContradiction")
+      }).pipe(Effect.provide(layerFor(protocolHarness)))
+    )
+  )
 })
