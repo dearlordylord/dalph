@@ -2,13 +2,14 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { it } from "@effect/vitest"
-import { Cause, Effect, FileSystem, Layer, Path } from "effect"
+import { Cause, ConfigProvider, Effect, FileSystem, Layer, Path } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import * as SqlError from "effect/unstable/sql/SqlError"
 import { describe, expect } from "vitest"
 import { RunId } from "@dalph/contracts"
 import {
   FixtureTarget,
+  CoordinatorOwnership,
   InitialControlPolicy,
   JournalDatabaseLocator,
   JournalRecordKey,
@@ -21,6 +22,7 @@ import {
   legacyMemoryJournalStoreLayer,
   OperationId,
   legacySqliteJournalStoreLayer,
+  productionJournalStoreLayer,
   TaskWorkCapacity,
   taskTrackerReadIntent,
   WorkflowRunAlreadyBegan,
@@ -65,6 +67,27 @@ const intent = (operationId: string, taskId: string) =>
       target: FixtureTarget.make(taskId)
     })
   )
+
+it.effect("opens the configured production journal only with coordinator ownership", () =>
+  Effect.scoped(
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const runId = RunId.make("production-journal-composition")
+        const began = yield* journal.beginRun(runId, FixtureTarget.make("production-target"), initialPolicy)
+
+        expect(began.runId).toBe(runId)
+      }).pipe(
+        Effect.provide(productionJournalStoreLayer),
+        Effect.provideService(
+          CoordinatorOwnership,
+          CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+        ),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+      )
+    )
+  )
+)
 
 const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<JournalStore, unknown>) => {
   const runId = RunId.make(`run-contract-${name}`)
