@@ -8,6 +8,9 @@ import { expect } from "vitest"
 const repositoryRoot = process.cwd()
 const qualityLintRunner = join(repositoryRoot, "scripts", "run-quality-lint.mjs")
 const qualityFixtureRoot = join(repositoryRoot, "test", "fixtures", "quality-lint")
+// Compatibility lint builds the whole TypeScript import graph. Keep its integration-test bound above the
+// observed repository-scale runtime while the outer quality gate retains its own fixed overall deadline.
+const repositoryCompatibilityLintTimeout = 120_000
 
 const CommandResult = Schema.Struct({ exitCode: Schema.Finite, stdout: Schema.String, stderr: Schema.String })
 
@@ -89,7 +92,7 @@ it.effect(
         expect(`${publicEntryResult.stdout}${publicEntryResult.stderr}`.split("\n").length).toBeLessThan(30)
       })
     ),
-  60_000
+  repositoryCompatibilityLintTimeout
 )
 
 it.effect(
@@ -103,5 +106,5 @@ it.effect(
         expect(result.stdout).toContain("functional/immutable-data")
       })
     ),
-  60_000
+  repositoryCompatibilityLintTimeout
 )
