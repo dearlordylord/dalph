@@ -142,7 +142,10 @@ const collectText = (value: unknown): string => {
   return typeof text === "string" ? text : ""
 }
 
-const commitFromTurn = (turn: CodexTurnSnapshot | undefined): GitCommitSha | undefined => {
+const commitFromTurn = (
+  turn: CodexTurnSnapshot | undefined,
+  expectedCorrelation?: PlannedAttemptExecutorCorrelation
+): GitCommitSha | undefined => {
   if (turn === undefined) return undefined
   const messages = turn.items
     .filter(isJsonRecord)
@@ -153,6 +156,17 @@ const commitFromTurn = (turn: CodexTurnSnapshot | undefined): GitCommitSha | und
   let parsedCandidate: string | undefined
   try {
     const parsed: unknown = JSON.parse(finalMessage)
+    if (isJsonRecord(parsed) && expectedCorrelation !== undefined) {
+      const responseCorrelation = parsed["correlation"]
+      if (responseCorrelation !== undefined) {
+        try {
+          const decoded = Schema.decodeUnknownSync(PlannedAttemptExecutorCorrelation)(responseCorrelation)
+          if (!sameCorrelation(decoded, expectedCorrelation)) return undefined
+        } catch {
+          return undefined
+        }
+      }
+    }
     if (isJsonRecord(parsed) && typeof parsed["commit"] === "string") {
       parsedCandidate = parsed["commit"]
     }
@@ -348,7 +362,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       record: CodexAttemptRecord,
       turn: CodexTurnSnapshot
     ) {
-      const commit = commitFromTurn(turn)
+      const commit = commitFromTurn(turn, correlation)
       const head = yield* readHead(attempt)
       if (commit === undefined) {
         return yield* failed(attempt, correlation, record, turn.id)
@@ -396,7 +410,8 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         return yield* Effect.fail(new CodexEvidenceInvalid({}))
       }
       if (Option.isNone(evidenceStore)) return yield* Effect.fail(new CodexEvidenceUnavailable({}))
-      if (commitFromTurn(turn) !== record.terminal.commit) return yield* Effect.fail(new CodexEvidenceInvalid({}))
+      if (commitFromTurn(turn, correlation) !== record.terminal.commit)
+        return yield* Effect.fail(new CodexEvidenceInvalid({}))
       const bytes = yield* evidenceStore.value.read(record.evidenceManifest)
       let manifest: typeof AcceptedResultEvidenceManifest.Type
       try {
