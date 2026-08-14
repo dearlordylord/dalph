@@ -13,8 +13,8 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import {
   beginPlannedAttemptExecutorResponsibility,
@@ -44,6 +44,11 @@ import {
 import { makeIntegrationTargetResourceController } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 
+const specification = makeTaskWorkSpecification({
+  body: "Complete the model task.",
+  taskId: TaskId.make("model-task"),
+  title: "Complete model task"
+})
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("1"),
   baseSha: GitCommitSha.make("1".repeat(40)),
@@ -51,7 +56,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:model"),
   runId: RunId.make("158"),
   taskId: TaskId.make("model-task"),
-  taskRevision: TaskRevision.make("model-revision"),
+  taskRevision: specification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/model-attempt")
 })
 const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
@@ -215,8 +220,16 @@ const executorConformanceDriver = defineDriver(
           yield* Deferred.succeed(commandCallSignal, undefined)
           return yield* Deferred.await(commandResponse)
         }),
-      startOrContinue: () =>
+      startOrContinue: (request) =>
         Effect.gen(function* () {
+          if (
+            request.specification.body !== specification.body ||
+            request.specification.fingerprint !== specification.fingerprint ||
+            request.specification.taskId !== specification.taskId ||
+            request.specification.title !== specification.title
+          ) {
+            return yield* Effect.die("the model command must carry its exact task-work specification")
+          }
           commandCalls += 1
           yield* Deferred.succeed(commandCallSignal, undefined)
           return yield* Deferred.await(commandResponse)
@@ -233,7 +246,7 @@ const executorConformanceDriver = defineDriver(
     const workflow = () =>
       commandKind === "Suspend"
         ? provideWorkflow(requestPlannedAttemptExecutorSuspension(plannedAttempt))
-        : provideWorkflow(continuePlannedAttemptExecutorWork(plannedAttempt))
+        : provideWorkflow(continuePlannedAttemptExecutorWork(plannedAttempt, undefined, specification))
     const requireController = () =>
       controller === undefined ? Effect.die("admission controller not initialized") : Effect.succeed(controller)
     const reservePosition = Effect.fn("ExecutorModel.reservePosition")(function* () {
