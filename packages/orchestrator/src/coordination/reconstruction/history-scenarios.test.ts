@@ -29,6 +29,7 @@ import { describeJournalEvent } from "../../workflow/registry/event-descriptor.j
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
+  attemptChoiceAppliedRecordKey,
   controlDirectionAppliedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
@@ -36,6 +37,8 @@ import {
   plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  plannedAttemptContinuationAuthorizedRecordKey,
+  plannedAttemptReplacedRecordKey,
   taskClaimReacquisitionDirectedRecordKey
 } from "../../workflow-journal/record-key.js"
 import { type JournalRecord } from "../../workflow-journal/store.js"
@@ -51,6 +54,14 @@ import {
   TargetLineageObservedEvent,
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
+import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
+import {
+  PlannedAttemptReplacedEvent,
+  PlannedAttemptReplacementWitness
+} from "../../workflow/protocols/attempt-choice/replacement-events.js"
+import { PlannedAttemptContinuationAuthorizedEvent } from "../../workflow/protocols/planned-attempt-continuation/events.js"
+import { CompletionClaimReplacedEvent } from "../../workflow/protocols/integration-finality/events.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
 import { reduceWorkflowJournalHistory } from "./history.js"
 import { deriveRunRecoveryFrontier } from "../frontier/recovery-frontier.js"
 import {
@@ -77,6 +88,7 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTargetLineageObservationOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
@@ -424,6 +436,176 @@ it("rejects an executor response without an exact outstanding command intent", (
     _tag: "InvalidWorkflowJournalHistory",
     issues: expect.arrayContaining([
       expect.objectContaining({ detail: expect.stringContaining("has no outstanding command intent") })
+    ])
+  })
+})
+
+it("rejects an executor command without its prior responsibility and records finality issues through the fold", () => {
+  const commandWithoutResponsibility = reduceWorkflowJournalHistory(runId, recordsFrom([planRow, firstCommandRow]))
+  expect(commandWithoutResponsibility).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("has no prior matching executor-work responsibility") })
+    ])
+  })
+
+  const replacementOperationId = OperationId.make("history-finality-orphan-replacement")
+  const orphanReplacement = CompletionClaimReplacedEvent.make({
+    claim: integrationFinalityFixture.claim,
+    operationId: replacementOperationId,
+    version: workflowJournalEventVersion
+  })
+  const finalityReduction = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([{ event: orphanReplacement, key: outcomeRecordKey(replacementOperationId) }])
+  )
+  expect(finalityReduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("completion claim binds run") }),
+      expect.objectContaining({ detail: expect.stringContaining("has no unique matching intent") })
+    ])
+  })
+})
+
+it("rejects continuation authorization when its run and current witnesses are not durable", () => {
+  const otherRun = RunId.make("continuation-other-run")
+  const otherAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: otherRun })
+  const witness = {
+    activeTaskContinuationRead: {
+      graphObservationOperationId: OperationId.make("continuation-graph"),
+      taskClaimObservationOperationId: OperationId.make("continuation-claim"),
+      taskWorkSpecificationObservationOperationId: OperationId.make("continuation-specification")
+    },
+    worktreeObservationOperationId: OperationId.make("continuation-worktree")
+  }
+  const event = PlannedAttemptContinuationAuthorizedEvent.make({
+    plannedAttempt: otherAttempt,
+    version: workflowJournalEventVersion,
+    witness
+  })
+  const reduction = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([
+      {
+        event,
+        key: plannedAttemptContinuationAuthorizedRecordKey(otherAttempt.attemptId, [
+          witness.activeTaskContinuationRead.graphObservationOperationId,
+          witness.activeTaskContinuationRead.taskClaimObservationOperationId,
+          witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
+          witness.worktreeObservationOperationId
+        ])
+      }
+    ])
+  )
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("continuation authorization binds another Run") }),
+      expect.objectContaining({ detail: expect.stringContaining("continuation authorization requires") })
+    ])
+  })
+})
+
+it("records the superseded attempt before rejecting its later executor responsibility", () => {
+  const successor = PlannedTaskAttempt.make({
+    ...plannedAttempt,
+    attemptId: AttemptId.make("history-replacement-successor"),
+    baseSha: GitCommitSha.make("b".repeat(40)),
+    branch: TaskBranchRef.make("refs/heads/dalph/history-replacement-successor"),
+    taskRevision: TaskRevision.make("history-replacement-successor-revision"),
+    worktree: WorktreeLocator.make("/worktrees/history-replacement-successor")
+  })
+  const requestId = AttemptChoiceRequestId.make({ nonce: "history-replacement-request", runId })
+  const subject = { observedTaskRevision: successor.taskRevision, plannedAttempt }
+  const expectedClaim = ActiveTaskClaim.make({
+    operationId: OperationId.make("history-replacement-claim"),
+    owner: ClaimOwner.make("dalph"),
+    taskId,
+    token: ClaimToken.make("history-replacement-token")
+  })
+  const graphRead = makeTrackerGraphObservationOperation(
+    OperationId.make("history-replacement-graph"),
+    target,
+    [],
+    [taskId]
+  )
+  const specificationRead = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("history-replacement-specification"),
+    target,
+    taskId
+  )
+  const claimRead = makeTaskClaimObservationOperation(
+    OperationId.make("history-replacement-claim-read"),
+    target,
+    taskId
+  )
+  const worktreeRead = makeTaskWorktreeObservationOperation({
+    operationId: OperationId.make("history-replacement-worktree"),
+    plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const targetRead = makeTargetLineageObservationOperation({
+    integrationTarget: IntegrationTarget.make({
+      repository: GitRepositoryLocator.make("/repositories/history-replacement.git"),
+      ref: IntegrationTargetRef.make("refs/heads/master")
+    }),
+    operationId: OperationId.make("history-replacement-target"),
+    plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const witness = PlannedAttemptReplacementWitness.make({
+    claimObservationOperationId: claimRead.operationId,
+    expectedClaim,
+    graphObservationOperationId: graphRead.operationId,
+    oldWorktreeObservationOperationId: worktreeRead.operationId,
+    oldWorktreeProof: proof,
+    quiescenceProof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+    specificationObservationOperationId: specificationRead.operationId,
+    targetHeadSha: successor.baseSha,
+    targetLineageObservationOperationId: targetRead.operationId
+  })
+  const successorPlan = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("history-replacement-plan"),
+    plannedAttempt: successor,
+    predecessorOperationIds: [
+      expectedClaim.operationId,
+      graphRead.operationId,
+      specificationRead.operationId,
+      claimRead.operationId,
+      worktreeRead.operationId,
+      targetRead.operationId
+    ]
+  })
+  const applied = AttemptChoiceAppliedEvent.make({
+    choice: "RestartTaskImplementation",
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    requestId,
+    subject,
+    version: workflowJournalEventVersion
+  })
+  const replacement = PlannedAttemptReplacedEvent.make({
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    requestId,
+    subject,
+    successorPlan,
+    version: workflowJournalEventVersion,
+    witness
+  })
+  const reduction = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([
+      { event: applied, key: attemptChoiceAppliedRecordKey(requestId) },
+      { event: replacement, key: plannedAttemptReplacedRecordKey(plannedAttempt.attemptId) },
+      startRow
+    ])
+  )
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("follows replacement of attempt") })
     ])
   })
 })

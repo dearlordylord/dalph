@@ -63,6 +63,9 @@ import {
 } from "../task-tracker-facts/observation.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../protocols/task-attempt-planning/plan.js"
 import {
+  makeTargetLineageObservationOperation,
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTrackerGraphObservationOperation
@@ -73,6 +76,7 @@ import {
   AppliedControlDirection,
   decodeWorkflowOccurrence,
   originatingActionForPlannedAttemptWorktreeObservation,
+  originatingActionForTargetLineageObservation,
   originatingActionForTrackerObservation,
   plannedAttemptExecutorResponsibilityForReport,
   presentWorkflowOccurrence,
@@ -84,6 +88,10 @@ import {
 import { Effect, Layer, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { invalidIntegrationOccurrenceRelationship, projectIntegrationOccurrence } from "./integration-occurrence.js"
+import { GitTargetLineageReadFailure } from "../../authorities/git/target-lineage.js"
+import { GitWorktreeReadFailure, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
@@ -95,7 +103,9 @@ import {
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
 import {
   AttemptRestartAuthorityReadFailedEvent,
-  AttemptRestartTaskFactsReadFailure
+  AttemptRestartTaskFactsReadFailure,
+  PlannedAttemptReplacedEvent,
+  PlannedAttemptReplacementWitness
 } from "../protocols/attempt-choice/replacement-events.js"
 import {
   TaskClaimReacquisitionDirectedEvent,
@@ -1161,6 +1171,299 @@ it.effect("rejects a Restart read failure without one exact earlier authority re
       }).pipe(Effect.flip)
       expect(schemaFailure._tag).toBe("SchemaError")
     }
+  })
+)
+
+it.effect("projects exact Git Restart failures and follows target-lineage observations", () =>
+  Effect.gen(function* () {
+    const requestId = AttemptChoiceRequestId.make({ nonce: "restart-git-failures", runId })
+    const subject = { observedTaskRevision: TaskRevision.make("occurrence-git-revision"), plannedAttempt }
+    const worktreeRead = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("restart-worktree-failure-read"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const targetRead = makeTargetLineageObservationOperation({
+      integrationTarget,
+      operationId: OperationId.make("restart-target-failure-read"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const applied = record(
+      1,
+      AttemptChoiceAppliedEvent.make({
+        choice: "RestartTaskImplementation",
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        requestId,
+        subject,
+        version: workflowJournalEventVersion
+      })
+    )
+    const projection = yield* projectWorkflowOccurrences([
+      applied,
+      record(
+        2,
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: worktreeRead,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        3,
+        AttemptRestartAuthorityReadFailedEvent.make({
+          failure: new GitWorktreeReadFailure({ detail: "worktree unavailable", worktree: plannedAttempt.worktree }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: worktreeRead.operationId,
+          requestId,
+          subject,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        4,
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: targetRead,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        5,
+        AttemptRestartAuthorityReadFailedEvent.make({
+          failure: new GitTargetLineageReadFailure({
+            detail: "target lineage unavailable",
+            plannedBaseSha: plannedAttempt.baseSha,
+            target: integrationTarget
+          }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: targetRead.operationId,
+          requestId,
+          subject,
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+
+    const targetFailure = projection.occurrences.find(
+      (occurrence) =>
+        occurrence._tag === "AttemptRestartAuthorityReadFailed" &&
+        occurrence.failure._tag === "GitTargetLineageReadFailure"
+    )
+    const targetAction = projection.occurrences.find(
+      (occurrence) =>
+        occurrence._tag === "GitReadInitiated" && occurrence.operation.operationId === targetRead.operationId
+    )
+    const appliedOccurrence = projection.occurrences.find((occurrence) => occurrence._tag === "AppliedAttemptChoice")
+    if (
+      targetFailure?._tag !== "AttemptRestartAuthorityReadFailed" ||
+      targetFailure.failure._tag !== "GitTargetLineageReadFailure" ||
+      targetAction?._tag !== "GitReadInitiated" ||
+      appliedOccurrence?._tag !== "AppliedAttemptChoice"
+    ) {
+      return expect.fail("expected applied Restart, target read, and target-lineage failure")
+    }
+    expect(targetFailure.failure.target).toEqual(integrationTarget)
+
+    const targetObservation = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: targetRead,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        2,
+        TargetLineageObservedEvent.make({
+          observation: {
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: plannedAttempt.baseSha,
+            targetHeadSha: GitCommitSha.make("4".repeat(40))
+          },
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: targetRead.operationId,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+    const observed = targetObservation.occurrences.find((occurrence) => occurrence._tag === "TargetLineageObserved")
+    if (observed?._tag !== "TargetLineageObserved") return expect.fail("expected target-lineage observation")
+    expect(Option.getOrThrow(originatingActionForTargetLineageObservation(targetObservation, observed))).toMatchObject({
+      _tag: "GitReadInitiated",
+      operation: { operationId: targetRead.operationId }
+    })
+
+    const unmatchedFailure = yield* projectWorkflowOccurrences([
+      applied,
+      record(
+        2,
+        AttemptRestartAuthorityReadFailedEvent.make({
+          failure: new GitTargetLineageReadFailure({
+            detail: "target lineage unavailable",
+            plannedBaseSha: plannedAttempt.baseSha,
+            target: integrationTarget
+          }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: OperationId.make("missing-target-failure-read"),
+          requestId,
+          subject,
+          version: workflowJournalEventVersion
+        })
+      )
+    ]).pipe(Effect.flip)
+    expect(unmatchedFailure).toMatchObject({
+      _tag: "GitOutcomeWithoutReadIntent",
+      operationId: "missing-target-failure-read",
+      position: 2,
+      runId
+    })
+
+    const laterAction = { ...targetAction, recordedAt: JournalPosition.make(targetFailure.recordedAt + 1) }
+    const mismatchedOperation = {
+      ...targetFailure,
+      originatingActionOperationId: OperationId.make("different-target-failure-operation")
+    }
+    const mismatchedTarget = {
+      ...targetFailure,
+      failure: new GitTargetLineageReadFailure({
+        detail: "target lineage unavailable",
+        plannedBaseSha: plannedAttempt.baseSha,
+        target: IntegrationTarget.make({
+          repository: GitRepositoryLocator.make("/other/repository.git"),
+          ref: integrationTarget.ref
+        })
+      })
+    }
+    for (const occurrences of [
+      [appliedOccurrence, targetFailure],
+      [appliedOccurrence, targetAction, targetAction, targetFailure],
+      [appliedOccurrence, laterAction, targetFailure],
+      [appliedOccurrence, targetAction, mismatchedOperation],
+      [appliedOccurrence, targetAction, mismatchedTarget]
+    ]) {
+      const schemaFailure = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
+        occurrences,
+        version: projection.version
+      }).pipe(Effect.flip)
+      expect(schemaFailure._tag).toBe("SchemaError")
+    }
+  })
+)
+
+it.effect("projects an atomic replacement occurrence while ignoring lifecycle rows", () =>
+  Effect.gen(function* () {
+    const successor = PlannedTaskAttempt.make({
+      ...plannedAttempt,
+      attemptId: AttemptId.make("occurrence-successor-attempt"),
+      baseSha: GitCommitSha.make("b".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/occurrence-successor"),
+      taskRevision: TaskRevision.make("occurrence-successor-revision"),
+      worktree: WorktreeLocator.make("/worktrees/occurrence-successor")
+    })
+    const requestId = AttemptChoiceRequestId.make({ nonce: "occurrence-replacement", runId })
+    const subject = { observedTaskRevision: successor.taskRevision, plannedAttempt }
+    const expectedClaim = ActiveTaskClaim.make({
+      operationId: OperationId.make("occurrence-replacement-claim"),
+      owner: ClaimOwner.make("dalph"),
+      taskId: plannedAttempt.taskId,
+      token: ClaimToken.make("occurrence-replacement-token")
+    })
+    const graphRead = makeTrackerGraphObservationOperation(
+      OperationId.make("occurrence-replacement-graph"),
+      operation.target,
+      [],
+      [plannedAttempt.taskId]
+    )
+    const specificationRead = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("occurrence-replacement-specification"),
+      operation.target,
+      plannedAttempt.taskId
+    )
+    const claimRead = makeTaskClaimObservationOperation(
+      OperationId.make("occurrence-replacement-claim-read"),
+      operation.target,
+      plannedAttempt.taskId
+    )
+    const worktreeRead = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("occurrence-replacement-worktree"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const targetRead = makeTargetLineageObservationOperation({
+      integrationTarget,
+      operationId: OperationId.make("occurrence-replacement-target"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const witness = PlannedAttemptReplacementWitness.make({
+      claimObservationOperationId: claimRead.operationId,
+      expectedClaim,
+      graphObservationOperationId: graphRead.operationId,
+      oldWorktreeObservationOperationId: worktreeRead.operationId,
+      oldWorktreeProof: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
+      quiescenceProof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      specificationObservationOperationId: specificationRead.operationId,
+      targetHeadSha: successor.baseSha,
+      targetLineageObservationOperationId: targetRead.operationId
+    })
+    const successorPlan = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("occurrence-replacement-plan"),
+      plannedAttempt: successor,
+      predecessorOperationIds: [
+        expectedClaim.operationId,
+        graphRead.operationId,
+        specificationRead.operationId,
+        claimRead.operationId,
+        worktreeRead.operationId,
+        targetRead.operationId
+      ]
+    })
+    const applied = AttemptChoiceAppliedEvent.make({
+      choice: "RestartTaskImplementation",
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId,
+      subject,
+      version: workflowJournalEventVersion
+    })
+    const replacement = PlannedAttemptReplacedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId,
+      subject,
+      successorPlan,
+      version: workflowJournalEventVersion,
+      witness
+    })
+    const projection = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        WorkflowRunBeganEvent.make({
+          initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          target: operation.target,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(2, applied),
+      record(3, replacement)
+    ])
+
+    expect(projection.occurrences.map(({ _tag }) => _tag)).toEqual(["AppliedAttemptChoice", "PlannedAttemptReplaced"])
+    expect(projection.occurrences.at(1)).toMatchObject({ _tag: "PlannedAttemptReplaced", successorPlan, witness })
   })
 )
 
