@@ -939,23 +939,17 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       return yield* finishStartedTurn(attempt, correlation, record, priorObservedTurnId, currentToken, result)
     })
 
-    const readStartRecord = Effect.fn("CodexPlannedAttemptExecutor.readStartRecord")(function* (
-      correlation: PlannedAttemptExecutorCorrelation,
-      attempt: PlannedTaskAttempt
-    ) {
-      try {
-        return yield* readRecord(correlation, attempt)
-      } catch (error) {
-        if (error instanceof ForeignAttemptRecord) return yield* Effect.fail(error)
-        return yield* Effect.fail(error)
-      }
-    })
-
     const loadStartRecord = Effect.fn("CodexPlannedAttemptExecutor.loadStartRecord")(function* (
       attempt: PlannedTaskAttempt,
       correlation: PlannedAttemptExecutorCorrelation
     ) {
-      const found = yield* readStartRecord(correlation, attempt)
+      let found: Option.Option<CodexAttemptRecord>
+      try {
+        found = yield* readRecord(correlation, attempt)
+      } catch (error) {
+        if (error instanceof ForeignAttemptRecord) return yield* Effect.fail(error)
+        return yield* Effect.fail(error)
+      }
       if (Option.isNone(found)) {
         return yield* allocateThread(attempt, correlation)
       }
@@ -1237,20 +1231,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
 
     return {
       project: (correlation) =>
-        project(correlation).pipe(
-          Effect.catch((error: unknown) => {
-            if (error instanceof ForeignAttemptRecord) return Effect.succeed(foreign(correlation, error.observed))
-            if (error instanceof CodexAppServerFailure) {
-              if (error.kind === "Unavailable") return Effect.succeed(unavailable(correlation))
-              if (error.kind === "CorrelationContradiction" && error.operation === "initialize") {
-                return Effect.succeed(initializationContradiction(correlation, error.detail))
-              }
-              return Effect.succeed(unreadable(correlation))
-            }
-            if (storeFailure(error)) return Effect.succeed(unreadable(correlation))
-            return Effect.succeed(unreadable(correlation))
-          })
-        ),
+        project(correlation).pipe(Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))),
       requestSuspension: (attempt) => {
         const correlation = plannedAttemptExecutorCorrelation(attempt)
         return gateFor(correlation).pipe(
