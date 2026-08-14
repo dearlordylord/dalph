@@ -3,9 +3,16 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Path } from "effect"
 import { expect } from "vitest"
-import { ApplicationExitShell, CoordinatorOwnership, makeApplicationExitShell } from "@dalph/orchestrator"
+import {
+  ApplicationExitDiagnostic,
+  ApplicationExitDrainFailure,
+  ApplicationExitShell,
+  CoordinatorOwnership,
+  makeApplicationExitShell
+} from "@dalph/orchestrator"
 import {
   CodexAppServer,
+  CodexAppServerFailure,
   CodexProcessStartIdentity,
   codexAppServerLayer,
   codexAppServerNodeLayer,
@@ -476,6 +483,242 @@ it.effect("scope teardown closes the server without claiming an Exit boundary", 
       expect(Exit.isSuccess(result)).toBe(true)
       expect(events).toEqual(["server-stop"])
       expect(processEndRequested).toBe(false)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("keeps startup closed when an existing app-server owner is unreadable or contradictory", () =>
+  Effect.forEach(
+    [
+      { _tag: "Unreadable" as const, detail: "owner census unavailable" },
+      { _tag: "Contradictory" as const, detail: "owner incarnation changed" },
+      { _tag: "ExactLive" as const, pid: 99_999 }
+    ],
+    (projection, index) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: `dalph-issue-58-owner-fail-${index}-` })
+          const executable = path.join(root, "fixture-codex")
+          yield* fileSystem.writeFileString(executable, fakeServer)
+          yield* fileSystem.chmod(executable, 0o755)
+          const prior = CodexServerLaunchRecord.make({
+            command: [executable, "app-server"],
+            incarnation: CodexServerIncarnation.make(`prior-owner-fail-${index}`),
+            phase: "Live",
+            pid: 31_337
+          })
+          const appLayer = codexAppServerLayer({ executable }).pipe(
+            Layer.provide(
+              controlledCodexProcessOwnershipLayer({
+                observe: (target) =>
+                  Effect.succeed("processIdentity" in target ? { _tag: "ExactLive" as const, pid: 1 } : projection),
+                discover: () => Effect.succeed({ _tag: "Absent" as const }),
+                stop: () => Effect.void
+              })
+            ),
+            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+          )
+          const result = yield* Effect.gen(function* () {
+            const app = yield* CodexAppServer
+            yield* Effect.exit(app.startThread("/owner-fail/worktree"))
+          }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+          expect(Exit.isSuccess(result)).toBe(true)
+        }).pipe(Effect.provide(NodeServices.layer))
+      )
+  )
+)
+
+it.effect("does not stop a prior app-server already observed absent", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-owner-absent-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      const prior = CodexServerLaunchRecord.make({
+        command: [executable, "app-server"],
+        incarnation: CodexServerIncarnation.make("prior-owner-absent"),
+        phase: "Live",
+        pid: 31_337
+      })
+      let stopCalls = 0
+      const appLayer = codexAppServerLayer({ executable }).pipe(
+        Layer.provide(
+          controlledCodexProcessOwnershipLayer({
+            observe: (target) =>
+              Effect.succeed(
+                "processIdentity" in target ? { _tag: "ExactLive" as const, pid: 1 } : { _tag: "Absent" as const }
+              ),
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
+            stop: () => Effect.sync(() => void (stopCalls += 1))
+          })
+        ),
+        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+      )
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        yield* app.startThread("/owner-absent/worktree")
+        yield* app.close
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isSuccess(result)).toBe(true)
+      expect(stopCalls).toBe(1)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("fails closed when a prior app-server cannot be stopped or never becomes absent", () =>
+  Effect.forEach(
+    [
+      { stop: true, afterStop: { _tag: "ExactLive" as const, pid: 31_337 } },
+      { stop: false, afterStop: { _tag: "Unreadable" as const, detail: "owner reread failed" } },
+      { stop: false, afterStop: { _tag: "Contradictory" as const, detail: "owner changed" } }
+    ],
+    (behavior, index) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: `dalph-issue-58-owner-stop-${index}-` })
+          const executable = path.join(root, "fixture-codex")
+          yield* fileSystem.writeFileString(executable, fakeServer)
+          yield* fileSystem.chmod(executable, 0o755)
+          const prior = CodexServerLaunchRecord.make({
+            command: [executable, "app-server"],
+            incarnation: CodexServerIncarnation.make(`prior-owner-stop-${index}`),
+            phase: "Live",
+            pid: 31_337
+          })
+          let stopped = false
+          const appLayer = codexAppServerLayer({ executable }).pipe(
+            Layer.provide(
+              controlledCodexProcessOwnershipLayer({
+                observe: (target) => {
+                  if ("processIdentity" in target) return Effect.succeed({ _tag: "ExactLive" as const, pid: 1 })
+                  return Effect.succeed(stopped ? behavior.afterStop : { _tag: "ExactLive" as const, pid: 31_337 })
+                },
+                discover: () => Effect.succeed({ _tag: "Absent" as const }),
+                stop: () =>
+                  behavior.stop
+                    ? Effect.sync(() => void (stopped = true))
+                    : Effect.fail(
+                        new CodexAppServerFailure({ operation: "close", kind: "Ownership", detail: "stop rejected" })
+                      )
+              })
+            ),
+            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+          )
+          const result = yield* Effect.gen(function* () {
+            const app = yield* CodexAppServer
+            const started = yield* Effect.exit(app.startThread("/owner-stop/worktree"))
+            expect(Exit.isFailure(started)).toBe(true)
+          }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+          expect(Exit.isSuccess(result)).toBe(true)
+        }).pipe(Effect.provide(NodeServices.layer))
+      )
+  )
+)
+
+it.effect("reports executor drain failure while still attempting app-server cleanup", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-exit-executor-fail-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      const shell = yield* makeApplicationExitShell(
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
+        { requestEnd: () => Effect.void }
+      )
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Effect.fail(
+          new ApplicationExitDrainFailure({ diagnostics: [ApplicationExitDiagnostic.make("executor failed")] })
+        )
+      })
+      let stopped = false
+      const appLayer = codexAppServerLayer({ executable }).pipe(
+        Layer.provide(
+          controlledCodexProcessOwnershipLayer({
+            observe: (target) =>
+              Effect.succeed(
+                "processIdentity" in target
+                  ? { _tag: "ExactLive" as const, pid: 1 }
+                  : stopped
+                    ? { _tag: "Absent" as const }
+                    : { _tag: "ExactLive" as const, pid: 1 }
+              ),
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
+            stop: () => Effect.sync(() => void (stopped = true))
+          })
+        ),
+        Layer.provide(memoryCodexAttemptStoreLayer()),
+        Layer.provide(Layer.succeed(ApplicationExitShell, shell))
+      )
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        yield* app.startThread("/exit-executor-fail/worktree")
+        const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+        const exit = yield* Fiber.join(exiting).pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(stopped).toBe(true)
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reports process-local app-server cleanup failure through the Exit boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-exit-close-fail-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      const shell = yield* makeApplicationExitShell(
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
+        { requestEnd: () => Effect.void }
+      )
+      yield* shell.registerExecutorDrain({ suspendRunningExecutorWork: Effect.succeed([]) })
+      let stopCalls = 0
+      const appLayer = codexAppServerLayer({ executable }).pipe(
+        Layer.provide(
+          controlledCodexProcessOwnershipLayer({
+            observe: (target) =>
+              Effect.succeed(
+                "processIdentity" in target
+                  ? { _tag: "ExactLive" as const, pid: 1 }
+                  : { _tag: "ExactLive" as const, pid: 1 }
+              ),
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
+            stop: () =>
+              Effect.sync(() => void (stopCalls += 1)).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new CodexAppServerFailure({ operation: "close", kind: "Ownership", detail: "cleanup failed" })
+                  )
+                )
+              )
+          })
+        ),
+        Layer.provide(memoryCodexAttemptStoreLayer()),
+        Layer.provide(Layer.succeed(ApplicationExitShell, shell))
+      )
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        yield* app.startThread("/exit-close-fail/worktree")
+        const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+        const exit = yield* Fiber.join(exiting).pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(stopCalls).toBeGreaterThan(0)
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
