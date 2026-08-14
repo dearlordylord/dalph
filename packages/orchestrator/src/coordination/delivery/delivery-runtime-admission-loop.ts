@@ -8,10 +8,10 @@ import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admi
 import { DeliveryProposalId, type DeliveryActionProposal } from "./delivery-action-proposal.js"
 import type { DeliveryRuntimeLiveOwnerSource } from "./delivery-runtime-observation.js"
 import {
-  liveActionIsPresent,
   liveActionKeyOf,
   type LiveDeliveryActionKey,
-  proposalIsAvailable
+  proposalIsAvailable,
+  proposalIsPresent
 } from "./live-delivery-action.js"
 import type { DeliveryProposalFrontier, DeliveryRuntimeEvaluation } from "./relations.js"
 
@@ -137,7 +137,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     const current = yield* Ref.get(owners)
     const removable = (yield* Effect.forEach(current.values(), (owner) =>
       Effect.map(owner.isSettled, (isSettled) =>
-        isSettled && !liveActionIsPresent(frontier, owner.proposal) ? owner : undefined
+        isSettled && !proposalIsPresent(frontier, owner.proposal.id) ? owner : undefined
       )
     )).filter((owner): owner is LiveOwner => owner !== undefined)
     if (removable.length === 0) return

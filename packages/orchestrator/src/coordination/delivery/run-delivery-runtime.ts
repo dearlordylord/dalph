@@ -31,10 +31,11 @@ import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import * as RuntimeObservation from "./delivery-runtime-observation.js"
 import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
-import { liveActionIsPresent } from "./live-delivery-action.js"
+import { proposalIsPresent } from "./live-delivery-action.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
+export { proposalIsPresent } from "./live-delivery-action.js"
 
 /** Reconfirmation was allowed without one exact accepted established graph, so G2 cannot be ordered after G1. */
 export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedError<DeliveryRuntimeReconfirmationStateInvalid>()(
@@ -57,11 +58,6 @@ type RuntimeEvent<E> =
   | { readonly _tag: "ActionCompleted"; readonly completion: Completion }
   | { readonly _tag: "EvaluationChanged"; readonly evaluation: DeliveryRuntimeEvaluation }
   | { readonly _tag: "RelationFailed"; readonly cause: Cause.Cause<E> }
-
-export const proposalIsPresent = (frontier: DeliveryProposalFrontier, proposalId: DeliveryProposalId): boolean =>
-  frontier._tag === "DeliveryProposalsAvailable"
-    ? frontier.proposals.some(({ id }) => id === proposalId)
-    : frontier.conflicts.some(({ id }) => id === proposalId)
 
 /**
  * The runtime consumes one coherent current-first evaluation signal. Authority
@@ -305,7 +301,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                   (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))
                 )
                 yield* publishRuntimeObservationInsideGate()
-              } else if (!liveActionIsPresent(current.proposedActions, owner.proposal)) {
+              } else if (!proposalIsPresent(current.proposedActions, owner.proposal.id)) {
                 yield* Ref.update(
                   owners,
                   (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))

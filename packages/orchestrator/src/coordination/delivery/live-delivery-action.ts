@@ -163,10 +163,16 @@ export const proposalIsAvailable = (
   deferred.get(proposal.id) !== acceptedAt &&
   (proposal.waitsForLiveOperationId === null || !liveOperationIds.has(proposal.waitsForLiveOperationId))
 
+/** A proposal remains current only while its exact identity is present in the relation frontier. */
+export const proposalIsPresent = (frontier: DeliveryProposalFrontier, proposalId: DeliveryProposalId): boolean =>
+  frontier._tag === "DeliveryProposalsAvailable"
+    ? frontier.proposals.some(({ id }) => id === proposalId)
+    : frontier.conflicts.some(({ id }) => id === proposalId)
+
 /** A settled semantic owner remains until the ordinary relation no longer proposes the same live action. */
 export const liveActionIsPresent = (frontier: DeliveryProposalFrontier, proposal: DeliveryActionProposal): boolean => {
   if (frontier._tag === "DeliveryProposalOwnershipConflict") {
-    return frontier.conflicts.some(({ id }) => id === proposal.id)
+    return proposalIsPresent(frontier, proposal.id)
   }
   const key = liveActionKeyOf(proposal)
   return frontier.proposals.some((candidate) => liveActionKeyOf(candidate) === key)
