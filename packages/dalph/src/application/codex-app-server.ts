@@ -33,7 +33,7 @@ import {
 } from "./codex-attempt-store.js"
 
 /** The process-owned status projection returned by one Codex thread read. */
-export type CodexThreadStatus = "active" | "idle" | "notLoaded" | "systemError"
+type CodexThreadStatus = "active" | "idle" | "notLoaded" | "systemError"
 
 /** One persisted Codex turn. Items remain opaque except for private input identity and correlation. */
 export interface CodexTurnSnapshot {
@@ -66,7 +66,7 @@ export interface CodexBackgroundTerminal {
 }
 
 /** App-server request boundary failures are deliberately richer than generic executor failures. */
-export const CodexAppServerOperation = Schema.Literals([
+const CodexAppServerOperation = Schema.Literals([
   "initialize",
   "thread/start",
   "thread/read",
@@ -79,9 +79,9 @@ export const CodexAppServerOperation = Schema.Literals([
   "thread/ownedActivity/terminate",
   "close"
 ])
-export type CodexAppServerOperation = typeof CodexAppServerOperation.Type
+type CodexAppServerOperation = typeof CodexAppServerOperation.Type
 
-export const CodexAppServerFailureKind = Schema.Literals([
+const CodexAppServerFailureKind = Schema.Literals([
   "Unavailable",
   "NotFound",
   "Protocol",
@@ -89,7 +89,7 @@ export const CodexAppServerFailureKind = Schema.Literals([
   "Malformed",
   "CorrelationContradiction"
 ])
-export type CodexAppServerFailureKind = typeof CodexAppServerFailureKind.Type
+type CodexAppServerFailureKind = typeof CodexAppServerFailureKind.Type
 
 export class CodexAppServerFailure extends Schema.TaggedError<CodexAppServerFailure>()("CodexAppServerFailure", {
   detail: Schema.String,
@@ -110,20 +110,20 @@ export interface CodexOwnedProcessIdentity {
 }
 
 /** Typed census of the app-server process group and descendants. */
-export type CodexProcessGroupProjection =
+type CodexProcessGroupProjection =
   | { readonly _tag: "Absent" }
   | { readonly _tag: "ExactLive"; readonly members: ReadonlyArray<CodexOwnedProcessIdentity> }
   | { readonly _tag: "Unreadable"; readonly detail: string }
   | { readonly _tag: "Contradictory"; readonly detail: string }
 
 /** Execution-substrate capability for observing every owned group member before and after a signal. */
-export interface CodexProcessGroupCensusService {
+interface CodexProcessGroupCensusService {
   readonly observe: (
     launch: CodexServerLaunchRecord
   ) => Effect.Effect<CodexProcessGroupProjection, CodexAppServerFailure>
 }
 
-export class CodexProcessGroupCensus extends Context.Service<CodexProcessGroupCensus, CodexProcessGroupCensusService>()(
+class CodexProcessGroupCensus extends Context.Service<CodexProcessGroupCensus, CodexProcessGroupCensusService>()(
   "@dalph/CodexProcessGroupCensus"
 ) {}
 
@@ -149,7 +149,7 @@ export type CodexOwnedActivityCensusProjection =
  * app-server activity list, then observes execution-substrate descendants
  * without accepting the app-server launch record as an attempt activity.
  */
-export interface CodexOwnedActivityCensusService {
+interface CodexOwnedActivityCensusService {
   readonly observe: (
     thread: CodexThreadSnapshot,
     backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>
@@ -165,21 +165,21 @@ export class CodexOwnedActivityCensus extends Context.Service<
 >()("@dalph/CodexOwnedActivityCensus") {}
 
 /** A process-incarnation projection used before an app-server replacement is admitted. */
-export type CodexServerOwnershipProjection =
+type CodexServerOwnershipProjection =
   | { readonly _tag: "Absent" }
   | { readonly _tag: "ExactLive"; readonly pid: number }
   | { readonly _tag: "Unreadable"; readonly detail: string }
   | { readonly _tag: "Contradictory"; readonly detail: string }
 
 /** The minimum execution-substrate authority needed for the no-second-owner gate. */
-export interface CodexProcessOwnershipService {
+interface CodexProcessOwnershipService {
   readonly observe: (
     target: CodexServerLaunchRecord | CodexServerLeaseRecord
   ) => Effect.Effect<CodexServerOwnershipProjection, CodexAppServerFailure>
   readonly stop: (launch: CodexServerLaunchRecord) => Effect.Effect<void, CodexAppServerFailure>
 }
 
-export class CodexProcessOwnership extends Context.Service<CodexProcessOwnership, CodexProcessOwnershipService>()(
+class CodexProcessOwnership extends Context.Service<CodexProcessOwnership, CodexProcessOwnershipService>()(
   "@dalph/CodexProcessOwnership"
 ) {}
 
@@ -221,11 +221,6 @@ export const controlledCodexAppServerLayer = (service: CodexAppServerService): L
 export const controlledCodexProcessOwnershipLayer = (
   service: CodexProcessOwnershipService
 ): Layer.Layer<CodexProcessOwnership> => Layer.succeed(CodexProcessOwnership, service)
-
-/** Controlled process-group projection injection for cleanup and census tests. */
-export const controlledCodexProcessGroupCensusLayer = (
-  service: CodexProcessGroupCensusService
-): Layer.Layer<CodexProcessGroupCensus> => Layer.succeed(CodexProcessGroupCensus, service)
 
 /** Controlled attempt-activity census injection for executor tests. */
 export const controlledCodexOwnedActivityCensusLayer = (
@@ -390,6 +385,10 @@ type OwnedActivityProcessProjection =
 const observeOwnedActivityProcesses = async (roots: ReadonlyArray<number>): Promise<OwnedActivityProcessProjection> => {
   if (roots.length === 0) return { _tag: "Absent" }
   if (nodeProcess.platform !== "linux") {
+    // #75 owns qualification of non-Linux attempt-child adapters. Until that
+    // execution-substrate boundary supplies exact descendants and start
+    // identities, this census is typed Unreadable rather than inferred from
+    // an inexact host listing.
     return { _tag: "Unreadable", detail: "owned attempt process census is not qualified on this host" }
   }
   const uniqueRoots = [...new Set(roots)]
@@ -545,11 +544,11 @@ const ownedTurnMarkerSuffix = " -->"
 const ownedTurnMarkerPattern = /<!-- dalph-owned-turn-token:v1:([^\s>]+) -->/g
 
 /** The private text marker used when the app-server has no input metadata field. */
-export const codexOwnedTurnMarker = (token: CodexOwnedTurnToken): string =>
+const codexOwnedTurnMarker = (token: CodexOwnedTurnToken): string =>
   `${ownedTurnMarkerPrefix}${token}${ownedTurnMarkerSuffix}`
 
 /** Adds the exact private marker to one user turn without relying on agent output. */
-export const codexOwnedTurnInput = (text: string, token: CodexOwnedTurnToken): string =>
+const codexOwnedTurnInput = (text: string, token: CodexOwnedTurnToken): string =>
   `${text}\n\n${codexOwnedTurnMarker(token)}`
 
 const markerTokenFromText = (text: string): ReadonlyArray<string> =>
@@ -1621,10 +1620,12 @@ const makeNodeCodexProcessOwnershipService = (
   return service
 }
 
-export const nodeCodexProcessOwnershipLayer: Layer.Layer<CodexProcessOwnership, never, CodexProcessGroupCensus> =
-  Layer.effect(CodexProcessOwnership, Effect.map(CodexProcessGroupCensus, makeNodeCodexProcessOwnershipService))
+const nodeCodexProcessOwnershipLayer: Layer.Layer<CodexProcessOwnership, never, CodexProcessGroupCensus> = Layer.effect(
+  CodexProcessOwnership,
+  Effect.map(CodexProcessGroupCensus, makeNodeCodexProcessOwnershipService)
+)
 
-export const nodeCodexProcessGroupCensusLayer: Layer.Layer<CodexProcessGroupCensus> = Layer.succeed(
+const nodeCodexProcessGroupCensusLayer: Layer.Layer<CodexProcessGroupCensus> = Layer.succeed(
   CodexProcessGroupCensus,
   nodeCodexProcessGroupCensusService
 )
@@ -1647,6 +1648,3 @@ export const codexAppServerNodeLayer = (
     Layer.provide(nodeCodexProcessOwnershipLayer),
     Layer.provide(nodeCodexProcessGroupCensusLayer)
   )
-
-/** Conventional node-prefixed alias used by application composition. */
-export const nodeCodexAppServerLayer = codexAppServerNodeLayer

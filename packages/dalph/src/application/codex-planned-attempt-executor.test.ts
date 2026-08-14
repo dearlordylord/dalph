@@ -22,8 +22,9 @@ import {
   type GitCommandService
 } from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
-import { Effect, Layer, Option } from "effect"
+import { Effect, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
+import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/conformance.test.js"
 import {
   CodexAppServerFailure,
   controlledCodexOwnedActivityCensusLayer,
@@ -71,6 +72,28 @@ const request = PlannedAttemptExecutorRequest.make({ plannedAttempt: attempt, sp
 const correlation = plannedAttemptExecutorCorrelation(attempt)
 const finalResponse = (commit: GitCommitSha): string => JSON.stringify({ commit, correlation })
 
+const conformanceSpecification = makeTaskWorkSpecification({
+  body: "Opaque conformance body",
+  taskId: TaskId.make("opaque-conformance-task"),
+  title: "Opaque conformance task"
+})
+const conformanceAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("attempt:opaque-conformance:0"),
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/opaque-conformance"),
+  executor: TaskExecutorLocator.make("executor:opaque-conformance"),
+  runId: RunId.make("opaque-conformance-run"),
+  taskId: TaskId.make("opaque-conformance-task"),
+  taskRevision: conformanceSpecification.fingerprint,
+  worktree: WorktreeLocator.make("/worktrees/opaque-conformance")
+})
+const conformanceRequest = PlannedAttemptExecutorRequest.make({
+  plannedAttempt: conformanceAttempt,
+  specification: conformanceSpecification
+})
+const conformanceCorrelation = plannedAttemptExecutorCorrelation(conformanceAttempt)
+const conformanceFinalResponse = JSON.stringify({ commit: head, correlation: conformanceCorrelation })
+
 // eslint-disable-next-line functional/no-mixed-types -- The controlled fixture intentionally groups immutable observations and test controls.
 type Harness = {
   readonly app: CodexAppServerService
@@ -96,6 +119,7 @@ type Harness = {
   readonly descendantTerminationCount: () => number
   readonly makeResumeUnavailable: () => void
   readonly makeForeignResume: () => void
+  readonly makeInterruptUnavailable: () => void
   readonly addManualTurn: (position: "before" | "after") => void
   readonly reorderTurns: () => void
   readonly duplicateOwnedTurn: () => void
@@ -115,6 +139,9 @@ const makeHarness = (
     readonly manualBeforeFirstTurn?: boolean
     readonly manualAfterFirstTurn?: boolean
     readonly reorderTurnsOnResume?: boolean
+    readonly foreignTurnCorrelation?: boolean
+    readonly keepTurnRunningOnInterruptCount?: number
+    readonly interruptUnavailable?: boolean
   } = {}
 ): Harness => {
   const threadId = CodexThreadId.make("codex-thread-issue-58")
@@ -137,6 +164,8 @@ const makeHarness = (
   let threadStartCount = 0
   let resumeUnavailable = false
   let foreignResume = false
+  let interruptUnavailable = options.interruptUnavailable === true
+  let keepTurnRunningOnInterruptCount = options.keepTurnRunningOnInterruptCount ?? 0
   let associatedWriteFailure = false
 
   const manualTurn = (id: string): CodexTurnSnapshot => ({
@@ -145,7 +174,7 @@ const makeHarness = (
     items: [{ type: "agentMessage", text: "manual activity" }]
   })
 
-  const unavailable = (operation: "turn/start" | "thread/resume"): CodexAppServerFailure =>
+  const unavailable = (operation: "turn/start" | "thread/resume" | "turn/interrupt"): CodexAppServerFailure =>
     new CodexAppServerFailure({ detail: "controlled response was lost", kind: "Unavailable", operation })
 
   const app: CodexAppServerService = {
@@ -195,7 +224,10 @@ const makeHarness = (
           id: CodexTurnId.make(`codex-turn-${turnNumber}`),
           status: "inProgress",
           items: [],
-          ...(ownedTurnToken === undefined ? {} : { ownedTurnToken })
+          ...(ownedTurnToken === undefined ? {} : { ownedTurnToken }),
+          ...(options.foreignTurnCorrelation === true
+            ? { correlation: { runId: RunId.make("foreign-run"), attemptId: AttemptId.make("foreign-attempt") } }
+            : {})
         }
         turns.push(currentTurn)
         currentThread = { ...currentThread, cwd, status: "active", turns }
@@ -209,14 +241,22 @@ const makeHarness = (
         }
         return currentTurn
       }),
-    interruptTurn: (threadIdValue, turnId) =>
-      Effect.sync(() => {
+    interruptTurn: (threadIdValue, turnId) => {
+      if (interruptUnavailable) {
+        return Effect.fail(unavailable("turn/interrupt"))
+      }
+      return Effect.sync(() => {
         if (threadIdValue !== threadId || currentTurn?.id !== turnId) return
+        if (keepTurnRunningOnInterruptCount > 0) {
+          keepTurnRunningOnInterruptCount -= 1
+          return
+        }
         currentTurn = { ...currentTurn, status: "interrupted" }
         const currentIndex = turns.findIndex((turn) => turn.id === currentTurn?.id)
         if (currentIndex >= 0) turns[currentIndex] = currentTurn
         currentThread = { ...currentThread, status: "idle", turns }
-      }),
+      })
+    },
     listBackgroundTerminals: () =>
       Effect.succeed(
         terminalActivity
@@ -321,6 +361,9 @@ const makeHarness = (
     makeForeignResume: () => {
       foreignResume = true
     },
+    makeInterruptUnavailable: () => {
+      interruptUnavailable = true
+    },
     addManualTurn: (position) => {
       const manual = manualTurn(`manual-${position}-${turns.length}`)
       if (position === "before") turns.unshift(manual)
@@ -391,6 +434,72 @@ const layerFor = (
     Layer.provide(NodeServices.layer)
   )
 
+type ConformanceBoundaryCall =
+  | { readonly _tag: "Project"; readonly correlation: typeof conformanceCorrelation }
+  | { readonly _tag: "StartOrContinue"; readonly correlation: typeof conformanceCorrelation }
+  | { readonly _tag: "Suspend"; readonly correlation: typeof conformanceCorrelation }
+
+/**
+ * #168's generic suite is intentionally run against the real Codex layer
+ * with controlled app-server, Git, and evidence boundaries. The scenario
+ * setup changes only those controls; all journal ordering and correlation
+ * assertions remain owned by the generic black-box protocol suite.
+ */
+const codexConformanceImplementation = {
+  name: "Codex planned-attempt executor layer",
+  terminalResultTag: "Accepted" as const,
+  make: (scenario: string, onBoundary: (call: ConformanceBoundaryCall) => Effect.Effect<void>) =>
+    Effect.gen(function* () {
+      const options =
+        scenario === "ForeignStart"
+          ? { foreignTurnCorrelation: true }
+          : scenario === "RunningThenSafeSuspension"
+            ? { keepTurnRunningOnInterruptCount: 1 }
+            : scenario === "UnavailableSuspension"
+              ? { interruptUnavailable: true }
+              : {}
+      const harness = makeHarness(options)
+      const concrete = yield* Effect.gen(function* () {
+        return yield* PlannedAttemptExecutor
+      }).pipe(Effect.provide(layerFor(harness)))
+
+      if (
+        scenario === "RunningThenSafeSuspension" ||
+        scenario === "ForeignSuspension" ||
+        scenario === "UnavailableSuspension" ||
+        scenario === "TerminalSuspension" ||
+        scenario === "ExactProjection" ||
+        scenario === "ForeignProjection"
+      ) {
+        yield* concrete.startOrContinue(conformanceRequest).pipe(Effect.orDie)
+      }
+      if (scenario === "ForeignSuspension" || scenario === "ForeignProjection") harness.makeForeignResume()
+      if (scenario === "UnavailableSuspension") harness.makeInterruptUnavailable()
+      if (scenario === "TerminalSuspension") harness.complete(conformanceFinalResponse)
+
+      const calls = yield* Ref.make<ReadonlyArray<ConformanceBoundaryCall>>([])
+      const record = (call: ConformanceBoundaryCall) =>
+        Ref.update(calls, (current) => [...current, call]).pipe(Effect.andThen(onBoundary(call)))
+      const executor = PlannedAttemptExecutor.of({
+        project: (requested) =>
+          record({ _tag: "Project", correlation: conformanceCorrelation }).pipe(
+            Effect.andThen(concrete.project(requested))
+          ),
+        requestSuspension: (requested) =>
+          record({ _tag: "Suspend", correlation: conformanceCorrelation }).pipe(
+            Effect.andThen(concrete.requestSuspension(requested))
+          ),
+        startOrContinue: (requested) =>
+          record({ _tag: "StartOrContinue", correlation: conformanceCorrelation }).pipe(
+            Effect.andThen(concrete.startOrContinue(requested))
+          )
+      })
+      return { calls: Ref.get(calls), executor }
+    })
+}
+
+definePlannedAttemptExecutorConformanceSuite(codexConformanceImplementation)
+
 it.effect("persists the exact association before the first turn and seals Accepted from reread evidence", () => {
   const harness = makeHarness()
   return Effect.gen(function* () {
@@ -442,6 +551,22 @@ it.effect("persists the exact association before the first turn and seals Accept
     }).pipe(Effect.provide(layerFor(harness)))
     expect(restarted._tag).toBe("Terminal")
     expect(harness.resumeCwds.length).toBeGreaterThan(resumeCountBeforeRestart)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("serializes same-attempt parallel admission behind one gate", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const reports = yield* Effect.all([executor.startOrContinue(request), executor.startOrContinue(request)], {
+      concurrency: 2
+    })
+    expect(reports).toEqual([
+      PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+      PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    ])
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.currentRecord()?._tag).toBe("Running")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 

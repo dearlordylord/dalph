@@ -68,6 +68,9 @@ const terminal = (
   result: PlannedAttemptExecutorResult
 ): PlannedAttemptExecutorReportType => PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result })
 
+const foreignReport = (observed: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorReportType =>
+  PlannedAttemptExecutorReport.cases.Running.make({ correlation: observed })
+
 const noReport = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorProjectionType =>
   PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
 
@@ -713,7 +716,8 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         id: record.threadId,
         cwd: attempt.worktree,
         status: turn.status === "inProgress" ? "active" : "idle",
-        turns: [turn]
+        turns: [turn],
+        ...(turn.correlation === undefined ? {} : { correlation: turn.correlation })
       })
       const observed = observedRecordFor(attempt, record.threadId, currentToken, turn.id, priorObservedTurnId)
       yield* save(observed)
@@ -928,6 +932,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         const correlation = plannedAttemptExecutorCorrelation(attempt)
         return gateFor(correlation).pipe(
           Effect.flatMap((gate) => gate.withPermit(suspend(attempt))),
+          Effect.catch((error: unknown) =>
+            error instanceof ForeignAttemptRecord ? Effect.succeed(foreignReport(error.observed)) : Effect.fail(error)
+          ),
           Effect.mapError((error) =>
             error instanceof PlannedAttemptExecutorCommandFailure
               ? error
@@ -939,6 +946,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
         return gateFor(correlation).pipe(
           Effect.flatMap((gate) => gate.withPermit(start(request))),
+          Effect.catch((error: unknown) =>
+            error instanceof ForeignAttemptRecord ? Effect.succeed(foreignReport(error.observed)) : Effect.fail(error)
+          ),
           Effect.mapError((error) =>
             error instanceof PlannedAttemptExecutorCommandFailure
               ? error
@@ -950,13 +960,10 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
   })
 )
 
-/** Compatibility alias emphasizing that this is the production executor. */
-export const codexPlannedAttemptExecutorNodeLayer = codexPlannedAttemptExecutorLayer.pipe(
+/** Supported production composition: use the node-owned activity census. */
+export const nodeCodexPlannedAttemptExecutorLayer = codexPlannedAttemptExecutorLayer.pipe(
   Layer.provide(nodeCodexOwnedActivityCensusLayer)
 )
-
-/** Conventional node-prefixed alias used by application composition. */
-export const nodeCodexPlannedAttemptExecutorLayer = codexPlannedAttemptExecutorNodeLayer
 
 class ForeignAttemptRecord extends Schema.TaggedError<ForeignAttemptRecord>()("ForeignAttemptRecord", {
   observed: PlannedAttemptExecutorCorrelation

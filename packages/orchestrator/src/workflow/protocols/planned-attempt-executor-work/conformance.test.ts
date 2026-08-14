@@ -72,6 +72,8 @@ interface ExecutorHarness {
 
 interface NamedConformanceImplementation {
   readonly name: string
+  /** Provider-specific terminal tags remain normalized reports at this seam. */
+  readonly terminalResultTag?: "Accepted" | "Completed" | "Failed"
 }
 
 interface ConformanceImplementation extends NamedConformanceImplementation {
@@ -325,11 +327,13 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
     it.effect("accepts Terminal from Suspend without issuing StartOrContinue", () =>
       Effect.gen(function* () {
         const harness = yield* implementation.make("TerminalSuspension", () => Effect.void)
-        expect(
-          yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
-            Effect.provideService(PlannedAttemptExecutor, harness.executor)
-          )
-        ).toEqual(terminal)
+        const report = yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, harness.executor)
+        )
+        expect(report._tag).toBe("Terminal")
+        if (report._tag === "Terminal") {
+          expect(report.result._tag).toBe(implementation.terminalResultTag ?? "Completed")
+        }
         expect(yield* harness.calls).toEqual([{ _tag: "Suspend", correlation }])
         expect(yield* requiredTaskWorkPositions).toEqual([])
       }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
