@@ -69,11 +69,6 @@
       "count": 2
     }
   },
-  "packages/dalph/test/conformance/git-reconciliation.mbt.test.ts": {
-    "functional/no-throw-statements": {
-      "count": 2
-    }
-  },
   "packages/dalph/test/conformance/integration-finality.mbt.test.ts": {
     "functional/no-throw-statements": {
       "count": 28

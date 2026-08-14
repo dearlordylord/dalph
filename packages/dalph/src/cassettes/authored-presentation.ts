@@ -5,6 +5,7 @@ import type {
   AuthoredOrchestrationEvidence,
   AuthoredProtocolEvidence,
   AuthoredScenarioCassette,
+  AuthoredTrackerGraph,
   AuthoredTaskWorkResult
 } from "./authored-domain.js"
 
@@ -15,10 +16,7 @@ import type {
  */
 const noLandmark = (): null => null
 
-const trackerGraphLandmark = (
-  graph: Extract<AuthoredCassetteStoryItem, { readonly _tag: "RunActivationFinalTrackerGraphReadReturned" }>["graph"],
-  readMeaning: string
-): string => {
+const trackerGraphLandmark = (graph: AuthoredTrackerGraph, readMeaning: string): string => {
   const taskStates = graph.tasks.map((task) => `task ${task.id} ${task.lifecycle._tag}`)
   return `${readMeaning} ${graph.revision}${taskStates.length === 0 ? " with no tasks" : `: ${taskStates.join("; ")}`}`
 }
@@ -30,6 +28,8 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CompletionClaimReadReturned: noLandmark,
       CompletionClaimReplacementApplied: noLandmark,
       CompletionTaskFocusedReadReturned: noLandmark,
+      CompletionTaskPrerequisiteReopened: (item) =>
+        trackerGraphLandmark(item.graph, "Another tracker client reopened prerequisite B"),
       CompletionTaskRequestLookupReturned: noLandmark,
       CompletionTaskRequestReturned: noLandmark,
       CoordinatorActivationReturned: noLandmark,
@@ -407,6 +407,8 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
   if (isOperatorStoryItem(item)) return operatorLyric(item)
   return Match.value(item).pipe(
     Match.tagsExhaustive({
+      CompletionTaskPrerequisiteReopened: (item) =>
+        `Another tracker client reopens prerequisite B before completion request Q is acknowledged (${item.graph.revision}).`,
       DalphHoldsAdmittedContinuationBeforeExecutorIntent: (item) =>
         `Dalph holds the admitted continuation for attempt ${item.attemptId} before its executor command intent while Alice's Stop request is applied.`,
       CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: (item) =>

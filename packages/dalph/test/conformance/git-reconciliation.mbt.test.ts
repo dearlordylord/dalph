@@ -37,37 +37,33 @@ import {
   IntegrationCandidateGit,
   IntegrationCandidateGitObservation,
   GitReadIntentRecordedEvent,
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent,
   intentRecordKey,
+  integrationResponsibilityBeganRecordKey,
+  integrationStartedRecordKey,
   JournalPosition,
   JournalStore,
   legacyMemoryJournalStoreLayer,
+  makeIntegrationTargetResourceController,
   makeCompleteTaskTrackerFactsObserved,
   makeTrackerGraphObservationOperation,
   makeTargetLineageObservationOperation,
   OperationId,
   PromotionTargetObservation,
   projectTrackerSnapshot,
+  reconstructRunState,
   responsibilityDispositionForTargetLineage,
   ResponsibilityDisposition,
   ResultCommitObservation,
   TaskWorkCapacity,
   TargetLineageObservation,
   TargetLineageObservedEvent,
-  taskTrackerReadIntent
-} from "@dalph/orchestrator"
-import { taskTrackerFactsObservedEvent } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
-import {
-  integrationResponsibilityBeganRecordKey,
-  integrationStartedRecordKey,
+  taskTrackerFactsObservedEvent,
+  taskTrackerReadIntent,
+  workflowJournalEventVersion,
   outcomeRecordKey
-} from "../../../orchestrator/src/workflow-journal/record-key.js"
-import { reconstructRunState } from "../../../orchestrator/src/coordination/reconstruction/reduce.js"
-import {
-  IntegrationResponsibilityBeganEvent,
-  IntegrationStartedEvent
-} from "../../../orchestrator/src/workflow/protocols/integration-admission/events.js"
-import { makeIntegrationTargetResourceController } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
-import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
+} from "@dalph/orchestrator"
 
 type Constraint =
   | "NoGitConstraint"
@@ -178,7 +174,7 @@ const makeProductionReconciliationTrace = () => {
   const reconstruct = () => {
     const result = reconstructRunState(runId, records())
     if (result._tag !== "ValidReconstructedRun")
-      throw new Error(`production MBT trace reconstruction failed: ${result._tag}`)
+      return Effect.runSync(Effect.die(`production MBT trace reconstruction failed: ${result._tag}`))
     return result.state
   }
   const frontier = () => {
@@ -227,7 +223,7 @@ const makeProductionReconciliationTrace = () => {
         { id: independentId, lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [] }
       ]
     })
-    if (projected._tag !== "Valid") throw new Error("production MBT graph projection failed")
+    if (projected._tag !== "Valid") return Effect.runSync(Effect.die("production MBT graph projection failed"))
     append(intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
     append(
       outcomeRecordKey(operation.operationId),
@@ -469,7 +465,7 @@ const gitDecisionFromFrontier = (constraint: Constraint, status: Status): string
   if (frontier.transitions[0]?._tag === "ContinuePlannedAttemptExecutorWork") return "ContinueAttempt"
   if (frontier.transitions[0]?._tag === "SuspendPlannedAttemptExecutorWork") return "RequestSafeSuspension"
   if (frontier.explanations[0]?._tag === "PlannedAttemptGitConstraint") return "GitConstraintWait"
-  throw new Error("production frontier returned no Git reconciliation decision")
+  return Effect.runSync(Effect.die("production frontier returned no Git reconciliation decision"))
 }
 
 const gitReconciliationDriver = defineDriver(
@@ -797,7 +793,9 @@ const gitReconciliationDriver = defineDriver(
             })
           )
           if (lineage._tag !== "IncompatibleTargetRewrite") {
-            throw new Error("the production lineage decision contradicted the incompatible observation")
+            return Effect.runSync(
+              Effect.die("the production lineage decision contradicted the incompatible observation")
+            )
           }
           constraint = "TargetRewriteConstraint"
           applyPreservation(lineage)

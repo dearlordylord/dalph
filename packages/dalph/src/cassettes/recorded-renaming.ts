@@ -606,6 +606,12 @@ const renameTrackerFactsObservation = (
           operationId: renamed(value.operationId, maps.operationIds),
           target: preserveCassetteValue(value.target)
         }),
+      TaskTrackerFactsReadFailed: (value) =>
+        completeFields<typeof value>({
+          ...value,
+          operationId: renamed(value.operationId, maps.operationIds),
+          target: preserveCassetteValue(value.target)
+        }),
       UnchangedTaskTrackerFactsReconfirmed: (value) =>
         completeFields<typeof value>({
           _tag: "UnchangedTaskTrackerFactsReconfirmed",

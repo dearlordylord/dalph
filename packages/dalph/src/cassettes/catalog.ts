@@ -3561,6 +3561,45 @@ export const prePromotionBlockerRecoveryAuthoredCassette: ScenarioCassette = Sch
   )
 })
 
+/** A complete blocker survives one crash; an unreadable restart read is durable and a later complete read resumes the queued candidate. */
+export const prePromotionBlockerUnreadableReadRecoveryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...prePromotionBlockerAuthoredCassette,
+  name: "an unreadable post-blocker read waits with empty target ownership before a later complete recovery read",
+  story: prePromotionBlockerAuthoredCassette.story.flatMap(
+    (item): ReadonlyArray<unknown> =>
+      item._tag === "TrackerGraphReadReturned" && item.graph.revision === issue138PrePromotionBlockerGraph.revision
+        ? [
+            item,
+            { _tag: "CoordinatorProcessDies" as const },
+            {
+              _tag: "DalphSelects" as const,
+              operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" as const }
+            },
+            { _tag: "TrackerGraphReadFailed" as const, reason: "IncompleteSnapshot" as const },
+            { _tag: "CoordinatorProcessDies" as const },
+            {
+              _tag: "DalphSelects" as const,
+              operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" as const }
+            },
+            { _tag: "TrackerGraphReadReturned" as const, graph: issue138PrePromotionRecoveryGraph },
+            { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId: "A" as const } },
+            { _tag: "TaskClaimCurrentReadReturned" as const, taskId: "A" as const },
+            {
+              _tag: "DalphSelects" as const,
+              operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" as const }
+            },
+            { _tag: "TrackerGraphReadReturned" as const, graph: issue138PrePromotionRecoveryGraph },
+            {
+              _tag: "CoordinatorActivationReturned" as const,
+              decision: { _tag: "RunMustRemainActive" as const, reason: "UnsettledResponsibility" as const }
+            }
+          ]
+        : [item]
+  )
+})
+
 /** A post-promotion blocker preserves M and its promotion proof while A waits. */
 export const blockersAroundPromotionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
@@ -3625,20 +3664,44 @@ const deliveryFinalityPrerequisiteCompleteGraph = {
   revision: "delivery-story-prerequisite-complete",
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
-    lifecycle: { _tag: task.id === "B" ? ("CompletedSuccessfully" as const) : ("Open" as const) }
+    lifecycle: { _tag: task.id === "B" ? ("CompletedSuccessfully" as const) : ("Open" as const) },
+    prerequisiteIds: task.id === "A" ? (["B"] as const) : task.id === "B" ? ([] as const) : task.prerequisiteIds
+  }))
+} as const
+
+const deliveryFinalityPrerequisiteStartingGraph = {
+  revision: "delivery-story-prerequisite-start",
+  tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
+    ...task,
+    lifecycle: task.id === "B" ? { _tag: "CompletedSuccessfully" as const } : task.lifecycle,
+    prerequisiteIds: task.id === "A" ? (["B"] as const) : task.id === "B" ? ([] as const) : task.prerequisiteIds
   }))
 } as const
 
 const deliveryFinalityPrerequisiteReopenedGraph = {
   revision: "delivery-story-prerequisite-reopened",
-  tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({ ...task, lifecycle: { _tag: "Open" as const } }))
+  tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
+    ...task,
+    lifecycle: { _tag: "Open" as const },
+    prerequisiteIds: task.id === "A" ? (["B"] as const) : task.id === "B" ? ([] as const) : task.prerequisiteIds
+  }))
+} as const
+
+const deliveryFinalityPrerequisiteACompleteGraph = {
+  revision: "delivery-story-G6",
+  tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
+    ...task,
+    lifecycle: { _tag: task.id === "B" ? ("Open" as const) : ("CompletedSuccessfully" as const) },
+    prerequisiteIds: task.id === "A" ? (["B"] as const) : task.id === "B" ? ([] as const) : task.prerequisiteIds
+  }))
 } as const
 
 const deliveryFinalityPrerequisiteCompletedGraph = {
   revision: "delivery-story-prerequisite-completed",
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
-    lifecycle: { _tag: "CompletedSuccessfully" as const }
+    lifecycle: { _tag: "CompletedSuccessfully" as const },
+    prerequisiteIds: task.id === "A" ? (["B"] as const) : task.id === "B" ? ([] as const) : task.prerequisiteIds
   }))
 } as const
 
@@ -3775,7 +3838,7 @@ export const prerequisiteReopensDuringCompletionAuthoredCassette: ScenarioCasset
   name: "a prerequisite reopens while tracker completion is in flight",
   startingFacts: {
     ...deliveryFinalitySpineAuthoredCassette.startingFacts,
-    trackerGraph: deliveryFinalityStartingGraph
+    trackerGraph: deliveryFinalityPrerequisiteStartingGraph
   },
   // B is complete in the graph used to authorize A.  It reopens at a fresh,
   // journaled graph read immediately before Q.  The accepted Q response and A
@@ -3794,15 +3857,17 @@ export const prerequisiteReopensDuringCompletionAuthoredCassette: ScenarioCasset
       if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === "delivery-story-G5") {
         return [{ ...item, graph: deliveryFinalityPrerequisiteCompleteGraph }]
       }
+      if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === "delivery-story-G0") {
+        return [{ ...item, graph: deliveryFinalityPrerequisiteStartingGraph }]
+      }
       if (bWorkCompleted && item._tag === "TrackerGraphReadReturned" && item.graph.revision === "delivery-story-G6") {
         return [{ ...item, graph: deliveryFinalityPrerequisiteCompletedGraph }]
       }
+      if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === "delivery-story-G6") {
+        return [{ ...item, graph: deliveryFinalityPrerequisiteACompleteGraph }]
+      }
       if (item._tag === "CompletionTaskRequestReturned" && item.outcome === "Acknowledged") {
-        return [
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-          { _tag: "TrackerGraphReadReturned", graph: deliveryFinalityPrerequisiteReopenedGraph },
-          item
-        ]
+        return [{ _tag: "CompletionTaskPrerequisiteReopened", graph: deliveryFinalityPrerequisiteReopenedGraph }, item]
       }
       return [item]
     })
@@ -4816,6 +4881,7 @@ type MaintainedAuthoredCassetteName =
   | "prePromotionBlocker"
   | "prePromotionBlockerClearAndSupersession"
   | "prePromotionBlockerRecovery"
+  | "prePromotionBlockerUnreadableReadRecovery"
   | "targetPromotionSuccess"
   | "blockersAroundPromotion"
   | "targetPromotionAmbiguityExhaustion"
@@ -4884,6 +4950,7 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     prePromotionBlocker: prePromotionBlockerAuthoredCassette,
     prePromotionBlockerClearAndSupersession: prePromotionBlockerClearAndSupersessionAuthoredCassette,
     prePromotionBlockerRecovery: prePromotionBlockerRecoveryAuthoredCassette,
+    prePromotionBlockerUnreadableReadRecovery: prePromotionBlockerUnreadableReadRecoveryAuthoredCassette,
     targetPromotionSuccess: targetPromotionSuccessAuthoredCassette,
     blockersAroundPromotion: blockersAroundPromotionAuthoredCassette,
     targetPromotionAmbiguityExhaustion: targetPromotionAmbiguityExhaustionAuthoredCassette,

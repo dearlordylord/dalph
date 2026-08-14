@@ -250,6 +250,11 @@ const expectRecordedRoundTrip = (records: ReadonlyArray<JournalRecord>, recorded
     )
   ).toBe(true)
 
+const foldRecordedCassetteOutcome = (cassette: RecordedCassette) =>
+  Effect.exit(Effect.sync(() => foldRecordedCassette(cassette))).pipe(
+    Effect.map((exit) => (Exit.isFailure(exit) ? Cause.pretty(exit.cause) : exit.value._tag))
+  )
+
 const exactExecutorReportTags = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> =>
   records.flatMap(({ event }) => {
     if (event._tag === "PlannedAttemptExecutorWorkReported") return [event.report._tag]
@@ -1168,7 +1173,7 @@ it.effect("shows an incomplete control read without recording a direction", () =
     const tags = run.records.map(({ event }) => event._tag)
 
     expect(tags.filter((tag) => tag === "TaskTrackerReadIntentRecorded")).toHaveLength(3)
-    expect(tags.filter((tag) => tag === "TaskTrackerFactsObserved")).toHaveLength(2)
+    expect(tags.filter((tag) => tag === "TaskTrackerFactsObserved")).toHaveLength(3)
     expect(tags).not.toContain("ControlDirectionApplied")
     expect(renderAuthoredCassetteLyrics(unreadableTaskUnpauseRejectedAuthoredCassette)).toContain(
       "Dalph rejects Operator Unpause for task A: IncompleteSnapshot."
@@ -2066,7 +2071,7 @@ it.effect("continues an accepted result after process death and crosses its inte
       ...recorded,
       entries: recorded.entries.filter(({ _tag }) => _tag !== "IntegrationResponsibilityBegan")
     })
-    expect(foldRecordedCassette(withoutIntegrationOrigin)._tag).toBe("InvalidWorkflowJournalHistory")
+    expect(yield* foldRecordedCassetteOutcome(withoutIntegrationOrigin)).toContain("RecordedCausalPositionMissing")
 
     const candidateRun = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateConflictRecovery)
     const candidateRecorded = yield* projectRecordedCassette(candidateRun.records)
@@ -2076,15 +2081,34 @@ it.effect("continues an accepted result after process death and crosses its inte
       "IntegrationCandidateAgentReported",
       "IntegrationCandidateGitObserved"
     ] as const) {
-      expect(
-        foldRecordedCassette(
-          RecordedCassette.make({
-            ...candidateRecorded,
-            entries: candidateRecorded.entries.filter(({ _tag }) => _tag !== omitted)
-          })
-        )._tag
-      ).toBe("InvalidWorkflowJournalHistory")
+      const malformed = RecordedCassette.make({
+        ...candidateRecorded,
+        entries: candidateRecorded.entries.filter(({ _tag }) => _tag !== omitted)
+      })
+      const outcome = yield* foldRecordedCassetteOutcome(malformed)
+      expect(outcome.includes("RecordedCausalPositionMissing") || outcome === "InvalidWorkflowJournalHistory").toBe(
+        true
+      )
     }
+
+    const constructedIndex = candidateRecorded.entries.findIndex(
+      ({ _tag }) => _tag === "IntegrationCandidateConstructed"
+    )
+    const gitObservationIndex = candidateRecorded.entries.findIndex(
+      ({ _tag }) => _tag === "IntegrationCandidateGitObserved"
+    )
+    if (constructedIndex < 0 || gitObservationIndex < 0) {
+      return yield* Effect.die("candidate cassette must contain its Git observation and construction")
+    }
+    const constructed = candidateRecorded.entries[constructedIndex]
+    if (constructed?._tag !== "IntegrationCandidateConstructed") {
+      return yield* Effect.die("candidate cassette construction entry was not found")
+    }
+    const reorderedEntries = candidateRecorded.entries.filter((_entry, index) => index !== constructedIndex)
+    reorderedEntries.splice(gitObservationIndex, 0, constructed)
+    expect(
+      yield* foldRecordedCassetteOutcome(RecordedCassette.make({ ...candidateRecorded, entries: reorderedEntries }))
+    ).toContain("RecordedCausalPositionMissing")
 
     const foreignRunId = RunId.make("foreign-candidate-run")
     for (const mismatchTag of [
@@ -2109,7 +2133,7 @@ it.effect("continues an accepted result after process death and crosses its inte
           return { ...entry, correlation: { ...entry.correlation, runId: foreignRunId } }
         })
       })
-      expect(foldRecordedCassette(mismatched)._tag).toBe("InvalidWorkflowJournalHistory")
+      expect(yield* foldRecordedCassetteOutcome(mismatched)).toBe("InvalidWorkflowJournalHistory")
     }
     const mismatchedIntentCorrelation = RecordedCassette.make({
       ...candidateRecorded,
@@ -2119,7 +2143,7 @@ it.effect("continues an accepted result after process death and crosses its inte
           : entry
       )
     })
-    expect(foldRecordedCassette(mismatchedIntentCorrelation)._tag).toBe("InvalidWorkflowJournalHistory")
+    expect(yield* foldRecordedCassetteOutcome(mismatchedIntentCorrelation)).toContain("RecordedCausalPositionMissing")
   })
 )
 
@@ -2288,13 +2312,13 @@ it.effect("round-trips pending Git failure and correction-limit candidate eviden
     expect(limitedHistory._tag).toBe("ValidWorkflowJournalHistory")
     expect(renderRecordedCassetteLyrics(limited)).toContain("stopped after 1 correction attempts")
     expect(
-      foldRecordedCassette(
+      yield* foldRecordedCassetteOutcome(
         RecordedCassette.make({
           ...limited,
           entries: limited.entries.filter(({ _tag }) => _tag !== "IntegrationCandidateGitObserved")
         })
-      )._tag
-    ).toBe("InvalidWorkflowJournalHistory")
+      )
+    ).toContain("RecordedCausalPositionMissing")
     expect(
       foldRecordedCassette(
         RecordedCassette.make({
@@ -2717,6 +2741,65 @@ it.effect("restarts after a durable blocker read with the candidate and queue hi
   })
 )
 
+it.effect("durably waits after an unreadable blocker restart read and resumes only on later complete facts", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(
+      maintainedAuthoredCassetteCatalog.prePromotionBlockerUnreadableReadRecovery
+    )
+    const unreadable = run.records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "TaskTrackerFactsReadFailed"
+    )
+    expect(run.activationOrdinals).toEqual([1, 2, 3, 4, 5])
+    expect(
+      unreadable?.event._tag === "TaskTrackerFactsObserved" ? unreadable.event.observation : undefined
+    ).toMatchObject({
+      _tag: "TaskTrackerFactsReadFailed",
+      completeness: "Unreadable",
+      failure: { _tag: "TrackerAdapterReadError", reason: { _tag: "IncompleteSnapshot" } }
+    })
+    expect(run.records.some(({ event }) => event._tag === "IntegrationCandidateConstructed")).toBe(true)
+    expect(run.records.some(({ event }) => event._tag === "TargetVerificationEvidenceSealed")).toBe(true)
+    expect(run.records.some(({ event }) => event._tag.startsWith("TargetPromotion"))).toBe(false)
+    expect(run.records.some(({ event }) => event._tag.startsWith("Completion"))).toBe(false)
+    const resumed = run.deliveryFrames.find(
+      (frame) =>
+        frame.graph._tag === "Established" && frame.graph.revision === "issue-138-pre-promotion-blocker-recovery"
+    )
+    expect(resumed?.frontier).toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId: "A", standing: "Excluded" })])
+    )
+    if (run.history._tag !== "ValidWorkflowJournalHistory") {
+      return yield* Effect.die("unreadable blocker recovery must retain valid journal history")
+    }
+    const started = deriveIntegrationAdmission(run.history.runState.workflowHistory.records).responsibilities.find(
+      (responsibility) => responsibility._tag === "StartedIntegrationResponsibility"
+    )
+    if (started?._tag !== "StartedIntegrationResponsibility") {
+      return yield* Effect.die("unreadable blocker recovery must retain its queued integration position")
+    }
+    expect(
+      deriveIntegrationFrontier(run.history.runState, {
+        currentTrackerTaskIds: new Set([TaskId.make("A"), TaskId.make("B"), TaskId.make("C")]),
+        heldResponsibilityPositions: new Set([started.queuedAt]),
+        integrationTarget: Option.some(
+          IntegrationTarget.make({
+            repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
+            ref: IntegrationTargetRef.make("refs/heads/master")
+          })
+        ),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(started.plannedAttempt.attemptId)
+      }).transitions
+    ).toContainEqual(
+      expect.objectContaining({
+        _tag: "ReleaseStartedIntegrationTarget",
+        responsibility: expect.objectContaining({ queuedAt: started.queuedAt })
+      })
+    )
+    expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
+  })
+)
+
 it.effect("preserves promotion proof and waits before tracker completion on a new blocker", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(blockersAroundPromotionAuthoredCassette)
@@ -2737,6 +2820,7 @@ it.effect("preserves accepted tracker completion when a prerequisite concurrentl
     const run = yield* runAuthoredScenarioCassette(prerequisiteReopensDuringCompletionAuthoredCassette)
     const recorded = yield* projectRecordedCassette(run.records)
     const acknowledgement = run.records.find(({ event }) => event._tag === "CompletionTaskAcknowledged")
+    const acknowledgementIndex = run.records.findIndex(({ event }) => event._tag === "CompletionTaskAcknowledged")
     const success = run.records.findLast(
       ({ event }) =>
         event._tag === "TaskTrackerFactsObserved" &&
@@ -2748,6 +2832,15 @@ it.effect("preserves accepted tracker completion when a prerequisite concurrentl
     )
 
     expect(acknowledgement?.event._tag).toBe("CompletionTaskAcknowledged")
+    const reopenedStoryIndex = run.cassette.story.findIndex(
+      (item) => item._tag === "CompletionTaskPrerequisiteReopened"
+    )
+    const requestStoryIndex = run.cassette.story.findIndex(
+      (item) => item._tag === "CompletionTaskRequestReturned" && item.outcome === "Acknowledged"
+    )
+    expect(reopenedStoryIndex).toBeGreaterThanOrEqual(0)
+    expect(requestStoryIndex).toBeGreaterThan(reopenedStoryIndex)
+    expect(acknowledgementIndex).toBeGreaterThan(0)
     expect(success?.event._tag).toBe("TaskTrackerFactsObserved")
     expect(laterGraph?.event._tag).toBe("TaskTrackerFactsObserved")
     const graphAt = (revision: string) =>
@@ -2762,9 +2855,6 @@ it.effect("preserves accepted tracker completion when a prerequisite concurrentl
     const completeBeforeAuthorization = Option.getOrThrow(
       Option.fromUndefinedOr(graphAt("delivery-story-prerequisite-complete"))
     )
-    const reopenedBeforeAcknowledgement = Option.getOrThrow(
-      Option.fromUndefinedOr(graphAt("delivery-story-prerequisite-reopened"))
-    )
     const laterACompleteBUnfinished = Option.getOrThrow(Option.fromUndefinedOr(graphAt("delivery-story-G6")))
     const bCompletedAfterItsWork = Option.getOrThrow(
       Option.fromUndefinedOr(graphAt("delivery-story-prerequisite-completed"))
@@ -2772,26 +2862,17 @@ it.effect("preserves accepted tracker completion when a prerequisite concurrentl
     const deliveryFrameAt = (revision: string) =>
       run.deliveryFrames.find(({ graph }) => graph._tag === "Established" && graph.revision === revision)
     const bFrontierAt = (revision: string) => deliveryFrameAt(revision)?.frontier.find(({ taskId }) => taskId === "B")
-    const reopenedB = bFrontierAt("delivery-story-prerequisite-reopened")
+    const aFrontierAt = (revision: string) => deliveryFrameAt(revision)?.frontier.find(({ taskId }) => taskId === "A")
+    const warnedA = aFrontierAt("delivery-story-G6")
     const completedB = bFrontierAt("delivery-story-prerequisite-completed")
-    expect(reopenedB?.standing).toBe("Excluded")
-    expect(reopenedB?.reasons).toContainEqual(expect.objectContaining({ kind: "PrerequisitesIncomplete" }))
+    expect(warnedA?.standing).toBe("Excluded")
+    expect(warnedA?.reasons).toContainEqual(expect.objectContaining({ kind: "PrerequisitesIncomplete" }))
     expect(completedB?.standing).toBe("Excluded")
     expect(completedB?.reasons).not.toContainEqual(expect.objectContaining({ kind: "PrerequisitesIncomplete" }))
-    const graphPositions = [
-      completeBeforeAuthorization,
-      reopenedBeforeAcknowledgement,
-      laterACompleteBUnfinished,
-      bCompletedAfterItsWork
-    ].map((record) => record.position)
+    const graphPositions = [completeBeforeAuthorization, laterACompleteBUnfinished, bCompletedAfterItsWork].map(
+      (record) => record.position
+    )
     expect(graphPositions).toEqual(graphPositions.toSorted((left, right) => left - right))
-    expect(
-      reopenedBeforeAcknowledgement.event._tag === "TaskTrackerFactsObserved" &&
-        reopenedBeforeAcknowledgement.event.observation._tag === "CompleteTaskTrackerFacts" &&
-        reopenedBeforeAcknowledgement.event.observation.factFamilies[1].lifecycles.some(
-          ({ lifecycle, taskId }) => taskId === TaskId.make("B") && lifecycle._tag === "Open"
-        )
-    ).toBe(true)
     expect(
       laterACompleteBUnfinished.event._tag === "TaskTrackerFactsObserved" &&
         laterACompleteBUnfinished.event.observation._tag === "CompleteTaskTrackerFacts" &&
@@ -2817,7 +2898,7 @@ it.effect("preserves accepted tracker completion when a prerequisite concurrentl
       run.deliveryFrames.some(({ frontier }) =>
         frontier.some(
           ({ reasons, standing, taskId }) =>
-            taskId === "B" && standing === "Excluded" && reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
+            taskId === "A" && standing === "Excluded" && reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
         )
       )
     ).toBe(true)
@@ -7051,6 +7132,7 @@ it.effect(
         FocusedTaskClaimFactsUnreadable: true,
         FocusedTaskCompletionFacts: true,
         FocusedTaskWorkSpecificationFacts: true,
+        TaskTrackerFactsReadFailed: true,
         UnchangedTaskTrackerFactsReconfirmed: true
       } satisfies Record<TaskTrackerFactsObservation["_tag"], true>
 

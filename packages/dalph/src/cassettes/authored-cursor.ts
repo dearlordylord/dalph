@@ -131,6 +131,10 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.CompletionTaskFocusedReadReturned.Type,
     CursorFailure
   >
+  readonly consumeCompletionTaskPrerequisiteReopened: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CompletionTaskPrerequisiteReopened.Type,
+    CursorFailure
+  >
   readonly consumeCompletionTaskRequestLookupReturned: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.CompletionTaskRequestLookupReturned.Type,
     CursorFailure
@@ -1039,9 +1043,16 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
       )
     )
   )
-  const consumeCompletionTaskFocusedReadReturned = consume("CompletionTaskFocusedReadReturned").pipe(
+  const consumeCompletionTaskFocusedReadReturned = Effect.gen(function* () {
+    const item = yield* consume("CompletionTaskFocusedReadReturned")
+    const decoded = yield* Schema.decodeUnknownEffect(
+      AuthoredCassetteStoryItem.cases.CompletionTaskFocusedReadReturned
+    )(item).pipe(Effect.orDie)
+    return decoded
+  })
+  const consumeCompletionTaskPrerequisiteReopened = consume("CompletionTaskPrerequisiteReopened").pipe(
     Effect.flatMap((item) =>
-      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionTaskFocusedReadReturned)(item).pipe(
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionTaskPrerequisiteReopened)(item).pipe(
         Effect.orDie
       )
     )
@@ -1121,6 +1132,7 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     consumeCompletionClaimReadReturned,
     consumeCompletionClaimReplacementApplied,
     consumeCompletionTaskFocusedReadReturned,
+    consumeCompletionTaskPrerequisiteReopened,
     consumeCompletionTaskRequestLookupReturned,
     consumeCompletionTaskRequestReturned,
     consumeAttemptChoice,

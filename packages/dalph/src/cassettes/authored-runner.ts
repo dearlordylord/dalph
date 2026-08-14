@@ -77,7 +77,6 @@ import {
   JournaledRunBootstrap,
   journaledRunBootstrapLayer,
   makeApplicationExitShell,
-  makeTrackerGraphObservationOperation,
   type JournaledRuntimeLayerInput,
   journaledWorkflowInterpreterLayer,
   type PauseProgressView,
@@ -1972,22 +1971,11 @@ const runAuthoredScenarioCassetteWith = (request: {
         return Layer.effectContext(
           Effect.gen(function* () {
             const context = yield* Layer.build(activationLayer)
-            const interpreter = Context.get(context, WorkflowInterpreter)
-            yield* Ref.set(beforeCompletionTask, (request) =>
+            yield* Ref.set(beforeCompletionTask, (_request) =>
               Effect.gen(function* () {
                 const item = yield* cursor.currentStoryItem
-                if (item?._tag !== "DalphSelects" || item.operation._tag !== "ReadTrackerGraph") return
-                const selected = yield* cursor.consumeDalphSelection
-                if (selected.operation._tag !== "ReadTrackerGraph") {
-                  return yield* Effect.die("authored completion prerequisite boundary selected a non-graph operation")
-                }
-                const operation = makeTrackerGraphObservationOperation(
-                  OperationId.make(`authored-completion-prerequisite-graph:${request.operationId}`),
-                  selected.operation.target,
-                  [],
-                  []
-                )
-                yield* interpreter.readTrackerGraph(operation).pipe(Effect.asVoid, Effect.orDie)
+                if (item?._tag !== "CompletionTaskPrerequisiteReopened") return
+                yield* cursor.consumeCompletionTaskPrerequisiteReopened.pipe(Effect.orDie)
               }).pipe(Effect.orDie)
             )
             return context

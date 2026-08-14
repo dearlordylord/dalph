@@ -804,6 +804,12 @@ export class EmptyJournalCannotBeRecorded extends Schema.TaggedError<EmptyJourna
   {}
 ) {}
 
+/** A recorded inverse cannot invent a causal journal position for a missing predecessor. */
+export class RecordedCausalPositionMissing extends Schema.TaggedError<RecordedCausalPositionMissing>()(
+  "RecordedCausalPositionMissing",
+  { entryIndex: Schema.Int, relation: Schema.String }
+) {}
+
 /** Projects a valid one-run journal without exposing a partial cassette. */
 export const projectRecordedCassette = Effect.fn("ScenarioCassette.projectRecorded")(function* (
   records: ReadonlyArray<JournalRecord>
@@ -959,20 +965,21 @@ const eventForIntegrationEntry = (
       version: workflowJournalEventVersion
     })
   }
-  const beganIndex = entries.findLastIndex(
-    (candidate, candidateIndex) =>
-      candidateIndex < index &&
-      candidate._tag === "IntegrationResponsibilityBegan" &&
-      candidate.plannedAttempt.attemptId === entry.plannedAttempt.attemptId &&
-      candidate.acceptedResult.commit === entry.acceptedResult.commit &&
-      candidate.integrationTarget.repository === entry.integrationTarget.repository &&
-      candidate.integrationTarget.ref === entry.integrationTarget.ref
-  )
   return IntegrationStartedEvent.make({
     acceptedResult: entry.acceptedResult,
     integrationTarget: entry.integrationTarget,
     plannedAttempt: entry.plannedAttempt,
-    responsibilityBeganAt: JournalPosition.make((beganIndex < 0 ? index : beganIndex) + 1),
+    responsibilityBeganAt: priorEntryPosition(
+      entries,
+      index,
+      (candidate) =>
+        candidate._tag === "IntegrationResponsibilityBegan" &&
+        candidate.plannedAttempt.attemptId === entry.plannedAttempt.attemptId &&
+        candidate.acceptedResult.commit === entry.acceptedResult.commit &&
+        candidate.integrationTarget.repository === entry.integrationTarget.repository &&
+        candidate.integrationTarget.ref === entry.integrationTarget.ref,
+      "IntegrationStarted requires its matching IntegrationResponsibilityBegan"
+    ),
     version: workflowJournalEventVersion
   })
 }
@@ -1038,10 +1045,14 @@ const eventForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): Work
 const priorEntryPosition = (
   entries: ReadonlyArray<RecordedCassetteEntry>,
   index: number,
-  matches: (entry: RecordedCassetteEntry) => boolean
+  matches: (entry: RecordedCassetteEntry) => boolean,
+  relation: string
 ): JournalPosition => {
   const priorIndex = entries.findLastIndex((entry, candidateIndex) => candidateIndex < index && matches(entry))
-  return JournalPosition.make((priorIndex < 0 ? index : priorIndex) + 1)
+  if (priorIndex < 0) {
+    return Effect.runSync(Effect.die(new RecordedCausalPositionMissing({ entryIndex: index, relation })))
+  }
+  return JournalPosition.make(priorIndex + 1)
 }
 
 const eventForCandidateConstructionEntry = (
@@ -1061,14 +1072,16 @@ const eventForCandidateConstructionEntry = (
           index,
           (candidate) =>
             candidate._tag === "IntegrationResponsibilityBegan" &&
-            candidate.plannedAttempt.attemptId === value.correlation.attemptId
+            candidate.plannedAttempt.attemptId === value.correlation.attemptId,
+          "IntegrationCandidateConstructionIntended requires IntegrationResponsibilityBegan"
         ),
         startedAt: priorEntryPosition(
           entries,
           index,
           (candidate) =>
             candidate._tag === "IntegrationStarted" &&
-            candidate.plannedAttempt.attemptId === value.correlation.attemptId
+            candidate.plannedAttempt.attemptId === value.correlation.attemptId,
+          "IntegrationCandidateConstructionIntended requires IntegrationStarted"
         ),
         version: workflowJournalEventVersion
       }),
@@ -1089,7 +1102,8 @@ const eventForCandidateConstructionEntry = (
               value.priorCorrelation.acceptanceManifest
             ) &&
             candidate.integrationTarget.repository === value.priorCorrelation.integrationTarget.repository &&
-            candidate.integrationTarget.ref === value.priorCorrelation.integrationTarget.ref
+            candidate.integrationTarget.ref === value.priorCorrelation.integrationTarget.ref,
+          "IntegrationCandidateSessionSuperseded requires matching prior IntegrationResponsibilityBegan"
         ),
         startedAt: priorEntryPosition(
           entries,
@@ -1103,7 +1117,8 @@ const eventForCandidateConstructionEntry = (
               value.priorCorrelation.acceptanceManifest
             ) &&
             candidate.integrationTarget.repository === value.priorCorrelation.integrationTarget.repository &&
-            candidate.integrationTarget.ref === value.priorCorrelation.integrationTarget.ref
+            candidate.integrationTarget.ref === value.priorCorrelation.integrationTarget.ref,
+          "IntegrationCandidateSessionSuperseded requires matching prior IntegrationStarted"
         ),
         successorCorrelation: value.successorCorrelation,
         version: workflowJournalEventVersion
@@ -1127,7 +1142,8 @@ const eventForCandidateConstructionEntry = (
             candidate._tag === "IntegrationCandidateAgentReported" &&
             candidate.report._tag === "Submitted" &&
             candidate.report.candidateCommit === value.candidateCommit &&
-            candidate.report.correlation.candidateId === value.correlation.candidateId
+            candidate.report.correlation.candidateId === value.correlation.candidateId,
+          "IntegrationCandidateGitObserved requires its matching submitted report"
         ),
         version: workflowJournalEventVersion
       }),
@@ -1141,7 +1157,8 @@ const eventForCandidateConstructionEntry = (
           (candidate) =>
             candidate._tag === "IntegrationCandidateGitObserved" &&
             candidate.candidateCommit === value.candidateCommit &&
-            candidate.correlation.candidateId === value.correlation.candidateId
+            candidate.correlation.candidateId === value.correlation.candidateId,
+          "IntegrationCandidateConstructed requires its matching Git observation"
         ),
         reviewManifest: value.reviewManifest,
         version: workflowJournalEventVersion
@@ -1159,7 +1176,8 @@ const eventForCandidateConstructionEntry = (
             candidate._tag === "IntegrationCandidateAgentReported" &&
             candidate.report._tag === "Submitted" &&
             candidate.report.candidateCommit === value.candidateCommit &&
-            candidate.report.correlation.candidateId === value.correlation.candidateId
+            candidate.report.correlation.candidateId === value.correlation.candidateId,
+          "IntegrationCandidateGitValidationFailed requires its matching submitted report"
         ),
         version: workflowJournalEventVersion
       }),
@@ -1173,7 +1191,8 @@ const eventForCandidateConstructionEntry = (
           index,
           (candidate) =>
             candidate._tag === "IntegrationCandidateGitObserved" &&
-            candidate.correlation.candidateId === value.correlation.candidateId
+            candidate.correlation.candidateId === value.correlation.candidateId,
+          "IntegrationCandidateCorrectionLimitReached requires its invalid Git observation"
         ),
         version: workflowJournalEventVersion
       }),
@@ -1188,7 +1207,8 @@ const eventForCandidateConstructionEntry = (
           (candidate) =>
             candidate._tag === "IntegrationCandidateAgentReported" &&
             candidate.report._tag !== "Submitted" &&
-            candidate.report.correlation.candidateId === value.correlation.candidateId
+            candidate.report.correlation.candidateId === value.correlation.candidateId,
+          "IntegrationCandidateContinuationLimitReached requires its prior candidate report"
         ),
         version: workflowJournalEventVersion
       })

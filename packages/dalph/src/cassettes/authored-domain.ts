@@ -677,6 +677,8 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   CompletionClaimDeletionApplied: { taskId: TaskId },
   /** The tracker reports which exact claim kind is current for finality reconciliation. */
   CompletionClaimReadReturned: { claim: Schema.Literals(["Active", "Completion"]), taskId: TaskId },
+  /** Another tracker client reopened the prerequisite before exact request Q was acknowledged. */
+  CompletionTaskPrerequisiteReopened: { graph: AuthoredTrackerGraph },
   /** The tracker applied replacement of the active claim with the exact completion claim. */
   CompletionClaimReplacementApplied: { taskId: TaskId },
   /** One all-or-nothing task-local lifecycle, prerequisite, membership, revision, and claim read. */
@@ -952,6 +954,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CompletionClaimDeletionApplied",
     "CompletionClaimReadReturned",
     "CompletionClaimReplacementApplied",
+    "CompletionTaskPrerequisiteReopened",
     "CompletionTaskFocusedReadReturned",
     "CompletionTaskRequestLookupReturned",
     "CompletionTaskRequestReturned",
