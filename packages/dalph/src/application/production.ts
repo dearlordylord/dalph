@@ -10,6 +10,7 @@ import {
   coordinatorOwnedTrackerMutationLayer,
   type GitCommonDirectoryTarget,
   type JournalStoreError,
+  EvidenceStore,
   journaledRunBootstrapLayer,
   journaledWorkflowInterpreterLayer,
   ApplicationExitRequestBoundary,
@@ -79,7 +80,11 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     Layer.provide(gitTargetLineageLayer),
     Layer.provide(gitWorktreeLayer)
   )
-  const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, plannedAttemptExecutorLayer)
+  const executorWithAcceptedEvidence =
+    acceptedResultEvidenceStore === undefined
+      ? plannedAttemptExecutorLayer
+      : plannedAttemptExecutorLayer.pipe(Layer.provide(Layer.succeed(EvidenceStore, acceptedResultEvidenceStore)))
+  const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, executorWithAcceptedEvidence)
 
   return Layer.unwrap(
     Effect.gen(function* () {
