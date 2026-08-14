@@ -227,7 +227,9 @@ const makeHarness = (
     },
     readServerLaunch: () => Effect.succeed(Option.none()),
     writeServerLaunch: () => Effect.void,
-    clearServerLaunch: () => Effect.void
+    clearServerLaunch: () => Effect.void,
+    acquireServerLease: () => Effect.void,
+    releaseServerLease: () => Effect.void
   }
 
   return {
@@ -533,8 +535,8 @@ it.effect("reports safe suspension after an interrupted turn and resumes the sam
     expect(harness.turnCount()).toBe(2)
     const continuationRecord = harness.currentRecord()
     expect(continuationRecord?._tag).toBe("Running")
-    if (continuationRecord?._tag === "Running") {
-      expect(continuationRecord.priorObservedTurnId).toBe(firstTurnRecord?.observedTurnId ?? null)
+    if (firstTurnRecord?._tag === "Running" && continuationRecord?._tag === "Running") {
+      expect(continuationRecord.priorObservedTurnId).toBe(firstTurnRecord.observedTurnId)
       const ownedTurns = harness
         .currentThread()
         .turns.filter((turn) => turn.ownedTurnToken === continuationRecord.currentToken)

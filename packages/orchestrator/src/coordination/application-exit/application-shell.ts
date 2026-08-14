@@ -242,7 +242,7 @@ export interface ApplicationExitShellService {
   readonly admission: ApplicationExitAdmissionService
   readonly awaitExitRequested: Effect.Effect<void>
   /** Every admitted executor drain has settled, including registrations that raced the cutoff. */
-  readonly awaitExecutorDrains?: Effect.Effect<void, ApplicationExitDrainFailure>
+  readonly awaitExecutorDrains: Effect.Effect<void, ApplicationExitDrainFailure>
   readonly registerExecutorDrain: (drain: ApplicationExitExecutorDrain) => Effect.Effect<void, never, Scope.Scope>
   readonly registerProcessLocalDrain: (
     drain: ApplicationExitProcessLocalDrain

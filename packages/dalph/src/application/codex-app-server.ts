@@ -934,25 +934,33 @@ const signalExactDetachedDescendants = (
 const registerApplicationServerDrain = (
   shell: ApplicationExitShellService,
   close: Effect.Effect<void, CodexAppServerFailure>
-) =>
-  shell.registerProcessLocalDrain({
-    closeProcessLocalResources: (shell.awaitExecutorDrains ?? Effect.void).pipe(
-      Effect.catchTag("ApplicationExitDrainFailure", () => Effect.void),
-      Effect.andThen(close),
-      Effect.mapError(
-        (error) =>
-          new ApplicationExitDrainFailure({
-            diagnostics: [
-              ApplicationExitDiagnostic.make(
-                `Codex app-server cleanup failed: ${
-                  error instanceof CodexAppServerFailure ? error.detail : String(error)
-                }`
-              )
-            ]
+) => {
+  const closeDiagnostic = (error: CodexAppServerFailure) =>
+    ApplicationExitDiagnostic.make(`Codex app-server cleanup failed: ${error.detail}`)
+  const closeAfterExecutorDrains = shell.awaitExecutorDrains.pipe(
+    Effect.matchEffect({
+      onFailure: (executorFailure) =>
+        close.pipe(
+          Effect.matchEffect({
+            onFailure: (closeFailure) =>
+              Effect.fail(
+                new ApplicationExitDrainFailure({
+                  diagnostics: [...executorFailure.diagnostics, closeDiagnostic(closeFailure)]
+                })
+              ),
+            // Closing the server is still attempted, but a failed executor
+            // drain remains a typed Exit failure rather than being ignored.
+            onSuccess: () => Effect.fail(executorFailure)
           })
-      )
-    )
-  })
+        ),
+      onSuccess: () =>
+        close.pipe(
+          Effect.mapError((error) => new ApplicationExitDrainFailure({ diagnostics: [closeDiagnostic(error)] }))
+        )
+    })
+  )
+  return shell.registerProcessLocalDrain({ closeProcessLocalResources: closeAfterExecutorDrains })
+}
 
 const ownershipGate = Effect.fn("CodexAppServer.ownershipGate")(function* (
   store: CodexAttemptStoreService,
