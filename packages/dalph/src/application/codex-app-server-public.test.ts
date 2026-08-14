@@ -1,5 +1,6 @@
 /* eslint-disable import/no-nodejs-modules -- these tests exercise the execution-substrate public boundary. */
 import nodeProcess from "node:process"
+import nodeFsPromises from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
@@ -47,6 +48,119 @@ const terminal = (osPid?: number | null): CodexBackgroundTerminal => ({
   cwd: "/public/worktree",
   ...(osPid === undefined ? {} : { osPid })
 })
+
+type FakeLinuxProcessStat =
+  | { readonly _tag: "Read"; readonly text: string }
+  | { readonly _tag: "Error"; readonly error: unknown }
+
+const processFilePath = (path: Parameters<typeof nodeFsPromises.readFile>[0]): string =>
+  typeof path === "string" ? path : path instanceof URL ? path.pathname : Buffer.from(path).toString("utf8")
+
+const linuxProcessStat = (pid: number, parentPid: number, processGroupId: number, startIdentity: string): string =>
+  `${pid} (fixture-codex) ${[
+    "S",
+    String(parentPid),
+    String(processGroupId),
+    ...Array.from({ length: 16 }, () => "0"),
+    startIdentity
+  ].join(" ")}`
+
+const withFakeLinuxProc = <A, E>(
+  entries: ReadonlyArray<string>,
+  stats: ReadonlyMap<number, FakeLinuxProcessStat>,
+  effect: Effect.Effect<A, E>
+): Effect.Effect<A, E> => {
+  const originalReadFile = nodeFsPromises.readFile
+  const originalReaddir = nodeFsPromises.readdir
+  return Effect.gen(function* () {
+    yield* Effect.sync(() => {
+      const readFile = async (path: Parameters<typeof nodeFsPromises.readFile>[0]): Promise<string> => {
+        const match = /\/proc\/([0-9]+)\/stat$/.exec(processFilePath(path))
+        const pid = match === null ? -1 : Number(match[1])
+        const result = stats.get(pid)
+        if (result === undefined) {
+          const error = Object.assign(new Error(`missing process ${pid}`), { code: "ENOENT" })
+          throw error
+        }
+        if (result._tag === "Error") throw result.error
+        return result.text
+      }
+      const readdir = async (): Promise<ReadonlyArray<string>> => entries
+      Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: readFile })
+      Object.defineProperty(nodeFsPromises, "readdir", { configurable: true, value: readdir })
+    })
+    return yield* effect.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: originalReadFile })
+          Object.defineProperty(nodeFsPromises, "readdir", { configurable: true, value: originalReaddir })
+        })
+      )
+    )
+  })
+}
+
+const withFakeProcessKill = <A, E>(kill: typeof nodeProcess.kill, effect: Effect.Effect<A, E>): Effect.Effect<A, E> => {
+  const originalKill = nodeProcess.kill.bind(nodeProcess)
+  return Effect.gen(function* () {
+    yield* Effect.sync(() => Object.defineProperty(nodeProcess, "kill", { configurable: true, value: kill }))
+    return yield* effect.pipe(
+      Effect.ensuring(
+        Effect.sync(() => Object.defineProperty(nodeProcess, "kill", { configurable: true, value: originalKill }))
+      )
+    )
+  })
+}
+
+type FakeLaunchObservation = {
+  readonly commandLine?: string
+  readonly stat?: string
+  readonly killError?: unknown
+  readonly platform?: string
+}
+
+const withFakeLaunchObservation = <A, E>(
+  observation: FakeLaunchObservation,
+  effect: Effect.Effect<A, E>
+): Effect.Effect<A, E> => {
+  const originalReadFile = nodeFsPromises.readFile
+  const originalKill = nodeProcess.kill.bind(nodeProcess)
+  const originalPlatform = nodeProcess.platform
+  return Effect.gen(function* () {
+    yield* Effect.sync(() => {
+      const readFile = async (path: Parameters<typeof nodeFsPromises.readFile>[0]): Promise<string> => {
+        const pathText = processFilePath(path)
+        const value = pathText.endsWith("/cmdline") ? observation.commandLine : observation.stat
+        if (value === undefined) {
+          const error = Object.assign(new Error(`missing process file ${pathText}`), { code: "ENOENT" })
+          throw error
+        }
+        return value
+      }
+      const kill = (() => {
+        if (observation.killError !== undefined) {
+          // eslint-disable-next-line functional/no-throw-statements -- the controlled kill fixture emulates a native signal failure.
+          throw observation.killError
+        }
+        return true
+      }) as typeof nodeProcess.kill
+      Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: readFile })
+      Object.defineProperty(nodeProcess, "kill", { configurable: true, value: kill })
+      if (observation.platform !== undefined) {
+        Object.defineProperty(nodeProcess, "platform", { configurable: true, value: observation.platform })
+      }
+    })
+    return yield* effect.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: originalReadFile })
+          Object.defineProperty(nodeProcess, "kill", { configurable: true, value: originalKill })
+          Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform })
+        })
+      )
+    )
+  })
+}
 
 const discoveryFixture = String.raw`#!/usr/bin/env node
 let buffer = ""
@@ -163,6 +277,213 @@ it.effect("reports exact owned activities only after fresh turn, terminal, and p
   })
 )
 
+it.effect("classifies controlled Linux process census observations at the public activity boundary", () => {
+  const valid = (pid: number, parentPid: number, processGroupId: number, startIdentity = "start") => ({
+    _tag: "Read" as const,
+    text: linuxProcessStat(pid, parentPid, processGroupId, startIdentity)
+  })
+  const cases: ReadonlyArray<{
+    readonly entries: ReadonlyArray<string>
+    readonly stats: ReadonlyMap<number, FakeLinuxProcessStat>
+    readonly rootPid: number
+    readonly expected: CodexOwnedActivityCensusProjection
+  }> = [
+    {
+      entries: ["self", "thread-self", "101"],
+      stats: new Map([[101, { _tag: "Read", text: "malformed" }]]),
+      rootPid: 101,
+      expected: { _tag: "Unreadable", detail: "process 101 stat is malformed" }
+    },
+    {
+      entries: ["102"],
+      stats: new Map([[102, { _tag: "Read", text: "102 (fixture-codex) S not-a-pid 1" }]]),
+      rootPid: 102,
+      expected: { _tag: "Unreadable", detail: "process 102 stat is malformed" }
+    },
+    {
+      entries: ["self", "103"],
+      stats: new Map([[103, { _tag: "Error", error: Object.assign(new Error("vanished"), { code: "ESRCH" }) }]]),
+      rootPid: 999,
+      expected: { _tag: "ExactLive", activities: [{ _tag: "BackgroundTerminal", terminal: terminal(999) }] }
+    },
+    {
+      entries: ["104"],
+      stats: new Map([[104, valid(104, 0, 0)]]),
+      rootPid: 104,
+      expected: { _tag: "Contradictory", detail: "attempt activity 104 has no valid process group" }
+    },
+    {
+      entries: ["self", "thread-self", "0", "999999999999999999999", "105"],
+      stats: new Map([[105, valid(105, 0, 105)]]),
+      rootPid: 105,
+      expected: {
+        _tag: "ExactLive",
+        activities: [
+          { _tag: "BackgroundTerminal", terminal: terminal(105) },
+          {
+            _tag: "ProcessGroupDescendant",
+            identity: {
+              pid: 105,
+              parentPid: 0,
+              processGroupId: 105,
+              startIdentity: CodexProcessStartIdentity.make("linux:start")
+            }
+          }
+        ]
+      }
+    },
+    {
+      entries: ["106", "107", "108", "109", "110"],
+      stats: new Map([
+        [106, valid(106, 0, 106, "root")],
+        [107, valid(107, 106, 107, "child")],
+        [108, valid(108, 107, 108, "grandchild")],
+        [109, valid(109, 999, 109, "orphan")],
+        [110, valid(110, 110, 110, "cycle")]
+      ]),
+      rootPid: 106,
+      expected: {
+        _tag: "ExactLive",
+        activities: [
+          { _tag: "BackgroundTerminal", terminal: terminal(106) },
+          {
+            _tag: "ProcessGroupDescendant",
+            identity: {
+              pid: 106,
+              parentPid: 0,
+              processGroupId: 106,
+              startIdentity: CodexProcessStartIdentity.make("linux:root")
+            }
+          },
+          {
+            _tag: "ProcessGroupDescendant",
+            identity: {
+              pid: 107,
+              parentPid: 106,
+              processGroupId: 107,
+              startIdentity: CodexProcessStartIdentity.make("linux:child")
+            }
+          },
+          {
+            _tag: "ProcessGroupDescendant",
+            identity: {
+              pid: 108,
+              parentPid: 107,
+              processGroupId: 108,
+              startIdentity: CodexProcessStartIdentity.make("linux:grandchild")
+            }
+          }
+        ]
+      }
+    }
+  ]
+  return Effect.forEach(cases, ({ entries, expected, rootPid, stats }) =>
+    withFakeLinuxProc(
+      entries,
+      stats,
+      runCensus((census) => census.observe(thread("idle", []), [terminal(rootPid)]))
+        .pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
+        .pipe(Effect.map((observed) => expect(observed).toEqual(expected)))
+    )
+  )
+})
+
+it.effect("revalidates and signals controlled Linux descendants without touching native processes", () => {
+  const member = (pid: number, startIdentity = "same", processGroupId = pid): CodexOwnedProcessIdentity => ({
+    pid,
+    parentPid: 0,
+    processGroupId,
+    startIdentity: CodexProcessStartIdentity.make(`linux:${startIdentity}`)
+  })
+  const valid = (pid: number, startIdentity = "same", processGroupId = pid): FakeLinuxProcessStat => ({
+    _tag: "Read",
+    text: linuxProcessStat(pid, 0, processGroupId, startIdentity)
+  })
+  const terminate = (descendant: CodexOwnedProcessIdentity) =>
+    Effect.gen(function* () {
+      const census = yield* CodexOwnedActivityCensus
+      return yield* census.terminateDescendants([descendant])
+    }).pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
+  const absent = Effect.gen(function* () {
+    const census = yield* CodexOwnedActivityCensus
+    return yield* census.terminateDescendants([])
+  }).pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
+  const errorKill = (() => {
+    // eslint-disable-next-line functional/no-throw-statements -- the controlled kill fixture emulates a native signal failure.
+    throw new Error("signal failed")
+  }) as typeof nodeProcess.kill
+  const absentKill = (() => {
+    // eslint-disable-next-line functional/no-throw-statements -- the controlled kill fixture emulates ESRCH from the native boundary.
+    throw { cause: { code: "ESRCH" } }
+  }) as typeof nodeProcess.kill
+  const cases: ReadonlyArray<{
+    readonly stats: ReadonlyMap<number, FakeLinuxProcessStat>
+    readonly descendant: CodexOwnedProcessIdentity
+    readonly expectedFailure?: string
+    readonly kill?: typeof nodeProcess.kill
+  }> = [
+    { stats: new Map(), descendant: member(201) },
+    {
+      stats: new Map([[202, { _tag: "Error", error: Object.assign(new Error("gone"), { code: "ESRCH" }) }]]),
+      descendant: member(202)
+    },
+    {
+      stats: new Map([[203, { _tag: "Error", error: Object.assign(new Error("I/O"), { code: "EIO" }) }]]),
+      descendant: member(203),
+      expectedFailure: "cannot read process 203"
+    },
+    {
+      stats: new Map([[204, { _tag: "Read", text: "204 (fixture-codex) broken" }]]),
+      descendant: member(204),
+      expectedFailure: "process 204 stat is malformed"
+    },
+    {
+      stats: new Map([[205, valid(205, "replacement")]]),
+      descendant: member(205),
+      expectedFailure: "changed identity"
+    },
+    { stats: new Map([[206, valid(206)]]), descendant: member(206), kill: absentKill },
+    { stats: new Map([[207, valid(207)]]), descendant: member(207), kill: errorKill, expectedFailure: "signal failed" },
+    { stats: new Map([[208, valid(208)]]), descendant: member(208) }
+  ]
+  const originalPlatform = nodeProcess.platform
+  return Effect.gen(function* () {
+    const empty = yield* absent
+    expect(empty).toBeUndefined()
+    Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "darwin" })
+    const unsupported = yield* terminate(member(209)).pipe(Effect.exit)
+    expect(Exit.isFailure(unsupported)).toBe(true)
+    Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform })
+    yield* Effect.forEach(cases, ({ descendant, expectedFailure, kill, stats }) => {
+      const outcome = withFakeLinuxProc(
+        [String(descendant.pid)],
+        stats,
+        (kill === undefined ? terminate(descendant) : withFakeProcessKill(kill, terminate(descendant))).pipe(
+          Effect.exit
+        )
+      )
+      return outcome.pipe(
+        Effect.map((result) => {
+          if (expectedFailure === undefined) {
+            expect(Exit.isSuccess(result)).toBe(true)
+          } else {
+            expect(Exit.isFailure(result)).toBe(true)
+            if (Exit.isFailure(result)) {
+              const failure = Cause.findErrorOption(result.cause)
+              expect(Option.isSome(failure)).toBe(true)
+              if (Option.isSome(failure)) expect(failure.value.detail).toContain(expectedFailure)
+            }
+          }
+        })
+      )
+    })
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform }))
+    )
+  )
+})
+
 it.effect("revalidates exact descendant identities before stopping owned activity", () =>
   Effect.gen(function* () {
     const census = yield* CodexOwnedActivityCensus.pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
@@ -265,3 +586,71 @@ it.effect("reconciles an exact launch-token process before starting a replacemen
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
+
+it.effect("classifies controlled Unix launch identity observations before replacement", () => {
+  const executable = "/controlled/codex"
+  const expectedStat = linuxProcessStat(301, 0, 301, "expected")
+  const cases: ReadonlyArray<{
+    readonly observation: FakeLaunchObservation
+    readonly incarnation: CodexServerIncarnation
+  }> = [
+    {
+      observation: { commandLine: "/foreign/codex\u0000app-server\u0000", stat: expectedStat },
+      incarnation: CodexServerIncarnation.make("launch-identity|linux%3Aexpected")
+    },
+    {
+      observation: { commandLine: `${executable}\u0000`, stat: expectedStat },
+      incarnation: CodexServerIncarnation.make("launch-mode|linux%3Aexpected")
+    },
+    {
+      observation: { commandLine: `${executable}\u0000app-server\u0000`, stat: expectedStat },
+      incarnation: CodexServerIncarnation.make("launch-without-identity")
+    },
+    {
+      observation: { commandLine: `${executable}\u0000app-server\u0000`, stat: "malformed" },
+      incarnation: CodexServerIncarnation.make("launch-missing-process-identity|linux%3Aexpected")
+    },
+    {
+      observation: {
+        commandLine: `${executable}\u0000app-server\u0000`,
+        stat: linuxProcessStat(301, 0, 301, "replacement")
+      },
+      incarnation: CodexServerIncarnation.make("launch-replaced-process|linux%3Aexpected")
+    },
+    {
+      observation: { killError: Object.assign(new Error("gone"), { code: "ESRCH" }) },
+      incarnation: CodexServerIncarnation.make("launch-gone|linux%3Aexpected")
+    },
+    {
+      observation: { killError: Object.assign(new Error("permission denied"), { code: "EACCES" }) },
+      incarnation: CodexServerIncarnation.make("launch-unreadable|linux%3Aexpected")
+    },
+    {
+      observation: { platform: "darwin" },
+      incarnation: CodexServerIncarnation.make("launch-unsupported|linux%3Aexpected")
+    }
+  ]
+  return Effect.forEach(cases, ({ incarnation, observation }) =>
+    withFakeLaunchObservation(
+      observation,
+      Effect.scoped(
+        Effect.gen(function* () {
+          const prior = CodexServerLaunchRecord.make({
+            command: [executable, "app-server"],
+            incarnation,
+            phase: "Live",
+            pid: 301
+          })
+          const layer = codexAppServerNodeLayer({ executable: "/missing/controlled-codex" }).pipe(
+            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+          )
+          const result = yield* Effect.gen(function* () {
+            const app = yield* CodexAppServer
+            return yield* Effect.exit(app.startThread("/controlled-launch/worktree"))
+          }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer), Effect.exit)
+          expect(Exit.isSuccess(result)).toBe(true)
+        }).pipe(Effect.provide(NodeServices.layer))
+      )
+    )
+  )
+})

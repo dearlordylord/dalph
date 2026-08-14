@@ -58,8 +58,20 @@ const responseFor = (method) => {
   if (mode === "invalid-turn-correlation" && method === "thread/start") {
     return { thread: { ...validThread, turns: [{ ...validTurn, correlation: { runId: "run" } }] } }
   }
+  if (mode === "invalid-turn-correlation-shape" && method === "thread/start") {
+    return { thread: { ...validThread, turns: [{ ...validTurn, correlation: "not-an-object" }] } }
+  }
+  if (mode === "invalid-turn-correlation-empty" && method === "thread/start") {
+    return { thread: { ...validThread, turns: [{ ...validTurn, correlation: { runId: "", attemptId: "" } }] } }
+  }
   if (mode === "invalid-turn-token" && method === "thread/start") {
     return { thread: { ...validThread, turns: [{ ...validTurn, ownedTurnToken: 42 }] } }
+  }
+  if (mode === "invalid-turn-token-empty" && method === "thread/start") {
+    return { thread: { ...validThread, turns: [{ ...validTurn, ownedTurnToken: "" }] } }
+  }
+  if (mode === "invalid-turn-input-item" && method === "thread/start") {
+    return { thread: { ...validThread, turns: [{ ...validTurn, input: [null] }] } }
   }
   if (mode === "duplicate-turn-marker" && method === "thread/start") {
     return {
@@ -221,7 +233,10 @@ it.effect("maps malformed thread and turn state to typed protocol failures", () 
       ["invalid-turn-fields", "thread/start"],
       ["invalid-turn-items", "thread/start"],
       ["invalid-turn-correlation", "thread/start"],
+      ["invalid-turn-correlation-shape", "thread/start"],
+      ["invalid-turn-correlation-empty", "thread/start"],
       ["invalid-turn-token", "thread/start"],
+      ["invalid-turn-token-empty", "thread/start"],
       ["duplicate-turn-marker", "thread/start"],
       ["contradictory-turn-token", "thread/start"],
       ["invalid-thread-correlation", "thread/start"]
@@ -281,6 +296,11 @@ it.effect("reconciles valid turn markers, metadata, status, and correlation thro
       Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.status)
     )
     expect(status).toBe("idle")
+
+    const ignoredInputShape = yield* withFixture("invalid-turn-input-item", (app) =>
+      Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.id)
+    )
+    expect(ignoredInputShape).toBe("protocol-thread")
   })
 )
 

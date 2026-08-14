@@ -781,6 +781,9 @@ it.effect("fails closed when a prior app-server cannot be stopped or never becom
   Effect.forEach(
     [
       { stop: true, afterStop: { _tag: "ExactLive" as const, pid: 31_337 } },
+      { stop: true, afterStop: { _tag: "ExactLive" as const, pid: 31_338 } },
+      { stop: true, afterStop: { _tag: "Unreadable" as const, detail: "owner reread failed after stop" } },
+      { stop: true, afterStop: { _tag: "Contradictory" as const, detail: "owner changed after stop" } },
       { stop: false, afterStop: { _tag: "Unreadable" as const, detail: "owner reread failed" } },
       { stop: false, afterStop: { _tag: "Contradictory" as const, detail: "owner changed" } }
     ],
