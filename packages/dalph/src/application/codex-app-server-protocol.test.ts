@@ -9,7 +9,7 @@ import {
   type CodexAppServerService,
   codexAppServerNodeLayer
 } from "./codex-app-server.js"
-import { CodexOwnedTurnToken, memoryCodexAttemptStoreLayer } from "./codex-attempt-store.js"
+import { CodexOwnedTurnToken, CodexTurnId, memoryCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 
 const protocolFixture = String.raw`#!/usr/bin/env node
 const path = require("node:path")
@@ -39,6 +39,12 @@ const responseFor = (method) => {
   }
   if (mode === "rpc-error" && method === "thread/start") return { error: true }
   if (mode === "response-not-object" && method === "thread/start") return "not-an-object"
+  if (mode === "read-response-not-object" && method === "thread/read") return "not-an-object"
+  if (mode === "resume-response-not-object" && method === "thread/resume") return "not-an-object"
+  if (mode === "turn-response-not-object" && method === "turn/start") return "not-an-object"
+  if (mode === "background-response-not-object" && method === "thread/backgroundTerminals/list") return "not-an-object"
+  if (mode === "terminate-response-not-object" && method === "thread/backgroundTerminals/terminate") return "not-an-object"
+  if (mode === "interrupt-rpc-error" && method === "turn/interrupt") return { error: true }
   if (mode === "missing-thread" && method === "thread/start") return {}
   if (mode === "invalid-thread-fields" && method === "thread/start") {
     return { thread: { id: "", cwd: "", status: "unknown", turns: [] } }
@@ -292,6 +298,20 @@ it.effect("reconciles valid turn markers, metadata, status, and correlation thro
     )
     expect(correlation).toBe("attempt:protocol")
 
+    const boundaries = yield* withFixture("happy", (app) =>
+      Effect.gen(function* () {
+        const started = yield* app.startThread("/fixture/worktree")
+        expect((yield* app.readThread(started.id)).id).toBe(started.id)
+        expect((yield* app.resumeThread(started.id, "/fixture/worktree")).cwd).toBe("/fixture/worktree")
+        const startedTurn = yield* app.startTurn(started.id, "/fixture/worktree", "work")
+        yield* app.interruptTurn(started.id, startedTurn.id)
+        expect(yield* app.listBackgroundTerminals(started.id)).toEqual([])
+        expect(yield* app.terminateBackgroundTerminal(started.id, "terminal")).toBe(true)
+        return startedTurn.id
+      })
+    )
+    expect(boundaries).toBe("protocol-turn")
+
     const status = yield* withFixture("status-object", (app) =>
       Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.status)
     )
@@ -318,6 +338,39 @@ it.effect("rejects invalid turn-start responses and preserves the requested toke
           const thread = yield* app.startThread("/fixture/worktree")
           const result = yield* Effect.exit(
             app.startTurn(thread.id, "/fixture/worktree", "work", CodexOwnedTurnToken.make("wire-token"))
+          )
+          expectAppFailure(result, operation)
+        })
+      )
+  )
+)
+
+it.effect("keeps every real RPC operation failure typed at its public boundary", () =>
+  Effect.forEach(
+    [
+      ["read-response-not-object", "thread/read"] as const,
+      ["resume-response-not-object", "thread/resume"] as const,
+      ["turn-response-not-object", "turn/start"] as const,
+      ["background-response-not-object", "thread/backgroundTerminals/list"] as const,
+      ["terminate-response-not-object", "thread/backgroundTerminals/terminate"] as const,
+      ["interrupt-rpc-error", "turn/interrupt"] as const
+    ],
+    ([mode, operation]) =>
+      withFixture(mode, (app) =>
+        Effect.gen(function* () {
+          const started = yield* app.startThread("/fixture/worktree")
+          const result = yield* Effect.exit(
+            operation === "thread/read"
+              ? app.readThread(started.id)
+              : operation === "thread/resume"
+                ? app.resumeThread(started.id, "/fixture/worktree")
+                : operation === "turn/start"
+                  ? app.startTurn(started.id, "/fixture/worktree", "work")
+                  : operation === "thread/backgroundTerminals/list"
+                    ? app.listBackgroundTerminals(started.id)
+                    : operation === "thread/backgroundTerminals/terminate"
+                      ? app.terminateBackgroundTerminal(started.id, "terminal")
+                      : app.interruptTurn(started.id, CodexTurnId.make("protocol-turn"))
           )
           expectAppFailure(result, operation)
         })

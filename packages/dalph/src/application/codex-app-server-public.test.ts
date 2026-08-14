@@ -23,10 +23,13 @@ import {
   type CodexTurnSnapshot
 } from "./codex-app-server.js"
 import {
+  CodexAttemptStore,
+  CodexAttemptStoreFailure,
   CodexThreadId,
   CodexTurnId,
   CodexServerIncarnation,
   CodexServerLaunchRecord,
+  type CodexAttemptStoreService,
   memoryCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
 
@@ -104,6 +107,91 @@ const withFakeLinuxProc = <A, E>(
   })
 }
 
+type FakeProcFile =
+  | { readonly _tag: "Read"; readonly text: string }
+  | { readonly _tag: "Error"; readonly error: unknown }
+
+const withFakeProcFiles = <A, E>(
+  entries: ReadonlyArray<string>,
+  files: ReadonlyMap<string, FakeProcFile>,
+  effect: Effect.Effect<A, E>
+): Effect.Effect<A, E> => {
+  const originalReadFile = nodeFsPromises.readFile
+  const originalReaddir = nodeFsPromises.readdir
+  return Effect.gen(function* () {
+    yield* Effect.sync(() => {
+      const readFile = async (path: Parameters<typeof nodeFsPromises.readFile>[0]): Promise<string> => {
+        const pathText = processFilePath(path)
+        if (pathText === `/proc/${nodeProcess.pid}/stat`) return (await originalReadFile(path, "utf8")) as string
+        const result = files.get(pathText)
+        if (result === undefined) {
+          const error = Object.assign(new Error(`missing process file ${pathText}`), { code: "ENOENT" })
+          throw error
+        }
+        if (result._tag === "Error") throw result.error
+        return result.text
+      }
+      const readdir = async (): Promise<ReadonlyArray<string>> => entries
+      Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: readFile })
+      Object.defineProperty(nodeFsPromises, "readdir", { configurable: true, value: readdir })
+    })
+    return yield* effect.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: originalReadFile })
+          Object.defineProperty(nodeFsPromises, "readdir", { configurable: true, value: originalReaddir })
+        })
+      )
+    )
+  })
+}
+
+const withFakeLeaseProc = <A, E>(
+  stats: ReadonlyArray<FakeProcFile>,
+  killError: unknown,
+  effect: Effect.Effect<A, E>
+): Effect.Effect<A, E> => {
+  const originalReadFile = nodeFsPromises.readFile
+  const originalKill = nodeProcess.kill.bind(nodeProcess)
+  const originalPlatform = nodeProcess.platform
+  return Effect.gen(function* () {
+    let readCount = 0
+    yield* Effect.sync(() => {
+      const readFile = async (path: Parameters<typeof nodeFsPromises.readFile>[0]): Promise<string> => {
+        if (!processFilePath(path).endsWith(`/proc/${nodeProcess.pid}/stat`)) {
+          const error = Object.assign(new Error("unexpected lease process file"), { code: "ENOENT" })
+          throw error
+        }
+        const result = stats[Math.min(readCount++, stats.length - 1)]
+        if (result === undefined) {
+          const error = Object.assign(new Error("missing lease process stat"), { code: "ENOENT" })
+          throw error
+        }
+        if (result._tag === "Error") throw result.error
+        return result.text
+      }
+      const kill = (() => {
+        if (killError !== undefined) {
+          // eslint-disable-next-line functional/no-throw-statements -- the controlled kill fixture emulates a native signal failure.
+          throw killError
+        }
+        return true
+      }) as typeof nodeProcess.kill
+      Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: readFile })
+      Object.defineProperty(nodeProcess, "kill", { configurable: true, value: kill })
+    })
+    return yield* effect.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: originalReadFile })
+          Object.defineProperty(nodeProcess, "kill", { configurable: true, value: originalKill })
+          Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform })
+        })
+      )
+    )
+  })
+}
+
 const withFakeProcessKill = <A, E>(kill: typeof nodeProcess.kill, effect: Effect.Effect<A, E>): Effect.Effect<A, E> => {
   const originalKill = nodeProcess.kill.bind(nodeProcess)
   return Effect.gen(function* () {
@@ -111,6 +199,59 @@ const withFakeProcessKill = <A, E>(kill: typeof nodeProcess.kill, effect: Effect
     return yield* effect.pipe(
       Effect.ensuring(
         Effect.sync(() => Object.defineProperty(nodeProcess, "kill", { configurable: true, value: originalKill }))
+      )
+    )
+  })
+}
+
+const withFakeProcessGroup = <A, E>(
+  executable: string,
+  pid: number,
+  startIdentity: string,
+  processGroupId: number,
+  effect: Effect.Effect<A, E>
+): Effect.Effect<A, E> => {
+  const originalReadFile = nodeFsPromises.readFile
+  const originalReaddir = nodeFsPromises.readdir
+  const originalKill = nodeProcess.kill.bind(nodeProcess)
+  return Effect.gen(function* () {
+    let signaled = false
+    yield* Effect.sync(() => {
+      const readFile = async (path: Parameters<typeof nodeFsPromises.readFile>[0]): Promise<string> => {
+        const pathText = processFilePath(path)
+        if (pathText.endsWith("/cmdline")) return `${executable}\u0000app-server\u0000`
+        if (pathText.endsWith("/stat")) {
+          if (signaled) {
+            const error = Object.assign(new Error("gone"), { code: "ESRCH" })
+            throw error
+          }
+          return linuxProcessStat(pid, 0, processGroupId, startIdentity)
+        }
+        const error = Object.assign(new Error(`missing process file ${pathText}`), { code: "ENOENT" })
+        throw error
+      }
+      const readdir = async (): Promise<ReadonlyArray<string>> => (signaled ? [] : [String(pid)])
+      const kill = ((...args: Parameters<typeof nodeProcess.kill>) => {
+        const signal = args[1]
+        if (signal === 0 && signaled) {
+          const error = Object.assign(new Error("gone"), { code: "ESRCH" })
+          // eslint-disable-next-line functional/no-throw-statements -- the controlled kill fixture emulates a vanished process.
+          throw error
+        }
+        if (signal !== 0) signaled = true
+        return true
+      }) as typeof nodeProcess.kill
+      Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: readFile })
+      Object.defineProperty(nodeFsPromises, "readdir", { configurable: true, value: readdir })
+      Object.defineProperty(nodeProcess, "kill", { configurable: true, value: kill })
+    })
+    return yield* effect.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: originalReadFile })
+          Object.defineProperty(nodeFsPromises, "readdir", { configurable: true, value: originalReaddir })
+          Object.defineProperty(nodeProcess, "kill", { configurable: true, value: originalKill })
+        })
       )
     )
   })
@@ -659,3 +800,230 @@ it.effect("classifies controlled Unix launch identity observations before replac
     )
   )
 })
+
+it.effect("reconciles application lease owner identity before spawning", () => {
+  const stat = (startIdentity: string): FakeProcFile => ({
+    _tag: "Read",
+    text: linuxProcessStat(nodeProcess.pid, 0, nodeProcess.pid, startIdentity)
+  })
+  const cases: ReadonlyArray<{
+    readonly stats: ReadonlyArray<FakeProcFile>
+    readonly killError?: unknown
+    readonly expected: "Absent" | "ExactLive" | "Unreadable" | "Contradictory"
+    readonly switchUnsupported?: boolean
+  }> = [
+    { stats: [stat("owner"), stat("owner")], expected: "ExactLive" },
+    { stats: [stat("owner"), stat("foreign")], expected: "Contradictory" },
+    { stats: [stat("owner"), { _tag: "Read", text: "malformed" }], expected: "Unreadable" },
+    { stats: [stat("owner")], killError: Object.assign(new Error("gone"), { code: "ESRCH" }), expected: "Absent" },
+    {
+      stats: [stat("owner")],
+      killError: Object.assign(new Error("permission denied"), { code: "EIO" }),
+      expected: "Unreadable"
+    },
+    { stats: [stat("owner")], expected: "Unreadable", switchUnsupported: true }
+  ]
+  return Effect.forEach(cases, ({ expected, killError, stats, switchUnsupported }) =>
+    withFakeLeaseProc(
+      stats,
+      killError,
+      Effect.scoped(
+        Effect.gen(function* () {
+          const store: CodexAttemptStoreService = {
+            readAttempt: () => Effect.succeed(Option.none()),
+            writeAttempt: () => Effect.void,
+            readServerLaunch: () => Effect.succeed(Option.none()),
+            writeServerLaunch: () => Effect.void,
+            clearServerLaunch: () => Effect.void,
+            acquireServerLease: (_owner, observe) =>
+              Effect.gen(function* () {
+                if (switchUnsupported === true) {
+                  Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "darwin" })
+                }
+                const projection = yield* observe(_owner)
+                expect(projection._tag).toBe(expected)
+                return yield* new CodexAttemptStoreFailure({
+                  detail: "controlled lease outcome",
+                  operation: "acquireServerLease"
+                })
+              }),
+            releaseServerLease: () => Effect.void
+          }
+          const layer = codexAppServerNodeLayer({ executable: "/missing/lease-codex" }).pipe(
+            Layer.provide(Layer.succeed(CodexAttemptStore, store))
+          )
+          const result = yield* Effect.gen(function* () {
+            yield* CodexAppServer
+          }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer), Effect.exit)
+          expect(Exit.isFailure(result)).toBe(true)
+        }).pipe(Effect.provide(NodeServices.layer))
+      )
+    )
+  )
+})
+
+it.effect("classifies controlled launch-token discovery candidates before replacement", () => {
+  const executable = "/controlled/discovery-codex"
+  const token = "discovery-token"
+  const file = (text: string): FakeProcFile => ({ _tag: "Read", text })
+  const error = (code: string): FakeProcFile => ({ _tag: "Error", error: Object.assign(new Error(code), { code }) })
+  const candidate = (
+    pid: number,
+    commandLine: FakeProcFile,
+    environment?: FakeProcFile,
+    stat?: FakeProcFile
+  ): ReadonlyArray<readonly [string, FakeProcFile]> => [
+    [`/proc/${pid}/cmdline`, commandLine],
+    ...(environment === undefined ? [] : [[`/proc/${pid}/environ`, environment] as const]),
+    ...(stat === undefined ? [] : [[`/proc/${pid}/stat`, stat] as const])
+  ]
+  const cases: ReadonlyArray<{
+    readonly entries: ReadonlyArray<string>
+    readonly files: ReadonlyMap<string, FakeProcFile>
+  }> = [
+    {
+      entries: ["self", "thread-self", "0", "999999999999999999999", "401"],
+      files: new Map(candidate(401, file("/foreign/worker\u0000")))
+    },
+    {
+      entries: ["402"],
+      files: new Map(candidate(402, file("/controlled/discovery-codex\u0000app-server\u0000"), file("PATH=x\u0000")))
+    },
+    {
+      entries: ["403"],
+      files: new Map(
+        candidate(
+          403,
+          file("/controlled/discovery-codex\u0000app-server\u0000"),
+          file("DALPH_CODEX_SERVER_INCARNATION=foreign\u0000")
+        )
+      )
+    },
+    {
+      entries: ["404", "405"],
+      files: new Map([
+        ...candidate(
+          404,
+          file("/controlled/discovery-codex\u0000app-server\u0000"),
+          file(`DALPH_CODEX_SERVER_INCARNATION=${token}\u0000`),
+          file(linuxProcessStat(404, 0, 404, "exact"))
+        ),
+        ...candidate(
+          405,
+          file("/controlled/discovery-codex\u0000app-server\u0000"),
+          file("DALPH_CODEX_SERVER_INCARNATION=foreign\u0000")
+        )
+      ])
+    },
+    { entries: ["406"], files: new Map(candidate(406, error("EIO"))) },
+    { entries: ["407"], files: new Map(candidate(407, error("ESRCH"))) },
+    {
+      entries: ["408"],
+      files: new Map(
+        candidate(
+          408,
+          file("/controlled/discovery-codex\u0000app-server\u0000"),
+          file(`DALPH_CODEX_SERVER_INCARNATION=${token}\u0000`),
+          file("malformed")
+        )
+      )
+    },
+    {
+      entries: ["409"],
+      files: new Map(candidate(409, file("/controlled/discovery-codex\u0000app-server\u0000"), error("EIO")))
+    }
+  ]
+  return Effect.forEach(cases, ({ entries, files }) =>
+    withFakeProcFiles(
+      entries,
+      files,
+      Effect.scoped(
+        Effect.gen(function* () {
+          const prior = CodexServerLaunchRecord.make({
+            command: [executable, "app-server"],
+            incarnation: CodexServerIncarnation.make(`${token}|linux%3Aold`),
+            phase: "Launching",
+            pid: null
+          })
+          const layer = codexAppServerNodeLayer({ executable: "/missing/controlled-discovery-codex" }).pipe(
+            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+          )
+          const result = yield* Effect.gen(function* () {
+            const app = yield* CodexAppServer
+            return yield* Effect.exit(app.startThread("/controlled-discovery/worktree"))
+          }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer), Effect.exit)
+          expect(Exit.isSuccess(result)).toBe(true)
+        }).pipe(Effect.provide(NodeServices.layer))
+      )
+    )
+  )
+})
+
+it.effect("reconciles controlled detached process-group ownership before close", () =>
+  Effect.forEach(
+    [
+      { startIdentity: "foreign", processGroupId: "same" as const, expectedFailure: true },
+      { startIdentity: "expected", processGroupId: "foreign" as const, expectedFailure: true },
+      { startIdentity: "expected", processGroupId: "same" as const, expectedFailure: false }
+    ] as const,
+    ({ expectedFailure, processGroupId, startIdentity }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-public-process-group-" })
+          const executable = path.join(root, "fixture-codex")
+          yield* fileSystem.writeFileString(executable, discoveryFixture)
+          yield* fileSystem.chmod(executable, 0o755)
+          let launch: CodexServerLaunchRecord | undefined
+          const store: CodexAttemptStoreService = {
+            readAttempt: () => Effect.succeed(Option.none()),
+            writeAttempt: () => Effect.void,
+            readServerLaunch: () => Effect.succeed(launch === undefined ? Option.none() : Option.some(launch)),
+            writeServerLaunch: (record) => Effect.sync(() => void (launch = record)),
+            clearServerLaunch: () =>
+              Effect.sync(() => {
+                launch = undefined
+              }),
+            acquireServerLease: () => Effect.void,
+            releaseServerLease: () => Effect.void
+          }
+          const layer = codexAppServerNodeLayer({ executable }).pipe(
+            Layer.provide(Layer.succeed(CodexAttemptStore, store))
+          )
+          const result = yield* Effect.gen(function* () {
+            const app = yield* CodexAppServer
+            yield* app.startThread("/controlled-process-group/worktree")
+            const liveLaunch = launch
+            const livePid = liveLaunch?.pid
+            expect(livePid).toBeGreaterThan(0)
+            if (livePid === undefined || livePid === null) return
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                try {
+                  nodeProcess.kill(-livePid, "SIGKILL")
+                } catch {
+                  // The ownership boundary may already have stopped this exact child.
+                }
+              })
+            )
+            const separator = app.incarnation.lastIndexOf("|")
+            const observedIdentity = decodeURIComponent(app.incarnation.slice(separator + 1))
+            const startToken = observedIdentity.startsWith("linux:")
+              ? observedIdentity.slice("linux:".length)
+              : observedIdentity
+            const observedGroupId = processGroupId === "same" ? livePid : livePid + 1
+            const closed = yield* withFakeProcessGroup(
+              executable,
+              livePid,
+              startIdentity === "expected" ? startToken : "foreign",
+              observedGroupId,
+              Effect.exit(app.close)
+            )
+            expect(Exit.isFailure(closed)).toBe(expectedFailure)
+          }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer), Effect.exit)
+          expect(Exit.isFailure(result)).toBe(expectedFailure)
+        }).pipe(Effect.provide(NodeServices.layer))
+      )
+  )
+)
