@@ -2,10 +2,12 @@
 import {
   Array as EffectArray,
   Clock,
+  Cause,
   Context,
   Deferred,
   Duration,
   Effect,
+  Exit,
   Option,
   Ref,
   Schema,
@@ -297,32 +299,50 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
   const runExecutorDrain = Effect.fn("ApplicationExitShell.runExecutorDrain")(function* (
     entry: RegisteredApplicationExitExecutorDrain
   ) {
-    const result = yield* entry.drain.suspendRunningExecutorWork.pipe(
-      Effect.catchDefect((defect) =>
-        Effect.fail(
-          new ApplicationExitDrainFailure({
-            diagnostics: [ApplicationExitDiagnostic.make(`Executor Exit drain failed: ${String(defect)}`)]
-          })
-        )
-      ),
-      Effect.match({
-        onFailure: ({ diagnostics }): ApplicationExitExecutorDrainResult => ({ correlations: [], diagnostics }),
-        onSuccess: (correlations): ApplicationExitExecutorDrainResult => ({ correlations, diagnostics: [] })
-      }),
-      Effect.tap((result) =>
-        Effect.gen(function* () {
-          if (result.diagnostics.length > 0) {
-            yield* Ref.update(settledExecutorDiagnostics, (current) =>
-              new Map(current).set(entry.drainId, result.diagnostics)
+    // Keep the settlement protocol uninterruptible after the actual drain has
+    // been restored. An interrupted drain is still a typed, terminal outcome
+    // for this registry entry; leaving `finished` pending would make every
+    // later Exit join wait forever.
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const outcome = yield* Effect.exit(
+          restore(
+            entry.drain.suspendRunningExecutorWork.pipe(
+              Effect.catchDefect((defect) =>
+                Effect.fail(
+                  new ApplicationExitDrainFailure({
+                    diagnostics: [ApplicationExitDiagnostic.make(`Executor Exit drain failed: ${String(defect)}`)]
+                  })
+                )
+              )
             )
-          }
-          yield* emitSafeExecutorCorrelations(trace, result.correlations)
-          yield* Deferred.succeed(entry.finished, result)
-        })
-      ),
-      Effect.ensuring(finishExecutorDrain())
+          )
+        )
+        const result: ApplicationExitExecutorDrainResult = Exit.isSuccess(outcome)
+          ? { correlations: outcome.value, diagnostics: [] }
+          : (() => {
+              const typedFailure = Cause.findErrorOption(outcome.cause)
+              if (Option.isSome(typedFailure) && typedFailure.value instanceof ApplicationExitDrainFailure) {
+                return { correlations: [], diagnostics: typedFailure.value.diagnostics }
+              }
+              return {
+                correlations: [],
+                diagnostics: [
+                  ApplicationExitDiagnostic.make(`Executor Exit drain interrupted: ${Cause.pretty(outcome.cause)}`)
+                ]
+              }
+            })()
+        if (result.diagnostics.length > 0) {
+          yield* Ref.update(settledExecutorDiagnostics, (current) =>
+            new Map(current).set(entry.drainId, result.diagnostics)
+          )
+        }
+        yield* emitSafeExecutorCorrelations(trace, result.correlations)
+        yield* Deferred.succeed(entry.finished, result)
+        yield* finishExecutorDrain()
+        return result
+      })
     )
-    return result
   })
 
   const startExecutorDrains = (entries: ReadonlyArray<RegisteredApplicationExitExecutorDrain>) =>
@@ -332,10 +352,11 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
     entry: RegisteredApplicationExitExecutorDrain
   ) {
     const result = yield* Deferred.await(entry.finished)
-    return yield* Ref.modify(entry.resultCollected, (collected) => [
+    const claimed = yield* Ref.modify(entry.resultCollected, (collected) => [
       collected ? Option.none() : Option.some(result),
       true
     ])
+    return claimed
   })
 
   const beginExecutorDrainHandoff = Ref.update(executorDrains, (current) =>

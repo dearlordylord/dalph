@@ -584,6 +584,27 @@ it.effect("reports a registered executor-family drain failure after its admitted
   )
 )
 
+it.effect("settles an interrupted executor drain with a typed diagnostic", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.interrupt))
+      })
+
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+
+      const result = yield* Fiber.join(exiting)
+      expect(result._tag).toBe("Failed")
+      if (result._tag === "Failed") {
+        expect(result.diagnostics[0]).toContain("Executor Exit drain interrupted")
+      }
+    })
+  )
+)
+
 it.effect("reports timeout with an earlier executor failure while an atomic owner remains stuck", () =>
   Effect.scoped(
     Effect.gen(function* () {

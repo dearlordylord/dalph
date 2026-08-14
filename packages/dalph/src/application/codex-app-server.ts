@@ -171,11 +171,22 @@ type CodexServerOwnershipProjection =
   | { readonly _tag: "Unreadable"; readonly detail: string }
   | { readonly _tag: "Contradictory"; readonly detail: string }
 
+/** Recovery census for a durable launch intent that has no acknowledged PID yet. */
+type CodexServerDiscoveryProjection =
+  | { readonly _tag: "Absent" }
+  | { readonly _tag: "ExactLive"; readonly pid: number; readonly processIdentity: CodexProcessStartIdentity }
+  | { readonly _tag: "Unreadable"; readonly detail: string }
+  | { readonly _tag: "Contradictory"; readonly detail: string }
+
 /** The minimum execution-substrate authority needed for the no-second-owner gate. */
 interface CodexProcessOwnershipService {
   readonly observe: (
     target: CodexServerLaunchRecord | CodexServerLeaseRecord
   ) => Effect.Effect<CodexServerOwnershipProjection, CodexAppServerFailure>
+  /** Finds only a child carrying the exact durable pre-spawn incarnation token. */
+  readonly discover: (
+    incarnation: CodexServerIncarnation
+  ) => Effect.Effect<CodexServerDiscoveryProjection, CodexAppServerFailure>
   readonly stop: (launch: CodexServerLaunchRecord) => Effect.Effect<void, CodexAppServerFailure>
 }
 
@@ -251,6 +262,7 @@ const processWasAbsent = (error: unknown): boolean => {
 }
 
 const processIdentitySeparator = "|"
+const codexServerIncarnationEnvironment = "DALPH_CODEX_SERVER_INCARNATION"
 const processStatAfterCommandOffset = 2
 const linuxProcessStatStartTimeFieldIndex = 19
 const execFileAsync = promisify(execFile)
@@ -289,6 +301,12 @@ const incarnationWithProcessIdentity = async (
   return identity === undefined
     ? undefined
     : CodexServerIncarnation.make(`${base}${processIdentitySeparator}${encodeURIComponent(identity)}`)
+}
+
+/** Returns the durable token written before spawn, excluding the later PID identity suffix. */
+const durableIncarnationToken = (incarnation: CodexServerIncarnation): CodexServerIncarnation => {
+  const separator = incarnation.indexOf(processIdentitySeparator)
+  return CodexServerIncarnation.make(separator < 0 ? incarnation : incarnation.slice(0, separator))
 }
 
 const processIdentityFromIncarnation = (incarnation: CodexServerIncarnation): string | undefined => {
@@ -951,7 +969,15 @@ const newIncarnation = (): CodexServerIncarnation => CodexServerIncarnation.make
 
 const unavailableAppServer = (failure: CodexAppServerFailure): CodexAppServerService => {
   const fail = (operation: CodexAppServerOperation) =>
-    Effect.fail(new CodexAppServerFailure({ operation, kind: failure.kind, detail: failure.detail }))
+    Effect.fail(
+      new CodexAppServerFailure({
+        // Keep a rejected initialize handshake distinguishable from a later
+        // request that merely happens to observe the unavailable service.
+        operation: failure.operation === "initialize" ? "initialize" : operation,
+        kind: failure.kind,
+        detail: failure.detail
+      })
+    )
   return {
     incarnation: newIncarnation(),
     startThread: () => fail("thread/start"),
@@ -1236,10 +1262,29 @@ const ownershipGate = Effect.fn("CodexAppServer.ownershipGate")(function* (
   yield* Effect.addFinalizer(() => store.releaseServerLease(leaseOwner).pipe(Effect.orDie))
   const prior = yield* store.readServerLaunch()
   if (Option.isSome(prior)) {
-    // A null-pid Launching record is only a pre-spawn intent. The exact lease
-    // above proves the previous application owner is gone, so this intent can
-    // be superseded without pretending that it identified a child process.
+    // A null-pid Launching record crosses the spawn/PID acknowledgement cut.
+    // Recover by the exact token carried in the child environment; absence is
+    // the only evidence that this was a pre-spawn crash. Never clear the
+    // intent merely because its PID field is still null.
     if (prior.value.phase === "Launching" && prior.value.pid === null) {
+      const discovered = yield* ownership.discover(prior.value.incarnation)
+      if (discovered._tag === "Unreadable" || discovered._tag === "Contradictory") {
+        return yield* Effect.fail(operationFailure("initialize", "Ownership", discovered.detail))
+      }
+      if (discovered._tag === "ExactLive") {
+        const recoveredLaunch: CodexServerLaunchRecord = {
+          command: prior.value.command,
+          incarnation: CodexServerIncarnation.make(
+            `${durableIncarnationToken(prior.value.incarnation)}${processIdentitySeparator}${encodeURIComponent(
+              discovered.processIdentity
+            )}`
+          ),
+          phase: "Spawned",
+          pid: discovered.pid
+        }
+        yield* ownership.stop(recoveredLaunch)
+        yield* awaitOwnedProcessAbsent(ownership, recoveredLaunch)
+      }
       yield* store.clearServerLaunch(prior.value.incarnation)
     } else {
       const observed = yield* ownership.observe(prior.value)
@@ -1289,7 +1334,9 @@ export const codexAppServerLayer = (
             stdin: { stream: "pipe", endOnDone: false },
             stdout: "pipe",
             stderr: "pipe",
-            detached: true
+            detached: true,
+            env: { [codexServerIncarnationEnvironment]: durableIncarnationToken(incarnation) },
+            extendEnv: true
           })
         )
         .pipe(Effect.mapError((error) => operationFailure("initialize", "Unavailable", error)))
@@ -1578,6 +1625,69 @@ const makeNodeCodexProcessOwnershipService = (
                   detail: `cannot observe app-server pid ${launch.pid}: ${String(error)}`
                 } as const)
           }
+        },
+        catch: (error) => operationFailure("initialize", "Ownership", error)
+      }),
+    discover: (incarnation) =>
+      Effect.tryPromise({
+        try: async (): Promise<CodexServerDiscoveryProjection> => {
+          if (nodeProcess.platform !== "linux") {
+            return { _tag: "Unreadable", detail: "launch-token process discovery is not qualified on this host" }
+          }
+          const expectedToken = durableIncarnationToken(incarnation)
+          const entries = await nodeFsPromises.readdir("/proc")
+          const exact: Array<{ readonly pid: number; readonly processIdentity: CodexProcessStartIdentity }> = []
+          const foreign: Array<string> = []
+          for (const entry of entries) {
+            if (!/^[0-9]+$/.test(entry)) continue
+            const pid = Number(entry)
+            if (!Number.isSafeInteger(pid) || pid <= 0) continue
+            let commandLine: ReadonlyArray<string>
+            try {
+              commandLine = (await nodeFsPromises.readFile(`/proc/${pid}/cmdline`, "utf8"))
+                .split("\u0000")
+                .filter(Boolean)
+            } catch (error) {
+              if (processWasAbsent(error)) continue
+              return { _tag: "Unreadable", detail: `cannot read process ${pid} command identity: ${String(error)}` }
+            }
+            if (!commandLine.includes("app-server")) continue
+            let environment: string
+            try {
+              environment = await nodeFsPromises.readFile(`/proc/${pid}/environ`, "utf8")
+            } catch (error) {
+              if (processWasAbsent(error)) continue
+              return { _tag: "Unreadable", detail: `cannot read process ${pid} launch token: ${String(error)}` }
+            }
+            const tokenEntry = environment
+              .split("\u0000")
+              .find((value) => value.startsWith(`${codexServerIncarnationEnvironment}=`))
+            if (tokenEntry === undefined) continue
+            const token = tokenEntry.slice(codexServerIncarnationEnvironment.length + 1)
+            const processIdentity = await readProcessStartIdentity(pid)
+            if (processIdentity === undefined) {
+              return { _tag: "Unreadable", detail: `process ${pid} launch token has no start identity` }
+            }
+            if (token === expectedToken) {
+              // The census is one local observation assembled before any
+              // signal; it is not shared domain state.
+              // eslint-disable-next-line functional/immutable-data
+              exact.push({ pid, processIdentity: CodexProcessStartIdentity.make(processIdentity) })
+            } else {
+              // eslint-disable-next-line functional/immutable-data
+              foreign.push(`pid ${pid} carries a different launch token`)
+            }
+          }
+          if (exact.length > 1) {
+            return { _tag: "Contradictory", detail: "multiple app-server children carry the exact launch token" }
+          }
+          if (exact[0] !== undefined) {
+            if (foreign.length > 0) {
+              return { _tag: "Contradictory", detail: foreign.join("; ") }
+            }
+            return { _tag: "ExactLive", ...exact[0] }
+          }
+          return foreign.length > 0 ? { _tag: "Contradictory", detail: foreign.join("; ") } : { _tag: "Absent" }
         },
         catch: (error) => operationFailure("initialize", "Ownership", error)
       }),

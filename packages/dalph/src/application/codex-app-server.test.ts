@@ -6,6 +6,7 @@ import { expect } from "vitest"
 import { ApplicationExitShell, CoordinatorOwnership, makeApplicationExitShell } from "@dalph/orchestrator"
 import {
   CodexAppServer,
+  CodexProcessStartIdentity,
   codexAppServerLayer,
   codexAppServerNodeLayer,
   controlledCodexProcessOwnershipLayer
@@ -174,6 +175,7 @@ it.effect("reconciles a surviving prior server incarnation before launching a re
                 observations.push(isAbsent ? "Absent" : "ExactLive")
                 return isAbsent ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 31337 }
               }),
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
             stop: () =>
               Effect.sync(() => {
                 stopped = true
@@ -214,6 +216,7 @@ it.effect("supersedes a prior pre-spawn intent only after the application lease 
           controlledCodexProcessOwnershipLayer({
             observe: () =>
               Effect.succeed(stopped ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 1 }),
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
             stop: () => Effect.sync(() => void (stopped = true))
           })
         ),
@@ -225,6 +228,97 @@ it.effect("supersedes a prior pre-spawn intent only after the application lease 
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
       expect(Exit.isSuccess(result)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("recovers and stops an exact child that survived before PID acknowledgement", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-app-server-recover-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      const prior = CodexServerLaunchRecord.make({
+        command: [executable, "app-server"],
+        incarnation: CodexServerIncarnation.make("recoverable-spawn-intent-58"),
+        phase: "Launching",
+        pid: null
+      })
+      let stopped = false
+      const appLayer = codexAppServerLayer({ executable }).pipe(
+        Layer.provide(
+          controlledCodexProcessOwnershipLayer({
+            discover: () =>
+              Effect.succeed({
+                _tag: "ExactLive" as const,
+                pid: 31337,
+                processIdentity: CodexProcessStartIdentity.make("linux:recoverable-child-58")
+              }),
+            observe: (target) =>
+              Effect.succeed(
+                stopped || target.pid === null
+                  ? { _tag: "Absent" as const }
+                  : { _tag: "ExactLive" as const, pid: target.pid }
+              ),
+            stop: () => Effect.sync(() => void (stopped = true))
+          })
+        ),
+        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+      )
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        yield* app.startThread("/recoverable/worktree")
+        yield* app.close
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isSuccess(result)).toBe(true)
+      expect(stopped).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("fails closed on duplicate, foreign, or unreadable pre-spawn token census", () =>
+  Effect.forEach(
+    [
+      { _tag: "Contradictory" as const, detail: "duplicate exact token" },
+      { _tag: "Contradictory" as const, detail: "foreign token" },
+      { _tag: "Unreadable" as const, detail: "token census unreadable" }
+    ],
+    (discovery, index) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const root = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: `dalph-issue-58-app-server-discovery-${index}-`
+          })
+          const executable = path.join(root, "fixture-codex")
+          yield* fileSystem.writeFileString(executable, fakeServer)
+          yield* fileSystem.chmod(executable, 0o755)
+          const prior = CodexServerLaunchRecord.make({
+            command: [executable, "app-server"],
+            incarnation: CodexServerIncarnation.make(`unrecoverable-spawn-intent-${index}`),
+            phase: "Launching",
+            pid: null
+          })
+          const appLayer = codexAppServerLayer({ executable }).pipe(
+            Layer.provide(
+              controlledCodexProcessOwnershipLayer({
+                discover: () => Effect.succeed(discovery),
+                observe: () => Effect.succeed({ _tag: "Absent" as const }),
+                stop: () => Effect.void
+              })
+            ),
+            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+          )
+          const result = yield* Effect.gen(function* () {
+            const app = yield* CodexAppServer
+            yield* app.startThread("/unrecoverable/worktree")
+          }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+          expect(Exit.isFailure(result)).toBe(true)
+        }).pipe(Effect.provide(NodeServices.layer))
+      )
   )
 )
 
@@ -303,6 +397,7 @@ it.effect("closes the application-scoped server only after the shared executor d
           controlledCodexProcessOwnershipLayer({
             observe: () =>
               Effect.succeed(stopped ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 1 }),
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
             stop: () =>
               Effect.sync(() => {
                 events.push("server-stop")
@@ -363,6 +458,7 @@ it.effect("scope teardown closes the server without claiming an Exit boundary", 
           controlledCodexProcessOwnershipLayer({
             observe: () =>
               Effect.succeed(stopped ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 1 }),
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
             stop: () =>
               Effect.sync(() => {
                 stopped = true
