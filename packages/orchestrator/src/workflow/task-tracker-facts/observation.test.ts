@@ -18,9 +18,11 @@ import { legacyMemoryJournalStoreLayer } from "../../workflow-journal/adapters/m
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { deriveRunRecoveryFrontier } from "../../coordination/frontier/recovery-frontier.js"
 import { reduceWorkflowJournalHistory } from "../../coordination/reconstruction/history.js"
+import type { TaskTrackerFactsReadUnavailable } from "./observation.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
+  TaskTrackerFactsReadFailed,
   TaskTrackerFactsObservedEvent,
   taskTrackerFactsObservedEvent
 } from "./observation.js"
@@ -33,6 +35,7 @@ import {
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import {
   TestTrackerGraphReader,
+  TrackerAdapterReadFailureReason,
   TrackerReadError,
   TrackerGraphReader,
   trackerGraphReaderTestLayer
@@ -723,6 +726,54 @@ it("appends one canonical observation for each logical provider read", async () 
   expect(events.at(5)).toMatchObject({ observation: { _tag: "UnchangedTaskTrackerFactsReconfirmed" } })
 })
 
+it("restarts from a durable unreadable graph read without calling the tracker again", async () => {
+  const runId = RunId.make("journaled-unreadable-graph-read")
+  const target = FixtureTarget.make("target")
+  const operation = makeTrackerGraphObservationOperation(OperationId.make("unreadable-graph-read"), target)
+  const unreadable = TaskTrackerFactsReadFailed.make({
+    completeness: "Unreadable",
+    failure: {
+      _tag: "TrackerAdapterReadError",
+      detail: "the tracker returned an incomplete target closure",
+      reason: TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
+    },
+    operationId: operation.operationId,
+    target
+  })
+  const provider = Layer.mock(WorkflowInterpreter, {
+    readTrackerGraph: () => Effect.die("replay must not call the tracker")
+  })
+  const store = legacyMemoryJournalStoreLayer
+  const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(store))
+
+  const failure = await Effect.gen(function* () {
+    const interpreter = yield* WorkflowInterpreter
+    const journal = yield* JournalStore
+    yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(operation.operationId),
+      taskTrackerFactsObservedEvent(operation.operationId, unreadable)
+    )
+    return yield* interpreter.readTrackerGraph(operation).pipe(Effect.flip)
+  }).pipe(Effect.provide(Layer.merge(journaled, store)), Effect.runPromise)
+
+  expect(failure).toMatchObject({
+    _tag: "TaskTrackerFactsReadUnavailable",
+    observation: {
+      _tag: "TaskTrackerFactsReadFailed",
+      completeness: "Unreadable",
+      failure: {
+        _tag: "TrackerAdapterReadError",
+        detail: "the tracker returned an incomplete target closure",
+        reason: { _tag: "IncompleteSnapshot" }
+      },
+      operationId: operation.operationId,
+      target
+    }
+  } satisfies Partial<TaskTrackerFactsReadUnavailable>)
+})
+
 it("a lost post-success graph response authorizes no dependant and resumes only that read", async () => {
   const fixture = integrationFinalityFixture
   const runId = fixture.runId
@@ -914,7 +965,8 @@ it("an invalid post-success graph read keeps the focused success and B blocked w
   })
   expect(result.focusedEvidence).toHaveLength(1)
   expect(result.graph.eligibleTaskIds()).toEqual([fixture.taskId])
-  expect(result.outcomeCount).toBe(0)
+  expect(result.outcomeCount).toBe(1)
+  expect(result.failure._tag).toBe("TrackerGraphReader.TrackerReadError")
   expect(await Effect.runPromise(Ref.get(providerReads))).toEqual([oldRead.operationId, invalidRead.operationId])
 })
 

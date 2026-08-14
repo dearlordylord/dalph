@@ -23,6 +23,7 @@ import type {
 } from "../../authorities/task-tracker/graph-reader.js"
 import type { TaskWorkSpecification } from "@dalph/contracts"
 import type { TaskTrackerKnowledgeUnavailable } from "../../coordination/reconstruction/graph-knowledge.js"
+import type { TaskTrackerFactsReadUnavailable } from "../task-tracker-facts/observation.js"
 import {
   ActiveTaskClaim,
   TaskClaimObservation,
@@ -89,6 +90,7 @@ export interface WorkflowInterpreterService {
     | GraphProjectionError
     | JournalAppendError
     | TaskTrackerKnowledgeUnavailable
+    | TaskTrackerFactsReadUnavailable
     | TrackerAdapterReadError
     | TrackerReadError
   >

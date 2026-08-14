@@ -47,11 +47,24 @@ export const executeFreshTrackerGraphRead = Effect.fn("DeliveryAction.executeFre
   lease: DeliveryActionExecutionLease
 ) {
   const operation = makeTrackerGraphObservationOperation(action.operationId, route.target)
-  const snapshot = yield* executeTrackerGraphRead(operation, lease)
-  return {
-    _tag: "TrackerGraphObservationPublished" as const,
-    operationId: action.operationId,
-    proposalId: action.proposal.id,
-    snapshot
-  }
+  return yield* executeTrackerGraphRead(operation, lease).pipe(
+    Effect.map((snapshot) => ({
+      _tag: "TrackerGraphObservationPublished" as const,
+      operationId: action.operationId,
+      proposalId: action.proposal.id,
+      snapshot
+    })),
+    Effect.catchTags({
+      "FixtureReader.FixtureReadError": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "TrackerGraphReadUnavailable")),
+      "TaskDag.GraphProjectionError": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "TrackerGraphReadUnavailable")),
+      "TrackerGraphReader.AdapterReadError": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "TrackerGraphReadUnavailable")),
+      "TrackerGraphReader.TrackerReadError": () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "TrackerGraphReadUnavailable")),
+      TaskTrackerFactsReadUnavailable: () =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, "TrackerGraphReadUnavailable"))
+    })
+  )
 })

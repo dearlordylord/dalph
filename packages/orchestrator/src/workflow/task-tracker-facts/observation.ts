@@ -15,10 +15,16 @@ import type { WorkflowOperation } from "../registry/operation.js"
 import { TaskClaimObservation } from "../../authorities/task-tracker/claim-mutation.js"
 import { taskClaimObservationAttemptBound } from "../protocols/task-claim-observation/bound.js"
 import { FocusedTaskCompletionFactsObserved } from "./focused-completion-observation.js"
+import { TaskTrackerFactsReadFailed } from "./read-observation.js"
 export {
   FocusedTaskCompletionFactsObserved,
   makeFocusedTaskCompletionFactsObserved
 } from "./focused-completion-observation.js"
+export {
+  TaskTrackerFactsReadFailed,
+  TaskTrackerFactsReadFailure,
+  TaskTrackerFactsReadUnavailable
+} from "./read-observation.js"
 
 const completeFactEvidenceFields = {
   completeness: Schema.Literal("Complete"),
@@ -328,7 +334,8 @@ export const TaskTrackerFactsObservation = Schema.Union([
   FocusedTaskWorkSpecificationFactsObserved,
   FocusedTaskClaimFactsObserved,
   FocusedTaskClaimFactsUnreadable,
-  FocusedTaskCompletionFactsObserved
+  FocusedTaskCompletionFactsObserved,
+  TaskTrackerFactsReadFailed
 ])
 export type TaskTrackerFactsObservation = typeof TaskTrackerFactsObservation.Type
 

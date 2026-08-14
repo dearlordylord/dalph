@@ -331,6 +331,7 @@ export * from "./workflow/protocols/integration-finality/history.js"
 export * from "./workflow/protocols/integration-finality/state.js"
 export * from "./coordination/run/recovery-authority.js"
 export * from "./coordination/frontier/frontier.js"
+export { reconstructRunState } from "./coordination/reconstruction/reduce.js"
 export {
   journalDatabaseLocatorConfig,
   legacySqliteJournalStoreLayer,

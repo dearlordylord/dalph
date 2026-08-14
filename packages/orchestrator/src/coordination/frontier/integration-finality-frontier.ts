@@ -102,6 +102,7 @@ const isCompleteGraphRead = (record: JournalRecord): boolean =>
     FocusedTaskClaimFactsUnreadable: () => false,
     FocusedTaskCompletionFacts: () => false,
     FocusedTaskWorkSpecificationFacts: () => false,
+    TaskTrackerFactsReadFailed: () => false,
     UnchangedTaskTrackerFactsReconfirmed: () => true
   })
 

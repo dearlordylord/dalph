@@ -1,5 +1,17 @@
 import { type RunId } from "@dalph/contracts"
 import { Effect, Option } from "effect"
+import type {
+  FixtureReadError,
+  TrackerAdapterReadError,
+  TrackerReadError
+} from "../authorities/task-tracker/graph-reader.js"
+import type { GraphProjectionError } from "../authorities/task-tracker/graph.js"
+import {
+  TaskTrackerFactsReadFailed,
+  TaskTrackerFactsReadUnavailable,
+  taskTrackerFactsObservedEvent,
+  type TaskTrackerFactsReadFailed as TaskTrackerFactsReadFailedObservation
+} from "../workflow/task-tracker-facts/observation.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../workflow/protocols/task-tracker-read/protocol.js"
 import { taskTrackerReadIntent } from "../workflow/registry/event.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
@@ -15,6 +27,32 @@ import {
 } from "../coordination/reconstruction/graph-knowledge.js"
 import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import type { InRunJournalService } from "./store.js"
+
+type TrackerGraphReadFailure = FixtureReadError | GraphProjectionError | TrackerAdapterReadError | TrackerReadError
+
+const readFailureObservation = (
+  operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type,
+  failure: TrackerGraphReadFailure
+): TaskTrackerFactsReadFailedObservation => {
+  const detail =
+    failure._tag === "TaskDag.GraphProjectionError"
+      ? failure.issues.map((issue) => JSON.stringify(issue)).join("; ")
+      : failure.detail
+  const mapped =
+    failure._tag === "FixtureReader.FixtureReadError"
+      ? { _tag: "FixtureReadError" as const, detail }
+      : failure._tag === "TaskDag.GraphProjectionError"
+        ? { _tag: "GraphProjectionError" as const, detail }
+        : failure._tag === "TrackerGraphReader.AdapterReadError"
+          ? { _tag: "TrackerAdapterReadError" as const, detail, reason: failure.reason }
+          : { _tag: "TrackerReadError" as const, detail }
+  return TaskTrackerFactsReadFailed.make({
+    completeness: "Unreadable",
+    failure: mapped,
+    operationId: operation.operationId,
+    target: operation.target
+  })
+}
 
 const requireTaskGraph = <A>(
   knowledge: Option.Option<A>,
@@ -44,6 +82,10 @@ export const journaledTrackerGraphRead = (
       ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
     )
     if (existingObservationIndex >= 0) {
+      const existing = records[existingObservationIndex]?.event
+      if (existing?._tag === "TaskTrackerFactsObserved" && existing.observation._tag === "TaskTrackerFactsReadFailed") {
+        return yield* new TaskTrackerFactsReadUnavailable({ observation: existing.observation })
+      }
       return yield* requireTaskGraph(
         reconstructedTaskGraphFromEvents(
           records.slice(0, existingObservationIndex + 1).map(({ event }) => event),
@@ -52,6 +94,16 @@ export const journaledTrackerGraphRead = (
         operation.operationId
       )
     }
+    const recordReadFailure = (failure: TrackerGraphReadFailure) =>
+      Effect.gen(function* () {
+        const observation = readFailureObservation(operation, failure)
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(operation.operationId),
+          taskTrackerFactsObservedEvent(operation.operationId, observation)
+        )
+        return yield* failure
+      })
     return yield* runInterruptibleBoundary(
       interruptibleBoundary,
       InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
@@ -75,5 +127,12 @@ export const journaledTrackerGraphRead = (
             operation.operationId
           )
         })
+    ).pipe(
+      Effect.catchTags({
+        "FixtureReader.FixtureReadError": recordReadFailure,
+        "TaskDag.GraphProjectionError": recordReadFailure,
+        "TrackerGraphReader.AdapterReadError": recordReadFailure,
+        "TrackerGraphReader.TrackerReadError": recordReadFailure
+      })
     )
   })

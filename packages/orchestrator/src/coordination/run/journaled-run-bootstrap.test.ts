@@ -1665,8 +1665,17 @@ it.effect("keeps an unreadable task membership distinct from stale rejection and
       expect(failure).toBe(unreadable)
       expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual([
         "WorkflowRunBegan",
-        "TaskTrackerReadIntentRecorded"
+        "TaskTrackerReadIntentRecorded",
+        "TaskTrackerFactsObserved"
       ])
+      const observed = (yield* storage.read(runId)).find(({ event }) => event._tag === "TaskTrackerFactsObserved")
+      expect(
+        observed?.event._tag === "TaskTrackerFactsObserved" ? observed.event.observation : undefined
+      ).toMatchObject({
+        _tag: "TaskTrackerFactsReadFailed",
+        completeness: "Unreadable",
+        failure: { _tag: "TrackerAdapterReadError", reason: { _tag: "IncompleteSnapshot" } }
+      })
       yield* Deferred.succeed(finish, undefined)
       yield* Fiber.join(running)
     })

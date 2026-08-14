@@ -172,6 +172,7 @@ export type DeliveryActionResult =
         | CompletionTaskAuthorizationConflict
         | CompletionTaskAuthorizationWait
         | CompletionTaskConfirmationWait
+        | "TrackerGraphReadUnavailable"
         | CompletionTaskPreconditionConflict
     }
   | {

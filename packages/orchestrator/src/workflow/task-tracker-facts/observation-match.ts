@@ -58,6 +58,8 @@ export const taskTrackerObservationMatchesRead = (
     FocusedTaskClaimFactsUnreadable: (facts) => focusedClaimMatchesRead(facts, operation),
     FocusedTaskCompletionFacts: (facts) => focusedCompletionMatchesRead(facts, operation),
     FocusedTaskWorkSpecificationFacts: (facts) => focusedWorkSpecificationMatchesRead(facts, operation),
+    TaskTrackerFactsReadFailed: (facts) =>
+      operation._tag === "ReadTrackerGraph" && operation.operationId === facts.operationId,
     UnchangedTaskTrackerFactsReconfirmed: (facts) => completeGraphMatchesRead(facts, operation)
   })
 }
