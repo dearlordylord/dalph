@@ -59,6 +59,16 @@ module gitReconciliationNegativeTest {
     state' = { ...state, completionWarning: true },
   }
 
+  action authorizeConstrainedCompatibleAdvance: bool = all {
+    state.compatibleAdvanceObserved,
+    state' = { ...state, constraint: TargetRewriteConstraint },
+  }
+
+  action restorePromotionAuthorizationAfterAmbiguousRead: bool = all {
+    state.decision == RereadTargetBeforePromotion,
+    state' = { ...state, compareAndSetAuthorized: true },
+  }
+
   run unsafeRepairIsDetectedTest = {
     init
       .then(observeLostWorktree)
@@ -160,5 +170,22 @@ module gitReconciliationNegativeTest {
     init
       .then(inventCompletionWarning)
       .expect(not(completionWarningIsDerivedOnly))
+  }
+
+  run constrainedCompatibleAdvanceIsDetectedTest = {
+    init
+      .then(observeCompatibleTargetAdvance)
+      .then(authorizeConstrainedCompatibleAdvance)
+      .expect(not(compatibleTargetAdvanceDoesNotConstrainAttempt))
+  }
+
+  run stalePromotionAuthorizationAfterAmbiguousReadIsDetectedTest = {
+    init
+      .then(observeEligibleResultCommit)
+      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observePostPromotionDependencyBlocker)
+      .then(clearPostPromotionDependencyBlocker)
+      .then(restorePromotionAuthorizationAfterAmbiguousRead)
+      .expect(not(ambiguousTargetNeverPromotes))
   }
 }

@@ -99,6 +99,7 @@ module gitReconciliation {
   action observePrePromotionDependencyBlocker: bool = all {
     state.candidatePreserved,
     not(state.promotionProof),
+    state.constraint == NoGitConstraint,
     state.positionHeld,
     state.trackerBlocker == NoTrackerBlocker,
     state' = {
@@ -111,7 +112,16 @@ module gitReconciliation {
 
   action clearPrePromotionDependencyBlocker: bool = all {
     state.trackerBlocker == BeforePromotionBlocker,
-    state' = { ...state, decision: RereadTargetBeforePromotion, trackerBlocker: NoTrackerBlocker },
+    state.constraint == NoGitConstraint,
+    state' = {
+      ...state,
+      compareAndSetAuthorized: false,
+      decision: RereadTargetBeforePromotion,
+      exactExpectedHeadObserved: false,
+      overwriteAuthorized: false,
+      positionHeld: true,
+      trackerBlocker: NoTrackerBlocker,
+    },
   }
 
   // Restart recreates no process-local target ownership and preserves the
@@ -185,13 +195,31 @@ module gitReconciliation {
   action observePostPromotionDependencyBlocker: bool = all {
     state.promotionProof,
     not(state.completionAuthorized),
+    state.constraint == NoGitConstraint,
     state.trackerBlocker == NoTrackerBlocker,
-    state' = { ...state, decision: GitConstraintWait, positionHeld: false, trackerBlocker: AfterPromotionBlocker },
+    state' = {
+      ...state,
+      compareAndSetAuthorized: false,
+      decision: GitConstraintWait,
+      exactExpectedHeadObserved: false,
+      overwriteAuthorized: false,
+      positionHeld: false,
+      trackerBlocker: AfterPromotionBlocker,
+    },
   }
 
   action clearPostPromotionDependencyBlocker: bool = all {
     state.trackerBlocker == AfterPromotionBlocker,
-    state' = { ...state, decision: RereadTargetBeforePromotion, trackerBlocker: NoTrackerBlocker },
+    state.constraint == NoGitConstraint,
+    state' = {
+      ...state,
+      compareAndSetAuthorized: false,
+      decision: RereadTargetBeforePromotion,
+      exactExpectedHeadObserved: false,
+      overwriteAuthorized: false,
+      positionHeld: true,
+      trackerBlocker: NoTrackerBlocker,
+    },
   }
 
   action observeFreshPromotedCandidateAncestry: bool = all {
@@ -228,6 +256,8 @@ module gitReconciliation {
   }
 
   action observeCompatibleTargetAdvance: bool = all {
+    state.constraint == NoGitConstraint,
+    state.trackerBlocker == NoTrackerBlocker,
     state.decision == ContinueAttempt,
     not(state.compatibleAdvanceObserved),
     state' = { ...state, compatibleAdvanceObserved: true },
