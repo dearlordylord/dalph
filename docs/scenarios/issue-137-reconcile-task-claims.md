@@ -218,11 +218,18 @@ because K3 was acquired.
   activation survives that restart, allocates one stable fresh K3, binds
   intent once, rereads exact K3, and only then exposes ordinary continuation
   to admission.
-- The missing-claim and foreign-conflict variants inside `records a foreign
-  claim from an authored recovery story and safely suspends only its attempt`
-  compose the applied Operator direction with the controlled tracker:
-  missing K1 produces fresh K3 and a foreign K2 remains untouched as a typed
-  acquisition conflict.
+- `records a foreign claim from an authored recovery story and safely suspends
+  only its attempt` is the maintained authored/recorded foreign-observation
+  story and proves K2 remains untouched. The terminal acquisition-conflict
+  chronology is covered by `records a foreign acquisition rejection as terminal
+  and never reconstructs a retry` in
+  `packages/orchestrator/src/workflow-journal/journaled-claim-acquisition.test.ts`
+  and by the rejection-entry projection and alpha-renaming round-trip in
+  `alpha-renames every Dalph-generated identity and preserves tracker
+  revisions, task revisions, and Git SHAs` in
+  `packages/dalph/test/cassettes/scenario.test.ts`; the two evidence cuts are
+  intentionally separate because the public authored coordinator runner does
+  not turn a failed recovery action into a second authored terminal assertion.
 - `rereads tracker authority after an ambiguously applied acquisition` proves
   intent-before-effect reconciliation after a lost response.
 - `stops when atomic acquisition reports a competing claim` proves a foreign
@@ -236,3 +243,39 @@ because K3 was acquired.
   later loss, restoration ends an earlier direction, a stale K1 identity is rejected,
   and an ordinary acquisition is never classified by parsing its opaque
   operation-ID spelling.
+
+## Completion audit mapping
+
+The six owner-comment questions resolve to existing provider-neutral seams and
+evidence; they do not introduce new production stages or actor identities.
+
+1. A current claim is exact only when operation ID, owner, task ID, and token
+   all match. A same-owner claim with a new token or acquisition operation is
+   therefore non-exact and follows the existing foreign-claim isolation path;
+   it does not receive a separate mutation authority. The focused regression
+   `classifies a same-owner replacement as foreign and never authorizes its
+   release` exercises `currentTaskClaimAuthority` and the release protocol.
+2. The three-read bound is owned by the provider-neutral
+   `task-claim-observation` protocol (`bound.ts` and `observeTaskClaim`). The
+   acquisition protocol has a separate three-pass bound; neither bound is a
+   provider configuration setting.
+3. A definite foreign acquisition conflict is terminal for that exact
+   acquisition intent: the journal records `TaskClaimAcquisitionRejected` and
+   recovery does not recreate the request. Unknown request outcomes remain the
+   separate bounded reconciliation case.
+4. `specs/taskFactReconciliation.qnt`, its paired Quint scenarios, and
+   `task-fact-reconciliation.mbt.test.ts` own #137. `frontierRecovery.qnt` is
+   stale and is not a second authority.
+5. The durable endpoints are the task-claim read intent, task-claim facts
+   observed (exact/missing/foreign/unreadable), reacquisition direction, fresh
+   acquisition intent, and acquisition outcome (acquired or rejected). The
+   journal/protocol tests, `records a foreign claim after process death and
+   safely suspends only its exact attempt` in
+   `packages/dalph/test/cassettes/scenario.test.ts`, the recorded rejection
+   projection fixture, and the Quint adapter cover the applicable behavior.
+   P0–P6 are only in-memory/conformance cut-point labels; there are
+   no literal production lanes or persisted P0–P6 rows, and no SQLite-specific
+   #137 claim is implied here.
+6. `Operator` is the V1 actor class at a trusted boundary. The direction and
+   request carry no authenticated-person identity; authentication is a
+   separately accepted boundary concern and is not inferred by this scenario.
