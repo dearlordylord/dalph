@@ -153,7 +153,9 @@ it("continues completion-claim cleanup only across adjacent exact calls", () => 
   expect(
     continuesCompletionClaimCleanup(
       readBeforeOne,
-      intent(CompletionClaimCleanupBoundaryCall.DeleteAttempt({ attemptOrdinal: CompletionClaimRequestOrdinal.make(2) }))
+      intent(
+        CompletionClaimCleanupBoundaryCall.DeleteAttempt({ attemptOrdinal: CompletionClaimRequestOrdinal.make(2) })
+      )
     )
   ).toBe(false)
   expect(continuesCompletionClaimCleanup(deleteOne, readBeforeTwo)).toBe(true)

@@ -626,7 +626,10 @@ it("records the superseded attempt before rejecting its later executor responsib
     ])
   })
 
-  const crossRunRequest = AttemptChoiceRequestId.make({ nonce: "history-replacement-cross-run", runId: RunId.make("other-run") })
+  const crossRunRequest = AttemptChoiceRequestId.make({
+    nonce: "history-replacement-cross-run",
+    runId: RunId.make("other-run")
+  })
   const crossRunReplacement = { ...replacement, requestId: crossRunRequest }
   expect(
     reduceWorkflowJournalHistory(
@@ -635,11 +638,8 @@ it("records the superseded attempt before rejecting its later executor responsib
     )
   ).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
-    issues: expect.arrayContaining([
-      expect.objectContaining({ detail: expect.stringContaining("binds another Run") })
-    ])
+    issues: expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining("binds another Run") })])
   })
-
 })
 
 it("rejects a generic executor-state observation while an exact command remains unmatched", () => {

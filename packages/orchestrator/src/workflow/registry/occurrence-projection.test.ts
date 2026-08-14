@@ -1240,10 +1240,7 @@ it.effect("accepts specification Restart failures only from the exact focused re
         })
       )
     ]).pipe(Effect.flip)
-    expect(rejected).toMatchObject({
-      _tag: "TrackerOutcomeWithoutReadIntent",
-      operationId: uncoveredGraph.operationId
-    })
+    expect(rejected).toMatchObject({ _tag: "TrackerOutcomeWithoutReadIntent", operationId: uncoveredGraph.operationId })
   })
 )
 
