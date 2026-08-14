@@ -345,6 +345,23 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       return activities.length === 0
     })
 
+    // Suspension owns every background terminal returned by the app-server.
+    // Termination is followed by a fresh census; an unreadable or contradictory
+    // census fails closed and therefore never reports safe capacity.
+    const quiesceOwnedActivity = Effect.fn("CodexPlannedAttemptExecutor.quiesceOwnedActivity")(function* (
+      threadId: CodexThreadId
+    ) {
+      for (let remaining = 3; remaining >= 0; remaining -= 1) {
+        const activities = yield* app.listBackgroundTerminals(threadId)
+        if (activities.length === 0) return
+        if (remaining === 0) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
+        for (const activity of activities) {
+          const terminated = yield* app.terminateBackgroundTerminal(threadId, activity.processId)
+          if (!terminated) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
+        }
+      }
+    })
+
     const readHead = Effect.fn("CodexPlannedAttemptExecutor.readHead")(function* (attempt: CodexAttemptContext) {
       const result = yield* git.runInWorktree(attempt.worktree, ["rev-parse", "HEAD"])
       if (result.exitCode !== 0) return undefined
@@ -628,7 +645,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       const current = yield* reconcile(attempt, correlation, record)
       if (current._tag === "Terminal") return yield* terminalOrRunning(attempt, correlation, record, current)
       if (current._tag === "Idle") {
-        if (!(yield* noOwnedActivity(record.threadId))) return running(correlation)
+        yield* quiesceOwnedActivity(record.threadId)
         yield* save(recordFor(attempt, "SafelySuspended", record.threadId, record.turnId, true))
         return suspended(correlation)
       }
@@ -653,7 +670,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       const after = yield* reconcile(attempt, correlation, interruptedIntent)
       if (after._tag === "Terminal") return yield* terminalOrRunning(attempt, correlation, interruptedIntent, after)
       if (after._tag === "Running") return running(correlation)
-      if (!(yield* noOwnedActivity(record.threadId))) return running(correlation)
+      yield* quiesceOwnedActivity(record.threadId)
       yield* save(recordFor(attempt, "SafelySuspended", record.threadId, turnId, true))
       return suspended(correlation)
     })
