@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- the lease adapter owns the native descriptor lock. */
 /* eslint-disable max-lines -- The private snapshot and crash-recoverable lease share one durable authority. */
 import nodeFsPromises, { type FileHandle } from "node:fs/promises"
-import nodeFs from "node:fs"
+import nodeFs, { type Stats } from "node:fs"
 import { createHash } from "node:crypto"
 import nodePath from "node:path"
 import nodeProcess from "node:process"
@@ -46,6 +46,31 @@ export const CodexSealedTerminal = Schema.TaggedUnion({
   Failed: {}
 })
 export type CodexSealedTerminal = typeof CodexSealedTerminal.Type
+
+const invalidCodexAttemptCorrelation = (attemptId: AttemptId, correlationAttemptId: AttemptId): string | undefined =>
+  attemptId !== correlationAttemptId
+    ? "private association attempt and correlation attempt must be identical"
+    : undefined
+
+const invalidCodexTerminalEvidence = (
+  terminal: CodexSealedTerminal,
+  evidenceManifest: EvidenceReference | null
+): string | undefined => {
+  if (terminal._tag === "Accepted" && evidenceManifest === null) {
+    return "an accepted terminal attempt must retain its evidence reference"
+  }
+  if (terminal._tag === "Failed" && evidenceManifest !== null) {
+    return "a failed terminal attempt cannot retain accepted evidence"
+  }
+  if (
+    terminal._tag === "Accepted" &&
+    evidenceManifest !== null &&
+    !evidenceReferenceEquals(terminal.evidenceManifest, evidenceManifest)
+  ) {
+    return "the sealed and top-level evidence references must agree"
+  }
+  return undefined
+}
 
 /**
  * Exact durable attempt/thread state. Each tag carries only the fields that
@@ -125,22 +150,14 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     worktree: WorktreeLocator
   }
 }).check(
-  Schema.makeFilter((record) =>
-    record.attemptId !== record.correlationAttemptId
-      ? "private association attempt and correlation attempt must be identical"
-      : record._tag === "Terminal" && record.terminal._tag === "Accepted" && record.evidenceManifest === null
-        ? "an accepted terminal attempt must retain its evidence reference"
-        : record._tag === "Terminal" && record.terminal._tag === "Failed" && record.evidenceManifest !== null
-          ? "a failed terminal attempt cannot retain accepted evidence"
-          : record._tag !== "Terminal" && "evidenceManifest" in record
-            ? "only a terminal attempt can retain accepted evidence"
-            : record._tag === "Terminal" &&
-                record.terminal._tag === "Accepted" &&
-                record.evidenceManifest !== null &&
-                !evidenceReferenceEquals(record.terminal.evidenceManifest, record.evidenceManifest)
-              ? "the sealed and top-level evidence references must agree"
-              : undefined
-  )
+  Schema.makeFilter((record) => {
+    const correlationFailure = invalidCodexAttemptCorrelation(record.attemptId, record.correlationAttemptId)
+    if (correlationFailure !== undefined) return correlationFailure
+    if (record._tag !== "Terminal") {
+      return "evidenceManifest" in record ? "only a terminal attempt can retain accepted evidence" : undefined
+    }
+    return invalidCodexTerminalEvidence(record.terminal, record.evidenceManifest)
+  })
 )
 export type CodexAttemptRecord = typeof CodexAttemptRecord.Type
 
@@ -405,6 +422,50 @@ type PrivateFilesystemObservation =
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Failure"; readonly detail: string }
 
+const invalidStateDirectory = (raw: string, path: Path.Path): boolean =>
+  raw.length === 0 ||
+  raw.trim() !== raw ||
+  raw.includes("\u0000") ||
+  !path.isAbsolute(raw) ||
+  path.normalize(raw) !== raw ||
+  path.basename(raw) === "." ||
+  path.basename(raw) === ".."
+
+const ensurePrivateDirectoryComponent = async (
+  parent: string,
+  component: string,
+  isFinal: boolean,
+  uid: number | undefined
+): Promise<{ readonly current: string; readonly observation: PrivateFilesystemObservation }> => {
+  const current = nodePath.join(parent, component)
+  let stat
+  try {
+    stat = await nodeFsPromises.lstat(current)
+  } catch (error) {
+    if (nativeErrorCode(error) !== "ENOENT") return { current, observation: { _tag: "Failure", detail: String(error) } }
+    await nodeFsPromises.mkdir(current, { mode: privateDirectoryMode })
+    stat = await nodeFsPromises.lstat(current)
+  }
+  const failure = privateDirectoryStatFailure(stat, current, isFinal, uid)
+  return failure === undefined
+    ? { current, observation: { _tag: "Present" } }
+    : { current, observation: { _tag: "Failure", detail: failure } }
+}
+
+const privateDirectoryStatFailure = (
+  stat: Stats,
+  current: string,
+  isFinal: boolean,
+  uid: number | undefined
+): string | undefined => {
+  if (stat.isSymbolicLink()) return `private state path is a symlink: ${current}`
+  if (!stat.isDirectory()) return `private state path is not a directory: ${current}`
+  if (isFinal && uid !== undefined && stat.uid !== uid) return `private state directory is foreign: ${current}`
+  if (isFinal && (stat.mode & privatePermissionMask) !== 0)
+    return `private state directory is not owner-only: ${current}`
+  return undefined
+}
+
 /**
  * The node adapter owns the exact path authority. It rejects traversal and
  * canonicalization changes before touching the host filesystem; the
@@ -412,15 +473,7 @@ type PrivateFilesystemObservation =
  * configuration boundary.
  */
 const decodeStateDirectory = (raw: string, path: Path.Path): Effect.Effect<string, CodexAttemptStoreFailure> => {
-  if (
-    raw.length === 0 ||
-    raw.trim() !== raw ||
-    raw.includes("\u0000") ||
-    !path.isAbsolute(raw) ||
-    path.normalize(raw) !== raw ||
-    path.basename(raw) === "." ||
-    path.basename(raw) === ".."
-  ) {
+  if (invalidStateDirectory(raw, path)) {
     return Effect.fail(
       configurationFailure("Codex private state directory must be an absolute, normalized path without traversal")
     )
@@ -448,24 +501,9 @@ const ensurePrivateDirectory = async (directory: string): Promise<PrivateFilesys
     let current = parsed.root
     const uid = processUid()
     for (const [index, component] of components.entries()) {
-      current = nodePath.join(current, component)
-      let stat
-      try {
-        stat = await nodeFsPromises.lstat(current)
-      } catch (error) {
-        if (nativeErrorCode(error) !== "ENOENT") return { _tag: "Failure", detail: String(error) }
-        await nodeFsPromises.mkdir(current, { mode: privateDirectoryMode })
-        stat = await nodeFsPromises.lstat(current)
-      }
-      if (stat.isSymbolicLink()) return { _tag: "Failure", detail: `private state path is a symlink: ${current}` }
-      if (!stat.isDirectory()) return { _tag: "Failure", detail: `private state path is not a directory: ${current}` }
-      if (index === components.length - 1) {
-        if (uid !== undefined && stat.uid !== uid)
-          return { _tag: "Failure", detail: `private state directory is foreign: ${current}` }
-        if ((stat.mode & privatePermissionMask) !== 0) {
-          return { _tag: "Failure", detail: `private state directory is not owner-only: ${current}` }
-        }
-      }
+      const result = await ensurePrivateDirectoryComponent(current, component, index === components.length - 1, uid)
+      if (result.observation._tag === "Failure") return result.observation
+      current = result.current
     }
     return { _tag: "Present" }
   } catch (error) {
@@ -616,29 +654,36 @@ const parseSnapshot = (text: string): CodexAttemptStoreSnapshot => {
   return Schema.decodeUnknownSync(CodexAttemptStoreSnapshot)(parsed)
 }
 
+type ChecksummedSnapshotRecord = { readonly formatVersion: 1; readonly payload: string; readonly digest: string }
+
+const isChecksummedSnapshotRecord = (parsed: unknown): parsed is ChecksummedSnapshotRecord => {
+  if (typeof parsed !== "object" || parsed === null) return false
+  if (!("formatVersion" in parsed) || parsed.formatVersion !== 1) return false
+  if (!("payload" in parsed) || typeof parsed.payload !== "string") return false
+  return "digest" in parsed && typeof parsed.digest === "string"
+}
+
+const checksummedPayload = (parsed: unknown): string | undefined => {
+  if (!isChecksummedSnapshotRecord(parsed)) return undefined
+  return createHash("sha256").update(parsed.payload, "utf8").digest("hex") === parsed.digest
+    ? parsed.payload
+    : undefined
+}
+
+const parseChecksummedSnapshotLine = (line: string): CodexAttemptStoreSnapshot | undefined => {
+  try {
+    const payload = checksummedPayload(JSON.parse(line))
+    return payload === undefined ? undefined : parseSnapshot(payload)
+  } catch {
+    return undefined
+  }
+}
+
 const parseSnapshotDocument = (text: string): CodexAttemptStoreSnapshot => {
   const lines = text.split("\n").filter((line) => line.trim().length > 0)
   for (const line of [...lines].reverse()) {
-    try {
-      const parsed: unknown = JSON.parse(line)
-      if (
-        typeof parsed === "object" &&
-        parsed !== null &&
-        "formatVersion" in parsed &&
-        parsed.formatVersion === 1 &&
-        "payload" in parsed &&
-        typeof parsed.payload === "string" &&
-        "digest" in parsed &&
-        typeof parsed.digest === "string" &&
-        createHash("sha256").update(parsed.payload, "utf8").digest("hex") === parsed.digest
-      ) {
-        return parseSnapshot(parsed.payload)
-      }
-    } catch {
-      // A torn or corrupt newest line is ignored only when an earlier complete
-      // checksummed record remains available; a plain legacy document still
-      // falls through to the strict parser below.
-    }
+    const snapshot = parseChecksummedSnapshotLine(line)
+    if (snapshot !== undefined) return snapshot
   }
   return parseSnapshot(text)
 }
@@ -950,13 +995,74 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
             onSuccess: () => Effect.fail(failure)
           })
         )
+      const handleLockedLease = (
+        file: FileHandle,
+        observe: (
+          owner: CodexServerLeaseRecord
+        ) => Effect.Effect<CodexServerLeaseOwnerProjection, CodexAttemptStoreFailure>,
+        lockFailure: CodexAttemptStoreFailure
+      ) =>
+        Effect.gen(function* () {
+          const existing = yield* readLeaseRecord(file).pipe(Effect.result)
+          yield* closeDescriptor(file, "acquireServerLease")
+          if (Result.isFailure(existing)) return yield* existing.failure
+          if (Option.isNone(existing.success)) {
+            return yield* new CodexAttemptStoreFailure({
+              detail: "server lease is locked but has no readable owner",
+              operation: "acquireServerLease"
+            })
+          }
+          const projection = yield* observe(existing.success.value)
+          return yield* new CodexAttemptStoreFailure({
+            detail:
+              projection._tag === "ExactLive"
+                ? "server lease is held by a live owner"
+                : projection._tag === "Absent"
+                  ? "server lease lock is held by an absent owner"
+                  : `server lease owner cannot be reclaimed: ${projection.detail}`,
+            operation: lockFailure.operation
+          })
+        })
+      const inspectUnlockedLease = (
+        file: FileHandle,
+        owner: CodexServerLeaseRecord,
+        observe: (
+          owner: CodexServerLeaseRecord
+        ) => Effect.Effect<CodexServerLeaseOwnerProjection, CodexAttemptStoreFailure>
+      ) =>
+        Effect.gen(function* () {
+          const existing = yield* readLeaseRecord(file)
+          if (Option.isNone(existing)) {
+            yield* writeLeaseRecord(file, owner)
+          } else {
+            const projection = yield* observe(existing.value)
+            if (projection._tag === "Absent") {
+              yield* writeLeaseRecord(file, owner)
+            } else if (!(projection._tag === "ExactLive" && sameLeaseOwner(existing.value, owner))) {
+              return yield* new CodexAttemptStoreFailure({
+                detail:
+                  projection._tag === "ExactLive"
+                    ? "server lease is held by a live owner"
+                    : `server lease owner cannot be reclaimed: ${projection.detail}`,
+                operation: "acquireServerLease"
+              })
+            }
+          }
+          yield* Ref.set(heldLease, Option.some({ file, owner }))
+        }).pipe(Effect.result)
+      const heldLeaseDisposition = (
+        held: Option.Option<{ readonly file: FileHandle; readonly owner: CodexServerLeaseRecord }>,
+        owner: CodexServerLeaseRecord
+      ): "Acquire" | "Reenter" | "Conflict" =>
+        Option.isNone(held) ? "Acquire" : sameLeaseOwner(held.value.owner, owner) ? "Reenter" : "Conflict"
       const acquireServerLease: CodexAttemptStoreService["acquireServerLease"] = (owner, observe) =>
         guard(
           "acquireServerLease",
           Effect.gen(function* () {
             const held = yield* Ref.get(heldLease)
-            if (Option.isSome(held)) {
-              if (sameLeaseOwner(held.value.owner, owner)) return
+            const disposition = heldLeaseDisposition(held, owner)
+            if (disposition === "Reenter") return
+            if (disposition === "Conflict") {
               return yield* new CodexAttemptStoreFailure({
                 detail: "server lease is already held by this process for another incarnation",
                 operation: "acquireServerLease"
@@ -979,49 +1085,9 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
               if (lockCode !== "EACCES" && lockCode !== "EAGAIN" && lockCode !== "EWOULDBLOCK") {
                 return yield* releaseAfterAcquireFailure(file, lockFailure)
               }
-              const existing = yield* readLeaseRecord(file).pipe(Effect.result)
-              yield* closeDescriptor(file, "acquireServerLease")
-              if (Result.isFailure(existing)) return yield* existing.failure
-              if (Option.isNone(existing.success)) {
-                return yield* new CodexAttemptStoreFailure({
-                  detail: "server lease is locked but has no readable owner",
-                  operation: "acquireServerLease"
-                })
-              }
-              const projection = yield* observe(existing.success.value)
-              return yield* new CodexAttemptStoreFailure({
-                detail:
-                  projection._tag === "ExactLive"
-                    ? "server lease is held by a live owner"
-                    : projection._tag === "Absent"
-                      ? "server lease lock is held by an absent owner"
-                      : `server lease owner cannot be reclaimed: ${projection.detail}`,
-                operation: "acquireServerLease"
-              })
+              return yield* handleLockedLease(file, observe, lockFailure)
             }
-            const inspected = yield* Effect.gen(function* () {
-              const existing = yield* readLeaseRecord(file)
-              if (Option.isNone(existing)) {
-                yield* writeLeaseRecord(file, owner)
-              } else {
-                const projection = yield* observe(existing.value)
-                if (projection._tag === "Absent") {
-                  yield* writeLeaseRecord(file, owner)
-                } else if (projection._tag === "ExactLive" && sameLeaseOwner(existing.value, owner)) {
-                  // The exact owner may be re-entering from one application
-                  // scope; retain the newly acquired descriptor below.
-                } else {
-                  return yield* new CodexAttemptStoreFailure({
-                    detail:
-                      projection._tag === "ExactLive"
-                        ? "server lease is held by a live owner"
-                        : `server lease owner cannot be reclaimed: ${projection.detail}`,
-                    operation: "acquireServerLease"
-                  })
-                }
-              }
-              yield* Ref.set(heldLease, Option.some({ file, owner }))
-            }).pipe(Effect.result)
+            const inspected = yield* inspectUnlockedLease(file, owner, observe)
             if (Result.isFailure(inspected)) return yield* releaseAfterAcquireFailure(file, inspected.failure)
           })
         )
