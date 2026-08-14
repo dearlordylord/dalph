@@ -97,6 +97,11 @@ export class CodexAppServerFailure extends Schema.TaggedError<CodexAppServerFail
   operation: CodexAppServerOperation
 }) {}
 
+/** Captures a native process-signal failure before the app-server adapter classifies it. */
+class CodexProcessSignalFailure extends Schema.TaggedError<CodexProcessSignalFailure>()("CodexProcessSignalFailure", {
+  cause: Schema.Defect()
+}) {}
+
 /** Process-start identity read from the execution substrate; a PID alone is not an owner identity. */
 export const CodexProcessStartIdentity = Schema.NonEmptyString.pipe(Schema.brand("CodexProcessStartIdentity"))
 export type CodexProcessStartIdentity = typeof CodexProcessStartIdentity.Type
@@ -1711,16 +1716,17 @@ const makeNodeCodexProcessOwnershipService = (
             nodeProcess.platform === "win32"
               ? Effect.tryPromise({
                   try: () => execFileAsync("taskkill", ["/PID", String(pid), "/T", "/F"]),
-                  catch: (error) => error
+                  catch: (cause) => new CodexProcessSignalFailure({ cause })
                 }).pipe(Effect.asVoid)
-              : Effect.try({ try: () => nodeProcess.kill(-pid, "SIGTERM"), catch: (error) => error }).pipe(
-                  Effect.asVoid
-                )
+              : Effect.try({
+                  try: () => nodeProcess.kill(-pid, "SIGTERM"),
+                  catch: (cause) => new CodexProcessSignalFailure({ cause })
+                }).pipe(Effect.asVoid)
           return groupSignal.pipe(
             // A failed group signal never falls back to an unverified PID: that
             // PID may already identify a different process incarnation.
-            Effect.catch((error) => (processWasAbsent(error) ? Effect.void : Effect.fail(error))),
-            Effect.mapError((error) => operationFailure("close", "Ownership", error))
+            Effect.catch((failure) => (processWasAbsent(failure.cause) ? Effect.void : Effect.fail(failure))),
+            Effect.mapError((failure) => operationFailure("close", "Ownership", failure.cause))
           )
         })
         yield* signalGroup
