@@ -134,17 +134,16 @@ it.effect("admits only one independent filesystem store lease", () =>
       const path = yield* Path.Path
       const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-lease-" })
       const storePath = path.join(root, "executor-private-state.json")
-      const first = yield* Effect.gen(function* () {
-        const store = yield* CodexAttemptStore
-        yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
-        return store
+      yield* Effect.gen(function* () {
+        const first = yield* CodexAttemptStore
+        yield* first.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+        const second = yield* Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          return yield* store.acquireServerLease(otherLeaseOwner, () => Effect.succeed({ _tag: "ExactLive" as const }))
+        }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+        expect(Exit.isFailure(second)).toBe(true)
+        yield* first.releaseServerLease(leaseOwner)
       }).pipe(Effect.provide(nodeLayer(storePath)))
-      const second = yield* Effect.gen(function* () {
-        const store = yield* CodexAttemptStore
-        return yield* store.acquireServerLease(otherLeaseOwner, () => Effect.succeed({ _tag: "ExactLive" as const }))
-      }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
-      expect(Exit.isFailure(second)).toBe(true)
-      yield* first.releaseServerLease(leaseOwner)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
@@ -157,13 +156,13 @@ it.effect("reclaims an exact stale lease but never releases a foreign owner", ()
       const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-lease-reclaim-" })
       const storePath = path.join(root, "executor-private-state.json")
       yield* writePrivateFile(fileSystem, `${storePath}.lease`, JSON.stringify(otherLeaseOwner))
-      const store = yield* Effect.gen(function* () {
-        return yield* CodexAttemptStore
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+        const foreignRelease = yield* store.releaseServerLease(otherLeaseOwner).pipe(Effect.exit)
+        expect(Exit.isFailure(foreignRelease)).toBe(true)
+        yield* store.releaseServerLease(leaseOwner)
       }).pipe(Effect.provide(nodeLayer(storePath)))
-      yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
-      const foreignRelease = yield* store.releaseServerLease(otherLeaseOwner).pipe(Effect.exit)
-      expect(Exit.isFailure(foreignRelease)).toBe(true)
-      yield* store.releaseServerLease(leaseOwner)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
@@ -246,7 +245,7 @@ it.effect("does not upcast a legacy flat attempt record", () =>
   )
 )
 
-it.effect("recovers a complete same-directory next snapshot after an interrupted rename", () =>
+it.effect("recovers a complete legacy next snapshot after an interrupted write", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -316,6 +315,33 @@ it.effect("fails closed when one Codex thread is aliased to multiple attempts", 
   )
 )
 
+it.effect("rejects a same-process executor alias before persisting the resulting snapshot", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-write-alias-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const second = CodexAttemptRecord.make({
+        ...associated,
+        attemptId: AttemptId.make("attempt:issue-58-store:write-alias"),
+        correlationAttemptId: AttemptId.make("attempt:issue-58-store:write-alias")
+      })
+      const result = yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        yield* store.writeAttempt(associated)
+        return yield* store.writeAttempt(second)
+      }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      const persisted = yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        return yield* store.readAttempt(attempt.runId, attempt.attemptId)
+      }).pipe(Effect.provide(nodeLayer(storePath)))
+      expect(Option.isSome(persisted)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("rejects relative and traversal state directories before filesystem access", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -379,6 +405,29 @@ it.effect("fails closed for a symlink or foreign-permission private file", () =>
         return true
       }).pipe(Effect.provide(nodeLayer(foreignPath)), Effect.exit)
       expect(Exit.isFailure(foreignResult)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("fails closed when a private snapshot path is swapped to a symlink before descriptor write", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-symlink-swap-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const target = path.join(root, "unowned-target.json")
+      yield* writePrivateFile(fileSystem, target, "unchanged")
+
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        yield* fileSystem.remove(storePath)
+        yield* fileSystem.symlink(target, storePath)
+
+        const result = yield* store.writeAttempt(associated).pipe(Effect.exit)
+        expect(Exit.isFailure(result)).toBe(true)
+        expect(yield* fileSystem.readFileString(target)).toBe("unchanged")
+      }).pipe(Effect.provide(nodeLayer(storePath)))
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

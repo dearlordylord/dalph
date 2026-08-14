@@ -1,6 +1,8 @@
 import { it } from "@effect/vitest"
 import {
   AttemptId,
+  EvidenceDigest,
+  EvidenceReference,
   GitCommitSha,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorReport,
@@ -15,14 +17,15 @@ import {
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import {
-  type EvidenceStore,
+  EvidenceStore,
+  EvidenceStoreFailure,
   GitCommand,
   GitCommandInvocationFailure,
   memoryEvidenceStoreLayer,
   type GitCommandService
 } from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
-import { Effect, Layer, Option, Ref } from "effect"
+import { Crypto, Effect, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
 import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/conformance.test.js"
 import {
@@ -408,13 +411,15 @@ const makeHarness = (
   }
 }
 
+const defaultGitCommand: GitCommandService = {
+  run: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
+  runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: `${head}\n` }),
+  runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
+}
+
 const layerFor = (
   harness: Harness,
-  gitCommand: GitCommandService = {
-    run: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
-    runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: `${head}\n` }),
-    runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
-  },
+  gitCommand: GitCommandService = defaultGitCommand,
   evidenceStore: Layer.Layer<EvidenceStore> = memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer))
 ) =>
   codexPlannedAttemptExecutorLayer.pipe(
@@ -433,6 +438,39 @@ const layerFor = (
     ),
     Layer.provide(NodeServices.layer)
   )
+
+const mutatedEvidenceStoreLayer = (mode: "manifest" | "reference"): Layer.Layer<EvidenceStore> =>
+  Layer.effect(
+    EvidenceStore,
+    Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto
+      let stored = new Uint8Array()
+      const digestFor = (bytes: Uint8Array) =>
+        crypto.digest("SHA-256", bytes).pipe(
+          Effect.mapError(
+            (error) => new EvidenceStoreFailure({ detail: String(error), operation: "EvidenceStore.put" })
+          ),
+          Effect.map((digest) =>
+            EvidenceDigest.make(Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(""))
+          )
+        )
+      const put = (bytes: Uint8Array) =>
+        Effect.gen(function* () {
+          const submitted = bytes.slice()
+          const mutated =
+            mode === "manifest"
+              ? new TextEncoder().encode(new TextDecoder().decode(submitted).replace(head, otherHead))
+              : submitted
+          stored = mutated
+          const digest = yield* digestFor(mutated)
+          return EvidenceReference.make({
+            byteLength: mutated.byteLength,
+            digest: mode === "reference" ? EvidenceDigest.make("f".repeat(64)) : digest
+          })
+        })
+      return EvidenceStore.of({ put, read: () => Effect.succeed(stored.slice()) })
+    })
+  ).pipe(Layer.provide(NodeServices.layer))
 
 type ConformanceBoundaryCall =
   | { readonly _tag: "Project"; readonly correlation: typeof conformanceCorrelation }
@@ -553,6 +591,20 @@ it.effect("persists the exact association before the first turn and seals Accept
     expect(harness.resumeCwds.length).toBeGreaterThan(resumeCountBeforeRestart)
   }).pipe(Effect.provide(layerFor(harness)))
 })
+
+it.effect("fails closed when accepted evidence changes its manifest or content address", () =>
+  Effect.forEach(["manifest", "reference"] as const, (mode) => {
+    const harness = makeHarness()
+    return Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.startOrContinue(request)
+      harness.complete(finalResponse(head))
+      const result = yield* executor.startOrContinue(request).pipe(Effect.exit)
+      expect(result._tag).toBe("Failure")
+      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+    }).pipe(Effect.provide(layerFor(harness, defaultGitCommand, mutatedEvidenceStoreLayer(mode))))
+  })
+)
 
 it.effect("serializes same-attempt parallel admission behind one gate", () => {
   const harness = makeHarness()

@@ -1,6 +1,8 @@
 /* eslint-disable import/no-nodejs-modules -- the lease adapter owns the native descriptor lock. */
 /* eslint-disable max-lines -- The private snapshot and crash-recoverable lease share one durable authority. */
 import nodeFsPromises, { type FileHandle } from "node:fs/promises"
+import nodeFs from "node:fs"
+import { createHash } from "node:crypto"
 import nodePath from "node:path"
 import nodeProcess from "node:process"
 import { flock, type FlockFlagString } from "fs-ext-extra-prebuilt"
@@ -12,7 +14,7 @@ import {
   WorktreeLocator,
   evidenceReferenceEquals
 } from "@dalph/contracts"
-import { Config, Context, Effect, FileSystem, Layer, Option, Path, Ref, Result, Schema, Semaphore } from "effect"
+import { Config, Context, Effect, Layer, Option, Path, Ref, Result, Schema, Semaphore } from "effect"
 
 /** The opaque identity returned by one persisted Codex app-server thread. */
 export const CodexThreadId = Schema.NonEmptyString.pipe(Schema.brand("CodexThreadId"))
@@ -250,6 +252,7 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
       const launch = yield* Ref.make<Option.Option<CodexServerLaunchRecord>>(
         initial.serverLaunch === null ? Option.none() : Option.some(initial.serverLaunch)
       )
+      const snapshotGate = yield* Semaphore.make(1)
       const readAttempt = Effect.fn("CodexAttemptStore.Memory.readAttempt")(function* (
         runId: RunId,
         attemptId: AttemptId
@@ -258,15 +261,29 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
         return value === undefined ? Option.none() : Option.some(value)
       })
       const writeAttempt = Effect.fn("CodexAttemptStore.Memory.writeAttempt")(function* (record: CodexAttemptRecord) {
-        yield* Ref.update(attempts, (current) => {
-          return new Map([...current, [keyOf(record.correlationRunId, record.correlationAttemptId), record] as const])
-        })
+        yield* snapshotGate.withPermit(
+          Effect.gen(function* () {
+            const current = yield* Ref.get(attempts)
+            const next = new Map([
+              ...current,
+              [keyOf(record.correlationRunId, record.correlationAttemptId), record] as const
+            ])
+            yield* validateSnapshot(next, yield* Ref.get(launch), "writeAttempt")
+            yield* Ref.set(attempts, next)
+          })
+        )
       })
       const readServerLaunch = () => Ref.get(launch)
       const writeServerLaunch = Effect.fn("CodexAttemptStore.Memory.writeServerLaunch")(function* (
         record: CodexServerLaunchRecord
       ) {
-        yield* Ref.set(launch, Option.some(record))
+        yield* snapshotGate.withPermit(
+          Effect.gen(function* () {
+            const next = Option.some(record)
+            yield* validateSnapshot(yield* Ref.get(attempts), next, "writeServerLaunch")
+            yield* Ref.set(launch, next)
+          })
+        )
       })
       const clearServerLaunch = Effect.fn("CodexAttemptStore.Memory.clearServerLaunch")(function* (
         incarnation: CodexServerIncarnation
@@ -354,6 +371,12 @@ const privateStateFilename = "executor-private-state.json"
 const privateDirectoryMode = 0o700
 const privateFileMode = 0o600
 const privatePermissionMask = 0o077
+const privateReadOnlyFlags = nodeFs.constants.O_RDONLY | nodeFs.constants.O_NOFOLLOW
+const privateAppendFlags =
+  nodeFs.constants.O_RDWR | nodeFs.constants.O_APPEND | nodeFs.constants.O_CREAT | nodeFs.constants.O_NOFOLLOW
+const privateAppendCreateFlags = privateAppendFlags | nodeFs.constants.O_EXCL
+const privateLeaseFlags = nodeFs.constants.O_RDWR | nodeFs.constants.O_NOFOLLOW
+const privateLeaseCreateFlags = privateLeaseFlags | nodeFs.constants.O_CREAT | nodeFs.constants.O_EXCL
 
 /** Validated absolute file locator for the one private Codex state record. */
 const CodexAttemptStoreLocator = Schema.String.pipe(Schema.brand("CodexAttemptStoreLocator"))
@@ -458,6 +481,100 @@ const inspectPrivateFile = async (filename: string): Promise<PrivateFilesystemOb
   }
 }
 
+/** Observes the descriptor opened with O_NOFOLLOW, never a second path lookup. */
+const inspectPrivateDescriptor = async (file: FileHandle, filename: string): Promise<PrivateFilesystemObservation> => {
+  try {
+    const stat = await file.stat()
+    if (!stat.isFile()) return { _tag: "Failure", detail: `private state path is not a regular file: ${filename}` }
+    const uid = processUid()
+    if (uid !== undefined && stat.uid !== uid) {
+      return { _tag: "Failure", detail: `private state file is foreign: ${filename}` }
+    }
+    if ((stat.mode & privatePermissionMask) !== 0) {
+      return { _tag: "Failure", detail: `private state file is not owner-only: ${filename}` }
+    }
+    return { _tag: "Present" }
+  } catch (error) {
+    return { _tag: "Failure", detail: String(error) }
+  }
+}
+
+/** Converts descriptor observation into one typed Effect failure. */
+const validatePrivateDescriptor = (file: FileHandle, filename: string): Effect.Effect<void, Error> =>
+  Effect.promise(() => inspectPrivateDescriptor(file, filename)).pipe(
+    Effect.flatMap((observation) =>
+      observation._tag === "Failure" ? Effect.fail(new Error(observation.detail)) : Effect.void
+    )
+  )
+
+/** Opens the private snapshot once; an existing file is reopened only with O_NOFOLLOW. */
+const openPrivateAppendDescriptor = async (filename: string): Promise<FileHandle> => {
+  try {
+    return await nodeFsPromises.open(filename, privateAppendCreateFlags, privateFileMode)
+  } catch (error) {
+    return nativeErrorCode(error) === "EEXIST"
+      ? await nodeFsPromises.open(filename, privateAppendFlags)
+      : await Promise.reject(error)
+  }
+}
+
+/** Opens the crash-recoverable lease once; creation and every reopen reject symlinks. */
+const openPrivateLeaseDescriptor = async (filename: string): Promise<FileHandle> => {
+  try {
+    return await nodeFsPromises.open(filename, privateLeaseCreateFlags, privateFileMode)
+  } catch (error) {
+    return nativeErrorCode(error) === "EEXIST"
+      ? await nodeFsPromises.open(filename, privateLeaseFlags)
+      : await Promise.reject(error)
+  }
+}
+
+/** Reads a retained descriptor from offset zero without resolving its path again. */
+const readPrivateDescriptor = async (file: FileHandle): Promise<string> => {
+  const size = (await file.stat()).size
+  const bytes = Buffer.alloc(size)
+  let offset = 0
+  while (offset < size) {
+    const result = await file.read(bytes, offset, size - offset, offset)
+    if (result.bytesRead === 0) break
+    offset += result.bytesRead
+  }
+  return bytes.subarray(0, offset).toString("utf8")
+}
+
+/** Reads one private file through the no-follow descriptor that owns the read. */
+const readPrivateFile = (filename: string): Effect.Effect<string, Error> =>
+  Effect.tryPromise({
+    try: async () => {
+      const file = await nodeFsPromises.open(filename, privateReadOnlyFlags)
+      try {
+        const observation = await inspectPrivateDescriptor(file, filename)
+        return observation._tag === "Failure"
+          ? { _tag: "Failure" as const, detail: observation.detail }
+          : { _tag: "Read" as const, text: await file.readFile("utf8") }
+      } finally {
+        await file.close()
+      }
+    },
+    catch: (error) => new Error(String(error))
+  }).pipe(
+    Effect.flatMap((result) =>
+      result._tag === "Failure" ? Effect.fail(new Error(result.detail)) : Effect.succeed(result.text)
+    )
+  )
+
+/** Appends one checksummed complete snapshot; a torn final line leaves the prior record readable. */
+const appendPrivateSnapshot = (file: FileHandle, payload: string): Effect.Effect<void, Error> =>
+  Effect.tryPromise({
+    try: async () => {
+      const digest = createHash("sha256").update(payload, "utf8").digest("hex")
+      await file.writeFile(`\n${JSON.stringify({ digest, formatVersion: 1, payload })}\n`, "utf8")
+      await file.chmod(privateFileMode)
+      await file.sync()
+    },
+    catch: (error) => new Error(String(error))
+  })
+
 const validatePrivateFilesystem = (parent: string, filename: string, temporary: string, lease: string) =>
   Effect.tryPromise({
     try: async () => {
@@ -485,6 +602,33 @@ const parseSnapshot = (text: string): CodexAttemptStoreSnapshot => {
   return Schema.decodeUnknownSync(CodexAttemptStoreSnapshot)(parsed)
 }
 
+const parseSnapshotDocument = (text: string): CodexAttemptStoreSnapshot => {
+  const lines = text.split("\n").filter((line) => line.trim().length > 0)
+  for (const line of [...lines].reverse()) {
+    try {
+      const parsed: unknown = JSON.parse(line)
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "formatVersion" in parsed &&
+        parsed.formatVersion === 1 &&
+        "payload" in parsed &&
+        typeof parsed.payload === "string" &&
+        "digest" in parsed &&
+        typeof parsed.digest === "string" &&
+        createHash("sha256").update(parsed.payload, "utf8").digest("hex") === parsed.digest
+      ) {
+        return parseSnapshot(parsed.payload)
+      }
+    } catch {
+      // A torn or corrupt newest line is ignored only when an earlier complete
+      // checksummed record remains available; a plain legacy document still
+      // falls through to the strict parser below.
+    }
+  }
+  return parseSnapshot(text)
+}
+
 const encodeSnapshot = (
   attempts: ReadonlyMap<string, CodexAttemptRecord>,
   serverLaunch: Option.Option<CodexServerLaunchRecord>
@@ -494,15 +638,30 @@ const encodeSnapshot = (
     serverLaunch: Option.isSome(serverLaunch) ? serverLaunch.value : null
   })
 
+/** Validates the complete next snapshot before one store operation crosses persistence. */
+const validateSnapshot = (
+  attempts: ReadonlyMap<string, CodexAttemptRecord>,
+  serverLaunch: Option.Option<CodexServerLaunchRecord>,
+  operation: CodexAttemptStoreOperation
+): Effect.Effect<void, CodexAttemptStoreFailure> =>
+  Effect.try({
+    try: () => {
+      Schema.decodeUnknownSync(CodexAttemptStoreSnapshot)({
+        attempts: [...attempts.values()],
+        serverLaunch: Option.isSome(serverLaunch) ? serverLaunch.value : null
+      })
+    },
+    catch: (error) => new CodexAttemptStoreFailure({ detail: String(error), operation })
+  }).pipe(Effect.asVoid)
+
 /**
- * Node filesystem implementation. Writes use a same-directory temporary file
- * and rename, so a restart observes either the previous complete snapshot or
- * the next complete snapshot, never a partially written association.
+ * Node filesystem implementation. Writes append one checksummed complete
+ * record through an O_NOFOLLOW descriptor, so a restart can retain the last
+ * complete record even when a process dies during a later append.
  */
 export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
   Layer.effectContext(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const stateDirectory = yield* decodeStateDirectory(
         config.stateDirectory ??
@@ -514,13 +673,29 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
       const leaseFilename = `${filename}.lease`
       const parent = stateDirectory
       const privateFiles = yield* validatePrivateFilesystem(parent, filename, temporary, leaseFilename)
+      const snapshotFile = yield* Effect.tryPromise({
+        try: () => openPrivateAppendDescriptor(filename),
+        catch: (error) => configurationFailure(String(error))
+      })
+      yield* Effect.addFinalizer(() =>
+        Effect.tryPromise({ try: () => snapshotFile.close(), catch: () => undefined }).pipe(Effect.orDie)
+      )
+      yield* validatePrivateDescriptor(snapshotFile, filename).pipe(
+        Effect.mapError((error) => configurationFailure(error.message))
+      )
       const initial = yield* Effect.gen(function* () {
-        if (privateFiles.mainExists) return yield* fs.readFileString(filename)
-        return privateFiles.temporaryExists ? yield* fs.readFileString(temporary) : JSON.stringify(emptySnapshot)
+        if (privateFiles.mainExists) {
+          const text = yield* Effect.tryPromise({
+            try: () => readPrivateDescriptor(snapshotFile),
+            catch: (error) => new Error(String(error))
+          })
+          return text.trim().length === 0 ? JSON.stringify(emptySnapshot) : text
+        }
+        return privateFiles.temporaryExists ? yield* readPrivateFile(temporary) : JSON.stringify(emptySnapshot)
       }).pipe(
         Effect.map((text) => {
           try {
-            return { snapshot: parseSnapshot(text), failure: Option.none<CodexAttemptStoreFailure>() }
+            return { snapshot: parseSnapshotDocument(text), failure: Option.none<CodexAttemptStoreFailure>() }
           } catch (error) {
             return {
               snapshot: emptySnapshot,
@@ -565,10 +740,10 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
             Effect.gen(function* () {
               yield* validatePrivateFilesystem(parent, filename, temporary, leaseFilename)
               const text = encodeSnapshot(yield* Ref.get(attempts), yield* Ref.get(launch))
-              yield* fs.writeFileString(temporary, text, { mode: privateFileMode })
-              yield* fs.chmod(temporary, privateFileMode)
-              yield* fs.rename(temporary, filename)
-              yield* validatePrivateFilesystem(parent, filename, temporary, leaseFilename)
+              // The private state file is an append-only checksummed boundary.
+              // It never re-resolves a validated temporary path for rename;
+              // O_NOFOLLOW + one descriptor owns the write and fsync.
+              yield* appendPrivateSnapshot(snapshotFile, text)
             }).pipe(Effect.mapError((error) => new CodexAttemptStoreFailure({ detail: String(error), operation })))
           )
         )
@@ -585,8 +760,14 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
       const writeAttempt: CodexAttemptStoreService["writeAttempt"] = (record) =>
         guard(
           "writeAttempt",
-          Ref.update(attempts, (current) => {
-            return new Map([...current, [keyOf(record.correlationRunId, record.correlationAttemptId), record] as const])
+          Effect.gen(function* () {
+            const current = yield* Ref.get(attempts)
+            const next = new Map([
+              ...current,
+              [keyOf(record.correlationRunId, record.correlationAttemptId), record] as const
+            ])
+            yield* validateSnapshot(next, yield* Ref.get(launch), "writeAttempt")
+            yield* Ref.set(attempts, next)
           })
         ).pipe(
           Effect.andThen(persist("writeAttempt")),
@@ -604,7 +785,14 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
       const readServerLaunch: CodexAttemptStoreService["readServerLaunch"] = () =>
         guard("readServerLaunch", Ref.get(launch))
       const writeServerLaunch: CodexAttemptStoreService["writeServerLaunch"] = (record) =>
-        guard("writeServerLaunch", Ref.set(launch, Option.some(record))).pipe(
+        guard(
+          "writeServerLaunch",
+          Effect.gen(function* () {
+            const next = Option.some(record)
+            yield* validateSnapshot(yield* Ref.get(attempts), next, "writeServerLaunch")
+            yield* Ref.set(launch, next)
+          })
+        ).pipe(
           Effect.andThen(persist("writeServerLaunch")),
           Effect.tapError((error) =>
             Ref.set(
@@ -680,50 +868,54 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
             onSuccess: () => closeDescriptor(file, "releaseServerLease")
           })
         )
-      const readLeaseRecord = Effect.tryPromise({
-        try: () => nodeFsPromises.readFile(leaseFilename, "utf8"),
-        catch: (error) => new Error(String(error))
-      }).pipe(
-        Effect.flatMap((text) => {
-          if (text.trim().length === 0) return Effect.succeed(Option.none<CodexServerLeaseRecord>())
-          try {
-            return Effect.succeed(Option.some(Schema.decodeUnknownSync(CodexServerLeaseRecord)(JSON.parse(text))))
-          } catch (error) {
-            return Effect.fail(new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" }))
-          }
-        }),
-        Effect.mapError((error) =>
-          error instanceof CodexAttemptStoreFailure
-            ? error
-            : new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
-        )
+      const leaseFile = yield* Effect.tryPromise({
+        try: () => openPrivateLeaseDescriptor(leaseFilename),
+        catch: (error) => configurationFailure(String(error))
+      })
+      yield* Effect.addFinalizer(() => closeLeaseFile(leaseFile).pipe(Effect.orDie))
+      yield* validatePrivateDescriptor(leaseFile, leaseFilename).pipe(
+        Effect.mapError((error) => configurationFailure(error.message))
       )
-      const writeLeaseRecord = (owner: CodexServerLeaseRecord) =>
+      const readLeaseRecord = (file: FileHandle) =>
+        Effect.tryPromise({ try: () => readPrivateDescriptor(file), catch: (error) => new Error(String(error)) }).pipe(
+          Effect.flatMap((text) => {
+            if (text.trim().length === 0) return Effect.succeed(Option.none<CodexServerLeaseRecord>())
+            try {
+              return Effect.succeed(Option.some(Schema.decodeUnknownSync(CodexServerLeaseRecord)(JSON.parse(text))))
+            } catch (error) {
+              return Effect.fail(
+                new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
+              )
+            }
+          }),
+          Effect.mapError((error) =>
+            error instanceof CodexAttemptStoreFailure
+              ? error
+              : new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
+          )
+        )
+      const writeLeaseRecord = (file: FileHandle, owner: CodexServerLeaseRecord) =>
         Effect.tryPromise({
-          try: () => nodeFsPromises.writeFile(leaseFilename, JSON.stringify(owner), "utf8"),
+          try: async () => {
+            const bytes = Buffer.from(JSON.stringify(owner), "utf8")
+            await file.truncate(0)
+            await file.write(bytes, 0, bytes.byteLength, 0)
+            await file.chmod(privateFileMode)
+            await file.sync()
+          },
           catch: (error) => new Error(String(error))
-        })
-          .pipe(
-            Effect.mapError(
-              (error) => new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
-            )
+        }).pipe(
+          Effect.mapError(
+            (error) => new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
           )
-          .pipe(
-            Effect.andThen(
-              Effect.tryPromise({
-                try: () => nodeFsPromises.chmod(leaseFilename, privateFileMode),
-                catch: (error) =>
-                  new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
-              })
-            )
-          )
+        )
       const releaseAfterAcquireFailure = (file: FileHandle, failure: CodexAttemptStoreFailure) =>
-        closeLeaseFile(file).pipe(
+        nativeLock(file, "un").pipe(
           Effect.matchEffect({
             onFailure: (cleanupFailure) =>
               Effect.fail(
                 new CodexAttemptStoreFailure({
-                  detail: `${failure.detail}; lease cleanup failed: ${cleanupFailure.detail}`,
+                  detail: `${failure.detail}; lease unlock failed: ${String(cleanupFailure)}`,
                   operation: "acquireServerLease"
                 })
               ),
@@ -743,22 +935,12 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
               })
             }
             yield* validatePrivateFilesystem(parent, filename, temporary, leaseFilename)
-            const file = yield* Effect.tryPromise({
-              try: () => nodeFsPromises.open(leaseFilename, "a+", privateFileMode),
-              catch: (error) => new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
-            })
-            const leaseFileValid = yield* Effect.tryPromise({
-              try: () => inspectPrivateFile(leaseFilename),
-              catch: (error) => new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
-            })
-            if (leaseFileValid._tag !== "Present")
-              return yield* releaseAfterAcquireFailure(
-                file,
-                new CodexAttemptStoreFailure({
-                  detail: "lease file disappeared after open",
-                  operation: "acquireServerLease"
-                })
+            const file = leaseFile
+            yield* validatePrivateDescriptor(file, leaseFilename).pipe(
+              Effect.mapError(
+                (error) => new CodexAttemptStoreFailure({ detail: error.message, operation: "acquireServerLease" })
               )
+            )
             const lock = yield* nativeLock(file, "exnb").pipe(Effect.result)
             if (Result.isFailure(lock)) {
               const lockCode = errorCode(lock.failure)
@@ -769,7 +951,7 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
               if (lockCode !== "EACCES" && lockCode !== "EAGAIN" && lockCode !== "EWOULDBLOCK") {
                 return yield* releaseAfterAcquireFailure(file, lockFailure)
               }
-              const existing = yield* readLeaseRecord.pipe(Effect.result)
+              const existing = yield* readLeaseRecord(file).pipe(Effect.result)
               yield* closeDescriptor(file, "acquireServerLease")
               if (Result.isFailure(existing)) return yield* existing.failure
               if (Option.isNone(existing.success)) {
@@ -790,13 +972,13 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
               })
             }
             const inspected = yield* Effect.gen(function* () {
-              const existing = yield* readLeaseRecord
+              const existing = yield* readLeaseRecord(file)
               if (Option.isNone(existing)) {
-                yield* writeLeaseRecord(owner)
+                yield* writeLeaseRecord(file, owner)
               } else {
                 const projection = yield* observe(existing.value)
                 if (projection._tag === "Absent") {
-                  yield* writeLeaseRecord(owner)
+                  yield* writeLeaseRecord(file, owner)
                 } else if (projection._tag === "ExactLive" && sameLeaseOwner(existing.value, owner)) {
                   // The exact owner may be re-entering from one application
                   // scope; retain the newly acquired descriptor below.
@@ -825,7 +1007,11 @@ export const nodeCodexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {})
               operation: "releaseServerLease"
             })
           }
-          yield* closeLeaseFile(held.value.file)
+          yield* nativeLock(held.value.file, "un").pipe(
+            Effect.mapError(
+              (error) => new CodexAttemptStoreFailure({ detail: String(error), operation: "releaseServerLease" })
+            )
+          )
           yield* Ref.set(heldLease, Option.none())
         })
       return Context.make(CodexAttemptStore, {

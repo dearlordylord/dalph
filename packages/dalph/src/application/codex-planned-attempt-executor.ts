@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- The bounded executor chronology stays co-located for auditability. */
 import {
   AcceptedResultEvidenceManifest,
+  EvidenceDigest,
   GitCommitSha,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorCommandFailure,
@@ -12,7 +13,8 @@ import {
   plannedAttemptExecutorCorrelationKey,
   type PlannedAttemptExecutorProjection as PlannedAttemptExecutorProjectionType,
   type PlannedAttemptExecutorReport as PlannedAttemptExecutorReportType,
-  type EvidenceReference,
+  EvidenceReference,
+  evidenceReferenceEquals,
   type PlannedTaskAttempt,
   type PlannedAttemptExecutorRequest,
   type TaskWorkSpecification
@@ -42,6 +44,8 @@ import {
 /** A terminal Codex message must contain one unambiguous 40-character commit. */
 const commitPattern = /(?<![0-9a-f])([0-9a-f]{40})(?![0-9a-f])/g
 const lastElementOffset = -1
+const hexRadix = 16
+const hexByteWidth = 2
 type JsonRecord = Record<string, unknown>
 
 const isJsonRecord = (value: unknown): value is JsonRecord => typeof value === "object" && value !== null
@@ -83,6 +87,12 @@ const unavailable = (correlation: PlannedAttemptExecutorCorrelation): PlannedAtt
 const unreadable = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorProjectionType =>
   PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
 
+const initializationContradiction = (
+  correlation: PlannedAttemptExecutorCorrelation,
+  detail: string
+): PlannedAttemptExecutorProjectionType =>
+  PlannedAttemptExecutorProjection.cases.InitializationCorrelationContradiction.make({ correlation, detail })
+
 const foreign = (
   expected: PlannedAttemptExecutorCorrelation,
   observed: PlannedAttemptExecutorCorrelation
@@ -94,6 +104,8 @@ const foreign = (
 
 const sameCorrelation = (left: PlannedAttemptExecutorCorrelation, right: PlannedAttemptExecutorCorrelation): boolean =>
   left.runId === right.runId && left.attemptId === right.attemptId
+
+const sameAcceptedManifest = Schema.toEquivalence(AcceptedResultEvidenceManifest)
 
 type CodexEmptyRecord = Extract<CodexAttemptRecord, { readonly _tag: "EmptyPreTurn" }>
 type CodexAssociatedRecord = Extract<CodexAttemptRecord, { readonly _tag: "AssociatedPreTurn" }>
@@ -348,6 +360,16 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const freshOwnedTurnToken = Effect.gen(function* () {
       return CodexOwnedTurnToken.make(yield* crypto.randomUUIDv4)
     }).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({})))
+    const referenceMatchesBytes = Effect.fn("CodexPlannedAttemptExecutor.referenceMatchesBytes")(function* (
+      reference: EvidenceReference,
+      bytes: Uint8Array
+    ) {
+      const digestBytes = yield* crypto.digest("SHA-256", bytes)
+      const digest = Schema.decodeUnknownSync(EvidenceDigest)(
+        Array.from(digestBytes, (byte) => byte.toString(hexRadix).padStart(hexByteWidth, "0")).join("")
+      )
+      return evidenceReferenceEquals(reference, EvidenceReference.make({ byteLength: bytes.byteLength, digest }))
+    })
 
     const gateFor = (correlation: PlannedAttemptExecutorCorrelation) =>
       Effect.gen(function* () {
@@ -525,13 +547,16 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       const bytes = new TextEncoder().encode(JSON.stringify(manifest))
       const reference = yield* evidenceStore.value.put(bytes)
       const reread = yield* evidenceStore.value.read(reference)
+      if (!(yield* referenceMatchesBytes(reference, reread))) {
+        return yield* Effect.fail(new CodexEvidenceInvalid({}))
+      }
       let decoded: typeof AcceptedResultEvidenceManifest.Type
       try {
         decoded = Schema.decodeUnknownSync(AcceptedResultEvidenceManifest)(JSON.parse(new TextDecoder().decode(reread)))
       } catch {
         return yield* Effect.fail(new CodexEvidenceInvalid({}))
       }
-      if (decoded.commit !== commit || !sameCorrelation(decoded.correlation, correlation)) {
+      if (!sameAcceptedManifest(decoded, manifest)) {
         return yield* Effect.fail(new CodexEvidenceInvalid({}))
       }
       const rereadHead = yield* readHead(attempt)
@@ -562,13 +587,23 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       if (commitFromTurn(turn, correlation) !== record.terminal.commit)
         return yield* Effect.fail(new CodexEvidenceInvalid({}))
       const bytes = yield* evidenceStore.value.read(record.evidenceManifest)
+      if (!(yield* referenceMatchesBytes(record.evidenceManifest, bytes))) {
+        return yield* Effect.fail(new CodexEvidenceInvalid({}))
+      }
       let manifest: typeof AcceptedResultEvidenceManifest.Type
       try {
         manifest = Schema.decodeUnknownSync(AcceptedResultEvidenceManifest)(JSON.parse(new TextDecoder().decode(bytes)))
       } catch {
         return yield* Effect.fail(new CodexEvidenceInvalid({}))
       }
-      if (manifest.commit !== record.terminal.commit || !sameCorrelation(manifest.correlation, correlation)) {
+      const expectedManifest = AcceptedResultEvidenceManifest.make({
+        commit: record.terminal.commit,
+        correlation,
+        formatVersion: 1,
+        outcome: "Accepted",
+        predecessor: null
+      })
+      if (!sameAcceptedManifest(manifest, expectedManifest)) {
         return yield* Effect.fail(new CodexEvidenceInvalid({}))
       }
       const head = yield* readHead(attempt)
@@ -909,7 +944,11 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       } catch (error) {
         if (error instanceof ForeignAttemptRecord) return foreign(correlation, error.observed)
         if (error instanceof CodexAppServerFailure) {
-          return error.kind === "Unavailable" ? unavailable(correlation) : unreadable(correlation)
+          if (error.kind === "Unavailable") return unavailable(correlation)
+          if (error.kind === "CorrelationContradiction" && error.operation === "initialize") {
+            return initializationContradiction(correlation, error.detail)
+          }
+          return unreadable(correlation)
         }
         if (storeFailure(error)) return unreadable(correlation)
         return unreadable(correlation)
@@ -922,7 +961,11 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
           Effect.catch((error: unknown) => {
             if (error instanceof ForeignAttemptRecord) return Effect.succeed(foreign(correlation, error.observed))
             if (error instanceof CodexAppServerFailure) {
-              return Effect.succeed(error.kind === "Unavailable" ? unavailable(correlation) : unreadable(correlation))
+              if (error.kind === "Unavailable") return Effect.succeed(unavailable(correlation))
+              if (error.kind === "CorrelationContradiction" && error.operation === "initialize") {
+                return Effect.succeed(initializationContradiction(correlation, error.detail))
+              }
+              return Effect.succeed(unreadable(correlation))
             }
             if (storeFailure(error)) return Effect.succeed(unreadable(correlation))
             return Effect.succeed(unreadable(correlation))
