@@ -386,6 +386,39 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       )
     })
 
+    const rereadAccepted = Effect.fn("CodexPlannedAttemptExecutor.rereadAccepted")(function* (
+      attempt: CodexAttemptContext,
+      correlation: PlannedAttemptExecutorCorrelation,
+      record: CodexAttemptRecord,
+      turn: CodexTurnSnapshot
+    ) {
+      if (record.terminal?._tag !== "Accepted" || record.evidenceManifest === null) {
+        return yield* Effect.fail(new CodexEvidenceInvalid({}))
+      }
+      if (Option.isNone(evidenceStore)) return yield* Effect.fail(new CodexEvidenceUnavailable({}))
+      if (commitFromTurn(turn) !== record.terminal.commit) return yield* Effect.fail(new CodexEvidenceInvalid({}))
+      const bytes = yield* evidenceStore.value.read(record.evidenceManifest)
+      let manifest: typeof AcceptedResultEvidenceManifest.Type
+      try {
+        manifest = Schema.decodeUnknownSync(AcceptedResultEvidenceManifest)(JSON.parse(new TextDecoder().decode(bytes)))
+      } catch {
+        return yield* Effect.fail(new CodexEvidenceInvalid({}))
+      }
+      if (manifest.commit !== record.terminal.commit || !sameCorrelation(manifest.correlation, correlation)) {
+        return yield* Effect.fail(new CodexEvidenceInvalid({}))
+      }
+      const head = yield* readHead(attempt)
+      if (head === undefined || head !== record.terminal.commit) {
+        return yield* Effect.fail(new CodexGitObservationUnknown({}))
+      }
+      return terminal(
+        correlation,
+        PlannedAttemptExecutorResult.cases.Accepted.make({
+          acceptedResult: { commit: record.terminal.commit, evidenceManifest: record.evidenceManifest }
+        })
+      )
+    })
+
     const failed = Effect.fn("CodexPlannedAttemptExecutor.failed")(function* (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
@@ -410,6 +443,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       }
       const turn = reconciliation.turn
       if (turn?.status === "completed") {
+        if (record.phase === "Terminal" && record.terminal?._tag === "Accepted") {
+          return yield* rereadAccepted(attempt, correlation, record, turn)
+        }
         return yield* accepted(attempt, correlation, record, turn)
       }
       return yield* failed(attempt, correlation, record, turn?.id ?? record.turnId)
@@ -514,7 +550,11 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
             return yield* terminalOrRunning(attempt, correlation, record, reconciliation)
           return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
         }
-        return existingReport
+        const reconciliation = yield* reconcile(attempt, correlation, record)
+        if (reconciliation._tag === "Terminal")
+          return yield* terminalOrRunning(attempt, correlation, record, reconciliation)
+        if (reconciliation._tag === "Running") return running(correlation)
+        return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       }
       if (record.phase === "EmptyPreTurn") {
         record = yield* allocateThread(attempt, correlation)
@@ -617,7 +657,25 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         if (!sameCorrelation(observed, correlation)) return foreign(correlation, observed)
         if (record.phase === "EmptyPreTurn") return noReport(correlation)
         const existingReport = reportForRecord(correlation, record)
-        if (record.phase === "Terminal" && existingReport !== undefined) return exact(existingReport)
+        if (record.phase === "Terminal" && existingReport !== undefined) {
+          const reconciliation = yield* reconcile(
+            { attemptId: correlation.attemptId, runId: correlation.runId, worktree: record.worktree },
+            correlation,
+            record
+          )
+          if (reconciliation._tag === "Terminal") {
+            return exact(
+              yield* terminalOrRunning(
+                { attemptId: correlation.attemptId, runId: correlation.runId, worktree: record.worktree },
+                correlation,
+                record,
+                reconciliation
+              )
+            )
+          }
+          if (reconciliation._tag === "Running") return exact(running(correlation))
+          return unreadable(correlation)
+        }
         if (record.threadId === null) return unreadable(correlation)
         const attempt: CodexAttemptContext = {
           attemptId: correlation.attemptId,

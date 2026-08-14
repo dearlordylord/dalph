@@ -145,3 +145,28 @@ it.effect("fails closed on duplicate private attempt correlations", () =>
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
+
+it.effect("fails closed when one Codex thread is aliased to multiple attempts", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-alias-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const second = CodexAttemptRecord.make({
+        ...associated,
+        attemptId: AttemptId.make("attempt:issue-58-store:1"),
+        correlationAttemptId: AttemptId.make("attempt:issue-58-store:1")
+      })
+      yield* fileSystem.writeFileString(
+        storePath,
+        JSON.stringify({ attempts: [associated, second], serverLaunch: null })
+      )
+      const result = yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        return yield* store.readAttempt(attempt.runId, attempt.attemptId)
+      }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)

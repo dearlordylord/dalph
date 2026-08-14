@@ -281,6 +281,14 @@ it.effect("persists the exact association before the first turn and seals Accept
     if (projected._tag === "Exact" && projected.report._tag === "Terminal") {
       expect(projected.report.result._tag).toBe("Accepted")
     }
+
+    const resumeCountBeforeRestart = harness.resumeCwds.length
+    const restarted = yield* Effect.gen(function* () {
+      const restartedExecutor = yield* PlannedAttemptExecutor
+      return yield* restartedExecutor.startOrContinue(request)
+    }).pipe(Effect.provide(layerFor(harness)))
+    expect(restarted._tag).toBe("Terminal")
+    expect(harness.resumeCwds.length).toBeGreaterThan(resumeCountBeforeRestart)
   }).pipe(Effect.provide(layerFor(harness)))
 })
 

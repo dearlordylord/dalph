@@ -112,9 +112,13 @@ export const CodexAttemptStoreSnapshot = Schema.Struct({
 }).check(
   Schema.makeFilter((snapshot) => {
     const keys = new Set(snapshot.attempts.map((record) => keyOf(record.correlationRunId, record.correlationAttemptId)))
-    return keys.size === snapshot.attempts.length
+    if (keys.size !== snapshot.attempts.length) return "private attempt snapshot contains duplicate correlations"
+    const threadIds = new Set(
+      snapshot.attempts.flatMap((record) => (record.threadId === null ? [] : [record.threadId]))
+    )
+    return threadIds.size === snapshot.attempts.filter((record) => record.threadId !== null).length
       ? undefined
-      : "private attempt snapshot contains duplicate correlations"
+      : "private attempt snapshot aliases one Codex thread to multiple attempts"
   })
 )
 export type CodexAttemptStoreSnapshot = typeof CodexAttemptStoreSnapshot.Type
