@@ -1,4 +1,5 @@
 import { expect, it } from "vitest"
+import { Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
@@ -15,10 +16,23 @@ import {
   CompletionClaimReplacedEvent,
   CompletionClaimReplacementAttemptIntendedEvent,
   CompletionClaimReplacementIntendedEvent,
+  CompletionClaimFinalityJournalEvent,
+  CompletionTaskAcknowledgement,
+  CompletionTaskAcknowledgedEvent,
+  CompletionTaskAttemptIntendedEvent,
+  CompletionTaskCandidateAncestryObservedEvent,
+  CompletionTaskCandidateAncestryReadIntendedEvent,
+  CompletionTaskRejectedEvent,
+  CompletionTaskRequestLookup,
+  CompletionTaskRequestLookupIntendedEvent,
+  CompletionTaskRequestLookupObservedEvent,
+  CompletionTaskRequestOrdinal,
+  CompletionTaskResponseLostEvent,
   CompletionClaimRequestOrdinal,
   CompletionTaskClaim,
   CompletionTaskIntendedEvent,
   completionTaskRequestFor,
+  IntegrationFinalityJournalEvent,
   IntegrationFinalitySettledEvent
 } from "./events.js"
 import {
@@ -27,7 +41,11 @@ import {
   makeIntegrationFinalityHistoryIndexes,
   validateIntegrationFinalityHistoryRecord
 } from "./history.js"
-import { deriveIntegrationFinalityStateFor, latestFocusedCompletedTaskObservationFor } from "./state.js"
+import {
+  deriveIntegrationFinalityStateFor,
+  isFinalityOccurrence,
+  latestFocusedCompletedTaskObservationFor
+} from "./state.js"
 import { integrationFinalityFixture as fixture, prerequisiteRecordEvents } from "./fixtures.js"
 import { makeCompletionTaskFactsObservationOperation, makeTaskAttemptPlanOperation } from "../../registry/operation.js"
 import { taskTrackerReadIntent, TaskAttemptPlannedEvent } from "../../registry/event.js"
@@ -221,6 +239,112 @@ it("projects each phase from exact stored evidence without rescanning authority 
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 10), fixture.claim)?._tag).toBe("DeletionPending")
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 12), fixture.claim)?._tag).toBe("CompletionClaimDeleted")
   expect(deriveIntegrationFinalityStateFor(records, fixture.claim)?._tag).toBe("IntegrationFinalitySettled")
+})
+
+it("keeps every finality event accepted while excluding unrelated or malformed records", () => {
+  const claimOrdinal = CompletionClaimRequestOrdinal.make(1)
+  const taskOrdinal = CompletionTaskRequestOrdinal.make(1)
+  const request = fixture.completionRequest
+  const focusedFactsOperationId = fixture.focusedSuccessFactsEvent.operationId
+  const candidateAncestryOperationId = OperationId.make("history-candidate-ancestry")
+  const lookupOperationId = OperationId.make("history-request-lookup")
+  const claimEvents = validFinalityRecords().flatMap(({ event }) =>
+    Schema.is(CompletionClaimFinalityJournalEvent)(event) ? [event] : []
+  )
+  const finalityEvents = [
+    ...claimEvents,
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: fixture.claim,
+      purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+        attemptOrdinal: claimOrdinal,
+        readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+      }),
+      replacementOperationId,
+      request: { claim: fixture.claim, operationId: deletionOperationId, successObservation },
+      version: workflowJournalEventVersion
+    }),
+    CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion }),
+    CompletionTaskAttemptIntendedEvent.make({
+      attemptOrdinal: taskOrdinal,
+      focusedFactsOperationId,
+      gitReadOperationId: candidateAncestryOperationId,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionTaskAcknowledgedEvent.make({
+      acknowledgement: CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId: request.taskId }),
+      attemptOrdinal: taskOrdinal,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionTaskResponseLostEvent.make({
+      attemptOrdinal: taskOrdinal,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionTaskRejectedEvent.make({
+      attemptOrdinal: taskOrdinal,
+      detail: "controlled rejection",
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionTaskCandidateAncestryReadIntendedEvent.make({
+      attemptOrdinal: taskOrdinal,
+      operationId: candidateAncestryOperationId,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionTaskCandidateAncestryObservedEvent.make({
+      attemptOrdinal: taskOrdinal,
+      observation: { _tag: "CandidateCurrent", currentHeadSha: fixture.promotionCorrelation.candidateCommit },
+      operationId: candidateAncestryOperationId,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionTaskRequestLookupIntendedEvent.make({
+      attemptOrdinal: taskOrdinal,
+      operationId: lookupOperationId,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionTaskRequestLookupObservedEvent.make({
+      attemptOrdinal: taskOrdinal,
+      lookup: CompletionTaskRequestLookup.cases.NotApplied.make({ request }),
+      operationId: lookupOperationId,
+      request,
+      version: workflowJournalEventVersion
+    })
+  ]
+
+  expect(finalityEvents.map(({ _tag }) => _tag).toSorted((left, right) => left.localeCompare(right))).toEqual(
+    [
+      "CompletionClaimDeletionAttemptIntended",
+      "CompletionClaimDeleted",
+      "CompletionClaimDeletionIntended",
+      "CompletionClaimDeletionReadObserved",
+      "CompletionClaimReplaced",
+      "CompletionClaimReplacementAttemptIntended",
+      "CompletionClaimReplacementIntended",
+      "CompletionTaskAcknowledged",
+      "CompletionTaskAttemptIntended",
+      "CompletionTaskCandidateAncestryObserved",
+      "CompletionTaskCandidateAncestryReadIntended",
+      "CompletionTaskIntended",
+      "CompletionTaskRejected",
+      "CompletionTaskRequestLookupIntended",
+      "CompletionTaskRequestLookupObserved",
+      "CompletionTaskResponseLost",
+      "IntegrationFinalitySettled"
+    ].toSorted((left, right) => left.localeCompare(right))
+  )
+  expect(
+    finalityEvents.map((event, index) => isFinalityOccurrence({ event, position: JournalPosition.make(index + 1) }))
+  ).toEqual(finalityEvents.map((event) => Schema.is(IntegrationFinalityJournalEvent)(event)))
+  expect(
+    [fixture.promotionSuccess, fixture.graphRecordEvent, null, 42, { _tag: "CompletionTaskRejected" }].map((event) =>
+      isFinalityOccurrence({ event, position: JournalPosition.make(1) })
+    )
+  ).toEqual([false, false, false, false, false])
 })
 
 it("does not settle from a terminal occurrence with different operation evidence", () => {

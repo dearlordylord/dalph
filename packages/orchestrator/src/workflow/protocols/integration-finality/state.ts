@@ -117,10 +117,39 @@ export const latestFocusedCompletedTaskObservationFor = (
   return latestObservation
 }
 
-const isFinalityOccurrence = (
+/** The exact runtime tags whose schemas make up one integration-finality occurrence. */
+const integrationFinalityJournalEventTags = {
+  CompletionClaimReplacementIntended: true,
+  CompletionClaimReplacementAttemptIntended: true,
+  CompletionClaimReplaced: true,
+  CompletionClaimDeletionIntended: true,
+  CompletionClaimDeletionAttemptIntended: true,
+  CompletionClaimDeleted: true,
+  IntegrationFinalitySettled: true,
+  CompletionClaimDeletionReadObserved: true,
+  CompletionTaskIntended: true,
+  CompletionTaskAttemptIntended: true,
+  CompletionTaskAcknowledged: true,
+  CompletionTaskResponseLost: true,
+  CompletionTaskRejected: true,
+  CompletionTaskCandidateAncestryReadIntended: true,
+  CompletionTaskCandidateAncestryObserved: true,
+  CompletionTaskRequestLookupIntended: true,
+  CompletionTaskRequestLookupObserved: true
+} as const satisfies Record<IntegrationFinalityJournalEvent["_tag"], true>
+
+export const isFinalityOccurrence = (
   occurrence: IntegrationFinalityJournalOccurrence
-): occurrence is IntegrationFinalityJournalOccurrence & { readonly event: IntegrationFinalityJournalEvent } =>
-  Schema.is(IntegrationFinalityJournalEvent)(occurrence.event)
+): occurrence is IntegrationFinalityJournalOccurrence & { readonly event: IntegrationFinalityJournalEvent } => {
+  const event = occurrence.event
+  if (typeof event !== "object" || event === null || !("_tag" in event)) return false
+  const tag = event._tag
+  return (
+    typeof tag === "string" &&
+    Object.hasOwn(integrationFinalityJournalEventTags, tag) &&
+    Schema.is(IntegrationFinalityJournalEvent)(event)
+  )
+}
 
 type ClaimFinalityEvent = CompletionClaimFinalityJournalEvent
 type ClaimFinalityOccurrence = IntegrationFinalityJournalOccurrence & { readonly event: ClaimFinalityEvent }
