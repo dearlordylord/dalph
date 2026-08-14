@@ -14,7 +14,13 @@ import {
   makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { GitCommand, memoryEvidenceStoreLayer } from "@dalph/orchestrator"
+import {
+  type EvidenceStore,
+  GitCommand,
+  GitCommandInvocationFailure,
+  memoryEvidenceStoreLayer,
+  type GitCommandService
+} from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
 import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
@@ -230,18 +236,22 @@ const makeHarness = (
   }
 }
 
-const layerFor = (harness: Harness) =>
+const layerFor = (
+  harness: Harness,
+  gitCommand: GitCommandService = {
+    run: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
+    runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: `${head}\n` }),
+    runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
+  },
+  evidenceStore: Layer.Layer<EvidenceStore> = memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer))
+) =>
   codexPlannedAttemptExecutorLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
         controlledCodexAppServerLayer(harness.app),
         Layer.succeed(CodexAttemptStore, harness.store),
-        Layer.succeed(GitCommand, {
-          run: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
-          runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: `${head}\n` }),
-          runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
-        }),
-        memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer))
+        Layer.succeed(GitCommand, gitCommand),
+        evidenceStore
       )
     )
   )
@@ -303,6 +313,24 @@ it.effect("seals Failed on commit mismatch and never reports Completed", () => {
     expect(again).toEqual(failed)
     expect(JSON.stringify(failed)).not.toContain("Completed")
   }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("does not seal Failed when Git head observation is unavailable", () => {
+  const harness = makeHarness()
+  const unavailableGit: GitCommandService = {
+    run: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
+    runInWorktree: () => Effect.fail(new GitCommandInvocationFailure({ detail: "git unavailable" })),
+    runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
+  }
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.complete(`Commit ${head}`)
+    const result = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    expect(result._tag).toBe("Failure")
+    const projected = yield* executor.project(correlation)
+    expect(projected._tag).toBe("Unreadable")
+  }).pipe(Effect.provide(layerFor(harness, unavailableGit)))
 })
 
 it.effect("lets a terminal result win the suspension race and keeps owned activity running", () => {

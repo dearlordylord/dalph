@@ -45,6 +45,25 @@ process.stdin.on("data", (chunk) => {
 })
 `
 
+const malformedInitializationServer = String.raw`#!/usr/bin/env node
+let buffer = ""
+process.stdin.setEncoding("utf8")
+process.stdin.on("data", (chunk) => {
+  buffer += chunk
+  while (buffer.includes("\n")) {
+    const index = buffer.indexOf("\n")
+    const line = buffer.slice(0, index)
+    buffer = buffer.slice(index + 1)
+    if (line.trim() === "") continue
+    const message = JSON.parse(line)
+    if (message.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: "malformed" }) + "\n")
+      process.exit(0)
+    }
+  }
+})
+`
+
 it.effect("speaks the normalized app-server protocol with exact per-call cwd", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -113,6 +132,25 @@ it.effect("reconciles a surviving prior server incarnation before launching a re
       expect(Exit.isSuccess(result)).toBe(true)
       expect(observations).toEqual(["ExactLive", "ExactLive", "Absent"])
       expect(stopped).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("fails closed when initialization decodes to an invalid protocol shape", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-app-server-malformed-" })
+      const executable = path.join(root, "fixture-codex-malformed")
+      yield* fileSystem.writeFileString(executable, malformedInitializationServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      const appLayer = codexAppServerNodeLayer({ executable }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        return yield* app.startThread("/exact/worktree")
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

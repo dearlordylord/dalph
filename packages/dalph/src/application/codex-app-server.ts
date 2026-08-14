@@ -467,6 +467,17 @@ const responseObject = (
   return value
 }
 
+const CodexInitializeResponse = Schema.Struct({})
+
+const normalizeInitializeResponse = (value: unknown): CodexAppServerFailure | true => {
+  try {
+    Schema.decodeUnknownSync(CodexInitializeResponse)(value)
+    return true
+  } catch (error) {
+    return operationFailure("initialize", "Malformed", error)
+  }
+}
+
 /** Default app-server executable and ambient-only protocol options. */
 export interface CodexAppServerLayerConfig {
   readonly executable?: string
@@ -481,6 +492,22 @@ const defaultConfig: Required<CodexAppServerLayerConfig> = {
 }
 
 const newIncarnation = (): CodexServerIncarnation => CodexServerIncarnation.make(randomUUID())
+
+const unavailableAppServer = (failure: CodexAppServerFailure): CodexAppServerService => {
+  const fail = (operation: CodexAppServerOperation) =>
+    Effect.fail(new CodexAppServerFailure({ operation, kind: failure.kind, detail: failure.detail }))
+  return {
+    incarnation: newIncarnation(),
+    startThread: () => fail("thread/start"),
+    readThread: () => fail("thread/read"),
+    resumeThread: () => fail("thread/resume"),
+    startTurn: () => fail("turn/start"),
+    interruptTurn: () => fail("turn/interrupt"),
+    listBackgroundTerminals: () => fail("thread/backgroundTerminals/list"),
+    terminateBackgroundTerminal: () => fail("thread/backgroundTerminals/terminate"),
+    close: Effect.void
+  }
+}
 
 const awaitOwnedProcessAbsent = (
   ownership: CodexProcessOwnershipService,
@@ -594,9 +621,11 @@ export const codexAppServerLayer = (
         .writeServerLaunch(liveLaunch)
         .pipe(Effect.catch((error) => closeHandle.pipe(Effect.andThen(Effect.fail(error)))))
       const rpc = yield* makeJsonRpcClient(handle, liveIncarnation)
-      yield* rpc.request("initialize", "initialize", {
+      const initializeResponse = yield* rpc.request("initialize", "initialize", {
         clientInfo: { name: selected.clientName, version: selected.clientVersion }
       })
+      const normalizedInitialize = normalizeInitializeResponse(initializeResponse)
+      if (normalizedInitialize !== true) return yield* Effect.fail(normalizedInitialize)
       yield* rpc.notify("initialized")
       const startThread = Effect.fn("CodexAppServer.startThread")(function* (cwd: string) {
         const response = responseObject(
@@ -692,7 +721,11 @@ export const codexAppServerLayer = (
         terminateBackgroundTerminal,
         close
       } satisfies CodexAppServerService
-    })
+    }).pipe(
+      Effect.catch((error) =>
+        error instanceof CodexAppServerFailure ? Effect.succeed(unavailableAppServer(error)) : Effect.fail(error)
+      )
+    )
   )
 
 /** Node process ownership projection used by the default app-server layer. */

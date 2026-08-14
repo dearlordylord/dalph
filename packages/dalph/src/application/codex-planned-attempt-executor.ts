@@ -350,9 +350,12 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     ) {
       const commit = commitFromTurn(turn)
       const head = yield* readHead(attempt)
-      if (commit === undefined || head === undefined || commit !== head || Option.isNone(evidenceStore)) {
+      if (commit === undefined) {
         return yield* failed(attempt, correlation, record, turn.id)
       }
+      if (head === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
+      if (commit !== head) return yield* failed(attempt, correlation, record, turn.id)
+      if (Option.isNone(evidenceStore)) return yield* Effect.fail(new CodexEvidenceUnavailable({}))
       const manifest = AcceptedResultEvidenceManifest.make({
         commit,
         correlation,
@@ -367,15 +370,14 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       try {
         decoded = Schema.decodeUnknownSync(AcceptedResultEvidenceManifest)(JSON.parse(new TextDecoder().decode(reread)))
       } catch {
-        return yield* failed(attempt, correlation, record, turn.id)
+        return yield* Effect.fail(new CodexEvidenceInvalid({}))
       }
       if (decoded.commit !== commit || !sameCorrelation(decoded.correlation, correlation)) {
-        return yield* failed(attempt, correlation, record, turn.id)
+        return yield* Effect.fail(new CodexEvidenceInvalid({}))
       }
       const rereadHead = yield* readHead(attempt)
-      if (rereadHead === undefined || rereadHead !== commit) {
-        return yield* failed(attempt, correlation, record, turn.id)
-      }
+      if (rereadHead === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
+      if (rereadHead !== commit) return yield* Effect.fail(new CodexGitObservationUnknown({}))
       const sealed = CodexSealedTerminal.cases.Accepted.make({ commit, evidenceManifest: reference })
       yield* save(recordFor(attempt, "Terminal", record.threadId, turn.id, true, sealed, reference))
       return terminal(
@@ -408,9 +410,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       }
       const turn = reconciliation.turn
       if (turn?.status === "completed") {
-        return yield* accepted(attempt, correlation, record, turn).pipe(
-          Effect.catch(() => failed(attempt, correlation, record, turn.id))
-        )
+        return yield* accepted(attempt, correlation, record, turn)
       }
       return yield* failed(attempt, correlation, record, turn?.id ?? record.turnId)
     })
@@ -699,3 +699,12 @@ class ForeignAttemptRecord extends Schema.TaggedError<ForeignAttemptRecord>()("F
 class CodexThreadMismatch extends Schema.TaggedError<CodexThreadMismatch>()("CodexThreadMismatch", {}) {}
 
 class CodexTurnBoundaryUnknown extends Schema.TaggedError<CodexTurnBoundaryUnknown>()("CodexTurnBoundaryUnknown", {}) {}
+
+class CodexGitObservationUnknown extends Schema.TaggedError<CodexGitObservationUnknown>()(
+  "CodexGitObservationUnknown",
+  {}
+) {}
+
+class CodexEvidenceUnavailable extends Schema.TaggedError<CodexEvidenceUnavailable>()("CodexEvidenceUnavailable", {}) {}
+
+class CodexEvidenceInvalid extends Schema.TaggedError<CodexEvidenceInvalid>()("CodexEvidenceInvalid", {}) {}
