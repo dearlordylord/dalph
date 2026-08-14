@@ -188,7 +188,8 @@ typed contradiction. A different request cannot reuse K1 because only the claim 
 allocates claim identities. If the tracker reports a foreign K2, Dalph
 preserves K2 and records a terminal foreign-claim rejection for that exact
 acquisition intent. Restart reconstructs the rejection and never retries that
-request, even if K2 later disappears; a later loss requires a new request.
+request; it rereads and preserves exact K2 rather than replaying the earlier
+missing observation. A later loss requires a new request.
 Only a fresh unclaimed observation may authorize creation of K3. Reacquiring
 capacity and deciding whether preserved P1 may continue remain independent
 later decisions.
@@ -220,23 +221,23 @@ because K3 was acquired.
   to admission.
 - `records a foreign claim from an authored recovery story and safely suspends
   only its attempt` is the maintained authored/recorded foreign-observation
-  story and proves K2 remains untouched. The terminal acquisition-conflict
-  chronology is covered by `records a foreign acquisition rejection as terminal
-  and never reconstructs a retry` in
-  `packages/orchestrator/src/workflow-journal/journaled-claim-acquisition.test.ts`
-  and by the rejection-entry projection and alpha-renaming round-trip in
-  `alpha-renames every Dalph-generated identity and preserves tracker
-  revisions, task revisions, and Git SHAs` in
-  `packages/dalph/test/cassettes/scenario.test.ts`; the two evidence cuts are
-  intentionally separate because the public authored coordinator runner does
-  not turn a failed recovery action into a second authored terminal assertion.
+  story and proves K2 remains untouched. The maintained
+  `records a foreign reacquisition rejection and never retries it after the
+  next activation` cassette drives the genuine process-death boundary,
+  rereads exact K2 through the controlled provider, asserts exact equality and
+  no post-rejection claim mutation or retry, and projects the rejection through
+  the recorded round trip. The provider-neutral terminal acquisition outcome
+  remains covered by `records a foreign acquisition rejection as terminal and
+  never reconstructs a retry` in
+  `packages/orchestrator/src/workflow-journal/journaled-claim-acquisition.test.ts`.
 - `rereads tracker authority after an ambiguously applied acquisition` proves
   intent-before-effect reconciliation after a lost response.
 - `stops when atomic acquisition reports a competing claim` proves a foreign
   K2 is preserved.
 - `records a foreign acquisition rejection as terminal and never reconstructs
   a retry` proves the definite conflict is journaled as the intent's terminal
-  outcome and remains non-runnable across restart even if K2 later disappears.
+  outcome and remains non-runnable across restart; the maintained authored
+  cassette additionally proves the restarted current read preserves exact K2.
 - `requires a prior matching applied Operator direction for a reacquisition
   intent` proves malformed history cannot manufacture replacement authority,
   directions applied after exact or unreadable evidence cannot authorize a

@@ -70,7 +70,14 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
                 tracker
                   .acquireTaskClaim(acquisition)
                   .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim))),
-              onSome: ({ observed }) => Effect.fail(new TaskClaimConflict({ attempted: acquisition, observed }))
+              onSome: ({ observed }) =>
+                Effect.gen(function* () {
+                  // A definite conflict is a provider observation, not a
+                  // mutation. Retain K2 so a later activation's current read
+                  // cannot regress to the earlier missing observation.
+                  yield* setObservation(acquisition.taskId, observed)
+                  return yield* Effect.fail(new TaskClaimConflict({ attempted: acquisition, observed }))
+                })
             })
           )
         )

@@ -1666,7 +1666,10 @@ export const changedAttemptReacquisitionForeignConflictAuthoredCassette: Scenari
       title: "Implement singleton"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
-    { _tag: "TaskClaimReadReturned", observation: { _tag: "UnclaimedTask", taskId: "A" } },
+    // The restarted coordinator performs a current read; the controlled
+    // tracker must retain K2 from the conflict boundary rather than replaying
+    // the earlier missing observation.
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     {

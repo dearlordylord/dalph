@@ -5306,19 +5306,31 @@ it.effect("records a foreign reacquisition rejection and never retries it after 
       )
     ).toBe(false)
 
-    const laterMissingObservation = run.records.find(
+    const rejectionPosition = run.records.find(({ event }) => event._tag === "TaskClaimAcquisitionRejected")?.position
+    if (rejectionPosition === undefined) return yield* Effect.die("missing rejection position")
+    const laterForeignObservation = run.records.find(
       ({ event, position }) =>
-        position >
-          (run.records.find(({ event }) => event._tag === "TaskClaimAcquisitionRejected")?.position ??
-            Number.MAX_SAFE_INTEGER) &&
+        position > rejectionPosition &&
         event._tag === "TaskTrackerFactsObserved" &&
-        event.observation._tag === "FocusedTaskClaimFacts" &&
-        event.observation.observation._tag === "UnclaimedTask"
+        event.observation._tag === "FocusedTaskClaimFacts"
     )?.event
-    expect(laterMissingObservation).toMatchObject({
-      _tag: "TaskTrackerFactsObserved",
-      observation: { observation: { _tag: "UnclaimedTask", taskId: "A" } }
-    })
+    if (
+      laterForeignObservation?._tag !== "TaskTrackerFactsObserved" ||
+      laterForeignObservation.observation._tag !== "FocusedTaskClaimFacts"
+    ) {
+      return yield* Effect.die("missing post-restart foreign claim observation")
+    }
+    expect(laterForeignObservation.observation.observation).toEqual(rejection.observed)
+    expect(
+      run.records.filter(
+        ({ event, position }) =>
+          position > rejectionPosition &&
+          (event._tag === "TaskClaimAcquisitionIntended" ||
+            event._tag === "TaskClaimAcquired" ||
+            event._tag === "TaskClaimReleaseIntended" ||
+            event._tag === "TaskClaimReleased")
+      )
+    ).toHaveLength(0)
 
     const recorded = yield* projectRecordedCassette(run.records)
     expect(recorded.entries).toContainEqual(
