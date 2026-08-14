@@ -1,12 +1,17 @@
 import { it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Ref, Scope } from "effect"
 import { expect } from "vitest"
-import { ApplicationExitResult, type ApplicationExitRequestBoundaryService } from "@dalph/orchestrator"
+import {
+  ApplicationExitResult,
+  type ApplicationExitRequestBoundaryService,
+  CoordinatorOwnership
+} from "@dalph/orchestrator"
 import {
   type ApplicationHostProcessBoundary,
   type LinuxSupervisorSignalBoundary,
   installLinuxSupervisorExitSignalAdapter,
   makeApplicationHostLifecyclePorts,
+  makeLinuxSupervisorApplicationExitHost,
   makeNodeApplicationHostProcessBoundary
 } from "./supervisor-exit.js"
 
@@ -84,6 +89,31 @@ it.effect("reports the lifecycle result before requesting the exact process stat
     yield* ports.processLifecycle.requestEnd({ _tag: "RequestForcedTermination", status: 1 })
 
     expect(yield* Ref.get(chronology)).toEqual(["reported:ExitResultReported", "ended:1"])
+  })
+)
+
+it.effect("composes the application Exit shell with the scoped Linux host boundary", () =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make()
+    const signals = yield* controlledSignalBoundary()
+    const host: ApplicationHostProcessBoundary = {
+      ...signals.boundary,
+      reportLifecycleEvent: () => Effect.void,
+      requestProcessEnd: () => Effect.void
+    }
+
+    const shell = yield* makeLinuxSupervisorApplicationExitHost(
+      CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
+      host
+    ).pipe(Scope.provide(scope))
+
+    expect(shell.requestBoundary.requestExit).toBeDefined()
+    expect(signals.listener()).toBeTypeOf("function")
+
+    yield* Scope.close(scope, Exit.void)
+
+    expect(signals.listener()).toBeUndefined()
+    expect(yield* Ref.get(signals.removals)).toBe(1)
   })
 )
 
