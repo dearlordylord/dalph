@@ -1,3 +1,7 @@
+/* eslint-disable import/no-nodejs-modules -- the lease adapter owns the native descriptor lock. */
+/* eslint-disable max-lines -- The private snapshot and crash-recoverable lease share one durable authority. */
+import nodeFsPromises, { type FileHandle } from "node:fs/promises"
+import { flock, type FlockFlagString } from "fs-ext-extra-prebuilt"
 import {
   AttemptId,
   EvidenceReference,
@@ -6,7 +10,7 @@ import {
   WorktreeLocator,
   evidenceReferenceEquals
 } from "@dalph/contracts"
-import { Context, Effect, FileSystem, Layer, Option, Path, Ref, Schema, Semaphore } from "effect"
+import { Context, Effect, FileSystem, Layer, Option, Path, Ref, Result, Schema, Semaphore } from "effect"
 
 /** The opaque identity returned by one persisted Codex app-server thread. */
 export const CodexThreadId = Schema.NonEmptyString.pipe(Schema.brand("CodexThreadId"))
@@ -23,6 +27,14 @@ export type CodexOwnedTurnToken = typeof CodexOwnedTurnToken.Type
 /** Identifies one launch incarnation of the application-owned app-server child. */
 export const CodexServerIncarnation = Schema.NonEmptyString.pipe(Schema.brand("CodexServerIncarnation"))
 export type CodexServerIncarnation = typeof CodexServerIncarnation.Type
+
+/** Exact process-start identity persisted with a crash-recoverable server lease. */
+export const CodexProcessIdentity = Schema.NonEmptyString.pipe(Schema.brand("CodexProcessIdentity"))
+export type CodexProcessIdentity = typeof CodexProcessIdentity.Type
+
+/** Fresh lease incarnation distinguishing one owner acquisition from its predecessors. */
+export const CodexServerLeaseIncarnation = Schema.NonEmptyString.pipe(Schema.brand("CodexServerLeaseIncarnation"))
+export type CodexServerLeaseIncarnation = typeof CodexServerLeaseIncarnation.Type
 
 /** A sealed private terminal result; the generic executor deliberately has no Completed state here. */
 export const CodexSealedTerminal = Schema.TaggedUnion({
@@ -147,6 +159,21 @@ export const CodexServerLaunchRecord = Schema.Struct({
 )
 export type CodexServerLaunchRecord = typeof CodexServerLaunchRecord.Type
 
+/** Durable identity of the process holding the app-server admission lease. */
+export const CodexServerLeaseRecord = Schema.Struct({
+  pid: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  processIdentity: CodexProcessIdentity,
+  incarnation: CodexServerLeaseIncarnation
+})
+export type CodexServerLeaseRecord = typeof CodexServerLeaseRecord.Type
+
+/** Execution-substrate result used while deciding whether a prior lease is stale. */
+export type CodexServerLeaseOwnerProjection =
+  | { readonly _tag: "Absent" }
+  | { readonly _tag: "ExactLive" }
+  | { readonly _tag: "Unreadable"; readonly detail: string }
+  | { readonly _tag: "Contradictory"; readonly detail: string }
+
 /** One private store snapshot. It is intentionally separate from the workflow Journal. */
 export const CodexAttemptStoreSnapshot = Schema.Struct({
   attempts: Schema.Array(CodexAttemptRecord),
@@ -195,8 +222,11 @@ export interface CodexAttemptStoreService {
   readonly writeServerLaunch: (record: CodexServerLaunchRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
   readonly clearServerLaunch: (incarnation: CodexServerIncarnation) => Effect.Effect<void, CodexAttemptStoreFailure>
   /** Cross-process exclusive admission lease for the application child. */
-  readonly acquireServerLease: () => Effect.Effect<void, CodexAttemptStoreFailure>
-  readonly releaseServerLease: () => Effect.Effect<void, CodexAttemptStoreFailure>
+  readonly acquireServerLease: (
+    owner: CodexServerLeaseRecord,
+    observe: (owner: CodexServerLeaseRecord) => Effect.Effect<CodexServerLeaseOwnerProjection, CodexAttemptStoreFailure>
+  ) => Effect.Effect<void, CodexAttemptStoreFailure>
+  readonly releaseServerLease: (owner: CodexServerLeaseRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
 }
 
 export class CodexAttemptStore extends Context.Service<CodexAttemptStore, CodexAttemptStoreService>()(
@@ -242,16 +272,54 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
           Option.isSome(current) && current.value.incarnation === incarnation ? Option.none() : current
         )
       })
-      const lease = yield* Ref.make(false)
-      const acquireServerLease = Effect.fn("CodexAttemptStore.Memory.acquireServerLease")(function* () {
-        const held = yield* Ref.get(lease)
-        if (held)
-          return yield* Effect.fail(
-            new CodexAttemptStoreFailure({ detail: "server lease is already held", operation: "acquireServerLease" })
-          )
-        yield* Ref.set(lease, true)
+      const lease = yield* Ref.make<Option.Option<CodexServerLeaseRecord>>(Option.none())
+      const leaseGate = yield* Semaphore.make(1)
+      const sameLeaseOwner = (left: CodexServerLeaseRecord, right: CodexServerLeaseRecord) =>
+        left.pid === right.pid &&
+        left.processIdentity === right.processIdentity &&
+        left.incarnation === right.incarnation
+      const acquireServerLease = Effect.fn("CodexAttemptStore.Memory.acquireServerLease")(function* (
+        owner: CodexServerLeaseRecord,
+        observe: (
+          owner: CodexServerLeaseRecord
+        ) => Effect.Effect<CodexServerLeaseOwnerProjection, CodexAttemptStoreFailure>
+      ) {
+        yield* leaseGate.withPermit(
+          Effect.gen(function* () {
+            const current = yield* Ref.get(lease)
+            if (Option.isNone(current)) {
+              yield* Ref.set(lease, Option.some(owner))
+              return
+            }
+            if (sameLeaseOwner(current.value, owner)) return
+            const projection = yield* observe(current.value)
+            if (projection._tag === "Absent") {
+              yield* Ref.set(lease, Option.some(owner))
+              return
+            }
+            return yield* new CodexAttemptStoreFailure({
+              detail:
+                projection._tag === "ExactLive"
+                  ? "server lease is held by a live owner"
+                  : `server lease owner cannot be reclaimed: ${projection.detail}`,
+              operation: "acquireServerLease"
+            })
+          })
+        )
       })
-      const releaseServerLease = () => Ref.set(lease, false)
+      const releaseServerLease = Effect.fn("CodexAttemptStore.Memory.releaseServerLease")(function* (
+        owner: CodexServerLeaseRecord
+      ) {
+        const current = yield* Ref.get(lease)
+        if (Option.isNone(current)) return
+        if (!sameLeaseOwner(current.value, owner)) {
+          return yield* new CodexAttemptStoreFailure({
+            detail: "server lease is owned by another process",
+            operation: "releaseServerLease"
+          })
+        }
+        yield* Ref.set(lease, Option.none())
+      })
       return Context.make(CodexAttemptStore, {
         readAttempt,
         writeAttempt,
@@ -421,27 +489,175 @@ export const nodeCodexAttemptStoreLayer = (locator: CodexAttemptStoreLocator | s
           )
         )
       const leaseFilename = `${filename}.lease`
-      const acquireServerLease: CodexAttemptStoreService["acquireServerLease"] = () =>
+      const heldLease = yield* Ref.make<
+        Option.Option<{ readonly file: FileHandle; readonly owner: CodexServerLeaseRecord }>
+      >(Option.none())
+      const sameLeaseOwner = (left: CodexServerLeaseRecord, right: CodexServerLeaseRecord) =>
+        left.pid === right.pid &&
+        left.processIdentity === right.processIdentity &&
+        left.incarnation === right.incarnation
+      const nativeLock = (file: FileHandle, flags: FlockFlagString) =>
+        Effect.tryPromise({
+          try: () =>
+            new Promise<void>((resolve, reject) => {
+              flock(file.fd, flags, (failure) => (failure === null ? resolve() : reject(failure)))
+            }),
+          catch: (error) => error
+        })
+      const closeDescriptor = (file: FileHandle, operation: CodexAttemptStoreOperation) =>
+        Effect.tryPromise({ try: () => file.close(), catch: (error) => new Error(String(error)) }).pipe(
+          Effect.mapError((error) => new CodexAttemptStoreFailure({ detail: String(error), operation }))
+        )
+      const closeLeaseFile = (file: FileHandle) =>
+        nativeLock(file, "un").pipe(
+          Effect.matchEffect({
+            onFailure: (unlockFailure) =>
+              closeDescriptor(file, "releaseServerLease").pipe(
+                Effect.matchEffect({
+                  onFailure: (closeFailure) =>
+                    Effect.fail(
+                      new CodexAttemptStoreFailure({
+                        detail: `lease unlock failed: ${String(unlockFailure)}; close failed: ${String(closeFailure)}`,
+                        operation: "releaseServerLease"
+                      })
+                    ),
+                  onSuccess: () =>
+                    Effect.fail(
+                      new CodexAttemptStoreFailure({
+                        detail: `lease unlock failed: ${String(unlockFailure)}`,
+                        operation: "releaseServerLease"
+                      })
+                    )
+                })
+              ),
+            onSuccess: () => closeDescriptor(file, "releaseServerLease")
+          })
+        )
+      const readLeaseRecord = Effect.tryPromise({
+        try: () => nodeFsPromises.readFile(leaseFilename, "utf8"),
+        catch: (error) => new Error(String(error))
+      }).pipe(
+        Effect.flatMap((text) => {
+          if (text.trim().length === 0) return Effect.succeed(Option.none<CodexServerLeaseRecord>())
+          try {
+            return Effect.succeed(Option.some(Schema.decodeUnknownSync(CodexServerLeaseRecord)(JSON.parse(text))))
+          } catch (error) {
+            return Effect.fail(new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" }))
+          }
+        }),
+        Effect.mapError((error) =>
+          error instanceof CodexAttemptStoreFailure
+            ? error
+            : new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
+        )
+      )
+      const writeLeaseRecord = (owner: CodexServerLeaseRecord) =>
+        Effect.tryPromise({
+          try: () => nodeFsPromises.writeFile(leaseFilename, JSON.stringify(owner), "utf8"),
+          catch: (error) => new Error(String(error))
+        }).pipe(
+          Effect.mapError(
+            (error) => new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
+          )
+        )
+      const releaseAfterAcquireFailure = (file: FileHandle, failure: CodexAttemptStoreFailure) =>
+        closeLeaseFile(file).pipe(
+          Effect.matchEffect({
+            onFailure: (cleanupFailure) =>
+              Effect.fail(
+                new CodexAttemptStoreFailure({
+                  detail: `${failure.detail}; lease cleanup failed: ${cleanupFailure.detail}`,
+                  operation: "acquireServerLease"
+                })
+              ),
+            onSuccess: () => Effect.fail(failure)
+          })
+        )
+      const acquireServerLease: CodexAttemptStoreService["acquireServerLease"] = (owner, observe) =>
         guard(
           "acquireServerLease",
-          fs
-            .writeFileString(leaseFilename, "dalph-codex-server-lease", { flag: "wx" })
-            .pipe(
-              Effect.mapError(
-                (error) => new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
-              )
-            )
+          Effect.gen(function* () {
+            const held = yield* Ref.get(heldLease)
+            if (Option.isSome(held)) {
+              if (sameLeaseOwner(held.value.owner, owner)) return
+              return yield* new CodexAttemptStoreFailure({
+                detail: "server lease is already held by this process for another incarnation",
+                operation: "acquireServerLease"
+              })
+            }
+            const file = yield* Effect.tryPromise({
+              try: () => nodeFsPromises.open(leaseFilename, "a+"),
+              catch: (error) => new CodexAttemptStoreFailure({ detail: String(error), operation: "acquireServerLease" })
+            })
+            const lock = yield* nativeLock(file, "exnb").pipe(Effect.result)
+            if (Result.isFailure(lock)) {
+              const lockCode = errorCode(lock.failure)
+              const lockFailure = new CodexAttemptStoreFailure({
+                detail: `server lease lock failed: ${String(lock.failure)}`,
+                operation: "acquireServerLease"
+              })
+              if (lockCode !== "EACCES" && lockCode !== "EAGAIN" && lockCode !== "EWOULDBLOCK") {
+                return yield* releaseAfterAcquireFailure(file, lockFailure)
+              }
+              const existing = yield* readLeaseRecord.pipe(Effect.result)
+              yield* closeDescriptor(file, "acquireServerLease")
+              if (Result.isFailure(existing)) return yield* existing.failure
+              if (Option.isNone(existing.success)) {
+                return yield* new CodexAttemptStoreFailure({
+                  detail: "server lease is locked but has no readable owner",
+                  operation: "acquireServerLease"
+                })
+              }
+              const projection = yield* observe(existing.success.value)
+              return yield* new CodexAttemptStoreFailure({
+                detail:
+                  projection._tag === "ExactLive"
+                    ? "server lease is held by a live owner"
+                    : projection._tag === "Absent"
+                      ? "server lease lock is held by an absent owner"
+                      : `server lease owner cannot be reclaimed: ${projection.detail}`,
+                operation: "acquireServerLease"
+              })
+            }
+            const inspected = yield* Effect.gen(function* () {
+              const existing = yield* readLeaseRecord
+              if (Option.isNone(existing)) {
+                yield* writeLeaseRecord(owner)
+              } else {
+                const projection = yield* observe(existing.value)
+                if (projection._tag === "Absent") {
+                  yield* writeLeaseRecord(owner)
+                } else if (projection._tag === "ExactLive" && sameLeaseOwner(existing.value, owner)) {
+                  // The exact owner may be re-entering from one application
+                  // scope; retain the newly acquired descriptor below.
+                } else {
+                  return yield* new CodexAttemptStoreFailure({
+                    detail:
+                      projection._tag === "ExactLive"
+                        ? "server lease is held by a live owner"
+                        : `server lease owner cannot be reclaimed: ${projection.detail}`,
+                    operation: "acquireServerLease"
+                  })
+                }
+              }
+              yield* Ref.set(heldLease, Option.some({ file, owner }))
+            }).pipe(Effect.result)
+            if (Result.isFailure(inspected)) return yield* releaseAfterAcquireFailure(file, inspected.failure)
+          })
         )
-      const releaseServerLease: CodexAttemptStoreService["releaseServerLease"] = () =>
-        fs
-          .remove(leaseFilename)
-          .pipe(
-            Effect.catch((error) =>
-              errorCode(error) === "ENOENT"
-                ? Effect.void
-                : Effect.fail(new CodexAttemptStoreFailure({ detail: String(error), operation: "releaseServerLease" }))
-            )
-          )
+      const releaseServerLease: CodexAttemptStoreService["releaseServerLease"] = (owner) =>
+        Effect.gen(function* () {
+          const held = yield* Ref.get(heldLease)
+          if (Option.isNone(held)) return
+          if (!sameLeaseOwner(held.value.owner, owner)) {
+            return yield* new CodexAttemptStoreFailure({
+              detail: "server lease is owned by another process",
+              operation: "releaseServerLease"
+            })
+          }
+          yield* closeLeaseFile(held.value.file)
+          yield* Ref.set(heldLease, Option.none())
+        })
       return Context.make(CodexAttemptStore, {
         readAttempt,
         writeAttempt,

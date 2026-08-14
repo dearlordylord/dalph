@@ -261,7 +261,7 @@ const collectText = (value: unknown): string => {
 
 const commitFromTurn = (
   turn: CodexTurnSnapshot | undefined,
-  expectedCorrelation?: PlannedAttemptExecutorCorrelation
+  expectedCorrelation: PlannedAttemptExecutorCorrelation
 ): GitCommitSha | undefined => {
   if (turn === undefined) return undefined
   const messages = turn.items
@@ -273,22 +273,14 @@ const commitFromTurn = (
   let parsedCandidate: string | undefined
   try {
     const parsed: unknown = JSON.parse(finalMessage)
-    if (isJsonRecord(parsed) && expectedCorrelation !== undefined) {
-      const responseCorrelation = parsed["correlation"]
-      if (responseCorrelation !== undefined) {
-        try {
-          const decoded = Schema.decodeUnknownSync(PlannedAttemptExecutorCorrelation)(responseCorrelation)
-          if (!sameCorrelation(decoded, expectedCorrelation)) return undefined
-        } catch {
-          return undefined
-        }
-      }
-    }
-    if (isJsonRecord(parsed) && typeof parsed["commit"] === "string") {
-      parsedCandidate = parsed["commit"]
-    }
+    if (!isJsonRecord(parsed)) return undefined
+    const responseCorrelation = parsed["correlation"]
+    if (responseCorrelation === undefined) return undefined
+    const decoded = Schema.decodeUnknownSync(PlannedAttemptExecutorCorrelation)(responseCorrelation)
+    if (!sameCorrelation(decoded, expectedCorrelation)) return undefined
+    if (typeof parsed["commit"] === "string") parsedCandidate = parsed["commit"]
   } catch {
-    // Plain-text final messages are handled by the exact-token pass below.
+    return undefined
   }
   const candidates = new Set<string>([
     ...(parsedCandidate !== undefined && /^[0-9a-f]{40}$/.test(parsedCandidate) ? [parsedCandidate] : []),
@@ -318,7 +310,8 @@ const taskTurnText = (attempt: PlannedTaskAttempt, specification: TaskWorkSpecif
     `task_revision: ${attempt.taskRevision}`,
     `base_sha: ${attempt.baseSha}`,
     `branch: ${attempt.branch}`,
-    `worktree: ${attempt.worktree}`
+    `worktree: ${attempt.worktree}`,
+    'Accepted results must be the final JSON object {"commit":"<40-hex>","correlation":{"runId":"...","attemptId":"..."}}.'
   ].join("\n")
 
 const storeFailure = (error: unknown): error is CodexAttemptStoreFailure => error instanceof CodexAttemptStoreFailure

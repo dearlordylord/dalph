@@ -63,6 +63,7 @@ const attempt = PlannedTaskAttempt.make({
 })
 const request = PlannedAttemptExecutorRequest.make({ plannedAttempt: attempt, specification })
 const correlation = plannedAttemptExecutorCorrelation(attempt)
+const finalResponse = (commit: GitCommitSha): string => JSON.stringify({ commit, correlation })
 
 // eslint-disable-next-line functional/no-mixed-types -- The controlled fixture intentionally groups immutable observations and test controls.
 type Harness = {
@@ -228,8 +229,8 @@ const makeHarness = (
     readServerLaunch: () => Effect.succeed(Option.none()),
     writeServerLaunch: () => Effect.void,
     clearServerLaunch: () => Effect.void,
-    acquireServerLease: () => Effect.void,
-    releaseServerLease: () => Effect.void
+    acquireServerLease: (_owner, _observe) => Effect.void,
+    releaseServerLease: (_owner) => Effect.void
   }
 
   return {
@@ -352,7 +353,7 @@ it.effect("persists the exact association before the first turn and seals Accept
       expect(ownedTurns[0]?.id).toBe(runningRecord.observedTurnId)
     }
 
-    harness.complete(`Accepted commit ${head}`)
+    harness.complete(finalResponse(head))
     const accepted = yield* executor.startOrContinue(request)
     expect(accepted._tag).toBe("Terminal")
     if (accepted._tag === "Terminal") {
@@ -386,6 +387,19 @@ it.effect("persists the exact association before the first turn and seals Accept
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
+it.effect("does not accept a commit without the exact final response correlation", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.complete(JSON.stringify({ commit: head }))
+    const result = yield* executor.startOrContinue(request)
+    expect(result).toEqual(
+      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+    )
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
 it.effect("reconciles a lost turn response without sending a second turn", () => {
   const harness = makeHarness({ loseFirstTurnResponse: true })
   return Effect.gen(function* () {
@@ -394,7 +408,7 @@ it.effect("reconciles a lost turn response without sending a second turn", () =>
     expect(running._tag).toBe("Running")
     expect(harness.turnCount()).toBe(1)
 
-    harness.complete(`Commit ${head}`)
+    harness.complete(finalResponse(head))
     const accepted = yield* executor.startOrContinue(request)
     expect(accepted._tag).toBe("Terminal")
     expect(harness.turnCount()).toBe(1)
@@ -415,7 +429,7 @@ it.effect("seals Failed on commit mismatch and never reports Completed", () => {
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     yield* executor.startOrContinue(request)
-    harness.complete(`The proposed commit is ${otherHead}`)
+    harness.complete(finalResponse(otherHead))
     const failed = yield* executor.startOrContinue(request)
     expect(failed).toEqual(
       PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
@@ -436,7 +450,7 @@ it.effect("does not seal Failed when Git head observation is unavailable", () =>
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     yield* executor.startOrContinue(request)
-    harness.complete(`Commit ${head}`)
+    harness.complete(finalResponse(head))
     const result = yield* executor.startOrContinue(request).pipe(Effect.exit)
     expect(result._tag).toBe("Failure")
     const projected = yield* executor.project(correlation)
@@ -450,7 +464,7 @@ it.effect("lets a terminal result win the suspension race and keeps owned activi
   return Effect.gen(function* () {
     const terminalExecutor = yield* PlannedAttemptExecutor
     yield* terminalExecutor.startOrContinue(request)
-    terminalHarness.complete(`Commit ${head}`)
+    terminalHarness.complete(finalResponse(head))
     const terminal = yield* terminalExecutor.requestSuspension(attempt)
     expect(terminal._tag).toBe("Terminal")
     if (terminal._tag === "Terminal") expect(terminal.result._tag).toBe("Accepted")
@@ -460,7 +474,7 @@ it.effect("lets a terminal result win the suspension race and keeps owned activi
       Effect.gen(function* () {
         const activityExecutor = yield* PlannedAttemptExecutor
         yield* activityExecutor.startOrContinue(request)
-        activityHarness.complete(`Commit ${head}`)
+        activityHarness.complete(finalResponse(head))
         activityHarness.makeTerminalActivity()
         const report = yield* activityExecutor.requestSuspension(attempt)
         expect(report._tag).toBe("Running")
@@ -572,7 +586,7 @@ it.effect("reconciles a lost continuation response against the later turn withou
       expect(ownedTurns[0]?.id).toBe(continuationRecord.observedTurnId)
     }
 
-    harness.complete(`Commit ${head}`)
+    harness.complete(finalResponse(head))
     const accepted = yield* executor.startOrContinue(request)
     expect(accepted._tag).toBe("Terminal")
     expect(harness.turnCount()).toBe(2)
@@ -584,7 +598,7 @@ it.effect("matches the owned turn by token across manual turns and reordered sna
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     yield* executor.startOrContinue(request)
-    harness.complete(`Commit ${head}`)
+    harness.complete(finalResponse(head))
     const accepted = yield* executor.startOrContinue(request)
     expect(accepted._tag).toBe("Terminal")
     expect(harness.turnCount()).toBe(1)

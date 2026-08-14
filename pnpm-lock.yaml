@@ -118,6 +118,9 @@ importers:
       effect:
         specifier: 4.0.0-beta.106
         version: 4.0.0-beta.106
+      fs-ext-extra-prebuilt:
+        specifier: 2.2.9
+        version: 2.2.9
 
   packages/orchestrator:
     dependencies:

@@ -16,7 +16,10 @@ import { expect } from "vitest"
 import {
   CodexAttemptRecord,
   CodexAttemptStore,
+  CodexProcessIdentity,
   CodexServerIncarnation,
+  CodexServerLeaseIncarnation,
+  CodexServerLeaseRecord,
   CodexServerLaunchRecord,
   CodexThreadId,
   nodeCodexAttemptStoreLayer
@@ -49,6 +52,16 @@ const launch = CodexServerLaunchRecord.make({
   incarnation: CodexServerIncarnation.make("private-incarnation-58"),
   phase: "Live",
   pid: 12345
+})
+const leaseOwner = CodexServerLeaseRecord.make({
+  pid: 12345,
+  processIdentity: CodexProcessIdentity.make("test-process-start-58"),
+  incarnation: CodexServerLeaseIncarnation.make("test-lease-incarnation-58")
+})
+const otherLeaseOwner = CodexServerLeaseRecord.make({
+  pid: 12346,
+  processIdentity: CodexProcessIdentity.make("other-process-start-58"),
+  incarnation: CodexServerLeaseIncarnation.make("other-lease-incarnation-58")
 })
 
 const nodeLayer = (storePath: string) => nodeCodexAttemptStoreLayer(storePath).pipe(Layer.provide(NodeServices.layer))
@@ -114,15 +127,58 @@ it.effect("admits only one independent filesystem store lease", () =>
       const storePath = path.join(root, "executor-private-state.json")
       const first = yield* Effect.gen(function* () {
         const store = yield* CodexAttemptStore
-        yield* store.acquireServerLease()
+        yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
         return store
       }).pipe(Effect.provide(nodeLayer(storePath)))
       const second = yield* Effect.gen(function* () {
         const store = yield* CodexAttemptStore
-        return yield* store.acquireServerLease()
+        return yield* store.acquireServerLease(otherLeaseOwner, () => Effect.succeed({ _tag: "ExactLive" as const }))
       }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
       expect(Exit.isFailure(second)).toBe(true)
-      yield* first.releaseServerLease()
+      yield* first.releaseServerLease(leaseOwner)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reclaims an exact stale lease but never releases a foreign owner", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-lease-reclaim-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      yield* fileSystem.writeFileString(`${storePath}.lease`, JSON.stringify(otherLeaseOwner))
+      const store = yield* Effect.gen(function* () {
+        return yield* CodexAttemptStore
+      }).pipe(Effect.provide(nodeLayer(storePath)))
+      yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+      const foreignRelease = yield* store.releaseServerLease(otherLeaseOwner).pipe(Effect.exit)
+      expect(Exit.isFailure(foreignRelease)).toBe(true)
+      yield* store.releaseServerLease(leaseOwner)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("fails closed for a live or unreadable persisted lease", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-lease-fail-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      yield* fileSystem.writeFileString(`${storePath}.lease`, JSON.stringify(otherLeaseOwner))
+      const live = yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        return yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "ExactLive" as const }))
+      }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+      expect(Exit.isFailure(live)).toBe(true)
+
+      yield* fileSystem.writeFileString(`${storePath}.lease`, "not-json")
+      const unreadable = yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        return yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+      }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+      expect(Exit.isFailure(unreadable)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

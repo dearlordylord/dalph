@@ -25,7 +25,13 @@ const persistedThreadFile = process.argv[1] + ".thread"
 const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
 const onMessage = (message) => {
   if (message.method === "initialized") return
-  if (message.method === "initialize") return write(message.id, {})
+  if (message.method === "initialize")
+    return write(message.id, {
+      userAgent: "fixture-codex/58",
+      codexHome: "/tmp/fixture-codex-home",
+      platformFamily: "unix",
+      platformOs: "linux"
+    })
   if (message.method === "thread/start") {
     thread = { ...thread, cwd: message.params.cwd, status: "idle", turns: [] }
     fs.writeFileSync(persistedThreadFile, thread.id)
@@ -76,6 +82,35 @@ process.stdin.on("data", (chunk) => {
     if (message.method === "initialize") {
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: "malformed" }) + "\n")
       process.exit(0)
+    }
+  }
+})
+`
+
+const contradictoryInitializationServer = String.raw`#!/usr/bin/env node
+let buffer = ""
+process.stdin.setEncoding("utf8")
+process.stdin.on("data", (chunk) => {
+  buffer += chunk
+  while (buffer.includes("\n")) {
+    const index = buffer.indexOf("\n")
+    const line = buffer.slice(0, index)
+    buffer = buffer.slice(index + 1)
+    if (line.trim() === "") continue
+    const message = JSON.parse(line)
+    if (message.method === "initialize") {
+      process.stdout.write(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            userAgent: "fixture-codex/58",
+            codexHome: "/tmp/fixture-codex-home",
+            platformFamily: "windows",
+            platformOs: "windows"
+          }
+        }) + "\n"
+      )
     }
   }
 })
@@ -158,6 +193,41 @@ it.effect("reconciles a surviving prior server incarnation before launching a re
   )
 )
 
+it.effect("supersedes a prior pre-spawn intent only after the application lease is acquired", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-app-server-pre-spawn-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      const prior = CodexServerLaunchRecord.make({
+        command: [executable, "app-server"],
+        incarnation: CodexServerIncarnation.make("pre-spawn-intent-58"),
+        phase: "Launching",
+        pid: null
+      })
+      let stopped = false
+      const appLayer = codexAppServerLayer({ executable }).pipe(
+        Layer.provide(
+          controlledCodexProcessOwnershipLayer({
+            observe: () =>
+              Effect.succeed(stopped ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 1 }),
+            stop: () => Effect.sync(() => void (stopped = true))
+          })
+        ),
+        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+      )
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        yield* app.startThread("/pre-spawn/worktree")
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isSuccess(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("fails closed when initialization decodes to an invalid protocol shape", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -166,6 +236,25 @@ it.effect("fails closed when initialization decodes to an invalid protocol shape
       const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-app-server-malformed-" })
       const executable = path.join(root, "fixture-codex-malformed")
       yield* fileSystem.writeFileString(executable, malformedInitializationServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      const appLayer = codexAppServerNodeLayer({ executable }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        return yield* app.startThread("/exact/worktree")
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("fails initialization closed when the server identity contradicts the host", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-app-server-conflict-" })
+      const executable = path.join(root, "fixture-codex-conflict")
+      yield* fileSystem.writeFileString(executable, contradictoryInitializationServer)
       yield* fileSystem.chmod(executable, 0o755)
       const appLayer = codexAppServerNodeLayer({ executable }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
       const result = yield* Effect.gen(function* () {
@@ -212,7 +301,8 @@ it.effect("closes the application-scoped server only after the shared executor d
       const appLayer = codexAppServerLayer({ executable }).pipe(
         Layer.provide(
           controlledCodexProcessOwnershipLayer({
-            observe: () => Effect.succeed(stopped ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 1 }),
+            observe: () =>
+              Effect.succeed(stopped ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 1 }),
             stop: () =>
               Effect.sync(() => {
                 events.push("server-stop")
@@ -271,7 +361,8 @@ it.effect("scope teardown closes the server without claiming an Exit boundary", 
       const appLayer = codexAppServerLayer({ executable }).pipe(
         Layer.provide(
           controlledCodexProcessOwnershipLayer({
-            observe: () => Effect.succeed(stopped ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 1 }),
+            observe: () =>
+              Effect.succeed(stopped ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 1 }),
             stop: () =>
               Effect.sync(() => {
                 stopped = true
