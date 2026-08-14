@@ -488,9 +488,8 @@ it.effect("keeps every request boundary typed after initialization becomes unava
           app.listBackgroundTerminals(CodexThreadId.make("unavailable-thread")),
           app.terminateBackgroundTerminal(CodexThreadId.make("unavailable-thread"), "unavailable-process")
         ]
-        for (const operation of operations) {
-          expect(Exit.isFailure(yield* Effect.exit(operation))).toBe(true)
-        }
+        const results = yield* Effect.forEach(operations, Effect.exit)
+        expect(results.map(Exit.isFailure)).toEqual(operations.map(() => true))
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
       expect(Exit.isSuccess(result)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
