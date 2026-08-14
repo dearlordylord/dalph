@@ -2527,19 +2527,37 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
       taskId: "B",
       title: "Implement second task"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the accepted singleton behavior.",
+      taskId: "A",
+      title: "Implement singleton"
+    },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the second eligible behavior.",
+      taskId: "B",
+      title: "Implement second task"
+    },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "B" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "B" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:B:1", taskId: "B" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
       request: "StartOrContinue"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:B:1", taskId: "B" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Terminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } },
@@ -4411,24 +4429,38 @@ const doubleDiamondIntegrationFinality = (
 }
 
 const doubleDiamondRecoveryReads = (
-  tasks: ReadonlyArray<{ readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] }>
+  tasks: ReadonlyArray<{ readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] }>,
+  reconfirmSpecifications = false
 ) => [
   ...tasks.flatMap(({ taskId }) => [
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
     { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
   ]),
   ...tasks.flatMap(({ taskId }) => [
+    ...(reconfirmSpecifications
+      ? [
+          { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
+          { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
+        ]
+      : []),
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
     { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
   ]),
-  ...tasks.map(({ attemptId, taskId }) => ({
-    _tag: "DalphSelects" as const,
-    operation: { _tag: "ReadTaskWorktree" as const, attemptId, taskId }
-  })),
-  ...tasks.map(({ attemptId, taskId }) => ({
-    _tag: "DalphSelects" as const,
-    operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId }
-  }))
+  ...tasks.flatMap(({ attemptId, taskId }, index) => [
+    ...(reconfirmSpecifications && index > 0
+      ? [
+          { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
+          { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
+        ]
+      : []),
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorktree" as const, attemptId, taskId } }
+  ]),
+  ...tasks.flatMap(({ attemptId, taskId }, index) => [
+    ...(reconfirmSpecifications && index > 0
+      ? [{ _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorktree" as const, attemptId, taskId } }]
+      : []),
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId } }
+  ])
 ]
 
 const doubleDiamondAttempts = {
@@ -4497,8 +4529,12 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     { _tag: "CoordinatorProcessDies" },
     ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
-    ...doubleDiamondRecoveryReads([doubleDiamondAttempts.b, doubleDiamondAttempts.c]),
+    ...doubleDiamondRecoveryReads([doubleDiamondAttempts.b, doubleDiamondAttempts.c], true),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.b),
+    {
+      _tag: "DalphSelects",
+      operation: { _tag: "ReadTargetLineage", attemptId: doubleDiamondAttempts.c.attemptId, taskId: "C" }
+    },
     doubleDiamondAcceptedReport(doubleDiamondAttempts.c),
     ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.b, doubleDiamondGraphs.xObservedDuringRestart, [], true),
     ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.c, doubleDiamondGraphs.bComplete, [], true),
