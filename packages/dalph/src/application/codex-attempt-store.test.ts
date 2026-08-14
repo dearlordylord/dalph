@@ -143,12 +143,24 @@ it.effect("admits only one independent filesystem store lease", () =>
       yield* Effect.gen(function* () {
         const first = yield* CodexAttemptStore
         yield* first.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+        yield* first.acquireServerLease(leaseOwner, () => Effect.die("same owner must not observe"))
+        const sameProcessConflict = yield* first
+          .acquireServerLease(otherLeaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(sameProcessConflict)).toBe(true)
         const second = yield* Effect.gen(function* () {
           const store = yield* CodexAttemptStore
           return yield* store.acquireServerLease(otherLeaseOwner, () => Effect.succeed({ _tag: "ExactLive" as const }))
         }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
         expect(Exit.isFailure(second)).toBe(true)
         yield* first.releaseServerLease(leaseOwner)
+        yield* first.releaseServerLease(leaseOwner)
+        const sameOwner = yield* Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "ExactLive" as const }))
+          yield* store.releaseServerLease(leaseOwner)
+        }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+        expect(Exit.isSuccess(sameOwner)).toBe(true)
       }).pipe(Effect.provide(nodeLayer(storePath)))
     }).pipe(Effect.provide(NodeServices.layer))
   )
@@ -193,6 +205,15 @@ it.effect("fails closed for a live or unreadable persisted lease", () =>
         return yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
       }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
       expect(Exit.isFailure(unreadable)).toBe(true)
+
+      yield* writePrivateFile(fileSystem, `${storePath}.lease`, JSON.stringify(otherLeaseOwner))
+      const unobservableOwner = yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        return yield* store.acquireServerLease(leaseOwner, () =>
+          Effect.succeed({ _tag: "Unreadable", detail: "owner observation unavailable" } as const)
+        )
+      }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+      expect(Exit.isFailure(unobservableOwner)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
@@ -516,6 +537,28 @@ it.effect("fails closed when a private snapshot path is swapped to a symlink bef
   )
 )
 
+it.effect("retains a typed persistence failure after a sidecar becomes non-regular", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-sidecar-race-" })
+      const storePath = path.join(root, "executor-private-state.json")
+
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.none())
+        yield* fileSystem.makeDirectory(`${storePath}.next`)
+        const write = yield* store.writeAttempt(associated).pipe(Effect.exit)
+        expect(Exit.isFailure(write)).toBe(true)
+        yield* fileSystem.remove(`${storePath}.next`, { recursive: true })
+        const read = yield* store.readAttempt(attempt.runId, attempt.attemptId).pipe(Effect.exit)
+        expect(Exit.isFailure(read)).toBe(true)
+      }).pipe(Effect.provide(nodeLayer(storePath)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("replays the newest complete checksummed snapshot after torn and invalid append records", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -534,13 +577,17 @@ it.effect("replays the newest complete checksummed snapshot after torn and inval
       yield* writePrivateFile(
         fileSystem,
         storePath,
-        `${valid}\n${noVersion}\n${invalidPayload}\n${invalidDigest}\nnot-json\n`
+        `${valid}\n${noVersion}\n${invalidPayload}\n${invalidDigest}\nnull\nnot-json\n`
       )
 
       yield* Effect.gen(function* () {
         const store = yield* CodexAttemptStore
         expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(associated))
         expect(yield* store.readServerLaunch()).toEqual(Option.some(launch))
+        yield* store.clearServerLaunch(CodexServerIncarnation.make("foreign-incarnation"))
+        expect(yield* store.readServerLaunch()).toEqual(Option.some(launch))
+        yield* store.clearServerLaunch(launch.incarnation)
+        expect(yield* store.readServerLaunch()).toEqual(Option.none())
       }).pipe(Effect.provide(nodeLayer(storePath)))
     }).pipe(Effect.provide(NodeServices.layer))
   )
