@@ -517,7 +517,7 @@ const layerFor = (
     Layer.provide(NodeServices.layer)
   )
 
-const mutatedEvidenceStoreLayer = (mode: "manifest" | "reference"): Layer.Layer<EvidenceStore> =>
+const mutatedEvidenceStoreLayer = (mode: "manifest" | "reference" | "malformed"): Layer.Layer<EvidenceStore> =>
   Layer.effect(
     EvidenceStore,
     Effect.gen(function* () {
@@ -538,7 +538,9 @@ const mutatedEvidenceStoreLayer = (mode: "manifest" | "reference"): Layer.Layer<
           const mutated =
             mode === "manifest"
               ? new TextEncoder().encode(new TextDecoder().decode(submitted).replace(head, otherHead))
-              : submitted
+              : mode === "malformed"
+                ? new TextEncoder().encode("not-json")
+                : submitted
           stored = mutated
           const digest = yield* digestFor(mutated)
           return EvidenceReference.make({
@@ -670,8 +672,8 @@ it.effect("persists the exact association before the first turn and seals Accept
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
-it.effect("fails closed when accepted evidence changes its manifest or content address", () =>
-  Effect.forEach(["manifest", "reference"] as const, (mode) => {
+it.effect("fails closed when accepted evidence changes its manifest, content address, or encoding", () =>
+  Effect.forEach(["manifest", "reference", "malformed"] as const, (mode) => {
     const harness = makeHarness()
     return Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
@@ -683,6 +685,23 @@ it.effect("fails closed when accepted evidence changes its manifest or content a
     }).pipe(Effect.provide(layerFor(harness, defaultGitCommand, mutatedEvidenceStoreLayer(mode))))
   })
 )
+
+it.effect("keeps an accepted turn running when activity appears during evidence publication", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.complete(finalResponse(head))
+    harness.setActivityCensusSequence([
+      { _tag: "Absent" },
+      { _tag: "ExactLive", activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("late-active-58") }] }
+    ])
+    expect(yield* executor.startOrContinue(request)).toEqual(
+      PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    )
+    expect(harness.currentRecord()?._tag).toBe("Running")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
 
 it.effect("fails closed when evidence is unavailable or Git cannot prove the accepted head", () => {
   const unavailableEvidenceHarness = makeHarness()
@@ -813,21 +832,26 @@ it.effect(
       activityHarness.complete(finalResponse(head))
       const accepted = yield* executor.startOrContinue(request)
       expect(accepted._tag).toBe("Terminal")
-      activityHarness.setActivityCensus({
-        _tag: "ExactLive",
-        activities: [
-          {
-            _tag: "BackgroundTerminal",
-            terminal: {
-              processId: "accepted-background-58",
-              itemId: "accepted-item-58",
-              command: "npm test",
-              cwd: worktree
+      activityHarness.setActivityCensusSequence([
+        { _tag: "Absent" },
+        {
+          _tag: "ExactLive",
+          activities: [
+            {
+              _tag: "BackgroundTerminal",
+              terminal: {
+                processId: "accepted-background-58",
+                itemId: "accepted-item-58",
+                command: "npm test",
+                cwd: worktree
+              }
             }
-          }
-        ]
-      })
-      expect((yield* executor.project(correlation))._tag).toBe("Exact")
+          ]
+        }
+      ])
+      const activityDuringReread = yield* executor.project(correlation)
+      expect(activityDuringReread._tag).toBe("Exact")
+      if (activityDuringReread._tag === "Exact") expect(activityDuringReread.report._tag).toBe("Running")
       activityHarness.setActivityCensus({ _tag: "Absent" })
       expect((yield* executor.project(correlation))._tag).toBe("Exact")
     }).pipe(
@@ -1116,6 +1140,146 @@ it.effect("reconciles an interrupted response that settled before its error and 
     const suspended = yield* executor.requestSuspension(attempt)
     expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
   }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("fails closed when the persisted prior owned turn is self-referential or missing", () => {
+  const selfReferentialHarness = makeHarness()
+  const missingPriorHarness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    const current = selfReferentialHarness.currentRecord()
+    expect(current?._tag).toBe("Running")
+    if (current?._tag === "Running") {
+      selfReferentialHarness.setRecord(
+        CodexAttemptRecord.cases.Running.make({ ...current, priorObservedTurnId: current.observedTurnId })
+      )
+      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+    }
+  }).pipe(
+    Effect.provide(layerFor(selfReferentialHarness)),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        const current = missingPriorHarness.currentRecord()
+        expect(current?._tag).toBe("Running")
+        if (current?._tag === "Running") {
+          missingPriorHarness.setRecord(
+            CodexAttemptRecord.cases.Running.make({
+              ...current,
+              priorObservedTurnId: CodexTurnId.make("missing-prior-58")
+            })
+          )
+          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+        }
+      }).pipe(Effect.provide(layerFor(missingPriorHarness)))
+    )
+  )
+})
+
+it.effect("reconciles a persisted turn intent through running and safe suspension", () => {
+  const runningHarness = makeHarness()
+  const suspensionHarness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    const current = runningHarness.currentRecord()
+    expect(current?._tag).toBe("Running")
+    if (current?._tag === "Running") {
+      runningHarness.setRecord(
+        CodexAttemptRecord.cases.TurnIntentRecorded.make({
+          attemptId: current.attemptId,
+          correlationAttemptId: current.correlationAttemptId,
+          correlationRunId: current.correlationRunId,
+          currentToken: current.currentToken,
+          priorObservedTurnId: current.priorObservedTurnId,
+          threadId: current.threadId,
+          worktree: current.worktree
+        })
+      )
+      expect((yield* executor.startOrContinue(request))._tag).toBe("Running")
+      expect(runningHarness.currentRecord()?._tag).toBe("Running")
+    }
+  }).pipe(
+    Effect.provide(layerFor(runningHarness)),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        const current = suspensionHarness.currentRecord()
+        expect(current?._tag).toBe("Running")
+        if (current?._tag === "Running") {
+          suspensionHarness.setRecord(
+            CodexAttemptRecord.cases.TurnIntentRecorded.make({
+              attemptId: current.attemptId,
+              correlationAttemptId: current.correlationAttemptId,
+              correlationRunId: current.correlationRunId,
+              currentToken: current.currentToken,
+              priorObservedTurnId: current.priorObservedTurnId,
+              threadId: current.threadId,
+              worktree: current.worktree
+            })
+          )
+          expect(yield* executor.requestSuspension(attempt)).toEqual(
+            PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+          )
+          expect(suspensionHarness.currentRecord()?._tag).toBe("SafelySuspended")
+        }
+      }).pipe(Effect.provide(layerFor(suspensionHarness)))
+    )
+  )
+})
+
+it.effect("normalizes suspension requests with absent, foreign, and empty-pre-turn records", () => {
+  const absentHarness = makeHarness()
+  const foreignHarness = makeHarness()
+  const emptyHarness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const absent = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+    expect(absent._tag).toBe("Failure")
+  }).pipe(
+    Effect.provide(layerFor(absentHarness)),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        const current = foreignHarness.currentRecord()
+        expect(current?._tag).toBe("Running")
+        if (current?._tag === "Running") {
+          foreignHarness.setReadOverride(
+            CodexAttemptRecord.cases.Running.make({
+              ...current,
+              correlationAttemptId: AttemptId.make("foreign-suspension-attempt"),
+              correlationRunId: RunId.make("foreign-suspension-run")
+            })
+          )
+        }
+        const foreign = yield* executor.requestSuspension(attempt)
+        expect(foreign._tag).toBe("Running")
+        expect(foreign.correlation.attemptId).toBe("foreign-suspension-attempt")
+      }).pipe(Effect.provide(layerFor(foreignHarness)))
+    ),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.startOrContinue(request)
+        const current = emptyHarness.currentRecord()
+        expect(current?._tag).toBe("Running")
+        emptyHarness.setRecord(
+          CodexAttemptRecord.cases.EmptyPreTurn.make({
+            attemptId: attempt.attemptId,
+            correlationAttemptId: attempt.attemptId,
+            correlationRunId: attempt.runId,
+            worktree
+          })
+        )
+        const empty = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+        expect(empty._tag).toBe("Failure")
+      }).pipe(Effect.provide(layerFor(emptyHarness)))
+    )
+  )
 })
 
 it.effect("fails closed for malformed thread states and unresolved turn intents", () => {
@@ -1440,6 +1604,16 @@ it.effect("projects no report, safe suspension, and an idle running record throu
     const executor = yield* PlannedAttemptExecutor
     expect((yield* executor.project(correlation))._tag).toBe("NoReport")
 
+    harness.setRecord(
+      CodexAttemptRecord.cases.EmptyPreTurn.make({
+        attemptId: attempt.attemptId,
+        correlationAttemptId: attempt.attemptId,
+        correlationRunId: attempt.runId,
+        worktree
+      })
+    )
+    expect((yield* executor.project(correlation))._tag).toBe("NoReport")
+
     const associatedRecord = CodexAttemptRecord.cases.AssociatedPreTurn.make({
       attemptId: attempt.attemptId,
       correlationAttemptId: attempt.attemptId,
@@ -1482,6 +1656,14 @@ it.effect("projects no report, safe suspension, and an idle running record throu
         status: "idle",
         turns: [{ id: current.observedTurnId, status: "interrupted", items: [], ownedTurnToken: current.currentToken }]
       })
+      harness.setActivityCensus({
+        _tag: "ExactLive",
+        activities: [{ _tag: "ActiveTurn", turnId: current.observedTurnId }]
+      })
+      const exact = yield* executor.project(correlation)
+      expect(exact._tag).toBe("Exact")
+      if (exact._tag === "Exact") expect(exact.report._tag).toBe("Running")
+      harness.setActivityCensus({ _tag: "Unreadable", detail: "idle activity census unavailable" })
       expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
     }
   }).pipe(Effect.provide(layerFor(harness)))

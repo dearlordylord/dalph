@@ -651,6 +651,14 @@ it.effect("keeps memory attempt, launch, and lease facts exact across replacemen
   }).pipe(Effect.provide(memoryCodexAttemptStoreLayer()))
 )
 
+it.effect("loads initial memory snapshot associations and launch ownership", () =>
+  Effect.gen(function* () {
+    const store = yield* CodexAttemptStore
+    expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(associated))
+    expect(yield* store.readServerLaunch()).toEqual(Option.some(launch))
+  }).pipe(Effect.provide(memoryCodexAttemptStoreLayer({ attempts: [associated], serverLaunch: launch })))
+)
+
 it.effect("rejects impossible private record and launch combinations before they can be stored", () =>
   Effect.gen(function* () {
     const acceptedReference = EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("a".repeat(64)) })
