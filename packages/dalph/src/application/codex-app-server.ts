@@ -586,6 +586,18 @@ export const codexAppServerLayer = (
           })
         )
         .pipe(Effect.mapError((error) => operationFailure("initialize", "Unavailable", error)))
+      // A spawned child is acknowledged durably before any identity lookup or
+      // protocol turn. A restart can therefore reconcile this owner instead
+      // of treating the old Launching intent as permission to spawn again.
+      const spawnedLaunch: CodexServerLaunchRecord = { command, incarnation, phase: "Spawned", pid: Number(handle.pid) }
+      yield* store.writeServerLaunch(spawnedLaunch).pipe(
+        Effect.catch((error) =>
+          handle.kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) }).pipe(
+            Effect.catch((_: unknown) => Effect.void),
+            Effect.andThen(Effect.fail(error))
+          )
+        )
+      )
       const liveIncarnation = yield* Effect.try({
         try: () => incarnationWithProcessIdentity(incarnation, Number(handle.pid)),
         catch: (error) => operationFailure("initialize", "Ownership", error)

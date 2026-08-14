@@ -92,13 +92,13 @@ const keyOf = (runId: RunId, attemptId: AttemptId): string => `${runId}\u0000${a
 export const CodexServerLaunchRecord = Schema.Struct({
   command: Schema.Array(Schema.NonEmptyString),
   incarnation: CodexServerIncarnation,
-  phase: Schema.Literals(["Launching", "Live"]),
+  phase: Schema.Literals(["Launching", "Spawned", "Live"]),
   pid: Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)))
 }).check(
   Schema.makeFilter((record) =>
     record.phase === "Launching" && record.pid !== null
       ? "a launching server cannot claim a process identity"
-      : record.phase === "Live" && record.pid === null
+      : (record.phase === "Spawned" || record.phase === "Live") && record.pid === null
         ? "a live server must claim a process identity"
         : undefined
   )

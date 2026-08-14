@@ -87,6 +87,29 @@ it.effect("survives an application restart with the exact private association an
   )
 )
 
+it.effect("durably records a spawned child before process identity reconciliation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-spawned-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const spawned = CodexServerLaunchRecord.make({
+        command: ["codex", "app-server"],
+        incarnation: CodexServerIncarnation.make("spawned-incarnation-58"),
+        phase: "Spawned",
+        pid: 54321
+      })
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        yield* store.writeServerLaunch(spawned)
+        const read = yield* store.readServerLaunch()
+        expect(Option.isSome(read) && read.value).toEqual(spawned)
+      }).pipe(Effect.provide(nodeLayer(storePath)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("fails closed when the private snapshot is malformed", () =>
   Effect.scoped(
     Effect.gen(function* () {
