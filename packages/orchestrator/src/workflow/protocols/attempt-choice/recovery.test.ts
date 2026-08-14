@@ -65,6 +65,7 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
 import {
+  makeFocusedTaskClaimFactsUnreadable,
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
@@ -338,6 +339,68 @@ it.effect("never claims the executor incorporated changed instructions", () =>
       plannedAttempt
     })
     expect(plannedAttempt.taskRevision).toBe(plannedRevision)
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("waits for a readable claim after Continue reports unreadable claim facts", () =>
+  Effect.gen(function* () {
+    yield* appendChangedSafelySuspendedAttempt()
+    const journal = yield* JournalStore
+    const recovery = yield* makeRunRecoveryProjection(runId)
+    const graph = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
+      ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
+    )
+    if (graph?._tag !== "ObservePlannedAttemptContinuationGraph") return yield* Effect.die("missing graph read")
+    yield* journal.append(runId, intentRecordKey(graph.operation.operationId), taskTrackerReadIntent(graph.operation))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(graph.operation.operationId),
+      taskTrackerGraphFactsObserved(graph.operation, {
+        revision: TrackerRevision.make("attempt-choice-recovery-unreadable-claim-graph"),
+        taskIds: [taskId]
+      })
+    )
+    const specification = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
+      ({ _tag }) => _tag === "ObservePlannedAttemptContinuationSpecification"
+    )
+    if (specification?._tag !== "ObservePlannedAttemptContinuationSpecification") {
+      return yield* Effect.die("missing specification read")
+    }
+    yield* journal.append(
+      runId,
+      intentRecordKey(specification.operation.operationId),
+      taskTrackerReadIntent(specification.operation)
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(specification.operation.operationId),
+      taskTrackerFactsObservedEvent(
+        specification.operation.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(specification.operation, observedSpecification)
+      )
+    )
+    const claim = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
+      ({ _tag }) => _tag === "ObservePlannedAttemptContinuationClaim"
+    )
+    if (claim?._tag !== "ObservePlannedAttemptContinuationClaim") return yield* Effect.die("missing claim read")
+    yield* journal.append(runId, intentRecordKey(claim.operation.operationId), taskTrackerReadIntent(claim.operation))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(claim.operation.operationId),
+      taskTrackerFactsObservedEvent(claim.operation.operationId, makeFocusedTaskClaimFactsUnreadable(claim.operation))
+    )
+
+    expect((yield* recovery.readDeliveryProjection).frontier).toMatchObject({
+      explanations: expect.arrayContaining([
+        expect.objectContaining({
+          _tag: "PlannedAttemptTaskClaimConstraint",
+          claimState: "Unreadable",
+          taskId,
+          wakeCondition: "TaskClaimFactsObserved"
+        })
+      ]),
+      transitions: []
+    })
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 

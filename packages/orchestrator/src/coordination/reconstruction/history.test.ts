@@ -16,12 +16,14 @@ import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  taskWorkCapacityPolicyRecordKey,
   workflowRunBeganRecordKey,
   workflowRunTerminatedRecordKey
 } from "../../workflow-journal/record-key.js"
 import { type JournalRecord } from "../../workflow-journal/store.js"
 import {
   TaskAttemptPlannedEvent,
+  TaskWorkCapacityChangedEvent,
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent
 } from "../../workflow/registry/event.js"
@@ -29,11 +31,43 @@ import { reduceWorkflowJournalHistory } from "./history.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
-import { InitialControlPolicy } from "../../control/policy.js"
+import { InitialControlPolicy, RunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 
 const runId = RunId.make("duplicate-attempt-run")
 const taskId = TaskId.make("A")
+
+it("folds nonconsecutive task-work capacity revisions into history issues", () => {
+  const target = FixtureTarget.make("policy-history-target")
+  const changed = TaskWorkCapacityChangedEvent.make({
+    capacity: TaskWorkCapacity.make(2),
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    previousRevision: RunPolicyRevision.make(1),
+    revision: RunPolicyRevision.make(3),
+    version: workflowJournalEventVersion
+  })
+  const reduction = reduceWorkflowJournalHistory(runId, [
+    {
+      event: WorkflowRunBeganEvent.make({
+        initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        target,
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunBeganRecordKey,
+      position: JournalPosition.make(1),
+      runId
+    },
+    { event: changed, key: taskWorkCapacityPolicyRecordKey(changed.revision), position: JournalPosition.make(2), runId }
+  ])
+
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: [expect.objectContaining({ detail: "task-work capacity revision 3 must immediately follow 1" })]
+  })
+})
 
 it("rejects workflow records after Run termination", () => {
   const target = FixtureTarget.make("terminated-history-target")

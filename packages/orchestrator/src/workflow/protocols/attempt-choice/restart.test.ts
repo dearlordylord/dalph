@@ -278,6 +278,7 @@ interface RestartHarnessOptions {
   readonly claim?: "Absent" | "Exact" | "Foreign" | "Unreadable"
   readonly executor?: "Completed" | "Contradictory" | "Failed" | "Running" | "RunningUntilReadOnlySafe" | "Unavailable"
   readonly factsChangeDuringTargetRead?: boolean
+  readonly planner?: "Exact" | "Wrong"
   readonly postChoiceClaimReacquired?: boolean
   readonly specification?: "F2" | "F3" | "F3ThenF2"
   readonly target?: "Readable" | "Unreadable"
@@ -519,7 +520,12 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
                   Effect.andThen(
                     Ref.update(plannerOrdinals, (ordinals) => [...ordinals, Number(planningRequest.ordinal)])
                   ),
-                  Effect.as(PlannedTaskAttempt.make({ ...successorAttempt, baseSha: planningRequest.baseSha }))
+                  Effect.as(
+                    PlannedTaskAttempt.make({
+                      ...(options.planner === "Wrong" ? plannedAttempt : successorAttempt),
+                      baseSha: planningRequest.baseSha
+                    })
+                  )
                 )
         })
       ),
@@ -545,6 +551,24 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       suspensionCalls: yield* Ref.get(suspensionCalls)
     }
   })
+
+it.effect("rejects a replacement when the planner returns a non-distinct successor", () =>
+  Effect.flip(exerciseRestart({ planner: "Wrong" })).pipe(
+    Effect.tap((failure) =>
+      Effect.sync(() =>
+        expect(failure).toMatchObject({
+          _tag: "AttemptRestartAuthorityContradiction",
+          detail: "successor planner did not return a distinct exact F2/H2 attempt",
+          requestId,
+          subject
+        })
+      )
+    ),
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
 
 it.effect("atomically supersedes exact P1 with clean P2 from fresh F2 K1 W1 and H2 facts", () =>
   Effect.gen(function* () {
