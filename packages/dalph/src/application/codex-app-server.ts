@@ -75,6 +75,8 @@ export const CodexAppServerOperation = Schema.Literals([
   "turn/interrupt",
   "thread/backgroundTerminals/list",
   "thread/backgroundTerminals/terminate",
+  "thread/ownedActivity/census",
+  "thread/ownedActivity/terminate",
   "close"
 ])
 export type CodexAppServerOperation = typeof CodexAppServerOperation.Type
@@ -99,7 +101,7 @@ export class CodexAppServerFailure extends Schema.TaggedError<CodexAppServerFail
 export const CodexProcessStartIdentity = Schema.NonEmptyString.pipe(Schema.brand("CodexProcessStartIdentity"))
 export type CodexProcessStartIdentity = typeof CodexProcessStartIdentity.Type
 
-/** One freshly observed member of the app-server's owned process tree. */
+/** One freshly observed member of an implementation-owned process tree. */
 export interface CodexOwnedProcessIdentity {
   readonly pid: number
   readonly parentPid: number
@@ -124,6 +126,43 @@ export interface CodexProcessGroupCensusService {
 export class CodexProcessGroupCensus extends Context.Service<CodexProcessGroupCensus, CodexProcessGroupCensusService>()(
   "@dalph/CodexProcessGroupCensus"
 ) {}
+
+/**
+ * One activity that can still mutate a planned attempt. The app-server
+ * process itself is deliberately not an activity in this algebra; its
+ * application-scoped lifecycle is owned by CodexProcessGroupCensus instead.
+ */
+export type CodexOwnedActivity =
+  | { readonly _tag: "ActiveTurn"; readonly turnId: CodexTurnId }
+  | { readonly _tag: "BackgroundTerminal"; readonly terminal: CodexBackgroundTerminal }
+  | { readonly _tag: "ProcessGroupDescendant"; readonly identity: CodexOwnedProcessIdentity }
+
+/** Fresh, typed census of every known activity that can mutate one attempt. */
+export type CodexOwnedActivityCensusProjection =
+  | { readonly _tag: "Absent" }
+  | { readonly _tag: "ExactLive"; readonly activities: ReadonlyArray<CodexOwnedActivity> }
+  | { readonly _tag: "Unreadable"; readonly detail: string }
+  | { readonly _tag: "Contradictory"; readonly detail: string }
+
+/**
+ * Attempt-scoped activity authority. It accepts a thread and its fresh
+ * app-server activity list, then observes execution-substrate descendants
+ * without accepting the app-server launch record as an attempt activity.
+ */
+export interface CodexOwnedActivityCensusService {
+  readonly observe: (
+    thread: CodexThreadSnapshot,
+    backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>
+  ) => Effect.Effect<CodexOwnedActivityCensusProjection, CodexAppServerFailure>
+  readonly terminateDescendants: (
+    descendants: ReadonlyArray<CodexOwnedProcessIdentity>
+  ) => Effect.Effect<void, CodexAppServerFailure>
+}
+
+export class CodexOwnedActivityCensus extends Context.Service<
+  CodexOwnedActivityCensus,
+  CodexOwnedActivityCensusService
+>()("@dalph/CodexOwnedActivityCensus") {}
 
 /** A process-incarnation projection used before an app-server replacement is admitted. */
 export type CodexServerOwnershipProjection =
@@ -187,6 +226,11 @@ export const controlledCodexProcessOwnershipLayer = (
 export const controlledCodexProcessGroupCensusLayer = (
   service: CodexProcessGroupCensusService
 ): Layer.Layer<CodexProcessGroupCensus> => Layer.succeed(CodexProcessGroupCensus, service)
+
+/** Controlled attempt-activity census injection for executor tests. */
+export const controlledCodexOwnedActivityCensusLayer = (
+  service: CodexOwnedActivityCensusService
+): Layer.Layer<CodexOwnedActivityCensus> => Layer.succeed(CodexOwnedActivityCensus, service)
 
 const operationFailure = (
   operation: CodexAppServerOperation,
@@ -330,6 +374,157 @@ const readLinuxProcessStatObservation = async (pid: number): Promise<LinuxProces
       ? { _tag: "Absent" }
       : { _tag: "Unreadable", detail: `cannot read process ${pid}: ${String(error)}` }
   }
+}
+
+type OwnedActivityProcessProjection =
+  | { readonly _tag: "Absent" }
+  | { readonly _tag: "ExactLive"; readonly members: ReadonlyArray<CodexOwnedProcessIdentity> }
+  | { readonly _tag: "Unreadable"; readonly detail: string }
+  | { readonly _tag: "Contradictory"; readonly detail: string }
+
+/**
+ * Reads only process trees rooted at app-server-reported attempt activities.
+ * The app-server launch process is never an input to this capability and is
+ * therefore never silently folded into an attempt census.
+ */
+const observeOwnedActivityProcesses = async (roots: ReadonlyArray<number>): Promise<OwnedActivityProcessProjection> => {
+  if (roots.length === 0) return { _tag: "Absent" }
+  if (nodeProcess.platform !== "linux") {
+    return { _tag: "Unreadable", detail: "owned attempt process census is not qualified on this host" }
+  }
+  const uniqueRoots = [...new Set(roots)]
+  const entries = await nodeFsPromises.readdir("/proc")
+  const stats: ReadonlyArray<LinuxProcessStatObservation> = await Promise.all(
+    entries.flatMap((entry) => {
+      if (!/^[0-9]+$/.test(entry)) return []
+      const pid = Number(entry)
+      if (!Number.isSafeInteger(pid) || pid <= 0) return []
+      return [readLinuxProcessStatObservation(pid)]
+    })
+  )
+  const unreadable = stats.find((result) => result._tag === "Unreadable")
+  if (unreadable !== undefined) return unreadable
+  const byPid = new Map<number, LinuxProcessStat>(
+    stats.flatMap((result) => (result._tag === "Read" ? [[result.stat.pid, result.stat] as const] : []))
+  )
+  const members = new Map<number, CodexOwnedProcessIdentity>()
+  for (const rootPid of uniqueRoots) {
+    const root = byPid.get(rootPid)
+    if (root === undefined) continue
+    if (root.processGroupId <= 0) {
+      return { _tag: "Contradictory", detail: `attempt activity ${rootPid} has no valid process group` }
+    }
+    const descendants = (candidate: LinuxProcessStat): boolean => {
+      let parentPid = candidate.parentPid
+      const seen = new Set<number>()
+      while (parentPid !== 0 && !seen.has(parentPid)) {
+        if (parentPid === rootPid) return true
+        // This local visited set is an observation guard, not mutable domain state.
+        // eslint-disable-next-line functional/immutable-data -- process-tree traversal needs one local visited marker.
+        seen.add(parentPid)
+        const parent = byPid.get(parentPid)
+        if (parent === undefined) return false
+        parentPid = parent.parentPid
+      }
+      return false
+    }
+    for (const candidate of byPid.values()) {
+      if (candidate.processGroupId !== root.processGroupId && candidate.pid !== rootPid && !descendants(candidate)) {
+        continue
+      }
+      // This local map is an observation accumulator, not mutable domain state.
+      // eslint-disable-next-line functional/immutable-data -- process census deduplicates one fresh snapshot.
+      members.set(candidate.pid, {
+        pid: candidate.pid,
+        parentPid: candidate.parentPid,
+        processGroupId: candidate.processGroupId,
+        startIdentity: candidate.startIdentity
+      })
+    }
+  }
+  return members.size === 0 ? { _tag: "Absent" } : { _tag: "ExactLive", members: [...members.values()] }
+}
+
+/** Signals only a freshly revalidated attempt descendant identity. */
+const terminateExactOwnedActivityProcesses = async (
+  members: ReadonlyArray<CodexOwnedProcessIdentity>
+): Promise<CodexAppServerFailure | undefined> => {
+  if (members.length === 0) return
+  if (nodeProcess.platform !== "linux") {
+    return operationFailure(
+      "thread/ownedActivity/terminate",
+      "Ownership",
+      "owned attempt process stop is not qualified"
+    )
+  }
+  for (const member of members) {
+    const observed = await readLinuxProcessStatObservation(member.pid)
+    if (observed._tag === "Absent") continue
+    if (observed._tag === "Unreadable") {
+      return operationFailure("thread/ownedActivity/terminate", "Ownership", observed.detail)
+    }
+    if (
+      observed.stat.startIdentity !== member.startIdentity ||
+      observed.stat.processGroupId !== member.processGroupId
+    ) {
+      return operationFailure(
+        "thread/ownedActivity/terminate",
+        "Ownership",
+        `attempt descendant ${member.pid} changed identity before signal`
+      )
+    }
+    try {
+      nodeProcess.kill(member.pid, "SIGTERM")
+    } catch (error) {
+      if (!processWasAbsent(error)) {
+        return operationFailure("thread/ownedActivity/terminate", "Ownership", error)
+      }
+    }
+  }
+}
+
+/** Node attempt-activity authority; server launch ownership remains separate. */
+const nodeCodexOwnedActivityCensusService: CodexOwnedActivityCensusService = {
+  observe: (thread, backgroundTerminals) =>
+    Effect.tryPromise({
+      try: async (): Promise<CodexOwnedActivityCensusProjection> => {
+        const activeTurns = thread.turns.filter((turn) => turn.status === "inProgress")
+        if (thread.status === "active" && activeTurns.length === 0) {
+          return { _tag: "Contradictory", detail: "active thread has no in-progress turn" }
+        }
+        if (activeTurns.length > 1) {
+          return { _tag: "Contradictory", detail: "thread has multiple in-progress turns" }
+        }
+        const processProjection = await observeOwnedActivityProcesses(
+          backgroundTerminals.flatMap((terminal) =>
+            terminal.osPid === null || terminal.osPid === undefined ? [] : [terminal.osPid]
+          )
+        )
+        if (processProjection._tag === "Unreadable" || processProjection._tag === "Contradictory") {
+          return processProjection
+        }
+        const activities: Array<CodexOwnedActivity> = [
+          ...activeTurns.map((turn) => ({ _tag: "ActiveTurn" as const, turnId: turn.id })),
+          ...backgroundTerminals.map((terminal) => ({ _tag: "BackgroundTerminal" as const, terminal })),
+          ...(processProjection._tag === "ExactLive"
+            ? processProjection.members.map((identity) => ({ _tag: "ProcessGroupDescendant" as const, identity }))
+            : [])
+        ]
+        return activities.length === 0 ? { _tag: "Absent" } : { _tag: "ExactLive", activities }
+      },
+      catch: (error) =>
+        error instanceof CodexAppServerFailure
+          ? error
+          : operationFailure("thread/ownedActivity/census", "Ownership", error)
+    }),
+  terminateDescendants: (descendants) =>
+    Effect.tryPromise({
+      try: () => terminateExactOwnedActivityProcesses(descendants),
+      catch: (error) =>
+        error instanceof CodexAppServerFailure
+          ? error
+          : operationFailure("thread/ownedActivity/terminate", "Ownership", error)
+    }).pipe(Effect.flatMap((failure) => (failure === undefined ? Effect.void : Effect.fail(failure))))
 }
 
 const stringValue = (value: unknown): string | undefined =>
@@ -1432,6 +1627,12 @@ export const nodeCodexProcessOwnershipLayer: Layer.Layer<CodexProcessOwnership, 
 export const nodeCodexProcessGroupCensusLayer: Layer.Layer<CodexProcessGroupCensus> = Layer.succeed(
   CodexProcessGroupCensus,
   nodeCodexProcessGroupCensusService
+)
+
+/** Convenience composition for the attempt-owned activity census. */
+export const nodeCodexOwnedActivityCensusLayer: Layer.Layer<CodexOwnedActivityCensus> = Layer.succeed(
+  CodexOwnedActivityCensus,
+  nodeCodexOwnedActivityCensusService
 )
 
 /** Convenience composition for the real app-server layer's process gate. */

@@ -22,6 +22,9 @@ import { Crypto, Effect, Layer, Option, Ref, Schema, Semaphore } from "effect"
 import {
   CodexAppServer,
   CodexAppServerFailure,
+  CodexOwnedActivityCensus,
+  nodeCodexOwnedActivityCensusLayer,
+  type CodexOwnedActivityCensusProjection,
   type CodexThreadSnapshot,
   type CodexTurnSnapshot
 } from "./codex-app-server.js"
@@ -333,6 +336,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
   PlannedAttemptExecutor,
   Effect.gen(function* () {
     const app = yield* CodexAppServer
+    const activityCensus = yield* CodexOwnedActivityCensus
     const crypto = yield* Crypto.Crypto
     const store = yield* CodexAttemptStore
     const git = yield* GitCommand
@@ -419,27 +423,61 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       return { _tag: "Idle" as const, thread, turn }
     })
 
-    const noOwnedActivity = Effect.fn("CodexPlannedAttemptExecutor.noOwnedActivity")(function* (
-      threadId: CodexThreadId
+    const observeOwnedActivity = Effect.fn("CodexPlannedAttemptExecutor.observeOwnedActivity")(function* (
+      thread: CodexThreadSnapshot
     ) {
-      const activities = yield* app.listBackgroundTerminals(threadId)
-      return activities.length === 0
+      const backgroundTerminals = yield* app.listBackgroundTerminals(thread.id)
+      return yield* activityCensus.observe(thread, backgroundTerminals)
     })
 
-    // Suspension owns every background terminal returned by the app-server.
-    // Termination is followed by a fresh census; an unreadable or contradictory
-    // census fails closed and therefore never reports safe capacity.
+    const observeOwnedActivityByThreadId = Effect.fn("CodexPlannedAttemptExecutor.observeOwnedActivityByThreadId")(
+      function* (threadId: CodexThreadId) {
+        const thread = yield* app.readThread(threadId)
+        return yield* observeOwnedActivity(thread)
+      }
+    )
+
+    const censusHasActivity = (census: CodexOwnedActivityCensusProjection): boolean => census._tag !== "Absent"
+
+    // Suspension owns every app-server activity and execution-substrate
+    // descendant returned by the attempt census. Every termination is followed
+    // by a fresh thread/list/group observation; unreadable, contradictory, or
+    // surviving activity never becomes safe capacity.
     const quiesceOwnedActivity = Effect.fn("CodexPlannedAttemptExecutor.quiesceOwnedActivity")(function* (
       threadId: CodexThreadId
     ) {
       const maxQuiescePasses = 3
       for (let remaining = maxQuiescePasses; remaining >= 0; remaining -= 1) {
-        const activities = yield* app.listBackgroundTerminals(threadId)
-        if (activities.length === 0) return
-        if (remaining === 0) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
-        for (const activity of activities) {
-          const terminated = yield* app.terminateBackgroundTerminal(threadId, activity.processId)
-          if (!terminated) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
+        const census = yield* observeOwnedActivityByThreadId(threadId)
+        if (census._tag === "Absent") return
+        if (census._tag === "Unreadable" || census._tag === "Contradictory") {
+          return yield* Effect.fail(new CodexActivityCensusUnknown({ detail: census.detail }))
+        }
+        if (remaining === 0) {
+          return yield* Effect.fail(new CodexActivityCensusUnknown({ detail: "owned activity survived quiescence" }))
+        }
+        if (census.activities.some((activity) => activity._tag === "ActiveTurn")) {
+          return yield* Effect.fail(new CodexActivityCensusUnknown({ detail: "owned turn remained active" }))
+        }
+        const backgroundTerminals = census.activities.flatMap((activity) =>
+          activity._tag === "BackgroundTerminal" ? [activity.terminal] : []
+        )
+        for (const terminal of backgroundTerminals) {
+          const terminated = yield* app.terminateBackgroundTerminal(threadId, terminal.processId)
+          if (!terminated) {
+            return yield* Effect.fail(
+              new CodexActivityCensusUnknown({ detail: `background activity ${terminal.processId} survived` })
+            )
+          }
+        }
+        const descendants = census.activities.flatMap((activity) =>
+          activity._tag === "ProcessGroupDescendant" ? [activity.identity] : []
+        )
+        if (descendants.length > 0) {
+          const uniqueDescendants = [
+            ...new Map(descendants.map((identity) => [`${identity.pid}:${identity.startIdentity}`, identity])).values()
+          ]
+          yield* activityCensus.terminateDescendants(uniqueDescendants)
         }
       }
     })
@@ -459,18 +497,19 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexAttemptRecord,
-      turn: CodexTurnSnapshot
+      turn: CodexTurnSnapshot,
+      thread: CodexThreadSnapshot
     ) {
       const commit = commitFromTurn(turn, correlation)
       const head = yield* readHead(attempt)
       if (commit === undefined) {
         if (!hasOwnedTurnRecord(record)) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
-        return yield* failed(attempt, correlation, record, turn.id)
+        return yield* failed(attempt, correlation, record, turn.id, thread)
       }
       if (head === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
       if (commit !== head) {
         if (!hasOwnedTurnRecord(record)) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
-        return yield* failed(attempt, correlation, record, turn.id)
+        return yield* failed(attempt, correlation, record, turn.id, thread)
       }
       if (Option.isNone(evidenceStore)) return yield* Effect.fail(new CodexEvidenceUnavailable({}))
       const manifest = AcceptedResultEvidenceManifest.make({
@@ -495,6 +534,8 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       const rereadHead = yield* readHead(attempt)
       if (rereadHead === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
       if (rereadHead !== commit) return yield* Effect.fail(new CodexGitObservationUnknown({}))
+      const finalCensus = yield* observeOwnedActivityByThreadId(thread.id)
+      if (finalCensus._tag !== "Absent") return running(correlation)
       const sealed = CodexSealedTerminal.cases.Accepted.make({ commit, evidenceManifest: reference })
       if (!hasOwnedTurnRecord(record)) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       yield* save(terminalRecordFor(attempt, record, turn.id, sealed, reference))
@@ -508,7 +549,8 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
       record: Extract<CodexAttemptRecord, { readonly _tag: "Terminal" }>,
-      turn: CodexTurnSnapshot
+      turn: CodexTurnSnapshot,
+      thread: CodexThreadSnapshot
     ) {
       if (record.terminal._tag !== "Accepted" || record.evidenceManifest === null) {
         return yield* Effect.fail(new CodexEvidenceInvalid({}))
@@ -530,6 +572,8 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       if (head === undefined || head !== record.terminal.commit) {
         return yield* Effect.fail(new CodexGitObservationUnknown({}))
       }
+      const finalCensus = yield* observeOwnedActivityByThreadId(thread.id)
+      if (finalCensus._tag !== "Absent") return running(correlation)
       return terminal(
         correlation,
         PlannedAttemptExecutorResult.cases.Accepted.make({
@@ -542,8 +586,11 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
       record: OwnedTurnRecord,
-      observedTurnId: CodexTurnId
+      observedTurnId: CodexTurnId,
+      thread: CodexThreadSnapshot
     ) {
+      const finalCensus = yield* observeOwnedActivityByThreadId(thread.id)
+      if (finalCensus._tag !== "Absent") return running(correlation)
       yield* save(terminalRecordFor(attempt, record, observedTurnId, CodexSealedTerminal.cases.Failed.make({}), null))
       return terminal(correlation, { _tag: "Failed" })
     })
@@ -570,7 +617,8 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       } else {
         return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       }
-      if (!(yield* noOwnedActivity(reconciliation.thread.id))) {
+      const census = yield* observeOwnedActivity(reconciliation.thread)
+      if (censusHasActivity(census)) {
         if (reconciliation.turn === undefined) {
           return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
         }
@@ -581,12 +629,12 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       const turn = reconciliation.turn
       if (turn?.status === "completed") {
         if (observedRecord._tag === "Terminal" && observedRecord.terminal._tag === "Accepted") {
-          return yield* rereadAccepted(attempt, correlation, observedRecord, turn)
+          return yield* rereadAccepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
         }
-        return yield* accepted(attempt, correlation, observedRecord, turn)
+        return yield* accepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
       }
       if (turn === undefined) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
-      return yield* failed(attempt, correlation, observedRecord, turn.id)
+      return yield* failed(attempt, correlation, observedRecord, turn.id, reconciliation.thread)
     })
 
     const reconcileAfterTurnBoundary = Effect.fn("CodexPlannedAttemptExecutor.reconcileAfterTurnBoundary")(function* (
@@ -849,7 +897,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
           return exact(yield* terminalOrRunning(attempt, correlation, record, reconciliation))
         if (reconciliation._tag === "Unresolved") return unreadable(correlation)
         if (record._tag === "AssociatedPreTurn") return noReport(correlation)
-        if (!(yield* noOwnedActivity(record.threadId))) return exact(running(correlation))
+        const census = yield* observeOwnedActivityByThreadId(record.threadId)
+        if (census._tag === "ExactLive") return exact(running(correlation))
+        if (census._tag === "Unreadable" || census._tag === "Contradictory") return unreadable(correlation)
         if (record._tag === "SafelySuspended") return exact(suspended(correlation))
         return unreadable(correlation)
       } catch (error) {
@@ -901,10 +951,12 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
 )
 
 /** Compatibility alias emphasizing that this is the production executor. */
-export const codexPlannedAttemptExecutorNodeLayer = codexPlannedAttemptExecutorLayer
+export const codexPlannedAttemptExecutorNodeLayer = codexPlannedAttemptExecutorLayer.pipe(
+  Layer.provide(nodeCodexOwnedActivityCensusLayer)
+)
 
 /** Conventional node-prefixed alias used by application composition. */
-export const nodeCodexPlannedAttemptExecutorLayer = codexPlannedAttemptExecutorLayer
+export const nodeCodexPlannedAttemptExecutorLayer = codexPlannedAttemptExecutorNodeLayer
 
 class ForeignAttemptRecord extends Schema.TaggedError<ForeignAttemptRecord>()("ForeignAttemptRecord", {
   observed: PlannedAttemptExecutorCorrelation
@@ -913,6 +965,11 @@ class ForeignAttemptRecord extends Schema.TaggedError<ForeignAttemptRecord>()("F
 class CodexThreadMismatch extends Schema.TaggedError<CodexThreadMismatch>()("CodexThreadMismatch", {}) {}
 
 class CodexTurnBoundaryUnknown extends Schema.TaggedError<CodexTurnBoundaryUnknown>()("CodexTurnBoundaryUnknown", {}) {}
+
+class CodexActivityCensusUnknown extends Schema.TaggedError<CodexActivityCensusUnknown>()(
+  "CodexActivityCensusUnknown",
+  { detail: Schema.String }
+) {}
 
 class CodexGitObservationUnknown extends Schema.TaggedError<CodexGitObservationUnknown>()(
   "CodexGitObservationUnknown",

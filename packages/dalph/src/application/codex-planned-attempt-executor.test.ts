@@ -26,7 +26,13 @@ import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
 import {
   CodexAppServerFailure,
+  controlledCodexOwnedActivityCensusLayer,
   controlledCodexAppServerLayer,
+  type CodexBackgroundTerminal,
+  type CodexOwnedActivity,
+  type CodexOwnedActivityCensusProjection,
+  type CodexOwnedProcessIdentity,
+  CodexProcessStartIdentity,
   type CodexAppServerService,
   type CodexThreadSnapshot,
   type CodexTurnSnapshot
@@ -79,6 +85,15 @@ type Harness = {
   readonly currentRecord: () => CodexAttemptRecord | undefined
   readonly complete: (message: string) => void
   readonly makeTerminalActivity: () => void
+  readonly setActivityCensus: (projection: CodexOwnedActivityCensusProjection | undefined) => void
+  readonly setActivityCensusSequence: (projections: ReadonlyArray<CodexOwnedActivityCensusProjection>) => void
+  readonly observeActivityCensus: (
+    thread: CodexThreadSnapshot,
+    backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>
+  ) => CodexOwnedActivityCensusProjection
+  readonly terminateDescendants: (descendants: ReadonlyArray<CodexOwnedProcessIdentity>) => void
+  readonly backgroundTerminationCount: () => number
+  readonly descendantTerminationCount: () => number
   readonly makeResumeUnavailable: () => void
   readonly makeForeignResume: () => void
   readonly addManualTurn: (position: "before" | "after") => void
@@ -114,6 +129,10 @@ const makeHarness = (
   let associationAtTurn: CodexAttemptRecord | undefined
   let firstTurnResponseLost = false
   let terminalActivity = false
+  let activityCensusOverride: CodexOwnedActivityCensusProjection | undefined
+  let activityCensusSequence: Array<CodexOwnedActivityCensusProjection> = []
+  let backgroundTerminationCount = 0
+  let descendantTerminationCount = 0
   let associatedRecord: CodexAttemptRecord | undefined
   let threadStartCount = 0
   let resumeUnavailable = false
@@ -204,7 +223,13 @@ const makeHarness = (
           ? [{ processId: "process-58", itemId: "item-58", command: "npm test", cwd: worktree, osPid: null }]
           : []
       ),
-    terminateBackgroundTerminal: () => Effect.succeed(false),
+    terminateBackgroundTerminal: () =>
+      Effect.sync(() => {
+        backgroundTerminationCount += 1
+        const wasActive = terminalActivity
+        terminalActivity = false
+        return wasActive
+      }),
     close: Effect.void
   }
 
@@ -262,6 +287,34 @@ const makeHarness = (
     makeTerminalActivity: () => {
       terminalActivity = true
     },
+    setActivityCensus: (projection) => {
+      activityCensusOverride = projection
+      activityCensusSequence = []
+    },
+    setActivityCensusSequence: (projections) => {
+      activityCensusOverride = undefined
+      activityCensusSequence = [...projections]
+    },
+    observeActivityCensus: (thread, backgroundTerminals) => {
+      const next = activityCensusSequence[0]
+      if (next !== undefined) {
+        activityCensusSequence = activityCensusSequence.slice(1)
+        return next
+      }
+      if (activityCensusOverride !== undefined) return activityCensusOverride
+      const activities: Array<CodexOwnedActivity> = [
+        ...thread.turns
+          .filter((turn) => turn.status === "inProgress")
+          .map((turn) => ({ _tag: "ActiveTurn" as const, turnId: turn.id })),
+        ...backgroundTerminals.map((terminal) => ({ _tag: "BackgroundTerminal" as const, terminal }))
+      ]
+      return activities.length === 0 ? { _tag: "Absent" } : { _tag: "ExactLive", activities }
+    },
+    terminateDescendants: (descendants) => {
+      descendantTerminationCount += descendants.length
+    },
+    backgroundTerminationCount: () => backgroundTerminationCount,
+    descendantTerminationCount: () => descendantTerminationCount,
     makeResumeUnavailable: () => {
       resumeUnavailable = true
     },
@@ -325,6 +378,11 @@ const layerFor = (
     Layer.provide(
       Layer.mergeAll(
         controlledCodexAppServerLayer(harness.app),
+        controlledCodexOwnedActivityCensusLayer({
+          observe: (thread, backgroundTerminals) =>
+            Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+          terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
+        }),
         Layer.succeed(CodexAttemptStore, harness.store),
         Layer.succeed(GitCommand, gitCommand),
         evidenceStore
@@ -481,6 +539,105 @@ it.effect("lets a terminal result win the suspension race and keeps owned activi
       }).pipe(Effect.provide(layerFor(activityHarness)))
     )
   )
+})
+
+it.effect("terminates a reported background activity before reporting safe suspension", () => {
+  const harness = makeHarness()
+  harness.makeTerminalActivity()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    const suspended = yield* executor.requestSuspension(attempt)
+    expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
+    expect(harness.backgroundTerminationCount()).toBe(1)
+    expect(harness.descendantTerminationCount()).toBe(0)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("keeps capacity when the census finds a hidden tool absent from the terminal list", () => {
+  const harness = makeHarness()
+  const hiddenTool = {
+    processId: "hidden-tool-58",
+    itemId: "hidden-item-58",
+    command: "npm test",
+    cwd: worktree,
+    osPid: null
+  }
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.complete(finalResponse(head))
+    harness.setActivityCensus({ _tag: "ExactLive", activities: [{ _tag: "BackgroundTerminal", terminal: hiddenTool }] })
+    const running = yield* executor.startOrContinue(request)
+    expect(running).toEqual(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+    harness.setActivityCensus({ _tag: "Absent" })
+    const accepted = yield* executor.startOrContinue(request)
+    expect(accepted._tag).toBe("Terminal")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("does not report safe suspension while a process-group descendant survives", () => {
+  const harness = makeHarness()
+  const descendant = {
+    pid: 5801,
+    parentPid: 5800,
+    processGroupId: 5800,
+    startIdentity: CodexProcessStartIdentity.make("linux:issue-58-descendant")
+  }
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.setActivityCensus({
+      _tag: "ExactLive",
+      activities: [{ _tag: "ProcessGroupDescendant", identity: descendant }]
+    })
+    const failed = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+    expect(failed._tag).toBe("Failure")
+    expect(harness.descendantTerminationCount()).toBeGreaterThan(0)
+    harness.setActivityCensus({ _tag: "Absent" })
+    const suspended = yield* executor.requestSuspension(attempt)
+    expect(suspended._tag).toBe("SafelySuspended")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("keeps a terminal attempt running when its activity census is unreadable", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.complete(finalResponse(head))
+    harness.setActivityCensus({ _tag: "Unreadable", detail: "controlled process observation" })
+    const running = yield* executor.startOrContinue(request)
+    expect(running).toEqual(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+    const projected = yield* executor.project(correlation)
+    expect(projected._tag).toBe("Exact")
+    if (projected._tag === "Exact") expect(projected.report._tag).toBe("Running")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("keeps terminal capacity while an owned descendant survives, then accepts after exact absence", () => {
+  const harness = makeHarness()
+  const descendant = {
+    pid: 5811,
+    parentPid: 5810,
+    processGroupId: 5810,
+    startIdentity: CodexProcessStartIdentity.make("linux:issue-58-terminal-descendant")
+  }
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.complete(finalResponse(head))
+    harness.setActivityCensus({
+      _tag: "ExactLive",
+      activities: [{ _tag: "ProcessGroupDescendant", identity: descendant }]
+    })
+    const running = yield* executor.startOrContinue(request)
+    expect(running._tag).toBe("Running")
+    harness.setActivityCensus({ _tag: "Absent" })
+    const accepted = yield* executor.startOrContinue(request)
+    expect(accepted._tag).toBe("Terminal")
+    if (accepted._tag === "Terminal") expect(accepted.result._tag).toBe("Accepted")
+  }).pipe(Effect.provide(layerFor(harness)))
 })
 
 it.effect("retries a lost association write without sending two task turns", () => {
