@@ -105,7 +105,7 @@ export const controlledTrackerAuthorityLayer = (
                       })
                     )
                   }
-                  return yield* Effect.fail(new TaskClaimConflict({ attempted: acquisition, observed }))
+                  return yield* new TaskClaimConflict({ attempted: acquisition, observed })
                 })
             })
           )
