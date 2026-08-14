@@ -5117,6 +5117,26 @@ it.effect("reports mismatches through the surface that owns the current story it
       _tag: "AuthoredCassetteInteractionMismatch"
     })
 
+    const exactClaimConflict = {
+      ...changedAttemptReacquisitionForeignConflictAuthoredCassette,
+      story: changedAttemptReacquisitionForeignConflictAuthoredCassette.story.map((item) =>
+        item._tag === "TaskClaimAcquisitionConflictReturned"
+          ? {
+              ...item,
+              observed: {
+                ...item.observed,
+                operationId: item.operationId,
+                owner: "cassette-owner",
+                token: `cassette-claim:A:${item.operationId}`
+              }
+            }
+          : item
+      )
+    }
+    expect(yield* runAuthoredScenarioCassette(exactClaimConflict).pipe(Effect.flip)).toMatchObject({
+      _tag: "AuthoredCassetteInteractionMismatch"
+    })
+
     const unknownForeignRejection = {
       ...changedAttemptReacquisitionForeignConflictAuthoredCassette,
       story: changedAttemptReacquisitionForeignConflictAuthoredCassette.story.map((item) =>

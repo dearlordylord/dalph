@@ -80,6 +80,7 @@ export const controlledTrackerAuthorityLayer = (
                   .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim))),
               onSome: ({ observed, operationId }) =>
                 Effect.gen(function* () {
+                  const attempted = { _tag: "ActiveTaskClaim" as const, ...acquisition }
                   // A definite conflict is a provider observation, not a
                   // mutation. Retain K2 so a later activation's current read
                   // cannot regress to the earlier missing observation.
@@ -89,7 +90,8 @@ export const controlledTrackerAuthorityLayer = (
                     Option.isNone(mappedTaskId) ||
                     mappedTaskId.value !== acquisition.taskId ||
                     operationId !== acquisition.operationId ||
-                    observed.taskId !== acquisition.taskId
+                    observed.taskId !== acquisition.taskId ||
+                    isExactTaskClaim(observed, attempted)
                   ) {
                     yield* reportInteractionMismatch(
                       new AuthoredCassetteInteractionMismatch({
