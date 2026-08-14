@@ -63,6 +63,10 @@ export const intentRecordKey = (operationId: OperationId): JournalRecordKey =>
 export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`operation:${operationId}:outcome`)
 
+/** Stable key for one Restart-scoped authority-read failure occurrence. */
+export const attemptRestartAuthorityReadFailedRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`operation:${operationId}:restart-authority-read-failed`)
+
 export const attemptPlanRecordKey = (attemptId: AttemptId): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:plan`)
 

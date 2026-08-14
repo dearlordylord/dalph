@@ -14,6 +14,7 @@ import { type OperationId } from "../identity.js"
 import {
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
+  attemptRestartAuthorityReadFailedRecordKey,
   attemptImplementationAbandonedRecordKey,
   attemptStoppageIntentRecordKey,
   controlDirectionAppliedRecordKey,
@@ -237,7 +238,7 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       }),
     AttemptRestartAuthorityReadFailed: (event) =>
       operationEvent({
-        expectedKey: outcomeRecordKey(event.operationId),
+        expectedKey: attemptRestartAuthorityReadFailedRecordKey(event.operationId),
         operationId: event.operationId,
         plannedAttempt: event.subject.plannedAttempt,
         requiredOperationIds: [event.operationId],

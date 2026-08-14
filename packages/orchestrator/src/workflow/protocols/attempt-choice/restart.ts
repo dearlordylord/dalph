@@ -9,7 +9,10 @@ import {
 import { Data, Effect, Match } from "effect"
 import { type PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { isExactTaskClaim, type ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
-import { outcomeRecordKey, plannedAttemptReplacedRecordKey } from "../../../workflow-journal/record-key.js"
+import {
+  attemptRestartAuthorityReadFailedRecordKey,
+  plannedAttemptReplacedRecordKey
+} from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { WorkflowInterpreter } from "../../interpretation/interpreter.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -110,7 +113,7 @@ const recordRestartAuthorityReadFailure = Effect.fn("AttemptRestart.recordAuthor
   const journal = yield* InRunJournal
   yield* journal.append(
     subject.plannedAttempt.runId,
-    outcomeRecordKey(operationId),
+    attemptRestartAuthorityReadFailedRecordKey(operationId),
     AttemptRestartAuthorityReadFailedEvent.make({
       failure,
       occurrenceClassification: "NonActionOccurrence",
