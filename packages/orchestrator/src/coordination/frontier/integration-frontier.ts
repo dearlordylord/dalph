@@ -135,6 +135,13 @@ export const deriveIntegrationFrontier = (
         lineage.targetHeadSha !== candidate.correlation.expectedTargetHead)
     )
   }
+  const targetLineageIsIncompatible = (responsibility: StartedIntegrationResponsibility): boolean => {
+    const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
+    return (
+      lineage !== undefined &&
+      (lineage.plannedBaseSha !== responsibility.plannedAttempt.baseSha || !lineage.plannedBaseIsAncestorOfTargetHead)
+    )
+  }
   const verificationFor = (candidate: TargetVerificationCandidate | undefined) =>
     candidate === undefined ? undefined : deriveTargetVerificationState(runState.workflowHistory.records, candidate)
   const promotionFor = (
@@ -254,10 +261,14 @@ export const deriveIntegrationFrontier = (
         ) {
           return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
         }
-        if (waiting || runtimeFacts.targetPromotionConfigured !== true) {
-          return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+        if (waiting) return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+        if (!runtimeFacts.targetLineageByAttemptId?.has(responsibility.plannedAttempt.attemptId)) {
+          return held ? [] : [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
         }
         if (promotion === undefined && verificationTargetWasRewritten(responsibility)) {
+          if (targetLineageIsIncompatible(responsibility)) {
+            return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+          }
           if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
           const durableIntent = candidateIntentFor(responsibility)
           const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
@@ -275,6 +286,9 @@ export const deriveIntegrationFrontier = (
             })
           ]
         }
+        if (runtimeFacts.targetPromotionConfigured !== true) {
+          return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+        }
         if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
         if (
           promotion === undefined &&
@@ -290,6 +304,9 @@ export const deriveIntegrationFrontier = (
         return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
       if (waiting) return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
       if (verificationTargetWasRewritten(responsibility)) {
+        if (targetLineageIsIncompatible(responsibility)) {
+          return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+        }
         if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
         const durableIntent = candidateIntentFor(responsibility)
         const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)

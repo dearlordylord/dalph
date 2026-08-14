@@ -361,13 +361,19 @@ const invalidCandidateSessionSupersession = (
     !priorAlreadyRecorded &&
     !successorAlreadyRecorded &&
     event.priorCorrelation.expectedTargetHead !== event.observedTargetHead &&
-    event.priorCorrelation.acceptedResultCommit === event.successorCorrelation.acceptedResultCommit &&
-    evidenceReferenceEquals(event.priorCorrelation.acceptanceManifest, event.successorCorrelation.acceptanceManifest) &&
-    event.successorCorrelation.acceptedResultCommit === started.acceptedResult.commit &&
-    evidenceReferenceEquals(event.successorCorrelation.acceptanceManifest, started.acceptedResult.evidenceManifest) &&
-    JSON.stringify(event.priorCorrelation.integrationTarget) ===
-      JSON.stringify(event.successorCorrelation.integrationTarget) &&
-    JSON.stringify(started.integrationTarget) === JSON.stringify(event.priorCorrelation.integrationTarget)
+    event.priorCorrelation.candidateResource !== event.successorCorrelation.candidateResource &&
+    event.priorCorrelation.integrationTarget.repository === event.successorCorrelation.integrationTarget.repository &&
+    event.priorCorrelation.integrationTarget.ref === event.successorCorrelation.integrationTarget.ref &&
+    acceptedResultEquivalence(started.acceptedResult, {
+      commit: event.priorCorrelation.acceptedResultCommit,
+      evidenceManifest: event.priorCorrelation.acceptanceManifest
+    }) &&
+    acceptedResultEquivalence(started.acceptedResult, {
+      commit: event.successorCorrelation.acceptedResultCommit,
+      evidenceManifest: event.successorCorrelation.acceptanceManifest
+    }) &&
+    started.integrationTarget.repository === event.priorCorrelation.integrationTarget.repository &&
+    started.integrationTarget.ref === event.priorCorrelation.integrationTarget.ref
   if (valid) {
     setMapValue(
       indexes.integrationCandidateSessionSupersessions,

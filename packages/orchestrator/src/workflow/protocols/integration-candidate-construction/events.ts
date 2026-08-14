@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import {
   AttemptId,
   EvidenceReference,
+  evidenceReferenceEquals,
   GitCommitSha,
   IntegrationTarget,
   PlannedTaskAttempt,
@@ -147,6 +148,22 @@ export const IntegrationCandidateSessionSupersededEvent = Schema.TaggedStruct("I
     }
     if (event.priorCorrelation.integrationTarget.ref !== event.successorCorrelation.integrationTarget.ref) {
       return "candidate session supersession must stay on one integration ref"
+    }
+    if (
+      event.priorCorrelation.integrationTarget.repository !== event.successorCorrelation.integrationTarget.repository
+    ) {
+      return "candidate session supersession must stay on one integration repository"
+    }
+    if (event.priorCorrelation.candidateResource === event.successorCorrelation.candidateResource) {
+      return "candidate session supersession must use a distinct candidate resource"
+    }
+    if (event.priorCorrelation.acceptedResultCommit !== event.successorCorrelation.acceptedResultCommit) {
+      return "candidate session supersession must preserve the accepted result commit"
+    }
+    if (
+      !evidenceReferenceEquals(event.priorCorrelation.acceptanceManifest, event.successorCorrelation.acceptanceManifest)
+    ) {
+      return "candidate session supersession must preserve the accepted result evidence"
     }
     if (event.priorCorrelation.candidateId === event.successorCorrelation.candidateId) {
       return "candidate session supersession must use a new candidate identity"

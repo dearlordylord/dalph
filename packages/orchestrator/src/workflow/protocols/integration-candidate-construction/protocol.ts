@@ -734,7 +734,8 @@ const supersessionBelongsToResponsibility = (
   event.priorCorrelation.attemptId === responsibility.plannedAttempt.attemptId &&
   event.priorCorrelation.acceptedResultCommit === responsibility.acceptedResult.commit &&
   evidenceReferenceEquals(event.priorCorrelation.acceptanceManifest, responsibility.acceptedResult.evidenceManifest) &&
-  JSON.stringify(event.priorCorrelation.integrationTarget) === JSON.stringify(responsibility.integrationTarget)
+  event.priorCorrelation.integrationTarget.repository === responsibility.integrationTarget.repository &&
+  event.priorCorrelation.integrationTarget.ref === responsibility.integrationTarget.ref
 
 /** Counts only supersessions in this responsibility's accepted-result/session chain. */
 export const integrationCandidateSuccessorOrdinalFor = (
@@ -836,6 +837,17 @@ export const continueIntegrationCandidateConstruction = Effect.fn("IntegrationCa
       )
       existing = deriveIntegrationCandidateConstruction(records, responsibility)
       durableIntent = latestCandidateIntentFor(records, responsibility)
+    }
+    if (
+      existing?._tag === "CandidateConstructed" &&
+      durableIntent !== undefined &&
+      durableIntent.correlation.expectedTargetHead !== lineage.targetHeadSha &&
+      !targetLineageAllowsCandidate(responsibility, lineage)
+    ) {
+      return yield* new IntegrationCandidateTargetLineageRejected({
+        observedTargetHead: lineage.targetHeadSha,
+        plannedBaseSha: responsibility.plannedAttempt.baseSha
+      })
     }
     if (isTerminalCandidateState(existing)) return existing
 

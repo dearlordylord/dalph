@@ -462,6 +462,47 @@ it.effect("supersedes a stale pre-promotion session before starting one successo
   )
 )
 
+it.effect("preserves a constructed candidate while rejecting an incompatible fresh target lineage", () =>
+  Effect.gen(function* () {
+    yield* seedStartedResponsibility
+    const first = yield* continueIntegrationCandidateConstruction(started, lineage, CandidateCorrectionLimit.make(2))
+    expect(first._tag).toBe("CandidateConstructed")
+
+    const incompatible = TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: false,
+      plannedBaseSha: base,
+      targetHeadSha: advancedHead
+    })
+    const rejected = yield* continueIntegrationCandidateConstruction(
+      started,
+      incompatible,
+      CandidateCorrectionLimit.make(2)
+    ).pipe(Effect.flip)
+
+    expect(rejected).toBeInstanceOf(IntegrationCandidateTargetLineageRejected)
+    const records = yield* (yield* JournalStore).read(runId)
+    expect(records.filter(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded")).toHaveLength(0)
+    expect(records.filter(({ event }) => event._tag === "IntegrationCandidateConstructionIntended")).toHaveLength(1)
+    expect(records.filter(({ event }) => event._tag === "IntegrationCandidateConstructed")).toHaveLength(1)
+    expect(deriveIntegrationCandidateConstruction(records, started)).toMatchObject({
+      _tag: "CandidateConstructed",
+      candidateCommit: candidate,
+      expectedTargetHead: head
+    })
+  }).pipe(
+    Effect.provide(
+      candidateBoundaryLayer([
+        IntegrationCandidateAgentReport.cases.Submitted.make({
+          candidateCommit: candidate,
+          correlation: placeholderCorrelation,
+          reviewManifest: evidenceReferenceFixture
+        })
+      ])
+    ),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
+
 it("does not let an unrelated task in the same run perturb the successor ordinal", () => {
   const unrelatedAccepted = acceptedResultFixture(GitCommitSha.make("a".repeat(40)))
   const unrelatedAttempt = AttemptId.make("unrelated-task-attempt")

@@ -357,6 +357,41 @@ describe("integration evidence history", () => {
     expect(result.semanticIssues).toEqual([expect.stringContaining("no exact earlier constructed candidate")])
     expect(historyIndexes.integrationCandidateSessionSupersessionsByPrior.size).toBe(1)
   })
+
+  it("rejects supersession correlations that cross a resource, repository, result, or evidence boundary", () => {
+    const successor = IntegrationCandidateCorrelation.make({
+      ...candidate.correlation,
+      candidateId: IntegrationCandidateId.make("supersession-boundary-successor"),
+      candidateResource: IntegrationCandidateResourceLocator.make("/candidate/supersession-boundary-successor"),
+      expectedTargetHead: GitCommitSha.make("8".repeat(40)),
+      integrationSessionId: IntegrationSessionId.make("supersession-boundary-successor-session")
+    })
+    const supersession = (successorCorrelation: IntegrationCandidateCorrelation) =>
+      IntegrationCandidateSessionSupersededEvent.make({
+        observedTargetHead: successorCorrelation.expectedTargetHead,
+        priorCandidateCommit: candidate.candidateCommit,
+        priorCorrelation: candidate.correlation,
+        responsibilityBeganAt: JournalPosition.make(8),
+        startedAt: JournalPosition.make(9),
+        successorCorrelation,
+        version: workflowJournalEventVersion
+      })
+
+    expect(() => supersession({ ...successor, candidateResource: candidate.correlation.candidateResource })).toThrow()
+    expect(() =>
+      supersession({
+        ...successor,
+        integrationTarget: IntegrationTarget.make({
+          ref: candidate.correlation.integrationTarget.ref,
+          repository: GitRepositoryLocator.make("/repositories/another.git")
+        })
+      })
+    ).toThrow()
+    expect(() => supersession({ ...successor, acceptedResultCommit: GitCommitSha.make("9".repeat(40)) })).toThrow()
+    expect(() =>
+      supersession({ ...successor, acceptanceManifest: changedByteLength(successor.acceptanceManifest) })
+    ).toThrow()
+  })
 })
 
 describe("target promotion history", () => {
