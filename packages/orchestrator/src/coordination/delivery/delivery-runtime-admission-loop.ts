@@ -29,36 +29,12 @@ type DeliveryRuntimeReservationResult =
   | DeferredAdmissionResult
   | { readonly _tag: "Started"; readonly started: boolean }
 
-type DeliveryRuntimeStartedProposalRegistryActions = {
-  readonly markStarted: (proposalId: DeliveryProposalId) => Effect.Effect<void>
-}
-
-type DeliveryRuntimeStartedProposalRegistryState = { readonly snapshot: Effect.Effect<ReadonlySet<DeliveryProposalId>> }
-
-type DeliveryRuntimeStartedProposalRegistry = DeliveryRuntimeStartedProposalRegistryActions &
-  DeliveryRuntimeStartedProposalRegistryState
-
-/** Owns the process-local fact that one exact proposal has crossed admission. */
-export const makeDeliveryRuntimeStartedProposalRegistry = Effect.fn(
-  "DeliveryRuntimeAdmissionLoop.makeStartedProposalRegistry"
-)(() =>
-  Effect.gen(function* () {
-    const started = yield* Ref.make<ReadonlySet<DeliveryProposalId>>(new Set())
-    return {
-      markStarted: (proposalId: DeliveryProposalId) =>
-        Ref.update(started, (current) => new Set([...current, proposalId])),
-      snapshot: Ref.get(started)
-    } satisfies DeliveryRuntimeStartedProposalRegistry
-  })
-)
-
 type DeliveryRuntimeAdmissionLoopState = {
   readonly admission: DeliveryRuntimeAdmissionController
   readonly deferredAt: Ref.Ref<ReadonlyMap<DeliveryProposalId, JournalPosition | null>>
   readonly latest: Ref.Ref<Option.Option<DeliveryRuntimeEvaluation>>
   readonly owners: Ref.Ref<ReadonlyMap<DeliveryProposalId, LiveOwner>>
   readonly selectionGate: Semaphore.Semaphore
-  readonly startedProposals: DeliveryRuntimeStartedProposalRegistry
 }
 
 type DeliveryRuntimeAdmissionLoopActions = {
@@ -93,8 +69,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     owners,
     publishRuntimeObservationInsideGate,
     reserveAndStart,
-    selectionGate,
-    startedProposals
+    selectionGate
   } = dependencies
 
   const admitLaterAvailableProposal = Effect.fn("DeliveryRuntimeAdmissionLoop.admitLaterAvailableProposal")(function* (
@@ -107,8 +82,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     acceptedAt: JournalPosition | null
   ) {
     for (const independent of proposals.slice(deferredIndex + 1)) {
-      const started = yield* startedProposals.snapshot
-      if (!proposalIsAvailable(independent, live, liveActionKeys, liveOperationIds, deferred, acceptedAt, started)) {
+      if (!proposalIsAvailable(independent, live, liveActionKeys, liveOperationIds, deferred, acceptedAt)) {
         continue
       }
       const laterReservation = yield* reserveAndStart(independent)
@@ -135,9 +109,8 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
         const liveOperationIds = new Set(
           (yield* Effect.forEach(live.values(), ({ operationId }) => operationId)).flatMap(Option.toArray)
         )
-        const started = yield* startedProposals.snapshot
         const proposal = proposedActions.proposals.find((candidate) =>
-          proposalIsAvailable(candidate, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt, started)
+          proposalIsAvailable(candidate, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)
         )
         if (proposal === undefined) return false
         const reservation = yield* reserveAndStart(proposal)

@@ -16,10 +16,7 @@ import {
 import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
 import type { DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
-import {
-  makeDeliveryRuntimeAdmissionLoop,
-  makeDeliveryRuntimeStartedProposalRegistry
-} from "./delivery-runtime-admission-loop.js"
+import { makeDeliveryRuntimeAdmissionLoop } from "./delivery-runtime-admission-loop.js"
 import type { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
 import {
   attachCurrentSignal,
@@ -143,7 +140,6 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         Option.match(semanticTrace, { onNone: () => Effect.void, onSome: ({ emit }) => emit(event) })
       const events = yield* Queue.unbounded<RuntimeEvent<E>>()
       const owners = yield* Ref.make<ReadonlyMap<DeliveryProposalId, LiveOwner>>(new Map())
-      const startedProposals = yield* makeDeliveryRuntimeStartedProposalRegistry()
       const deferredAt = yield* Ref.make<ReadonlyMap<DeliveryProposalId, JournalPosition | null>>(new Map())
       const latest = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
       const selectionGate = yield* Semaphore.make(1)
@@ -184,7 +180,6 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const proposal = reservation.proposal
         const owner = yield* RuntimeObservation.makeDeliveryRuntimeLiveOwner(reservation)
         yield* Ref.update(owners, (current) => new Map(current).set(proposal.id, owner))
-        yield* startedProposals.markStarted(proposal.id)
         yield* publishRuntimeObservationInsideGate()
         yield* emit({ _tag: "ProposalAdmitted", proposalId: proposal.id })
         const run = Effect.gen(function* () {
@@ -252,8 +247,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         owners,
         publishRuntimeObservationInsideGate,
         reserveAndStart,
-        selectionGate,
-        startedProposals
+        selectionGate
       })
 
       const applyEvaluation = Effect.fn("DeliveryRuntime.applyEvaluation")(function* (

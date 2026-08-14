@@ -23,6 +23,7 @@ import { AuthoredCassetteInteractionMismatch, type StoryCursor } from "./authore
 
 type AuthoredInteractionMismatchReporter = (failure: AuthoredCassetteInteractionMismatch) => Effect.Effect<void>
 type AuthoredAcquisitionOperationLookup = (operationId: OperationId) => Effect.Effect<Option.Option<TaskId>>
+type AuthoredBeforeCompletionTask = (request: CompletionTaskRequest) => Effect.Effect<void>
 
 interface ControlledTrackerAuthorityOptions {
   readonly reportInteractionMismatch?: AuthoredInteractionMismatchReporter
@@ -33,7 +34,7 @@ interface ControlledTrackerAuthorityOptions {
    * a fresh graph observation can be journaled without pretending that the
    * completion response itself changed the graph.
    */
-  readonly beforeCompleteTask?: (request: CompletionTaskRequest) => Effect.Effect<void>
+  readonly beforeCompleteTask?: AuthoredBeforeCompletionTask
 }
 
 /** Owns one coherent authored tracker-claim authority across ordinary and completion-finality protocols. */

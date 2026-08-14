@@ -156,14 +156,10 @@ export const proposalIsAvailable = (
   liveActionKeys: ReadonlySet<LiveDeliveryActionKey>,
   liveOperationIds: ReadonlySet<OperationId>,
   deferred: ReadonlyMap<DeliveryProposalId, JournalPosition | null>,
-  acceptedAt: JournalPosition | null,
-  startedProposalIds: ReadonlySet<DeliveryProposalId> = new Set()
+  acceptedAt: JournalPosition | null
 ): boolean =>
   !live.has(proposal.id) &&
   !liveActionKeys.has(liveActionKeyOf(proposal)) &&
-  (proposal.waitsForLiveProposalId === undefined ||
-    proposal.waitsForLiveProposalId === null ||
-    startedProposalIds.has(proposal.waitsForLiveProposalId)) &&
   deferred.get(proposal.id) !== acceptedAt &&
   (proposal.waitsForLiveOperationId === null || !liveOperationIds.has(proposal.waitsForLiveOperationId))
 
