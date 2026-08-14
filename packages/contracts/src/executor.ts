@@ -74,6 +74,8 @@ const PlannedAttemptExecutorProjectionShape = Schema.TaggedUnion({
   NoReport: { correlation: PlannedAttemptExecutorCorrelation },
   TemporarilyUnavailable: { correlation: PlannedAttemptExecutorCorrelation },
   Unreadable: { correlation: PlannedAttemptExecutorCorrelation },
+  /** The pre-attempt app initialization response contradicted the requested host/protocol identity. */
+  InitializationCorrelationContradiction: { correlation: PlannedAttemptExecutorCorrelation, detail: Schema.String },
   CorrelationContradiction: { expected: PlannedAttemptExecutorCorrelation, observed: PlannedAttemptExecutorReport }
 }).check(
   Schema.makeFilter((projection) => {

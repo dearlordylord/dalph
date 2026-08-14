@@ -65,7 +65,7 @@ it("roundtrips every generated exact planned-attempt work request", () => {
   )
 })
 
-it("roundtrips all five normalized projection outcomes for arbitrary correlations", () => {
+it("roundtrips all six normalized projection outcomes for arbitrary correlations", () => {
   fc.assert(
     fc.property(correlationArbitrary, correlatedReportArbitrary, (correlation, { report }) => {
       const foreignAttemptCorrelation = {
@@ -81,6 +81,11 @@ it("roundtrips all five normalized projection outcomes for arbitrary correlation
         { _tag: "NoReport" as const, correlation },
         { _tag: "TemporarilyUnavailable" as const, correlation },
         { _tag: "Unreadable" as const, correlation },
+        {
+          _tag: "InitializationCorrelationContradiction" as const,
+          correlation,
+          detail: "server platform identity contradicts the host"
+        },
         {
           _tag: "CorrelationContradiction" as const,
           expected: correlation,

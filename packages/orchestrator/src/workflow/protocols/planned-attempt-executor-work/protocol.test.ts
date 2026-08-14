@@ -885,6 +885,24 @@ it.effect("records temporary and unreadable outcomes without issuing an unmatche
       commandOrdinal,
       correlation
     })
+
+    const initializationContradiction = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        projection(
+          PlannedAttemptExecutorProjection.cases.InitializationCorrelationContradiction.make({
+            correlation,
+            detail: "server platform identity contradicts the host"
+          })
+        )
+      ),
+      Effect.flip
+    )
+    expect(initializationContradiction).toMatchObject({
+      _tag: "PlannedAttemptExecutorInitializationCorrelationContradiction",
+      correlation,
+      detail: "server platform identity contradicts the host"
+    })
     expect(
       (yield* journal.read(plannedAttempt.runId)).flatMap(({ event }) =>
         event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ? [event.observation._tag] : []
@@ -942,6 +960,23 @@ it.effect("records temporary and unreadable current-state outcomes while retaini
     expect(unreadable).toMatchObject({
       _tag: "PlannedAttemptExecutorStateUnreadable",
       correlation: stateObservationCorrelation
+    })
+    const initializationContradiction = yield* observePlannedAttemptExecutorState(stateObservationAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        projection(
+          PlannedAttemptExecutorProjection.cases.InitializationCorrelationContradiction.make({
+            correlation: stateObservationCorrelation,
+            detail: "server platform identity contradicts the host"
+          })
+        )
+      ),
+      Effect.flip
+    )
+    expect(initializationContradiction).toMatchObject({
+      _tag: "PlannedAttemptExecutorInitializationCorrelationContradiction",
+      correlation: stateObservationCorrelation,
+      detail: "server platform identity contradicts the host"
     })
     expect(
       (yield* journal.read(stateObservationAttempt.runId)).flatMap(({ event }) =>

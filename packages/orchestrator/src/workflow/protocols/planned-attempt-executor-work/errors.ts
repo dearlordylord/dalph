@@ -55,6 +55,12 @@ export class PlannedAttemptExecutorProjectionUnreadable extends Schema.TaggedErr
   { commandOrdinal: PlannedAttemptExecutorCommandOrdinal, correlation: PlannedAttemptExecutorCorrelationSchema }
 ) {}
 
+/** App initialization contradicted the exact host/protocol identity before a provider attempt report existed. */
+export class PlannedAttemptExecutorInitializationCorrelationContradiction extends Schema.TaggedError<PlannedAttemptExecutorInitializationCorrelationContradiction>()(
+  "PlannedAttemptExecutorInitializationCorrelationContradiction",
+  { correlation: PlannedAttemptExecutorCorrelationSchema, detail: Schema.String }
+) {}
+
 /** The normalized projection carried a different outer correlation than requested. */
 export class PlannedAttemptExecutorProjectionCorrelationMismatch extends Schema.TaggedError<PlannedAttemptExecutorProjectionCorrelationMismatch>()(
   "PlannedAttemptExecutorProjectionCorrelationMismatch",

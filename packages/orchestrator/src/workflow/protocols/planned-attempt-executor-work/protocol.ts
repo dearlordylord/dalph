@@ -46,6 +46,7 @@ import {
   PlannedAttemptExecutorCommandReconciliationRequired,
   PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
+  PlannedAttemptExecutorInitializationCorrelationContradiction,
   PlannedAttemptExecutorProjectionNoCurrentReport,
   PlannedAttemptExecutorProjectionTemporarilyUnavailable,
   PlannedAttemptExecutorProjectionUnreadable,
@@ -178,6 +179,12 @@ const reconcileUnsettledCommand = Effect.fn("PlannedAttemptExecutorWorkflow.reco
   if (projected._tag === "Unreadable") {
     yield* recordProjection(PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateUnreadable.make({}))
     return yield* new PlannedAttemptExecutorProjectionUnreadable({ commandOrdinal: intent.ordinal, correlation })
+  }
+  if (projected._tag === "InitializationCorrelationContradiction") {
+    return yield* new PlannedAttemptExecutorInitializationCorrelationContradiction({
+      correlation,
+      detail: projected.detail
+    })
   }
   const projectedReport = projected._tag === "Exact" ? projected.report : projected.observed
   if (!samePlannedAttemptExecutorCorrelation(correlation, projectedReport.correlation)) {
@@ -394,7 +401,9 @@ const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
     Unreadable: () =>
       recordObservation(PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({})).pipe(
         Effect.andThen(new PlannedAttemptExecutorStateUnreadable({ correlation }))
-      )
+      ),
+    InitializationCorrelationContradiction: ({ detail }) =>
+      Effect.fail(new PlannedAttemptExecutorInitializationCorrelationContradiction({ correlation, detail }))
   })
 })
 

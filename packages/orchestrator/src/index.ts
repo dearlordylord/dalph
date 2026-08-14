@@ -287,6 +287,7 @@ export {
   PlannedAttemptExecutorCommandReconciliationRequired,
   PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
+  PlannedAttemptExecutorInitializationCorrelationContradiction,
   PlannedAttemptExecutorProjectionCorrelationMismatch,
   PlannedAttemptExecutorProjectionTemporarilyUnavailable,
   PlannedAttemptExecutorProjectionUnreadable,

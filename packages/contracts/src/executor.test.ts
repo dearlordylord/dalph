@@ -53,6 +53,10 @@ it.each([
   PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
   PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation }),
   PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation }),
+  PlannedAttemptExecutorProjection.cases.InitializationCorrelationContradiction.make({
+    correlation,
+    detail: "server platform identity contradicts the host"
+  }),
   PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
     expected: correlation,
     observed: PlannedAttemptExecutorReport.cases.Running.make({
