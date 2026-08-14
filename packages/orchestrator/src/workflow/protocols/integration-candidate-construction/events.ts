@@ -129,18 +129,15 @@ export const IntegrationCandidateConstructionIntendedEvent = Schema.TaggedStruct
  * after a fresh compatible target read made its session stale. The successor
  * must be intended only after this fact is recorded.
  */
-export const IntegrationCandidateSessionSupersededEvent = Schema.TaggedStruct(
-  "IntegrationCandidateSessionSuperseded",
-  {
-    observedTargetHead: GitCommitSha,
-    priorCandidateCommit: GitCommitSha,
-    priorCorrelation: IntegrationCandidateCorrelation,
-    responsibilityBeganAt: JournalPosition,
-    startedAt: JournalPosition,
-    successorCorrelation: IntegrationCandidateCorrelation,
-    version: Schema.Literal(workflowJournalEventVersion)
-  }
-).check(
+export const IntegrationCandidateSessionSupersededEvent = Schema.TaggedStruct("IntegrationCandidateSessionSuperseded", {
+  observedTargetHead: GitCommitSha,
+  priorCandidateCommit: GitCommitSha,
+  priorCorrelation: IntegrationCandidateCorrelation,
+  responsibilityBeganAt: JournalPosition,
+  startedAt: JournalPosition,
+  successorCorrelation: IntegrationCandidateCorrelation,
+  version: Schema.Literal(workflowJournalEventVersion)
+}).check(
   Schema.makeFilter((event) => {
     if (event.priorCorrelation.runId !== event.successorCorrelation.runId) {
       return "candidate session supersession must stay within one run"

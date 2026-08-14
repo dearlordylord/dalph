@@ -350,10 +350,7 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     }),
     IntegrationCandidateSessionSuperseded: (event) => ({
       _tag: "GenericEventDescriptor",
-      expectedKey: integrationCandidateSessionSupersededRecordKey(
-        event.priorCorrelation,
-        event.successorCorrelation
-      )
+      expectedKey: integrationCandidateSessionSupersededRecordKey(event.priorCorrelation, event.successorCorrelation)
     }),
     IntegrationCandidateAgentReported: (event) => ({
       _tag: "GenericEventDescriptor",

@@ -3403,30 +3403,30 @@ const issue138PostPromotionBlockerGraph = {
 } as const
 
 /** A complete new blocker read preserves the verified candidate before promotion. */
-export const prePromotionBlockerAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
-  ...candidateCorrectionAfterUnreadableGitAuthoredCassette,
-  name: "a new prerequisite preserves the verified candidate before promotion",
-  story: candidateCorrectionAfterUnreadableGitAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
-    if (item._tag === "TargetVerificationReturned") {
-      return [
-        item,
-        {
-          _tag: "CoordinatorActivationReturned",
-          decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-        }
-      ]
-    }
-    return item._tag !== "ExpectedBehavior"
-      ? [item]
-      : [
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-          { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionBlockerGraph },
-          item
+export const prePromotionBlockerAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
+  {
+    ...candidateCorrectionAfterUnreadableGitAuthoredCassette,
+    name: "a new prerequisite preserves the verified candidate before promotion",
+    story: candidateCorrectionAfterUnreadableGitAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+      if (item._tag === "TargetVerificationReturned") {
+        return [
+          item,
+          {
+            _tag: "CoordinatorActivationReturned",
+            decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+          }
         ]
-  })
-})
+      }
+      return item._tag !== "ExpectedBehavior"
+        ? [item]
+        : [
+            { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+            { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionBlockerGraph },
+            item
+          ]
+    })
+  }
+)
 
 /** A post-promotion blocker preserves M and its promotion proof while A waits. */
 export const blockersAroundPromotionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
