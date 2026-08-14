@@ -2,8 +2,9 @@
 /* eslint-disable max-lines -- The protocol transport and ownership gate form one audited application boundary. */
 import nodeProcess from "node:process"
 import { randomUUID } from "node:crypto"
-import nodeFs from "node:fs"
-import { execFileSync } from "node:child_process"
+import nodeFsPromises from "node:fs/promises"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { setTimeout as nodeSetTimeout } from "node:timers"
 import nodePath from "node:path"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -156,11 +157,12 @@ const processErrorCode = (error: unknown): string => {
 const processIdentitySeparator = "|"
 const processStatAfterCommandOffset = 2
 const linuxProcessStatStartTimeFieldIndex = 19
+const execFileAsync = promisify(execFile)
 
 /** Reads the host's process-start identity, which distinguishes PID reuse. */
-const readProcessStartIdentity = (pid: number): string | undefined => {
+const readProcessStartIdentity = async (pid: number): Promise<string | undefined> => {
   if (nodeProcess.platform === "linux") {
-    const stat = nodeFs.readFileSync(`/proc/${pid}/stat`, "utf8")
+    const stat = await nodeFsPromises.readFile(`/proc/${pid}/stat`, "utf8")
     const commandEnd = stat.lastIndexOf(")")
     const fields =
       commandEnd < 0
@@ -173,22 +175,21 @@ const readProcessStartIdentity = (pid: number): string | undefined => {
     return startTime === undefined || startTime.length === 0 ? undefined : `linux:${startTime}`
   }
   if (nodeProcess.platform === "win32") {
-    const startTime = execFileSync(
+    const { stdout: startTime } = await execFileAsync(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`],
       { encoding: "utf8" }
-    ).trim()
-    return startTime.length === 0 ? undefined : `windows:${startTime}`
+    )
+    return startTime.trim().length === 0 ? undefined : `windows:${startTime.trim()}`
   }
-  const startTime = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim()
-  return startTime.length === 0 ? undefined : `posix:${startTime}`
+  return undefined
 }
 
-const incarnationWithProcessIdentity = (
+const incarnationWithProcessIdentity = async (
   base: CodexServerIncarnation,
   pid: number
-): CodexServerIncarnation | undefined => {
-  const identity = readProcessStartIdentity(pid)
+): Promise<CodexServerIncarnation | undefined> => {
+  const identity = await readProcessStartIdentity(pid)
   return identity === undefined
     ? undefined
     : CodexServerIncarnation.make(`${base}${processIdentitySeparator}${encodeURIComponent(identity)}`)
@@ -600,7 +601,7 @@ export const codexAppServerLayer = (
           )
         )
       )
-      const liveIncarnation = yield* Effect.try({
+      const liveIncarnation = yield* Effect.tryPromise({
         try: () => incarnationWithProcessIdentity(incarnation, Number(handle.pid)),
         catch: (error) => operationFailure("initialize", "Ownership", error)
       })
@@ -743,80 +744,115 @@ export const codexAppServerLayer = (
   )
 
 /** Node process ownership projection used by the default app-server layer. */
-export const nodeCodexProcessOwnershipLayer: Layer.Layer<CodexProcessOwnership> = Layer.succeed(CodexProcessOwnership, {
+const nodeCodexProcessOwnershipService: CodexProcessOwnershipService = {
   observe: (launch) =>
-    Effect.sync(() => {
-      if (launch.pid === null) return { _tag: "Unreadable", detail: "launch intent has no process identity" } as const
-      try {
-        nodeProcess.kill(launch.pid, 0)
-        const expectedExecutable = launch.command[0]
-        const expectedMode = launch.command[1]
-        if (expectedExecutable === undefined || expectedMode !== "app-server") {
-          return { _tag: "Unreadable", detail: "server launch command is incomplete" } as const
+    Effect.tryPromise({
+      try: async () => {
+        if (launch.pid === null) return { _tag: "Unreadable", detail: "launch intent has no process identity" } as const
+        try {
+          nodeProcess.kill(launch.pid, 0)
+          const expectedExecutable = launch.command[0]
+          const expectedMode = launch.command[1]
+          if (expectedExecutable === undefined || expectedMode !== "app-server") {
+            return { _tag: "Unreadable", detail: "server launch command is incomplete" } as const
+          }
+          if (nodeProcess.platform !== "linux" && nodeProcess.platform !== "win32") {
+            return { _tag: "Unreadable", detail: "process command identity is unsupported on this platform" } as const
+          }
+          const commandLine =
+            nodeProcess.platform === "linux"
+              ? (await nodeFsPromises.readFile(`/proc/${launch.pid}/cmdline`, "utf8")).split("\u0000").filter(Boolean)
+              : (
+                  await execFileAsync("powershell.exe", [
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    `(Get-Process -Id ${launch.pid}).Path`
+                  ])
+                ).stdout
+                  .trim()
+                  .split(/\s+/)
+          const executableName = nodePath.basename(expectedExecutable)
+          const executableHasPath = nodePath.isAbsolute(expectedExecutable) || expectedExecutable.includes(nodePath.sep)
+          const executableMatches = commandLine.some((argument) =>
+            executableHasPath
+              ? argument === expectedExecutable || argument === nodePath.resolve(expectedExecutable)
+              : nodePath.basename(argument) === executableName
+          )
+          if (!executableMatches) {
+            return { _tag: "Contradictory", detail: `pid ${launch.pid} is not the recorded Codex executable` } as const
+          }
+          if (!commandLine.includes(expectedMode)) {
+            return { _tag: "Contradictory", detail: `pid ${launch.pid} is not an app-server command` } as const
+          }
+          const expectedProcessIdentity = processIdentityFromIncarnation(launch.incarnation)
+          if (expectedProcessIdentity === undefined) {
+            return { _tag: "Unreadable", detail: "server launch incarnation has no process-start identity" } as const
+          }
+          const observedProcessIdentity = await readProcessStartIdentity(launch.pid)
+          if (observedProcessIdentity === undefined) {
+            return { _tag: "Unreadable", detail: "observed process has no process-start identity" } as const
+          }
+          if (observedProcessIdentity !== expectedProcessIdentity) {
+            return {
+              _tag: "Contradictory",
+              detail: `pid ${launch.pid} belongs to a different process incarnation`
+            } as const
+          }
+          return { _tag: "ExactLive", pid: launch.pid } as const
+        } catch (error) {
+          const code = processErrorCode(error)
+          return code === "ESRCH"
+            ? ({ _tag: "Absent" } as const)
+            : ({ _tag: "Unreadable", detail: `cannot observe app-server pid ${launch.pid}: ${String(error)}` } as const)
         }
-        const commandLine =
-          nodeProcess.platform === "linux"
-            ? nodeFs.readFileSync(`/proc/${launch.pid}/cmdline`, "utf8").split("\u0000").filter(Boolean)
-            : execFileSync("ps", ["-p", String(launch.pid), "-o", "command="], { encoding: "utf8" })
-                .trim()
-                .split(/\s+/)
-        const executableName = nodePath.basename(expectedExecutable)
-        const executableHasPath = nodePath.isAbsolute(expectedExecutable) || expectedExecutable.includes(nodePath.sep)
-        const executableMatches = commandLine.some((argument) =>
-          executableHasPath
-            ? argument === expectedExecutable || argument === nodePath.resolve(expectedExecutable)
-            : nodePath.basename(argument) === executableName
-        )
-        if (!executableMatches) {
-          return { _tag: "Contradictory", detail: `pid ${launch.pid} is not the recorded Codex executable` } as const
-        }
-        if (!commandLine.includes(expectedMode)) {
-          return { _tag: "Contradictory", detail: `pid ${launch.pid} is not an app-server command` } as const
-        }
-        const expectedProcessIdentity = processIdentityFromIncarnation(launch.incarnation)
-        if (expectedProcessIdentity === undefined) {
-          return { _tag: "Unreadable", detail: "server launch incarnation has no process-start identity" } as const
-        }
-        const observedProcessIdentity = readProcessStartIdentity(launch.pid)
-        if (observedProcessIdentity === undefined) {
-          return { _tag: "Unreadable", detail: "observed process has no process-start identity" } as const
-        }
-        if (observedProcessIdentity !== expectedProcessIdentity) {
-          return {
-            _tag: "Contradictory",
-            detail: `pid ${launch.pid} belongs to a different process incarnation`
-          } as const
-        }
-        return { _tag: "ExactLive", pid: launch.pid } as const
-      } catch (error) {
-        const code = processErrorCode(error)
-        return code === "ESRCH"
-          ? ({ _tag: "Absent" } as const)
-          : ({ _tag: "Unreadable", detail: `cannot observe app-server pid ${launch.pid}: ${String(error)}` } as const)
-      }
+      },
+      catch: (error) => operationFailure("initialize", "Ownership", error)
     }),
   stop: (launch) => {
     if (launch.pid === null) return Effect.void
     const pid = launch.pid
-    const groupSignal = Effect.try({
-      try: () =>
-        nodeProcess.platform === "win32"
-          ? execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"])
-          : nodeProcess.kill(-pid, "SIGTERM"),
-      catch: (error) => error
-    })
-    return groupSignal
-      .pipe(
-        Effect.catch((error) =>
-          processErrorCode(error) === "ESRCH"
-            ? Effect.try({ try: () => nodeProcess.kill(pid, "SIGTERM"), catch: (fallbackError) => fallbackError })
-            : Effect.fail(error)
-        )
+    // The signal is authorized only after a fresh identity observation.
+    const service = nodeCodexProcessOwnershipService
+    return service.observe(launch).pipe(
+      Effect.flatMap((observed) =>
+        observed._tag === "ExactLive" && observed.pid === pid
+          ? Effect.void
+          : observed._tag === "Absent"
+            ? Effect.void
+            : Effect.fail(operationFailure("close", "Ownership", "process identity changed before signal"))
+      ),
+      Effect.andThen(
+        Effect.suspend(() => {
+          const groupSignal =
+            nodeProcess.platform === "win32"
+              ? Effect.tryPromise({
+                  try: () => execFileAsync("taskkill", ["/PID", String(pid), "/T", "/F"]),
+                  catch: (error) => error
+                }).pipe(Effect.as(true))
+              : Effect.try({ try: () => nodeProcess.kill(-pid, "SIGTERM"), catch: (error) => error }).pipe(
+                  Effect.as(true)
+                )
+          return groupSignal
+            .pipe(
+              Effect.catch((error) =>
+                processErrorCode(error) === "ESRCH"
+                  ? Effect.try({ try: () => nodeProcess.kill(pid, "SIGTERM"), catch: (fallbackError) => fallbackError })
+                  : Effect.fail(error)
+              )
+            )
+            .pipe(Effect.catch((error) => (processErrorCode(error) === "ESRCH" ? Effect.void : Effect.fail(error))))
+            .pipe(Effect.mapError((error) => operationFailure("close", "Ownership", error)))
+        })
       )
-      .pipe(Effect.catch((error) => (processErrorCode(error) === "ESRCH" ? Effect.void : Effect.fail(error))))
-      .pipe(Effect.mapError((error) => operationFailure("close", "Ownership", error)))
+    )
   }
-})
+}
+
+export const nodeCodexProcessOwnershipLayer: Layer.Layer<CodexProcessOwnership> = Layer.succeed(
+  CodexProcessOwnership,
+  nodeCodexProcessOwnershipService
+)
 
 /** Convenience composition for the real app-server layer's process gate. */
 export const codexAppServerNodeLayer = (
