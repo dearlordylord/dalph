@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The application Exit chronology and its registries stay co-located for auditability. */
 import {
   Array as EffectArray,
   Clock,
@@ -240,12 +241,19 @@ interface ApplicationExitExecutorDrainRegistry {
 export interface ApplicationExitShellService {
   readonly admission: ApplicationExitAdmissionService
   readonly awaitExitRequested: Effect.Effect<void>
+  /** Every admitted executor drain has settled, including registrations that raced the cutoff. */
+  readonly awaitExecutorDrains?: Effect.Effect<void, ApplicationExitDrainFailure>
   readonly registerExecutorDrain: (drain: ApplicationExitExecutorDrain) => Effect.Effect<void, never, Scope.Scope>
   readonly registerProcessLocalDrain: (
     drain: ApplicationExitProcessLocalDrain
   ) => Effect.Effect<void, never, Scope.Scope>
   readonly requestBoundary: ApplicationExitRequestBoundaryService
 }
+
+/** Application-scoped Exit capability shared by every Run bootstrap and executor resource. */
+export class ApplicationExitShell extends Context.Service<ApplicationExitShell, ApplicationExitShellService>()(
+  "@dalph/ApplicationExitShell"
+) {}
 
 /**
  * Owns the one process-wide Exit lifecycle, driver, process port, drain registry,
@@ -273,22 +281,42 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
   const settledProcessLocalDiagnostics = yield* Ref.make<ReadonlyMap<number, ReadonlyArray<ApplicationExitDiagnostic>>>(
     new Map()
   )
+  const executorDrainsSettled = yield* Deferred.make<void>()
+  const executorDrainActivity = yield* Ref.make(0)
+  const finishExecutorDrain = Effect.fn("ApplicationExitShell.finishExecutorDrain")(function* () {
+    const settled = yield* Ref.updateAndGet(executorDrainActivity, (count) => Math.max(0, count - 1))
+    if (settled === 0) yield* Deferred.succeed(executorDrainsSettled, undefined)
+  })
+
   const runExecutorDrain = Effect.fn("ApplicationExitShell.runExecutorDrain")(function* (
     entry: RegisteredApplicationExitExecutorDrain
   ) {
     const result = yield* entry.drain.suspendRunningExecutorWork.pipe(
+      Effect.catchDefect((defect) =>
+        Effect.fail(
+          new ApplicationExitDrainFailure({
+            diagnostics: [ApplicationExitDiagnostic.make(`Executor Exit drain failed: ${String(defect)}`)]
+          })
+        )
+      ),
       Effect.match({
         onFailure: ({ diagnostics }): ApplicationExitExecutorDrainResult => ({ correlations: [], diagnostics }),
         onSuccess: (correlations): ApplicationExitExecutorDrainResult => ({ correlations, diagnostics: [] })
-      })
+      }),
+      Effect.tap((result) =>
+        Effect.gen(function* () {
+          if (result.diagnostics.length > 0) {
+            yield* Ref.update(settledExecutorDiagnostics, (current) =>
+              new Map(current).set(entry.drainId, result.diagnostics)
+            )
+          }
+          yield* emitSafeExecutorCorrelations(trace, result.correlations)
+          yield* Deferred.succeed(entry.finished, result)
+        })
+      ),
+      Effect.ensuring(finishExecutorDrain())
     )
-    if (result.diagnostics.length > 0) {
-      yield* Ref.update(settledExecutorDiagnostics, (current) =>
-        new Map(current).set(entry.drainId, result.diagnostics)
-      )
-    }
-    yield* emitSafeExecutorCorrelations(trace, result.correlations)
-    yield* Deferred.succeed(entry.finished, result)
+    return result
   })
 
   const startExecutorDrains = (entries: ReadonlyArray<RegisteredApplicationExitExecutorDrain>) =>
@@ -314,6 +342,8 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
       const registered = new Map([...current.registered].map(([id, entry]) => [id, { ...entry, started: true }]))
       return [pending, { ...current, phase: "Draining" as const, registered }] as const
     })
+    yield* Ref.update(executorDrainActivity, (count) => count + entries.length)
+    if (entries.length === 0) yield* Deferred.succeed(executorDrainsSettled, undefined)
     yield* startExecutorDrains(entries)
     const results = yield* Effect.forEach(entries, claimExecutorDrainResult)
     const diagnostics = EffectArray.getSomes(results).flatMap(({ diagnostics }) => diagnostics)
@@ -325,6 +355,17 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
   })
 
   const awaitExecutorDrainResults = Effect.gen(function* () {
+    const entries = [...(yield* Ref.get(executorDrains)).registered.values()]
+    const results = yield* Effect.forEach(entries, claimExecutorDrainResult)
+    const diagnostics = EffectArray.getSomes(results).flatMap(({ diagnostics }) => diagnostics)
+    const [first, ...remaining] = diagnostics
+    if (first !== undefined) {
+      return yield* new ApplicationExitDrainFailure({ diagnostics: [first, ...remaining] })
+    }
+  })
+
+  const awaitExecutorDrains = Effect.gen(function* () {
+    yield* Deferred.await(executorDrainsSettled)
     const entries = [...(yield* Ref.get(executorDrains)).registered.values()]
     const results = yield* Effect.forEach(entries, claimExecutorDrainResult)
     const diagnostics = EffectArray.getSomes(results).flatMap(({ diagnostics }) => diagnostics)
@@ -383,6 +424,7 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
   return {
     admission: lifecycle.admission,
     awaitExitRequested: lifecycle.awaitExitRequested,
+    awaitExecutorDrains,
     registerExecutorDrain: (drain) =>
       Effect.gen(function* () {
         const finished = yield* Deferred.make<ApplicationExitExecutorDrainResult>()
@@ -402,7 +444,10 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
             { ...current, nextId: current.nextId + 1, registered }
           ] as const
         })
-        if (registration.started) yield* startExecutorDrains([registration.entry])
+        if (registration.started) {
+          yield* Ref.update(executorDrainActivity, (count) => count + 1)
+          yield* startExecutorDrains([registration.entry])
+        }
         yield* Effect.addFinalizer(() =>
           Ref.modify(executorDrains, (current) => {
             if (current.phase !== "Serving") {

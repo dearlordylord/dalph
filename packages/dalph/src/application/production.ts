@@ -11,11 +11,12 @@ import {
   type GitCommonDirectoryTarget,
   type JournalStoreError,
   EvidenceStore,
+  ApplicationExitShell,
+  makeApplicationExitShell,
   journaledRunBootstrapLayer,
   journaledWorkflowInterpreterLayer,
   ApplicationExitRequestBoundary,
   CoordinatorOwnership,
-  makeApplicationExitShell,
   nodeGitCommandLayer,
   nodeGitTargetLineageLayer,
   nodeGitWorktreeLayer,
@@ -84,7 +85,15 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     acceptedResultEvidenceStore === undefined
       ? plannedAttemptExecutorLayer
       : plannedAttemptExecutorLayer.pipe(Layer.provide(Layer.succeed(EvidenceStore, acceptedResultEvidenceStore)))
-  const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, executorWithAcceptedEvidence)
+  const applicationExitLayer = Layer.effect(
+    ApplicationExitShell,
+    Effect.gen(function* () {
+      const ownership = yield* CoordinatorOwnership
+      return yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
+    })
+  )
+  const executorWithApplicationExit = executorWithAcceptedEvidence.pipe(Layer.provideMerge(applicationExitLayer))
+  const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, executorWithApplicationExit)
 
   return Layer.unwrap(
     Effect.gen(function* () {
@@ -92,8 +101,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const crypto = yield* Crypto.Crypto
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
-      const ownership = yield* CoordinatorOwnership
-      const applicationExit = yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
+      const applicationExit = yield* ApplicationExitShell
       const runtimeLayer = ({ runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(
           activeRunId,

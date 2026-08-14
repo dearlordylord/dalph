@@ -1,8 +1,9 @@
 /* eslint-disable import/no-nodejs-modules -- this test launches only a local protocol fixture, never OpenAI. */
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, Exit, FileSystem, Layer, Path } from "effect"
+import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Path } from "effect"
 import { expect } from "vitest"
+import { ApplicationExitShell, CoordinatorOwnership, makeApplicationExitShell } from "@dalph/orchestrator"
 import {
   CodexAppServer,
   codexAppServerLayer,
@@ -17,14 +18,17 @@ import {
 } from "./codex-attempt-store.js"
 
 const fakeServer = String.raw`#!/usr/bin/env node
+const fs = require("node:fs")
 let buffer = ""
 let thread = { id: "fixture-thread", cwd: "/unset", status: "idle", turns: [] }
+const persistedThreadFile = process.argv[1] + ".thread"
 const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
 const onMessage = (message) => {
   if (message.method === "initialized") return
   if (message.method === "initialize") return write(message.id, {})
   if (message.method === "thread/start") {
     thread = { ...thread, cwd: message.params.cwd, status: "idle", turns: [] }
+    fs.writeFileSync(persistedThreadFile, thread.id)
     return write(message.id, { thread })
   }
   if (message.method === "thread/read" || message.method === "thread/resume") return write(message.id, { thread })
@@ -148,7 +152,7 @@ it.effect("reconciles a surviving prior server incarnation before launching a re
         yield* app.close
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
       expect(Exit.isSuccess(result)).toBe(true)
-      expect(observations).toEqual(["ExactLive", "ExactLive", "Absent"])
+      expect(observations).toEqual(["ExactLive", "ExactLive", "Absent", "Absent"])
       expect(stopped).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
   )
@@ -169,6 +173,122 @@ it.effect("fails closed when initialization decodes to an invalid protocol shape
         return yield* app.startThread("/exact/worktree")
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
       expect(Exit.isFailure(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("closes the application-scoped server only after the shared executor drain", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-app-server-exit-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+
+      const shell = yield* makeApplicationExitShell(
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
+        { requestEnd: () => Effect.void }
+      )
+      const drainStarted = yield* Deferred.make<void>()
+      const secondDrainStarted = yield* Deferred.make<void>()
+      const releaseDrain = yield* Deferred.make<void>()
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Deferred.succeed(drainStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseDrain)),
+          Effect.as([])
+        )
+      })
+      // Two Run bootstraps register with this one application shell/server.
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Deferred.succeed(secondDrainStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseDrain)),
+          Effect.as([])
+        )
+      })
+      const events: Array<string> = []
+      let stopped = false
+      const appLayer = codexAppServerLayer({ executable }).pipe(
+        Layer.provide(
+          controlledCodexProcessOwnershipLayer({
+            observe: () => Effect.succeed(stopped ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 1 }),
+            stop: () =>
+              Effect.sync(() => {
+                events.push("server-stop")
+                stopped = true
+              })
+          })
+        ),
+        Layer.provide(memoryCodexAttemptStoreLayer()),
+        Layer.provide(Layer.succeed(ApplicationExitShell, shell))
+      )
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        const thread = yield* app.startThread("/persisted/worktree")
+        const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+        yield* Deferred.await(drainStarted)
+        yield* Deferred.await(secondDrainStarted)
+        expect((yield* app.readThread(thread.id)).id).toBe(thread.id)
+        expect(events).toEqual([])
+
+        yield* Deferred.succeed(releaseDrain, undefined)
+        expect(yield* Fiber.join(exiting)).toMatchObject({ _tag: "Succeeded" })
+        expect(events).toEqual(["server-stop"])
+        expect(yield* fileSystem.readFileString(`${executable}.thread`)).toBe("fixture-thread")
+
+        // Repeated close joins the same application close and never signals a second owner.
+        yield* app.close
+        const afterClose = yield* Effect.exit(app.startThread("/persisted/worktree"))
+        expect(Exit.isFailure(afterClose)).toBe(true)
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isSuccess(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("scope teardown closes the server without claiming an Exit boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-app-server-scope-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      const events: Array<string> = []
+      let stopped = false
+      let processEndRequested = false
+      const shell = yield* makeApplicationExitShell(
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
+        {
+          requestEnd: () =>
+            Effect.sync(() => {
+              processEndRequested = true
+            })
+        }
+      )
+      const appLayer = codexAppServerLayer({ executable }).pipe(
+        Layer.provide(
+          controlledCodexProcessOwnershipLayer({
+            observe: () => Effect.succeed(stopped ? { _tag: "Absent" as const } : { _tag: "ExactLive" as const, pid: 1 }),
+            stop: () =>
+              Effect.sync(() => {
+                stopped = true
+                events.push("server-stop")
+              })
+          })
+        ),
+        Layer.provide(memoryCodexAttemptStoreLayer()),
+        Layer.provide(Layer.succeed(ApplicationExitShell, shell))
+      )
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        yield* app.startThread("/scope-only/worktree")
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+      expect(Exit.isSuccess(result)).toBe(true)
+      expect(events).toEqual(["server-stop"])
+      expect(processEndRequested).toBe(false)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
