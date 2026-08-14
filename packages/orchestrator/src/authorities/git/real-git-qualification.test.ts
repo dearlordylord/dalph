@@ -164,8 +164,44 @@ const scriptedTargetPromotion = <A>(
     }).pipe(Effect.provide(nodeGitTargetPromotionLayer), Effect.provide(Layer.succeed(GitCommand, commands)))
   })
 
+const targetPromotionTransportFailureAfter = (responses: ReadonlyArray<GitCommandResult>) =>
+  Effect.gen(function* () {
+    const call = yield* Ref.make(0)
+    const commands = GitCommand.of({
+      run: () =>
+        Ref.getAndUpdate(call, (current) => current + 1).pipe(
+          Effect.flatMap((index) => {
+            const response = responses[index]
+            return response === undefined
+              ? Effect.fail(new GitCommandInvocationFailure({ detail: `transport failed at call ${index + 1}` }))
+              : Effect.succeed(response)
+          })
+        ),
+      runBytesInWorktree: () => Effect.die("unused"),
+      runInWorktree: () => Effect.die("unused")
+    })
+    return yield* Effect.gen(function* () {
+      const git = yield* TargetPromotionGit
+      return yield* git.read(scriptedRequest)
+    }).pipe(
+      Effect.provide(nodeGitTargetPromotionLayer),
+      Effect.provide(Layer.succeed(GitCommand, commands)),
+      Effect.flip
+    )
+  })
+
 it.effect("types target promotion transport, malformed, indeterminate, and contradictory Git outcomes", () =>
   Effect.gen(function* () {
+    expect(yield* targetPromotionTransportFailureAfter([])).toMatchObject({
+      _tag: "TargetPromotionGitReadFailure",
+      detail: "transport failed at call 1"
+    })
+    expect(
+      yield* targetPromotionTransportFailureAfter([
+        GitCommandResult.make({ exitCode: 0, stderr: "", stdout: scriptedRequest.expectedTargetHead })
+      ])
+    ).toMatchObject({ _tag: "TargetPromotionGitReadFailure", detail: "transport failed at call 2" })
+
     const targetReadTransport = yield* scriptedTargetPromotion((git) => git.read(scriptedRequest), []).pipe(Effect.flip)
     expect(targetReadTransport).toMatchObject({
       _tag: "TargetPromotionGitReadFailure",
@@ -187,6 +223,15 @@ it.effect("types target promotion transport, malformed, indeterminate, and contr
     ).pipe(Effect.flip)
     expect(ancestryTransport).toMatchObject({ detail: "ancestry unavailable" })
 
+    const ancestryWithoutDiagnostic = yield* scriptedTargetPromotion(
+      (git) => git.read(scriptedRequest),
+      [
+        GitCommandResult.make({ exitCode: 0, stderr: "", stdout: scriptedRequest.expectedTargetHead }),
+        GitCommandResult.make({ exitCode: 2, stderr: "", stdout: "" })
+      ]
+    ).pipe(Effect.flip)
+    expect(ancestryWithoutDiagnostic).toMatchObject({ detail: "git exited 2" })
+
     const compareTransport = yield* scriptedTargetPromotion((git) => git.compareAndSet(scriptedRequest), []).pipe(
       Effect.flip
     )
@@ -207,6 +252,17 @@ it.effect("types target promotion transport, malformed, indeterminate, and contr
       detail: "stale compare-and-set"
     })
 
+    const stillExpectedWithoutDiagnostic = yield* scriptedTargetPromotion(
+      (git) => git.compareAndSet(scriptedRequest),
+      [
+        GitCommandResult.make({ exitCode: 1, stderr: "", stdout: "" }),
+        GitCommandResult.make({ exitCode: 0, stderr: "", stdout: scriptedRequest.expectedTargetHead })
+      ]
+    ).pipe(Effect.flip)
+    expect(stillExpectedWithoutDiagnostic).toMatchObject({
+      detail: "Git rejected compare-and-set while the expected head remained current"
+    })
+
     const unreadableAfterReject = yield* scriptedTargetPromotion(
       (git) => git.compareAndSet(scriptedRequest),
       [
@@ -218,6 +274,17 @@ it.effect("types target promotion transport, malformed, indeterminate, and contr
     if (unreadableAfterReject instanceof TargetPromotionCompareAndSetFailure) {
       expect(unreadableAfterReject.detail).toContain("unable to reconcile current target: target unreadable")
     }
+
+    const unreadableWithoutDiagnostic = yield* scriptedTargetPromotion(
+      (git) => git.compareAndSet(scriptedRequest),
+      [
+        GitCommandResult.make({ exitCode: 1, stderr: "", stdout: "" }),
+        GitCommandResult.make({ exitCode: 1, stderr: "", stdout: "" })
+      ]
+    ).pipe(Effect.flip)
+    expect(unreadableWithoutDiagnostic).toMatchObject({
+      detail: expect.stringContaining("git update-ref exited 1; unable to reconcile current target: git exited 1")
+    })
   })
 )
 
