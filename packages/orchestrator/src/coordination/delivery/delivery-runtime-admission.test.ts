@@ -233,6 +233,10 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
         { capacity: TaskWorkCapacity.make(3), held: [{ correlation, taskId }] },
         integrationTargets
       )
+      yield* admission.bindPlannedAttemptPosition(TaskId.make("unknown"), correlation)
+      expect((yield* admission.snapshot).positions).toEqual(
+        new Map([[taskId, { _tag: "AcceptedAttemptPosition", correlation }]])
+      )
       const proposalBase = trackerGraphReadProposalOf({
         acceptedAt: JournalPosition.make(1),
         purpose: "EstablishCurrentGraph",

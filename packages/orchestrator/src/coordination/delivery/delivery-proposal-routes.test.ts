@@ -25,8 +25,15 @@ import { describe, expect, expectTypeOf, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Ref, Stream } from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
-import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
+import { GraphProjectionError, projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import {
+  FixtureReadError,
+  TrackerAdapterReadContext,
+  TrackerAdapterReadError,
+  TrackerAdapterReadFailureReason,
+  TrackerReadError
+} from "../../authorities/task-tracker/graph-reader.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskLifecycle, type Task, TrackerRevision } from "../../authorities/task-tracker/task.js"
@@ -75,7 +82,7 @@ import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
-import { deliveryProposalsOf } from "./delivery-proposal.js"
+import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { executeAcceptedWorkflowAction, executeNewRecoveredAction } from "./recovered-delivery-action-adapter.js"
 import { DeliveryActionExecutor, type DeliveryActionExecutionLease } from "./delivery-action-executor.js"
@@ -84,11 +91,13 @@ import type {
   AcceptedIdentityDeliveryProposal,
   DeliveryActionProposal,
   FreshIdentityDeliveryProposal,
-  IdentityFreeDeliveryProposal
+  IdentityFreeDeliveryProposal,
+  TrackerGraphActionProposal
 } from "./delivery-action-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
 import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
+import { executeFreshTrackerGraphRead, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import { executePlannedAttemptTransition } from "./planned-attempt-delivery-action-adapter.js"
 import { liveDeliveryActionExecutorLayer, makeLiveDeliveryActionExecutor } from "./live-delivery-action-executor.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
@@ -197,6 +206,17 @@ type FreshOperationProposal = Extract<
 >
 
 const isFreshOperationProposal = (proposal: DeliveryActionProposal): proposal is FreshOperationProposal =>
+  proposal.actionIdentity._tag === "FreshOperationIdRequired"
+
+type FreshTrackerGraphProposal = Extract<
+  TrackerGraphActionProposal,
+  {
+    readonly actionIdentity: { readonly _tag: "FreshOperationIdRequired" }
+    readonly route: { readonly _tag: "TrackerGraphReadRoute" }
+  }
+>
+
+const isFreshTrackerGraphProposal = (proposal: TrackerGraphActionProposal): proposal is FreshTrackerGraphProposal =>
   proposal.actionIdentity._tag === "FreshOperationIdRequired"
 
 const proposalsFor = (transition: Transition, acceptedOperationIds: ReadonlySet<OperationId> = new Set()) => {
@@ -691,8 +711,8 @@ describe("delivery proposal route matrix", () => {
   effectIt.effect("executes the identity-free acquire route and names missing candidate boundaries", () =>
     Effect.gen(function* () {
       const candidateJournal = InRunJournal.of({
-        append: () => Effect.die("candidate journal must not append"),
-        read: () => Effect.succeed([])
+        append: (_runId, _key, _event) => Effect.die("candidate journal must not append"),
+        read: (_runId) => Effect.succeed([])
       })
       const acquire = RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started })
       const acquireProposal = proposalsFor(acquire).proposals[0]
@@ -707,6 +727,20 @@ describe("delivery proposal route matrix", () => {
           target
         ).pipe(Effect.provideService(InRunJournal, candidateJournal))
       ).toMatchObject({ _tag: "ActionCompleted", proposalId: acquireProposal.id })
+
+      const release = RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility: started })
+      const releaseProposal = proposalsFor(release).proposals[0]
+      if (releaseProposal === undefined || !isIdentityFreeProposal(releaseProposal)) {
+        return yield* Effect.die("missing identity-free release proposal")
+      }
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: releaseProposal },
+          release,
+          inertLease,
+          target
+        ).pipe(Effect.provideService(InRunJournal, candidateJournal))
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: releaseProposal.id })
 
       const lineage = TargetLineageObservation.make({
         plannedBaseIsAncestorOfTargetHead: true,
@@ -1391,6 +1425,89 @@ describe("delivery proposal route matrix", () => {
 
       expect(result).toEqual({ _tag: "ActionCompleted", proposalId: proposal.id })
       expect(yield* Ref.get(traceTags)).not.toContain("TrackerExecutionAdmitted")
+    })
+  )
+
+  effectIt.effect("normalizes fresh graph-read failures while preserving boundary-decode errors", () =>
+    Effect.gen(function* () {
+      const proposal = trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })
+      if (!isFreshTrackerGraphProposal(proposal)) {
+        return yield* Effect.die("missing fresh tracker graph-read proposal")
+      }
+      const action = {
+        _tag: "FreshOperationAction" as const,
+        operationId: OperationId.make("fresh-graph-read"),
+        proposal
+      }
+      const failures = [
+        new FixtureReadError({ detail: "fixture unavailable", target }),
+        new GraphProjectionError({ issues: [] }),
+        new TrackerAdapterReadError({
+          context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
+          detail: "incomplete tracker snapshot",
+          reason: TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
+        }),
+        new TrackerReadError({ detail: "tracker response was malformed", operation: "TrackerGraphReader.parse" }),
+        new TrackerAdapterReadError({
+          context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
+          detail: "tracker boundary could not decode",
+          reason: TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
+        })
+      ] as const
+
+      for (const failure of failures) {
+        const result = yield* executeFreshTrackerGraphRead(action, proposal.route, inertLease).pipe(
+          Effect.provideService(
+            WorkflowInterpreter,
+            WorkflowInterpreter.of({
+              acquireTaskClaim: () => Effect.die("unused claim acquisition"),
+              readTaskClaim: () => Effect.die("unused claim read"),
+              readTaskWorktree: () => Effect.die("unused worktree read"),
+              readTargetLineage: () => Effect.die("unused lineage read"),
+              readTrackerGraph: () => Effect.fail(failure),
+              readTaskWorkSpecification: () => Effect.die("unused specification read"),
+              reconcileTaskWorktree: () => Effect.die("unused worktree reconciliation"),
+              recordTaskAttemptPlan: () => Effect.die("unused attempt planning"),
+              releaseTaskClaim: () => Effect.die("unused claim release")
+            })
+          ),
+          Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+          Effect.exit
+        )
+        const isBoundaryDecode =
+          failure._tag === "TrackerGraphReader.AdapterReadError" && failure.reason._tag === "BoundaryDecode"
+        expect(result._tag).toBe(isBoundaryDecode ? "Failure" : "Success")
+        if (!isBoundaryDecode && result._tag === "Success") {
+          expect(result.value).toEqual({
+            _tag: "ActionDeferred",
+            proposalId: proposal.id,
+            reason: "TrackerGraphReadUnavailable"
+          })
+        }
+      }
+
+      const projected = projectTrackerSnapshot({ revision: "fresh-graph-read-success", tasks: [] })
+      if (projected._tag === "Invalid") return yield* Effect.die("the empty tracker graph must be valid")
+      const snapshot = yield* executeTrackerGraphRead(
+        makeTrackerGraphObservationOperation(OperationId.make("fresh-graph-read-success"), target)
+      ).pipe(
+        Effect.provideService(
+          WorkflowInterpreter,
+          WorkflowInterpreter.of({
+            acquireTaskClaim: () => Effect.die("unused claim acquisition"),
+            readTaskClaim: () => Effect.die("unused claim read"),
+            readTaskWorktree: () => Effect.die("unused worktree read"),
+            readTargetLineage: () => Effect.die("unused lineage read"),
+            readTrackerGraph: () => Effect.succeed(projected.snapshot),
+            readTaskWorkSpecification: () => Effect.die("unused specification read"),
+            reconcileTaskWorktree: () => Effect.die("unused worktree reconciliation"),
+            recordTaskAttemptPlan: () => Effect.die("unused attempt planning"),
+            releaseTaskClaim: () => Effect.die("unused claim release")
+          })
+        ),
+        Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+      )
+      expect(snapshot).toBe(projected.snapshot)
     })
   )
 

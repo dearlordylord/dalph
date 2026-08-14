@@ -605,6 +605,25 @@ it.effect("settles an interrupted executor drain with a typed diagnostic", () =>
   )
 )
 
+it.effect("normalizes executor drain defects and exposes the settled drain awaiter", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const emptyShell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      expect(yield* emptyShell.requestBoundary.requestExit).toMatchObject({ _tag: "Succeeded" })
+      yield* emptyShell.awaitExecutorDrains
+
+      const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      yield* shell.registerExecutorDrain({ suspendRunningExecutorWork: Effect.die("controlled executor defect") })
+
+      const result = yield* shell.requestBoundary.requestExit
+      expect(result).toMatchObject({
+        _tag: "Failed",
+        diagnostics: ["Executor Exit drain failed: controlled executor defect"]
+      })
+    })
+  )
+)
+
 it.effect("reports timeout with an earlier executor failure while an atomic owner remains stuck", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -139,6 +139,32 @@ it.effect("records immediately available tracker and Git results before releasin
   )
 )
 
+it.effect("keeps boundary recording safe when its owner is released and release is repeated", () =>
+  Effect.gen(function* () {
+    const lifecycle = yield* makeApplicationExitLifecycle()
+    const owner = yield* lifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
+    if (owner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong owner kind")
+
+    expect(
+      yield* owner.run(trackerIntent, Effect.succeed("ready"), (value) => owner.release.pipe(Effect.as(value)))
+    ).toBe("ready")
+    expect(yield* owner.snapshot).toEqual({ _tag: "NoBoundaryCall" })
+
+    expect(yield* owner.run(trackerIntent, Effect.succeed("late"), Effect.succeed).pipe(Effect.exit)).toMatchObject({
+      _tag: "Failure"
+    })
+    yield* owner.release
+
+    const atomic = yield* lifecycle.admission.acquireForwardOwner("AtomicBoundary")
+    if (atomic.kind !== "AtomicBoundary") return yield* Effect.die("wrong atomic owner kind")
+    expect(yield* atomic.run(Effect.succeed("atomic"))).toBe("atomic")
+    yield* atomic.release
+
+    yield* lifecycle.requestExit
+    yield* lifecycle.awaitForwardOwnersReleased
+  })
+)
+
 it.effect("starts no tracker or Git call whose acknowledged intent reaches the owner after cutoff", () =>
   Effect.gen(function* () {
     const lifecycle = yield* makeApplicationExitLifecycle()

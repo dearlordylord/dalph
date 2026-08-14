@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Fiber, Layer, Ref } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
 import { acceptedResultFixture, evidenceReferenceFixture } from "../../../../test/support/evidence.js"
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
@@ -1331,3 +1331,66 @@ it.effect(
       Effect.provide(legacyMemoryJournalStoreLayer)
     )
 )
+
+it("rejects every cross-scope and identity-changing candidate-session supersession", () => {
+  const successorCorrelation = {
+    ...placeholderCorrelation,
+    candidateId: IntegrationCandidateId.make("supersession-successor"),
+    candidateResource: IntegrationCandidateResourceLocator.make("/candidate-resources/supersession-successor"),
+    integrationSessionId: IntegrationSessionId.make("supersession-successor-session")
+  }
+  const base = {
+    _tag: "IntegrationCandidateSessionSuperseded" as const,
+    observedTargetHead: head,
+    priorCandidateCommit: candidate,
+    priorCorrelation: placeholderCorrelation,
+    responsibilityBeganAt: JournalPosition.make(8),
+    startedAt: JournalPosition.make(9),
+    successorCorrelation,
+    version: workflowJournalEventVersion
+  }
+  expect(Schema.is(IntegrationCandidateSessionSupersededEvent)(base)).toBe(true)
+
+  const invalid = (change: Partial<typeof base>) =>
+    expect(Schema.is(IntegrationCandidateSessionSupersededEvent)({ ...base, ...change })).toBe(false)
+  invalid({ successorCorrelation: { ...successorCorrelation, runId: RunId.make("foreign-run") } })
+  invalid({ successorCorrelation: { ...successorCorrelation, attemptId: AttemptId.make("foreign-attempt") } })
+  invalid({
+    successorCorrelation: {
+      ...successorCorrelation,
+      integrationTarget: IntegrationTarget.make({
+        repository: target.repository,
+        ref: IntegrationTargetRef.make("refs/heads/other")
+      })
+    }
+  })
+  invalid({
+    successorCorrelation: {
+      ...successorCorrelation,
+      integrationTarget: IntegrationTarget.make({
+        repository: GitRepositoryLocator.make("/other.git"),
+        ref: target.ref
+      })
+    }
+  })
+  invalid({
+    successorCorrelation: { ...successorCorrelation, candidateResource: placeholderCorrelation.candidateResource }
+  })
+  invalid({
+    successorCorrelation: { ...successorCorrelation, acceptedResultCommit: GitCommitSha.make("6".repeat(40)) }
+  })
+  invalid({
+    successorCorrelation: {
+      ...successorCorrelation,
+      acceptanceManifest: {
+        ...successorCorrelation.acceptanceManifest,
+        byteLength: successorCorrelation.acceptanceManifest.byteLength + 1
+      }
+    }
+  })
+  invalid({ successorCorrelation: { ...successorCorrelation, candidateId: placeholderCorrelation.candidateId } })
+  invalid({
+    successorCorrelation: { ...successorCorrelation, integrationSessionId: placeholderCorrelation.integrationSessionId }
+  })
+  invalid({ observedTargetHead: GitCommitSha.make("7".repeat(40)) })
+})

@@ -43,12 +43,29 @@ import {
   boundedParallelTicketsOf,
   deliverySettlementsOf,
   frontierOf,
+  releaseEligibleProposalContributionsOf,
   selectedTicketIds,
   ticketDeliveriesOf
 } from "./ticket-delivery-projection.js"
+import { DeliveryProposalOrdinal, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
-import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
-import { TargetPromotionState } from "../../workflow/protocols/target-promotion/state.js"
+import {
+  QueuedIntegrationResponsibility,
+  StartedIntegrationResponsibility,
+  UnqueuedAcceptedResult
+} from "../../workflow/protocols/integration-admission/protocol.js"
+import {
+  CandidateContinuationLimit,
+  CandidateCorrectionLimit,
+  IntegrationCandidateConstructionState
+} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import { TargetPromotionPendingRetry, TargetPromotionState } from "../../workflow/protocols/target-promotion/state.js"
+import {
+  TargetPromotionNonConvergenceObservation,
+  TargetPromotionStaleObservation,
+  TargetPromotionAttemptOrdinal
+} from "../../workflow/protocols/target-promotion/events.js"
+import { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import {
@@ -497,6 +514,194 @@ describe("#181 graph and bounded projections", () => {
 })
 
 describe("#181 ticket-delivery positive and negative space", () => {
+  it("retains every durable integration evidence family with its matching standing", () => {
+    const fixture = integrationFinalityFixture
+    const queued = QueuedIntegrationResponsibility.make({
+      acceptedResult: acceptedResultFixture(fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit),
+      integrationTarget: fixture.integrationTarget,
+      plannedAttempt: fixture.plannedAttempt,
+      preIntegrationCancellation: {
+        attemptId: fixture.plannedAttempt.attemptId,
+        queuedAt: JournalPosition.make(2),
+        runId: fixture.runId
+      },
+      queuedAt: JournalPosition.make(2)
+    })
+    const started = StartedIntegrationResponsibility.make({
+      acceptedResult: queued.acceptedResult,
+      integrationTarget: queued.integrationTarget,
+      plannedAttempt: queued.plannedAttempt,
+      queuedAt: queued.queuedAt,
+      startedAt: JournalPosition.make(3)
+    })
+    const candidateCorrelation = fixture.promotionCorrelation.candidateCorrelation
+    const candidateStates = [
+      IntegrationCandidateConstructionState.cases.CandidateConstructed.make({
+        acceptedResult: queued.acceptedResult,
+        candidateCommit: candidateCorrelation.acceptedResultCommit,
+        correlation: candidateCorrelation,
+        expectedTargetHead: candidateCorrelation.expectedTargetHead,
+        reviewManifest: fixture.verificationCorrelation.reviewManifest
+      }),
+      IntegrationCandidateConstructionState.cases.CandidateConstructionInProgress.make({
+        correlation: candidateCorrelation
+      }),
+      IntegrationCandidateConstructionState.cases.CandidateCorrectionLimitReached.make({
+        correctionCount: 1,
+        correctionLimit: CandidateCorrectionLimit.make(1),
+        correlation: candidateCorrelation
+      }),
+      IntegrationCandidateConstructionState.cases.CandidateContinuationLimitReached.make({
+        continuationCount: 1,
+        continuationLimit: CandidateContinuationLimit.make(1),
+        correlation: candidateCorrelation
+      })
+    ]
+    const verificationCorrelation = fixture.verificationCorrelation
+    const verificationStates = [
+      TargetVerificationState.cases.VerificationPending.make({ correlation: verificationCorrelation }),
+      TargetVerificationState.cases.VerificationPassed.make({
+        correlation: verificationCorrelation,
+        manifest: fixture.promotionCorrelation.verificationManifest
+      }),
+      TargetVerificationState.cases.VerificationStopped.make({
+        correlation: verificationCorrelation,
+        manifest: fixture.promotionCorrelation.verificationManifest,
+        outcome: "Failed"
+      }),
+      TargetVerificationState.cases.VerificationContradicted.make({
+        expected: verificationCorrelation,
+        received: { ...verificationCorrelation, candidateCommit: GitCommitSha.make("4".repeat(40)) }
+      })
+    ]
+    const promotionStates = [
+      TargetPromotionState.cases.PromotionPending.make({
+        correlation: fixture.promotionCorrelation,
+        retry: TargetPromotionPendingRetry.cases.NeedInitialReconciliationRead.make({})
+      }),
+      TargetPromotionState.cases.PromotionSucceeded.make({
+        basis: fixture.promotionSuccess.basis,
+        correlation: fixture.promotionCorrelation,
+        observation: fixture.promotionSuccess.observation
+      }),
+      TargetPromotionState.cases.PromotionStale.make({
+        basis: fixture.promotionSuccess.basis,
+        correlation: fixture.promotionCorrelation,
+        observation: TargetPromotionStaleObservation.cases.CompareAndSetRejected.make({
+          observedHeadSha: fixture.promotionCorrelation.expectedTargetHead
+        })
+      }),
+      TargetPromotionState.cases.PromotionNonConvergent.make({
+        attemptLimit: 3,
+        attemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
+        correlation: fixture.promotionCorrelation,
+        lastObservation: TargetPromotionNonConvergenceObservation.cases.ExpectedHeadStillObserved.make({
+          observedHeadSha: fixture.promotionCorrelation.expectedTargetHead
+        })
+      })
+    ]
+    const settlement = IntegrationFinalitySettledEvent.make({
+      claim: fixture.claim,
+      deletionOperationId: OperationId.make("projection-evidence-deletion"),
+      replacementOperationId: OperationId.make("projection-evidence-replacement"),
+      successObservation: fixture.successObservation,
+      version: workflowJournalEventVersion
+    })
+    const evidence: ReadonlyArray<TicketDeliveryEvidence> = [
+      exactExecutorEvidence(fixture.taskId),
+      {
+        _tag: "AcceptedAwaitingIntegration",
+        accepted: UnqueuedAcceptedResult.make({
+          acceptedResult: queued.acceptedResult,
+          plannedAttempt: queued.plannedAttempt,
+          terminalAt: JournalPosition.make(1)
+        })
+      },
+      { _tag: "QueuedIntegration", responsibility: queued },
+      { _tag: "StartedIntegration", responsibility: started },
+      {
+        _tag: "FocusedTaskCompletionSuccess",
+        observed: fixture.focusedSuccessFactsEvent,
+        recordedAt: JournalPosition.make(4)
+      },
+      { _tag: "IntegrationFinalitySettlement", settlement },
+      ...candidateStates.map((state) => ({ _tag: "IntegrationCandidate" as const, responsibility: started, state })),
+      ...verificationStates.map((state) => ({ _tag: "TargetVerification" as const, responsibility: started, state })),
+      ...promotionStates.map((state) => ({ _tag: "TargetPromotion" as const, responsibility: started, state })),
+      { _tag: "IntegrationWait", wait: { _tag: "IntegrationTargetWait", plannedAttempt: fixture.plannedAttempt } }
+    ]
+
+    const result = project([task(fixture.taskId)], 1, evidence)
+    const delivery = result.deliveries.find(({ taskId }) => taskId === fixture.taskId)
+    expect(delivery?.evidence).toHaveLength(evidence.length)
+    expect(delivery?.obligations.map(({ _tag }) => _tag)).toEqual(
+      expect.arrayContaining([
+        "WorkflowResponsibility",
+        "AcceptedAwaitingIntegration",
+        "QueuedIntegration",
+        "StartedIntegration"
+      ])
+    )
+    expect(delivery?.standings.map(({ _tag }) => _tag)).toEqual(
+      expect.arrayContaining([
+        "ResponsibilitySituation",
+        "AcceptedAwaitingIntegrationQueue",
+        "QueuedIntegration",
+        "StartedIntegration",
+        "CandidateConstructedUnsettled",
+        "CandidateWorkActive",
+        "IntegrationNonConvergencePreserved",
+        "TargetVerificationPending",
+        "TargetVerificationPassed",
+        "TargetVerificationStopped",
+        "TargetVerificationContradicted",
+        "TargetPromotionPending",
+        "TargetPromotionSucceeded",
+        "TargetPromotionStale",
+        "TargetPromotionNonConvergent",
+        "IntegrationFinalitySettled",
+        "IntegrationWait"
+      ])
+    )
+
+    const graphReadProposal = trackerGraphReadProposalOf({
+      acceptedAt: null,
+      purpose: "EstablishCurrentGraph",
+      runId: fixture.runId,
+      target: fixture.target
+    })
+    const freshProposal = {
+      ...graphReadProposal,
+      order: {
+        _tag: "FreshWorkflowOrder" as const,
+        frontierOrdinal: DeliveryProposalOrdinal.make(0),
+        step: "ReadCurrentTaskGraph" as const,
+        taskId: fixture.taskId
+      }
+    }
+    const noGraphTickets = boundedParallelTicketsOf(
+      frontierOf(publication(TrackerGraphState.cases.GraphNotEstablished.make({}), policy(1)))
+    )
+    expect(
+      releaseEligibleProposalContributionsOf(noGraphTickets, {
+        deliverySettlement: [],
+        issues: [],
+        ticketDelivery: [freshProposal]
+      }).ticketDelivery
+    ).toHaveLength(1)
+    const missingTaskProposal = {
+      ...freshProposal,
+      order: { ...freshProposal.order, taskId: TaskId.make("missing-from-graph") }
+    }
+    expect(
+      releaseEligibleProposalContributionsOf(boundedTickets(graph([task(fixture.taskId)]), policy(1)), {
+        deliverySettlement: [],
+        issues: [],
+        ticketDelivery: [missingTaskProposal]
+      }).ticketDelivery
+    ).toHaveLength(1)
+  })
+
   it("retains exact evidence while the current graph is not established", () => {
     const taskA = TaskId.make("A")
     const currentGraph = TrackerGraphState.cases.GraphNotEstablished.make({})
