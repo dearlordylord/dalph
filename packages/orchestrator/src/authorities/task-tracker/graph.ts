@@ -1,6 +1,6 @@
 /* eslint-disable functional/immutable-data -- Local builder and traversal scratch never escapes the opaque snapshot. */
 import { HashMap, HashSet, Option, Order, Result, Schema } from "effect"
-import { TaskId, type TaskRevision } from "@dalph/contracts"
+import { encodeTaskRevisionFingerprint, TaskId, type TaskRevision } from "@dalph/contracts"
 import {
   isDependencySatisfied,
   isTaskOpen,
@@ -10,7 +10,6 @@ import {
   TrackerSnapshot,
   type TrackerTask
 } from "./task.js"
-import { encodeTaskRevisionFingerprint } from "./task-revision-fingerprint.js"
 
 export const ProjectionIssue = Schema.TaggedUnion({
   BoundaryDecodeFailed: { detail: Schema.String },

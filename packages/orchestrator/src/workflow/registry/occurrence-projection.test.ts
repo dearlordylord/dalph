@@ -15,7 +15,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../test/controlled-planned-attempt-executor.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
@@ -60,7 +61,6 @@ import {
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../task-tracker-facts/observation.js"
-import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../protocols/task-attempt-planning/plan.js"
 import {
   makeTaskWorkSpecificationObservationOperation,

@@ -11,7 +11,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { Deferred, Effect, Fiber, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
@@ -22,7 +23,6 @@ import {
   UnclaimedTask
 } from "../../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { transitionTaskWorkPosition } from "../../../coordination/frontier/transition-task-work.js"
 import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"

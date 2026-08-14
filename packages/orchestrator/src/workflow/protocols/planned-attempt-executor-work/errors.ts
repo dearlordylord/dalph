@@ -97,13 +97,13 @@ export class PlannedAttemptExecutorResponsibilityMissing extends Schema.TaggedEr
   { correlation: PlannedAttemptExecutorCorrelationSchema }
 ) {}
 
-/** The journal has no accepted authored instructions for the exact planned attempt. */
+/** No accepted authored instructions exist for the task named by the planned attempt. */
 export class PlannedAttemptExecutorTaskWorkSpecificationMissing extends Schema.TaggedError<PlannedAttemptExecutorTaskWorkSpecificationMissing>()(
   "PlannedAttemptExecutorTaskWorkSpecificationMissing",
   { correlation: PlannedAttemptExecutorCorrelationSchema }
 ) {}
 
-/** Accepted authored instructions do not match the immutable task or fingerprint in the plan. */
+/** Accepted authored instructions for the planned task have a different immutable fingerprint. */
 export class PlannedAttemptExecutorTaskWorkSpecificationMismatch extends Schema.TaggedError<PlannedAttemptExecutorTaskWorkSpecificationMismatch>()(
   "PlannedAttemptExecutorTaskWorkSpecificationMismatch",
   { plannedAttempt: PlannedTaskAttemptSchema, specification: TaskWorkSpecificationSchema }

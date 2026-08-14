@@ -11,7 +11,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { describe, expect, it } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
@@ -19,7 +20,6 @@ import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutat
 import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
 import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { makeTargetLineageObservationOperation } from "../../workflow/registry/operation.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"

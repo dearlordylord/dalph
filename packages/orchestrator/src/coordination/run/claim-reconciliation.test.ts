@@ -11,7 +11,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../test/controlled-planned-attempt-executor.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
@@ -19,7 +20,6 @@ import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
-import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeRunRecoveryProjection } from "./recovery-activation.js"

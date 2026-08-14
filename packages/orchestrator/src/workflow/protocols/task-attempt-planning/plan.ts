@@ -1,9 +1,8 @@
 // @effect-diagnostics lazyEffect:off
 import { Context, Crypto, Data, Effect, Layer, Ref, Schema } from "effect"
-import { type GitCommitSha, type RunId, type TaskExecutorLocator } from "@dalph/contracts"
+import { type GitCommitSha, type RunId, type TaskExecutorLocator, type TaskWorkSpecification } from "@dalph/contracts"
 import { AttemptId, PlannedTaskAttempt, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import { OperationId } from "../../identity.js"
-import type { TaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 
 export interface OperationIdAllocatorService {
   readonly allocate: () => Effect.Effect<OperationId>

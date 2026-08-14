@@ -1,11 +1,10 @@
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import { Option } from "effect"
-import { TaskId } from "@dalph/contracts"
+import { TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
-import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { OperationId } from "../../workflow/identity.js"
 import {
   makeTaskWorkSpecificationObservationOperation,

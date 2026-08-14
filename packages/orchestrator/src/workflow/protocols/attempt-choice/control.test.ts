@@ -13,7 +13,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { Effect } from "effect"
 import { expect } from "vitest"
@@ -42,7 +43,6 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
-import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import {
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent

@@ -32,8 +32,14 @@ export const plannedAttemptExecutorRequestFor = (
   PlannedAttemptExecutorTaskWorkSpecificationMissing | PlannedAttemptExecutorTaskWorkSpecificationMismatch
 > => {
   if (selectedSpecification !== undefined) {
-    return selectedSpecification.taskId === plannedAttempt.taskId &&
-      selectedSpecification.fingerprint === plannedAttempt.taskRevision
+    if (selectedSpecification.taskId !== plannedAttempt.taskId) {
+      return Effect.fail(
+        new PlannedAttemptExecutorTaskWorkSpecificationMissing({
+          correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+        })
+      )
+    }
+    return selectedSpecification.fingerprint === plannedAttempt.taskRevision
       ? Effect.succeed(PlannedAttemptExecutorRequest.make({ plannedAttempt, specification: selectedSpecification }))
       : Effect.fail(
           new PlannedAttemptExecutorTaskWorkSpecificationMismatch({
@@ -50,16 +56,14 @@ export const plannedAttemptExecutorRequestFor = (
   if (exact !== undefined) {
     return Effect.succeed(PlannedAttemptExecutorRequest.make({ plannedAttempt, specification: exact }))
   }
-  const observed =
-    specifications.findLast((specification) => specification.taskId === plannedAttempt.taskId) ??
-    specifications.at(latestElementOffset)
-  return observed === undefined
+  const sameTask = specifications.findLast((specification) => specification.taskId === plannedAttempt.taskId)
+  return sameTask === undefined
     ? Effect.fail(
         new PlannedAttemptExecutorTaskWorkSpecificationMissing({
           correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
         })
       )
-    : Effect.fail(new PlannedAttemptExecutorTaskWorkSpecificationMismatch({ plannedAttempt, specification: observed }))
+    : Effect.fail(new PlannedAttemptExecutorTaskWorkSpecificationMismatch({ plannedAttempt, specification: sameTask }))
 }
 
 /** Reconstructs accepted focused task-work observations without substituting later tracker text. */

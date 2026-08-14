@@ -10,7 +10,7 @@ import {
 } from "../../authorities/task-tracker/target.js"
 import { workflowJournalEventVersion } from "../kernel/event.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-import { type TaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
+import { type TaskWorkSpecification } from "@dalph/contracts"
 import type { WorkflowOperation } from "../registry/operation.js"
 import { TaskClaimObservation } from "../../authorities/task-tracker/claim-mutation.js"
 import { taskClaimObservationAttemptBound } from "../protocols/task-claim-observation/bound.js"

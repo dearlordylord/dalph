@@ -10,7 +10,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
@@ -31,7 +32,6 @@ import {
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,

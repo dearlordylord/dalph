@@ -5,6 +5,7 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  makeTaskWorkSpecification,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorProjection,
@@ -41,7 +42,6 @@ import {
   InitialControlPolicy,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
-  makeTaskWorkSpecification,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
   nodeGitCommandLayer,
@@ -71,7 +71,6 @@ import {
   taskTrackerReadIntent,
   TaskWorkCapacity,
   TaskClaimAcquisitionPlanner,
-  taskRevisionFor,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TrackerGraphReader,
@@ -709,6 +708,7 @@ it.effect(absentHistoryApplicationScenario, () =>
         Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
       )
       const task = Option.getOrThrow(Option.fromUndefinedOr(snapshot.eligibleTasks()[0]))
+      const specification = makeTaskWorkSpecification({ body: "Complete A.", taskId: task.id, title: "Complete A" })
       const plannedAttempt = PlannedTaskAttempt.make({
         attemptId: AttemptId.make("production-fresh-task-attempt"),
         baseSha,
@@ -716,7 +716,7 @@ it.effect(absentHistoryApplicationScenario, () =>
         executor: TaskExecutorLocator.make("executor:production-controlled-fake"),
         runId,
         taskId: task.id,
-        taskRevision: taskRevisionFor(task),
+        taskRevision: specification.fingerprint,
         worktree: WorktreeLocator.make(`${directory}/worktree`)
       })
       const specificationReads = yield* Ref.make(0)
@@ -724,10 +724,8 @@ it.effect(absentHistoryApplicationScenario, () =>
         TrackerGraphReader,
         TrackerGraphReader.of({
           read: () => Effect.succeed(snapshot),
-          readTaskWorkSpecification: (_target, taskId) =>
-            Ref.update(specificationReads, (count) => count + 1).pipe(
-              Effect.as(makeTaskWorkSpecification({ body: "Complete A.", taskId, title: "Complete A" }))
-            )
+          readTaskWorkSpecification: (_target, _taskId) =>
+            Ref.update(specificationReads, (count) => count + 1).pipe(Effect.as(specification))
         })
       )
       const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)

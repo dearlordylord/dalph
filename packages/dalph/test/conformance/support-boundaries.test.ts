@@ -5,7 +5,7 @@ import * as Contracts from "@dalph/contracts"
 import { dryRunWorkflowInterpreterLayer, semanticTrace } from "@dalph/dalph"
 import { Effect, FileSystem, Layer, Option } from "effect"
 import { expect } from "vitest"
-import { GitCommitSha, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
+import { GitCommitSha, makeTaskWorkSpecification, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
 import {
   ClaimOwner,
   ClaimToken,
@@ -25,7 +25,6 @@ import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTargetLineageObservationOperation,
-  makeTaskWorkSpecification,
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,

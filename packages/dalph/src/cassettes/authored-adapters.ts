@@ -12,10 +12,10 @@ import {
   plannedAttemptExecutorCorrelationKey,
   samePlannedAttemptExecutorCorrelation,
   type PlannedTaskAttempt,
-  type RunId
+  type RunId,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import {
-  makeTaskWorkSpecification,
   projectTrackerSnapshot,
   TraceOutputError,
   TrackerAdapterReadContext,

@@ -13,7 +13,8 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { Effect, Layer, Option, Ref, Stream } from "effect"
 import { readFileSync } from "node:fs"
@@ -24,7 +25,6 @@ import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TrackerGraphReader } from "../../authorities/task-tracker/graph-reader.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
-import { makeTaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { controlledWorkflowInterpreterLayer } from "../../workflow/interpretation/layers.js"

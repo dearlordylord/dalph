@@ -369,7 +369,6 @@ export {
   taskRevisionFor
 } from "./authorities/task-tracker/graph.js"
 export * from "./workflow/task-tracker-facts/observation.js"
-export { makeTaskWorkSpecification, TaskWorkSpecification } from "./authorities/task-tracker/task-work-specification.js"
 export { makeTaskTrackerFactsObservedFromRead } from "./workflow/protocols/task-tracker-read/protocol.js"
 export * from "./coordination/reconstruction/graph-knowledge.js"
 export * from "./authorities/task-tracker/target.js"

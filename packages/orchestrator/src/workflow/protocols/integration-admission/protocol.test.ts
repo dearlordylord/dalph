@@ -21,7 +21,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -94,7 +95,6 @@ import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutatio
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { CandidateContinuationLimit, CandidateCorrectionLimit } from "../integration-candidate-construction/events.js"
 
-import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import {
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,

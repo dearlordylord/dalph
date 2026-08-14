@@ -7,6 +7,7 @@ import {
   IntegrationTarget,
   TaskExecutorLocator,
   TaskId,
+  makeTaskWorkSpecification,
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
@@ -16,7 +17,6 @@ import {
   ControlDirection,
   InitialControlPolicy,
   IntegrationCandidateGitObservation,
-  makeTaskWorkSpecification,
   PlannedBranchReady,
   PlannedWorktreeAbsent,
   PlannedWorktreeReady,

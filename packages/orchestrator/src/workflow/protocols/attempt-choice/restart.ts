@@ -3,12 +3,12 @@ import {
   type GitCommitSha,
   plannedAttemptExecutorCorrelation,
   type IntegrationTarget,
-  type PlannedTaskAttempt
+  type PlannedTaskAttempt,
+  type TaskWorkSpecification
 } from "@dalph/contracts"
 import { Data, Effect, Match } from "effect"
 import { type PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { isExactTaskClaim, type ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
-import { type TaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import { outcomeRecordKey, plannedAttemptReplacedRecordKey } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { WorkflowInterpreter } from "../../interpretation/interpreter.js"

@@ -22,7 +22,8 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
@@ -80,7 +81,6 @@ import {
 } from "../../../orchestrator/src/authorities/git/target-lineage.js"
 import { FixtureReadError } from "../../../orchestrator/src/authorities/task-tracker/graph-reader.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
-import { makeTaskWorkSpecification } from "../../../orchestrator/src/authorities/task-tracker/task-work-specification.js"
 import { makeRunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { deriveFreshWorkflowDecisions } from "../../../orchestrator/src/coordination/run/fresh-workflow.js"
 import { latestReconstructedTaskGraph } from "../../../orchestrator/src/coordination/reconstruction/graph-knowledge.js"

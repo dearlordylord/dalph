@@ -1,6 +1,5 @@
 /* eslint-disable max-lines -- The maintained authored story catalog keeps complete chronological cassettes reviewable together. */
-import { TaskId } from "@dalph/contracts"
-import { makeTaskWorkSpecification } from "@dalph/orchestrator"
+import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
 import { AuthoredCassetteStoryItem } from "./authored-domain.js"

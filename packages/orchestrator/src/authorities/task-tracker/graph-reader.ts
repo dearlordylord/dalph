@@ -1,11 +1,10 @@
 // @effect-diagnostics lazyEffect:off
 import { NodeFileSystem } from "@effect/platform-node"
 import { Context, Effect, FileSystem, Layer, Ref, Schema } from "effect"
-import { TaskId } from "@dalph/contracts"
+import { makeTaskWorkSpecification, TaskId, type TaskWorkSpecification } from "@dalph/contracts"
 import { FixtureTarget } from "./fixture/target.js"
 import { type TrackerTarget } from "./target.js"
 import { GraphProjectionError, projectTrackerSnapshot, type TaskDagSnapshot } from "./graph.js"
-import { makeTaskWorkSpecification, type TaskWorkSpecification } from "./task-work-specification.js"
 
 const TrackerReadOperation = Schema.Literals(["TrackerGraphReader.parse", "TrackerGraphReader.decode"])
 

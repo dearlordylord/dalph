@@ -14,7 +14,8 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { Effect, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
@@ -26,7 +27,6 @@ import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.
 import { FixtureReadError } from "../../../authorities/task-tracker/graph-reader.js"
 import { projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.js"
 import { TaskLifecycle, TrackerRevision } from "../../../authorities/task-tracker/task.js"
-import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
@@ -234,6 +234,24 @@ const appendExposedRestart = Effect.gen(function* () {
       report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }),
       version: workflowJournalEventVersion
     })
+  )
+  const originalSpecificationRead = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("attempt-restart-original-F1"),
+    target,
+    taskId
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(originalSpecificationRead.operationId),
+    taskTrackerReadIntent(originalSpecificationRead)
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(originalSpecificationRead.operationId),
+    taskTrackerFactsObservedEvent(
+      originalSpecificationRead.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(originalSpecificationRead, plannedSpecification)
+    )
   )
   const specificationRead = makeTaskWorkSpecificationObservationOperation(
     OperationId.make("attempt-restart-choice-F2"),

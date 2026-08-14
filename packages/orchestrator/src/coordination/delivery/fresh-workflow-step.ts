@@ -1,7 +1,6 @@
-import type { PlannedTaskAttempt } from "@dalph/contracts"
+import type { PlannedTaskAttempt, TaskWorkSpecification } from "@dalph/contracts"
 import { Data } from "effect"
 import type { Task } from "../../authorities/task-tracker/task.js"
-import type { TaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import type { AcceptedPlannedAttemptExecutorProgress } from "../frontier/fresh-facts.js"

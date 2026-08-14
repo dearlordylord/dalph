@@ -13,9 +13,9 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import { Effect, Ref } from "effect"
 import { expect } from "vitest"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"

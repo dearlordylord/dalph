@@ -10,7 +10,8 @@ import {
   RunId,
   TaskExecutorLocator,
   TaskId,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import {
   deterministicPlannedTaskAttemptLayer,
@@ -25,7 +26,6 @@ import {
   WorkflowOperation,
   workflowOperationId
 } from "../../../index.js"
-import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 
 it.effect("binds every exact attempt identity and resource locator", () =>
   Effect.gen(function* () {

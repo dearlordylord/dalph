@@ -8,7 +8,7 @@ import type {
   TaskTrackerFactsObservation
 } from "../../workflow/task-tracker-facts/observation.js"
 import { TaskTrackerFactsObservedEvent } from "../../workflow/task-tracker-facts/observation.js"
-import { TaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
+import { TaskWorkSpecification } from "@dalph/contracts"
 import { reconfirmationMatchesPriorFullObservation } from "../../workflow/task-tracker-facts/reconfirmation.js"
 import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { projectTrackerSnapshot, type TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"

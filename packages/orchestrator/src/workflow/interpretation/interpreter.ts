@@ -21,7 +21,7 @@ import type {
   TrackerAdapterReadError,
   TrackerReadError
 } from "../../authorities/task-tracker/graph-reader.js"
-import type { TaskWorkSpecification } from "../../authorities/task-tracker/task-work-specification.js"
+import type { TaskWorkSpecification } from "@dalph/contracts"
 import type { TaskTrackerKnowledgeUnavailable } from "../../coordination/reconstruction/graph-knowledge.js"
 import {
   ActiveTaskClaim,

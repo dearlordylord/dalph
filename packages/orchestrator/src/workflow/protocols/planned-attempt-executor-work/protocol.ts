@@ -270,25 +270,29 @@ export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecuto
         event.plannedAttempt.attemptId === plannedAttempt.attemptId
     ).length + 1
   )
-  yield* journal.append(
-    plannedAttempt.runId,
-    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-    PlannedAttemptExecutorCommandIntendedEvent.make({
-      command,
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      ordinal: commandOrdinal,
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-
-  const report: PlannedAttemptExecutorReport =
-    command === "StartOrContinue"
-      ? yield* executor.startOrContinue(
-          yield* plannedAttemptExecutorRequestFor(records, plannedAttempt, selectedSpecification)
-        )
-      : yield* executor.requestSuspension(plannedAttempt)
+  const appendCommandIntent = () =>
+    journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: commandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+  const report: PlannedAttemptExecutorReport = yield* command === "StartOrContinue"
+    ? Effect.gen(function* () {
+        const request = yield* plannedAttemptExecutorRequestFor(records, plannedAttempt, selectedSpecification)
+        yield* appendCommandIntent()
+        return yield* executor.startOrContinue(request)
+      })
+    : Effect.gen(function* () {
+        yield* appendCommandIntent()
+        return yield* executor.requestSuspension(plannedAttempt)
+      })
   if (!samePlannedAttemptExecutorCorrelation(correlation, report.correlation)) {
     yield* journal.append(
       plannedAttempt.runId,

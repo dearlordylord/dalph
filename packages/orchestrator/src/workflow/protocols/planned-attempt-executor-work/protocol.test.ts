@@ -13,7 +13,8 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import {
   ControlledFakeExecutorStep,
@@ -85,7 +86,6 @@ import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutatio
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
-import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import { projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.js"
 import { journaledWorkflowInterpreterLayer } from "../../../workflow-journal/journaled-interpreter.js"
 import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
@@ -298,13 +298,85 @@ it.effect("rejects a fresh selected specification mismatch before executor conta
         PlannedAttemptExecutor.of({
           project: () => Effect.succeed(noReport()),
           requestSuspension: () => Effect.die("unused"),
-          startOrContinue: () => Ref.update(calls, (count) => count + 1).pipe(Effect.die("must not contact"))
+          startOrContinue: () => Effect.die("must not contact")
         })
       ),
       Effect.flip
     )
     expect(failure._tag).toBe("PlannedAttemptExecutorTaskWorkSpecificationMismatch")
     expect(yield* Ref.get(calls)).toBe(0)
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("does not journal a mismatched command and retries with one exact intent", () =>
+  Effect.gen(function* () {
+    const changedSpecification = makeTaskWorkSpecification({
+      body: "Changed F2 instructions.",
+      taskId: plannedAttempt.taskId,
+      title: "Changed F2"
+    })
+    const calls = yield* Ref.make(0)
+    const report = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    const executor = PlannedAttemptExecutor.of({
+      project: () => Effect.die("the command must not project before contact"),
+      requestSuspension: () => Effect.die("unused suspension"),
+      startOrContinue: (request) =>
+        Effect.gen(function* () {
+          expect(request).toEqual({ plannedAttempt, specification: currentSpecification })
+          yield* Ref.update(calls, (count) => count + 1)
+          return report
+        })
+    })
+    const mismatch = yield* continuePlannedAttemptExecutorWork(plannedAttempt, undefined, changedSpecification).pipe(
+      Effect.provideService(PlannedAttemptExecutor, executor),
+      Effect.flip
+    )
+    expect(mismatch._tag).toBe("PlannedAttemptExecutorTaskWorkSpecificationMismatch")
+
+    const journal = yield* JournalStore
+    expect((yield* journal.read(plannedAttempt.runId)).map(({ event }) => event._tag)).toEqual([
+      "PlannedAttemptExecutorWorkResponsibilityBegan"
+    ])
+
+    expect(
+      yield* continuePlannedAttemptExecutorWork(plannedAttempt, undefined, currentSpecification).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor)
+      )
+    ).toEqual(report)
+    expect(yield* Ref.get(calls)).toBe(1)
+    expect((yield* journal.read(plannedAttempt.runId)).map(({ event }) => event._tag)).toEqual([
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorWorkReported"
+    ])
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("reports task-scoped missing specification without unrelated witness text", () =>
+  Effect.gen(function* () {
+    const unrelatedSpecification = makeTaskWorkSpecification({
+      body: "Unrelated task instructions.",
+      taskId: TaskId.make("unrelated-task"),
+      title: "Unrelated task"
+    })
+    yield* appendTaskWorkSpecification(unrelatedSpecification, "unrelated")
+    const failure = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () => Effect.die("missing specification must fail before projection"),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("missing specification must not contact executor")
+        })
+      ),
+      Effect.flip
+    )
+    expect(failure).toMatchObject({ _tag: "PlannedAttemptExecutorTaskWorkSpecificationMissing", correlation })
+    expect((yield* (yield* JournalStore).read(plannedAttempt.runId)).map(({ event }) => event._tag)).toEqual([
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "PlannedAttemptExecutorWorkResponsibilityBegan"
+    ])
   }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
 

@@ -1,7 +1,7 @@
 // @effect-diagnostics multipleEffectProvide:off
 import { Effect, Layer, Option, Ref, Result, Schema } from "effect"
 import { expect, it } from "vitest"
-import { RunId, TaskId, TaskRevision } from "@dalph/contracts"
+import { RunId, TaskId, TaskRevision, makeTaskWorkSpecification, TaskWorkSpecification } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
@@ -24,10 +24,6 @@ import {
   TaskTrackerFactsObservedEvent,
   taskTrackerFactsObservedEvent
 } from "./observation.js"
-import {
-  makeTaskWorkSpecification,
-  TaskWorkSpecification
-} from "../../authorities/task-tracker/task-work-specification.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../protocols/task-tracker-read/protocol.js"
 import {
   reconstructedTaskGraphFromEvents,

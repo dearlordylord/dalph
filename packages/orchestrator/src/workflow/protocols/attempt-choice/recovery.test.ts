@@ -12,7 +12,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { Effect } from "effect"
 import { expect } from "vitest"
@@ -21,7 +22,6 @@ import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
-import { makeTaskWorkSpecification } from "../../../authorities/task-tracker/task-work-specification.js"
 import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
