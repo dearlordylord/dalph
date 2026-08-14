@@ -710,6 +710,46 @@ it.effect("drains an admitted Run that registers after the Exit driver captured 
   )
 )
 
+it.effect("settles the empty executor set before accepting a post-settlement registration", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const lateDrainStarted = yield* Deferred.make<void>()
+      const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+
+      expect(yield* Fiber.join(exiting)).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+
+      // The empty activation atomically moved the registry to Settled. A
+      // registration arriving after that point cannot become an active drain.
+      yield* shell.registerExecutorDrain({
+        suspendRunningExecutorWork: Deferred.succeed(lateDrainStarted, undefined).pipe(Effect.as([]))
+      })
+      expect(yield* Deferred.isDone(lateDrainStarted)).toBe(false)
+    })
+  )
+)
+
+it.effect("unregisters a serving drain before cutoff so Exit does not start it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const drainStarted = yield* Deferred.make<void>()
+      const registrationScope = yield* Scope.make()
+      const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      yield* shell
+        .registerExecutorDrain({
+          suspendRunningExecutorWork: Deferred.succeed(drainStarted, undefined).pipe(Effect.as([]))
+        })
+        .pipe(Scope.provide(registrationScope))
+
+      yield* Scope.close(registrationScope, Exit.void)
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+
+      expect(yield* Fiber.join(exiting)).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(yield* Deferred.isDone(drainStarted)).toBe(false)
+    })
+  )
+)
+
 it.effect("keeps a pre-cutoff executor drain registered when its Run scope closes before driver capture", () =>
   Effect.scoped(
     Effect.gen(function* () {

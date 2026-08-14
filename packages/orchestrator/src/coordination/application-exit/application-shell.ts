@@ -233,7 +233,9 @@ interface RegisteredApplicationExitExecutorDrain {
 /** Coordinates exact drain membership with the application Exit admission cutoff. */
 interface ApplicationExitExecutorDrainRegistry {
   readonly nextId: number
-  readonly phase: "Serving" | "CutoffPending" | "Draining"
+  readonly phase: "Serving" | "CutoffPending" | "Draining" | "Settled"
+  /** Number of registered executor drains whose result has not settled. */
+  readonly activity: number
   readonly registered: ReadonlyMap<number, RegisteredApplicationExitExecutorDrain>
 }
 
@@ -269,6 +271,7 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
   const executorDrains = yield* Ref.make<ApplicationExitExecutorDrainRegistry>({
     nextId: 0,
     phase: "Serving",
+    activity: 0,
     registered: new Map()
   })
   const processLocalDrains = yield* Ref.make({
@@ -282,10 +285,13 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
     new Map()
   )
   const executorDrainsSettled = yield* Deferred.make<void>()
-  const executorDrainActivity = yield* Ref.make(0)
   const finishExecutorDrain = Effect.fn("ApplicationExitShell.finishExecutorDrain")(function* () {
-    const settled = yield* Ref.updateAndGet(executorDrainActivity, (count) => Math.max(0, count - 1))
-    if (settled === 0) yield* Deferred.succeed(executorDrainsSettled, undefined)
+    const settled = yield* Ref.modify(executorDrains, (current) => {
+      const activity = Math.max(0, current.activity - 1)
+      const nowSettled = current.phase === "Draining" && activity === 0
+      return [nowSettled, { ...current, activity, phase: nowSettled ? ("Settled" as const) : current.phase }] as const
+    })
+    if (settled) yield* Deferred.succeed(executorDrainsSettled, undefined)
   })
 
   const runExecutorDrain = Effect.fn("ApplicationExitShell.runExecutorDrain")(function* (
@@ -337,13 +343,22 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
   )
 
   const activateExecutorDrains = Effect.gen(function* () {
-    const entries = yield* Ref.modify(executorDrains, (current) => {
+    const activation = yield* Ref.modify(executorDrains, (current) => {
       const pending = [...current.registered.values()].filter(({ started }) => !started)
       const registered = new Map([...current.registered].map(([id, entry]) => [id, { ...entry, started: true }]))
-      return [pending, { ...current, phase: "Draining" as const, registered }] as const
+      const settled = pending.length === 0 && current.activity === 0
+      return [
+        { entries: pending, settled },
+        {
+          ...current,
+          phase: settled ? ("Settled" as const) : ("Draining" as const),
+          activity: current.activity + pending.length,
+          registered
+        }
+      ] as const
     })
-    yield* Ref.update(executorDrainActivity, (count) => count + entries.length)
-    if (entries.length === 0) yield* Deferred.succeed(executorDrainsSettled, undefined)
+    if (activation.settled) yield* Deferred.succeed(executorDrainsSettled, undefined)
+    const entries = activation.entries
     yield* startExecutorDrains(entries)
     const results = yield* Effect.forEach(entries, claimExecutorDrainResult)
     const diagnostics = EffectArray.getSomes(results).flatMap(({ diagnostics }) => diagnostics)
@@ -430,6 +445,9 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
         const finished = yield* Deferred.make<ApplicationExitExecutorDrainResult>()
         const resultCollected = yield* Ref.make(false)
         const registration = yield* Ref.modify(executorDrains, (current) => {
+          if (current.phase === "Settled") {
+            return [Option.none(), current] as const
+          }
           const started = current.phase === "Draining"
           const entry = {
             drainId: current.nextId,
@@ -440,13 +458,13 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
           } satisfies RegisteredApplicationExitExecutorDrain
           const registered = new Map(current.registered).set(current.nextId, entry)
           return [
-            { drainId: current.nextId, entry, started },
-            { ...current, nextId: current.nextId + 1, registered }
+            Option.some({ drainId: current.nextId, entry, started }),
+            { ...current, nextId: current.nextId + 1, activity: current.activity + (started ? 1 : 0), registered }
           ] as const
         })
-        if (registration.started) {
-          yield* Ref.update(executorDrainActivity, (count) => count + 1)
-          yield* startExecutorDrains([registration.entry])
+        if (Option.isNone(registration)) return
+        if (registration.value.started) {
+          yield* startExecutorDrains([registration.value.entry])
         }
         yield* Effect.addFinalizer(() =>
           Ref.modify(executorDrains, (current) => {
@@ -457,7 +475,7 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
               ] as const
             }
             const registered = new Map(current.registered)
-            registered.delete(registration.drainId)
+            registered.delete(registration.value.drainId)
             return [Effect.void, { ...current, registered }] as const
           }).pipe(Effect.flatten)
         )
