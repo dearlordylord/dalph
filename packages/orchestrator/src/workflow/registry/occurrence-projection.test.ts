@@ -1174,6 +1174,79 @@ it.effect("rejects a Restart read failure without one exact earlier authority re
   })
 )
 
+it.effect("accepts specification Restart failures only from the exact focused read", () =>
+  Effect.gen(function* () {
+    const requestId = AttemptChoiceRequestId.make({ nonce: "restart-specification-failure", runId })
+    const subject = { observedTaskRevision: TaskRevision.make("occurrence-specification-revision"), plannedAttempt }
+    const applied = record(
+      1,
+      AttemptChoiceAppliedEvent.make({
+        choice: "RestartTaskImplementation",
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        requestId,
+        subject,
+        version: workflowJournalEventVersion
+      })
+    )
+    const specificationRead = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("restart-specification-failure-read"),
+      operation.target,
+      plannedAttempt.taskId
+    )
+    const failure = AttemptRestartAuthorityReadFailedEvent.make({
+      failure: AttemptRestartTaskFactsReadFailure.make({
+        detail: "specification unavailable",
+        source: "FixtureReader.FixtureReadError",
+        target: specificationRead.target
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: specificationRead.operationId,
+      requestId,
+      subject,
+      version: workflowJournalEventVersion
+    })
+    const projection = yield* projectWorkflowOccurrences([
+      applied,
+      record(2, taskTrackerReadIntent(specificationRead)),
+      record(3, failure)
+    ])
+    expect(projection.occurrences).toContainEqual(
+      expect.objectContaining({
+        _tag: "AttemptRestartAuthorityReadFailed",
+        originatingActionOperationId: specificationRead.operationId
+      })
+    )
+
+    const uncoveredGraph = makeTrackerGraphObservationOperation(
+      OperationId.make("restart-specification-failure-uncovered-graph"),
+      operation.target,
+      [],
+      []
+    )
+    const rejected = yield* projectWorkflowOccurrences([
+      applied,
+      record(2, taskTrackerReadIntent(uncoveredGraph)),
+      record(
+        3,
+        AttemptRestartAuthorityReadFailedEvent.make({
+          ...failure,
+          operationId: uncoveredGraph.operationId,
+          failure: AttemptRestartTaskFactsReadFailure.make({
+            detail: "graph unavailable",
+            source: "FixtureReader.FixtureReadError",
+            target: uncoveredGraph.target
+          })
+        })
+      )
+    ]).pipe(Effect.flip)
+    expect(rejected).toMatchObject({
+      _tag: "TrackerOutcomeWithoutReadIntent",
+      operationId: uncoveredGraph.operationId
+    })
+  })
+)
+
 it.effect("projects exact Git Restart failures and follows target-lineage observations", () =>
   Effect.gen(function* () {
     const requestId = AttemptChoiceRequestId.make({ nonce: "restart-git-failures", runId })

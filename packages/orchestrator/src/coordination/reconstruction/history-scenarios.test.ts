@@ -81,6 +81,7 @@ import {
   workflowResponsibilityOperationId
 } from "./state.js"
 import { reconstructRunState } from "./reduce.js"
+import { hasUnfinishedRunResponsibility } from "../run/recovery-activation.js"
 import { ActiveTaskClaim, UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import {
   causalGraphProjection,
@@ -308,6 +309,11 @@ it("accepts every chronological workflow-journal-history boundary prefix", () =>
   expect(final.recoveryFrontier.entries).toContainEqual({ _tag: "Terminal", plannedAttempt })
   expect(final.runState.appliedThrough).toBe(records.length)
   expect(final.runState.graphKnowledge.taskTrackerFacts).toHaveLength(2)
+  const running = reconstructRunState(runId, records.slice(0, 12))
+  expect(running._tag).toBe("ValidReconstructedRun")
+  if (running._tag !== "ValidReconstructedRun") return
+  expect(hasUnfinishedRunResponsibility(running.state)).toBe(true)
+  expect(hasUnfinishedRunResponsibility(final.runState)).toBe(false)
 })
 
 it("rejects Git outcomes that do not match the exact read intent and planned attempt", () => {
@@ -608,6 +614,32 @@ it("records the superseded attempt before rejecting its later executor responsib
       expect.objectContaining({ detail: expect.stringContaining("follows replacement of attempt") })
     ])
   })
+
+  const replacementWithoutAppliedChoice = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([{ event: replacement, key: plannedAttemptReplacedRecordKey(plannedAttempt.attemptId) }])
+  )
+  expect(replacementWithoutAppliedChoice).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: "PlannedAttemptReplaced requires its exact prior applied Restart choice" })
+    ])
+  })
+
+  const crossRunRequest = AttemptChoiceRequestId.make({ nonce: "history-replacement-cross-run", runId: RunId.make("other-run") })
+  const crossRunReplacement = { ...replacement, requestId: crossRunRequest }
+  expect(
+    reduceWorkflowJournalHistory(
+      runId,
+      recordsFrom([{ event: crossRunReplacement, key: plannedAttemptReplacedRecordKey(plannedAttempt.attemptId) }])
+    )
+  ).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("binds another Run") })
+    ])
+  })
+
 })
 
 it("rejects a generic executor-state observation while an exact command remains unmatched", () => {

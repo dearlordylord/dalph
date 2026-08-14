@@ -52,6 +52,7 @@ import {
   runCompletionClaimDeletionProtocol,
   runCompletionClaimReplacementProtocol
 } from "./protocol.js"
+import { continuesCompletionClaimCleanup } from "./cleanup-boundary-transition.js"
 import { integrationFinalityFixture as fixture } from "./fixtures.js"
 import { makeApplicationExitLifecycle } from "../../../coordination/application-exit/lifecycle.js"
 import { InterruptibleWorkflowBoundaryIntent } from "../../interpretation/interpreter.js"
@@ -115,6 +116,72 @@ const focusedSuccessRecords = [
   ),
   recordOf(5, describeJournalEvent(fixture.focusedSuccessFactsEvent).expectedKey, fixture.focusedSuccessFactsEvent)
 ] as const
+
+it("continues completion-claim cleanup only across adjacent exact calls", () => {
+  const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
+  const replacementOperationId = replacementOperationFor(fixture.claim)
+  const intent = (call: CompletionClaimCleanupBoundaryCall) =>
+    InterruptibleWorkflowBoundaryIntent.CompletionClaimCleanup({
+      call,
+      family: "TaskTracker",
+      replacementOperationId,
+      request
+    })
+  const readBeforeOne = intent(
+    CompletionClaimCleanupBoundaryCall.ReadBeforeDeletionAttempt({
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+      readOrdinal: firstCleanupReadOrdinal
+    })
+  )
+  const deleteOne = intent(
+    CompletionClaimCleanupBoundaryCall.DeleteAttempt({ attemptOrdinal: CompletionClaimRequestOrdinal.make(1) })
+  )
+  const readBeforeTwo = intent(
+    CompletionClaimCleanupBoundaryCall.ReadBeforeDeletionAttempt({
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(2),
+      readOrdinal: CompletionClaimCleanupReadOrdinal.make(2)
+    })
+  )
+  const exhaustedThree = intent(
+    CompletionClaimCleanupBoundaryCall.ReadAfterDeletionAttemptsExhausted({
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(3),
+      readOrdinal: CompletionClaimCleanupReadOrdinal.make(3)
+    })
+  )
+
+  expect(continuesCompletionClaimCleanup(readBeforeOne, deleteOne)).toBe(true)
+  expect(
+    continuesCompletionClaimCleanup(
+      readBeforeOne,
+      intent(CompletionClaimCleanupBoundaryCall.DeleteAttempt({ attemptOrdinal: CompletionClaimRequestOrdinal.make(2) }))
+    )
+  ).toBe(false)
+  expect(continuesCompletionClaimCleanup(deleteOne, readBeforeTwo)).toBe(true)
+  expect(continuesCompletionClaimCleanup(deleteOne, readBeforeOne)).toBe(false)
+  expect(continuesCompletionClaimCleanup(deleteOne, exhaustedThree)).toBe(false)
+  const deleteThree = intent(
+    CompletionClaimCleanupBoundaryCall.DeleteAttempt({ attemptOrdinal: CompletionClaimRequestOrdinal.make(3) })
+  )
+  expect(continuesCompletionClaimCleanup(deleteThree, exhaustedThree)).toBe(true)
+  expect(continuesCompletionClaimCleanup(exhaustedThree, readBeforeOne)).toBe(false)
+  expect(
+    continuesCompletionClaimCleanup(
+      intent({ ...deleteOne.call, attemptOrdinal: CompletionClaimRequestOrdinal.make(1) }),
+      intent({ ...exhaustedThree.call, attemptOrdinal: CompletionClaimRequestOrdinal.make(2) })
+    )
+  ).toBe(false)
+  expect(
+    continuesCompletionClaimCleanup(
+      readBeforeOne,
+      InterruptibleWorkflowBoundaryIntent.CompletionClaimCleanup({
+        call: deleteOne.call,
+        family: "TaskTracker",
+        replacementOperationId: OperationId.make("different-cleanup-replacement"),
+        request
+      })
+    )
+  ).toBe(false)
+})
 
 it("describes every completion-finality event with its stable record key", () => {
   const replacementOperationId = replacementOperationFor(fixture.claim)
