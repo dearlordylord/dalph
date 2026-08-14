@@ -86,6 +86,8 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
         trackerGraphLandmark(item.graph, "Activation-final tracker read returned graph"),
       RunCoordinator: noLandmark,
       SetTaskExecutionCapacity: noLandmark,
+      TaskClaimAcquisitionConflictReturned: noLandmark,
+      TaskClaimAcquisitionRejected: noLandmark,
       TargetPromotionCompareAndSetResponseLost: noLandmark,
       TargetPromotionCompareAndSetReturned: noLandmark,
       TargetPromotionGitReadFailed: noLandmark,
@@ -263,6 +265,8 @@ type AuthoredTrackerClaimStoryItem = Extract<
       | "CompletionClaimDeletionApplied"
       | "CompletionClaimReadReturned"
       | "CompletionClaimReplacementApplied"
+      | "TaskClaimAcquisitionConflictReturned"
+      | "TaskClaimAcquisitionRejected"
       | "TaskClaimCurrentReadReturned"
       | "TaskClaimReadFailed"
       | "TaskClaimReadReturned"
@@ -273,6 +277,8 @@ const isTrackerClaimStoryItem = (item: CoordinatorStoryItem): item is AuthoredTr
   item._tag === "CompletionClaimDeletionApplied" ||
   item._tag === "CompletionClaimReadReturned" ||
   item._tag === "CompletionClaimReplacementApplied" ||
+  item._tag === "TaskClaimAcquisitionConflictReturned" ||
+  item._tag === "TaskClaimAcquisitionRejected" ||
   item._tag === "TaskClaimCurrentReadReturned" ||
   item._tag === "TaskClaimReadFailed" ||
   item._tag === "TaskClaimReadReturned"
@@ -285,6 +291,10 @@ const trackerClaimLyric = Match.type<AuthoredTrackerClaimStoryItem>().pipe(
       `The task tracker returns the exact ${item.claim.toLowerCase()} claim for finality task ${item.taskId}.`,
     CompletionClaimReplacementApplied: (item) =>
       `The task tracker replaces task ${item.taskId}'s active claim with its exact promotion-correlated completion claim.`,
+    TaskClaimAcquisitionConflictReturned: (item) =>
+      `The task tracker returns foreign claim ${item.observed.token} while rejecting a fresh acquisition for task ${item.observed.taskId}.`,
+    TaskClaimAcquisitionRejected: (item) =>
+      `Dalph records the terminal foreign-claim rejection for task ${item.observed.taskId} and preserves claim ${item.observed.token}.`,
     TaskClaimCurrentReadReturned: (item) => `The task tracker returns its current exact claim for task ${item.taskId}.`,
     TaskClaimReadFailed: (item) => `The task tracker cannot read the claim for task ${item.taskId}.`,
     TaskClaimReadReturned: (item) =>

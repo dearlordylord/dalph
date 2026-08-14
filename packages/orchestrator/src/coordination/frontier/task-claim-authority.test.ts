@@ -48,7 +48,10 @@ it("trusts an atomic claim acquired in this activation but rereads one inherited
   expect(currentTaskClaimAuthority(records, taskId, claim, Option.none())).toEqual({ _tag: "Unobserved" })
 })
 
-it.effect("classifies a same-owner replacement as foreign and never authorizes its release", () =>
+const sameOwnerReplacementIsForeign = (replacementChange: {
+  readonly operationId: OperationId
+  readonly token: ClaimToken
+}) =>
   Effect.gen(function* () {
     const runId = RunId.make("claim-authority-same-owner-replacement")
     const taskId = TaskId.make("A")
@@ -61,8 +64,8 @@ it.effect("classifies a same-owner replacement as foreign and never authorizes i
     })
     const replacement = ActiveTaskClaim.make({
       ...original,
-      operationId: OperationId.make("claim-authority-replacement-operation"),
-      token: ClaimToken.make("claim-authority-replacement-token")
+      operationId: replacementChange.operationId,
+      token: replacementChange.token
     })
     const read = makeTaskClaimObservationOperation(
       OperationId.make("claim-authority-same-owner-read"),
@@ -98,5 +101,18 @@ it.effect("classifies a same-owner replacement as foreign and never authorizes i
     expect(failure).toBeInstanceOf(TaskClaimOwnershipConflict)
     expect(failure).toMatchObject({ observed: replacement })
     expect(yield* Ref.get(releaseCalls)).toBe(0)
+  })
+
+it.effect("classifies a same-owner token replacement as foreign and preserves its observation", () =>
+  sameOwnerReplacementIsForeign({
+    operationId: OperationId.make("claim-authority-original-operation"),
+    token: ClaimToken.make("claim-authority-replacement-token")
+  })
+)
+
+it.effect("classifies a same-owner operation replacement as foreign and preserves its observation", () =>
+  sameOwnerReplacementIsForeign({
+    operationId: OperationId.make("claim-authority-replacement-operation"),
+    token: ClaimToken.make("claim-authority-original-token")
   })
 )

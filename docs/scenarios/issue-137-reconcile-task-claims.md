@@ -253,8 +253,10 @@ evidence; they do not introduce new production stages or actor identities.
    all match. A same-owner claim with a new token or acquisition operation is
    therefore non-exact and follows the existing foreign-claim isolation path;
    it does not receive a separate mutation authority. The focused regression
-   `classifies a same-owner replacement as foreign and never authorizes its
-   release` exercises `currentTaskClaimAuthority` and the release protocol.
+   `classifies a same-owner token replacement as foreign and preserves its
+   observation` and `classifies a same-owner operation replacement as foreign
+   and preserves its observation` exercise `currentTaskClaimAuthority` and
+   the release protocol.
 2. The three-read bound is owned by the provider-neutral
    `task-claim-observation` protocol (`bound.ts` and `observeTaskClaim`). The
    acquisition protocol has a separate three-pass bound; neither bound is a
@@ -272,7 +274,9 @@ evidence; they do not introduce new production stages or actor identities.
    journal/protocol tests, `records a foreign claim after process death and
    safely suspends only its exact attempt` in
    `packages/dalph/test/cassettes/scenario.test.ts`, the recorded rejection
-   projection fixture, and the Quint adapter cover the applicable behavior.
+   projection fixture, and `records a foreign reacquisition rejection and
+   never retries it after the next activation` in that same cassette suite
+   cover the applicable behavior.
    P0–P6 are only in-memory/conformance cut-point labels; there are
    no literal production lanes or persisted P0–P6 rows, and no SQLite-specific
    #137 claim is implied here.

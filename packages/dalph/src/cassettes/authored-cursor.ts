@@ -287,6 +287,13 @@ export interface StoryCursor {
       | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.Type
     >
   >
+  readonly consumeTaskClaimAcquisitionConflictReturned: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type>
+  >
+  readonly consumeTaskClaimAcquisitionRejected: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionRejected.Type,
+    CursorFailure
+  >
   readonly consumeTaskClaimReleaseResponseLost: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.TaskClaimReleaseResponseLost.Type>
   >
@@ -996,6 +1003,23 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(yield* Schema.decodeUnknownEffect(AuthoredTaskClaimReadItem)(claimed.item).pipe(Effect.orDie))
   })
+  const consumeTaskClaimAcquisitionConflictReturned = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type =>
+        item?._tag === "TaskClaimAcquisitionConflictReturned"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
+  })
+  const consumeTaskClaimAcquisitionRejected = consume("TaskClaimAcquisitionRejected").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionRejected)(item).pipe(Effect.orDie)
+    )
+  )
   const consumeCompletionClaimDeletionApplied = consume("CompletionClaimDeletionApplied").pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CompletionClaimDeletionApplied)(item).pipe(
@@ -1124,6 +1148,8 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     consumeTargetPromotionGitRead,
     consumeRunCoordinator,
     consumeTaskClaimRead,
+    consumeTaskClaimAcquisitionConflictReturned,
+    consumeTaskClaimAcquisitionRejected,
     consumeTaskClaimReleaseResponseLost,
     consumeTaskWorkSpecification,
     consumeTerminalAssertions,

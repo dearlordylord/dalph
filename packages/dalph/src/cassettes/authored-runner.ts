@@ -130,7 +130,12 @@ import {
   type AuthoredScenarioCassette as ScenarioCassette
 } from "./authored-domain.js"
 import { controlledExecutorLayer, controlledTrace, controlledTrackerGraphReaderLayer } from "./authored-adapters.js"
-import { AuthoredCoordinatorProcessDies, makeStoryCursor, type StoryCursor } from "./authored-cursor.js"
+import {
+  AuthoredCassetteInteractionMismatch,
+  AuthoredCoordinatorProcessDies,
+  makeStoryCursor,
+  type StoryCursor
+} from "./authored-cursor.js"
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
@@ -1153,6 +1158,20 @@ const isAuthoredCoordinatorProcessDeath = (exit: Exit.Exit<unknown, unknown>): b
     (reason) => Cause.isDieReason(reason) && reason.defect instanceof AuthoredCoordinatorProcessDies
   )
 
+/** Extracts a typed authored-correlation failure captured inside a journal append callback. */
+const authoredInteractionMismatchFrom = (
+  exit: Exit.Exit<unknown, unknown>
+): AuthoredCassetteInteractionMismatch | undefined => {
+  if (Exit.isFailure(exit)) {
+    for (const reason of exit.cause.reasons) {
+      if (Cause.isFailReason(reason) && reason.error instanceof AuthoredCassetteInteractionMismatch) {
+        return reason.error
+      }
+    }
+  }
+  return undefined
+}
+
 type TargetVerificationStoryResult = Extract<
   AuthoredCassetteStoryItem,
   { readonly _tag: "TargetVerificationReturned" }
@@ -1311,6 +1330,8 @@ const runAuthoredScenarioCassetteWith = (request: {
       const evidenceStoreContext = yield* Layer.build(memoryEvidenceStoreLayer)
       const evidenceStore = Context.get(evidenceStoreContext, EvidenceStore)
       const acceptedEvidencePublicationFailure = yield* Ref.make<EvidenceStoreFailure | undefined>(undefined)
+      const authoredInteractionFailure = yield* Ref.make<AuthoredCassetteInteractionMismatch | undefined>(undefined)
+      const acquisitionTaskIds = yield* Ref.make<ReadonlyMap<OperationId, TaskId>>(new Map())
       const prepareExecutorReport = Effect.fn("AuthoredCassette.sealAcceptedExecutorEvidence")(function* (
         report: PlannedAttemptExecutorReport
       ) {
@@ -1453,6 +1474,46 @@ const runAuthoredScenarioCassetteWith = (request: {
               sharedJournal.append(requestedRunId, key, event).pipe(
                 Effect.tap(() =>
                   Effect.gen(function* () {
+                    if (event._tag === "TaskClaimAcquisitionIntended") {
+                      yield* Ref.update(acquisitionTaskIds, (current) =>
+                        new Map(current).set(
+                          event.operation.acquisition.operationId,
+                          event.operation.acquisition.taskId
+                        )
+                      )
+                    }
+                    if (event._tag === "TaskClaimAcquisitionRejected") {
+                      const expectedExit = yield* Effect.exit(cursor.consumeTaskClaimAcquisitionRejected)
+                      const expectedMismatch = authoredInteractionMismatchFrom(expectedExit)
+                      if (expectedMismatch !== undefined) {
+                        yield* Ref.set(authoredInteractionFailure, expectedMismatch)
+                        return
+                      }
+                      if (Exit.isFailure(expectedExit)) {
+                        return yield* Effect.die(expectedExit.cause)
+                      }
+                      const expected = expectedExit.value
+                      const attemptedTaskId = (yield* Ref.get(acquisitionTaskIds)).get(event.operationId)
+                      if (
+                        (attemptedTaskId !== undefined && attemptedTaskId !== event.observed.taskId) ||
+                        JSON.stringify(expected.observed) !== JSON.stringify(event.observed)
+                      ) {
+                        yield* Ref.set(
+                          authoredInteractionFailure,
+                          new AuthoredCassetteInteractionMismatch({
+                            actual: JSON.stringify(event.observed),
+                            expected: JSON.stringify({ attemptedTaskId, observed: expected.observed }),
+                            storyPosition: (yield* cursor.storyPosition) - 1
+                          })
+                        )
+                        return
+                      }
+                      // The rejection is durable before this boundary dies.
+                      // The next activation must therefore reconstruct from
+                      // the same journal instead of retrying the acquisition.
+                      yield* cursor.pauseAtCoordinatorProcessDeath
+                      return
+                    }
                     if (candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag) {
                       yield* Deferred.succeed(candidateOutcomeRecorded, undefined)
                     }
@@ -2491,7 +2552,10 @@ const runAuthoredScenarioCassetteWith = (request: {
         let consumedLifecycleBoundaries = 0
         let activationOrdinal = firstActivationOrdinal
         while (consumedLifecycleBoundaries < coordinatorLifecycleBoundaryCount) {
-          const boundary = { _tag: "CoordinatorActivationReturned" as const, exit: yield* Fiber.await(coordinator) }
+          const boundaryExit = yield* Fiber.await(coordinator)
+          const interactionFailure = yield* Ref.get(authoredInteractionFailure)
+          if (interactionFailure !== undefined) return yield* interactionFailure
+          const boundary = { _tag: "CoordinatorActivationReturned" as const, exit: boundaryExit }
           consumedLifecycleBoundaries += 1
           if (isAuthoredCoordinatorProcessDeath(boundary.exit)) {
             // The exact production action fiber raised the typed cassette

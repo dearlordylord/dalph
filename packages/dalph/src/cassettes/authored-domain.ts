@@ -865,6 +865,10 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   RunActivationFinalTrackerGraphReadReturned: { graph: AuthoredTrackerGraph },
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
+  /** The controlled tracker rejects this exact fresh acquisition with a current foreign claim. */
+  TaskClaimAcquisitionConflictReturned: { observed: ActiveTaskClaim },
+  /** The journaled acquisition boundary exposes the tracker conflict as its terminal outcome. */
+  TaskClaimAcquisitionRejected: { observed: ActiveTaskClaim },
   TaskClaimReadFailed: { reason: Schema.Literal("Unreadable"), taskId: TaskId },
   TaskClaimCurrentReadReturned: { taskId: TaskId },
   TaskClaimReadReturned: { observation: TaskClaimObservation },
@@ -954,6 +958,8 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "TaskClaimReadFailed",
     "TaskClaimCurrentReadReturned",
     "TaskClaimReadReturned",
+    "TaskClaimAcquisitionConflictReturned",
+    "TaskClaimAcquisitionRejected",
     "TaskClaimReleaseResponseLost",
     "TaskWorkSpecificationReadReturned",
     "TrackerGraphReadFailed",

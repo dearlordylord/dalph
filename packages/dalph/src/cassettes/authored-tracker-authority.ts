@@ -62,6 +62,18 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
           yield* setObservation(observation.taskId, observation)
           return observation
         })
+      const applyAcquisition = (acquisition: Parameters<TrackerMutation["Service"]["acquireTaskClaim"]>[0]) =>
+        cursor.consumeTaskClaimAcquisitionConflictReturned.pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                tracker
+                  .acquireTaskClaim(acquisition)
+                  .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim))),
+              onSome: ({ observed }) => Effect.fail(new TaskClaimConflict({ attempted: acquisition, observed }))
+            })
+          )
+        )
       const readTaskClaim: TrackerMutation["Service"]["readTaskClaim"] = (taskId) =>
         cursor.consumeTaskClaimRead.pipe(
           Effect.flatMap(
@@ -94,15 +106,11 @@ export const controlledTrackerAuthorityLayer = (cursor: StoryCursor, tracker: Tr
             Effect.flatMap((observations) => {
               const observed = observations.get(acquisition.taskId)
               if (observed === undefined) {
-                return tracker
-                  .acquireTaskClaim(acquisition)
-                  .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim)))
+                return applyAcquisition(acquisition)
               }
               const attempted = { _tag: "ActiveTaskClaim" as const, ...acquisition }
               if (observed._tag === "UnclaimedTask") {
-                return tracker
-                  .acquireTaskClaim(acquisition)
-                  .pipe(Effect.tap((claim) => setObservation(acquisition.taskId, claim)))
+                return applyAcquisition(acquisition)
               }
               /* v8 ignore start -- @preserve A completion claim retains integration-finality ownership and cannot return to fresh task acquisition. */
               if (observed._tag === "CompletionTaskClaim") {

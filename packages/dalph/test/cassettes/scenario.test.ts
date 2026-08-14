@@ -121,6 +121,7 @@ import {
   changedAttemptStopReleaseResponseLostAuthoredCassette,
   changedAttemptStopsWithAbsentClaimAuthoredCassette,
   changedAttemptStopsWithForeignClaimAuthoredCassette,
+  changedAttemptReacquisitionForeignConflictAuthoredCassette,
   compareRecordedCassetteCheckpoints,
   completionGraphRefreshRecoveryAuthoredCassette,
   completionTaskConflictAuthoredCassette,
@@ -5091,6 +5092,18 @@ it.effect("reports mismatches through the surface that owns the current story it
       )
     }
     expect(Exit.isFailure(yield* runAuthoredScenarioCassette(mismatchedRejection).pipe(Effect.exit))).toBe(true)
+
+    const mismatchedForeignRejection = {
+      ...changedAttemptReacquisitionForeignConflictAuthoredCassette,
+      story: changedAttemptReacquisitionForeignConflictAuthoredCassette.story.map((item) =>
+        item._tag === "TaskClaimAcquisitionRejected"
+          ? { ...item, observed: { ...item.observed, token: "unexpected-foreign-token" } }
+          : item
+      )
+    }
+    expect(yield* runAuthoredScenarioCassette(mismatchedForeignRejection).pipe(Effect.flip)).toMatchObject({
+      _tag: "AuthoredCassetteInteractionMismatch"
+    })
   })
 )
 
@@ -5245,6 +5258,81 @@ it.effect("drives a public operator claim-reacquisition request through a later 
     expect(
       run.records.some(({ event }) => event._tag === "TaskClaimReacquisitionDirected" && event.requestId === requestId)
     ).toBe(true)
+  })
+)
+
+it.effect("records a foreign reacquisition rejection and never retries it after the next activation", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(changedAttemptReacquisitionForeignConflictAuthoredCassette)
+    expect(run.activationOrdinals).toEqual([1, 2, 3])
+
+    const acquisitionIntents = run.records.flatMap(({ event }) =>
+      event._tag === "TaskClaimAcquisitionIntended" ? [event.operation] : []
+    )
+    expect(acquisitionIntents).toHaveLength(2)
+    const reacquisition = acquisitionIntents[1]
+    if (reacquisition === undefined) return yield* Effect.die("missing reacquisition intent")
+    expect(reacquisition.authority).toMatchObject({
+      _tag: "ExplicitTaskClaimReacquisitionAuthority",
+      requestId: "coverage-reacquire-foreign-A"
+    })
+
+    const rejection = run.records.find(({ event }) => event._tag === "TaskClaimAcquisitionRejected")?.event
+    if (rejection?._tag !== "TaskClaimAcquisitionRejected") {
+      return yield* Effect.die("missing terminal foreign acquisition rejection")
+    }
+    expect(rejection).toMatchObject({
+      operationId: reacquisition.acquisition.operationId,
+      reason: "ForeignClaim",
+      observed: {
+        _tag: "ActiveTaskClaim",
+        operationId: "foreign-reacquisition-operation-A",
+        owner: "foreign-reacquisition-owner",
+        taskId: "A",
+        token: "foreign-reacquisition-token-A"
+      }
+    })
+    expect(
+      run.records.filter(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" &&
+          event.operation.authority._tag === "ExplicitTaskClaimReacquisitionAuthority"
+      )
+    ).toHaveLength(1)
+    expect(
+      run.records.some(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquired" && event.claim.operationId === reacquisition.acquisition.operationId
+      )
+    ).toBe(false)
+
+    const laterMissingObservation = run.records.find(
+      ({ event, position }) =>
+        position >
+          (run.records.find(({ event }) => event._tag === "TaskClaimAcquisitionRejected")?.position ??
+            Number.MAX_SAFE_INTEGER) &&
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskClaimFacts" &&
+        event.observation.observation._tag === "UnclaimedTask"
+    )?.event
+    expect(laterMissingObservation).toMatchObject({
+      _tag: "TaskTrackerFactsObserved",
+      observation: { observation: { _tag: "UnclaimedTask", taskId: "A" } }
+    })
+
+    const recorded = yield* projectRecordedCassette(run.records)
+    expect(recorded.entries).toContainEqual(
+      expect.objectContaining({
+        _tag: "TaskClaimAcquisitionRejected",
+        observed: rejection.observed,
+        operationId: rejection.operationId,
+        reason: "ForeignClaim"
+      })
+    )
+    expectRecordedRoundTrip(run.records, recorded)
+    expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
+      "Dalph records the terminal foreign-claim rejection for task A"
+    )
   })
 )
 

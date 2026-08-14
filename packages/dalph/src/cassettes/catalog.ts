@@ -1609,6 +1609,74 @@ export const changedAttemptStopsWithForeignClaimAuthoredCassette: ScenarioCasset
     }
   )
 
+/** A definite foreign reacquisition conflict is exposed, then remains terminal across restart. */
+export const changedAttemptReacquisitionForeignConflictAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "a missing claim reacquisition preserves a foreign claim and never retries after restart",
+  story: [
+    ...lostWorktreeStoryBeforeAssertions,
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the accepted singleton behavior.",
+      taskId: "A",
+      title: "Implement singleton"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimReadReturned", observation: { _tag: "UnclaimedTask", taskId: "A" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "OperatorDirectsTaskClaimReacquisition", requestId: "coverage-reacquire-foreign-A", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+    {
+      _tag: "TaskClaimAcquisitionConflictReturned",
+      observed: {
+        _tag: "ActiveTaskClaim",
+        operationId: "foreign-reacquisition-operation-A",
+        owner: "foreign-reacquisition-owner",
+        taskId: "A",
+        token: "foreign-reacquisition-token-A"
+      }
+    },
+    {
+      _tag: "TaskClaimAcquisitionRejected",
+      observed: {
+        _tag: "ActiveTaskClaim",
+        operationId: "foreign-reacquisition-operation-A",
+        owner: "foreign-reacquisition-owner",
+        taskId: "A",
+        token: "foreign-reacquisition-token-A"
+      }
+    },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the accepted singleton behavior.",
+      taskId: "A",
+      title: "Implement singleton"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimReadReturned", observation: { _tag: "UnclaimedTask", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    { _tag: "ExpectedBehavior", orchestration: null, protocol: null, taskWork: { absences: [], results: [] } }
+  ]
+})
+
 const stoppedAttemptReleaseSelectedAt = changedAttemptStopsAndReleasesAuthoredCassette.story.findIndex(
   (item) => item._tag === "DalphSelects" && item.operation._tag === "ReleaseTaskClaim"
 )
@@ -4495,6 +4563,7 @@ type MaintainedAuthoredCassetteName =
   | "changedAttemptStopReleaseResponseLost"
   | "changedAttemptStopsWithAbsentClaim"
   | "changedAttemptStopsWithForeignClaim"
+  | "changedAttemptReacquisitionForeignConflict"
   | "compatibleTargetAdvanceContinues"
   | "coordinatorProcessDeathContinues"
   | "contractedCapacityRetainsTwoAttempts"
@@ -4558,6 +4627,7 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     changedAttemptStopReleaseResponseLost: changedAttemptStopReleaseResponseLostAuthoredCassette,
     changedAttemptStopsWithAbsentClaim: changedAttemptStopsWithAbsentClaimAuthoredCassette,
     changedAttemptStopsWithForeignClaim: changedAttemptStopsWithForeignClaimAuthoredCassette,
+    changedAttemptReacquisitionForeignConflict: changedAttemptReacquisitionForeignConflictAuthoredCassette,
     compatibleTargetAdvanceContinues: compatibleTargetAdvanceContinuesAuthoredCassette,
     coordinatorProcessDeathContinues: coordinatorProcessDeathContinuesAuthoredCassette,
     contractedCapacityRetainsTwoAttempts: contractedCapacityRetainsTwoAttemptsAuthoredCassette,
