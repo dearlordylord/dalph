@@ -86,6 +86,8 @@ export const CodexAttemptRecord = Schema.Struct({
 )
 export type CodexAttemptRecord = typeof CodexAttemptRecord.Type
 
+const keyOf = (runId: RunId, attemptId: AttemptId): string => `${runId}\u0000${attemptId}`
+
 /** Durable ownership intent and observation for one application-scoped app-server child. */
 export const CodexServerLaunchRecord = Schema.Struct({
   command: Schema.Array(Schema.NonEmptyString),
@@ -107,7 +109,14 @@ export type CodexServerLaunchRecord = typeof CodexServerLaunchRecord.Type
 export const CodexAttemptStoreSnapshot = Schema.Struct({
   attempts: Schema.Array(CodexAttemptRecord),
   serverLaunch: Schema.NullOr(CodexServerLaunchRecord)
-})
+}).check(
+  Schema.makeFilter((snapshot) => {
+    const keys = new Set(snapshot.attempts.map((record) => keyOf(record.correlationRunId, record.correlationAttemptId)))
+    return keys.size === snapshot.attempts.length
+      ? undefined
+      : "private attempt snapshot contains duplicate correlations"
+  })
+)
 export type CodexAttemptStoreSnapshot = typeof CodexAttemptStoreSnapshot.Type
 
 /** A private store operation could not prove its exact previous or next value. */
@@ -140,8 +149,6 @@ export interface CodexAttemptStoreService {
 export class CodexAttemptStore extends Context.Service<CodexAttemptStore, CodexAttemptStoreService>()(
   "@dalph/CodexAttemptStore"
 ) {}
-
-const keyOf = (runId: RunId, attemptId: AttemptId): string => `${runId}\u0000${attemptId}`
 
 const emptySnapshot: CodexAttemptStoreSnapshot = { attempts: [], serverLaunch: null }
 

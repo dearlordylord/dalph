@@ -125,3 +125,23 @@ it.effect("recovers a complete same-directory next snapshot after an interrupted
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
+
+it.effect("fails closed on duplicate private attempt correlations", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-duplicate-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      yield* fileSystem.writeFileString(
+        storePath,
+        JSON.stringify({ attempts: [associated, associated], serverLaunch: null })
+      )
+      const result = yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        return yield* store.readAttempt(attempt.runId, attempt.attemptId)
+      }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)

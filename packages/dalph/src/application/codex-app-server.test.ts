@@ -3,7 +3,12 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Effect, Exit, FileSystem, Layer, Path } from "effect"
 import { expect } from "vitest"
-import { CodexAppServer, codexAppServerLayer, controlledCodexProcessOwnershipLayer } from "./codex-app-server.js"
+import {
+  CodexAppServer,
+  codexAppServerLayer,
+  codexAppServerNodeLayer,
+  controlledCodexProcessOwnershipLayer
+} from "./codex-app-server.js"
 import { CodexServerIncarnation, CodexServerLaunchRecord, memoryCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 
 const fakeServer = String.raw`#!/usr/bin/env node
@@ -50,15 +55,7 @@ it.effect("speaks the normalized app-server protocol with exact per-call cwd", (
       yield* fileSystem.writeFileString(executable, fakeServer)
       yield* fileSystem.chmod(executable, 0o755)
 
-      const appLayer = codexAppServerLayer({ executable }).pipe(
-        Layer.provide(
-          controlledCodexProcessOwnershipLayer({
-            observe: () => Effect.succeed({ _tag: "Absent" as const }),
-            stop: () => Effect.void
-          })
-        ),
-        Layer.provide(memoryCodexAttemptStoreLayer())
-      )
+      const appLayer = codexAppServerNodeLayer({ executable }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
         const thread = yield* app.startThread("/exact/worktree")

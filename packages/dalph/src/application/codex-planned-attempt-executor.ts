@@ -39,6 +39,7 @@ import {
 /** A terminal Codex message must contain one unambiguous 40-character commit. */
 const commitPattern = /(?<![0-9a-f])([0-9a-f]{40})(?![0-9a-f])/g
 const lastElementOffset = -1
+const noRecordedTurnIndex = -1
 
 type JsonRecord = Record<string, unknown>
 
@@ -291,7 +292,27 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       if (thread.status === "notLoaded" || thread.status === "systemError") {
         return yield* Effect.fail(new CodexThreadMismatch({}))
       }
+      const recordedIndex =
+        record.turnId === null
+          ? noRecordedTurnIndex
+          : thread.turns.findIndex((candidate) => candidate.id === record.turnId)
+      const laterTurnCount = recordedIndex === noRecordedTurnIndex ? 0 : thread.turns.length - recordedIndex - 1
+      if (
+        (record.phase === "TurnMayHaveStarted" &&
+          ((record.turnId === null && thread.turns.length > 1) || (record.turnId !== null && laterTurnCount > 1))) ||
+        (record.phase !== "TurnMayHaveStarted" && laterTurnCount > 0)
+      ) {
+        return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
+      }
       const turn = turnForRecord(thread, record)
+      if (
+        record.phase === "TurnMayHaveStarted" &&
+        record.turnId !== null &&
+        laterTurnCount === 0 &&
+        isTerminalTurn(turn)
+      ) {
+        return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
+      }
       if (record.phase === "AssociatedPreTurn" && (thread.turns.length > 0 || thread.status === "active")) {
         return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       }
@@ -382,7 +403,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       reconciliation: ThreadReconciliation
     ) {
       if (!(yield* noOwnedActivity(reconciliation.thread.id))) {
-        yield* save(recordFor(attempt, "Running", record.threadId, record.turnId, true))
+        yield* save(recordFor(attempt, "Running", record.threadId, reconciliation.turn?.id ?? record.turnId, true))
         return running(correlation)
       }
       const turn = reconciliation.turn
@@ -548,7 +569,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       }
       const existingReport = reportForRecord(correlation, record)
       if (record.phase === "Terminal" && existingReport !== undefined) return existingReport
-      if (record.threadId === null) return suspended(correlation)
+      if (record.threadId === null) return yield* Effect.fail(new CodexThreadMismatch({}))
       const current = yield* reconcile(attempt, correlation, record)
       if (current._tag === "Terminal") return yield* terminalOrRunning(attempt, correlation, record, current)
       if (current._tag === "Idle") {

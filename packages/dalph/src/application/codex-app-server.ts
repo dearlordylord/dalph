@@ -147,8 +147,62 @@ const waitForOwnershipPoll = Effect.promise(
   () => new Promise<void>((resolve) => nodeSetTimeout(resolve, ownershipStopPollDelayMilliseconds))
 )
 
-const processErrorCode = (error: unknown): string =>
-  typeof error === "object" && error !== null && "code" in error ? String(error.code) : ""
+const processErrorCode = (error: unknown): string => {
+  if (typeof error !== "object" || error === null) return ""
+  if ("code" in error) return String(error.code)
+  return "cause" in error ? processErrorCode(error.cause) : ""
+}
+
+const processIdentitySeparator = "|"
+const processStatAfterCommandOffset = 2
+const linuxProcessStatStartTimeFieldIndex = 19
+
+/** Reads the host's process-start identity, which distinguishes PID reuse. */
+const readProcessStartIdentity = (pid: number): string | undefined => {
+  if (nodeProcess.platform === "linux") {
+    const stat = nodeFs.readFileSync(`/proc/${pid}/stat`, "utf8")
+    const commandEnd = stat.lastIndexOf(")")
+    const fields =
+      commandEnd < 0
+        ? []
+        : stat
+            .slice(commandEnd + processStatAfterCommandOffset)
+            .trim()
+            .split(/\s+/)
+    const startTime = fields[linuxProcessStatStartTimeFieldIndex]
+    return startTime === undefined || startTime.length === 0 ? undefined : `linux:${startTime}`
+  }
+  if (nodeProcess.platform === "win32") {
+    const startTime = execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`],
+      { encoding: "utf8" }
+    ).trim()
+    return startTime.length === 0 ? undefined : `windows:${startTime}`
+  }
+  const startTime = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim()
+  return startTime.length === 0 ? undefined : `posix:${startTime}`
+}
+
+const incarnationWithProcessIdentity = (
+  base: CodexServerIncarnation,
+  pid: number
+): CodexServerIncarnation | undefined => {
+  const identity = readProcessStartIdentity(pid)
+  return identity === undefined
+    ? undefined
+    : CodexServerIncarnation.make(`${base}${processIdentitySeparator}${encodeURIComponent(identity)}`)
+}
+
+const processIdentityFromIncarnation = (incarnation: CodexServerIncarnation): string | undefined => {
+  const separator = incarnation.lastIndexOf(processIdentitySeparator)
+  if (separator <= 0 || separator === incarnation.length - 1) return undefined
+  try {
+    return decodeURIComponent(incarnation.slice(separator + 1))
+  } catch {
+    return undefined
+  }
+}
 
 const stringValue = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined
@@ -505,13 +559,29 @@ export const codexAppServerLayer = (
           })
         )
         .pipe(Effect.mapError((error) => operationFailure("initialize", "Unavailable", error)))
+      const liveIncarnation = yield* Effect.try({
+        try: () => incarnationWithProcessIdentity(incarnation, Number(handle.pid)),
+        catch: (error) => operationFailure("initialize", "Ownership", error)
+      })
+      if (liveIncarnation === undefined) {
+        return yield* Effect.fail(operationFailure("initialize", "Ownership", "process-start identity is missing"))
+      }
+      const liveLaunch: CodexServerLaunchRecord = {
+        command,
+        incarnation: liveIncarnation,
+        phase: "Live",
+        pid: Number(handle.pid)
+      }
       const closeHandle = Effect.gen(function* () {
+        // The managed child is detached on POSIX; dispose its owned process
+        // group first so app-server descendants cannot outlive the scope.
+        yield* ownership.stop(liveLaunch)
         yield* handle.isRunning.pipe(
           Effect.flatMap((running) =>
             running ? handle.kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) }) : Effect.void
           )
         )
-        yield* store.clearServerLaunch(incarnation)
+        yield* store.clearServerLaunch(liveIncarnation)
       }).pipe(
         Effect.mapError((error) =>
           error instanceof CodexAttemptStoreFailure
@@ -521,9 +591,9 @@ export const codexAppServerLayer = (
       )
       yield* Effect.addFinalizer(() => closeHandle.pipe(Effect.catch(() => Effect.void)))
       yield* store
-        .writeServerLaunch({ command, incarnation, phase: "Live", pid: Number(handle.pid) })
+        .writeServerLaunch(liveLaunch)
         .pipe(Effect.catch((error) => closeHandle.pipe(Effect.andThen(Effect.fail(error)))))
-      const rpc = yield* makeJsonRpcClient(handle, incarnation)
+      const rpc = yield* makeJsonRpcClient(handle, liveIncarnation)
       yield* rpc.request("initialize", "initialize", {
         clientInfo: { name: selected.clientName, version: selected.clientVersion }
       })
@@ -612,7 +682,7 @@ export const codexAppServerLayer = (
         return rpc.close.pipe(Effect.andThen(closeHandle))
       })
       return {
-        incarnation,
+        incarnation: liveIncarnation,
         startThread,
         readThread,
         resumeThread,
@@ -656,6 +726,20 @@ export const nodeCodexProcessOwnershipLayer: Layer.Layer<CodexProcessOwnership> 
         if (!commandLine.includes(expectedMode)) {
           return { _tag: "Contradictory", detail: `pid ${launch.pid} is not an app-server command` } as const
         }
+        const expectedProcessIdentity = processIdentityFromIncarnation(launch.incarnation)
+        if (expectedProcessIdentity === undefined) {
+          return { _tag: "Unreadable", detail: "server launch incarnation has no process-start identity" } as const
+        }
+        const observedProcessIdentity = readProcessStartIdentity(launch.pid)
+        if (observedProcessIdentity === undefined) {
+          return { _tag: "Unreadable", detail: "observed process has no process-start identity" } as const
+        }
+        if (observedProcessIdentity !== expectedProcessIdentity) {
+          return {
+            _tag: "Contradictory",
+            detail: `pid ${launch.pid} belongs to a different process incarnation`
+          } as const
+        }
         return { _tag: "ExactLive", pid: launch.pid } as const
       } catch (error) {
         const code = processErrorCode(error)
@@ -667,15 +751,19 @@ export const nodeCodexProcessOwnershipLayer: Layer.Layer<CodexProcessOwnership> 
   stop: (launch) => {
     if (launch.pid === null) return Effect.void
     const pid = launch.pid
-    const groupSignal = Effect.sync(() =>
-      nodeProcess.platform === "win32"
-        ? execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"])
-        : nodeProcess.kill(-pid, "SIGTERM")
-    )
+    const groupSignal = Effect.try({
+      try: () =>
+        nodeProcess.platform === "win32"
+          ? execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"])
+          : nodeProcess.kill(-pid, "SIGTERM"),
+      catch: (error) => error
+    })
     return groupSignal
       .pipe(
         Effect.catch((error) =>
-          processErrorCode(error) === "ESRCH" ? Effect.sync(() => nodeProcess.kill(pid, "SIGTERM")) : Effect.fail(error)
+          processErrorCode(error) === "ESRCH"
+            ? Effect.try({ try: () => nodeProcess.kill(pid, "SIGTERM"), catch: (fallbackError) => fallbackError })
+            : Effect.fail(error)
         )
       )
       .pipe(Effect.catch((error) => (processErrorCode(error) === "ESRCH" ? Effect.void : Effect.fail(error))))
