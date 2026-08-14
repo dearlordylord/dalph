@@ -2,6 +2,7 @@ import { it } from "@effect/vitest"
 import {
   acceptedResultEvidenceLayer,
   acceptedResultFixture,
+  evidenceReferenceFixture,
   registerAcceptedResultEvidence
 } from "../../../../test/support/evidence.js"
 import { Effect, Layer, Option } from "effect"
@@ -39,7 +40,8 @@ import {
   IntegrationTargetSelection,
   queueAcceptedResultIntegrationResponsibility,
   selectStartableIntegrationResponsibilities,
-  startQueuedIntegration
+  startQueuedIntegration,
+  type StartedIntegrationResponsibility
 } from "./protocol.js"
 
 import {
@@ -93,7 +95,35 @@ import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
-import { CandidateContinuationLimit, CandidateCorrectionLimit } from "../integration-candidate-construction/events.js"
+import {
+  CandidateContinuationLimit,
+  CandidateCorrectionLimit,
+  IntegrationCandidateAgentReport,
+  IntegrationCandidateAgentReportedEvent,
+  IntegrationCandidateAgentReportOrdinal,
+  IntegrationCandidateConstructedEvent,
+  IntegrationCandidateConstructionIntendedEvent,
+  IntegrationCandidateCorrelation,
+  IntegrationCandidateGitObservation,
+  IntegrationCandidateGitObservedEvent,
+  IntegrationCandidateId,
+  IntegrationCandidateResourceLocator,
+  IntegrationSessionId
+} from "../integration-candidate-construction/events.js"
+import {
+  TargetVerificationEvidenceSealedEvent,
+  TargetVerificationIntendedEvent,
+  TargetVerificationPlan,
+  TargetVerificationPlanId,
+  targetVerificationCorrelationFor
+} from "../target-verification/events.js"
+import {
+  TargetPromotionIntendedEvent,
+  TargetPromotionObservedSuccessEvent,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionSuccessObservation,
+  targetPromotionRequestFor
+} from "../target-promotion/events.js"
 
 import {
   makeFocusedTaskClaimFactsObserved,
@@ -249,6 +279,121 @@ const recordAcceptedTerminal = (
       })
     )
   })
+
+const frontierRecord = (runId: RunId, position: number, event: JournalRecord["event"]): JournalRecord =>
+  JournalRecord.make({
+    event,
+    key: JournalRecordKey.make(`frontier-candidate:${position}`),
+    position: JournalPosition.make(position),
+    runId
+  })
+
+const candidateFrontierRecordsFor = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: StartedIntegrationResponsibility,
+  suffix: string,
+  targetHeadSha: GitCommitSha = GitCommitSha.make("f".repeat(40))
+) => {
+  const nextPosition = Math.max(0, ...records.map(({ position }) => Number(position))) + 1
+  const candidateCommit = GitCommitSha.make("c".repeat(40))
+  const correlation = IntegrationCandidateCorrelation.make({
+    acceptanceManifest: responsibility.acceptedResult.evidenceManifest,
+    acceptedResultCommit: responsibility.acceptedResult.commit,
+    attemptId: responsibility.plannedAttempt.attemptId,
+    candidateId: IntegrationCandidateId.make(`frontier-candidate:${suffix}`),
+    candidateResource: IntegrationCandidateResourceLocator.make(`frontier-resource:${suffix}`),
+    expectedTargetHead: targetHeadSha,
+    integrationSessionId: IntegrationSessionId.make(`frontier-session:${suffix}`),
+    integrationTarget: responsibility.integrationTarget,
+    runId: responsibility.plannedAttempt.runId
+  })
+  const intent = frontierRecord(
+    responsibility.plannedAttempt.runId,
+    nextPosition,
+    IntegrationCandidateConstructionIntendedEvent.make({
+      continuationLimit: CandidateContinuationLimit.make(2),
+      correctionLimit: CandidateCorrectionLimit.make(2),
+      correlation,
+      plannedAttempt: responsibility.plannedAttempt,
+      responsibilityBeganAt: responsibility.queuedAt,
+      startedAt: responsibility.startedAt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const report = frontierRecord(
+    responsibility.plannedAttempt.runId,
+    nextPosition + 1,
+    IntegrationCandidateAgentReportedEvent.make({
+      expectedCorrelation: correlation,
+      ordinal: IntegrationCandidateAgentReportOrdinal.make(1),
+      report: IntegrationCandidateAgentReport.cases.Submitted.make({
+        candidateCommit,
+        correlation,
+        reviewManifest: evidenceReferenceFixture
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
+  const git = frontierRecord(
+    responsibility.plannedAttempt.runId,
+    nextPosition + 2,
+    IntegrationCandidateGitObservedEvent.make({
+      candidateCommit,
+      correlation,
+      observation: IntegrationCandidateGitObservation.cases.Commit.make({
+        directParents: [targetHeadSha, responsibility.acceptedResult.commit]
+      }),
+      submissionAt: report.position,
+      version: workflowJournalEventVersion
+    })
+  )
+  const constructed = frontierRecord(
+    responsibility.plannedAttempt.runId,
+    nextPosition + 3,
+    IntegrationCandidateConstructedEvent.make({
+      candidateCommit,
+      correlation,
+      gitObservationAt: git.position,
+      reviewManifest: evidenceReferenceFixture,
+      version: workflowJournalEventVersion
+    })
+  )
+  return {
+    candidate: {
+      candidateCommit,
+      constructedAt: constructed.position,
+      correlation,
+      reviewManifest: evidenceReferenceFixture
+    },
+    records: [...records, intent, report, git, constructed]
+  }
+}
+
+const targetVerificationRecordsFor = (
+  records: ReadonlyArray<JournalRecord>,
+  candidate: ReturnType<typeof candidateFrontierRecordsFor>["candidate"],
+  terminal: "Passed" | "Failed" = "Passed"
+) => {
+  const nextPosition = Math.max(0, ...records.map(({ position }) => Number(position))) + 1
+  const planId = TargetVerificationPlanId.make(`frontier-plan:${candidate.correlation.candidateId}`)
+  const correlation = targetVerificationCorrelationFor(candidate, planId)
+  const intent = frontierRecord(
+    candidate.correlation.runId,
+    nextPosition,
+    TargetVerificationIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+  )
+  const sealed = frontierRecord(
+    candidate.correlation.runId,
+    nextPosition + 1,
+    TargetVerificationEvidenceSealedEvent.make({
+      correlation,
+      manifest: evidenceReferenceFixture,
+      terminal,
+      version: workflowJournalEventVersion
+    })
+  )
+  return { correlation, records: [...records, intent, sealed] }
+}
 
 const protocolTestLayer = Layer.merge(acceptedResultEvidenceLayer, legacyMemoryJournalStoreLayer)
 
@@ -1103,4 +1248,206 @@ it.effect("rereads target lineage after restart instead of authorizing a candida
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   )
+)
+
+it.effect("routes a constructed candidate through configuration and compatible target rewrite boundaries", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("A", 0)
+    const result = acceptedResult("a")
+    yield* beginRun
+    yield* recordAcceptedTerminal(attempt, result)
+    const queued = yield* queueAcceptedResultIntegrationResponsibility(attempt, result, integrationTarget)
+    yield* startQueuedIntegration(queued)
+
+    const journal = yield* JournalStore
+    const reconstructed = reconstructRunState(runId, yield* journal.read(runId))
+    if (reconstructed._tag !== "ValidReconstructedRun") return yield* Effect.die("expected started run")
+    const started = deriveIntegrationAdmission(reconstructed.state.workflowHistory.records).responsibilities.find(
+      (responsibility): responsibility is StartedIntegrationResponsibility =>
+        responsibility._tag === "StartedIntegrationResponsibility"
+    )
+    if (started === undefined) return yield* Effect.die("expected started integration responsibility")
+    const candidateState = candidateFrontierRecordsFor(
+      reconstructed.state.workflowHistory.records,
+      started,
+      "configuration"
+    )
+    const runState = { ...reconstructed.state, workflowHistory: { records: candidateState.records } }
+    const plan = TargetVerificationPlan.make({
+      planId: TargetVerificationPlanId.make("frontier-configuration-plan"),
+      target: integrationTarget
+    })
+    const common = {
+      currentTrackerTaskIds: new Set([attempt.taskId]),
+      heldResponsibilityPositions: new Set([started.queuedAt]),
+      integrationTarget: Option.some(integrationTarget),
+      taskClaimAuthorityByAttemptId: exactClaimAuthorities(attempt.attemptId)
+    }
+
+    expect(deriveIntegrationFrontier(runState, { ...common, targetVerificationPlan: Option.none() })).toMatchObject({
+      explanations: [{ _tag: "TargetVerificationConfigurationWait", plannedAttempt: attempt }],
+      transitions: [{ _tag: "ReleaseStartedIntegrationTarget" }]
+    })
+
+    const targetLineage = TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: attempt.baseSha,
+      targetHeadSha: GitCommitSha.make("f".repeat(40))
+    })
+    expect(
+      deriveIntegrationFrontier(runState, {
+        ...common,
+        targetLineageByAttemptId: new Map([[attempt.attemptId, targetLineage]]),
+        targetVerificationPlan: Option.some(plan)
+      }).transitions
+    ).toMatchObject([{ _tag: "RunTargetVerification", candidate: { candidateCommit: expect.any(String) } }])
+
+    const rewritten = TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: attempt.baseSha,
+      targetHeadSha: GitCommitSha.make("e".repeat(40))
+    })
+    expect(
+      deriveIntegrationFrontier(runState, {
+        ...common,
+        targetLineageByAttemptId: new Map([[attempt.attemptId, rewritten]]),
+        targetVerificationPlan: Option.some(plan)
+      }).transitions
+    ).toMatchObject([{ _tag: "ContinueStartedIntegrationCandidate" }])
+
+    const incompatible = TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: false,
+      plannedBaseSha: attempt.baseSha,
+      targetHeadSha: GitCommitSha.make("d".repeat(40))
+    })
+    expect(
+      deriveIntegrationFrontier(runState, {
+        ...common,
+        targetLineageByAttemptId: new Map([[attempt.attemptId, incompatible]]),
+        targetVerificationPlan: Option.some(plan)
+      }).transitions
+    ).toMatchObject([{ _tag: "ReleaseStartedIntegrationTarget" }])
+  }).pipe(Effect.provide(protocolTestLayer))
+)
+
+it.effect("keeps passed verification in promotion order and releases a completed promotion", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("B", 0)
+    const result = acceptedResult("b")
+    yield* beginRun
+    yield* recordAcceptedTerminal(attempt, result)
+    const queued = yield* queueAcceptedResultIntegrationResponsibility(attempt, result, integrationTarget)
+    yield* startQueuedIntegration(queued)
+
+    const journal = yield* JournalStore
+    const reconstructed = reconstructRunState(runId, yield* journal.read(runId))
+    if (reconstructed._tag !== "ValidReconstructedRun") return yield* Effect.die("expected started run")
+    const started = deriveIntegrationAdmission(reconstructed.state.workflowHistory.records).responsibilities.find(
+      (responsibility): responsibility is StartedIntegrationResponsibility =>
+        responsibility._tag === "StartedIntegrationResponsibility"
+    )
+    if (started === undefined) return yield* Effect.die("expected started integration responsibility")
+    const candidateState = candidateFrontierRecordsFor(
+      reconstructed.state.workflowHistory.records,
+      started,
+      "promotion"
+    )
+    const verified = targetVerificationRecordsFor(candidateState.records, candidateState.candidate)
+    const promotion = targetPromotionRequestFor(candidateState.candidate, {
+      correlation: verified.correlation,
+      manifest: evidenceReferenceFixture
+    })
+    const promotionIntent = frontierRecord(
+      runId,
+      Math.max(...verified.records.map(({ position }) => Number(position))) + 1,
+      TargetPromotionIntendedEvent.make({ correlation: promotion, version: workflowJournalEventVersion })
+    )
+    const runState = { ...reconstructed.state, workflowHistory: { records: [...verified.records, promotionIntent] } }
+    const plan = TargetVerificationPlan.make({ planId: verified.correlation.planId, target: integrationTarget })
+    const facts = {
+      currentTrackerTaskIds: new Set([attempt.taskId]),
+      heldResponsibilityPositions: new Set([started.queuedAt]),
+      integrationTarget: Option.some(integrationTarget),
+      targetLineageByAttemptId: new Map([
+        [
+          attempt.attemptId,
+          TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: attempt.baseSha,
+            targetHeadSha: candidateState.candidate.correlation.expectedTargetHead
+          })
+        ]
+      ]),
+      targetPromotionConfigured: true,
+      targetVerificationPlan: Option.some(plan),
+      taskClaimAuthorityByAttemptId: exactClaimAuthorities(attempt.attemptId)
+    }
+
+    expect(deriveIntegrationFrontier(runState, facts)).toMatchObject({
+      explanations: [{ _tag: "IntegrationInProgress", plannedAttempt: attempt }],
+      transitions: [{ _tag: "RunTargetPromotion" }]
+    })
+
+    const success = frontierRecord(
+      runId,
+      Number(promotionIntent.position) + 1,
+      TargetPromotionObservedSuccessEvent.make({
+        basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
+        correlation: promotion,
+        observation: TargetPromotionSuccessObservation.cases.CompareAndSetApplied.make({
+          candidateAncestry: "Current",
+          targetHeadSha: candidateState.candidate.candidateCommit
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
+    expect(
+      deriveIntegrationFrontier(
+        { ...runState, workflowHistory: { records: [...runState.workflowHistory.records, success] } },
+        facts
+      ).transitions
+    ).toMatchObject([{ _tag: "ReleaseStartedIntegrationTarget" }])
+  }).pipe(Effect.provide(protocolTestLayer))
+)
+
+it.effect("releases a held target when verification is stopped or tracker facts are stale", () =>
+  Effect.gen(function* () {
+    const attempt = plannedAttempt("C", 0)
+    const result = acceptedResult("c")
+    yield* beginRun
+    yield* recordAcceptedTerminal(attempt, result)
+    const queued = yield* queueAcceptedResultIntegrationResponsibility(attempt, result, integrationTarget)
+    yield* startQueuedIntegration(queued)
+
+    const journal = yield* JournalStore
+    const reconstructed = reconstructRunState(runId, yield* journal.read(runId))
+    if (reconstructed._tag !== "ValidReconstructedRun") return yield* Effect.die("expected started run")
+    const started = deriveIntegrationAdmission(reconstructed.state.workflowHistory.records).responsibilities.find(
+      (responsibility): responsibility is StartedIntegrationResponsibility =>
+        responsibility._tag === "StartedIntegrationResponsibility"
+    )
+    if (started === undefined) return yield* Effect.die("expected started integration responsibility")
+    const candidateState = candidateFrontierRecordsFor(reconstructed.state.workflowHistory.records, started, "stopped")
+    const verified = targetVerificationRecordsFor(candidateState.records, candidateState.candidate, "Failed")
+    const runState = { ...reconstructed.state, workflowHistory: { records: verified.records } }
+    const common = {
+      currentTrackerTaskIds: new Set([attempt.taskId]),
+      heldResponsibilityPositions: new Set([started.queuedAt]),
+      integrationTarget: Option.some(integrationTarget),
+      taskClaimAuthorityByAttemptId: exactClaimAuthorities(attempt.attemptId),
+      targetVerificationPlan: Option.some(
+        TargetVerificationPlan.make({ planId: verified.correlation.planId, target: integrationTarget })
+      )
+    }
+    expect(deriveIntegrationFrontier(runState, common).transitions).toMatchObject([
+      { _tag: "ReleaseStartedIntegrationTarget" }
+    ])
+    expect(
+      deriveIntegrationFrontier(runState, {
+        ...common,
+        currentTrackerTaskIds: new Set(),
+        heldResponsibilityPositions: new Set()
+      }).transitions
+    ).toEqual([])
+  }).pipe(Effect.provide(protocolTestLayer))
 )
