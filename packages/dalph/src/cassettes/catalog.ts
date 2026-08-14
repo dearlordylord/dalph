@@ -3384,6 +3384,76 @@ export const targetPromotionSuccessAuthoredCassette: ScenarioCassette = promotio
   }
 )
 
+const issue138PrePromotionBlockerGraph = {
+  revision: "issue-138-pre-promotion-blocker",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["B"] },
+    { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "C", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+  ]
+} as const
+
+const issue138PostPromotionBlockerGraph = {
+  revision: "issue-138-post-promotion-blocker",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["B"] },
+    { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "C", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+  ]
+} as const
+
+/** A complete new blocker read preserves the verified candidate before promotion. */
+export const prePromotionBlockerAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...candidateCorrectionAfterUnreadableGitAuthoredCassette,
+  name: "a new prerequisite preserves the verified candidate before promotion",
+  story: candidateCorrectionAfterUnreadableGitAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (item._tag === "TargetVerificationReturned") {
+      return [
+        item,
+        {
+          _tag: "CoordinatorActivationReturned",
+          decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+        }
+      ]
+    }
+    return item._tag !== "ExpectedBehavior"
+      ? [item]
+      : [
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+          { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionBlockerGraph },
+          item
+        ]
+  })
+})
+
+/** A post-promotion blocker preserves M and its promotion proof while A waits. */
+export const blockersAroundPromotionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...targetPromotionSuccessAuthoredCassette,
+  name: "a post-promotion prerequisite preserves M while tracker completion waits",
+  story: targetPromotionSuccessAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (item._tag === "TargetPromotionCompareAndSetReturned") {
+      return [
+        item,
+        {
+          _tag: "CoordinatorActivationReturned",
+          decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+        }
+      ]
+    }
+    return item._tag !== "ExpectedBehavior"
+      ? [item]
+      : [
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+          { _tag: "TrackerGraphReadReturned", graph: issue138PostPromotionBlockerGraph },
+          item
+        ]
+  })
+})
+
 const deliveryFinalityStartingGraph = {
   revision: "delivery-story-G0",
   tasks: [
@@ -3541,6 +3611,19 @@ export const deliveryFinalitySpineAuthoredCassette: ScenarioCassette = Schema.de
     trackerGraph: deliveryFinalityStartingGraph
   },
   story: deliveryFinalityBase
+})
+
+/** B reopens between the focused eligibility read and accepted completion Q. */
+export const prerequisiteReopensDuringCompletionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...deliveryFinalitySpineAuthoredCassette,
+  name: "a prerequisite reopens while tracker completion is in flight",
+  startingFacts: {
+    ...deliveryFinalitySpineAuthoredCassette.startingFacts,
+    trackerGraph: deliveryFinalityStartingGraph
+  },
+  story: deliveryFinalitySpineAuthoredCassette.story
 })
 
 /** The same A-to-B story when the tracker applies Q but its direct response is lost. */
@@ -4547,7 +4630,9 @@ type MaintainedAuthoredCassetteName =
   | "candidateVerificationFailure"
   | "candidateVerificationContradiction"
   | "candidateVerificationPassed"
+  | "prePromotionBlocker"
   | "targetPromotionSuccess"
+  | "blockersAroundPromotion"
   | "targetPromotionAmbiguityExhaustion"
   | "targetPromotionStaleBeforeCompareAndSet"
   | "targetPromotionLostResponseDiscoversCurrentCandidate"
@@ -4573,6 +4658,7 @@ type MaintainedAuthoredCassetteName =
   | "coordinatorProcessDeathContinues"
   | "contractedCapacityRetainsTwoAttempts"
   | "ambiguousCompletionResponse"
+  | "prerequisiteReopensDuringCompletion"
   | "completionGraphRefreshRecovery"
   | "completionTaskConflict"
   | "currentCompletionGraphAuthority"
@@ -4610,7 +4696,9 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     candidateVerificationFailure: candidateVerificationFailureAuthoredCassette,
     candidateVerificationContradiction: candidateVerificationContradictionAuthoredCassette,
     candidateVerificationPassed: candidateCorrectionAfterUnreadableGitAuthoredCassette,
+    prePromotionBlocker: prePromotionBlockerAuthoredCassette,
     targetPromotionSuccess: targetPromotionSuccessAuthoredCassette,
+    blockersAroundPromotion: blockersAroundPromotionAuthoredCassette,
     targetPromotionAmbiguityExhaustion: targetPromotionAmbiguityExhaustionAuthoredCassette,
     targetPromotionStaleBeforeCompareAndSet: targetPromotionStaleBeforeCompareAndSetAuthoredCassette,
     targetPromotionLostResponseDiscoversCurrentCandidate:
@@ -4637,6 +4725,7 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     coordinatorProcessDeathContinues: coordinatorProcessDeathContinuesAuthoredCassette,
     contractedCapacityRetainsTwoAttempts: contractedCapacityRetainsTwoAttemptsAuthoredCassette,
     ambiguousCompletionResponse: ambiguousCompletionResponseAuthoredCassette,
+    prerequisiteReopensDuringCompletion: prerequisiteReopensDuringCompletionAuthoredCassette,
     completionGraphRefreshRecovery: completionGraphRefreshRecoveryAuthoredCassette,
     completionTaskConflict: completionTaskConflictAuthoredCassette,
     currentCompletionGraphAuthority: currentCompletionGraphAuthorityAuthoredCassette,

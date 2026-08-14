@@ -53,6 +53,19 @@ export interface IntegrationHistoryIndexes {
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateConstructionIntended" }>
   >
+  readonly integrationCandidateSessionSupersessions: Map<
+    string,
+    Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateSessionSuperseded" }>
+  >
+  /**
+   * The prior session is also a unique subject of supersession.  Indexing
+   * only by successor would allow one stale session to acquire two different
+   * successors while each successor looked new in isolation.
+   */
+  readonly integrationCandidateSessionSupersessionsByPrior: Map<
+    string,
+    Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateSessionSuperseded" }>
+  >
   readonly integrationCandidateSubmissions: Map<
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateAgentReported" }>
@@ -75,6 +88,8 @@ export interface IntegrationHistoryIndexes {
 
 const candidateKey = (correlation: IntegrationCandidateCorrelation): string =>
   JSON.stringify([correlation.runId, correlation.candidateId])
+const sessionSupersessionKey = (correlation: IntegrationCandidateCorrelation): string => candidateKey(correlation)
+const priorSessionSupersessionKey = (correlation: IntegrationCandidateCorrelation): string => candidateKey(correlation)
 const candidateCorrelatedEventTags: ReadonlySet<string> = new Set([
   "IntegrationCandidateGitObserved",
   "IntegrationCandidateGitValidationFailed",
@@ -121,6 +136,14 @@ const invalidCandidateIntent = (
 ): string | undefined => {
   const started = indexes.integrationStarted.get(event.startedAt)
   const existingIntent = indexes.integrationCandidateIntentsByStartedAt.get(event.startedAt)
+  const supersession =
+    existingIntent === undefined
+      ? undefined
+      : [...indexes.integrationCandidateSessionSupersessions.values()].find(
+          (candidate) =>
+            integrationCandidateCorrelationEquals(candidate.priorCorrelation, existingIntent.correlation) &&
+            integrationCandidateCorrelationEquals(candidate.successorCorrelation, event.correlation)
+        )
   const reusesOpaqueIdentity = [...indexes.integrationCandidateIntents.values()].some(
     (intent) =>
       intent.correlation.candidateId === event.correlation.candidateId ||
@@ -129,7 +152,7 @@ const invalidCandidateIntent = (
   )
   indexes.integrationCandidateIntents.set(candidateKey(event.correlation), event)
   indexes.integrationCandidateIntentsByStartedAt.set(event.startedAt, event)
-  return existingIntent !== undefined ||
+  return (existingIntent !== undefined && supersession === undefined) ||
     reusesOpaqueIdentity ||
     started === undefined ||
     event.correlation.runId !== event.plannedAttempt.runId ||
@@ -317,6 +340,50 @@ const invalidContinuationLimitReachedCandidate = (
     : `candidate continuation limit has no exact final non-submitting report at ${event.lastReportAt}`
 }
 
+const invalidCandidateSessionSupersession = (
+  event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateSessionSuperseded" }>,
+  indexes: IntegrationHistoryIndexes
+): string | undefined => {
+  const priorIntent = indexes.integrationCandidateIntents.get(candidateKey(event.priorCorrelation))
+  const priorAlreadyRecorded = indexes.integrationCandidateSessionSupersessionsByPrior.has(
+    priorSessionSupersessionKey(event.priorCorrelation)
+  )
+  const successorAlreadyRecorded = indexes.integrationCandidateSessionSupersessions.has(
+    sessionSupersessionKey(event.successorCorrelation)
+  )
+  const priorConstructed = [...indexes.integrationCandidatesConstructed.values()].some(
+    (candidate) =>
+      candidate.correlation.candidateId === event.priorCorrelation.candidateId &&
+      integrationCandidateCorrelationEquals(candidate.correlation, event.priorCorrelation) &&
+      candidate.candidateCommit === event.priorCandidateCommit
+  )
+  const started = indexes.integrationStarted.get(event.startedAt)
+  const valid =
+    priorIntent !== undefined &&
+    integrationCandidateCorrelationEquals(priorIntent.correlation, event.priorCorrelation) &&
+    priorConstructed &&
+    started !== undefined &&
+    event.responsibilityBeganAt === priorIntent.responsibilityBeganAt &&
+    event.startedAt === priorIntent.startedAt &&
+    !priorAlreadyRecorded &&
+    !successorAlreadyRecorded &&
+    event.priorCorrelation.expectedTargetHead !== event.observedTargetHead &&
+    event.priorCorrelation.acceptedResultCommit === event.successorCorrelation.acceptedResultCommit &&
+    evidenceReferenceEquals(event.priorCorrelation.acceptanceManifest, event.successorCorrelation.acceptanceManifest) &&
+    event.successorCorrelation.acceptedResultCommit === started.acceptedResult.commit &&
+    evidenceReferenceEquals(event.successorCorrelation.acceptanceManifest, started.acceptedResult.evidenceManifest) &&
+    JSON.stringify(event.priorCorrelation.integrationTarget) === JSON.stringify(event.successorCorrelation.integrationTarget) &&
+    JSON.stringify(started.integrationTarget) === JSON.stringify(event.priorCorrelation.integrationTarget)
+  if (valid) {
+    indexes.integrationCandidateSessionSupersessions.set(sessionSupersessionKey(event.successorCorrelation), event)
+    indexes.integrationCandidateSessionSupersessionsByPrior.set(
+      priorSessionSupersessionKey(event.priorCorrelation),
+      event
+    )
+  }
+  return valid ? undefined : "candidate session supersession has no exact earlier constructed candidate"
+}
+
 const invalidTargetVerificationHistory = (
   record: JournalRecord,
   indexes: IntegrationHistoryIndexes
@@ -369,6 +436,9 @@ export const invalidIntegrationHistoryEvent = (
     indexes.integrationStarted.set(record.position, event)
     return issue
   }
+  if (event._tag === "IntegrationCandidateSessionSuperseded") {
+    return invalidCandidateSessionSupersession(event, indexes)
+  }
   return invalidCandidateHistory(record, indexes)
 }
 
@@ -400,6 +470,11 @@ const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): 
     return event.plannedAttempt.runId === runId && event.correlation.runId === runId
       ? undefined
       : `integration work for attempt ${event.plannedAttempt.attemptId} binds run ${event.plannedAttempt.runId}`
+  }
+  if (event._tag === "IntegrationCandidateSessionSuperseded") {
+    return event.priorCorrelation.runId === runId && event.successorCorrelation.runId === runId
+      ? undefined
+      : "candidate session supersession binds a foreign run"
   }
   if (event._tag === "IntegrationCandidateAgentReported") {
     return event.expectedCorrelation.runId === runId

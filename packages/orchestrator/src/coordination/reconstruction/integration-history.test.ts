@@ -30,6 +30,7 @@ import {
   IntegrationCandidateGitObservedEvent,
   IntegrationCandidateId,
   IntegrationCandidateResourceLocator,
+  IntegrationCandidateSessionSupersededEvent,
   IntegrationSessionId,
   type ConstructedIntegrationCandidateOccurrence
 } from "../../workflow/protocols/integration-candidate-construction/events.js"
@@ -106,6 +107,8 @@ const indexes = (): IntegrationHistoryIndexes => ({
   integrationCandidateGitObservations: new Map(),
   integrationCandidateIntents: new Map(),
   integrationCandidateIntentsByStartedAt: new Map(),
+  integrationCandidateSessionSupersessions: new Map(),
+  integrationCandidateSessionSupersessionsByPrior: new Map(),
   integrationCandidateSubmissions: new Map(),
   integrationCandidatesConstructed: new Map([[candidate.constructedAt, constructed]]),
   integrationResponsibilitiesBegan: new Map(),
@@ -317,6 +320,42 @@ describe("integration evidence history", () => {
     ])
 
     expect(result.semanticIssues).toEqual([expect.stringContaining("no exact Git observation")])
+  })
+
+  it("rejects two different successors for one prior candidate session", () => {
+    const historyIndexes = indexes()
+    seedIntegrationStart(historyIndexes)
+    const successor = (suffix: string) =>
+      IntegrationCandidateCorrelation.make({
+        ...candidate.correlation,
+        candidateId: IntegrationCandidateId.make(`promotion-history-successor-${suffix}`),
+        candidateResource: IntegrationCandidateResourceLocator.make(`/candidate/promotion-history-successor-${suffix}`),
+        expectedTargetHead: GitCommitSha.make("8".repeat(40)),
+        integrationSessionId: IntegrationSessionId.make(`promotion-history-successor-session-${suffix}`)
+      })
+    const supersession = (correlation: IntegrationCandidateCorrelation, position: number) =>
+      record(
+        position,
+        IntegrationCandidateSessionSupersededEvent.make({
+          observedTargetHead: correlation.expectedTargetHead,
+          priorCandidateCommit: candidate.candidateCommit,
+          priorCorrelation: candidate.correlation,
+          responsibilityBeganAt,
+          startedAt,
+          successorCorrelation: correlation,
+          version: workflowJournalEventVersion
+        })
+      )
+
+    const result = validate(historyIndexes, [
+      record(10, candidateIntent(candidate.correlation)),
+      supersession(successor("one"), 12),
+      supersession(successor("two"), 13)
+    ])
+
+    expect(result.identityIssues).toEqual([])
+    expect(result.semanticIssues).toEqual([expect.stringContaining("no exact earlier constructed candidate")])
+    expect(historyIndexes.integrationCandidateSessionSupersessionsByPrior.size).toBe(1)
   })
 })
 

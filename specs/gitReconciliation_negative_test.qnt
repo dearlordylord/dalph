@@ -18,6 +18,47 @@ module gitReconciliationNegativeTest {
     state' = { ...state, overwriteAuthorized: true },
   }
 
+  action dropCandidateDuringPrePromotionBlocker: bool = all {
+    state.trackerBlocker == BeforePromotionBlocker,
+    state' = { ...state, candidatePreserved: false },
+  }
+
+  action retainTargetDuringTrackerBlocker: bool = all {
+    state.trackerBlocker != NoTrackerBlocker,
+    state' = { ...state, positionHeld: true },
+  }
+
+  action promoteWhilePostPromotionBlockerWaits: bool = all {
+    state.trackerBlocker == AfterPromotionBlocker,
+    state' = { ...state, reintegrationAuthorized: true },
+  }
+
+  action startSuccessorWithoutSupersession: bool = all {
+    not(state.sessionSuperseded),
+    state' = { ...state, successorStarted: true },
+  }
+
+  action completeWithoutFreshPromotedAncestry: bool = all {
+    state.promotionProof,
+    not(state.promotedCandidateAncestryProven),
+    state' = { ...state, completionAuthorized: true },
+  }
+
+  action completeWhilePostPromotionBlockerWaits: bool = all {
+    state.trackerBlocker == AfterPromotionBlocker,
+    state' = { ...state, completionAuthorized: true },
+  }
+
+  action reintegrateAfterPromotion: bool = all {
+    state.promotionProof,
+    state' = { ...state, reintegrationAuthorized: true },
+  }
+
+  action inventCompletionWarning: bool = all {
+    not(state.completionAccepted),
+    state' = { ...state, completionWarning: true },
+  }
+
   run unsafeRepairIsDetectedTest = {
     init
       .then(observeLostWorktree)
@@ -38,5 +79,86 @@ module gitReconciliationNegativeTest {
       .then(observeStaleTargetAfterVerification)
       .then(overwriteStaleTarget)
       .expect(not(staleTargetNeverOverwrites))
+  }
+
+  run prePromotionCandidateDropIsDetectedTest = {
+    init
+      .then(observePrePromotionDependencyBlocker)
+      .then(dropCandidateDuringPrePromotionBlocker)
+      .expect(not(prePromotionBlockerPreservesCandidate))
+  }
+
+  run trackerBlockerTargetRetentionIsDetectedTest = {
+    init
+      .then(observePrePromotionDependencyBlocker)
+      .then(retainTargetDuringTrackerBlocker)
+      .expect(not(prePromotionBlockerReleasesTarget))
+  }
+
+  run postPromotionRollbackIsDetectedTest = {
+    init
+      .then(observeEligibleResultCommit)
+      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observePostPromotionDependencyBlocker)
+      .then(promoteWhilePostPromotionBlockerWaits)
+      .expect(not(postPromotionBlockerNeverRollsBack))
+  }
+
+  run successorWithoutDurableSupersessionIsDetectedTest = {
+    init
+      .then(startSuccessorWithoutSupersession)
+      .expect(not(oneSuccessorRequiresDurableSupersession))
+  }
+
+  run duplicatePriorSupersessionIsDetectedTest = {
+    init
+      .then(observePrePromotionDependencyBlocker)
+      .then(clearPrePromotionDependencyBlocker)
+      .then(observeFreshTargetAfterPrePromotionBlocker)
+      .then(recordIntegrationSessionSupersession)
+      .then(recordDuplicatePriorSessionSupersession)
+      .expect(not(onePriorSessionHasOneSupersession))
+  }
+
+  run unrelatedTaskOrdinalPerturbationIsDetectedTest = {
+    init
+      .then(recordUnrelatedSessionSupersession)
+      .then(observePrePromotionDependencyBlocker)
+      .then(clearPrePromotionDependencyBlocker)
+      .then(observeFreshTargetAfterPrePromotionBlocker)
+      .then(recordIntegrationSessionSupersession)
+      .then(startSuccessorUsingUnrelatedOrdinal)
+      .expect(not(successorIdentityUsesOwnSessionChain))
+  }
+
+  run completionWithoutFreshAncestryIsDetectedTest = {
+    init
+      .then(observeEligibleResultCommit)
+      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(completeWithoutFreshPromotedAncestry)
+      .expect(not(clearedPromotionRequiresFreshAncestry))
+  }
+
+  run completionDuringPostPromotionBlockerIsDetectedTest = {
+    init
+      .then(observeEligibleResultCommit)
+      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observePostPromotionDependencyBlocker)
+      .then(completeWhilePostPromotionBlockerWaits)
+      .expect(not(clearedPromotionRequiresFreshAncestry))
+  }
+
+  run reintegrationAfterPromotionIsDetectedTest = {
+    init
+      .then(observeEligibleResultCommit)
+      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(reintegrateAfterPromotion)
+      .expect(not(clearedPromotionNeverReintegrates))
+  }
+
+  run completionWarningWithoutAcceptedCompletionIsDetectedTest = {
+    init
+      .then(inventCompletionWarning)
+      .expect(not(completionWarningIsDerivedOnly))
   }
 }

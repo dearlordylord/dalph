@@ -234,7 +234,10 @@ export const deriveIntegrationFrontier = (
         )
       }
     }
-    if (!trackerFactsAreCurrentFor(responsibility) || !claimIsExactFor(responsibility)) return []
+    if (!trackerFactsAreCurrentFor(responsibility)) {
+      return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+    }
+    if (!claimIsExactFor(responsibility)) return []
     if (existing?._tag === "CandidateConstructed") {
       const candidate = Option.getOrThrow(Option.fromUndefinedOr(constructedCandidateFor(responsibility)))
       const verification = deriveTargetVerificationState(runState.workflowHistory.records, candidate)
@@ -254,7 +257,19 @@ export const deriveIntegrationFrontier = (
           return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
         }
         if (promotion === undefined && verificationTargetWasRewritten(responsibility)) {
-          return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+          if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+          const durableIntent = candidateIntentFor(responsibility)
+          const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
+          if (durableIntent?._tag !== "IntegrationCandidateConstructionIntended" || lineage === undefined) return []
+          return [
+            RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
+              acceptedCandidateProgressAt: acceptedCandidateProgressAt(runState.workflowHistory.records, responsibility),
+              correctionLimit: durableIntent.correctionLimit,
+              continuationLimit: durableIntent.continuationLimit,
+              lineage,
+              responsibility
+            })
+          ]
         }
         if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
         if (
@@ -270,8 +285,21 @@ export const deriveIntegrationFrontier = (
       if (Option.isNone(plan))
         return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
       if (waiting) return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-      if (verificationTargetWasRewritten(responsibility))
-        return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+      if (verificationTargetWasRewritten(responsibility)) {
+        if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+        const durableIntent = candidateIntentFor(responsibility)
+        const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
+        if (durableIntent?._tag !== "IntegrationCandidateConstructionIntended" || lineage === undefined) return []
+        return [
+          RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
+            acceptedCandidateProgressAt: acceptedCandidateProgressAt(runState.workflowHistory.records, responsibility),
+            correctionLimit: durableIntent.correctionLimit,
+            continuationLimit: durableIntent.continuationLimit,
+            lineage,
+            responsibility
+          })
+        ]
+      }
       if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
       if (!runtimeFacts.targetLineageByAttemptId?.has(responsibility.plannedAttempt.attemptId)) return []
       return [RunnableFrontierTransition.RunTargetVerification({ candidate, plan: plan.value, responsibility })]

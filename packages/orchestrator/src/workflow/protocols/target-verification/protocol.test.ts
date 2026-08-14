@@ -705,6 +705,8 @@ it("rejects duplicate verification intent, false contradiction, and foreign-run 
     firstRestartChoiceAppliedAt: new Map(),
     integrationCandidateIntents: new Map(),
     integrationCandidateIntentsByStartedAt: new Map(),
+    integrationCandidateSessionSupersessions: new Map(),
+    integrationCandidateSessionSupersessionsByPrior: new Map(),
     integrationCandidateSubmissions: new Map(),
     integrationCandidateGitObservations: new Map(),
     integrationCandidatesConstructed: new Map([[candidate.constructedAt, constructedEvent]]),

@@ -120,6 +120,15 @@ export const integrationCandidateConstructionIntentRecordKey = (
 ): JournalRecordKey =>
   JournalRecordKey.make(`integration-candidate:${integrationCandidateCorrelationKey(correlation)}:intent`)
 
+/** Stable journal key for one exact stale-session supersession. */
+export const integrationCandidateSessionSupersededRecordKey = (
+  priorCorrelation: IntegrationCandidateCorrelation,
+  successorCorrelation: IntegrationCandidateCorrelation
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `integration-candidate:${integrationCandidateCorrelationKey(priorCorrelation)}:superseded:${successorCorrelation.candidateId}`
+  )
+
 export const integrationCandidateAgentReportRecordKey = (
   correlation: IntegrationCandidateCorrelation,
   ordinal: IntegrationCandidateAgentReportOrdinal

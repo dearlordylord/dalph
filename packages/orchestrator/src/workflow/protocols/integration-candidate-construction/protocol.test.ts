@@ -75,7 +75,8 @@ import {
   CandidateContinuationLimit,
   IntegrationCandidateAgentReportedEvent,
   IntegrationCandidateAgentReportOrdinal,
-  IntegrationCandidateGitObservedEvent
+  IntegrationCandidateGitObservedEvent,
+  IntegrationCandidateSessionSupersededEvent
 } from "./events.js"
 import {
   CandidateCorrectionLimit,
@@ -90,6 +91,7 @@ import {
   IntegrationCandidateGitReadFailure,
   IntegrationCandidateTargetLineageRejected,
   IntegrationSessionId,
+  integrationCandidateSuccessorOrdinalFor,
   type IntegrationCandidateAgentRequest
 } from "./protocol.js"
 
@@ -100,8 +102,10 @@ const target = IntegrationTarget.make({
 })
 const base = GitCommitSha.make("1".repeat(40))
 const head = GitCommitSha.make("2".repeat(40))
+const advancedHead = GitCommitSha.make("8".repeat(40))
 const acceptedCommit = GitCommitSha.make("3".repeat(40))
 const candidate = GitCommitSha.make("4".repeat(40))
+const successorCandidate = GitCommitSha.make("9".repeat(40))
 const continuationLimit = CandidateContinuationLimit.make(2)
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("candidate-attempt"),
@@ -392,6 +396,126 @@ it.effect("builds one candidate with current target first and accepted result se
     Effect.provide(legacyMemoryJournalStoreLayer)
   )
 )
+
+it.effect("supersedes a stale pre-promotion session before starting one successor", () =>
+  Effect.gen(function* () {
+    yield* seedStartedResponsibility
+    const first = yield* continueIntegrationCandidateConstruction(started, lineage, CandidateCorrectionLimit.make(2))
+    expect(first._tag).toBe("CandidateConstructed")
+
+    const successorLineage = TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: base,
+      targetHeadSha: advancedHead
+    })
+    const successor = yield* continueIntegrationCandidateConstruction(
+      started,
+      successorLineage,
+      CandidateCorrectionLimit.make(2)
+    )
+
+    expect(successor).toMatchObject({
+      _tag: "CandidateConstructed",
+      candidateCommit: successorCandidate,
+      expectedTargetHead: advancedHead
+    })
+    const records = yield* (yield* JournalStore).read(runId)
+    const supersessionAt = records.findIndex(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded")
+    const intents = records.flatMap(({ event }, position) =>
+      event._tag === "IntegrationCandidateConstructionIntended" ? [{ event, position }] : []
+    )
+    expect(supersessionAt).toBeGreaterThan(-1)
+    expect(intents).toHaveLength(2)
+    expect(supersessionAt).toBeLessThan(intents[1]?.position ?? Number.POSITIVE_INFINITY)
+    expect(records.filter(({ event }) => event._tag === "IntegrationCandidateConstructed")).toHaveLength(2)
+    expect(records.filter(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded")).toHaveLength(1)
+    expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+
+    const repeated = yield* continueIntegrationCandidateConstruction(
+      started,
+      successorLineage,
+      CandidateCorrectionLimit.make(2)
+    )
+    expect(repeated).toEqual(successor)
+    expect(
+      (yield* (yield* JournalStore).read(runId)).filter(
+        ({ event }) => event._tag === "IntegrationCandidateSessionSuperseded"
+      )
+    ).toHaveLength(1)
+  }).pipe(
+    Effect.provide(
+      candidateBoundaryLayer(
+        [candidate, successorCandidate].map((candidateCommit) =>
+          IntegrationCandidateAgentReport.cases.Submitted.make({
+            candidateCommit,
+            correlation: placeholderCorrelation,
+            reviewManifest: evidenceReferenceFixture
+          })
+        ),
+        [
+          IntegrationCandidateGitObservation.cases.Commit.make({ directParents: [head, acceptedCommit] }),
+          IntegrationCandidateGitObservation.cases.Commit.make({ directParents: [advancedHead, acceptedCommit] })
+        ]
+      )
+    ),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
+
+it("does not let an unrelated task in the same run perturb the successor ordinal", () => {
+  const unrelatedAccepted = acceptedResultFixture(GitCommitSha.make("a".repeat(40)))
+  const unrelatedAttempt = AttemptId.make("unrelated-task-attempt")
+  const unrelatedPriorCorrelation = {
+    ...placeholderCorrelation,
+    acceptanceManifest: unrelatedAccepted.evidenceManifest,
+    acceptedResultCommit: unrelatedAccepted.commit,
+    attemptId: unrelatedAttempt,
+    candidateId: IntegrationCandidateId.make("unrelated-prior-candidate"),
+    candidateResource: IntegrationCandidateResourceLocator.make("unrelated-prior-resource"),
+    integrationSessionId: IntegrationSessionId.make("unrelated-prior-session")
+  }
+  const unrelatedSuccessorCorrelation = {
+    ...unrelatedPriorCorrelation,
+    candidateId: IntegrationCandidateId.make("unrelated-successor-candidate"),
+    candidateResource: IntegrationCandidateResourceLocator.make("unrelated-successor-resource"),
+    expectedTargetHead: advancedHead,
+    integrationSessionId: IntegrationSessionId.make("unrelated-successor-session")
+  }
+  const unrelated = IntegrationCandidateSessionSupersededEvent.make({
+    observedTargetHead: advancedHead,
+    priorCandidateCommit: candidate,
+    priorCorrelation: unrelatedPriorCorrelation,
+    responsibilityBeganAt: JournalPosition.make(90),
+    startedAt: JournalPosition.make(91),
+    successorCorrelation: unrelatedSuccessorCorrelation,
+    version: workflowJournalEventVersion
+  })
+  const ownSuccessorCorrelation = {
+    ...placeholderCorrelation,
+    candidateId: IntegrationCandidateId.make("own-successor-candidate"),
+    candidateResource: IntegrationCandidateResourceLocator.make("own-successor-resource"),
+    expectedTargetHead: advancedHead,
+    integrationSessionId: IntegrationSessionId.make("own-successor-session")
+  }
+  const own = IntegrationCandidateSessionSupersededEvent.make({
+    observedTargetHead: advancedHead,
+    priorCandidateCommit: candidate,
+    priorCorrelation: placeholderCorrelation,
+    responsibilityBeganAt: started.queuedAt,
+    startedAt: started.startedAt,
+    successorCorrelation: ownSuccessorCorrelation,
+    version: workflowJournalEventVersion
+  })
+  const record = (event: typeof unrelated, position: number) => ({
+    event,
+    key: JournalRecordKey.make(`successor-ordinal:${position}`),
+    position: JournalPosition.make(position),
+    runId
+  })
+
+  expect(integrationCandidateSuccessorOrdinalFor([record(unrelated, 1)], started)).toBe(1)
+  expect(integrationCandidateSuccessorOrdinalFor([record(unrelated, 1), record(own, 2)], started)).toBe(2)
+})
 
 it.effect("replays the authored candidate Exit cassette through production admission without a successor", () =>
   Effect.scoped(

@@ -125,6 +125,7 @@ import {
   compareRecordedCassetteCheckpoints,
   completionGraphRefreshRecoveryAuthoredCassette,
   completionTaskConflictAuthoredCassette,
+  blockersAroundPromotionAuthoredCassette,
   compatibleTargetAdvanceContinuesAuthoredCassette,
   coordinatorProcessDeathContinuesAuthoredCassette,
   contractedCapacityRetainsTwoAttemptsAuthoredCassette,
@@ -141,6 +142,8 @@ import {
   measureTrackerObservationEncoding,
   projectRecordedCassette,
   postIntegrationAttemptChoiceRejectedAuthoredCassette,
+  prePromotionBlockerAuthoredCassette,
+  prerequisiteReopensDuringCompletionAuthoredCassette,
   ProtocolStoryItem,
   RecordedCassette,
   recordedCassetteVersion,
@@ -2585,6 +2588,61 @@ it.effect("promotes verified M by exact compare-and-set and records exact ancest
     expect(renamed.entries.find(({ _tag }) => _tag === "TargetPromotionObservedSuccess")).toMatchObject({
       correlation: { candidateCorrelation: { candidateId: "renamed-promotion-candidate" } }
     })
+  })
+)
+
+it.effect("preserves the candidate and releases integration when a blocker appears before promotion", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(prePromotionBlockerAuthoredCassette)
+    const recorded = yield* projectRecordedCassette(run.records)
+
+    expect(run.records.some(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toBe(false)
+    expect(run.records.some(({ event }) => event._tag === "IntegrationCandidateConstructed")).toBe(true)
+    expect(run.observedBehavior.orchestrationEvidence).toContainEqual(
+      expect.objectContaining({ _tag: "IntegrationCandidateConstructed", taskId: "A" })
+    )
+    expect(renderRecordedCassetteLyrics(recorded)).toContain("candidate")
+    expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expectRecordedRoundTrip(run.records, recorded)
+  })
+)
+
+it.effect("preserves promotion proof and waits before tracker completion on a new blocker", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(blockersAroundPromotionAuthoredCassette)
+    const recorded = yield* projectRecordedCassette(run.records)
+    const promotion = run.records.find(({ event }) => event._tag === "TargetPromotionObservedSuccess")
+
+    expect(promotion?.event._tag).toBe("TargetPromotionObservedSuccess")
+    expect(run.records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(false)
+    expect(run.records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+    expect(recorded.entries.some(({ _tag }) => _tag === "TargetPromotionObservedSuccess")).toBe(true)
+    expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expectRecordedRoundTrip(run.records, recorded)
+  })
+)
+
+it.effect("preserves accepted tracker completion when a prerequisite concurrently reopens", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(prerequisiteReopensDuringCompletionAuthoredCassette)
+    const recorded = yield* projectRecordedCassette(run.records)
+    const acknowledgement = run.records.find(({ event }) => event._tag === "CompletionTaskAcknowledged")
+    const success = run.records.findLast(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskCompletionFacts" &&
+        event.observation.facts.lifecycle === "CompletedSuccessfully"
+    )
+    const laterGraph = run.records.findLast(
+      ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "CompleteTaskTrackerFacts"
+    )
+
+    expect(acknowledgement?.event._tag).toBe("CompletionTaskAcknowledged")
+    expect(success?.event._tag).toBe("TaskTrackerFactsObserved")
+    expect(laterGraph?.event._tag).toBe("TaskTrackerFactsObserved")
+    expect(recorded.entries.some(({ _tag }) => _tag === "CompletionTaskAcknowledged")).toBe(true)
+    expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expectRecordedRoundTrip(run.records, recorded)
   })
 )
 

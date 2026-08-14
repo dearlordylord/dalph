@@ -668,6 +668,17 @@ const renameRecordedCassetteEntry = (
           plannedAttempt: renamePlannedAttempt(candidateEntry.plannedAttempt, maps)
         })
       },
+      IntegrationCandidateSessionSuperseded: (candidateEntry) =>
+        completeFields<typeof candidateEntry>({
+          _tag: "IntegrationCandidateSessionSuperseded",
+          observedTargetHead: preserveCassetteValue(candidateEntry.observedTargetHead),
+          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification),
+          priorCandidateCommit: preserveCassetteValue(candidateEntry.priorCandidateCommit),
+          priorCorrelation: renameCandidateCorrelation(candidateEntry.priorCorrelation, maps),
+          responsibilityBeganAt: preserveCassetteValue(candidateEntry.responsibilityBeganAt),
+          startedAt: preserveCassetteValue(candidateEntry.startedAt),
+          successorCorrelation: renameCandidateCorrelation(candidateEntry.successorCorrelation, maps)
+        }),
       IntegrationCandidateAgentReported: (candidateEntry) =>
         completeFields<typeof candidateEntry>({
           _tag: "IntegrationCandidateAgentReported",

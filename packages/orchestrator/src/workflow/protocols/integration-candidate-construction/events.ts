@@ -124,6 +124,47 @@ export const IntegrationCandidateConstructionIntendedEvent = Schema.TaggedStruct
   }
 )
 
+/**
+ * Immutable proof that a constructed candidate remains historical evidence
+ * after a fresh compatible target read made its session stale. The successor
+ * must be intended only after this fact is recorded.
+ */
+export const IntegrationCandidateSessionSupersededEvent = Schema.TaggedStruct(
+  "IntegrationCandidateSessionSuperseded",
+  {
+    observedTargetHead: GitCommitSha,
+    priorCandidateCommit: GitCommitSha,
+    priorCorrelation: IntegrationCandidateCorrelation,
+    responsibilityBeganAt: JournalPosition,
+    startedAt: JournalPosition,
+    successorCorrelation: IntegrationCandidateCorrelation,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+).check(
+  Schema.makeFilter((event) => {
+    if (event.priorCorrelation.runId !== event.successorCorrelation.runId) {
+      return "candidate session supersession must stay within one run"
+    }
+    if (event.priorCorrelation.attemptId !== event.successorCorrelation.attemptId) {
+      return "candidate session supersession must stay within one attempt"
+    }
+    if (event.priorCorrelation.integrationTarget.ref !== event.successorCorrelation.integrationTarget.ref) {
+      return "candidate session supersession must stay on one integration ref"
+    }
+    if (event.priorCorrelation.candidateId === event.successorCorrelation.candidateId) {
+      return "candidate session supersession must use a new candidate identity"
+    }
+    if (event.priorCorrelation.integrationSessionId === event.successorCorrelation.integrationSessionId) {
+      return "candidate session supersession must use a new session identity"
+    }
+    if (event.successorCorrelation.expectedTargetHead !== event.observedTargetHead) {
+      return "candidate successor must bind the freshly observed target head"
+    }
+    return undefined
+  })
+)
+export type IntegrationCandidateSessionSupersededEvent = typeof IntegrationCandidateSessionSupersededEvent.Type
+
 /** Automatic agent continuation stopped without discarding the isolated candidate work. */
 export const IntegrationCandidateContinuationLimitReachedEvent = Schema.TaggedStruct(
   "IntegrationCandidateContinuationLimitReached",
@@ -196,6 +237,7 @@ export type ConstructedIntegrationCandidateOccurrence = typeof ConstructedIntegr
 
 export const IntegrationCandidateConstructionJournalEvent = Schema.Union([
   IntegrationCandidateConstructionIntendedEvent,
+  IntegrationCandidateSessionSupersededEvent,
   IntegrationCandidateAgentReportedEvent,
   IntegrationCandidateGitObservedEvent,
   IntegrationCandidateGitValidationFailedEvent,
@@ -209,4 +251,8 @@ export type IntegrationCandidateConstructionJournalEvent = typeof IntegrationCan
 export const integrationCandidateConstructionEventCorrelation = (
   event: IntegrationCandidateConstructionJournalEvent
 ): IntegrationCandidateCorrelation =>
-  event._tag === "IntegrationCandidateAgentReported" ? event.expectedCorrelation : event.correlation
+  event._tag === "IntegrationCandidateAgentReported"
+    ? event.expectedCorrelation
+    : event._tag === "IntegrationCandidateSessionSuperseded"
+      ? event.successorCorrelation
+      : event.correlation

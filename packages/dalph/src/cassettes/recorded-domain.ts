@@ -162,6 +162,15 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     ...initiatedByCoordinator,
     plannedAttempt: PlannedTaskAttempt
   },
+  IntegrationCandidateSessionSuperseded: {
+    observedTargetHead: GitCommitSha,
+    priorCandidateCommit: GitCommitSha,
+    priorCorrelation: IntegrationCandidateCorrelation,
+    responsibilityBeganAt: Schema.Int,
+    startedAt: Schema.Int,
+    successorCorrelation: IntegrationCandidateCorrelation,
+    ...nonActionOccurrence
+  },
   IntegrationCandidateAgentReported: {
     ...nonActionOccurrence,
     expectedCorrelation: IntegrationCandidateCorrelation,

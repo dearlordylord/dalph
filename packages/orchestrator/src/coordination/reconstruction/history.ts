@@ -130,6 +130,8 @@ const emptyIndexes = (): FoldIndexes => ({
   firstRestartChoiceAppliedAt: new Map(),
   integrationCandidateIntents: new Map(),
   integrationCandidateIntentsByStartedAt: new Map(),
+  integrationCandidateSessionSupersessions: new Map(),
+  integrationCandidateSessionSupersessionsByPrior: new Map(),
   integrationCandidatesConstructed: new Map(),
   targetVerificationIntents: new Map(),
   targetVerificationTerminals: new Set(),

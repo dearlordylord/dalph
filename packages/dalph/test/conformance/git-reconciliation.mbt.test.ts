@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { defineDriver, stateCheck } from "@firfi/quint-connect/effect"
+import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
@@ -33,6 +33,7 @@ type Constraint =
   | "RegistrationConflictConstraint"
   | "TargetRewriteConstraint"
 type Status = "Running" | "SafelySuspended"
+type TrackerBlocker = "NoTrackerBlocker" | "BeforePromotionBlocker" | "AfterPromotionBlocker" | "IncompleteTrackerFacts"
 
 const base = GitCommitSha.make("1".repeat(40))
 const advanced = GitCommitSha.make("2".repeat(40))
@@ -62,13 +63,18 @@ const independentTask = {
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
     candidateVerified: Schema.Boolean,
+    candidatePreserved: Schema.Boolean,
     claimPreserved: Schema.Boolean,
     compareAndSetAuthorized: Schema.Boolean,
+    completionAccepted: Schema.Boolean,
+    completionAuthorized: Schema.Boolean,
+    completionWarning: Schema.Boolean,
     compatibleAdvanceObserved: Schema.Boolean,
     constraint: Schema.Unknown,
     decision: Schema.Unknown,
     evidencePreserved: Schema.Boolean,
     exactExpectedHeadObserved: Schema.Boolean,
+    focusedCompletionConfirmed: Schema.Boolean,
     independentTaskEligible: Schema.Boolean,
     independentTaskSelected: Schema.Boolean,
     overwriteAuthorized: Schema.Boolean,
@@ -76,7 +82,16 @@ const SpecProjection = Schema.Struct({
     repairAuthorized: Schema.Boolean,
     resultRejected: Schema.Boolean,
     resultRejection: Schema.Unknown,
+    priorSupersessionCount: ITFBigInt,
+    promotedCandidateAncestryProven: Schema.Boolean,
+    promotionProof: Schema.Boolean,
+    reintegrationAuthorized: Schema.Boolean,
+    sessionSuperseded: Schema.Boolean,
     status: Schema.Unknown,
+    successorOrdinal: ITFBigInt,
+    successorStarted: Schema.Boolean,
+    trackerBlocker: Schema.Unknown,
+    unrelatedSupersessionCount: ITFBigInt,
     worktreePreserved: Schema.Boolean
   })
 })
@@ -112,19 +127,33 @@ const gitDecisionFromFrontier = (constraint: Constraint, status: Status): string
 const gitReconciliationDriver = defineDriver(
   {
     init: {},
+    acceptCompletionAcrossPrerequisiteRace: {},
     observeAmbiguousTargetAfterVerification: {},
     observeCompatibleTargetAdvance: {},
     observeEligibleResultCommit: {},
     observeExactExpectedTargetWithVerifiedCandidate: {},
     observeExactTargetWithUnverifiedCandidate: {},
+    observeFreshPromotedCandidateAncestry: {},
+    observeFreshTargetAfterPrePromotionBlocker: {},
+    observeIncompleteTrackerFacts: {},
     observeIncompatibleTargetRewrite: {},
     observeLostWorktree: {},
     observeMissingResultCommit: {},
+    observePostPromotionDependencyBlocker: {},
+    observePrePromotionDependencyBlocker: {},
+    reopenPrePromotionBlockerAfterRestart: {},
     observeNonDescendantResultCommit: {},
     observeRegistrationConflict: {},
     observeStaleTargetAfterVerification: {},
+    clearDerivedCompletionWarning: {},
+    clearPostPromotionDependencyBlocker: {},
+    clearPrePromotionDependencyBlocker: {},
+    completeAfterPromotedCandidateAncestry: {},
+    recordIntegrationSessionSupersession: {},
+    recordUnrelatedSessionSupersession: {},
     reportSafelySuspended: {},
-    selectIndependentTask: {}
+    selectIndependentTask: {},
+    startOneSuccessorCandidate: {}
   },
   () => {
     let status: Status = "Running"
@@ -133,6 +162,20 @@ const gitReconciliationDriver = defineDriver(
     let compatibleAdvanceObserved = false
     let resultRejected = false
     let resultRejection = "NoResultRejection"
+    let candidatePreserved = true
+    let promotionProof = false
+    let trackerBlocker: TrackerBlocker = "NoTrackerBlocker"
+    let priorSupersessionCount = 0
+    let unrelatedSupersessionCount = 0
+    let successorOrdinal = 0
+    let sessionSuperseded = false
+    let successorStarted = false
+    let promotedCandidateAncestryProven = false
+    let completionAuthorized = false
+    let completionAccepted = false
+    let focusedCompletionConfirmed = false
+    let completionWarning = false
+    let reintegrationAuthorized = false
     let independentTaskSelected = false
     let exactExpectedHeadObserved = false
     let candidateVerified = false
@@ -142,6 +185,7 @@ const gitReconciliationDriver = defineDriver(
     let evidencePreserved = true
     let repairAuthorized = false
     let worktreePreserved = true
+    let positionHeld = true
 
     const applyPreservation = (proof: {
       readonly claimPreserved: true
@@ -192,6 +236,7 @@ const gitReconciliationDriver = defineDriver(
         candidateVerified = candidateVerifiedAgainstExpectedHead
         compareAndSetAuthorized = result.compareAndSetAuthorized
         overwriteAuthorized = result.overwriteAuthorized
+        promotionProof = result._tag === "PromoteByExactCompareAndSet" && candidateVerifiedAgainstExpectedHead
       })
 
     return {
@@ -203,6 +248,21 @@ const gitReconciliationDriver = defineDriver(
           compatibleAdvanceObserved = false
           resultRejected = false
           resultRejection = "NoResultRejection"
+          candidatePreserved = true
+          promotionProof = false
+          trackerBlocker = "NoTrackerBlocker"
+          priorSupersessionCount = 0
+          unrelatedSupersessionCount = 0
+          successorOrdinal = 0
+          sessionSuperseded = false
+          successorStarted = false
+          promotedCandidateAncestryProven = false
+          completionAuthorized = false
+          completionAccepted = false
+          focusedCompletionConfirmed = false
+          completionWarning = false
+          reintegrationAuthorized = false
+          positionHeld = true
           independentTaskSelected = false
           exactExpectedHeadObserved = false
           candidateVerified = false
@@ -212,6 +272,80 @@ const gitReconciliationDriver = defineDriver(
         }),
       observeAmbiguousTargetAfterVerification: () =>
         decidePromotion(PromotionTargetObservation.cases.AmbiguousTargetHead.make({}), true),
+      observePrePromotionDependencyBlocker: () =>
+        Effect.sync(() => {
+          decision = "GitConstraintWait"
+          positionHeld = false
+          trackerBlocker = "BeforePromotionBlocker"
+        }),
+      reopenPrePromotionBlockerAfterRestart: () =>
+        Effect.sync(() => {
+          decision = "GitConstraintWait"
+          positionHeld = false
+        }),
+      clearPrePromotionDependencyBlocker: () =>
+        Effect.sync(() => {
+          decision = "RereadTargetBeforePromotion"
+          trackerBlocker = "NoTrackerBlocker"
+        }),
+      observeFreshTargetAfterPrePromotionBlocker: () =>
+        Effect.sync(() => {
+          decision = "ContinueAttempt"
+          compatibleAdvanceObserved = true
+        }),
+      recordIntegrationSessionSupersession: () =>
+        Effect.sync(() => {
+          priorSupersessionCount += 1
+          sessionSuperseded = true
+          decision = "ContinueAttempt"
+        }),
+      recordUnrelatedSessionSupersession: () =>
+        Effect.sync(() => {
+          unrelatedSupersessionCount += 1
+        }),
+      startOneSuccessorCandidate: () =>
+        Effect.sync(() => {
+          successorOrdinal = priorSupersessionCount
+          successorStarted = true
+          decision = "ContinueAttempt"
+        }),
+      observePostPromotionDependencyBlocker: () =>
+        Effect.sync(() => {
+          decision = "GitConstraintWait"
+          positionHeld = false
+          trackerBlocker = "AfterPromotionBlocker"
+        }),
+      clearPostPromotionDependencyBlocker: () =>
+        Effect.sync(() => {
+          decision = "RereadTargetBeforePromotion"
+          trackerBlocker = "NoTrackerBlocker"
+        }),
+      observeFreshPromotedCandidateAncestry: () =>
+        Effect.sync(() => {
+          decision = "ContinueAttempt"
+          promotedCandidateAncestryProven = true
+        }),
+      completeAfterPromotedCandidateAncestry: () =>
+        Effect.sync(() => {
+          completionAuthorized = true
+          decision = "ContinueAttempt"
+        }),
+      observeIncompleteTrackerFacts: () =>
+        Effect.sync(() => {
+          decision = "GitConstraintWait"
+          positionHeld = false
+          trackerBlocker = "IncompleteTrackerFacts"
+        }),
+      acceptCompletionAcrossPrerequisiteRace: () =>
+        Effect.sync(() => {
+          completionAccepted = true
+          focusedCompletionConfirmed = true
+          completionWarning = true
+        }),
+      clearDerivedCompletionWarning: () =>
+        Effect.sync(() => {
+          completionWarning = false
+        }),
       observeCompatibleTargetAdvance: () =>
         Effect.sync(() => {
           const lineage = decideTargetLineage(
@@ -277,6 +411,7 @@ const gitReconciliationDriver = defineDriver(
       reportSafelySuspended: () =>
         Effect.sync(() => {
           status = "SafelySuspended"
+          positionHeld = false
           decision = gitDecisionFromFrontier(constraint, status)
         }),
       selectIndependentTask: () =>
@@ -303,21 +438,35 @@ const gitReconciliationDriver = defineDriver(
       getState: () =>
         Effect.sync(() => ({
           candidateVerified,
+          candidatePreserved,
           claimPreserved,
           compareAndSetAuthorized,
           compatibleAdvanceObserved,
+          completionAccepted,
+          completionAuthorized,
+          completionWarning,
           constraint,
           decision,
           evidencePreserved,
           exactExpectedHeadObserved,
+          focusedCompletionConfirmed,
           independentTaskEligible: true,
           independentTaskSelected,
           overwriteAuthorized,
-          positionHeld: status === "Running",
+          positionHeld,
           repairAuthorized,
           resultRejected,
           resultRejection,
+          priorSupersessionCount,
+          promotedCandidateAncestryProven,
+          promotionProof,
+          reintegrationAuthorized,
+          sessionSuperseded,
           status,
+          successorOrdinal,
+          successorStarted,
+          trackerBlocker,
+          unrelatedSupersessionCount,
           worktreePreserved
         }))
     }
@@ -336,25 +485,37 @@ quintIt(
     spec: "specs/gitReconciliation.qnt",
     stateCheck: stateCheck(
       (raw) =>
-        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
+        Effect.sync(() => {
+          return raw
+        }).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(SpecProjection)),
           Effect.map(({ state }) => ({
             ...state,
             constraint: variantTag(state.constraint),
             decision: variantTag(state.decision),
+            priorSupersessionCount: Number(state.priorSupersessionCount),
             resultRejection: variantTag(state.resultRejection),
-            status: variantTag(state.status)
+            status: variantTag(state.status),
+            successorOrdinal: Number(state.successorOrdinal),
+            trackerBlocker: variantTag(state.trackerBlocker),
+            unrelatedSupersessionCount: Number(state.unrelatedSupersessionCount)
           })),
           Effect.orDie
         ),
       (spec, implementation) =>
         spec.candidateVerified === implementation.candidateVerified &&
+        spec.candidatePreserved === implementation.candidatePreserved &&
         spec.claimPreserved === implementation.claimPreserved &&
         spec.compareAndSetAuthorized === implementation.compareAndSetAuthorized &&
         spec.compatibleAdvanceObserved === implementation.compatibleAdvanceObserved &&
+        spec.completionAccepted === implementation.completionAccepted &&
+        spec.completionAuthorized === implementation.completionAuthorized &&
+        spec.completionWarning === implementation.completionWarning &&
         spec.constraint === implementation.constraint &&
         spec.decision === implementation.decision &&
         spec.evidencePreserved === implementation.evidencePreserved &&
         spec.exactExpectedHeadObserved === implementation.exactExpectedHeadObserved &&
+        spec.focusedCompletionConfirmed === implementation.focusedCompletionConfirmed &&
         spec.independentTaskEligible === implementation.independentTaskEligible &&
         spec.independentTaskSelected === implementation.independentTaskSelected &&
         spec.overwriteAuthorized === implementation.overwriteAuthorized &&
@@ -362,7 +523,16 @@ quintIt(
         spec.repairAuthorized === implementation.repairAuthorized &&
         spec.resultRejected === implementation.resultRejected &&
         spec.resultRejection === implementation.resultRejection &&
+        Number(spec.priorSupersessionCount) === implementation.priorSupersessionCount &&
+        spec.promotedCandidateAncestryProven === implementation.promotedCandidateAncestryProven &&
+        spec.promotionProof === implementation.promotionProof &&
+        spec.reintegrationAuthorized === implementation.reintegrationAuthorized &&
+        spec.sessionSuperseded === implementation.sessionSuperseded &&
         spec.status === implementation.status &&
+        Number(spec.successorOrdinal) === implementation.successorOrdinal &&
+        spec.successorStarted === implementation.successorStarted &&
+        spec.trackerBlocker === implementation.trackerBlocker &&
+        Number(spec.unrelatedSupersessionCount) === implementation.unrelatedSupersessionCount &&
         spec.worktreePreserved === implementation.worktreePreserved
     )
   },

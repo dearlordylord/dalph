@@ -1,5 +1,7 @@
-// Models issue #139's provider-neutral Git decisions. Concrete candidate
-// construction, verification, and ref mutation remain owned by #57/#59/#60.
+// Models issue #139's provider-neutral Git decisions plus issue #138's
+// blocker chronology. Concrete candidate construction, verification, and ref
+// mutation remain owned by their existing protocols; this model records the
+// authority and preservation decisions around those boundaries.
 module gitReconciliation {
   type AttemptStatus = Running | SafelySuspended
   type GitConstraint =
@@ -20,6 +22,7 @@ module gitReconciliation {
     | RejectUnverifiedCandidate
 
   type ResultRejection = NoResultRejection | MissingResultCommit | NonDescendantResultCommit
+  type TrackerBlocker = NoTrackerBlocker | BeforePromotionBlocker | AfterPromotionBlocker | IncompleteTrackerFacts
 
   type State = {
     status: AttemptStatus,
@@ -39,6 +42,20 @@ module gitReconciliation {
     independentTaskSelected: bool,
     exactExpectedHeadObserved: bool,
     candidateVerified: bool,
+    candidatePreserved: bool,
+    promotionProof: bool,
+    trackerBlocker: TrackerBlocker,
+    priorSupersessionCount: int,
+    unrelatedSupersessionCount: int,
+    successorOrdinal: int,
+    sessionSuperseded: bool,
+    successorStarted: bool,
+    promotedCandidateAncestryProven: bool,
+    completionAuthorized: bool,
+    completionAccepted: bool,
+    focusedCompletionConfirmed: bool,
+    completionWarning: bool,
+    reintegrationAuthorized: bool,
   }
 
   var state: State
@@ -62,7 +79,152 @@ module gitReconciliation {
       independentTaskSelected: false,
       exactExpectedHeadObserved: false,
       candidateVerified: false,
+      candidatePreserved: true,
+      promotionProof: false,
+      trackerBlocker: NoTrackerBlocker,
+      priorSupersessionCount: 0,
+      unrelatedSupersessionCount: 0,
+      successorOrdinal: 0,
+      sessionSuperseded: false,
+      successorStarted: false,
+      promotedCandidateAncestryProven: false,
+      completionAuthorized: false,
+      completionAccepted: false,
+      focusedCompletionConfirmed: false,
+      completionWarning: false,
+      reintegrationAuthorized: false,
     }
+  }
+
+  action observePrePromotionDependencyBlocker: bool = all {
+    state.candidatePreserved,
+    not(state.promotionProof),
+    state.positionHeld,
+    state.trackerBlocker == NoTrackerBlocker,
+    state' = {
+      ...state,
+      decision: GitConstraintWait,
+      positionHeld: false,
+      trackerBlocker: BeforePromotionBlocker,
+    },
+  }
+
+  action clearPrePromotionDependencyBlocker: bool = all {
+    state.trackerBlocker == BeforePromotionBlocker,
+    state' = { ...state, decision: RereadTargetBeforePromotion, trackerBlocker: NoTrackerBlocker },
+  }
+
+  // Restart recreates no process-local target ownership and preserves the
+  // accepted candidate while the complete tracker read is still required.
+  action reopenPrePromotionBlockerAfterRestart: bool = all {
+    state.trackerBlocker == BeforePromotionBlocker,
+    state.candidatePreserved,
+    not(state.positionHeld),
+    state' = { ...state, decision: GitConstraintWait, positionHeld: false },
+  }
+
+  action observeFreshTargetAfterPrePromotionBlocker: bool = all {
+    state.decision == RereadTargetBeforePromotion,
+    state.candidatePreserved,
+    not(state.promotionProof),
+    state' = { ...state, decision: ContinueAttempt, compatibleAdvanceObserved: true },
+  }
+
+  action recordIntegrationSessionSupersession: bool = all {
+    state.candidatePreserved,
+    state.compatibleAdvanceObserved,
+    not(state.promotionProof),
+    not(state.sessionSuperseded),
+    state' = {
+      ...state,
+      decision: ContinueAttempt,
+      priorSupersessionCount: state.priorSupersessionCount + 1,
+      sessionSuperseded: true,
+    },
+  }
+
+  // A different task may supersede its own session in the same Run.  It does
+  // not belong to this accepted-result/session chain and therefore cannot
+  // consume this responsibility's successor ordinal.
+  action recordUnrelatedSessionSupersession: bool = all {
+    state.unrelatedSupersessionCount == 0,
+    state' = { ...state, unrelatedSupersessionCount: state.unrelatedSupersessionCount + 1 },
+  }
+
+  // Mutation-profile action: one prior session must never be superseded twice.
+  action recordDuplicatePriorSessionSupersession: bool = all {
+    state.priorSupersessionCount == 1,
+    state' = { ...state, priorSupersessionCount: state.priorSupersessionCount + 1 },
+  }
+
+  action startOneSuccessorCandidate: bool = all {
+    state.sessionSuperseded,
+    not(state.successorStarted),
+    state.candidatePreserved,
+    state' = {
+      ...state,
+      decision: ContinueAttempt,
+      successorOrdinal: state.priorSupersessionCount,
+      successorStarted: true,
+    },
+  }
+
+  // Mutation-profile action: deriving identity from all Run sessions would
+  // make an unrelated task change this responsibility's successor ordinal.
+  action startSuccessorUsingUnrelatedOrdinal: bool = all {
+    state.sessionSuperseded,
+    state.unrelatedSupersessionCount > 0,
+    not(state.successorStarted),
+    state' = {
+      ...state,
+      successorOrdinal: state.unrelatedSupersessionCount + 1,
+      successorStarted: true,
+    },
+  }
+
+  action observePostPromotionDependencyBlocker: bool = all {
+    state.promotionProof,
+    not(state.completionAuthorized),
+    state.trackerBlocker == NoTrackerBlocker,
+    state' = { ...state, decision: GitConstraintWait, positionHeld: false, trackerBlocker: AfterPromotionBlocker },
+  }
+
+  action clearPostPromotionDependencyBlocker: bool = all {
+    state.trackerBlocker == AfterPromotionBlocker,
+    state' = { ...state, decision: RereadTargetBeforePromotion, trackerBlocker: NoTrackerBlocker },
+  }
+
+  action observeFreshPromotedCandidateAncestry: bool = all {
+    state.promotionProof,
+    state.trackerBlocker == NoTrackerBlocker,
+    state.decision == RereadTargetBeforePromotion,
+    state' = { ...state, decision: ContinueAttempt, promotedCandidateAncestryProven: true },
+  }
+
+  action completeAfterPromotedCandidateAncestry: bool = all {
+    state.promotionProof,
+    state.trackerBlocker == NoTrackerBlocker,
+    state.promotedCandidateAncestryProven,
+    state.candidatePreserved,
+    not(state.reintegrationAuthorized),
+    state' = { ...state, completionAuthorized: true, decision: ContinueAttempt },
+  }
+
+  action observeIncompleteTrackerFacts: bool = all {
+    state.positionHeld,
+    state.trackerBlocker == NoTrackerBlocker,
+    state' = { ...state, decision: GitConstraintWait, positionHeld: false, trackerBlocker: IncompleteTrackerFacts },
+  }
+
+  action acceptCompletionAcrossPrerequisiteRace: bool = all {
+    state.completionAuthorized,
+    not(state.completionAccepted),
+    state' = { ...state, completionAccepted: true, focusedCompletionConfirmed: true, completionWarning: true },
+  }
+
+  action clearDerivedCompletionWarning: bool = all {
+    state.completionWarning,
+    state' = { ...state, completionWarning: false },
   }
 
   action observeCompatibleTargetAdvance: bool = all {
@@ -116,7 +278,12 @@ module gitReconciliation {
   action observeEligibleResultCommit: bool = all {
     state.decision == ContinueAttempt,
     state.constraint == NoGitConstraint,
-    state' = { ...state, decision: ResultCommitEligible },
+    state' = {
+      ...state,
+      decision: ResultCommitEligible,
+      resultRejected: false,
+      resultRejection: NoResultRejection,
+    },
   }
 
   action observeMissingResultCommit: bool = all {
@@ -149,6 +316,7 @@ module gitReconciliation {
       exactExpectedHeadObserved: true,
       candidateVerified: true,
       compareAndSetAuthorized: true,
+      promotionProof: true,
     },
   }
 
@@ -227,7 +395,7 @@ module gitReconciliation {
     state.constraint != RegistrationConflictConstraint or not(state.repairAuthorized)
 
   val positionHeldUntilSafeSuspension: bool =
-    state.positionHeld == (state.status == Running)
+    state.positionHeld or state.status == SafelySuspended or state.trackerBlocker != NoTrackerBlocker
 
   val targetRewriteWaitReached: bool =
     state.constraint == TargetRewriteConstraint and state.decision == GitConstraintWait
@@ -287,6 +455,53 @@ module gitReconciliation {
   val staleTargetReconciliationReached: bool = state.decision == ReconcileCandidateFromCurrentTarget
   val ambiguousTargetRereadReached: bool = state.decision == RereadTargetBeforePromotion
   val unverifiedCandidateRejectionReached: bool = state.decision == RejectUnverifiedCandidate
+  val prePromotionBlockerReached: bool = state.trackerBlocker == BeforePromotionBlocker
+  val prePromotionRereadReached: bool =
+    state.decision == RereadTargetBeforePromotion and not(state.promotionProof)
+  val unrelatedSupersessionReached: bool = state.unrelatedSupersessionCount > 0
+  val sessionSupersessionReached: bool = state.sessionSuperseded
+  val successorStartedReached: bool = state.successorStarted
+  val postPromotionBlockerReached: bool = state.trackerBlocker == AfterPromotionBlocker
+  val promotedAncestryProvenReached: bool = state.promotedCandidateAncestryProven
+  val completionAuthorizedReached: bool = state.completionAuthorized
+  val completionAcceptedReached: bool = state.completionAccepted
+  val completionWarningReached: bool = state.completionWarning
+  val incompleteFactsWaitReached: bool = state.trackerBlocker == IncompleteTrackerFacts
+
+  val prePromotionBlockerPreservesCandidate: bool =
+    state.trackerBlocker != BeforePromotionBlocker or state.candidatePreserved
+
+  val prePromotionBlockerReleasesTarget: bool =
+    state.trackerBlocker != BeforePromotionBlocker or not(state.positionHeld)
+
+  val postPromotionBlockerPreservesProof: bool =
+    state.trackerBlocker != AfterPromotionBlocker or state.promotionProof
+
+  val postPromotionBlockerNeverRollsBack: bool =
+    not(state.promotionProof) or not(state.reintegrationAuthorized)
+
+  val clearedPromotionRequiresFreshAncestry: bool =
+    not(state.completionAuthorized) or and { state.promotionProof, state.promotedCandidateAncestryProven }
+
+  val clearedPromotionNeverReintegrates: bool =
+    not(state.promotionProof) or not(state.reintegrationAuthorized)
+
+  val incompleteFactsReleaseTarget: bool =
+    state.trackerBlocker != IncompleteTrackerFacts or not(state.positionHeld)
+
+  val oneSuccessorRequiresDurableSupersession: bool =
+    not(state.successorStarted) or state.sessionSuperseded
+
+  val onePriorSessionHasOneSupersession: bool = state.priorSupersessionCount <= 1
+
+  val successorIdentityUsesOwnSessionChain: bool =
+    not(state.successorStarted) or state.successorOrdinal == state.priorSupersessionCount
+
+  val completionRacePreservesAcceptedCompletion: bool =
+    not(state.completionWarning) or and { state.completionAccepted, state.focusedCompletionConfirmed }
+
+  val completionWarningIsDerivedOnly: bool =
+    not(state.completionWarning) or state.completionAccepted
 
   action step: bool = any {
     observeCompatibleTargetAdvance,
@@ -302,6 +517,19 @@ module gitReconciliation {
     observeStaleTargetAfterVerification,
     observeAmbiguousTargetAfterVerification,
     observeExactTargetWithUnverifiedCandidate,
+    observePrePromotionDependencyBlocker,
+    clearPrePromotionDependencyBlocker,
+    observeFreshTargetAfterPrePromotionBlocker,
+    recordIntegrationSessionSupersession,
+    recordUnrelatedSessionSupersession,
+    startOneSuccessorCandidate,
+    observePostPromotionDependencyBlocker,
+    clearPostPromotionDependencyBlocker,
+    observeFreshPromotedCandidateAncestry,
+    completeAfterPromotedCandidateAncestry,
+    observeIncompleteTrackerFacts,
+    acceptCompletionAcrossPrerequisiteRace,
+    clearDerivedCompletionWarning,
   }
 
   // Exhaustive safety checking must extend settled traces to its fixed bound;

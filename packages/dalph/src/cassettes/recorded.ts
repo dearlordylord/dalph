@@ -12,6 +12,7 @@ import {
   IntegrationCandidateAgentReportedEvent,
   IntegrationCandidateConstructedEvent,
   IntegrationCandidateConstructionIntendedEvent,
+  IntegrationCandidateSessionSupersededEvent,
   IntegrationCandidateGitObservedEvent,
   IntegrationCandidateGitValidationFailedEvent,
   IntegrationCandidateCorrectionLimitReachedEvent,
@@ -215,6 +216,7 @@ type CandidateConstructionEvent = Extract<
       | "IntegrationCandidateAgentReported"
       | "IntegrationCandidateConstructed"
       | "IntegrationCandidateConstructionIntended"
+      | "IntegrationCandidateSessionSuperseded"
       | "IntegrationCandidateGitObserved"
       | "IntegrationCandidateGitValidationFailed"
       | "IntegrationCandidateCorrectionLimitReached"
@@ -231,6 +233,7 @@ const isCandidateConstructionEvent = (event: WorkflowJournalEvent): event is Can
   event._tag === "IntegrationCandidateAgentReported" ||
   event._tag === "IntegrationCandidateConstructed" ||
   event._tag === "IntegrationCandidateConstructionIntended" ||
+  event._tag === "IntegrationCandidateSessionSuperseded" ||
   event._tag === "IntegrationCandidateGitObserved" ||
   event._tag === "IntegrationCandidateGitValidationFailed" ||
   event._tag === "IntegrationCandidateCorrectionLimitReached" ||
@@ -243,6 +246,7 @@ const isRecordedCandidateConstructionEntry = (
     "IntegrationCandidateAgentReported",
     "IntegrationCandidateConstructed",
     "IntegrationCandidateConstructionIntended",
+    "IntegrationCandidateSessionSuperseded",
     "IntegrationCandidateGitObserved",
     "IntegrationCandidateGitValidationFailed",
     "IntegrationCandidateCorrectionLimitReached",
@@ -260,6 +264,16 @@ const recordCandidateConstructionEntry = (event: CandidateConstructionEvent): Re
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
         plannedAttempt: value.plannedAttempt
+      }),
+      IntegrationCandidateSessionSuperseded: (value): RecordedCandidateConstructionEntry => ({
+        _tag: value._tag,
+        observedTargetHead: value.observedTargetHead,
+        occurrenceClassification: "NonActionOccurrence",
+        priorCandidateCommit: value.priorCandidateCommit,
+        priorCorrelation: value.priorCorrelation,
+        responsibilityBeganAt: value.responsibilityBeganAt,
+        startedAt: value.startedAt,
+        successorCorrelation: value.successorCorrelation
       }),
       IntegrationCandidateAgentReported: (value): RecordedCandidateConstructionEntry => ({
         _tag: value._tag,
@@ -1059,6 +1073,16 @@ const eventForCandidateConstructionEntry = (
         ),
         version: workflowJournalEventVersion
       }),
+    IntegrationCandidateSessionSuperseded: (value) =>
+      IntegrationCandidateSessionSupersededEvent.make({
+        observedTargetHead: value.observedTargetHead,
+        priorCandidateCommit: value.priorCandidateCommit,
+        priorCorrelation: value.priorCorrelation,
+        responsibilityBeganAt: JournalPosition.make(value.responsibilityBeganAt),
+        startedAt: JournalPosition.make(value.startedAt),
+        successorCorrelation: value.successorCorrelation,
+        version: workflowJournalEventVersion
+      }),
     IntegrationCandidateAgentReported: (value) =>
       IntegrationCandidateAgentReportedEvent.make({
         expectedCorrelation: value.expectedCorrelation,
@@ -1480,6 +1504,8 @@ const lyricForCandidateConstructionEntry = (entry: RecordedCandidateConstruction
   Match.valueTags(entry, {
     IntegrationCandidateConstructionIntended: (value) =>
       `Dalph coordinator began candidate ${value.correlation.candidateId} in session ${value.correlation.integrationSessionId}.`,
+    IntegrationCandidateSessionSuperseded: (value) =>
+      `Dalph preserved candidate ${value.priorCandidateCommit} and superseded its stale session for target ${value.observedTargetHead}.`,
     IntegrationCandidateAgentReported: (value) =>
       integrationCandidateCorrelationEquals(value.expectedCorrelation, value.report.correlation)
         ? `The integration agent reported ${value.report._tag} for session ${value.report.correlation.integrationSessionId}.`

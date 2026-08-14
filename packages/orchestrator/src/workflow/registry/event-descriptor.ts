@@ -24,6 +24,7 @@ import {
   integrationCandidateAgentReportRecordKey,
   integrationCandidateConstructedRecordKey,
   integrationCandidateConstructionIntentRecordKey,
+  integrationCandidateSessionSupersededRecordKey,
   integrationCandidateGitObservationRecordKey,
   integrationCandidateGitValidationFailureRecordKey,
   integrationCandidateCorrectionLimitReachedRecordKey,
@@ -346,6 +347,13 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     IntegrationCandidateConstructionIntended: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integrationCandidateConstructionIntentRecordKey(event.correlation)
+    }),
+    IntegrationCandidateSessionSuperseded: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationCandidateSessionSupersededRecordKey(
+        event.priorCorrelation,
+        event.successorCorrelation
+      )
     }),
     IntegrationCandidateAgentReported: (event) => ({
       _tag: "GenericEventDescriptor",

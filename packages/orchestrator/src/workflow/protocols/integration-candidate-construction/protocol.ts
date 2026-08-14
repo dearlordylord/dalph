@@ -1,6 +1,12 @@
 /* eslint-disable max-lines -- The candidate state derivation and its intent/observation interpreter stay adjacent for auditability. */
 import { Context, Effect, Option, Schema } from "effect"
-import { AcceptedResult, EvidenceReference, GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
+import {
+  AcceptedResult,
+  EvidenceReference,
+  GitCommitSha,
+  GitRepositoryLocator,
+  evidenceReferenceEquals
+} from "@dalph/contracts"
 import { type TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import {
   integrationCandidateAgentReportRecordKey,
@@ -9,7 +15,8 @@ import {
   integrationCandidateGitObservationRecordKey,
   integrationCandidateGitValidationFailureRecordKey,
   integrationCandidateCorrectionLimitReachedRecordKey,
-  integrationCandidateContinuationLimitReachedRecordKey
+  integrationCandidateContinuationLimitReachedRecordKey,
+  integrationCandidateSessionSupersededRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -25,6 +32,7 @@ import {
   IntegrationCandidateGitValidationAttemptOrdinal,
   IntegrationCandidateCorrectionLimitReachedEvent,
   IntegrationCandidateContinuationLimitReachedEvent,
+  IntegrationCandidateSessionSupersededEvent,
   IntegrationCandidateAgentReportOrdinal,
   CandidateCorrectionLimit,
   CandidateContinuationLimit,
@@ -158,6 +166,25 @@ const correlationFor = (
     integrationTarget: responsibility.integrationTarget,
     runId: responsibility.plannedAttempt.runId
   })
+
+const successorCorrelationFor = (
+  responsibility: StartedIntegrationResponsibility,
+  expectedTargetHead: GitCommitSha,
+  successorOrdinal: number
+): IntegrationCandidateCorrelation => {
+  const identity = `${responsibility.plannedAttempt.runId}:${responsibility.plannedAttempt.attemptId}:${responsibility.startedAt}:successor:${successorOrdinal}`
+  return IntegrationCandidateCorrelation.make({
+    acceptanceManifest: responsibility.acceptedResult.evidenceManifest,
+    acceptedResultCommit: responsibility.acceptedResult.commit,
+    attemptId: responsibility.plannedAttempt.attemptId,
+    candidateId: IntegrationCandidateId.make(`integration-candidate:${identity}:${expectedTargetHead}`),
+    candidateResource: IntegrationCandidateResourceLocator.make(`integration-candidate-resource:${identity}`),
+    expectedTargetHead,
+    integrationSessionId: IntegrationSessionId.make(`integration-session:${identity}`),
+    integrationTarget: responsibility.integrationTarget,
+    runId: responsibility.plannedAttempt.runId
+  })
+}
 
 const constructedState = (
   event: typeof IntegrationCandidateConstructedEvent.Type
@@ -673,6 +700,114 @@ const isTerminalCandidateState = (
   state?._tag === "CandidateCorrectionLimitReached" ||
   state?._tag === "CandidateContinuationLimitReached"
 
+const latestCandidateIntentFor = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: StartedIntegrationResponsibility
+): CandidateIntent | undefined =>
+  records.findLast(
+    ({ event }) =>
+      event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
+  )?.event
+
+const supersededSessionFor = (
+  records: ReadonlyArray<JournalRecord>,
+  priorCorrelation: IntegrationCandidateCorrelation,
+  targetHead: GitCommitSha
+) =>
+  records.findLast(
+    ({ event }) =>
+      event._tag === "IntegrationCandidateSessionSuperseded" &&
+      integrationCandidateCorrelationEquals(event.priorCorrelation, priorCorrelation) &&
+      event.observedTargetHead === targetHead
+  )?.event
+
+const supersessionBelongsToResponsibility = (
+  event: typeof IntegrationCandidateSessionSupersededEvent.Type,
+  responsibility: StartedIntegrationResponsibility
+): boolean =>
+  event.startedAt === responsibility.startedAt &&
+  event.responsibilityBeganAt === responsibility.queuedAt &&
+  event.priorCorrelation.runId === responsibility.plannedAttempt.runId &&
+  event.priorCorrelation.attemptId === responsibility.plannedAttempt.attemptId &&
+  event.priorCorrelation.acceptedResultCommit === responsibility.acceptedResult.commit &&
+  evidenceReferenceEquals(
+    event.priorCorrelation.acceptanceManifest,
+    responsibility.acceptedResult.evidenceManifest
+  ) &&
+  JSON.stringify(event.priorCorrelation.integrationTarget) === JSON.stringify(responsibility.integrationTarget)
+
+/** Counts only supersessions in this responsibility's accepted-result/session chain. */
+export const integrationCandidateSuccessorOrdinalFor = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: StartedIntegrationResponsibility
+): number =>
+  records.filter(
+    ({ event }) =>
+      event._tag === "IntegrationCandidateSessionSuperseded" &&
+      supersessionBelongsToResponsibility(event, responsibility)
+  ).length + 1
+
+const supersedeConstructedCandidate = Effect.fn("IntegrationCandidateConstruction.supersedeSession")(
+  function* (
+    records: ReadonlyArray<JournalRecord>,
+    responsibility: StartedIntegrationResponsibility,
+    priorIntent: CandidateIntent,
+    priorState: Extract<IntegrationCandidateConstructionState, { readonly _tag: "CandidateConstructed" }>,
+    lineage: TargetLineageObservation,
+    correctionLimit: CandidateCorrectionLimit,
+    continuationLimit: CandidateContinuationLimit
+  ) {
+    const journal = yield* InRunJournal
+    const existing = supersededSessionFor(records, priorIntent.correlation, lineage.targetHeadSha)
+    const successor =
+      existing?._tag === "IntegrationCandidateSessionSuperseded"
+        ? existing.successorCorrelation
+        : successorCorrelationFor(
+            responsibility,
+            lineage.targetHeadSha,
+            integrationCandidateSuccessorOrdinalFor(records, responsibility)
+          )
+    if (existing === undefined) {
+      yield* journal.append(
+        responsibility.plannedAttempt.runId,
+        integrationCandidateSessionSupersededRecordKey(priorIntent.correlation, successor),
+        IntegrationCandidateSessionSupersededEvent.make({
+          observedTargetHead: lineage.targetHeadSha,
+          priorCandidateCommit: priorState.candidateCommit,
+          priorCorrelation: priorIntent.correlation,
+          responsibilityBeganAt: responsibility.queuedAt,
+          startedAt: responsibility.startedAt,
+          successorCorrelation: successor,
+          version: workflowJournalEventVersion
+        })
+      )
+    }
+    const afterSupersession = yield* journal.read(responsibility.plannedAttempt.runId)
+    if (
+      !afterSupersession.some(
+        ({ event }) =>
+          event._tag === "IntegrationCandidateConstructionIntended" &&
+          integrationCandidateCorrelationEquals(event.correlation, successor)
+      )
+    ) {
+      yield* journal.append(
+        responsibility.plannedAttempt.runId,
+        integrationCandidateConstructionIntentRecordKey(successor),
+        IntegrationCandidateConstructionIntendedEvent.make({
+          correlation: successor,
+          correctionLimit,
+          continuationLimit,
+          plannedAttempt: responsibility.plannedAttempt,
+          responsibilityBeganAt: responsibility.queuedAt,
+          startedAt: responsibility.startedAt,
+          version: workflowJournalEventVersion
+        })
+      )
+    }
+    return yield* journal.read(responsibility.plannedAttempt.runId)
+  }
+)
+
 export const continueIntegrationCandidateConstruction = Effect.fn("IntegrationCandidateConstruction.continue")(
   // eslint-disable-next-line complexity -- One resumable boundary dispatches the closed durable candidate states without hiding their ordering.
   function* (
@@ -684,13 +819,28 @@ export const continueIntegrationCandidateConstruction = Effect.fn("IntegrationCa
     const journal = yield* InRunJournal
     const runId = responsibility.plannedAttempt.runId
     let records = yield* journal.read(runId)
-    const existing = deriveIntegrationCandidateConstruction(records, responsibility)
+    let existing = deriveIntegrationCandidateConstruction(records, responsibility)
+    let durableIntent = latestCandidateIntentFor(records, responsibility)
+    if (
+      existing?._tag === "CandidateConstructed" &&
+      durableIntent !== undefined &&
+      durableIntent.correlation.expectedTargetHead !== lineage.targetHeadSha &&
+      targetLineageAllowsCandidate(responsibility, lineage)
+    ) {
+      records = yield* supersedeConstructedCandidate(
+        records,
+        responsibility,
+        durableIntent,
+        existing,
+        lineage,
+        durableIntent.correctionLimit,
+        durableIntent.continuationLimit
+      )
+      existing = deriveIntegrationCandidateConstruction(records, responsibility)
+      durableIntent = latestCandidateIntentFor(records, responsibility)
+    }
     if (isTerminalCandidateState(existing)) return existing
 
-    const durableIntent = records.find(
-      ({ event }) =>
-        event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
-    )?.event
     if (durableIntent === undefined && !targetLineageAllowsCandidate(responsibility, lineage)) {
       return yield* new IntegrationCandidateTargetLineageRejected({
         observedTargetHead: lineage.targetHeadSha,

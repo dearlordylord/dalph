@@ -628,7 +628,19 @@ const gitReconciliationInvariants = [
   "staleTargetNeverOverwrites",
   "ambiguousTargetNeverPromotes",
   "promotionRequiresExactExpectedHead",
-  "unverifiedCandidateNeverPromotes"
+  "unverifiedCandidateNeverPromotes",
+  "prePromotionBlockerPreservesCandidate",
+  "prePromotionBlockerReleasesTarget",
+  "postPromotionBlockerPreservesProof",
+  "postPromotionBlockerNeverRollsBack",
+  "clearedPromotionRequiresFreshAncestry",
+  "clearedPromotionNeverReintegrates",
+  "incompleteFactsReleaseTarget",
+  "oneSuccessorRequiresDurableSupersession",
+  "onePriorSessionHasOneSupersession",
+  "successorIdentityUsesOwnSessionChain",
+  "completionRacePreservesAcceptedCompletion",
+  "completionWarningIsDerivedOnly"
 ]
 
 await run("Git reconciliation model typecheck", ["typecheck", "specs/gitReconciliation.qnt"])
@@ -662,6 +674,17 @@ await run("Git reconciliation sampled model", [
   "staleTargetReconciliationReached",
   "ambiguousTargetRereadReached",
   "unverifiedCandidateRejectionReached",
+  "prePromotionBlockerReached",
+  "prePromotionRereadReached",
+  "unrelatedSupersessionReached",
+  "sessionSupersessionReached",
+  "successorStartedReached",
+  "postPromotionBlockerReached",
+  "promotedAncestryProvenReached",
+  "completionAuthorizedReached",
+  "completionAcceptedReached",
+  "completionWarningReached",
+  "incompleteFactsWaitReached",
   "--max-steps",
   "7",
   "--max-samples",

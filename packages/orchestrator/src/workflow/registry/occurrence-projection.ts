@@ -535,6 +535,7 @@ const nonProjectedJournalEventKinds = {
   IntegrationCandidateAgentReported: true,
   IntegrationCandidateConstructed: true,
   IntegrationCandidateConstructionIntended: true,
+  IntegrationCandidateSessionSuperseded: true,
   IntegrationCandidateGitObserved: true,
   IntegrationCandidateGitValidationFailed: true,
   IntegrationCandidateCorrectionLimitReached: true,

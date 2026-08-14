@@ -86,4 +86,76 @@ module gitReconciliationTest {
       .then(observeExactTargetWithUnverifiedCandidate)
       .expect(unverifiedCandidateRejectionReached and unverifiedCandidateNeverPromotes)
   }
+
+  run prePromotionBlockerPreservesCandidateAndReleasesTargetTest = {
+    init
+      .then(observePrePromotionDependencyBlocker)
+      .then(selectIndependentTask)
+      .expect(
+        prePromotionBlockerPreservesCandidate
+          and prePromotionBlockerReleasesTarget
+          and state.independentTaskSelected
+          and state.decision == GitConstraintWait
+      )
+  }
+
+  run prePromotionBlockerRecoveryPreservesCandidateAndEmptyTargetTest = {
+    init
+      .then(observePrePromotionDependencyBlocker)
+      .then(reopenPrePromotionBlockerAfterRestart)
+      .expect(prePromotionBlockerPreservesCandidate and prePromotionBlockerReleasesTarget)
+  }
+
+  run prePromotionClearRereadsAndSupersedesBeforeOneSuccessorTest = {
+    init
+      .then(recordUnrelatedSessionSupersession)
+      .then(observePrePromotionDependencyBlocker)
+      .then(clearPrePromotionDependencyBlocker)
+      .then(observeFreshTargetAfterPrePromotionBlocker)
+      .then(recordIntegrationSessionSupersession)
+      .then(startOneSuccessorCandidate)
+      .expect(
+        state.successorStarted
+          and state.successorOrdinal == 1
+          and successorIdentityUsesOwnSessionChain
+          and oneSuccessorRequiresDurableSupersession
+      )
+  }
+
+  run postPromotionBlockerPreservesProofAndWaitsTest = {
+    init
+      .then(observeEligibleResultCommit)
+      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observePostPromotionDependencyBlocker)
+      .expect(postPromotionBlockerPreservesProof and postPromotionBlockerNeverRollsBack and state.decision == GitConstraintWait)
+  }
+
+  run clearedPromotionRequiresFreshAncestryAndNeverReintegratesTest = {
+    init
+      .then(observeEligibleResultCommit)
+      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observePostPromotionDependencyBlocker)
+      .then(clearPostPromotionDependencyBlocker)
+      .then(observeFreshPromotedCandidateAncestry)
+      .then(completeAfterPromotedCandidateAncestry)
+      .expect(clearedPromotionRequiresFreshAncestry and clearedPromotionNeverReintegrates)
+  }
+
+  run incompleteTrackerFactsReleaseTargetWithoutTransitionTest = {
+    init
+      .then(observeIncompleteTrackerFacts)
+      .expect(incompleteFactsReleaseTarget and state.decision == GitConstraintWait)
+  }
+
+  run completionRacePreservesAcceptedCompletionAndDerivedWarningTest = {
+    init
+      .then(observeEligibleResultCommit)
+      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observePostPromotionDependencyBlocker)
+      .then(clearPostPromotionDependencyBlocker)
+      .then(observeFreshPromotedCandidateAncestry)
+      .then(completeAfterPromotedCandidateAncestry)
+      .then(acceptCompletionAcrossPrerequisiteRace)
+      .expect(completionRacePreservesAcceptedCompletion and completionWarningIsDerivedOnly)
+  }
 }
