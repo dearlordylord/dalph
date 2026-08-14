@@ -25,7 +25,8 @@ import {
 } from "../../workflow/task-tracker-facts/reconfirmation.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import { validateRunPolicyHistory } from "./run-policy-history.js"
-import { type IntegrationHistoryIndexes, validateIntegrationHistoryRecord } from "./integration-history.js"
+import type { IntegrationHistoryIndexes } from "./integration-history.js"
+import { validateIntegrationHistoryRecord } from "./integration-history-validation.js"
 import { makeTargetPromotionHistoryIndexes } from "./target-promotion-history.js"
 import { validateTaskClaimRelease } from "./claim-release-history.js"
 import {

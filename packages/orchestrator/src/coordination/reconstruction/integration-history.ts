@@ -443,4 +443,3 @@ export const invalidIntegrationHistoryEvent = (
   }
   return invalidCandidateHistory(record, indexes)
 }
-export { validateIntegrationHistoryRecord } from "./integration-history-validation.js"

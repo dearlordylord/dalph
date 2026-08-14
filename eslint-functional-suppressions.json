@@ -219,11 +219,6 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.ts": {
-    "functional/immutable-data": {
-      "count": 1
-    }
-  },
   "packages/orchestrator/src/coordination/delivery/ticket-delivery-projection.ts": {
     "functional/immutable-data": {
       "count": 1

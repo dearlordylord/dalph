@@ -47,10 +47,8 @@ import {
 } from "./events.js"
 import { decodeTargetVerificationManifest } from "./manifest.js"
 import { runTargetVerification } from "./protocol.js"
-import {
-  type IntegrationHistoryIndexes,
-  validateIntegrationHistoryRecord
-} from "../../../coordination/reconstruction/integration-history.js"
+import type { IntegrationHistoryIndexes } from "../../../coordination/reconstruction/integration-history.js"
+import { validateIntegrationHistoryRecord } from "../../../coordination/reconstruction/integration-history-validation.js"
 import { makeTargetPromotionHistoryIndexes } from "../../../coordination/reconstruction/target-promotion-history.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import { makeIntegrationTargetResourceController } from "../../../coordination/admission/integration-target-resource.js"

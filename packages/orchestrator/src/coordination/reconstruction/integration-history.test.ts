@@ -55,7 +55,8 @@ import {
   TargetPromotionTerminalBasis,
   targetPromotionRequestFor
 } from "../../workflow/protocols/target-promotion/events.js"
-import { type IntegrationHistoryIndexes, validateIntegrationHistoryRecord } from "./integration-history.js"
+import type { IntegrationHistoryIndexes } from "./integration-history.js"
+import { validateIntegrationHistoryRecord } from "./integration-history-validation.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { makeTargetPromotionHistoryIndexes } from "./target-promotion-history.js"
 import {
