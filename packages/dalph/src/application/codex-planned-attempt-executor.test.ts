@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest"
 import {
   AttemptId,
+  AcceptedResultEvidenceManifest,
   EvidenceDigest,
   EvidenceReference,
   GitCommitSha,
@@ -46,6 +47,7 @@ import {
   CodexAttemptStore,
   CodexAttemptStoreFailure,
   CodexOwnedTurnToken,
+  CodexSealedTerminal,
   CodexServerIncarnation,
   CodexAttemptRecord,
   type CodexAttemptStoreService,
@@ -595,6 +597,37 @@ const corruptOnRereadEvidenceStoreLayer: Layer.Layer<EvidenceStore> = Layer.effe
     })
   })
 ).pipe(Layer.provide(NodeServices.layer))
+
+const manifestDriftEvidenceStoreLayer = (replacement: Uint8Array): Layer.Layer<EvidenceStore> =>
+  Layer.effect(
+    EvidenceStore,
+    Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto
+      let stored = new Uint8Array()
+      let reads = 0
+      const digestFor = (bytes: Uint8Array) =>
+        crypto.digest("SHA-256", bytes).pipe(
+          Effect.mapError(
+            (error) => new EvidenceStoreFailure({ detail: String(error), operation: "EvidenceStore.put" })
+          ),
+          Effect.map((digest) =>
+            EvidenceDigest.make(Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(""))
+          )
+        )
+      return EvidenceStore.of({
+        put: (bytes) =>
+          Effect.gen(function* () {
+            stored = bytes.slice()
+            return EvidenceReference.make({ byteLength: bytes.byteLength, digest: yield* digestFor(bytes) })
+          }),
+        read: () =>
+          Effect.sync(() => {
+            reads += 1
+            return reads === 1 ? stored.slice() : replacement.slice()
+          })
+      })
+    })
+  ).pipe(Layer.provide(NodeServices.layer))
 
 type ConformanceBoundaryCall =
   | { readonly _tag: "Project"; readonly correlation: typeof conformanceCorrelation }
@@ -1875,4 +1908,118 @@ it.effect("normalizes stored failures, foreign records, and unusable app-server 
       }).pipe(Effect.provide(layerFor(protocolHarness)))
     )
   )
+})
+
+it.effect("reconstructs a persisted failed terminal without sending another task turn", () => {
+  const harness = makeHarness({ terminalTurnStatus: "failed" })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const started = yield* executor.startOrContinue(request)
+    expect(started._tag).toBe("Terminal")
+    expect(harness.turnCount()).toBe(1)
+
+    const current = harness.currentRecord()
+    expect(current?._tag).toBe("Terminal")
+    const projected = yield* executor.project(correlation)
+    expect(projected).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+      })
+    )
+    const retried = yield* executor.startOrContinue(request)
+    expect(retried).toEqual(
+      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+    )
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("fails closed when an associated thread already contains owned activity", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    const current = harness.currentRecord()
+    expect(current?._tag).toBe("Running")
+    if (current?._tag === "Running") {
+      harness.setRecord(
+        CodexAttemptRecord.cases.AssociatedPreTurn.make({
+          attemptId: current.attemptId,
+          correlationAttemptId: current.correlationAttemptId,
+          correlationRunId: current.correlationRunId,
+          threadId: current.threadId,
+          worktree: current.worktree
+        })
+      )
+      harness.setThread({
+        id: current.threadId,
+        cwd: current.worktree,
+        status: "active",
+        turns: [{ id: current.observedTurnId, status: "inProgress", items: [], ownedTurnToken: current.currentToken }]
+      })
+      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+      expect(yield* executor.startOrContinue(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
+    }
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("rejects a retained accepted terminal when its reread manifest no longer matches", () => {
+  const harness = makeHarness()
+  const replacementManifest = AcceptedResultEvidenceManifest.make({
+    commit: otherHead,
+    correlation,
+    formatVersion: 1,
+    outcome: "Accepted",
+    predecessor: null
+  })
+  const replacementBytes = new TextEncoder().encode(JSON.stringify(replacementManifest))
+  return Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const replacementDigest = yield* crypto.digest("SHA-256", replacementBytes)
+    const replacementReference = EvidenceReference.make({
+      byteLength: replacementBytes.byteLength,
+      digest: EvidenceDigest.make(Array.from(replacementDigest, (byte) => byte.toString(16).padStart(2, "0")).join(""))
+    })
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.complete(finalResponse(head))
+    expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
+    const current = harness.currentRecord()
+    expect(current?._tag).toBe("Terminal")
+    if (current?._tag === "Terminal") {
+      harness.setRecord(
+        CodexAttemptRecord.cases.Terminal.make({
+          ...current,
+          evidenceManifest: replacementReference,
+          terminal: CodexSealedTerminal.cases.Accepted.make({ commit: head, evidenceManifest: replacementReference })
+        })
+      )
+    }
+    expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+  }).pipe(
+    Effect.provide(layerFor(harness, defaultGitCommand, manifestDriftEvidenceStoreLayer(replacementBytes))),
+    Effect.provide(NodeServices.layer)
+  )
+})
+
+it.effect("fails closed when a persisted terminal is followed by an interrupted turn", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.complete(finalResponse(head))
+    expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
+    const terminalRecord = harness.currentRecord()
+    const terminalTurnId = terminalRecord?._tag === "Terminal" ? terminalRecord.observedTurnId : undefined
+    expect(terminalTurnId).toBeDefined()
+    if (terminalTurnId === undefined) return
+    const thread = harness.currentThread()
+    harness.setThread({
+      ...thread,
+      status: "idle",
+      turns: thread.turns.map((turn) => (turn.id === terminalTurnId ? { ...turn, status: "interrupted" } : turn))
+    })
+    const restarted = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    expect(restarted._tag).toBe("Failure")
+  }).pipe(Effect.provide(layerFor(harness)))
 })

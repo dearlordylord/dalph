@@ -103,7 +103,10 @@ requires a setting that cannot correctly be shared.
   functions above cyclomatic complexity eight in each file.
 - `pnpm check:duplicates` enforces the configured TypeScript duplication budget.
 - `pnpm test` runs the deterministic Vitest suite.
-- `pnpm test:coverage` enforces the configured line, function, branch, and statement coverage bar.
+- `pnpm test:coverage` enforces the configured statements (98%), branches
+  (96%), functions (97%), and lines (98%) aggregate floors, then verifies at
+  least 99% coverage of changed executable production lines from
+  `coverage/coverage-final.json`.
 - `pnpm test:mbt` runs the Quint-connected executable conformance suites.
 - `pnpm check:quint` runs deterministic, sampled, and exhaustive formal model
   checks. Run it once after the final relevant changes and before integration;
@@ -115,11 +118,42 @@ requires a setting that cannot correctly be shared.
 - `pnpm check:all` runs the bounded local implementation gate, including
   Quint-connected MBT but not exhaustive formal model checking.
 
+The aggregate floors are an evidence-backed prototype boundary, not a waiver
+for new production paths. After the retained public-seam and chronological
+scenario tests, the full suite measured 16,261/16,575 statements (98.10%),
+9,128/9,472 branches (96.36%), 5,247/5,375 functions (97.61%), and
+15,076/15,300 lines (98.53%). The 344 uncovered branches are concentrated in
+platform/process ownership and invariant-heavy recovery code: 69 in the
+Codex app-server boundary, 42 in the planned-attempt executor, 40 in journal
+reconstruction history, 27 in the attempt store, and 26 in run recovery
+activation. The independent 99% changed-executable-line check compares every
+new production line with the explicit base commit, so these aggregate floors
+cannot silently admit new coverage debt.
+
 The quality harness counts stdout and stderr lines from successful stages and
 fails after a stage if their cumulative output exceeds 400 lines. A failed
 stage still reports its complete diagnostics and fails for its own exit status;
 the noise budget governs successful output only. Prefer compacting a reporter
 or removing repetitive diagnostics before increasing the checked-in budget.
+
+The changed-line coverage verifier compares the working tree with an explicit
+base commit. CI sets `DALPH_COVERAGE_BASE_SHA` to the pull request target SHA or
+the push event's previous SHA. For a local run, set that variable explicitly
+when reviewing a branch, for example:
+
+```sh
+DALPH_COVERAGE_BASE_SHA="$(git merge-base origin/master HEAD)" pnpm test:coverage
+```
+
+When it is absent (or a push event provides GitHub's all-zero initial SHA), the
+verifier tries `git merge-base origin/master HEAD` and then `git rev-parse
+HEAD^`. The diff is taken against that base without restricting paths, so
+staged and unstaged tracked worktree changes are included; untracked
+production source files are also included. Test, documentation, script,
+declaration, and other non-production changes do not enter the changed
+executable-line denominator. The verifier uses statement spans in
+`coverage-final.json` to derive Istanbul line coverage and reports every
+uncovered changed line when the 99% floor is missed.
 
 The native TypeScript 7 compiler is installed as `@typescript/native` and
 patched by `@effect/tsgo` during `pnpm install`. Oxlint's TypeScript-Go plugin

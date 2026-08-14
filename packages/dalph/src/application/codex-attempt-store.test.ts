@@ -153,6 +153,18 @@ it.effect("admits only one independent filesystem store lease", () =>
           return yield* store.acquireServerLease(otherLeaseOwner, () => Effect.succeed({ _tag: "ExactLive" as const }))
         }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
         expect(Exit.isFailure(second)).toBe(true)
+        const lockedAbsent = yield* Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          return yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+        }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+        expect(Exit.isFailure(lockedAbsent)).toBe(true)
+        const lockedContradictory = yield* Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          return yield* store.acquireServerLease(leaseOwner, () =>
+            Effect.succeed({ _tag: "Contradictory", detail: "locked owner disagrees" } as const)
+          )
+        }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+        expect(Exit.isFailure(lockedContradictory)).toBe(true)
         yield* first.releaseServerLease(leaseOwner)
         yield* first.releaseServerLease(leaseOwner)
         const sameOwner = yield* Effect.gen(function* () {
@@ -382,6 +394,45 @@ it.effect("rejects relative and traversal state directories before filesystem ac
       }).pipe(Effect.provide(nodeCodexAttemptStoreLayer({ stateDirectory: "/tmp/../private" })), Effect.exit)
       expect(Exit.isFailure(relative)).toBe(true)
       expect(Exit.isFailure(traversal)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("treats an empty private snapshot as a fresh store", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-empty-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      yield* writePrivateFile(fileSystem, storePath, "")
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.none())
+        expect(yield* store.readServerLaunch()).toEqual(Option.none())
+        yield* store.writeAttempt(associated)
+      }).pipe(Effect.provide(nodeLayer(storePath)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reports a locked lease with no readable owner instead of reclaiming it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-empty-lease-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      yield* Effect.gen(function* () {
+        const first = yield* CodexAttemptStore
+        yield* first.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+        yield* fileSystem.writeFileString(`${storePath}.lease`, "", { mode: 0o600 })
+        const second = yield* Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          return yield* store.acquireServerLease(otherLeaseOwner, () => Effect.succeed({ _tag: "Absent" as const }))
+        }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+        expect(Exit.isFailure(second)).toBe(true)
+      }).pipe(Effect.provide(nodeLayer(storePath)))
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

@@ -1,7 +1,7 @@
-import { Cause, Effect, Exit, Option, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Option, Schema } from "effect"
 import { NodeCrypto } from "@effect/platform-node"
 import { expect, it } from "vitest"
-import { GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
+import { AttemptId, GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
 import { TaskWorkCapacity } from "@dalph/orchestrator"
 import {
   AuthoredCassetteStoryItem,
@@ -10,11 +10,13 @@ import {
   foldRecordedCassette,
   maintainedAuthoredCassetteCatalog,
   projectRecordedCassette,
+  RecordedCassette,
   renderAuthoredCassetteLyrics,
   renderRecordedCassetteLyrics,
   renameRecordedCassette,
   runAuthoredScenarioCassette,
   singletonTaskCompletesAuthoredCassette,
+  type RecordedCassette as RecordedCassetteType,
   verifyRecordedCassetteRoundTrip,
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
@@ -214,6 +216,131 @@ it("keeps authored Git, control, and executor outcomes correlated at the cursor 
       ])
       expect(Option.isSome(yield* publicationHold.consumeExecutorRequestPublicationHold)).toBe(true)
     })
+  )
+})
+
+it("waits for delayed candidate reports and correlates concurrent Git validation requests", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const authoredLineage = maintainedStoryItems.find(
+        (item) => item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
+      )
+      const authoredReport = findStoryItemOf("IntegrationCandidateAgentReported")
+      if (authoredLineage?._tag !== "DalphSelects") return yield* Effect.die("missing target-lineage selection")
+
+      const requestedAttemptId = AttemptId.make("cursor-requested-attempt")
+      const foreignAttemptId = AttemptId.make("cursor-foreign-attempt")
+      const requestedReport = { ...authoredReport, attemptId: requestedAttemptId }
+      const foreignReport = { ...authoredReport, attemptId: foreignAttemptId }
+      const delayedCursor = yield* makeStoryCursor([authoredLineage, requestedReport])
+      const delayed = yield* delayedCursor
+        .consumeIntegrationCandidateAgentReport(requestedAttemptId)
+        .pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(yield* delayedCursor.consumeDalphSelection).toEqual(authoredLineage)
+      expect(yield* Fiber.join(delayed)).toEqual(Option.some(requestedReport))
+
+      const concurrentCursor = yield* makeStoryCursor([authoredLineage, foreignReport, requestedReport])
+      const requested = yield* concurrentCursor
+        .consumeIntegrationCandidateAgentReport(requestedAttemptId)
+        .pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      const foreign = yield* concurrentCursor
+        .consumeIntegrationCandidateAgentReport(foreignAttemptId)
+        .pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(yield* concurrentCursor.consumeDalphSelection).toEqual(authoredLineage)
+      expect(yield* Fiber.join(requested)).toEqual(Option.some(requestedReport))
+      expect(yield* Fiber.join(foreign)).toEqual(Option.some(foreignReport))
+
+      const controlDirection = findStoryItemOf("OperatorAppliesControlDirectionBeforeDeliveryActionAdmission")
+      const requestedRepository = GitRepositoryLocator.make("/cursor/requested.git")
+      const requestedCommit = GitCommitSha.make("1".repeat(40))
+      const foreignRepository = GitRepositoryLocator.make("/cursor/foreign.git")
+      const foreignCommit = GitCommitSha.make("2".repeat(40))
+      const authoredGit = findStoryItemOf("IntegrationCandidateGitValidationReturned")
+      const requestedGit = { ...authoredGit, candidateCommit: requestedCommit, repository: requestedRepository }
+      const foreignGit = { ...authoredGit, candidateCommit: foreignCommit, repository: foreignRepository }
+      const mismatchedGitCursor = yield* makeStoryCursor([requestedGit])
+      const mismatchedGit = yield* mismatchedGitCursor
+        .consumeIntegrationCandidateGitValidation(foreignRepository, foreignCommit)
+        .pipe(Effect.flip)
+      expect(mismatchedGit).toMatchObject({ _tag: "AuthoredCassetteInteractionMismatch", storyPosition: 0 })
+      const gitCursor = yield* makeStoryCursor([controlDirection, foreignGit, requestedGit])
+      expect(yield* gitCursor.consumeControlDirection(controlDirection)).toEqual(Option.some(controlDirection))
+      const requestedGitFiber = yield* gitCursor
+        .consumeIntegrationCandidateGitValidation(requestedRepository, requestedCommit)
+        .pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      const foreignGitFiber = yield* gitCursor
+        .consumeIntegrationCandidateGitValidation(foreignRepository, foreignCommit)
+        .pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* gitCursor.completeControlDirectionBeforeDeliveryActionAdmission
+      expect(yield* Fiber.join(requestedGitFiber)).toEqual(requestedGit)
+      expect(yield* Fiber.join(foreignGitFiber)).toEqual(foreignGit)
+
+      const emptyGitCursor = yield* makeStoryCursor([])
+      const emptyGit = yield* emptyGitCursor
+        .consumeIntegrationCandidateGitValidation(requestedRepository, requestedCommit)
+        .pipe(Effect.flip)
+      expect(emptyGit).toMatchObject({ _tag: "AuthoredCassetteInteractionMismatch", expected: "EndOfStory" })
+      const terminalGitCursor = yield* makeStoryCursor([findStoryItem("ExpectedBehavior")])
+      const terminalGit = yield* terminalGitCursor
+        .consumeIntegrationCandidateGitValidation(requestedRepository, requestedCommit)
+        .pipe(Effect.flip)
+      expect(terminalGit).toMatchObject({ _tag: "AuthoredCassetteInteractionMismatch", expected: "ExpectedBehavior" })
+      const terminalPromotionCursor = yield* makeStoryCursor([findStoryItem("ExpectedBehavior")])
+      const terminalPromotion = yield* terminalPromotionCursor
+        .consumeTargetPromotionGitRead(requestedRepository, requestedCommit)
+        .pipe(Effect.flip)
+      expect(terminalPromotion).toMatchObject({
+        _tag: "AuthoredCassetteInteractionMismatch",
+        expected: "ExpectedBehavior"
+      })
+    })
+  )
+})
+
+it("round-trips restart, release, worktree, Git, lost-response, and supersession histories", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const cassettes = [
+        maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly,
+        maintainedAuthoredCassetteCatalog.changedAttemptStopReleaseResponseLost,
+        maintainedAuthoredCassetteCatalog.lostPlannedWorktreeSafelySuspends,
+        maintainedAuthoredCassetteCatalog.candidateCorrectionAfterUnreadableGit,
+        maintainedAuthoredCassetteCatalog.changedAttemptRestartRemainsUnproved,
+        maintainedAuthoredCassetteCatalog.prePromotionBlockerClearAndSupersession,
+        maintainedAuthoredCassetteCatalog.targetPromotionLostResponseDiscoversCurrentCandidate
+      ]
+
+      let supersessionRecorded: RecordedCassetteType | undefined
+      for (const cassette of cassettes) {
+        const run = yield* runAuthoredScenarioCassette(cassette)
+        const recorded = yield* projectRecordedCassette(run.records)
+        if (cassette === maintainedAuthoredCassetteCatalog.prePromotionBlockerClearAndSupersession) {
+          supersessionRecorded = recorded
+        }
+        expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
+        expect(
+          verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+            ({ operationalStateEquivalent, workflowHistoryEquivalent }) =>
+              operationalStateEquivalent && workflowHistoryEquivalent
+          )
+        ).toBe(true)
+        expect(renderRecordedCassetteLyrics(recorded)).toContain("Dalph")
+      }
+
+      if (supersessionRecorded === undefined) return yield* Effect.die("supersession cassette was not recorded")
+      const withoutIntegrationOrigin = RecordedCassette.make({
+        ...supersessionRecorded,
+        entries: supersessionRecorded.entries.filter(({ _tag }) => _tag !== "IntegrationResponsibilityBegan")
+      })
+      const missingCause = yield* Effect.exit(Effect.sync(() => foldRecordedCassette(withoutIntegrationOrigin)))
+      expect(Exit.isFailure(missingCause)).toBe(true)
+      if (Exit.isFailure(missingCause)) expect(Cause.hasDies(missingCause.cause)).toBe(true)
+    }).pipe(Effect.provide(NodeCrypto.layer))
   )
 })
 

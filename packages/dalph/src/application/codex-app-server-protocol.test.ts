@@ -79,6 +79,20 @@ const responseFor = (method) => {
   if (mode === "invalid-turn-input-item" && method === "thread/start") {
     return { thread: { ...validThread, turns: [{ ...validTurn, input: [null] }] } }
   }
+  if (mode === "thread-no-turns" && method === "thread/start") {
+    const { turns: _turns, ...threadWithoutTurns } = validThread
+    return { thread: threadWithoutTurns }
+  }
+  if (mode === "thread-turn-items-omitted" && method === "thread/start") {
+    const { items: _items, ...turnWithoutItems } = validTurn
+    return { thread: { ...validThread, turns: [turnWithoutItems] } }
+  }
+  if (mode === "thread-status-not-loaded" && method === "thread/start") {
+    return { thread: { ...validThread, status: "notLoaded" } }
+  }
+  if (mode === "thread-status-system-error" && method === "thread/start") {
+    return { thread: { ...validThread, status: "systemError" } }
+  }
   if (mode === "duplicate-turn-marker" && method === "thread/start") {
     return {
       thread: {
@@ -105,6 +119,9 @@ const responseFor = (method) => {
   }
   if (mode === "invalid-thread-correlation" && method === "thread/start") {
     return { thread: { ...validThread, correlation: { runId: "run" } } }
+  }
+  if (mode === "thread-correlation" && method === "thread/start") {
+    return { thread: { ...validThread, correlation: { runId: "run:protocol", attemptId: "attempt:protocol" } } }
   }
   if (mode === "turn-start-invalid-response" && method === "turn/start") return { turn: null }
   if (mode === "turn-start-invalid-status" && method === "turn/start") {
@@ -146,6 +163,9 @@ const responseFor = (method) => {
   if (mode === "background-valid-null-pid" && method === "thread/backgroundTerminals/list") {
     return { data: [{ processId: "p", itemId: "i", command: "echo", cwd: "/fixture", osPid: null }] }
   }
+  if (mode === "background-valid-number-pid" && method === "thread/backgroundTerminals/list") {
+    return { data: [{ processId: "p", itemId: "i", command: "echo", cwd: "/fixture", osPid: 42 }] }
+  }
   if (mode === "terminate-invalid" && method === "thread/backgroundTerminals/terminate") return { terminated: "yes" }
   if (mode === "malformed-json" && method === "thread/start") return "__MALFORMED__"
   return method === "initialize"
@@ -174,6 +194,10 @@ const onMessage = (message) => {
   }
   if (mode === "no-id-response" && requestNumber === 1) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "fixture/notice" }) + "\n")
+  }
+  if (mode === "non-object-message" && requestNumber === 1) {
+    process.stdout.write(JSON.stringify("not-an-object") + "\n")
+    return
   }
   if (mode === "malformed-json" && message.method === "thread/start") {
     process.stdout.write("not-json\n")
@@ -317,6 +341,22 @@ it.effect("reconciles valid turn markers, metadata, status, and correlation thro
     )
     expect(status).toBe("idle")
 
+    const threadCorrelation = yield* withFixture("thread-correlation", (app) =>
+      Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.correlation)
+    )
+    expect(threadCorrelation).toEqual({ runId: "run:protocol", attemptId: "attempt:protocol" })
+
+    for (const mode of ["thread-no-turns", "thread-turn-items-omitted"] as const) {
+      const started = yield* withFixture(mode, (app) => app.startThread("/fixture/worktree"))
+      expect(started.turns).toEqual(
+        mode === "thread-no-turns" ? [] : [{ id: CodexTurnId.make("protocol-turn"), status: "completed", items: [] }]
+      )
+    }
+    for (const mode of ["thread-status-not-loaded", "thread-status-system-error"] as const) {
+      const started = yield* withFixture(mode, (app) => app.startThread("/fixture/worktree"))
+      expect(started.status).toBe(mode === "thread-status-not-loaded" ? "notLoaded" : "systemError")
+    }
+
     const ignoredInputShape = yield* withFixture("invalid-turn-input-item", (app) =>
       Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.id)
     )
@@ -390,6 +430,14 @@ it.effect("normalizes background terminal observations and rejects unsafe termin
     )
     expect(valid).toBe(true)
 
+    const numericPid = yield* withFixture("background-valid-number-pid", (app) =>
+      Effect.gen(function* () {
+        const thread = yield* app.startThread("/fixture/worktree")
+        return yield* app.listBackgroundTerminals(thread.id)
+      })
+    )
+    expect(numericPid[0]?.osPid).toBe(42)
+
     for (const mode of [
       "background-not-array",
       "background-invalid-item",
@@ -421,7 +469,8 @@ it.effect("classifies transport protocol errors without fabricating a thread", (
       ["rpc-error", "thread/start"],
       ["malformed-json", "thread/start"],
       ["non-number-response-id", "initialize"],
-      ["initialize-family-contradiction", "initialize"]
+      ["initialize-family-contradiction", "initialize"],
+      ["non-object-message", "initialize"]
     ] as const,
     ([mode, operation]) =>
       withFixture(mode, (app) =>

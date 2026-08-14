@@ -41,6 +41,11 @@ jobs:
     needs: node-support
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Pull requests compare with the target branch tip; pushes compare with
+    # the event's previous commit so the changed-line verifier includes the
+    # committed change and any worktree changes produced by the gate.
+    env:
+      DALPH_COVERAGE_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
 
     strategy:
       fail-fast: false

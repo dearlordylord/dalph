@@ -6,6 +6,9 @@ export interface CoverageSummary {
 
 export declare const coverageThresholdFailures: (
   summary: CoverageSummary,
-  threshold?: number
+  thresholds?: Readonly<Record<"statements" | "branches" | "functions" | "lines", number>>
 ) => ReadonlyArray<string>
-export declare const coverageExitCode: (summary: CoverageSummary, threshold?: number) => number
+export declare const coverageExitCode: (
+  summary: CoverageSummary,
+  thresholds?: Readonly<Record<"statements" | "branches" | "functions" | "lines", number>>
+) => number

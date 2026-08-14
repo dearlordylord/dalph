@@ -30,7 +30,7 @@
     "check:quint": "node scripts/check-quint-models.mjs",
     "check:secrets": "gitleaks git --redact --no-banner",
     "test": "vitest run",
-    "test:coverage": "vitest run --mode coverage --reporter=dot --coverage --coverage.reporter=text-summary --coverage.reporter=json-summary && node scripts/verify-coverage-summary.mjs",
+    "test:coverage": "vitest run --mode coverage --reporter=dot --coverage --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=json && node scripts/verify-coverage-summary.mjs && node scripts/verify-changed-coverage.mjs",
     "test:mbt": "vitest run --mode mbt",
     "test:watch": "vitest",
     "check:ci": "node scripts/run-quality-gate.mjs --without-quint",

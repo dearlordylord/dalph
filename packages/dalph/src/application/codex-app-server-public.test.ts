@@ -407,6 +407,14 @@ it.effect("reports exact owned activities only after fresh turn, terminal, and p
     ).pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
     expect(multipleTurns._tag).toBe("Contradictory")
 
+    const activeTurn = yield* runCensus((census) =>
+      census.observe(thread("idle", [turn("active", "inProgress")]), [])
+    ).pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
+    expect(activeTurn).toEqual({
+      _tag: "ExactLive",
+      activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("active") }]
+    })
+
     const background = yield* runCensus((census) =>
       census.observe(thread("idle", [turn("done", "completed")]), [terminal(null)])
     ).pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
@@ -895,7 +903,8 @@ it.effect("classifies controlled launch-token discovery candidates before replac
         candidate(
           403,
           file("/controlled/discovery-codex\u0000app-server\u0000"),
-          file("DALPH_CODEX_SERVER_INCARNATION=foreign\u0000")
+          file("DALPH_CODEX_SERVER_INCARNATION=foreign\u0000"),
+          file(linuxProcessStat(403, 0, 403, "foreign"))
         )
       )
     },
@@ -911,7 +920,8 @@ it.effect("classifies controlled launch-token discovery candidates before replac
         ...candidate(
           405,
           file("/controlled/discovery-codex\u0000app-server\u0000"),
-          file("DALPH_CODEX_SERVER_INCARNATION=foreign\u0000")
+          file("DALPH_CODEX_SERVER_INCARNATION=foreign\u0000"),
+          file(linuxProcessStat(405, 0, 405, "foreign"))
         )
       ])
     },
@@ -931,6 +941,23 @@ it.effect("classifies controlled launch-token discovery candidates before replac
     {
       entries: ["409"],
       files: new Map(candidate(409, file("/controlled/discovery-codex\u0000app-server\u0000"), error("EIO")))
+    },
+    {
+      entries: ["410", "411"],
+      files: new Map([
+        ...candidate(
+          410,
+          file("/controlled/discovery-codex\u0000app-server\u0000"),
+          file(`DALPH_CODEX_SERVER_INCARNATION=${token}\u0000`),
+          file(linuxProcessStat(410, 0, 410, "exact-one"))
+        ),
+        ...candidate(
+          411,
+          file("/controlled/discovery-codex\u0000app-server\u0000"),
+          file(`DALPH_CODEX_SERVER_INCARNATION=${token}\u0000`),
+          file(linuxProcessStat(411, 0, 411, "exact-two"))
+        )
+      ])
     }
   ]
   return Effect.forEach(cases, ({ entries, files }) =>

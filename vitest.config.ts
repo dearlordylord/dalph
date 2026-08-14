@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url"
 import { coveragePolicy } from "./scripts/coverage-policy.mjs"
 
 const coverageThresholds = Object.fromEntries(
-  coveragePolicy.metrics.map((metric) => [metric, coveragePolicy.threshold])
+  coveragePolicy.metrics.map((metric) => [metric, coveragePolicy.thresholds[metric]])
 )
 
 const mbtTestPattern = "packages/**/*.mbt.test.ts"
