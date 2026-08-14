@@ -5,14 +5,25 @@ import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { samePlannedTaskAttempt, TaskAttemptPlanHistoryContradiction } from "./record.js"
 
 /** Every durable planned-attempt recording operation, including an atomic replacement's successor plan. */
-export const recordedTaskAttemptPlans = (records: ReadonlyArray<JournalRecord>) =>
-  records.flatMap(({ event }) =>
+type RecordedTaskAttemptPlan = Extract<JournalRecord["event"], { readonly _tag: "TaskAttemptPlanned" }>["operation"]
+
+const recordedPlansByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, ReadonlyArray<RecordedTaskAttemptPlan>>()
+
+export const recordedTaskAttemptPlans = (
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<RecordedTaskAttemptPlan> => {
+  const cached = recordedPlansByPrefix.get(records)
+  if (cached !== undefined) return cached
+  const plans = records.flatMap(({ event }) =>
     event._tag === "TaskAttemptPlanned"
       ? [event.operation]
       : event._tag === "PlannedAttemptReplaced"
         ? [event.successorPlan]
         : []
   )
+  recordedPlansByPrefix.set(records, plans)
+  return plans
+}
 
 /** Finds the durable operation that recorded one exact attempt identity. */
 export const recordedTaskAttemptPlanFor = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) =>

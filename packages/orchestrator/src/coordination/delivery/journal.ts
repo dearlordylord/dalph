@@ -2,7 +2,7 @@ import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import { JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
@@ -84,7 +84,7 @@ export class JournalInitialHistoryInvalid extends Schema.TaggedError<JournalInit
 ) {}
 
 type JournalStatus =
-  | { readonly _tag: "JournalOpen"; readonly value: JournalState }
+  | { readonly _tag: "JournalOpen"; readonly history: ValidWorkflowJournalHistory; readonly value: JournalState }
   | { readonly _tag: "JournalFailed"; readonly failure: JournalError }
 
 const readOpenJournal = (status: JournalStatus): Effect.Effect<JournalState, JournalError> =>
@@ -179,21 +179,17 @@ const journaledGraphWasPublished = (
   )
 }
 
-const reduceJournalState = (
-  runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+const advanceJournalState = (
+  history: ValidWorkflowJournalHistory,
   prior: JournalState,
   target: TrackerTarget
-):
-  | JournalState
-  | Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { _tag: "InvalidWorkflowJournalHistory" }> => {
-  const reduced = reduceWorkflowJournalHistory(runId, records)
-  if (reduced._tag === "InvalidWorkflowJournalHistory") return reduced
+): JournalState => {
+  const records = history.records
   const position = Option.getOrThrow(Option.fromUndefinedOr(records.at(lastElementOffset))).position
   const graph = journaledGraphWasPublished(records, prior.position, target)
-    ? graphStateFrom(reduced.runState, records, target)
+    ? graphStateFrom(history.runState, records, target)
     : prior.graph
-  return { _tag: "JournalState", position, graph, reconstructed: reduced.runState, records }
+  return { _tag: "JournalState", position, graph, reconstructed: history.runState, records }
 }
 
 /**
@@ -241,6 +237,7 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
   const initialPosition = last.position
   const publicationState = yield* SubscriptionRef.make<JournalStatus>({
     _tag: "JournalOpen",
+    history: validated,
     value: {
       _tag: "JournalState",
       position: initialPosition,
@@ -286,17 +283,17 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
             const failure = new JournalPositionGap({ position: record.position, expectedPosition, runId })
             return yield* failJournal(failure)
           }
-          const records = [...before.records, record]
-          const next = reduceJournalState(runId, records, before, target)
-          if (next._tag === "InvalidWorkflowJournalHistory") {
+          const nextHistory = advanceWorkflowJournalHistory(status.history, record)
+          if (nextHistory._tag === "InvalidWorkflowJournalHistory") {
             const failure = new JournalHistoryInvalid({
               position: record.position,
-              detail: JSON.stringify(next.issues),
+              detail: JSON.stringify(nextHistory.issues),
               runId
             })
             return yield* failJournal(failure)
           }
-          yield* SubscriptionRef.set(publicationState, { _tag: "JournalOpen", value: next })
+          const next = advanceJournalState(nextHistory, before, target)
+          yield* SubscriptionRef.set(publicationState, { _tag: "JournalOpen", history: nextHistory, value: next })
           return record
         })
       )

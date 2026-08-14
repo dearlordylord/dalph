@@ -7,7 +7,7 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { runnableTransitionTaskId, transitionTrackerGraphRequirement } from "../frontier/frontier.js"
-import type { RunRecoveryProjectionSource } from "../run/recovery-activation.js"
+import { readDeliveryProjectionFrom, type RunRecoveryProjectionSource } from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
@@ -126,7 +126,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   const readCoherentJournalProjection = Effect.fn("DeliveryRelations.readCoherentJournalProjection")(function* () {
     for (;;) {
       const journalBefore = yield* journal.state.get
-      const projection = yield* recovery.readDeliveryProjection
+      const projection = yield* readDeliveryProjectionFrom(recovery, journalBefore.reconstructed)
       const journalAfter = yield* journal.state.get
       const projectionAcceptedAt =
         projection.evidence._tag === "AvailableDeliveryProjectionEvidence"

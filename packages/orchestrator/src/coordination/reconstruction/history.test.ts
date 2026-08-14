@@ -34,7 +34,7 @@ import {
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent
 } from "../../workflow/registry/event.js"
-import { reduceWorkflowJournalHistory } from "./history.js"
+import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "./history.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -128,6 +128,44 @@ it("rejects workflow records after Run termination", () => {
       position: 2,
       runId
     })
+  )
+})
+
+it("reports the same terminating-record issue when an accepted terminated prefix is advanced", () => {
+  const target = FixtureTarget.make("incremental-terminated-history-target")
+  const terminated: ReadonlyArray<JournalRecord> = [
+    {
+      event: WorkflowRunBeganEvent.make({
+        initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        target,
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunBeganRecordKey,
+      position: JournalPosition.make(1),
+      runId
+    },
+    {
+      event: WorkflowRunTerminatedEvent.make({
+        disposition: "Completed",
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunTerminatedRecordKey,
+      position: JournalPosition.make(2),
+      runId
+    }
+  ]
+  const prior = reduceWorkflowJournalHistory(runId, terminated)
+  expect(prior._tag).toBe("ValidWorkflowJournalHistory")
+  if (prior._tag !== "ValidWorkflowJournalHistory") return
+  const successor = planAndStart(attempt("incremental-after-termination"), 3)[0]
+  expect(successor).toBeDefined()
+  if (successor === undefined) return
+
+  expect(advanceWorkflowJournalHistory(prior, successor)).toEqual(
+    reduceWorkflowJournalHistory(runId, [...terminated, successor])
   )
 })
 

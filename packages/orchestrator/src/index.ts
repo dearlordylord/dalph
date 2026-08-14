@@ -263,6 +263,7 @@ export * from "./coordination/frontier/recovery-frontier.js"
 export { deriveIntegrationFrontier } from "./coordination/frontier/integration-frontier.js"
 export {
   RunRecoveryProjection,
+  RunRecoveryProjectionRunMismatch,
   type RunRecoveryProjectionError,
   type RunRecoveryProjectionSource
 } from "./coordination/run/recovery-activation.js"

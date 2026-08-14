@@ -1,3 +1,4 @@
+/* eslint-disable functional/immutable-data -- Process-local memo indexes mutate only private maps; executor evidence stays journal-derived. */
 import { Effect } from "effect"
 import {
   PlannedAttemptExecutorRequest,
@@ -19,6 +20,7 @@ import type {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservationOrdinal
 } from "./events.js"
+import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 
 const latestElementOffset = -1
 
@@ -67,22 +69,47 @@ export const plannedAttemptExecutorRequestFor = (
 }
 
 /** Reconstructs accepted focused task-work observations without substituting later tracker text. */
+const taskWorkSpecificationsByPrefix = new WeakMap<object, ReadonlyArray<TaskWorkSpecificationType>>()
+
 export const plannedAttemptExecutorTaskWorkSpecifications = (
   records: ReadonlyArray<Pick<JournalRecord, "event">>
-): ReadonlyArray<TaskWorkSpecificationType> =>
-  records.flatMap(({ event }) => {
-    if (event._tag !== "TaskTrackerFactsObserved" || event.observation._tag !== "FocusedTaskWorkSpecificationFacts") {
-      return []
+): ReadonlyArray<TaskWorkSpecificationType> => {
+  const cached = taskWorkSpecificationsByPrefix.get(records)
+  if (cached !== undefined) return cached
+  const predecessor = journalPrefixPredecessorOf(records)
+  const specifications = (() => {
+    if (predecessor !== undefined) {
+      const prior = plannedAttemptExecutorTaskWorkSpecifications(predecessor.prior)
+      const event = predecessor.appended.event
+      return event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+        ? [
+            ...prior,
+            TaskWorkSpecification.make({
+              body: event.observation.factFamily.body,
+              fingerprint: event.observation.factFamily.fingerprint,
+              taskId: event.observation.factFamily.taskId,
+              title: event.observation.factFamily.title
+            })
+          ]
+        : prior
     }
-    return [
-      TaskWorkSpecification.make({
-        body: event.observation.factFamily.body,
-        fingerprint: event.observation.factFamily.fingerprint,
-        taskId: event.observation.factFamily.taskId,
-        title: event.observation.factFamily.title
-      })
-    ]
-  })
+    return records.flatMap(({ event }) => {
+      if (event._tag !== "TaskTrackerFactsObserved" || event.observation._tag !== "FocusedTaskWorkSpecificationFacts") {
+        return []
+      }
+      return [
+        TaskWorkSpecification.make({
+          body: event.observation.factFamily.body,
+          fingerprint: event.observation.factFamily.fingerprint,
+          taskId: event.observation.factFamily.taskId,
+          title: event.observation.factFamily.title
+        })
+      ]
+    })
+  })()
+  taskWorkSpecificationsByPrefix.set(records, specifications)
+  return specifications
+}
 
 /** Provenance of one exact executor report, preserving command response vs read-only projection. */
 type PlannedAttemptExecutorEvidenceSource =
@@ -215,6 +242,36 @@ export const latestPlannedAttemptExecutorProjectionIssue = (
   return undefined
 }
 
+const latestExecutorEvidenceByPrefix = new WeakMap<object, Map<string, PlannedAttemptExecutorEvidence | undefined>>()
+
+const executorProjectionEventTags = new Set<JournalRecord["event"]["_tag"]>([
+  "PlannedAttemptExecutorCommandProjectionObserved",
+  "PlannedAttemptExecutorStateObserved"
+])
+
+const executorEventAffectsAttempt = (event: JournalRecord["event"], plannedAttempt: PlannedTaskAttempt): boolean => {
+  if (event._tag === "PlannedAttemptExecutorWorkReported") return exactCorrelation(event.report, plannedAttempt)
+  return (
+    executorProjectionEventTags.has(event._tag) &&
+    "plannedAttempt" in event &&
+    event.plannedAttempt.runId === plannedAttempt.runId &&
+    event.plannedAttempt.attemptId === plannedAttempt.attemptId
+  )
+}
+
+const deriveLatestExecutorEvidence = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  plannedAttempt: PlannedTaskAttempt,
+  after?: JournalPosition
+): PlannedAttemptExecutorEvidence | undefined => {
+  const evidence = plannedAttemptExecutorEvidence(records, plannedAttempt, after).at(latestElementOffset)
+  const issue =
+    evidence === undefined ? undefined : latestPlannedAttemptExecutorProjectionIssue(records, plannedAttempt)
+  return evidence !== undefined && (issue === undefined || evidence.observedAt > issue.observedAt)
+    ? evidence
+    : undefined
+}
+
 /**
  * Returns the newest exact executor authority that remains current.
  * A later non-exact projection invalidates the report as authority without
@@ -225,10 +282,22 @@ export const latestPlannedAttemptExecutorEvidence = (
   plannedAttempt: PlannedTaskAttempt,
   after?: JournalPosition
 ): PlannedAttemptExecutorEvidence | undefined => {
-  const evidence = plannedAttemptExecutorEvidence(records, plannedAttempt, after).at(latestElementOffset)
-  if (evidence === undefined) return undefined
-  const issue = latestPlannedAttemptExecutorProjectionIssue(records, plannedAttempt)
-  return issue === undefined || evidence.observedAt > issue.observedAt ? evidence : undefined
+  const key = `${plannedAttempt.attemptId}:after:${after ?? "beginning"}`
+  const cachedByAttempt = latestExecutorEvidenceByPrefix.get(records)
+  if (cachedByAttempt?.has(key) === true) return cachedByAttempt.get(key)
+  const predecessor = journalPrefixPredecessorOf(records)
+  if (predecessor !== undefined && !executorEventAffectsAttempt(predecessor.appended.event, plannedAttempt)) {
+    const evidence = latestPlannedAttemptExecutorEvidence(predecessor.prior, plannedAttempt, after)
+    const cache = cachedByAttempt ?? new Map<string, PlannedAttemptExecutorEvidence | undefined>()
+    cache.set(key, evidence)
+    latestExecutorEvidenceByPrefix.set(records, cache)
+    return evidence
+  }
+  const latest = deriveLatestExecutorEvidence(records, plannedAttempt, after)
+  const cache = cachedByAttempt ?? new Map<string, PlannedAttemptExecutorEvidence | undefined>()
+  cache.set(key, latest)
+  latestExecutorEvidenceByPrefix.set(records, cache)
+  return latest
 }
 
 /** Latest exact executor command whose boundary response is still ambiguous. */

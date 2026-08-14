@@ -37,6 +37,57 @@ consumed 3 milliseconds. This is the relevant ordinary acceptance-test cost:
 still substantial, but far below either the former 312.6-second covered file
 interval or the five-minute outer quality-gate cutoff.
 
+## Follow-up after incremental prefix reconstruction
+
+The current issue #221 worktree gives the live journal a process-local
+incremental state fold. Startup
+and the story's one simulated coordinator process death still read and validate
+the complete durable journal prefix. After that validation, each accepted exact
+successor advances the already-valid state once. Read-only protocol projections
+memoize results by immutable prefix identity and inherit a result only when the
+new event cannot affect that projection. None of these indexes or results are
+persisted or treated as authority.
+
+An isolated warm run of the same two capstone assertions now repeatedly spends
+about 4.9 to 5.7 seconds inside the tests (about 7.1 to 7.9 seconds including
+Vitest startup and module loading). Both exact chronology assertions remain
+unchanged. This is roughly a 93% reduction from the 72.16-second pre-change
+test execution, although it does not yet reach the aspirational one-second
+target. This report records observed timings only; acceptance does not contain
+a wall-clock assertion.
+
+Approximately one second is not reasonably reachable by further local
+micro-optimization of this patch. A publication-coalescing experiment reached
+about 0.7 seconds but changed the authored journal chronology and was rejected.
+The remaining work is architectural: validation still copies growing private
+maps and sets, lifecycle/finality derivation still visits the prefix, and the
+delivery runtime evaluates hundreds of actor-visible publications. Reaching
+the aspiration without changing those publications requires one
+reconstruction-owned validated-prefix/query-index capability and broader
+generated histories, not looser assertions or test-only timing shortcuts.
+
+The capstone must not carry a process-local prefix cache through its simulated
+death: cold reconstruction from the surviving journal is one of the behaviors
+the scenario proves. Other controlled suites may use an Effect test layer that
+prevalidates an unchanged durable prefix before constructing a replacement
+coordinator. Such a layer must key reuse by the exact Run identity and terminal
+journal position, and recovery-focused tests or tests that alter the journal
+between processes must explicitly select the cold layer. That is a possible
+test-fixture optimization, not part of the production journal contract and not
+needed for this capstone, which contains only one process death and spends a
+small minority of its remaining time in restart replay.
+
+A complete post-change V8 run executed 1,551 tests successfully (two skipped)
+in 97.02 seconds. The repository's 99% aggregate thresholds then rejected the
+existing suite totals: 97.95% statements, 95.88% branches, 97.45% functions,
+and 98.38% lines. A detailed threshold-free rerun confirmed that the issue #221
+diff initially contributed five uncovered statements; focused tests now execute
+the repeated graph lookup and no-index replay fallback, and an unused plan-index
+inheritance branch was removed. Recent unmodified `master` CI runs already fail
+their comprehensive gate, so the remaining aggregate deficit is recorded as a
+pre-existing repository blocker. This work neither lowers a threshold nor adds
+a timeout exemption.
+
 ## What dominates the wall clock
 
 The slowest file, `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`, took 312.6 s. That is 99.0% of the measured wall interval, so the overall run cannot finish materially sooner unless that capstone is shortened or split. The next two large consumers overlap with it on other workers: `packages/dalph/test/cassettes/scenario.test.ts` at 163.5 s and `scripts/quality-lint.test.ts` at 118.5 s.
@@ -203,6 +254,26 @@ currently supplied by the capstone.
 4. **Separate acceptance from coverage instrumentation.** This reduces gate
    wall time and contention, but it is test harness tiering, not a substitute
    for fixing production-shaped scaling.
+
+### Test-family operating targets
+
+These are execution and documentation targets, not timing assertions embedded
+in tests.
+
+| Test family | Purpose | Cadence | Current timeout or stage budget | Recommended target | Documentation gap |
+|---|---|---|---|---|---|
+| Focused protocol and reducer tests | Prove one transition, validation rule, or projection law with controlled data. | Every relevant edit and in ordinary coverage. | Ordinary Vitest defaults inside the five-minute `test:coverage` stage. | Sub-second per focused file where practical. | Name the operational scenario or pure law each file owns. |
+| Generated journal-prefix properties | Compare incremental advance with complete replay and compare malformed-successor issues. | Every reconstruction change and in ordinary coverage. | Ordinary Vitest defaults inside the five-minute `test:coverage` stage. | Seconds, with run count chosen for useful mutation diversity rather than a wall limit. | Grow the reusable valid-history generator as new journal phenomena are added. |
+| Maintained authored cassette examples | Prove accepted chronological behavior through the production coordinator against controlled boundaries. | Relevant feature edits and hosted CI. | Per-file Vitest configuration; currently part of the five-minute coverage stage. | Keep small stories cheap enough for routine local use. | Catalog which focused tests own each cassette's individual mechanisms. |
+| Ten-task delivery capstone | Prove capacity, dependency waves, one cold coordinator restart, late X discovery, exact identities, and final settlement together. | Relevant journal/delivery/recovery changes and once before handoff/CI. | Ten-minute test timeout, presently nested inside the five-minute coverage stage. | Continue toward roughly one second warm execution without changing chronology; never enforce it as acceptance. | Give system acceptance a named non-covered command and retain the scenario-to-test map. |
+| Dedicated performance characterization | Detect reconstruction/publication scaling regressions by operation counts or an external benchmark. | Performance work and scheduled CI, not every edit. | No dedicated stage today. | Stable operation-count bounds; use wall time only as reported environment-specific evidence. | Define the fixture, measurement command, host metadata, and retained baseline. |
+| Cold restart/recovery tests | Prove a replacement process rebuilds only from durable records and rejects malformed history. | Every reconstruction/recovery change and hosted CI. | Ordinary focused-test defaults plus the capstone's ten-minute timeout. | Keep complete replay mandatory; optimize the fold, not the evidence away. | Mark test layers explicitly as cold-recovery or unchanged-prefix fixture reuse. |
+| Build, package-boundary, and TypeScript diagnostics | Prove packages compile, production imports respect declared boundaries, and both TypeScript and Effect diagnostics remain accepted. | Every `check:all`/`check:ci`; focused typecheck during implementation. | Build 120 s, package boundary 60 s, TypeScript 120 s, Effect diagnostics 180 s. | Keep each independently diagnosable; do not hide one behind the coverage stage. | None specific to issue #221. |
+| Static architecture and maintenance checks | Enforce formatting/lint, acyclic dependencies, complexity baseline, and duplication limits. | Every `check:all`/`check:ci`; focused lint after meaningful edits. | Format/lint 120 s; cycles, complexity, and duplication 60 s each. | New code should add no baseline exceptions and no duplicated cache-invalidation vocabulary. | Treat authoritative event schemas as the invalidation source. |
+| Project-memory and Quint-connected MBT | Exercise checked-in memory scenarios and executable conformance adapters. | Every `check:all`; memory also runs in `check:ci`. | Memory 60 s; MBT 300 s. | Preserve all collected scenario counts and negative controls. | Report collected model-test counts, not merely a passing command. |
+| Aggregate tests and coverage | Run the ordinary suite and enforce repository coverage policy. | Every `check:all`/`check:ci` and before handoff. | 300 s outer stage; 99% statements, branches, functions, and lines. | Restore the repository aggregate above policy without weakening thresholds. | The present master-wide deficit must be resolved independently of capstone tiering. |
+| Exhaustive Quint model gate | Run deterministic checks, mutations, samples, and TLC verification outside `check:all`. | Once after final relevant changes and before integration. | 360 s regression budget; 480 s safety timeout. | A pass must include successful negative controls and reachable scenario evidence. | Keep its result separate because `check:all` intentionally omits this exhaustive gate. |
+| Secret scan and aggregate gate orchestration | Reject committed secrets and bound successful gate output. | Every `check:all`/`check:ci`. | Secret scan 300 s; aggregate successful output limited to 400 lines. | Preserve fail-fast stage names and compact evidence. | None specific to issue #221. |
 
 ## Groups
 

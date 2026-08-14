@@ -1,9 +1,19 @@
+/* eslint-disable functional/immutable-data -- Process-local memo indexes mutate only private maps; claim authority stays journal-derived. */
 import { type AttemptId, type PlannedTaskAttempt } from "@dalph/contracts"
+import { Schema } from "effect"
 import type { JournalRecord } from "../workflow-journal/store.js"
 import { causalPredecessorOperationIds } from "./causal-history.js"
-import { type WorkflowJournalEvent } from "./registry/event.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  type WorkflowJournalEvent
+} from "./registry/event.js"
+import { PlannedAttemptReplacedEvent } from "./protocols/attempt-choice/replacement-events.js"
+import { TaskClaimReacquisitionDirectedEvent } from "./protocols/task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "./protocols/task-claim-reacquisition/plan.js"
 import { recordedTaskAttemptPlans } from "./protocols/task-attempt-planning/journal-evidence.js"
+import { journalPrefixPredecessorOf } from "../workflow-journal/prefix-lineage.js"
 
 /** Finds the exact acquired claim in one planned attempt's causal history. */
 export const causalClaimForAttempt = (
@@ -20,10 +30,25 @@ export const causalClaimForAttempt = (
 }
 
 /** Finds the original planned claim or the latest claim authorized by an exact accepted reacquisition direction. */
-export const authorizedClaimForAttempt = (
+type AcquiredClaimEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }>
+const authorizedClaimsByPrefix = new WeakMap<
+  ReadonlyArray<JournalRecord>,
+  Map<AttemptId, AcquiredClaimEvent | undefined>
+>()
+
+/** Journal facts that can change the exact claim authorized for a planned attempt. */
+const ClaimAuthorityJournalEvent = Schema.Union([
+  TaskAttemptPlannedEvent,
+  PlannedAttemptReplacedEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimReacquisitionDirectedEvent
+])
+
+const deriveAuthorizedClaimForAttempt = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt
-): Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }> | undefined => {
+): AcquiredClaimEvent | undefined => {
   const replacement = records.findLast(({ event, position: outcomePosition }) => {
     if (event._tag !== "TaskClaimAcquired" || event.claim.taskId !== plannedAttempt.taskId) return false
     const intent = records.findLast(
@@ -50,7 +75,24 @@ export const authorizedClaimForAttempt = (
         taskClaimReacquisitionOperationId(candidate.requestId) === event.claim.operationId
     )
   })?.event
-  return replacement?._tag === "TaskClaimAcquired"
-    ? replacement
-    : causalClaimForAttempt(records, plannedAttempt.attemptId)
+  const authorized =
+    replacement?._tag === "TaskClaimAcquired" ? replacement : causalClaimForAttempt(records, plannedAttempt.attemptId)
+  return authorized
+}
+
+export const authorizedClaimForAttempt = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): AcquiredClaimEvent | undefined => {
+  const cachedByAttempt = authorizedClaimsByPrefix.get(records)
+  if (cachedByAttempt?.has(plannedAttempt.attemptId) === true) return cachedByAttempt.get(plannedAttempt.attemptId)
+  const predecessor = journalPrefixPredecessorOf(records)
+  const authorized =
+    predecessor !== undefined && !Schema.is(ClaimAuthorityJournalEvent)(predecessor.appended.event)
+      ? authorizedClaimForAttempt(predecessor.prior, plannedAttempt)
+      : deriveAuthorizedClaimForAttempt(records, plannedAttempt)
+  const cache = cachedByAttempt ?? new Map<AttemptId, AcquiredClaimEvent | undefined>()
+  cache.set(plannedAttempt.attemptId, authorized)
+  authorizedClaimsByPrefix.set(records, cache)
+  return authorized
 }

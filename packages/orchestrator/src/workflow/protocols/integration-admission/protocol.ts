@@ -243,9 +243,16 @@ const settledFor = (
   )
 
 /** Finds accepted terminal facts that still need their exact durable integration responsibility. */
+const unqueuedAcceptedResultsByPrefix = new WeakMap<
+  ReadonlyArray<JournalRecord>,
+  ReadonlyArray<UnqueuedAcceptedResult>
+>()
+
 export const deriveUnqueuedAcceptedResults = (
   records: ReadonlyArray<JournalRecord>
 ): ReadonlyArray<UnqueuedAcceptedResult> => {
+  const cached = unqueuedAcceptedResultsByPrefix.get(records)
+  if (cached !== undefined) return cached
   const queuedAttemptIds = new Set(
     records.flatMap(({ event }) =>
       event._tag === "IntegrationResponsibilityBegan" ? [event.plannedAttempt.attemptId] : []
@@ -258,7 +265,7 @@ export const deriveUnqueuedAcceptedResults = (
         : []
     )
   )
-  return records.flatMap((record) => {
+  const results = records.flatMap((record) => {
     const event = record.event
     if (
       event._tag !== "PlannedAttemptExecutorWorkReported" ||
@@ -279,40 +286,50 @@ export const deriveUnqueuedAcceptedResults = (
           })
         ]
   })
+  unqueuedAcceptedResultsByPrefix.set(records, results)
+  return results
 }
 
 /** Reconstructs FIFO and cutoff state solely from immutable journal records. */
-export const deriveIntegrationAdmission = (records: ReadonlyArray<JournalRecord>): IntegrationAdmission => ({
-  responsibilities: records
-    .filter(
-      (record): record is JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type } =>
-        record.event._tag === "IntegrationResponsibilityBegan"
-    )
-    .filter((record) => !settledFor(records, record))
-    .toSorted((left, right) => left.position - right.position)
-    .map((queued) => {
-      const started = startedFor(records, queued)
-      return started === undefined
-        ? QueuedIntegrationResponsibility.make({
-            acceptedResult: queued.event.acceptedResult,
-            integrationTarget: queued.event.integrationTarget,
-            plannedAttempt: queued.event.plannedAttempt,
-            preIntegrationCancellation: PreIntegrationCancellationCapability.make({
-              attemptId: queued.event.plannedAttempt.attemptId,
+const integrationAdmissionByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, IntegrationAdmission>()
+
+export const deriveIntegrationAdmission = (records: ReadonlyArray<JournalRecord>): IntegrationAdmission => {
+  const cached = integrationAdmissionByPrefix.get(records)
+  if (cached !== undefined) return cached
+  const admission: IntegrationAdmission = {
+    responsibilities: records
+      .filter(
+        (record): record is JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type } =>
+          record.event._tag === "IntegrationResponsibilityBegan"
+      )
+      .filter((record) => !settledFor(records, record))
+      .toSorted((left, right) => left.position - right.position)
+      .map((queued) => {
+        const started = startedFor(records, queued)
+        return started === undefined
+          ? QueuedIntegrationResponsibility.make({
+              acceptedResult: queued.event.acceptedResult,
+              integrationTarget: queued.event.integrationTarget,
+              plannedAttempt: queued.event.plannedAttempt,
+              preIntegrationCancellation: PreIntegrationCancellationCapability.make({
+                attemptId: queued.event.plannedAttempt.attemptId,
+                queuedAt: queued.position,
+                runId: queued.runId
+              }),
+              queuedAt: queued.position
+            })
+          : StartedIntegrationResponsibility.make({
+              acceptedResult: queued.event.acceptedResult,
+              integrationTarget: queued.event.integrationTarget,
+              plannedAttempt: queued.event.plannedAttempt,
               queuedAt: queued.position,
-              runId: queued.runId
-            }),
-            queuedAt: queued.position
-          })
-        : StartedIntegrationResponsibility.make({
-            acceptedResult: queued.event.acceptedResult,
-            integrationTarget: queued.event.integrationTarget,
-            plannedAttempt: queued.event.plannedAttempt,
-            queuedAt: queued.position,
-            startedAt: started.position
-          })
-    })
-})
+              startedAt: started.position
+            })
+      })
+  }
+  integrationAdmissionByPrefix.set(records, admission)
+  return admission
+}
 
 const integrationTargetKey = (responsibility: IntegrationResponsibility): string =>
   JSON.stringify(responsibility.integrationTarget)

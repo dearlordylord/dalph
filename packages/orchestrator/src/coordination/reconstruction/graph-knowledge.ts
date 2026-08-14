@@ -1,3 +1,4 @@
+/* eslint-disable functional/immutable-data -- Process-local memo indexes mutate only private maps; projected values stay immutable. */
 import { Option, Schema } from "effect"
 import { type TaskId } from "@dalph/contracts"
 import { OperationId } from "../../workflow/identity.js"
@@ -55,34 +56,62 @@ const fullObservationForReconfirmation = (
   return reconfirmationMatchesPriorFullObservation(reconfirmation, full) ? full : undefined
 }
 
+type ReconstructableGraphKnowledge = { readonly taskTrackerFacts: ReadonlyArray<TaskTrackerFactsObservation> }
+const reconstructedGraphsByKnowledge = new WeakMap<
+  ReconstructableGraphKnowledge,
+  Map<string, Option.Option<TaskDagSnapshot>>
+>()
+const latestGraphByKnowledge = new WeakMap<ReconstructableGraphKnowledge, Option.Option<TaskDagSnapshot>>()
+
 /** Projects only complete journal-reconstructed facts into the graph selector input. */
 export const reconstructedTaskGraphFor = (
-  knowledge: { readonly taskTrackerFacts: ReadonlyArray<TaskTrackerFactsObservation> },
+  knowledge: ReconstructableGraphKnowledge,
   target: TrackerTarget
 ): Option.Option<TaskDagSnapshot> => {
+  const targetKey = taskTrackerTargetKey(target)
+  const cachedByTarget = reconstructedGraphsByKnowledge.get(knowledge)
+  const cached = cachedByTarget?.get(targetKey)
+  if (cached !== undefined) return cached
   const latest = knowledge.taskTrackerFacts.findLast(
     (candidate): candidate is GraphFactsObservation =>
-      isGraphFactsObservation(candidate) && taskTrackerTargetKey(candidate.target) === taskTrackerTargetKey(target)
+      isGraphFactsObservation(candidate) && taskTrackerTargetKey(candidate.target) === targetKey
   )
-  if (latest === undefined) return Option.none()
+  if (latest === undefined) {
+    const result = Option.none<TaskDagSnapshot>()
+    const cache = cachedByTarget ?? new Map<string, Option.Option<TaskDagSnapshot>>()
+    cache.set(targetKey, result)
+    reconstructedGraphsByKnowledge.set(knowledge, cache)
+    return result
+  }
   const observation =
     latest._tag === "CompleteTaskTrackerFacts"
       ? latest
       : fullObservationForReconfirmation(knowledge.taskTrackerFacts, latest)
-  if (observation?._tag !== "CompleteTaskTrackerFacts") return Option.none()
-  const projected = projectTrackerSnapshot({
-    revision: observation.factFamilies[0].contentIdentity,
-    tasks: graphTasksFrom(observation)
-  })
-  return projected._tag === "Valid" ? Option.some(projected.snapshot) : Option.none()
+  const result = (() => {
+    if (observation?._tag !== "CompleteTaskTrackerFacts") return Option.none<TaskDagSnapshot>()
+    const projected = projectTrackerSnapshot({
+      revision: observation.factFamilies[0].contentIdentity,
+      tasks: graphTasksFrom(observation)
+    })
+    return projected._tag === "Valid" ? Option.some(projected.snapshot) : Option.none<TaskDagSnapshot>()
+  })()
+  const cache = cachedByTarget ?? new Map<string, Option.Option<TaskDagSnapshot>>()
+  cache.set(targetKey, result)
+  reconstructedGraphsByKnowledge.set(knowledge, cache)
+  return result
 }
 
 /** Reconstructs the latest complete graph regardless of its one Run's provider-neutral target shape. */
-export const latestReconstructedTaskGraph = (knowledge: {
-  readonly taskTrackerFacts: ReadonlyArray<TaskTrackerFactsObservation>
-}): Option.Option<TaskDagSnapshot> => {
+export const latestReconstructedTaskGraph = (
+  knowledge: ReconstructableGraphKnowledge
+): Option.Option<TaskDagSnapshot> => {
+  const cached = latestGraphByKnowledge.get(knowledge)
+  if (cached !== undefined) return cached
   const latest = knowledge.taskTrackerFacts.findLast(isGraphFactsObservation)
-  return latest === undefined ? Option.none() : reconstructedTaskGraphFor(knowledge, latest.target)
+  const result =
+    latest === undefined ? Option.none<TaskDagSnapshot>() : reconstructedTaskGraphFor(knowledge, latest.target)
+  latestGraphByKnowledge.set(knowledge, result)
+  return result
 }
 
 /** Selects exact authored instructions only from a focused journaled observation. */
@@ -112,9 +141,14 @@ export const reconstructedTaskGraphFromEvents = (
   reconstructedTaskGraphFor(
     {
       taskTrackerFacts: events.flatMap((event) =>
-        Option.toArray(
-          Option.map(Schema.decodeUnknownOption(TaskTrackerFactsObservedEvent)(event), ({ observation }) => observation)
-        )
+        typeof event === "object" && event !== null && "_tag" in event && event._tag === "TaskTrackerFactsObserved"
+          ? Option.toArray(
+              Option.map(
+                Schema.decodeUnknownOption(TaskTrackerFactsObservedEvent)(event),
+                ({ observation }) => observation
+              )
+            )
+          : []
       )
     },
     target

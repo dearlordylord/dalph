@@ -1,3 +1,4 @@
+/* eslint-disable functional/immutable-data -- Process-local memo indexes mutate only private maps; finality state stays journal-derived. */
 import type { TaskId } from "@dalph/contracts"
 import { Schema } from "effect"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -23,6 +24,7 @@ import {
 import { TaskTrackerFactsObservedEvent } from "../../task-tracker-facts/observation.js"
 import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
 import { TaskTrackerReadIntentRecordedEvent } from "../../registry/event.js"
+import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 
 /** The exact durable evidence currently owned by one completion-finality protocol. */
 export const IntegrationFinalityState = Schema.TaggedUnion({
@@ -171,6 +173,17 @@ const exactOccurrencesFor = (
 
 const latest = <A>(values: ReadonlyArray<A>): A | undefined => values[values.length - 1]
 
+const finalityStateByPrefix = new WeakMap<
+  ReadonlyArray<IntegrationFinalityJournalOccurrence>,
+  Map<string, IntegrationFinalityState | undefined>
+>()
+
+const finalityClaimKey = (claim: CompletionTaskClaim): string => JSON.stringify(claim)
+
+const appendedEventChangesClaim = (event: unknown, claim: CompletionTaskClaim): boolean => {
+  return Schema.is(CompletionClaimFinalityJournalEvent)(event) && completionTaskClaimEquals(event.claim, claim)
+}
+
 const successProofOf = (
   event: CompletionClaimDeletionIntendedEvent | CompletionClaimDeletedEvent | IntegrationFinalitySettledEvent
 ): CompletionSuccessObservation => event.successObservation
@@ -192,7 +205,7 @@ const settlementMatches = (
  * Invalid duplicate or contradictory histories are rejected by reconstruction;
  * this projector therefore exposes only evidence-backed protocol phases.
  */
-export const deriveIntegrationFinalityStateFor = (
+const deriveIntegrationFinalityState = (
   records: ReadonlyArray<IntegrationFinalityJournalOccurrence>,
   claim: CompletionTaskClaim
 ): IntegrationFinalityState | undefined => {
@@ -209,52 +222,74 @@ export const deriveIntegrationFinalityStateFor = (
     (record): record is typeof record & { readonly event: CompletionClaimReplacedEvent } =>
       record.event._tag === "CompletionClaimReplaced"
   )
+  let state: IntegrationFinalityState
   if (replacement === undefined) {
-    return IntegrationFinalityState.cases.ReplacementPending.make({
+    state = IntegrationFinalityState.cases.ReplacementPending.make({
       claim,
       replacementAttempts,
       replacementIntent: replacementIntent.event
     })
+  } else {
+    const deletionIntent = relevant.find(
+      (record): record is typeof record & { readonly event: CompletionClaimDeletionIntendedEvent } =>
+        record.event._tag === "CompletionClaimDeletionIntended"
+    )
+    if (deletionIntent === undefined) {
+      state = IntegrationFinalityState.cases.CompletionClaimReplaced.make({ claim, replacement: replacement.event })
+    } else {
+      const deletionAttempts = relevant.flatMap((record) =>
+        record.event._tag === "CompletionClaimDeletionAttemptIntended" ? [record.event] : []
+      )
+      const deleted = relevant.find(
+        (record): record is typeof record & { readonly event: CompletionClaimDeletedEvent } =>
+          record.event._tag === "CompletionClaimDeleted"
+      )
+      if (deleted === undefined) {
+        state = IntegrationFinalityState.cases.DeletionPending.make({
+          claim,
+          deletionAttempts,
+          deletionIntent: deletionIntent.event,
+          replacement: replacement.event,
+          successObservation: successProofOf(deletionIntent.event)
+        })
+      } else {
+        const settlement = latest(
+          relevant.flatMap((record) => (record.event._tag === "IntegrationFinalitySettled" ? [record.event] : []))
+        )
+        state = settlementMatches(settlement, replacement.event, deleted.event)
+          ? IntegrationFinalityState.cases.IntegrationFinalitySettled.make({
+              claim,
+              deletion: deleted.event,
+              replacement: replacement.event,
+              settlement,
+              successObservation: settlement.successObservation
+            })
+          : IntegrationFinalityState.cases.CompletionClaimDeleted.make({
+              claim,
+              deletion: deleted.event,
+              replacement: replacement.event,
+              successObservation: deleted.event.successObservation
+            })
+      }
+    }
   }
-  const deletionIntent = relevant.find(
-    (record): record is typeof record & { readonly event: CompletionClaimDeletionIntendedEvent } =>
-      record.event._tag === "CompletionClaimDeletionIntended"
-  )
-  if (deletionIntent === undefined) {
-    return IntegrationFinalityState.cases.CompletionClaimReplaced.make({ claim, replacement: replacement.event })
-  }
-  const deletionAttempts = relevant.flatMap((record) =>
-    record.event._tag === "CompletionClaimDeletionAttemptIntended" ? [record.event] : []
-  )
-  const deleted = relevant.find(
-    (record): record is typeof record & { readonly event: CompletionClaimDeletedEvent } =>
-      record.event._tag === "CompletionClaimDeleted"
-  )
-  if (deleted === undefined) {
-    return IntegrationFinalityState.cases.DeletionPending.make({
-      claim,
-      deletionAttempts,
-      deletionIntent: deletionIntent.event,
-      replacement: replacement.event,
-      successObservation: successProofOf(deletionIntent.event)
-    })
-  }
-  const settlement = latest(
-    relevant.flatMap((record) => (record.event._tag === "IntegrationFinalitySettled" ? [record.event] : []))
-  )
-  if (!settlementMatches(settlement, replacement.event, deleted.event)) {
-    return IntegrationFinalityState.cases.CompletionClaimDeleted.make({
-      claim,
-      deletion: deleted.event,
-      replacement: replacement.event,
-      successObservation: deleted.event.successObservation
-    })
-  }
-  return IntegrationFinalityState.cases.IntegrationFinalitySettled.make({
-    claim,
-    deletion: deleted.event,
-    replacement: replacement.event,
-    settlement,
-    successObservation: settlement.successObservation
-  })
+  return state
+}
+
+export const deriveIntegrationFinalityStateFor = (
+  records: ReadonlyArray<IntegrationFinalityJournalOccurrence>,
+  claim: CompletionTaskClaim
+): IntegrationFinalityState | undefined => {
+  const claimKey = finalityClaimKey(claim)
+  const cachedByClaim = finalityStateByPrefix.get(records)
+  if (cachedByClaim?.has(claimKey) === true) return cachedByClaim.get(claimKey)
+  const predecessor = journalPrefixPredecessorOf(records)
+  const state =
+    predecessor !== undefined && !appendedEventChangesClaim(predecessor.appended.event, claim)
+      ? deriveIntegrationFinalityStateFor(predecessor.prior, claim)
+      : deriveIntegrationFinalityState(records, claim)
+  const cache = cachedByClaim ?? new Map<string, IntegrationFinalityState | undefined>()
+  cache.set(claimKey, state)
+  finalityStateByPrefix.set(records, cache)
+  return state
 }

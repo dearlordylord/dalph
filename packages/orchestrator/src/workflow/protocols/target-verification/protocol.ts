@@ -17,6 +17,7 @@ import {
   TargetVerificationPlanId,
   type TargetVerificationPlan,
   TargetVerificationRequestId,
+  TargetVerificationJournalEvent,
   targetVerificationCorrelationEquals,
   targetVerificationCorrelationFor,
   targetVerificationOutcomeFor,
@@ -24,6 +25,7 @@ import {
   type TargetVerificationCandidate,
   type TargetVerificationTerminal
 } from "./events.js"
+import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 import {
   decodeTargetVerificationManifest,
   encodeTargetVerificationManifest,
@@ -141,11 +143,34 @@ const stateFromRecords = (
 }
 
 /** Reconstructs the durable verification state for one exact candidate, without acting. */
+const verificationStateByPrefix = new WeakMap<
+  ReadonlyArray<JournalRecord>,
+  Map<string, TargetVerificationState | undefined>
+>()
+
 export const deriveTargetVerificationState = (
   records: ReadonlyArray<JournalRecord>,
   candidate: TargetVerificationCandidate
-): TargetVerificationState | undefined =>
-  stateFromRecords(records, targetVerificationRequestIdForCandidate(candidate.correlation.candidateId))
+): TargetVerificationState | undefined => {
+  const requestId = targetVerificationRequestIdForCandidate(candidate.correlation.candidateId)
+  const cachedByRequest = verificationStateByPrefix.get(records)
+  if (cachedByRequest?.has(requestId) === true) return cachedByRequest.get(requestId)
+  const predecessor = journalPrefixPredecessorOf(records)
+  if (predecessor !== undefined && !Schema.is(TargetVerificationJournalEvent)(predecessor.appended.event)) {
+    const state = deriveTargetVerificationState(predecessor.prior, candidate)
+    const cache = cachedByRequest ?? new Map<string, TargetVerificationState | undefined>()
+    // eslint-disable-next-line functional/immutable-data -- This private process-local memo never becomes journal state.
+    cache.set(requestId, state)
+    verificationStateByPrefix.set(records, cache)
+    return state
+  }
+  const state = stateFromRecords(records, requestId)
+  const cache = cachedByRequest ?? new Map<string, TargetVerificationState | undefined>()
+  // eslint-disable-next-line functional/immutable-data -- This private process-local memo never becomes journal state.
+  cache.set(requestId, state)
+  verificationStateByPrefix.set(records, cache)
+  return state
+}
 
 const putAndReconfirmArtifacts = Effect.fn("TargetVerification.putAndReconfirmArtifacts")(function* (
   terminal: TargetVerificationTerminal

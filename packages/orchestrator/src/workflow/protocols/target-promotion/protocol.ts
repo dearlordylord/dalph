@@ -1,3 +1,4 @@
+/* eslint-disable functional/immutable-data -- Process-local memo indexes mutate only private maps; promotion state stays journal-derived. */
 import { Effect, Schema } from "effect"
 import { GitCommitSha } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/store.js"
@@ -28,7 +29,7 @@ import {
   type TargetPromotionAttemptReason as TargetPromotionAttemptReasonType,
   type TargetPromotionCompareAndSetResult,
   type TargetPromotionGitReadObservation,
-  type TargetPromotionJournalEvent,
+  TargetPromotionJournalEvent,
   type TargetPromotionRequest as TargetPromotionRequestType
 } from "./events.js"
 import {
@@ -43,6 +44,7 @@ import {
   TargetPromotionState,
   type JournalOccurrence
 } from "./state.js"
+import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 export { deriveTargetPromotionState, TargetPromotionPendingRetry, TargetPromotionState } from "./state.js"
 export type { JournalOccurrence } from "./state.js"
 
@@ -401,12 +403,34 @@ export const runTargetPromotion = Effect.fn("TargetPromotion.run")(function* (
 })
 
 /** Reconstructs state for an exact candidate and verification premise. */
+const promotionStateByPrefix = new WeakMap<
+  ReadonlyArray<JournalOccurrence>,
+  Map<string, TargetPromotionState | undefined>
+>()
+
 export const deriveTargetPromotionStateFor = (
   records: ReadonlyArray<JournalOccurrence>,
   candidate: TargetVerificationCandidate,
   verification: Extract<TargetVerificationState, { readonly _tag: "VerificationPassed" }>
-): TargetPromotionState | undefined =>
-  deriveTargetPromotionState(
-    records,
-    targetPromotionRequestFor(candidate, { correlation: verification.correlation, manifest: verification.manifest })
-  )
+): TargetPromotionState | undefined => {
+  const request = targetPromotionRequestFor(candidate, {
+    correlation: verification.correlation,
+    manifest: verification.manifest
+  })
+  const requestId = request.requestId
+  const cachedByRequest = promotionStateByPrefix.get(records)
+  if (cachedByRequest?.has(requestId) === true) return cachedByRequest.get(requestId)
+  const predecessor = journalPrefixPredecessorOf(records)
+  if (predecessor !== undefined && !Schema.is(TargetPromotionJournalEvent)(predecessor.appended.event)) {
+    const state = deriveTargetPromotionStateFor(predecessor.prior, candidate, verification)
+    const cache = cachedByRequest ?? new Map<string, TargetPromotionState | undefined>()
+    cache.set(requestId, state)
+    promotionStateByPrefix.set(records, cache)
+    return state
+  }
+  const state = deriveTargetPromotionState(records, request)
+  const cache = cachedByRequest ?? new Map<string, TargetPromotionState | undefined>()
+  cache.set(requestId, state)
+  promotionStateByPrefix.set(records, cache)
+  return state
+}

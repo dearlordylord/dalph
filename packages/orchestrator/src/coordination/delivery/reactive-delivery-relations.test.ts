@@ -2,6 +2,9 @@ import { it } from "@effect/vitest"
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -71,7 +74,7 @@ import { makeIntegrationTargetResourceController } from "../admission/integratio
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
-import { makeRunRecoveryProjection } from "../run/recovery-activation.js"
+import { makeRunRecoveryProjection, readDeliveryProjectionFrom } from "../run/recovery-activation.js"
 import { type JournalState, makeJournal } from "./journal.js"
 import { delivery } from "./delivery.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
@@ -92,6 +95,10 @@ import type { DeliveryRelationInputBundle } from "./relations.js"
 
 const runId = RunId.make("reactive-delivery-coherent-reconstruction")
 const target = FixtureTarget.make("reactive-delivery-coherent-reconstruction-target")
+const integrationTarget = IntegrationTarget.make({
+  ref: IntegrationTargetRef.make("refs/heads/main"),
+  repository: GitRepositoryLocator.make("/repositories/reactive-delivery.git")
+})
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const recoveredAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("reactive-delivery-recovered-attempt"),
@@ -343,7 +350,36 @@ it.effect("retains the exact task-work position after a safe report when a later
       )
       yield* appendStartOrContinue(journal, 2)
 
-      const recovery = yield* makeRunRecoveryProjection(runId).pipe(Effect.provideService(InRunJournal, journal))
+      const integrationResources = yield* makeIntegrationTargetResourceController()
+      const recovery = yield* makeRunRecoveryProjection(
+        runId,
+        integrationTarget,
+        undefined,
+        undefined,
+        integrationResources
+      ).pipe(Effect.provideService(InRunJournal, journal))
+      const reconstructed = (yield* journal.state.get).reconstructed
+      const firstProjection = yield* readDeliveryProjectionFrom(recovery, reconstructed)
+      const repeatedProjection = yield* readDeliveryProjectionFrom(recovery, reconstructed)
+      expect(repeatedProjection).toBe(firstProjection)
+      expect(yield* recovery.readDeliveryProjection).toBe(yield* recovery.readDeliveryProjection)
+      expect(
+        yield* readDeliveryProjectionFrom(recovery, {
+          ...reconstructed,
+          runId: RunId.make("another-reactive-delivery-run")
+        }).pipe(Effect.flip)
+      ).toMatchObject({
+        _tag: "RunRecoveryProjectionRunMismatch",
+        expectedRunId: runId,
+        receivedRunId: "another-reactive-delivery-run"
+      })
+      const unrelatedOwnership = { integrationTarget, queuedAt: JournalPosition.make(99) }
+      yield* integrationResources.acquire(unrelatedOwnership)
+      yield* integrationResources.publishAcceptedOwnership(unrelatedOwnership)
+      const ownershipChangedProjection = yield* readDeliveryProjectionFrom(recovery, reconstructed)
+      expect(ownershipChangedProjection).not.toBe(firstProjection)
+      yield* integrationResources.release(unrelatedOwnership)
+      expect(yield* readDeliveryProjectionFrom(recovery, reconstructed)).not.toBe(ownershipChangedProjection)
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const current = yield* relation.get

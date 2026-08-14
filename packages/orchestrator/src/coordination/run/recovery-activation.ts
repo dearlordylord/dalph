@@ -1,10 +1,10 @@
 /* eslint-disable max-lines -- Exact history reconstruction spans every delivery authority boundary. */
-import { Context, Effect, Match, Option } from "effect"
+import { Context, Effect, Match, Option, Schema } from "effect"
 import {
   type IntegrationTarget,
   type PlannedTaskAttempt,
   plannedTaskAttemptEquivalence,
-  type RunId,
+  RunId,
   type TaskId,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
@@ -38,6 +38,7 @@ import {
 import { deriveIntegrationAdmission } from "../../workflow/protocols/integration-admission/protocol.js"
 import { deriveIntegrationFrontier, integrationDeliveryWaitsOf } from "../frontier/integration-frontier.js"
 import {
+  type IntegrationTargetResourceSnapshot,
   type IntegrationTargetResourceController,
   makeIntegrationTargetResourceController
 } from "../admission/integration-target-resource.js"
@@ -1894,8 +1895,8 @@ const continuationDecisionFor = (
   return decisionWithoutCurrentSpecification(plannedAttempt, planOperationId, currentGraphObservation)
 }
 
-const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredProjection")(function* (
-  runId: RunId,
+const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecoveredRunState")(function* (
+  runState: ReconstructedRunState,
   integrationResources: IntegrationTargetResourceController,
   integrationTarget: Option.Option<IntegrationTarget>,
   activationBaselinePosition: Option.Option<JournalPosition>,
@@ -1904,9 +1905,9 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
   targetVerificationPlan: Option.Option<TargetVerificationPlan>,
   targetPromotionConfigured: boolean,
   integrationFinalityConfigured: boolean,
-  completionTaskConfigured: boolean
+  completionTaskConfigured: boolean,
+  currentIntegrationResources?: IntegrationTargetResourceSnapshot
 ) {
-  const runState = yield* readRecoveredRunState(runId)
   const currentTaskGraph = Option.getOrUndefined(latestReconstructedTaskGraph(runState.graphKnowledge))
   const requiredFreshnessBaseline = continuationFreshnessBaseline(runState, activationBaselinePosition)
   const freshnessBaselineForTask = (taskId: TaskId) =>
@@ -2011,7 +2012,7 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
         ]
       : []
   })
-  const integrationResourceSnapshot = yield* integrationResources.snapshot
+  const integrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
   const activationTargetLineage = runState.workflowHistory.records.flatMap(({ event, position }) => {
     if (event._tag !== "TargetLineageObserved") return []
     const taskBaseline = freshnessBaselineForTask(event.plannedAttempt.taskId)
@@ -2157,6 +2158,32 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
   }
 })
 
+const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredProjection")(function* (
+  runId: RunId,
+  integrationResources: IntegrationTargetResourceController,
+  integrationTarget: Option.Option<IntegrationTarget>,
+  activationBaselinePosition: Option.Option<JournalPosition>,
+  candidateCorrectionLimit: Option.Option<CandidateCorrectionLimit>,
+  candidateContinuationLimit: Option.Option<CandidateContinuationLimit>,
+  targetVerificationPlan: Option.Option<TargetVerificationPlan>,
+  targetPromotionConfigured: boolean,
+  integrationFinalityConfigured: boolean,
+  completionTaskConfigured: boolean
+) {
+  return yield* projectRecoveredRunState(
+    yield* readRecoveredRunState(runId),
+    integrationResources,
+    integrationTarget,
+    activationBaselinePosition,
+    candidateCorrectionLimit,
+    candidateContinuationLimit,
+    targetVerificationPlan,
+    targetPromotionConfigured,
+    integrationFinalityConfigured,
+    completionTaskConfigured
+  )
+})
+
 /** One reconstruction turn; process-local integration state is sampled exactly once. */
 export interface RunRecoveryProjectionSnapshot {
   readonly evidence: DeliveryProjectionEvidence
@@ -2164,7 +2191,14 @@ export interface RunRecoveryProjectionSnapshot {
 }
 
 /** Exact shared failures that can prevent reconstruction of descriptive recovery evidence. */
-export type RunRecoveryProjectionError = Effect.Error<ReturnType<typeof readRecoveredProjection>>
+export class RunRecoveryProjectionRunMismatch extends Schema.TaggedError<RunRecoveryProjectionRunMismatch>()(
+  "RunRecoveryProjectionRunMismatch",
+  { expectedRunId: RunId, receivedRunId: RunId }
+) {}
+
+export type RunRecoveryProjectionError =
+  | Effect.Error<ReturnType<typeof readRecoveredProjection>>
+  | RunRecoveryProjectionRunMismatch
 
 /** Read-only reconstructed evidence consumed by delivery. */
 export interface RunRecoveryProjectionSource {
@@ -2174,7 +2208,29 @@ export interface RunRecoveryProjectionSource {
 
 type RunRecoveryProjectionService = RunRecoveryProjectionSource & {
   readonly _tag: "AuthoritativeRunRecoveryProjection"
+  /** Projects an already-validated current journal state without replaying its complete history. */
+  readonly projectDeliveryFrom: (
+    runState: ReconstructedRunState
+  ) => Effect.Effect<RunRecoveryProjectionSnapshot, RunRecoveryProjectionError, never>
   readonly runId: RunId
+}
+
+const isAuthoritativeRunRecoveryProjection = (
+  source: RunRecoveryProjectionSource
+): source is RunRecoveryProjectionService => "_tag" in source && source._tag === "AuthoritativeRunRecoveryProjection"
+
+/**
+ * Production recovery consumes the journal service's validated current state.
+ * Controlled projection sources retain their explicit read boundary.
+ */
+export const readDeliveryProjectionFrom = (
+  source: RunRecoveryProjectionSource,
+  runState: ReconstructedRunState
+): Effect.Effect<RunRecoveryProjectionSnapshot, RunRecoveryProjectionError, never> => {
+  if (!isAuthoritativeRunRecoveryProjection(source)) return source.readDeliveryProjection
+  return source.runId === runState.runId
+    ? source.projectDeliveryFrom(runState)
+    : Effect.fail(new RunRecoveryProjectionRunMismatch({ expectedRunId: source.runId, receivedRunId: runState.runId }))
 }
 
 /**
@@ -2197,6 +2253,27 @@ const recoveryProjectionSnapshot = (
   frontier
 })
 
+const samePositions = (left: ReadonlySet<JournalPosition>, right: ReadonlySet<JournalPosition>): boolean =>
+  left.size === right.size && [...left].every((position) => right.has(position))
+
+const sameIntegrationResourceSnapshot = (
+  left: IntegrationTargetResourceSnapshot,
+  right: IntegrationTargetResourceSnapshot
+): boolean =>
+  samePositions(left.activeResponsibilityPositions, right.activeResponsibilityPositions) &&
+  samePositions(left.heldResponsibilityPositions, right.heldResponsibilityPositions)
+
+interface JournalCurrentReconstructedState {
+  readonly state: { readonly get: Effect.Effect<{ readonly reconstructed: ReconstructedRunState }> }
+}
+
+const hasCurrentReconstructedState = (journal: object): journal is object & JournalCurrentReconstructedState =>
+  "state" in journal &&
+  typeof journal.state === "object" &&
+  journal.state !== null &&
+  "get" in journal.state &&
+  Effect.isEffect(journal.state.get)
+
 const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAuthoritative")(function* (
   runId: RunId,
   integrationTarget: Option.Option<IntegrationTarget>,
@@ -2215,21 +2292,61 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
   const initialRecords = initialReduction.runState.workflowHistory.records
   const activationBaselinePosition = latestJournalPosition(initialRecords)
   const reconstructedPlannedAttemptPositions = requiredPlannedAttemptPositionsOf(initialReduction.runState)
-  const projection = readRecoveredProjection(
-    runId,
-    integrationResources,
-    integrationTarget,
-    activationBaselinePosition,
-    candidateCorrectionLimit,
-    candidateContinuationLimit,
-    targetVerificationPlan,
-    targetPromotionConfigured,
-    integrationFinalityConfigured,
-    completionTaskConfigured
-  ).pipe(Effect.map(recoveryProjectionSnapshot), Effect.provideService(InRunJournal, journal))
+  const projectionByRunState = new WeakMap<
+    ReconstructedRunState,
+    { readonly resources: IntegrationTargetResourceSnapshot; readonly snapshot: RunRecoveryProjectionSnapshot }
+  >()
+  const projectDeliveryFrom = Effect.fn("RunRecoveryProjection.projectDeliveryFrom")(function* (
+    runState: ReconstructedRunState
+  ) {
+    const resources = yield* integrationResources.snapshot
+    const cached = projectionByRunState.get(runState)
+    if (cached !== undefined && sameIntegrationResourceSnapshot(cached.resources, resources)) return cached.snapshot
+    const snapshot = recoveryProjectionSnapshot(
+      yield* projectRecoveredRunState(
+        runState,
+        integrationResources,
+        integrationTarget,
+        activationBaselinePosition,
+        candidateCorrectionLimit,
+        candidateContinuationLimit,
+        targetVerificationPlan,
+        targetPromotionConfigured,
+        integrationFinalityConfigured,
+        completionTaskConfigured,
+        resources
+      )
+    )
+    // eslint-disable-next-line functional/immutable-data -- Process-local projection memo; journal and resources remain authoritative.
+    projectionByRunState.set(runState, { resources, snapshot })
+    return snapshot
+  })
+  const projection = !hasCurrentReconstructedState(journal)
+    ? readRecoveredProjection(
+        runId,
+        integrationResources,
+        integrationTarget,
+        activationBaselinePosition,
+        candidateCorrectionLimit,
+        candidateContinuationLimit,
+        targetVerificationPlan,
+        targetPromotionConfigured,
+        integrationFinalityConfigured,
+        completionTaskConfigured
+      ).pipe(Effect.map(recoveryProjectionSnapshot), Effect.provideService(InRunJournal, journal))
+    : journal.state.get.pipe(
+        Effect.flatMap(({ reconstructed }) =>
+          reconstructed.runId === runId
+            ? projectDeliveryFrom(reconstructed)
+            : Effect.fail(
+                new RunRecoveryProjectionRunMismatch({ expectedRunId: runId, receivedRunId: reconstructed.runId })
+              )
+        )
+      )
   return RunRecoveryProjection.of({
     _tag: "AuthoritativeRunRecoveryProjection",
     readDeliveryProjection: projection,
+    projectDeliveryFrom,
     reconstructedPlannedAttemptPositions,
     runId
   })

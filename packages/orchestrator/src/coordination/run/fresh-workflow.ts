@@ -15,6 +15,7 @@ import {
   latestPlannedAttemptExecutorProjectionIssue,
   plannedAttemptExecutorTaskWorkSpecifications
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import { journalPrefixPredecessorOf } from "../../workflow-journal/prefix-lineage.js"
 
 const postClaimGraphRank = 0
 const claimRank = 1
@@ -54,12 +55,27 @@ const decisionFor = (step: FreshWorkflowStepType): FreshWorkflowDecision => ({
         : continued(step.task.id, step.predecessorOperationId)
 })
 
-const observedOperationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> =>
-  new Set(
-    records.flatMap(({ event }) =>
-      event._tag === "TaskTrackerFactsObserved" || event._tag === "TaskWorktreeReady" ? [event.operationId] : []
-    )
-  )
+const observedOperationIdsByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, ReadonlySet<OperationId>>()
+
+const observedOperationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> => {
+  const cached = observedOperationIdsByPrefix.get(records)
+  if (cached !== undefined) return cached
+  const predecessor = journalPrefixPredecessorOf(records)
+  const observed = (() => {
+    if (predecessor === undefined)
+      return new Set(
+        records.flatMap(({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" || event._tag === "TaskWorktreeReady" ? [event.operationId] : []
+        )
+      )
+    const event = predecessor.appended.event
+    return event._tag === "TaskTrackerFactsObserved" || event._tag === "TaskWorktreeReady"
+      ? new Set(observedOperationIds(predecessor.prior)).add(event.operationId)
+      : observedOperationIds(predecessor.prior)
+  })()
+  observedOperationIdsByPrefix.set(records, observed)
+  return observed
+}
 
 const plannedSpecificationFor = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) =>
   plannedAttemptExecutorTaskWorkSpecifications(records).findLast(
@@ -71,7 +87,8 @@ const plannedSpecificationFor = (records: ReadonlyArray<JournalRecord>, plannedA
 const journaledStepFor = (
   task: Task,
   records: ReadonlyArray<JournalRecord>,
-  recoveredAttemptIds: ReadonlySet<AttemptId>
+  recoveredAttemptIds: ReadonlySet<AttemptId>,
+  observed: ReadonlySet<OperationId>
 ): FreshWorkflowStepType => {
   const executorResponsibility = records.findLast(
     ({ event }) =>
@@ -102,7 +119,6 @@ const journaledStepFor = (
     }
     /* v8 ignore stop */
   }
-  const observed = observedOperationIds(records)
   const plan = recordedTaskAttemptPlans(records)
     .filter(({ plannedAttempt }) => plannedAttempt.taskId === task.id)
     .at(lastElementOffset)
@@ -284,15 +300,13 @@ export const deriveFreshWorkflowDecisions = (
     frame.pause.tasks._tag === "NoTaskPauses"
       ? new Set<TaskId>()
       : new Set(frame.pause.tasks.taskIds.flatMap((taskId) => frame.currentGraph.groupingSubtreeOf(taskId)))
-  const observedOperationIds = new Set(
-    records.flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.operationId] : []))
-  )
+  const observed = observedOperationIds(records)
   const latestGlobalGraphRead = records.findLast(
     ({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadTrackerGraph" &&
       event.operation.readShape.explicitlyCoveredTaskIds.length === 0 &&
-      observedOperationIds.has(event.operation.operationId)
+      observed.has(event.operation.operationId)
   )
   const latestGlobalGraphOperation =
     latestGlobalGraphRead?.event._tag === "TaskTrackerReadIntentRecorded" &&
@@ -327,7 +341,7 @@ export const deriveFreshWorkflowDecisions = (
   const decisions = candidateGraph
     .eligibleTasks()
     .filter(({ id }) => currentlyEligibleTaskIds.has(id) && !responsibleTaskIds.has(id) && !pauseCoveredTaskIds.has(id))
-    .map((task) => decisionFor(journaledStepFor(task, records, recoveredAttemptIds)))
+    .map((task) => decisionFor(journaledStepFor(task, records, recoveredAttemptIds, observed)))
   if (decisions.some(({ step }) => step._tag === "ReadCurrentTaskGraph")) {
     return decisions.filter(({ step }) => step._tag === "ReadCurrentTaskGraph")
   }

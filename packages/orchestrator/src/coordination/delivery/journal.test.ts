@@ -547,6 +547,7 @@ it.effect("reconstructs an append accepted before the process could publish it",
           intentRecordKey(operation.operationId),
           taskTrackerReadIntent(operation)
         )
+        expect(yield* storage.read(crashRunId)).not.toBe((yield* crashingJournal.state.get).records)
         yield* Ref.set(failAfterDurableAppend, true)
         const interruptedPublication = yield* crashingJournal
           .append(

@@ -18,6 +18,7 @@ import { completionTaskRequestEquals } from "../../workflow/protocols/integratio
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import type { ExactTicketDeliveryEvidence, TicketDeliveryEvidence } from "./relations.js"
+import { journalPrefixPredecessorOf } from "../../workflow-journal/prefix-lineage.js"
 
 const focusedTaskCompletionSuccessOf = (
   { event, position }: JournalRecord,
@@ -78,12 +79,36 @@ const integrationEvidenceOf = (
 }
 
 /** Every operation identity whose journal fact is available to delivery proposal derivation. */
-export const acceptedOperationIdsOf = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> =>
-  new Set(records.flatMap(({ event }) => Option.toArray(Option.fromUndefinedOr(acceptedOperationIdOf(event)))))
+const acceptedOperationIdsByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, ReadonlySet<OperationId>>()
+
+export const acceptedOperationIdsOf = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> => {
+  const cached = acceptedOperationIdsByPrefix.get(records)
+  if (cached !== undefined) return cached
+  const predecessor = journalPrefixPredecessorOf(records)
+  const operationIds = (() => {
+    if (predecessor === undefined)
+      return new Set(
+        records.flatMap(({ event }) => Option.toArray(Option.fromUndefinedOr(acceptedOperationIdOf(event))))
+      )
+    const accepted = acceptedOperationIdOf(predecessor.appended.event)
+    return accepted === undefined
+      ? acceptedOperationIdsOf(predecessor.prior)
+      : new Set(acceptedOperationIdsOf(predecessor.prior)).add(accepted)
+  })()
+  acceptedOperationIdsByPrefix.set(records, operationIds)
+  return operationIds
+}
+
+const journaledIntegrationEvidenceByPrefix = new WeakMap<
+  ReadonlyArray<JournalRecord>,
+  ReadonlyArray<ExactTicketDeliveryEvidence>
+>()
 
 export const journaledIntegrationEvidenceOf = (
   records: ReadonlyArray<JournalRecord>
 ): ReadonlyArray<ExactTicketDeliveryEvidence> => {
+  const cached = journaledIntegrationEvidenceByPrefix.get(records)
+  if (cached !== undefined) return cached
   const focusedCompletionSuccesses = records.flatMap((record) => focusedTaskCompletionSuccessOf(record, records))
   const finalitySettlements: ReadonlyArray<ExactTicketDeliveryEvidence> = records.flatMap(({ event }) =>
     event._tag === "IntegrationFinalitySettled" &&
@@ -91,7 +116,7 @@ export const journaledIntegrationEvidenceOf = (
       ? [{ _tag: "IntegrationFinalitySettlement" as const, settlement: event }]
       : []
   )
-  return [
+  const evidence = [
     ...deriveUnqueuedAcceptedResults(records).map((accepted) => ({
       _tag: "AcceptedAwaitingIntegration" as const,
       accepted
@@ -102,6 +127,8 @@ export const journaledIntegrationEvidenceOf = (
     ...focusedCompletionSuccesses,
     ...finalitySettlements
   ]
+  journaledIntegrationEvidenceByPrefix.set(records, evidence)
+  return evidence
 }
 
 /** Derives exact delivery evidence from journal facts, never from the legacy runnable frontier. */

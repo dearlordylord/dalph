@@ -1,6 +1,7 @@
 /* eslint-disable functional/immutable-data, max-lines -- The chronological validator owns its local indexes and cross-event invariants. */
 import { type AttemptId, type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
+import { rememberValidatedJournalPrefixSuccessor } from "../../workflow-journal/prefix-lineage.js"
 import { type OperationId } from "../../workflow/identity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -17,7 +18,8 @@ import {
 } from "./history-result.js"
 import { deriveRunRecoveryFrontier } from "../frontier/recovery-frontier.js"
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
-import { reconstructValidatedRunState } from "./reduce.js"
+import { advanceReconstructedRunState, reconstructValidatedRunState } from "./reduce.js"
+import type { ReconstructedRunState } from "./state.js"
 import {
   invalidTaskTrackerReconfirmationReference,
   makeTaskTrackerReconfirmationIndex,
@@ -152,6 +154,67 @@ const emptyIndexes = (): FoldIndexes => ({
   unsettledExecutorCommands: new Map(),
   trackerReconfirmations: makeTaskTrackerReconfirmationIndex()
 })
+
+const copyMap = <K, V>(source: ReadonlyMap<K, V>): Map<K, V> => new Map(source)
+const copySet = <A>(source: ReadonlySet<A>): Set<A> => new Set(source)
+const copyNestedMap = <K, I, V>(source: ReadonlyMap<K, ReadonlyMap<I, V>>): Map<K, Map<I, V>> =>
+  new Map([...source].map(([key, values]) => [key, new Map(values)]))
+
+/** Copies the private mutable fold indexes so a rejected successor cannot poison its accepted prefix. */
+const copyIndexes = (source: FoldIndexes): FoldIndexes => ({
+  acceptedExecutorResults: copyMap(source.acceptedExecutorResults),
+  acceptedExecutorResultPositions: copyMap(source.acceptedExecutorResultPositions),
+  abandonedExecutorAttempts: copySet(source.abandonedExecutorAttempts),
+  attemptChoiceSubjects: copySet(source.attemptChoiceSubjects),
+  executorCommandOrdinals: copyMap(source.executorCommandOrdinals),
+  executorCommandCountsSinceSafeSuspension: copyMap(source.executorCommandCountsSinceSafeSuspension),
+  executorCommandProjectionOrdinals: copyMap(source.executorCommandProjectionOrdinals),
+  executorReportOrdinals: copyMap(source.executorReportOrdinals),
+  executorStateObservationOrdinals: copyMap(source.executorStateObservationOrdinals),
+  executorResponsibilitiesBegan: copyMap(source.executorResponsibilitiesBegan),
+  integrationResponsibilitiesBegan: copyMap(source.integrationResponsibilitiesBegan),
+  integrationStarted: copyMap(source.integrationStarted),
+  firstRestartChoiceAppliedAt: copyMap(source.firstRestartChoiceAppliedAt),
+  integrationCandidateIntents: copyMap(source.integrationCandidateIntents),
+  integrationCandidateIntentsByStartedAt: copyMap(source.integrationCandidateIntentsByStartedAt),
+  integrationCandidateSessionSupersessions: copyMap(source.integrationCandidateSessionSupersessions),
+  integrationCandidateSessionSupersessionsByPrior: copyMap(source.integrationCandidateSessionSupersessionsByPrior),
+  integrationCandidateSubmissions: copyMap(source.integrationCandidateSubmissions),
+  integrationCandidateGitObservations: copyMap(source.integrationCandidateGitObservations),
+  integrationCandidatesConstructed: copyMap(source.integrationCandidatesConstructed),
+  targetVerificationIntents: copyMap(source.targetVerificationIntents),
+  targetVerificationTerminals: copySet(source.targetVerificationTerminals),
+  targetPromotionHistory: {
+    attempts: copyNestedMap(source.targetPromotionHistory.attempts),
+    intents: copyMap(source.targetPromotionHistory.intents),
+    passedVerification: copyMap(source.targetPromotionHistory.passedVerification),
+    terminals: copySet(source.targetPromotionHistory.terminals)
+  },
+  integrationFinalityHistory: {
+    deletionAttempts: copyNestedMap(source.integrationFinalityHistory.deletionAttempts),
+    deletionIntents: copyMap(source.integrationFinalityHistory.deletionIntents),
+    deletionTerminals: copySet(source.integrationFinalityHistory.deletionTerminals),
+    replacementAttempts: copyNestedMap(source.integrationFinalityHistory.replacementAttempts),
+    replacementIntents: copyMap(source.integrationFinalityHistory.replacementIntents),
+    replacementTerminals: copyMap(source.integrationFinalityHistory.replacementTerminals),
+    settlements: copySet(source.integrationFinalityHistory.settlements)
+  },
+  gitReadIntents: copyMap(source.gitReadIntents),
+  latestControlDirectionOrdinal: source.latestControlDirectionOrdinal,
+  latestRunPolicyRevision: source.latestRunPolicyRevision,
+  plans: copyMap(source.plans),
+  seenEventKindsByOperation: new Map(
+    [...source.seenEventKindsByOperation].map(([operationId, kinds]) => [operationId, copySet(kinds)])
+  ),
+  seenKeys: copySet(source.seenKeys),
+  seenOperationIds: copySet(source.seenOperationIds),
+  supersededExecutorAttempts: copySet(source.supersededExecutorAttempts),
+  terminalExecutorAttempts: copySet(source.terminalExecutorAttempts),
+  trackerReconfirmations: { completeFactsByOperation: copyMap(source.trackerReconfirmations.completeFactsByOperation) },
+  unsettledExecutorCommands: copyMap(source.unsettledExecutorCommands)
+})
+
+const acceptedFoldIndexes = new WeakMap<ValidWorkflowJournalHistory, FoldIndexes>()
 
 const validateRecordEnvelope = (
   record: JournalRecord,
@@ -2143,76 +2206,120 @@ const validateRunLifecycle = (
  * Validates all decoded records before reconstruction or any outside call.
  * The fold retains every issue it can establish from the immutable history.
  */
+const validateRecord = (
+  record: JournalRecord,
+  index: number,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const unique = validateRecordEnvelope(record, index, runId, indexes, issues)
+  const descriptor = describeJournalEvent(record.event)
+  validateControlDirection(record, runId, indexes, issues)
+  validateAttemptChoice(record, runId, records, indexes, issues)
+  validateAttemptStop(record, runId, records, indexes, issues)
+  validateTaskClaimReacquisitionDirection(record, runId, issues)
+  if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor" && descriptor.correlation.runId !== runId) {
+    identityIssue(
+      issues,
+      runId,
+      record.position,
+      `executor work for attempt ${descriptor.correlation.attemptId} binds run ${descriptor.correlation.runId}`
+    )
+  }
+  if (!unique) {
+    if (record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+      validateExecutorEvent(record, runId, indexes, issues)
+    }
+    return
+  }
+  validateOperationEvent(record, runId, indexes, issues)
+  validateAttemptRestartAuthorityReadFailure(record, runId, records, issues)
+  validatePlannedAttemptReplacement(record, runId, records, indexes, issues)
+  validateContinuationAuthorization(record, runId, records, issues)
+  validatePlan(record, runId, indexes, issues)
+  validateClaimReacquisitionIntent(record, runId, records, issues)
+  validateClaim(record, runId, records, issues)
+  validateClaimRejection(record, runId, records, issues)
+  validateTaskClaimRelease(record, records, (detail) => identityIssue(issues, runId, record.position, detail))
+  validateTrackerObservation(record, runId, records, issues)
+  validateReconfirmationReference(record, runId, indexes, issues)
+  validateExecutorEvent(record, runId, indexes, issues)
+  validateIntegrationHistoryRecord(
+    record,
+    runId,
+    indexes,
+    (detail) => identityIssue(issues, runId, record.position, detail),
+    (detail) => semanticIssue(issues, runId, record.position, detail)
+  )
+  validateIntegrationFinalityHistoryRecord(
+    record,
+    runId,
+    records,
+    indexes.integrationFinalityHistory,
+    (detail) => identityIssue(issues, runId, record.position, detail),
+    (detail) => semanticIssue(issues, runId, record.position, detail)
+  )
+  const policyValidation = validateRunPolicyHistory(record, indexes)
+  indexes.latestRunPolicyRevision = policyValidation.latestRunPolicyRevision
+  for (const detail of policyValidation.details) {
+    semanticIssue(issues, runId, record.position, detail)
+  }
+}
+
+const finishValidation = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>,
+  reconstructRunState: () => ReconstructedRunState = () => reconstructValidatedRunState(runId, records)
+): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
+  validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
+  validateRunLifecycle(runId, records, issues)
+  if (issues.length > 0) {
+    return { _tag: "InvalidWorkflowJournalHistory", issues, records, runId }
+  }
+  const valid: ValidWorkflowJournalHistory = {
+    _tag: "ValidWorkflowJournalHistory",
+    runState: reconstructRunState(),
+    records,
+    recoveryFrontier: deriveRunRecoveryFrontier(records),
+    runId
+  }
+  acceptedFoldIndexes.set(valid, indexes)
+  return valid
+}
+
 export const reduceWorkflowJournalHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
   const issues = new Array<WorkflowJournalHistoryIssue>()
   const indexes = emptyIndexes()
-  records.forEach((record, index) => {
-    const unique = validateRecordEnvelope(record, index, runId, indexes, issues)
-    const descriptor = describeJournalEvent(record.event)
-    validateControlDirection(record, runId, indexes, issues)
-    validateAttemptChoice(record, runId, records, indexes, issues)
-    validateAttemptStop(record, runId, records, indexes, issues)
-    validateTaskClaimReacquisitionDirection(record, runId, issues)
-    if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor" && descriptor.correlation.runId !== runId) {
-      identityIssue(
-        issues,
-        runId,
-        record.position,
-        `executor work for attempt ${descriptor.correlation.attemptId} binds run ${descriptor.correlation.runId}`
-      )
-    }
-    if (!unique) {
-      if (record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-        validateExecutorEvent(record, runId, indexes, issues)
-      }
-      return
-    }
-    validateOperationEvent(record, runId, indexes, issues)
-    validateAttemptRestartAuthorityReadFailure(record, runId, records, issues)
-    validatePlannedAttemptReplacement(record, runId, records, indexes, issues)
-    validateContinuationAuthorization(record, runId, records, issues)
-    validatePlan(record, runId, indexes, issues)
-    validateClaimReacquisitionIntent(record, runId, records, issues)
-    validateClaim(record, runId, records, issues)
-    validateClaimRejection(record, runId, records, issues)
-    validateTaskClaimRelease(record, records, (detail) => identityIssue(issues, runId, record.position, detail))
-    validateTrackerObservation(record, runId, records, issues)
-    validateReconfirmationReference(record, runId, indexes, issues)
-    validateExecutorEvent(record, runId, indexes, issues)
-    validateIntegrationHistoryRecord(
-      record,
-      runId,
-      indexes,
-      (detail) => identityIssue(issues, runId, record.position, detail),
-      (detail) => semanticIssue(issues, runId, record.position, detail)
-    )
-    validateIntegrationFinalityHistoryRecord(
-      record,
-      runId,
-      records,
-      indexes.integrationFinalityHistory,
-      (detail) => identityIssue(issues, runId, record.position, detail),
-      (detail) => semanticIssue(issues, runId, record.position, detail)
-    )
-    const policyValidation = validateRunPolicyHistory(record, indexes)
-    indexes.latestRunPolicyRevision = policyValidation.latestRunPolicyRevision
-    for (const detail of policyValidation.details) {
-      semanticIssue(issues, runId, record.position, detail)
-    }
-  })
-  validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
-  validateRunLifecycle(runId, records, issues)
-  if (issues.length > 0) {
-    return { _tag: "InvalidWorkflowJournalHistory", issues, records, runId }
+  records.forEach((record, index) => validateRecord(record, index, runId, records, indexes, issues))
+  return finishValidation(runId, records, indexes, issues)
+}
+
+/**
+ * Validates and advances one exact successor of an already accepted immutable prefix.
+ * Prefixes not produced in this process fall back to the complete restart reducer.
+ */
+export const advanceWorkflowJournalHistory = (
+  prior: ValidWorkflowJournalHistory,
+  record: JournalRecord
+): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
+  const records = [...prior.records, record]
+  const cached = acceptedFoldIndexes.get(prior)
+  if (cached === undefined) return reduceWorkflowJournalHistory(prior.runId, records)
+  const indexes = copyIndexes(cached)
+  const issues = new Array<WorkflowJournalHistoryIssue>()
+  validateRecord(record, prior.records.length, prior.runId, records, indexes, issues)
+  const advanced = finishValidation(prior.runId, records, indexes, issues, () =>
+    advanceReconstructedRunState(prior.runState, record, records)
+  )
+  if (advanced._tag === "ValidWorkflowJournalHistory") {
+    rememberValidatedJournalPrefixSuccessor(prior, advanced, record)
   }
-  return {
-    _tag: "ValidWorkflowJournalHistory",
-    runState: reconstructValidatedRunState(runId, records),
-    records,
-    recoveryFrontier: deriveRunRecoveryFrontier(records),
-    runId
-  }
+  return advanced
 }

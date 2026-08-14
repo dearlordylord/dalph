@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- The candidate state derivation and its intent/observation interpreter stay adjacent for auditability. */
+/* eslint-disable functional/immutable-data, max-lines -- The candidate protocol owns private memo maps alongside its auditable interpreter. */
 import { Context, Effect, Option, Schema } from "effect"
 import {
   AcceptedResult,
@@ -19,6 +19,8 @@ import {
   integrationCandidateSessionSupersededRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import type { JournalPosition } from "../../../workflow-journal/identity.js"
+import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import type { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import {
@@ -41,6 +43,7 @@ import {
   IntegrationCandidateId,
   IntegrationSessionId,
   IntegrationCandidateResourceLocator,
+  IntegrationCandidateConstructionJournalEvent,
   integrationCandidateCorrelationEquals,
   integrationCandidateHasExactParents
 } from "./events.js"
@@ -299,7 +302,12 @@ const activeCandidateState = (
   return correctionState(relevant, intent, observation)
 }
 
-export const deriveIntegrationCandidateConstruction = (
+const candidateConstructionByPrefix = new WeakMap<
+  ReadonlyArray<JournalRecord>,
+  Map<JournalPosition, IntegrationCandidateConstructionState | undefined>
+>()
+
+const deriveCandidateConstruction = (
   records: ReadonlyArray<JournalRecord>,
   responsibility: StartedIntegrationResponsibility
 ): IntegrationCandidateConstructionState | undefined => {
@@ -316,6 +324,30 @@ export const deriveIntegrationCandidateConstruction = (
     correlationContradictionState(relevant, intended.correlation) ??
     activeCandidateState(relevant, intended)
   )
+}
+
+export const deriveIntegrationCandidateConstruction = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: StartedIntegrationResponsibility
+): IntegrationCandidateConstructionState | undefined => {
+  const cachedByStart = candidateConstructionByPrefix.get(records)
+  if (cachedByStart?.has(responsibility.startedAt) === true) return cachedByStart.get(responsibility.startedAt)
+  const predecessor = journalPrefixPredecessorOf(records)
+  if (
+    predecessor !== undefined &&
+    !Schema.is(IntegrationCandidateConstructionJournalEvent)(predecessor.appended.event)
+  ) {
+    const state = deriveIntegrationCandidateConstruction(predecessor.prior, responsibility)
+    const cache = cachedByStart ?? new Map<JournalPosition, IntegrationCandidateConstructionState | undefined>()
+    cache.set(responsibility.startedAt, state)
+    candidateConstructionByPrefix.set(records, cache)
+    return state
+  }
+  const state = deriveCandidateConstruction(records, responsibility)
+  const cache = cachedByStart ?? new Map<JournalPosition, IntegrationCandidateConstructionState | undefined>()
+  cache.set(responsibility.startedAt, state)
+  candidateConstructionByPrefix.set(records, cache)
+  return state
 }
 
 /** Finds the constructed occurrence through the responsibility's exact candidate-session intent. */

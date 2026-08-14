@@ -85,6 +85,84 @@ const reduceWorkflowResponsibility = (records: ReadonlyArray<JournalRecord>): Wo
 /** Pure workflow-history reducer; it retains every exact decoded record. */
 const reduceWorkflowHistory = (records: ReadonlyArray<JournalRecord>): ReconstructedWorkflowHistory => ({ records })
 
+const appendGraphKnowledge = (
+  prior: BestAvailableDurableGraphKnowledge,
+  record: JournalRecord
+): BestAvailableDurableGraphKnowledge =>
+  record.event._tag === "TaskTrackerFactsObserved"
+    ? BestAvailableDurableGraphKnowledge.make({
+        taskTrackerFacts: [...prior.taskTrackerFacts, record.event.observation]
+      })
+    : prior
+
+const appendResponsibility = (
+  prior: WorkflowResponsibilityState,
+  record: JournalRecord
+): WorkflowResponsibilityState => {
+  if (record.event._tag === "PlannedAttemptReplaced") {
+    const attemptId = record.event.subject.plannedAttempt.attemptId
+    return WorkflowResponsibilityState.make({
+      entries: prior.entries.filter(
+        (entry) =>
+          entry._tag !== "PlannedAttemptExecutorWorkResponsibility" || entry.plannedAttempt.attemptId !== attemptId
+      )
+    })
+  }
+  const entry = responsibilityForRecord(record)
+  return entry === undefined ? prior : WorkflowResponsibilityState.make({ entries: [...prior.entries, entry] })
+}
+
+const appendControlPolicy = (
+  prior: ReconstructedRunState["controlPolicy"],
+  record: JournalRecord
+): ReconstructedRunState["controlPolicy"] =>
+  record.event._tag === "TaskWorkCapacityChanged"
+    ? Option.some(
+        RunControlPolicy.make({ revision: record.event.revision, taskExecutionCapacity: record.event.capacity })
+      )
+    : prior
+
+const appendPauseState = (prior: ReconstructedPauseState, record: JournalRecord): ReconstructedPauseState => {
+  if (record.event._tag !== "ControlDirectionApplied") return prior
+  if (record.event.subject._tag === "Run") {
+    return ReconstructedPauseState.make({
+      run:
+        record.event.direction === "Pause"
+          ? ReconstructedRunPauseState.cases.RunPaused.make({})
+          : ReconstructedRunPauseState.cases.RunUnpaused.make({}),
+      tasks: prior.tasks
+    })
+  }
+  const paused = new Set(prior.tasks._tag === "TaskPauses" ? prior.tasks.taskIds : [])
+  if (record.event.direction === "Pause") paused.add(record.event.subject.taskId)
+  else paused.delete(record.event.subject.taskId)
+  const taskIds = [...paused].sort()
+  return ReconstructedPauseState.make({
+    run: prior.run,
+    tasks:
+      taskIds.length === 0
+        ? ReconstructedTaskPauseState.cases.NoTaskPauses.make({})
+        : ReconstructedTaskPauseState.cases.TaskPauses.make({ taskIds })
+  })
+}
+
+/** Advances one already-validated prefix after its exact successor record has passed history validation. */
+export const advanceReconstructedRunState = (
+  prior: ReconstructedRunState,
+  record: JournalRecord,
+  records: ReadonlyArray<JournalRecord> = [...prior.workflowHistory.records, record]
+): ReconstructedRunState => {
+  return {
+    appliedThrough: record.position,
+    controlPolicy: appendControlPolicy(prior.controlPolicy, record),
+    graphKnowledge: appendGraphKnowledge(prior.graphKnowledge, record),
+    pause: appendPauseState(prior.pause, record),
+    responsibility: appendResponsibility(prior.responsibility, record),
+    runId: prior.runId,
+    workflowHistory: { records }
+  }
+}
+
 /** Applies the initial policy and every later Operator change in journal order. */
 const reduceControlPolicy = (records: ReadonlyArray<JournalRecord>) => {
   const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
