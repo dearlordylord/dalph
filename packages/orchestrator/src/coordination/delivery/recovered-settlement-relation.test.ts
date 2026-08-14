@@ -629,10 +629,10 @@ it.effect("restart rereads the exact target head before offering candidate verif
         })
       )
       expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual(
-        expect.objectContaining({ _tag: "ReleaseStartedIntegrationTarget" })
+        expect.objectContaining({ _tag: "ContinueStartedIntegrationCandidate" })
       )
       yield* resources.release(responsibility)
-      expect((yield* recovery.readDeliveryProjection).frontier.transitions).not.toContainEqual(
+      expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual(
         expect.objectContaining({ _tag: "AcquireStartedIntegrationTarget" })
       )
       const restoredLineageRead = makeTargetLineageObservationOperation({
