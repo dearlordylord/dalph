@@ -1172,6 +1172,68 @@ const authoredInteractionMismatchFrom = (
   return undefined
 }
 
+type AuthoredTaskClaimAcquisitionRejected = typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionRejected.Type
+type TaskClaimAcquisitionRejectedEvent = Extract<
+  JournalRecord["event"],
+  { readonly _tag: "TaskClaimAcquisitionRejected" }
+>
+
+const authoredTaskClaimAcquisitionRejectionMatches = (request: {
+  readonly attemptedTaskId: TaskId | undefined
+  readonly event: TaskClaimAcquisitionRejectedEvent
+  readonly expected: AuthoredTaskClaimAcquisitionRejected
+}): boolean =>
+  [
+    request.attemptedTaskId !== undefined,
+    request.expected.operationId === request.event.operationId,
+    request.attemptedTaskId === request.event.observed.taskId,
+    JSON.stringify(request.expected.observed) === JSON.stringify(request.event.observed)
+  ].every(Boolean)
+
+const handleAuthoredTaskClaimJournalEvent = (request: {
+  readonly acquisitionTaskIds: Ref.Ref<ReadonlyMap<OperationId, TaskId>>
+  readonly authoredInteractionFailure: Ref.Ref<AuthoredCassetteInteractionMismatch | undefined>
+  readonly cursor: StoryCursor
+  readonly event: JournalRecord["event"]
+}) =>
+  Effect.gen(function* () {
+    const { event } = request
+    if (event._tag === "TaskClaimAcquisitionIntended") {
+      yield* Ref.update(request.acquisitionTaskIds, (current) =>
+        new Map(current).set(event.operation.acquisition.operationId, event.operation.acquisition.taskId)
+      )
+    }
+    if (event._tag !== "TaskClaimAcquisitionRejected") return false
+
+    const expectedExit = yield* Effect.exit(request.cursor.consumeTaskClaimAcquisitionRejected)
+    const expectedMismatch = authoredInteractionMismatchFrom(expectedExit)
+    if (expectedMismatch !== undefined) {
+      yield* Ref.set(request.authoredInteractionFailure, expectedMismatch)
+      return true
+    }
+    if (Exit.isFailure(expectedExit)) {
+      return yield* Effect.die(expectedExit.cause)
+    }
+    const expected = expectedExit.value
+    const attemptedTaskId = (yield* Ref.get(request.acquisitionTaskIds)).get(event.operationId)
+    if (!authoredTaskClaimAcquisitionRejectionMatches({ attemptedTaskId, event, expected })) {
+      yield* Ref.set(
+        request.authoredInteractionFailure,
+        new AuthoredCassetteInteractionMismatch({
+          actual: JSON.stringify(event.observed),
+          expected: JSON.stringify({ operationId: expected.operationId, attemptedTaskId, observed: expected.observed }),
+          storyPosition: (yield* request.cursor.storyPosition) - 1
+        })
+      )
+      return true
+    }
+    // The rejection is durable before this boundary dies.
+    // The next activation must therefore reconstruct from
+    // the same journal instead of retrying the acquisition.
+    yield* request.cursor.pauseAtCoordinatorProcessDeath
+    return true
+  })
+
 type TargetVerificationStoryResult = Extract<
   AuthoredCassetteStoryItem,
   { readonly _tag: "TargetVerificationReturned" }
@@ -1474,52 +1536,13 @@ const runAuthoredScenarioCassetteWith = (request: {
               sharedJournal.append(requestedRunId, key, event).pipe(
                 Effect.tap(() =>
                   Effect.gen(function* () {
-                    if (event._tag === "TaskClaimAcquisitionIntended") {
-                      yield* Ref.update(acquisitionTaskIds, (current) =>
-                        new Map(current).set(
-                          event.operation.acquisition.operationId,
-                          event.operation.acquisition.taskId
-                        )
-                      )
-                    }
-                    if (event._tag === "TaskClaimAcquisitionRejected") {
-                      const expectedExit = yield* Effect.exit(cursor.consumeTaskClaimAcquisitionRejected)
-                      const expectedMismatch = authoredInteractionMismatchFrom(expectedExit)
-                      if (expectedMismatch !== undefined) {
-                        yield* Ref.set(authoredInteractionFailure, expectedMismatch)
-                        return
-                      }
-                      if (Exit.isFailure(expectedExit)) {
-                        return yield* Effect.die(expectedExit.cause)
-                      }
-                      const expected = expectedExit.value
-                      const attemptedTaskId = (yield* Ref.get(acquisitionTaskIds)).get(event.operationId)
-                      if (
-                        attemptedTaskId === undefined ||
-                        expected.operationId !== event.operationId ||
-                        attemptedTaskId !== event.observed.taskId ||
-                        JSON.stringify(expected.observed) !== JSON.stringify(event.observed)
-                      ) {
-                        yield* Ref.set(
-                          authoredInteractionFailure,
-                          new AuthoredCassetteInteractionMismatch({
-                            actual: JSON.stringify(event.observed),
-                            expected: JSON.stringify({
-                              operationId: expected.operationId,
-                              attemptedTaskId,
-                              observed: expected.observed
-                            }),
-                            storyPosition: (yield* cursor.storyPosition) - 1
-                          })
-                        )
-                        return
-                      }
-                      // The rejection is durable before this boundary dies.
-                      // The next activation must therefore reconstruct from
-                      // the same journal instead of retrying the acquisition.
-                      yield* cursor.pauseAtCoordinatorProcessDeath
-                      return
-                    }
+                    const taskClaimHandled = yield* handleAuthoredTaskClaimJournalEvent({
+                      acquisitionTaskIds,
+                      authoredInteractionFailure,
+                      cursor,
+                      event
+                    })
+                    if (taskClaimHandled) return
                     if (candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag) {
                       yield* Deferred.succeed(candidateOutcomeRecorded, undefined)
                     }
