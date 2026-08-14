@@ -476,8 +476,17 @@ it.effect("keeps every request boundary typed after initialization becomes unava
       const executable = path.join(root, "fixture-codex-unavailable")
       yield* fileSystem.writeFileString(executable, malformedInitializationServer)
       yield* fileSystem.chmod(executable, 0o755)
-      const appLayer = codexAppServerNodeLayer({ executable }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
-      const result = yield* Effect.gen(function* () {
+      const appLayer = codexAppServerLayer({ executable }).pipe(
+        Layer.provide(
+          controlledCodexProcessOwnershipLayer({
+            observe: () => Effect.succeed({ _tag: "Absent" as const }),
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
+            stop: () => Effect.void
+          })
+        ),
+        Layer.provide(memoryCodexAttemptStoreLayer())
+      )
+      yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
         const operations: ReadonlyArray<Effect.Effect<unknown, CodexAppServerFailure>> = [
           app.startThread("/unavailable/worktree"),
@@ -490,8 +499,7 @@ it.effect("keeps every request boundary typed after initialization becomes unava
         ]
         const results = yield* Effect.forEach(operations, Effect.exit)
         expect(results.map(Exit.isFailure)).toEqual(operations.map(() => true))
-      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
-      expect(Exit.isSuccess(result)).toBe(true)
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
