@@ -16,20 +16,13 @@ export type CodexThreadId = typeof CodexThreadId.Type
 export const CodexTurnId = Schema.NonEmptyString.pipe(Schema.brand("CodexTurnId"))
 export type CodexTurnId = typeof CodexTurnId.Type
 
+/** A fresh private token Dalph puts in one turn's user input to identify that owned turn after restart. */
+export const CodexOwnedTurnToken = Schema.NonEmptyString.pipe(Schema.brand("CodexOwnedTurnToken"))
+export type CodexOwnedTurnToken = typeof CodexOwnedTurnToken.Type
+
 /** Identifies one launch incarnation of the application-owned app-server child. */
 export const CodexServerIncarnation = Schema.NonEmptyString.pipe(Schema.brand("CodexServerIncarnation"))
 export type CodexServerIncarnation = typeof CodexServerIncarnation.Type
-
-/** The private phases needed to distinguish an empty allocation from a turn boundary. */
-export const CodexAttemptPhase = Schema.Literals([
-  "EmptyPreTurn",
-  "AssociatedPreTurn",
-  "TurnMayHaveStarted",
-  "Running",
-  "SafelySuspended",
-  "Terminal"
-])
-export type CodexAttemptPhase = typeof CodexAttemptPhase.Type
 
 /** A sealed private terminal result; the generic executor deliberately has no Completed state here. */
 export const CodexSealedTerminal = Schema.TaggedUnion({
@@ -38,50 +31,99 @@ export const CodexSealedTerminal = Schema.TaggedUnion({
 })
 export type CodexSealedTerminal = typeof CodexSealedTerminal.Type
 
-/** Exact durable attempt/thread association and the protocol state required for restart reconciliation. */
-export const CodexAttemptRecord = Schema.Struct({
-  attemptId: AttemptId,
-  correlationAttemptId: AttemptId,
-  correlationRunId: RunId,
-  evidenceManifest: Schema.NullOr(EvidenceReference),
-  phase: CodexAttemptPhase,
-  terminal: Schema.NullOr(CodexSealedTerminal),
-  threadId: Schema.NullOr(CodexThreadId),
-  turnId: Schema.NullOr(CodexTurnId),
-  turnMayHaveStarted: Schema.Boolean,
-  worktree: WorktreeLocator
+/**
+ * Exact durable attempt/thread state. Each tag carries only the fields that
+ * are valid at that boundary, so an unresolved turn always retains its fresh
+ * token and its previous owned turn separately from a newly observed id.
+ */
+export const CodexAttemptRecord = Schema.TaggedUnion({
+  /** The thread allocation intent before Codex returns a thread id. */
+  EmptyPreTurn: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    worktree: WorktreeLocator
+  },
+  /** A returned idle thread is durably associated before any turn is sent. */
+  AssociatedPreTurn: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  },
+  /** A fresh token authorizes one first or continuation turn crossing. */
+  TurnIntentRecorded: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    currentToken: CodexOwnedTurnToken,
+    priorObservedTurnId: Schema.NullOr(CodexTurnId),
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  },
+  /** The app-server returned or later exposed this exact token-to-turn pair. */
+  TurnObserved: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    currentToken: CodexOwnedTurnToken,
+    observedTurnId: CodexTurnId,
+    priorObservedTurnId: Schema.NullOr(CodexTurnId),
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  },
+  /** The exact owned turn remains active and retains its previous owned id. */
+  Running: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    currentToken: CodexOwnedTurnToken,
+    observedTurnId: CodexTurnId,
+    priorObservedTurnId: Schema.NullOr(CodexTurnId),
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  },
+  /** The exact owned turn and every owned activity are quiescent. */
+  SafelySuspended: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    currentToken: CodexOwnedTurnToken,
+    observedTurnId: CodexTurnId,
+    priorObservedTurnId: Schema.NullOr(CodexTurnId),
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  },
+  /** The exact owned turn has one sealed terminal result and correlation. */
+  Terminal: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    currentToken: CodexOwnedTurnToken,
+    evidenceManifest: Schema.NullOr(EvidenceReference),
+    observedTurnId: CodexTurnId,
+    priorObservedTurnId: Schema.NullOr(CodexTurnId),
+    terminal: CodexSealedTerminal,
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  }
 }).check(
   Schema.makeFilter((record) =>
     record.attemptId !== record.correlationAttemptId
       ? "private association attempt and correlation attempt must be identical"
-      : record.phase === "EmptyPreTurn" && record.threadId !== null
-        ? "an empty pre-turn allocation cannot contain a thread association"
-        : record.phase !== "EmptyPreTurn" && record.threadId === null
-          ? "an associated attempt must contain a Codex thread"
-          : record.phase === "Terminal" && record.terminal === null
-            ? "a terminal attempt must contain a sealed terminal result"
-            : record.phase !== "Terminal" && record.terminal !== null
-              ? "a non-terminal attempt cannot contain a sealed terminal result"
-              : record.phase === "Terminal" && record.terminal?._tag === "Accepted" && record.evidenceManifest === null
-                ? "an accepted terminal attempt must retain its evidence reference"
-                : record.phase === "Terminal" && record.terminal?._tag === "Failed" && record.evidenceManifest !== null
-                  ? "a failed terminal attempt cannot retain accepted evidence"
-                  : record.phase !== "Terminal" && record.evidenceManifest !== null
-                    ? "a non-terminal attempt cannot retain accepted evidence"
-                    : record.phase === "Terminal" &&
-                        record.terminal?._tag === "Accepted" &&
-                        record.evidenceManifest !== null &&
-                        !evidenceReferenceEquals(record.terminal.evidenceManifest, record.evidenceManifest)
-                      ? "the sealed and top-level evidence references must agree"
-                      : record.phase === "EmptyPreTurn" && (record.turnId !== null || record.turnMayHaveStarted)
-                        ? "an empty pre-turn allocation cannot contain turn intent"
-                        : record.phase === "AssociatedPreTurn" && (record.turnId !== null || record.turnMayHaveStarted)
-                          ? "an associated pre-turn thread cannot contain turn intent"
-                          : record.phase !== "EmptyPreTurn" &&
-                              record.phase !== "AssociatedPreTurn" &&
-                              !record.turnMayHaveStarted
-                            ? "a post-association attempt must retain turn intent"
-                            : undefined
+      : record._tag === "Terminal" && record.terminal._tag === "Accepted" && record.evidenceManifest === null
+        ? "an accepted terminal attempt must retain its evidence reference"
+        : record._tag === "Terminal" && record.terminal._tag === "Failed" && record.evidenceManifest !== null
+          ? "a failed terminal attempt cannot retain accepted evidence"
+          : record._tag !== "Terminal" && "evidenceManifest" in record
+            ? "only a terminal attempt can retain accepted evidence"
+            : record._tag === "Terminal" &&
+                record.terminal._tag === "Accepted" &&
+                record.evidenceManifest !== null &&
+                !evidenceReferenceEquals(record.terminal.evidenceManifest, record.evidenceManifest)
+              ? "the sealed and top-level evidence references must agree"
+              : undefined
   )
 )
 export type CodexAttemptRecord = typeof CodexAttemptRecord.Type
@@ -113,10 +155,12 @@ export const CodexAttemptStoreSnapshot = Schema.Struct({
   Schema.makeFilter((snapshot) => {
     const keys = new Set(snapshot.attempts.map((record) => keyOf(record.correlationRunId, record.correlationAttemptId)))
     if (keys.size !== snapshot.attempts.length) return "private attempt snapshot contains duplicate correlations"
-    const threadIds = new Set(
-      snapshot.attempts.flatMap((record) => (record.threadId === null ? [] : [record.threadId]))
+    const associatedAttempts = snapshot.attempts.filter(
+      (record): record is Exclude<CodexAttemptRecord, { readonly _tag: "EmptyPreTurn" }> =>
+        record._tag !== "EmptyPreTurn"
     )
-    return threadIds.size === snapshot.attempts.filter((record) => record.threadId !== null).length
+    const threadIds = new Set(associatedAttempts.map((record) => record.threadId))
+    return threadIds.size === associatedAttempts.length
       ? undefined
       : "private attempt snapshot aliases one Codex thread to multiple attempts"
   })

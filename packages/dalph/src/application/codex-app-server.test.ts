@@ -9,7 +9,12 @@ import {
   codexAppServerNodeLayer,
   controlledCodexProcessOwnershipLayer
 } from "./codex-app-server.js"
-import { CodexServerIncarnation, CodexServerLaunchRecord, memoryCodexAttemptStoreLayer } from "./codex-attempt-store.js"
+import {
+  CodexOwnedTurnToken,
+  CodexServerIncarnation,
+  CodexServerLaunchRecord,
+  memoryCodexAttemptStoreLayer
+} from "./codex-attempt-store.js"
 
 const fakeServer = String.raw`#!/usr/bin/env node
 let buffer = ""
@@ -24,7 +29,15 @@ const onMessage = (message) => {
   }
   if (message.method === "thread/read" || message.method === "thread/resume") return write(message.id, { thread })
   if (message.method === "turn/start") {
-    const turn = { id: "fixture-turn", status: "completed", items: [{ type: "agentMessage", text: "fixture" }] }
+    const inputText = message.params.input?.[0]?.text ?? ""
+    const turn = {
+      id: "fixture-turn",
+      status: "completed",
+      items: [
+        { type: "userMessage", content: [{ type: "input_text", text: inputText }] },
+        { type: "agentMessage", text: "fixture <!-- dalph-owned-turn-token:v1:agent-prose -->" }
+      ]
+    }
     thread = { ...thread, cwd: message.params.cwd, status: "idle", turns: [turn] }
     return write(message.id, { turn })
   }
@@ -79,8 +92,13 @@ it.effect("speaks the normalized app-server protocol with exact per-call cwd", (
         const app = yield* CodexAppServer
         const thread = yield* app.startThread("/exact/worktree")
         expect(thread.cwd).toBe("/exact/worktree")
-        const turn = yield* app.startTurn(thread.id, "/exact/worktree", "turn text")
+        const ownedToken = CodexOwnedTurnToken.make("owned-wire-token")
+        const turn = yield* app.startTurn(thread.id, "/exact/worktree", "turn text", ownedToken)
         expect(turn.status).toBe("completed")
+        expect(turn.ownedTurnToken).toBe(ownedToken)
+        const resumed = yield* app.resumeThread(thread.id, "/exact/worktree")
+        expect(resumed.turns).toHaveLength(1)
+        expect(resumed.turns[0]?.ownedTurnToken).toBe(ownedToken)
         expect((yield* app.listBackgroundTerminals(thread.id)).length).toBe(0)
         yield* app.close
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))

@@ -14,6 +14,7 @@ import { Context, Deferred, Duration, Effect, Layer, Option, Ref, Schema, Semaph
 import {
   CodexAttemptStore,
   CodexAttemptStoreFailure,
+  CodexOwnedTurnToken,
   CodexServerIncarnation,
   CodexThreadId,
   CodexTurnId,
@@ -24,11 +25,15 @@ import {
 /** The process-owned status projection returned by one Codex thread read. */
 export type CodexThreadStatus = "active" | "idle" | "notLoaded" | "systemError"
 
-/** One persisted Codex turn. Items remain opaque except for final agent messages. */
+/** One persisted Codex turn. Items remain opaque except for private input identity and correlation. */
 export interface CodexTurnSnapshot {
   readonly id: CodexTurnId
   readonly status: "completed" | "interrupted" | "failed" | "inProgress"
   readonly items: ReadonlyArray<unknown>
+  /** Exact Dalph marker recovered from user input, when this is an owned turn. */
+  readonly ownedTurnToken?: CodexOwnedTurnToken
+  /** Controlled transports may expose a provider-side correlation for contradiction tests. */
+  readonly correlation?: PlannedAttemptExecutorCorrelation
 }
 
 /** The exact thread state needed to reconcile a private attempt association. */
@@ -111,7 +116,8 @@ export interface CodexAppServerService {
   readonly startTurn: (
     threadId: CodexThreadId,
     cwd: string,
-    text: string
+    text: string,
+    ownedTurnToken?: CodexOwnedTurnToken
   ) => Effect.Effect<CodexTurnSnapshot, CodexAppServerFailure>
   readonly interruptTurn: (threadId: CodexThreadId, turnId: CodexTurnId) => Effect.Effect<void, CodexAppServerFailure>
   readonly listBackgroundTerminals: (
@@ -212,6 +218,84 @@ type JsonObject = Record<string, unknown>
 
 const isJsonObject = (value: unknown): value is JsonObject => typeof value === "object" && value !== null
 
+/*
+ * The current app-server input contract accepts text only; it has no supported
+ * caller metadata field. This exact machine-readable marker therefore travels
+ * in user input and is recovered from the user-input item in thread/read.
+ * Agent prose and turn-list position are deliberately never consulted.
+ */
+const ownedTurnMarkerPrefix = "<!-- dalph-owned-turn-token:v1:"
+const ownedTurnMarkerSuffix = " -->"
+const ownedTurnMarkerPattern = /<!-- dalph-owned-turn-token:v1:([^\s>]+) -->/g
+
+/** The private text marker used when the app-server has no input metadata field. */
+export const codexOwnedTurnMarker = (token: CodexOwnedTurnToken): string =>
+  `${ownedTurnMarkerPrefix}${token}${ownedTurnMarkerSuffix}`
+
+/** Adds the exact private marker to one user turn without relying on agent output. */
+export const codexOwnedTurnInput = (text: string, token: CodexOwnedTurnToken): string =>
+  `${text}\n\n${codexOwnedTurnMarker(token)}`
+
+const markerTokenFromText = (text: string): ReadonlyArray<string> =>
+  Array.from(text.matchAll(ownedTurnMarkerPattern), (match) => match[1]).filter(
+    (token): token is string => token !== undefined
+  )
+
+const inputTextValues = (
+  value: unknown,
+  forceInputShape: boolean = false,
+  userMessageContext: boolean = false
+): ReadonlyArray<string> => {
+  if (!isJsonObject(value)) return []
+  const type = value["type"]
+  const role = value["role"]
+  const userMessageContainer = role === "user" || type === "userMessage" || type === "user_message"
+  const recognized = forceInputShape || userMessageContext || userMessageContainer || type === "input_text"
+  if (!recognized) return []
+  const text = typeof value["text"] === "string" ? [value["text"]] : []
+  const content = Array.isArray(value["content"])
+    ? value["content"].flatMap((item) => inputTextValues(item, false, userMessageContext || userMessageContainer))
+    : []
+  const input = Array.isArray(value["input"])
+    ? value["input"].flatMap((item) => inputTextValues(item, true, userMessageContext || userMessageContainer))
+    : []
+  return [...text, ...content, ...input]
+}
+
+const normalizeTurnCorrelation = (
+  value: unknown,
+  operation: CodexAppServerOperation
+): PlannedAttemptExecutorCorrelation | CodexAppServerFailure | undefined => {
+  if (value === undefined || value === null) return undefined
+  if (!isJsonObject(value)) return operationFailure(operation, "Malformed", "turn correlation is invalid")
+  const candidate = value
+  if (typeof candidate["runId"] !== "string" || typeof candidate["attemptId"] !== "string") {
+    return operationFailure(operation, "Malformed", "turn correlation is incomplete")
+  }
+  try {
+    return Schema.decodeUnknownSync(PlannedAttemptExecutorCorrelation)({
+      runId: RunId.make(candidate["runId"]),
+      attemptId: AttemptId.make(candidate["attemptId"])
+    })
+  } catch (error) {
+    return operationFailure(operation, "Malformed", `turn correlation is invalid: ${String(error)}`)
+  }
+}
+
+const normalizeOwnedTurnToken = (
+  value: unknown,
+  operation: CodexAppServerOperation
+): CodexOwnedTurnToken | CodexAppServerFailure | undefined => {
+  if (value === undefined || value === null) return undefined
+  const token = stringValue(value)
+  if (token === undefined) return operationFailure(operation, "Malformed", "owned turn token is invalid")
+  try {
+    return CodexOwnedTurnToken.make(token)
+  } catch (error) {
+    return operationFailure(operation, "Malformed", `owned turn token is invalid: ${String(error)}`)
+  }
+}
+
 const normalizeTurn = (
   value: unknown,
   operation: CodexAppServerOperation
@@ -229,7 +313,39 @@ const normalizeTurn = (
   const items = source["items"]
   if (items !== undefined && !Array.isArray(items))
     return operationFailure(operation, "Malformed", "turn items are invalid")
-  return { id: CodexTurnId.make(id), status, items: Array.isArray(items) ? items : [] }
+  const normalizedCorrelation = normalizeTurnCorrelation(source["correlation"], operation)
+  if (normalizedCorrelation instanceof CodexAppServerFailure) return normalizedCorrelation
+  const rawInputTexts = Array.isArray(source["input"])
+    ? source["input"].flatMap((item) => inputTextValues(item, true))
+    : []
+  const rawItemTexts = Array.isArray(items) ? items.flatMap((item) => inputTextValues(item)) : []
+  const inputMarkerValues = rawInputTexts.flatMap(markerTokenFromText)
+  const itemMarkerValues = rawItemTexts.flatMap(markerTokenFromText)
+  const markerValues = [...inputMarkerValues, ...itemMarkerValues]
+  const directToken = normalizeOwnedTurnToken(source["ownedTurnToken"], operation)
+  if (directToken instanceof CodexAppServerFailure) return directToken
+  const distinctMarkerValues = [...new Set(markerValues)]
+  if (inputMarkerValues.length > 1 || itemMarkerValues.length > 1 || distinctMarkerValues.length > 1) {
+    return operationFailure(operation, "Malformed", "owned turn token marker is duplicated")
+  }
+  const markerToken = distinctMarkerValues[0]
+  let normalizedToken: CodexOwnedTurnToken | undefined
+  if (markerToken !== undefined) {
+    const decoded = normalizeOwnedTurnToken(markerToken, operation)
+    if (decoded instanceof CodexAppServerFailure) return decoded
+    normalizedToken = decoded
+  }
+  if (directToken !== undefined && normalizedToken !== undefined && directToken !== normalizedToken) {
+    return operationFailure(operation, "Malformed", "owned turn token metadata contradicts its input marker")
+  }
+  const ownedTurnToken = directToken ?? normalizedToken
+  return {
+    id: CodexTurnId.make(id),
+    status,
+    items: Array.isArray(items) ? items : [],
+    ...(ownedTurnToken === undefined ? {} : { ownedTurnToken }),
+    ...(normalizedCorrelation === undefined ? {} : { correlation: normalizedCorrelation })
+  }
 }
 
 const normalizeThread = (
@@ -672,15 +788,29 @@ export const codexAppServerLayer = (
       const startTurn = Effect.fn("CodexAppServer.startTurn")(function* (
         threadId: CodexThreadId,
         cwd: string,
-        text: string
+        text: string,
+        ownedTurnToken?: CodexOwnedTurnToken
       ) {
         const response = responseObject(
-          yield* rpc.request("turn/start", "turn/start", { threadId, cwd, input: [{ type: "text", text }] }),
+          yield* rpc.request("turn/start", "turn/start", {
+            threadId,
+            cwd,
+            input: [
+              { type: "text", text: ownedTurnToken === undefined ? text : codexOwnedTurnInput(text, ownedTurnToken) }
+            ]
+          }),
           "turn/start"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
         const turn = normalizeTurn(response["turn"], "turn/start")
-        return turn instanceof CodexAppServerFailure ? yield* Effect.fail(turn) : turn
+        if (turn instanceof CodexAppServerFailure) return yield* Effect.fail(turn)
+        if (ownedTurnToken === undefined) return turn
+        if (turn.ownedTurnToken !== undefined && turn.ownedTurnToken !== ownedTurnToken) {
+          return yield* Effect.fail(
+            operationFailure("turn/start", "Malformed", "turn response token contradicts the requested token")
+          )
+        }
+        return { ...turn, ownedTurnToken }
       })
       const interruptTurn = Effect.fn("CodexAppServer.interruptTurn")(function* (
         threadId: CodexThreadId,

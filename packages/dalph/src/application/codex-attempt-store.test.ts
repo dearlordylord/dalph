@@ -37,16 +37,11 @@ const attempt = PlannedTaskAttempt.make({
   taskRevision: specification.fingerprint,
   worktree: WorktreeLocator.make("/tmp/dalph-issue-58-store-worktree")
 })
-const associated = CodexAttemptRecord.make({
+const associated = CodexAttemptRecord.cases.AssociatedPreTurn.make({
   attemptId: attempt.attemptId,
   correlationAttemptId: attempt.attemptId,
   correlationRunId: attempt.runId,
-  evidenceManifest: null,
-  phase: "AssociatedPreTurn",
-  terminal: null,
   threadId: CodexThreadId.make("private-thread-58"),
-  turnId: null,
-  turnMayHaveStarted: false,
   worktree: attempt.worktree
 })
 const launch = CodexServerLaunchRecord.make({
@@ -140,6 +135,42 @@ it.effect("fails closed when the private snapshot is malformed", () =>
       const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-corrupt-" })
       const storePath = path.join(root, "executor-private-state.json")
       yield* fileSystem.writeFileString(storePath, "{not-json")
+      const result = yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        return yield* store.readAttempt(attempt.runId, attempt.attemptId)
+      }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("does not upcast a legacy flat attempt record", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-legacy-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      yield* fileSystem.writeFileString(
+        storePath,
+        JSON.stringify({
+          attempts: [
+            {
+              attemptId: attempt.attemptId,
+              correlationAttemptId: attempt.attemptId,
+              correlationRunId: attempt.runId,
+              evidenceManifest: null,
+              phase: "AssociatedPreTurn",
+              terminal: null,
+              threadId: CodexThreadId.make("private-thread-legacy"),
+              turnId: null,
+              turnMayHaveStarted: false,
+              worktree: attempt.worktree
+            }
+          ],
+          serverLaunch: null
+        })
+      )
       const result = yield* Effect.gen(function* () {
         const store = yield* CodexAttemptStore
         return yield* store.readAttempt(attempt.runId, attempt.attemptId)

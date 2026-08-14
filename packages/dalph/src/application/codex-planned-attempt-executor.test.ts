@@ -34,6 +34,7 @@ import {
 import {
   CodexAttemptStore,
   CodexAttemptStoreFailure,
+  CodexOwnedTurnToken,
   CodexServerIncarnation,
   type CodexAttemptRecord,
   type CodexAttemptStoreService,
@@ -73,10 +74,18 @@ type Harness = {
   readonly threadStarts: () => number
   readonly turnCount: () => number
   readonly associationAtTurn: () => CodexAttemptRecord | undefined
+  readonly currentThread: () => CodexThreadSnapshot
+  readonly currentRecord: () => CodexAttemptRecord | undefined
   readonly complete: (message: string) => void
   readonly makeTerminalActivity: () => void
   readonly makeResumeUnavailable: () => void
   readonly makeForeignResume: () => void
+  readonly addManualTurn: (position: "before" | "after") => void
+  readonly reorderTurns: () => void
+  readonly duplicateOwnedTurn: () => void
+  readonly contradictOwnedTurnId: () => void
+  readonly addForeignOwnedTurn: () => void
+  readonly makeForeignTurnCorrelation: () => void
 }
 
 const keyOf = (runId: RunId, attemptId: AttemptId): string => `${runId}\u0000${attemptId}`
@@ -87,6 +96,9 @@ const makeHarness = (
     readonly loseTurnResponseAt?: number
     readonly missingEmptyThread?: boolean
     readonly failAssociatedWriteOnce?: boolean
+    readonly manualBeforeFirstTurn?: boolean
+    readonly manualAfterFirstTurn?: boolean
+    readonly reorderTurnsOnResume?: boolean
   } = {}
 ): Harness => {
   const threadId = CodexThreadId.make("codex-thread-issue-58")
@@ -106,6 +118,12 @@ const makeHarness = (
   let resumeUnavailable = false
   let foreignResume = false
   let associatedWriteFailure = false
+
+  const manualTurn = (id: string): CodexTurnSnapshot => ({
+    id: CodexTurnId.make(id),
+    status: "completed",
+    items: [{ type: "agentMessage", text: "manual activity" }]
+  })
 
   const unavailable = (operation: "turn/start" | "thread/resume"): CodexAppServerFailure =>
     new CodexAppServerFailure({ detail: "controlled response was lost", kind: "Unavailable", operation })
@@ -139,17 +157,26 @@ const makeHarness = (
             ? { correlation: { runId: RunId.make("foreign-run"), attemptId: AttemptId.make("foreign-attempt") } }
             : {})
         }
+        if (options.reorderTurnsOnResume === true) {
+          currentThread = { ...currentThread, turns: [...currentThread.turns].reverse() }
+        }
         return currentThread
       })
     },
-    startTurn: (threadIdValue, cwd, text) =>
+    startTurn: (threadIdValue, cwd, text, ownedTurnToken) =>
       Effect.gen(function* () {
         if (threadIdValue !== threadId) return yield* Effect.fail(unavailable("turn/start"))
         turnCwds.push(cwd)
         turnTexts.push(text)
         associationAtTurn = associatedRecord
         turnNumber += 1
-        currentTurn = { id: CodexTurnId.make(`codex-turn-${turnNumber}`), status: "inProgress", items: [] }
+        if (turnNumber === 1 && options.manualBeforeFirstTurn === true) turns.push(manualTurn("manual-before"))
+        currentTurn = {
+          id: CodexTurnId.make(`codex-turn-${turnNumber}`),
+          status: "inProgress",
+          items: [],
+          ...(ownedTurnToken === undefined ? {} : { ownedTurnToken })
+        }
         turns.push(currentTurn)
         currentThread = { ...currentThread, cwd, status: "active", turns }
         if (
@@ -166,7 +193,8 @@ const makeHarness = (
       Effect.sync(() => {
         if (threadIdValue !== threadId || currentTurn?.id !== turnId) return
         currentTurn = { ...currentTurn, status: "interrupted" }
-        turns[turns.length - 1] = currentTurn
+        const currentIndex = turns.findIndex((turn) => turn.id === currentTurn?.id)
+        if (currentIndex >= 0) turns[currentIndex] = currentTurn
         currentThread = { ...currentThread, status: "idle", turns }
       }),
     listBackgroundTerminals: () =>
@@ -186,7 +214,7 @@ const makeHarness = (
         return record === undefined ? Option.none() : Option.some(record)
       }),
     writeAttempt: (record) => {
-      if (record.phase === "AssociatedPreTurn" && options.failAssociatedWriteOnce === true && !associatedWriteFailure) {
+      if (record._tag === "AssociatedPreTurn" && options.failAssociatedWriteOnce === true && !associatedWriteFailure) {
         associatedWriteFailure = true
         return Effect.fail(
           new CodexAttemptStoreFailure({ detail: "controlled association write lost", operation: "writeAttempt" })
@@ -194,7 +222,7 @@ const makeHarness = (
       }
       return Effect.sync(() => {
         records.set(keyOf(record.correlationRunId, record.correlationAttemptId), record)
-        if (record.phase === "AssociatedPreTurn") associatedRecord = record
+        if (record._tag === "AssociatedPreTurn") associatedRecord = record
       })
     },
     readServerLaunch: () => Effect.succeed(Option.none()),
@@ -211,6 +239,8 @@ const makeHarness = (
     threadStarts: () => threadStartCount,
     turnCount: () => turnNumber,
     associationAtTurn: () => associationAtTurn,
+    currentThread: () => currentThread,
+    currentRecord: () => records.get(keyOf(attempt.runId, attempt.attemptId)),
     complete: (message) => {
       if (currentTurn === undefined) return
       currentTurn = {
@@ -221,8 +251,10 @@ const makeHarness = (
           { type: "agentMessage", text: message }
         ]
       }
-      turns[turns.length - 1] = currentTurn
+      const currentIndex = turns.findIndex((turn) => turn.id === currentTurn?.id)
+      if (currentIndex >= 0) turns[currentIndex] = currentTurn
       currentThread = { ...currentThread, status: "idle", turns }
+      if (options.manualAfterFirstTurn === true && turnNumber === 1) turns.push(manualTurn("manual-after"))
     },
     makeTerminalActivity: () => {
       terminalActivity = true
@@ -232,6 +264,47 @@ const makeHarness = (
     },
     makeForeignResume: () => {
       foreignResume = true
+    },
+    addManualTurn: (position) => {
+      const manual = manualTurn(`manual-${position}-${turns.length}`)
+      if (position === "before") turns.unshift(manual)
+      else turns.push(manual)
+      currentThread = { ...currentThread, turns }
+    },
+    reorderTurns: () => {
+      currentThread = { ...currentThread, turns: [...currentThread.turns].reverse() }
+    },
+    duplicateOwnedTurn: () => {
+      if (currentTurn === undefined || currentTurn.ownedTurnToken === undefined) return
+      turns.push({ ...currentTurn, id: CodexTurnId.make("duplicate-owned-turn") })
+      currentThread = { ...currentThread, turns }
+    },
+    contradictOwnedTurnId: () => {
+      if (currentTurn === undefined) return
+      const previousId = currentTurn.id
+      currentTurn = { ...currentTurn, id: CodexTurnId.make("contradictory-owned-turn") }
+      const currentIndex = turns.findIndex((turn) => turn.id === previousId)
+      if (currentIndex >= 0) turns[currentIndex] = currentTurn
+      currentThread = { ...currentThread, turns }
+    },
+    addForeignOwnedTurn: () => {
+      turns.push({
+        id: CodexTurnId.make("foreign-owned-turn"),
+        status: "completed",
+        items: [{ type: "agentMessage", text: "foreign activity" }],
+        ownedTurnToken: CodexOwnedTurnToken.make("foreign-owned-token")
+      })
+      currentThread = { ...currentThread, turns }
+    },
+    makeForeignTurnCorrelation: () => {
+      if (currentTurn === undefined) return
+      currentTurn = {
+        ...currentTurn,
+        correlation: { runId: RunId.make("foreign-turn-run"), attemptId: AttemptId.make("foreign-turn-attempt") }
+      }
+      const currentIndex = turns.findIndex((turn) => turn.id === currentTurn?.id)
+      if (currentIndex >= 0) turns[currentIndex] = currentTurn
+      currentThread = { ...currentThread, turns }
     }
   }
 }
@@ -253,7 +326,8 @@ const layerFor = (
         Layer.succeed(GitCommand, gitCommand),
         evidenceStore
       )
-    )
+    ),
+    Layer.provide(NodeServices.layer)
   )
 
 it.effect("persists the exact association before the first turn and seals Accepted from reread evidence", () => {
@@ -262,10 +336,19 @@ it.effect("persists the exact association before the first turn and seals Accept
     const executor = yield* PlannedAttemptExecutor
     const first = yield* executor.startOrContinue(request)
     expect(first).toEqual(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
-    expect(harness.associationAtTurn()?.phase).toBe("AssociatedPreTurn")
+    expect(harness.associationAtTurn()?._tag).toBe("AssociatedPreTurn")
     expect(harness.associationAtTurn()?.worktree).toBe(worktree)
     expect(harness.turnCwds).toEqual([worktree])
     expect(harness.turnTexts[0]).toContain(`base_sha: ${attempt.baseSha}`)
+    const runningRecord = harness.currentRecord()
+    expect(runningRecord?._tag).toBe("Running")
+    if (runningRecord?._tag === "Running") {
+      const ownedTurns = harness
+        .currentThread()
+        .turns.filter((turn) => turn.ownedTurnToken === runningRecord.currentToken)
+      expect(ownedTurns).toHaveLength(1)
+      expect(ownedTurns[0]?.id).toBe(runningRecord.observedTurnId)
+    }
 
     harness.complete(`Accepted commit ${head}`)
     const accepted = yield* executor.startOrContinue(request)
@@ -273,6 +356,15 @@ it.effect("persists the exact association before the first turn and seals Accept
     if (accepted._tag === "Terminal") {
       expect(accepted.result._tag).toBe("Accepted")
       if (accepted.result._tag === "Accepted") expect(accepted.result.acceptedResult.commit).toBe(head)
+    }
+    const terminalRecord = harness.currentRecord()
+    expect(terminalRecord?._tag).toBe("Terminal")
+    if (terminalRecord?._tag === "Terminal") {
+      const ownedTurns = harness
+        .currentThread()
+        .turns.filter((turn) => turn.ownedTurnToken === terminalRecord.currentToken)
+      expect(ownedTurns).toHaveLength(1)
+      expect(ownedTurns[0]?.id).toBe(terminalRecord.observedTurnId)
     }
     expect(harness.turnCount()).toBe(1)
 
@@ -304,6 +396,15 @@ it.effect("reconciles a lost turn response without sending a second turn", () =>
     const accepted = yield* executor.startOrContinue(request)
     expect(accepted._tag).toBe("Terminal")
     expect(harness.turnCount()).toBe(1)
+    const terminalRecord = harness.currentRecord()
+    expect(terminalRecord?._tag).toBe("Terminal")
+    if (terminalRecord?._tag === "Terminal") {
+      const ownedTurns = harness
+        .currentThread()
+        .turns.filter((turn) => turn.ownedTurnToken === terminalRecord.currentToken)
+      expect(ownedTurns).toHaveLength(1)
+      expect(ownedTurns[0]?.id).toBe(terminalRecord.observedTurnId)
+    }
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -420,6 +521,8 @@ it.effect("reports safe suspension after an interrupted turn and resumes the sam
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     yield* executor.startOrContinue(request)
+    const firstTurnRecord = harness.currentRecord()
+    expect(firstTurnRecord?._tag).toBe("Running")
     const suspended = yield* executor.requestSuspension(attempt)
     expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
     expect(harness.threadStarts()).toBe(1)
@@ -428,6 +531,16 @@ it.effect("reports safe suspension after an interrupted turn and resumes the sam
     expect(resumed._tag).toBe("Running")
     expect(harness.threadStarts()).toBe(1)
     expect(harness.turnCount()).toBe(2)
+    const continuationRecord = harness.currentRecord()
+    expect(continuationRecord?._tag).toBe("Running")
+    if (continuationRecord?._tag === "Running") {
+      expect(continuationRecord.priorObservedTurnId).toBe(firstTurnRecord?.observedTurnId ?? null)
+      const ownedTurns = harness
+        .currentThread()
+        .turns.filter((turn) => turn.ownedTurnToken === continuationRecord.currentToken)
+      expect(ownedTurns).toHaveLength(1)
+      expect(ownedTurns[0]?.id).toBe(continuationRecord.observedTurnId)
+    }
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -436,16 +549,94 @@ it.effect("reconciles a lost continuation response against the later turn withou
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     yield* executor.startOrContinue(request)
+    const firstTurnRecord = harness.currentRecord()
+    expect(firstTurnRecord?._tag).toBe("Running")
     const suspended = yield* executor.requestSuspension(attempt)
     expect(suspended._tag).toBe("SafelySuspended")
 
     const resumed = yield* executor.startOrContinue(request)
     expect(resumed._tag).toBe("Running")
     expect(harness.turnCount()).toBe(2)
+    const continuationRecord = harness.currentRecord()
+    expect(continuationRecord?._tag).toBe("Running")
+    if (continuationRecord?._tag === "Running") {
+      expect(continuationRecord.priorObservedTurnId).toBe(
+        firstTurnRecord?._tag === "Running" ? firstTurnRecord.observedTurnId : null
+      )
+      const ownedTurns = harness
+        .currentThread()
+        .turns.filter((turn) => turn.ownedTurnToken === continuationRecord.currentToken)
+      expect(ownedTurns).toHaveLength(1)
+      expect(ownedTurns[0]?.id).toBe(continuationRecord.observedTurnId)
+    }
 
     harness.complete(`Commit ${head}`)
     const accepted = yield* executor.startOrContinue(request)
     expect(accepted._tag).toBe("Terminal")
     expect(harness.turnCount()).toBe(2)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("matches the owned turn by token across manual turns and reordered snapshots", () => {
+  const harness = makeHarness({ manualBeforeFirstTurn: true, manualAfterFirstTurn: true, reorderTurnsOnResume: true })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.complete(`Commit ${head}`)
+    const accepted = yield* executor.startOrContinue(request)
+    expect(accepted._tag).toBe("Terminal")
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("preserves foreign-token turns while reporting the exact owned turn", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.addForeignOwnedTurn()
+    const projected = yield* executor.project(correlation)
+    expect(projected._tag).toBe("Exact")
+    if (projected._tag === "Exact") expect(projected.report._tag).toBe("Running")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("maps duplicate owned tokens to an unreadable projection without choosing a turn", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.duplicateOwnedTurn()
+    const projected = yield* executor.project(correlation)
+    expect(projected._tag).toBe("Unreadable")
+    const retried = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    expect(retried._tag).toBe("Failure")
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("maps an owned token to a contradictory turn id without choosing a turn", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.contradictOwnedTurnId()
+    const projected = yield* executor.project(correlation)
+    expect(projected._tag).toBe("Unreadable")
+    const retried = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    expect(retried._tag).toBe("Failure")
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("maps a foreign correlation on the owned token to a contradiction", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    harness.makeForeignTurnCorrelation()
+    const projected = yield* executor.project(correlation)
+    expect(projected._tag).toBe("CorrelationContradiction")
+    expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
 })
