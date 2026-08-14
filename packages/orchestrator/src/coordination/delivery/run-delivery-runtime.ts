@@ -35,7 +35,6 @@ import { proposalIsPresent } from "./live-delivery-action.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
-export { proposalIsPresent } from "./live-delivery-action.js"
 
 /** Reconfirmation was allowed without one exact accepted established graph, so G2 cannot be ordered after G1. */
 export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedError<DeliveryRuntimeReconfirmationStateInvalid>()(
