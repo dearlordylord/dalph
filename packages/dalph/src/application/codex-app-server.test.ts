@@ -146,13 +146,16 @@ const controlledStoreWithFailure = (
       ? Effect.gen(function* () {
           const projection = yield* observe(_owner)
           if (failureMode === "lease-observation" && projection._tag !== "ExactLive") {
-            yield* new CodexAttemptStoreFailure({
+            return yield* new CodexAttemptStoreFailure({
               detail: "lease owner cannot be reclaimed",
               operation: "acquireServerLease"
             })
           }
           if (failureMode === "lease-exact") {
-            yield* new CodexAttemptStoreFailure({ detail: "lease admission failed", operation: "acquireServerLease" })
+            return yield* new CodexAttemptStoreFailure({
+              detail: "lease admission failed",
+              operation: "acquireServerLease"
+            })
           }
         })
       : Effect.void,
