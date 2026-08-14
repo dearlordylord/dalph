@@ -33,6 +33,7 @@ import {
 import {
   nodeRepositoryVerificationWrapperLayer,
   nodeTargetVerificationBoundaryLayer,
+  repositoryVerificationBoundaryLayer,
   RepositoryVerificationWrapper,
   RepositoryVerificationWrapperFailure,
   RepositoryVerificationWrapperInterrupted,
@@ -130,6 +131,8 @@ emit({ _tag: "Acquired", requestId: request.requestId })
 emit({ _tag: "Failed", requestId: request.requestId, detail: "guarded command failed" })
 process.exitCode = 2
 `
+
+const oversizedWrapperScript = `process.stdout.write("x".repeat(16 * 1024 * 1024 + 1))`
 
 const lockHolderScript = `
 const fs = require("node:fs")
@@ -231,6 +234,22 @@ describe("repository verification wrapper node adapter", () => {
     }).pipe(Effect.provide(nodeWrapperLayer(signalWrapperScript)))
   )
 
+  it.effect("normalizes wrapper process spawn failure before any lifecycle observation", () =>
+    Effect.gen(function* () {
+      const wrapper = yield* RepositoryVerificationWrapper
+      const failure = yield* wrapper.runOrResume(request).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({ _tag: "RepositoryVerificationWrapperFailure", observations: [] })
+    }).pipe(
+      Effect.provide(
+        nodeRepositoryVerificationWrapperLayer({
+          args: [],
+          executable: TargetVerificationWrapperExecutable.make("/dalph/does-not-exist/verification-wrapper")
+        }).pipe(Layer.provide(NodeServices.layer))
+      )
+    )
+  )
+
   it.effect("rejects malformed or incomplete wrapper output", () =>
     Effect.gen(function* () {
       const wrapper = yield* RepositoryVerificationWrapper
@@ -240,6 +259,18 @@ describe("repository verification wrapper node adapter", () => {
       expect(failure).toMatchObject({ requestId: request.requestId })
       expect(failure.observations.map((observation) => observation._tag)).toEqual(["Waiting", "Acquired"])
     }).pipe(Effect.provide(nodeWrapperLayer(malformedWrapperScript)))
+  )
+
+  it.effect("rejects wrapper output beyond the fixed public boundary", () =>
+    Effect.gen(function* () {
+      const wrapper = yield* RepositoryVerificationWrapper
+      const failure = yield* wrapper.runOrResume(request).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        detail: "wrapper output exceeded the bounded limit",
+        requestId: request.requestId
+      })
+    }).pipe(Effect.provide(nodeWrapperLayer(oversizedWrapperScript)))
   )
 
   it.effect("maps wrapper failure and missing release to a fail-closed boundary failure", () =>
@@ -255,6 +286,52 @@ describe("repository verification wrapper node adapter", () => {
           args: ["-e", failedWrapperScript],
           executable: TargetVerificationWrapperExecutable.make(execPath)
         }).pipe(Layer.provide(NodeServices.layer))
+      )
+    )
+  )
+
+  it.effect("returns the exact successful terminal through the provider-neutral boundary", () =>
+    Effect.gen(function* () {
+      const boundary = yield* TargetVerificationBoundary
+      const terminal = yield* boundary.runOrResume(request)
+
+      expect(terminal).toMatchObject({ _tag: "Passed", correlation: request })
+    }).pipe(
+      Effect.provide(
+        nodeTargetVerificationBoundaryLayer({
+          args: ["-e", passedWrapperScript],
+          executable: TargetVerificationWrapperExecutable.make(execPath)
+        }).pipe(Layer.provide(NodeServices.layer))
+      )
+    )
+  )
+
+  it.effect("preserves an interrupted wrapper signal at the provider-neutral boundary", () =>
+    Effect.gen(function* () {
+      const boundary = yield* TargetVerificationBoundary
+      const failure = yield* boundary.runOrResume(request).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({ detail: "SIGTERM: controlled interruption", requestId: request.requestId })
+    }).pipe(
+      Effect.provide(
+        repositoryVerificationBoundaryLayer.pipe(
+          Layer.provide(
+            Layer.succeed(
+              RepositoryVerificationWrapper,
+              RepositoryVerificationWrapper.of({
+                runOrResume: () =>
+                  Effect.fail(
+                    new RepositoryVerificationWrapperInterrupted({
+                      detail: "controlled interruption",
+                      observations: [],
+                      requestId: request.requestId,
+                      signal: "SIGTERM"
+                    })
+                  )
+              })
+            )
+          )
+        )
       )
     )
   )
