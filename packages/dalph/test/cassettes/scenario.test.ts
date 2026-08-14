@@ -33,13 +33,17 @@ import {
   ContradictoryWorktreeState,
   CompletionClaimReplacedEvent,
   CompletionClaimReplacementIntendedEvent,
+  CompletionTaskAuthorizationReadOrdinal,
   CompletionTaskClaim,
   CompletionTaskBoundary,
+  CompletionTaskFocusedReadPurpose,
   CompletionTaskRequestLookup,
   CompletionTaskRequestOrdinal,
   completionClaimReplacementOperationIdFor,
+  completionTaskRequestFor,
   decodeFreshWorkflowRunIdForDiagnostics,
   deriveIntegrationFrontier,
+  deriveIntegrationAdmission,
   deriveRunnableFrontier,
   describeJournalEvent,
   EvidenceDigest,
@@ -75,6 +79,7 @@ import {
   projectWorkflowOccurrences,
   projectTrackerSnapshot,
   reduceWorkflowJournalHistory,
+  readCompletionCandidateAncestry,
   RunPolicyRevision,
   TrackerRevision,
   TrackerMutation,
@@ -84,6 +89,8 @@ import {
   TaskClaimReleaseAuthority,
   TaskLifecycle,
   TaskTrackerFactsObservedEvent,
+  TargetPromotionGit,
+  TargetPromotionGitReadObservation,
   taskTrackerReadIntent,
   taskRevisionFor,
   UntrackedWorktreePath,
@@ -2607,6 +2614,109 @@ it.effect("preserves the candidate and releases integration when a blocker appea
   })
 )
 
+it.effect("clears the pre-promotion edge and records one compatible H2 successor", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(
+      maintainedAuthoredCassetteCatalog.prePromotionBlockerClearAndSupersession
+    )
+    const dependencyWaitFrame = run.deliveryFrames.find((frame) =>
+      frame.deliveries.some((delivery) =>
+        delivery.evidence.some(
+          (evidence) => evidence.kind === "IntegrationWait" && evidence.exact.includes("IntegrationDependencyWait")
+        )
+      )
+    )
+    expect(dependencyWaitFrame).toBeDefined()
+    const blockerFrame = run.deliveryFrames.find(
+      (frame) => frame.graph._tag === "Established" && frame.graph.revision === "issue-138-pre-promotion-blocker"
+    )
+    expect(blockerFrame?.frontier).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: "A", standing: "Excluded" }),
+        expect.objectContaining({ taskId: "B", standing: "Eligible" }),
+        expect.objectContaining({ taskId: "C", standing: "Eligible" })
+      ])
+    )
+    const clearedFrame = run.deliveryFrames.find(
+      (frame) => frame.graph._tag === "Established" && frame.graph.revision === "issue-138-pre-promotion-edge-removed"
+    )
+    expect(clearedFrame?.frontier).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: "A", standing: "Eligible" }),
+        expect.objectContaining({ taskId: "B", standing: "Excluded" }),
+        expect.objectContaining({ taskId: "C", standing: "Excluded" })
+      ])
+    )
+    const blockerRecordIndex = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "CompleteTaskTrackerFacts" &&
+        event.observation.factFamilies[0].contentIdentity === "issue-138-pre-promotion-blocker"
+    )
+    expect(blockerRecordIndex).toBeGreaterThan(0)
+    const blockedHistory = reduceWorkflowJournalHistory(run.runId, run.records.slice(0, blockerRecordIndex + 1))
+    if (blockedHistory._tag !== "ValidWorkflowJournalHistory") {
+      return yield* Effect.die("pre-promotion blocker prefix must remain valid journal history")
+    }
+    const started = deriveIntegrationAdmission(blockedHistory.runState.workflowHistory.records).responsibilities.find(
+      (responsibility) => responsibility._tag === "StartedIntegrationResponsibility"
+    )
+    if (started?._tag !== "StartedIntegrationResponsibility") {
+      return yield* Effect.die("pre-promotion blocker prefix must retain its started integration responsibility")
+    }
+    expect(
+      deriveIntegrationFrontier(blockedHistory.runState, {
+        currentTrackerTaskIds: new Set([TaskId.make("A"), TaskId.make("B"), TaskId.make("C")]),
+        heldResponsibilityPositions: new Set([started.queuedAt]),
+        integrationTarget: Option.some(
+          IntegrationTarget.make({
+            repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
+            ref: IntegrationTargetRef.make("refs/heads/master")
+          })
+        ),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(started.plannedAttempt.attemptId)
+      }).transitions
+    ).toContainEqual(
+      expect.objectContaining({
+        _tag: "ReleaseStartedIntegrationTarget",
+        responsibility: expect.objectContaining({ queuedAt: started.queuedAt })
+      })
+    )
+    const lineageObservations = run.records.flatMap(({ event }) =>
+      event._tag === "TargetLineageObserved" ? [event.observation.targetHeadSha] : []
+    )
+    expect(lineageObservations).toEqual([
+      "1111111111111111111111111111111111111111",
+      "2222222222222222222222222222222222222222"
+    ])
+    const candidateVerifications = run.records.flatMap(({ event }) =>
+      event._tag === "TargetVerificationIntended" ? [event.correlation.candidateCommit] : []
+    )
+    expect(candidateVerifications).toEqual([
+      "cccccccccccccccccccccccccccccccccccccccc",
+      "dddddddddddddddddddddddddddddddddddddddd"
+    ])
+    expect(run.records.filter(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "IntegrationCandidateConstructionIntended")).toHaveLength(2)
+    expect(run.records.some(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toBe(false)
+    expect(run.records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(false)
+    expect(run.records.some(({ event }) => event._tag.startsWith("TargetPromotion"))).toBe(false)
+    expect(run.records.some(({ event }) => event._tag.startsWith("Completion"))).toBe(false)
+  })
+)
+
+it.effect("restarts after a durable blocker read with the candidate and queue history intact", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.prePromotionBlockerRecovery)
+    expect(run.activationOrdinals.length).toBeGreaterThan(1)
+    expect(run.records.some(({ event }) => event._tag === "TaskTrackerFactsObserved")).toBe(true)
+    expect(run.records.some(({ event }) => event._tag === "IntegrationCandidateConstructed")).toBe(true)
+    expect(run.records.some(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toBe(false)
+    expect(run.records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(false)
+    expect(run.records.filter(({ event }) => event._tag === "IntegrationCandidateConstructionIntended")).toHaveLength(1)
+  })
+)
+
 it.effect("preserves promotion proof and waits before tracker completion on a new blocker", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(blockersAroundPromotionAuthoredCassette)
@@ -2640,6 +2750,82 @@ it.effect("preserves accepted tracker completion when a prerequisite concurrentl
     expect(acknowledgement?.event._tag).toBe("CompletionTaskAcknowledged")
     expect(success?.event._tag).toBe("TaskTrackerFactsObserved")
     expect(laterGraph?.event._tag).toBe("TaskTrackerFactsObserved")
+    const graphAt = (revision: string) =>
+      run.records.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies.some(
+            ({ contentIdentity }) => contentIdentity === TrackerRevision.make(revision)
+          )
+      )
+    const completeBeforeAuthorization = Option.getOrThrow(
+      Option.fromUndefinedOr(graphAt("delivery-story-prerequisite-complete"))
+    )
+    const reopenedBeforeAcknowledgement = Option.getOrThrow(
+      Option.fromUndefinedOr(graphAt("delivery-story-prerequisite-reopened"))
+    )
+    const laterACompleteBUnfinished = Option.getOrThrow(Option.fromUndefinedOr(graphAt("delivery-story-G6")))
+    const bCompletedAfterItsWork = Option.getOrThrow(
+      Option.fromUndefinedOr(graphAt("delivery-story-prerequisite-completed"))
+    )
+    const deliveryFrameAt = (revision: string) =>
+      run.deliveryFrames.find(({ graph }) => graph._tag === "Established" && graph.revision === revision)
+    const bFrontierAt = (revision: string) => deliveryFrameAt(revision)?.frontier.find(({ taskId }) => taskId === "B")
+    const reopenedB = bFrontierAt("delivery-story-prerequisite-reopened")
+    const completedB = bFrontierAt("delivery-story-prerequisite-completed")
+    expect(reopenedB?.standing).toBe("Excluded")
+    expect(reopenedB?.reasons).toContainEqual(expect.objectContaining({ kind: "PrerequisitesIncomplete" }))
+    expect(completedB?.standing).toBe("Excluded")
+    expect(completedB?.reasons).not.toContainEqual(expect.objectContaining({ kind: "PrerequisitesIncomplete" }))
+    const graphPositions = [
+      completeBeforeAuthorization,
+      reopenedBeforeAcknowledgement,
+      laterACompleteBUnfinished,
+      bCompletedAfterItsWork
+    ].map((record) => record.position)
+    expect(graphPositions).toEqual(graphPositions.toSorted((left, right) => left - right))
+    expect(
+      reopenedBeforeAcknowledgement.event._tag === "TaskTrackerFactsObserved" &&
+        reopenedBeforeAcknowledgement.event.observation._tag === "CompleteTaskTrackerFacts" &&
+        reopenedBeforeAcknowledgement.event.observation.factFamilies[1].lifecycles.some(
+          ({ lifecycle, taskId }) => taskId === TaskId.make("B") && lifecycle._tag === "Open"
+        )
+    ).toBe(true)
+    expect(
+      laterACompleteBUnfinished.event._tag === "TaskTrackerFactsObserved" &&
+        laterACompleteBUnfinished.event.observation._tag === "CompleteTaskTrackerFacts" &&
+        laterACompleteBUnfinished.event.observation.factFamilies[1].lifecycles.some(
+          ({ lifecycle, taskId }) => taskId === TaskId.make("A") && lifecycle._tag === "CompletedSuccessfully"
+        ) &&
+        laterACompleteBUnfinished.event.observation.factFamilies[1].lifecycles.some(
+          ({ lifecycle, taskId }) => taskId === TaskId.make("B") && lifecycle._tag === "Open"
+        )
+    ).toBe(true)
+    expect(
+      bCompletedAfterItsWork.event._tag === "TaskTrackerFactsObserved" &&
+        bCompletedAfterItsWork.event.observation._tag === "CompleteTaskTrackerFacts" &&
+        bCompletedAfterItsWork.event.observation.factFamilies[1].lifecycles.some(
+          ({ lifecycle, taskId }) => taskId === TaskId.make("B") && lifecycle._tag === "CompletedSuccessfully"
+        )
+    ).toBe(true)
+    expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAcknowledged")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "CompletionTaskIntended")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
+    expect(run.records.some(({ event }) => event._tag === "CompletionTaskRejected")).toBe(false)
+    expect(
+      run.deliveryFrames.some(({ frontier }) =>
+        frontier.some(
+          ({ reasons, standing, taskId }) =>
+            taskId === "B" && standing === "Excluded" && reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
+        )
+      )
+    ).toBe(true)
+    expect(
+      run.deliveryFrames.some(({ frontier }) =>
+        frontier.some(({ standing, taskId }) => taskId === "B" && standing === "Eligible")
+      )
+    ).toBe(true)
     expect(recorded.entries.some(({ _tag }) => _tag === "CompletionTaskAcknowledged")).toBe(true)
     expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
     expectRecordedRoundTrip(run.records, recorded)
@@ -3104,6 +3290,58 @@ it.effect("preserves promoted M across a post-promotion blocker and resumes its 
     expect(
       completionClaimBlockedHistory.records.filter(({ event }) => event._tag === "CompletionClaimReplaced")
     ).toHaveLength(1)
+
+    const completionRequest = completionTaskRequestFor(claim)
+    const ancestryPurpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+      attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+      authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(1)
+    })
+    const ancestryRecordsRef = yield* Ref.make(clearRecords)
+    const ancestryJournal = InRunJournal.of({
+      append: (runId, key, event) =>
+        Effect.gen(function* () {
+          const records = yield* Ref.get(ancestryRecordsRef)
+          const existing = records.find((record) => record.runId === runId && record.key === key)
+          if (existing !== undefined) return existing
+          const record = { event, key, position: JournalPosition.make(records.length + 1), runId }
+          yield* Ref.set(ancestryRecordsRef, [...records, record])
+          return record
+        }),
+      read: (runId) =>
+        Ref.get(ancestryRecordsRef).pipe(Effect.map((records) => records.filter((record) => record.runId === runId)))
+    })
+    const ancestry = yield* readCompletionCandidateAncestry(completionRequest, ancestryPurpose).pipe(
+      Effect.provideService(InRunJournal, ancestryJournal),
+      Effect.provideService(
+        TargetPromotionGit,
+        TargetPromotionGit.of({
+          compareAndSet: () => Effect.die("post-promotion ancestry cassette must not mutate Git"),
+          read: (request) =>
+            Effect.succeed(
+              TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: request.candidateCommit })
+            )
+        })
+      )
+    )
+    expect(ancestry.observation._tag).toBe("CandidateCurrent")
+    const clearAndAncestryRecords = yield* Ref.get(ancestryRecordsRef)
+    const resumed = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
+      maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
+      clearAndAncestryRecords
+    )
+    const resumedRecords = resumed.records.slice(clearAndAncestryRecords.length)
+    const ancestryAt = clearAndAncestryRecords.findIndex(
+      ({ event }) => event._tag === "CompletionTaskCandidateAncestryObserved"
+    )
+    const completionAt = resumedRecords.findIndex(({ event }) => event._tag === "IntegrationFinalitySettled")
+    expect(ancestryAt).toBeGreaterThanOrEqual(0)
+    expect(completionAt + clearAndAncestryRecords.length).toBeGreaterThan(ancestryAt)
+    expect(resumed.records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+    expect(
+      resumed.records.filter(({ event }) => event._tag === "IntegrationCandidateConstructionIntended")
+    ).toHaveLength(1)
+    expect(resumed.records.some(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded")).toBe(false)
+    expect(resumed.records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(true)
   })
 )
 
@@ -6761,6 +6999,7 @@ it.effect(
         CompletionClaimDeletionReadObserved: true,
         CompletionClaimDeleted: true,
         IntegrationFinalitySettled: true,
+        IntegrationCandidateSessionSuperseded: true,
         CompletionTaskIntended: true,
         CompletionTaskAttemptIntended: true,
         CompletionTaskAcknowledged: true,

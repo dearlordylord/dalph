@@ -675,8 +675,6 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification),
           priorCandidateCommit: preserveCassetteValue(candidateEntry.priorCandidateCommit),
           priorCorrelation: renameCandidateCorrelation(candidateEntry.priorCorrelation, maps),
-          responsibilityBeganAt: preserveCassetteValue(candidateEntry.responsibilityBeganAt),
-          startedAt: preserveCassetteValue(candidateEntry.startedAt),
           successorCorrelation: renameCandidateCorrelation(candidateEntry.successorCorrelation, maps)
         }),
       IntegrationCandidateAgentReported: (candidateEntry) =>

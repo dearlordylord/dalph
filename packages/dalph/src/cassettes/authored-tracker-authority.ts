@@ -4,6 +4,7 @@ import {
   CompletionClaimBoundary,
   CompletionTaskAcknowledgement,
   CompletionTaskBoundary,
+  type CompletionTaskRequest,
   CompletionTaskRequestFailure,
   CompletionTaskRequestLookup,
   type CompletionClaimObservation,
@@ -23,15 +24,29 @@ import { AuthoredCassetteInteractionMismatch, type StoryCursor } from "./authore
 type AuthoredInteractionMismatchReporter = (failure: AuthoredCassetteInteractionMismatch) => Effect.Effect<void>
 type AuthoredAcquisitionOperationLookup = (operationId: OperationId) => Effect.Effect<Option.Option<TaskId>>
 
+interface ControlledTrackerAuthorityOptions {
+  readonly reportInteractionMismatch?: AuthoredInteractionMismatchReporter
+  readonly lookupAcquisitionOperationTask?: AuthoredAcquisitionOperationLookup
+  /**
+   * Optional authored seam used by completion chronology cassettes.  The
+   * callback is invoked immediately before Q crosses the tracker boundary so
+   * a fresh graph observation can be journaled without pretending that the
+   * completion response itself changed the graph.
+   */
+  readonly beforeCompleteTask?: (request: CompletionTaskRequest) => Effect.Effect<void>
+}
+
 /** Owns one coherent authored tracker-claim authority across ordinary and completion-finality protocols. */
 export const controlledTrackerAuthorityLayer = (
   cursor: StoryCursor,
   tracker: TrackerMutation["Service"],
-  reportInteractionMismatch: AuthoredInteractionMismatchReporter = () => Effect.void,
-  lookupAcquisitionOperationTask: AuthoredAcquisitionOperationLookup = () => Effect.succeed(Option.none())
+  options: ControlledTrackerAuthorityOptions = {}
 ) =>
   Layer.unwrap(
     Effect.gen(function* () {
+      const reportInteractionMismatch = options.reportInteractionMismatch ?? (() => Effect.void)
+      const lookupAcquisitionOperationTask =
+        options.lookupAcquisitionOperationTask ?? (() => Effect.succeed(Option.none()))
       const authoredObservations = yield* Ref.make<ReadonlyMap<TaskId, CompletionClaimObservation>>(new Map())
       const currentObservation: TrackerMutation["Service"]["readTaskClaim"] = (taskId) =>
         Ref.get(authoredObservations).pipe(
@@ -298,6 +313,7 @@ export const controlledTrackerAuthorityLayer = (
           }),
         completeTask: (request) =>
           Effect.gen(function* () {
+            if (options.beforeCompleteTask !== undefined) yield* options.beforeCompleteTask(request)
             const returned = yield* cursor.consumeCompletionTaskRequestReturned.pipe(Effect.orDie)
             if (returned.taskId !== request.taskId) {
               return yield* Effect.die(`authored completion response returned ${returned.taskId} for ${request.taskId}`)

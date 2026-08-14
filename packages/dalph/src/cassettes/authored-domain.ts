@@ -1004,6 +1004,8 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
     taskClaims: Schema.Array(ActiveTaskClaim),
     taskWorkSpecifications: Schema.Array(AuthoredTaskWorkSpecification),
     targetLineageObservation: Schema.optionalKey(TargetLineageObservation),
+    /** Ordered Git target-lineage facts returned by successive production reads. */
+    targetLineageObservations: Schema.optionalKey(Schema.Array(TargetLineageObservation)),
     trackerGraph: AuthoredTrackerGraph,
     worktreeObservation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   }),

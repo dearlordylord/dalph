@@ -3393,6 +3393,24 @@ const issue138PrePromotionBlockerGraph = {
   ]
 } as const
 
+const issue138PrePromotionClearedGraph = {
+  revision: "issue-138-pre-promotion-edge-removed",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "B", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "C", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }
+  ]
+} as const
+
+const issue138PrePromotionRecoveryGraph = {
+  revision: "issue-138-pre-promotion-blocker-recovery",
+  tasks: [
+    { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["B"] },
+    { id: "B", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] },
+    { id: "C", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }
+  ]
+} as const
+
 const issue138PostPromotionBlockerGraph = {
   revision: "issue-138-post-promotion-blocker",
   tasks: [
@@ -3427,6 +3445,121 @@ export const prePromotionBlockerAuthoredCassette: ScenarioCassette = Schema.deco
     })
   }
 )
+
+/** The blocker clears, H advances to H2, and one compatible successor is recorded before promotion. */
+export const prePromotionBlockerClearAndSupersessionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...prePromotionBlockerAuthoredCassette,
+  name: "clears a pre-promotion blocker and supersedes H with one compatible H2 candidate",
+  startingFacts: {
+    ...prePromotionBlockerAuthoredCassette.startingFacts,
+    targetLineageObservations: [
+      {
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: "1111111111111111111111111111111111111111",
+        targetHeadSha: "1111111111111111111111111111111111111111"
+      },
+      {
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: "1111111111111111111111111111111111111111",
+        targetHeadSha: "2222222222222222222222222222222222222222"
+      }
+    ]
+  },
+  story: prePromotionBlockerAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === issue138PrePromotionBlockerGraph.revision) {
+      return [
+        item,
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+        { _tag: "TaskClaimCurrentReadReturned", taskId: "A" }
+      ]
+    }
+    if (item._tag !== "ExpectedBehavior") return [item]
+    return [
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionClearedGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionClearedGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+      {
+        _tag: "IntegrationCandidateAgentReported",
+        attemptId: "attempt:A:0",
+        report: { _tag: "Submitted", candidateCommit: "dddddddddddddddddddddddddddddddddddddddd" }
+      },
+      {
+        _tag: "IntegrationCandidateGitValidationReturned",
+        candidateCommit: "dddddddddddddddddddddddddddddddddddddddd",
+        observation: {
+          _tag: "Commit",
+          directParents: ["2222222222222222222222222222222222222222", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+        },
+        repository: "/dalph/cassettes/integration.git"
+      },
+      {
+        _tag: "TargetVerificationReturned",
+        result: { _tag: "Passed", artifacts: [{ name: "verification-report", content: "all selected checks passed" }] }
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionClearedGraph },
+      item.orchestration === null
+        ? item
+        : {
+            ...item,
+            orchestration: [
+              ...item.orchestration,
+              {
+                _tag: "IntegrationCandidateConstructed",
+                acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                attemptId: "attempt:A:0",
+                candidateCommit: "dddddddddddddddddddddddddddddddddddddddd",
+                expectedTargetHead: "2222222222222222222222222222222222222222",
+                taskId: "A"
+              },
+              {
+                _tag: "TargetVerificationPassed",
+                candidateCommit: "dddddddddddddddddddddddddddddddddddddddd",
+                planId: "public-checks-v1",
+                taskId: "A"
+              }
+            ]
+          }
+    ]
+  })
+})
+
+/** The complete blocker fact is durable before a crash; restart owns no target resource. */
+export const prePromotionBlockerRecoveryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...prePromotionBlockerAuthoredCassette,
+  name: "a pre-promotion blocker survives a crash with empty target ownership",
+  story: prePromotionBlockerAuthoredCassette.story.flatMap(
+    (item): ReadonlyArray<unknown> =>
+      item._tag === "TrackerGraphReadReturned" && item.graph.revision === issue138PrePromotionBlockerGraph.revision
+        ? [
+            item,
+            { _tag: "CoordinatorProcessDies" as const },
+            {
+              _tag: "DalphSelects" as const,
+              operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" as const }
+            },
+            { _tag: "TrackerGraphReadReturned" as const, graph: issue138PrePromotionRecoveryGraph },
+            { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId: "A" as const } },
+            { _tag: "TaskClaimCurrentReadReturned" as const, taskId: "A" as const },
+            {
+              _tag: "DalphSelects" as const,
+              operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" as const }
+            },
+            { _tag: "TrackerGraphReadReturned" as const, graph: issue138PrePromotionRecoveryGraph },
+            {
+              _tag: "CoordinatorActivationReturned" as const,
+              decision: { _tag: "RunMustRemainActive" as const, reason: "UnsettledResponsibility" as const }
+            }
+          ]
+        : [item]
+  )
+})
 
 /** A post-promotion blocker preserves M and its promotion proof while A waits. */
 export const blockersAroundPromotionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
@@ -3485,6 +3618,27 @@ const deliveryFinalityReleasedGraph = {
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
     lifecycle: { _tag: task.id === "B" ? ("Open" as const) : ("CompletedSuccessfully" as const) }
+  }))
+} as const
+
+const deliveryFinalityPrerequisiteCompleteGraph = {
+  revision: "delivery-story-prerequisite-complete",
+  tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
+    ...task,
+    lifecycle: { _tag: task.id === "B" ? ("CompletedSuccessfully" as const) : ("Open" as const) }
+  }))
+} as const
+
+const deliveryFinalityPrerequisiteReopenedGraph = {
+  revision: "delivery-story-prerequisite-reopened",
+  tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({ ...task, lifecycle: { _tag: "Open" as const } }))
+} as const
+
+const deliveryFinalityPrerequisiteCompletedGraph = {
+  revision: "delivery-story-prerequisite-completed",
+  tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
+    ...task,
+    lifecycle: { _tag: "CompletedSuccessfully" as const }
   }))
 } as const
 
@@ -3623,7 +3777,36 @@ export const prerequisiteReopensDuringCompletionAuthoredCassette: ScenarioCasset
     ...deliveryFinalitySpineAuthoredCassette.startingFacts,
     trackerGraph: deliveryFinalityStartingGraph
   },
-  story: deliveryFinalitySpineAuthoredCassette.story
+  // B is complete in the graph used to authorize A.  It reopens at a fresh,
+  // journaled graph read immediately before Q.  The accepted Q response and A
+  // completion remain historical and are never repaired by Dalph.
+  story: (() => {
+    let bWorkCompleted = false
+    return deliveryFinalitySpineAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+      if (
+        item._tag === "PlannedAttemptExecutorWorkReported" &&
+        item.report.attemptId === "attempt:B:0" &&
+        item.report._tag === "Terminal" &&
+        item.report.result._tag === "Completed"
+      ) {
+        bWorkCompleted = true
+      }
+      if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === "delivery-story-G5") {
+        return [{ ...item, graph: deliveryFinalityPrerequisiteCompleteGraph }]
+      }
+      if (bWorkCompleted && item._tag === "TrackerGraphReadReturned" && item.graph.revision === "delivery-story-G6") {
+        return [{ ...item, graph: deliveryFinalityPrerequisiteCompletedGraph }]
+      }
+      if (item._tag === "CompletionTaskRequestReturned" && item.outcome === "Acknowledged") {
+        return [
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+          { _tag: "TrackerGraphReadReturned", graph: deliveryFinalityPrerequisiteReopenedGraph },
+          item
+        ]
+      }
+      return [item]
+    })
+  })()
 })
 
 /** The same A-to-B story when the tracker applies Q but its direct response is lost. */
@@ -4631,6 +4814,8 @@ type MaintainedAuthoredCassetteName =
   | "candidateVerificationContradiction"
   | "candidateVerificationPassed"
   | "prePromotionBlocker"
+  | "prePromotionBlockerClearAndSupersession"
+  | "prePromotionBlockerRecovery"
   | "targetPromotionSuccess"
   | "blockersAroundPromotion"
   | "targetPromotionAmbiguityExhaustion"
@@ -4697,6 +4882,8 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     candidateVerificationContradiction: candidateVerificationContradictionAuthoredCassette,
     candidateVerificationPassed: candidateCorrectionAfterUnreadableGitAuthoredCassette,
     prePromotionBlocker: prePromotionBlockerAuthoredCassette,
+    prePromotionBlockerClearAndSupersession: prePromotionBlockerClearAndSupersessionAuthoredCassette,
+    prePromotionBlockerRecovery: prePromotionBlockerRecoveryAuthoredCassette,
     targetPromotionSuccess: targetPromotionSuccessAuthoredCassette,
     blockersAroundPromotion: blockersAroundPromotionAuthoredCassette,
     targetPromotionAmbiguityExhaustion: targetPromotionAmbiguityExhaustionAuthoredCassette,

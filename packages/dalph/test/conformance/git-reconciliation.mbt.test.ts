@@ -2,8 +2,14 @@ import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import {
+  AcceptedResult,
+  EvidenceDigest,
+  EvidenceReference,
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -12,20 +18,56 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import {
+  CandidateContinuationLimit,
+  CandidateCorrectionLimit,
+  continueIntegrationCandidateConstruction,
   decideResultCommitQualification,
   decideGitFactPreservation,
   decideTargetLineage,
   decideTargetPromotion,
   deriveRunnableFrontier,
+  deriveIntegrationFrontier,
+  FixtureTarget,
+  InitialControlPolicy,
+  InRunJournal,
+  IntegrationCandidateAgent,
+  IntegrationCandidateAgentReport,
+  IntegrationCandidateGit,
+  IntegrationCandidateGitObservation,
+  GitReadIntentRecordedEvent,
+  intentRecordKey,
   JournalPosition,
+  JournalStore,
+  legacyMemoryJournalStoreLayer,
+  makeCompleteTaskTrackerFactsObserved,
+  makeTrackerGraphObservationOperation,
+  makeTargetLineageObservationOperation,
+  OperationId,
   PromotionTargetObservation,
+  projectTrackerSnapshot,
   responsibilityDispositionForTargetLineage,
   ResponsibilityDisposition,
   ResultCommitObservation,
-  TargetLineageObservation
+  TaskWorkCapacity,
+  TargetLineageObservation,
+  TargetLineageObservedEvent,
+  taskTrackerReadIntent
 } from "@dalph/orchestrator"
-import { Effect, Schema } from "effect"
+import { taskTrackerFactsObservedEvent } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+import {
+  integrationResponsibilityBeganRecordKey,
+  integrationStartedRecordKey,
+  outcomeRecordKey
+} from "../../../orchestrator/src/workflow-journal/record-key.js"
+import { reconstructRunState } from "../../../orchestrator/src/coordination/reconstruction/reduce.js"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../../../orchestrator/src/workflow/protocols/integration-admission/events.js"
+import { makeIntegrationTargetResourceController } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
+import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
 
 type Constraint =
   | "NoGitConstraint"
@@ -58,6 +100,312 @@ const responsibility = {
 const independentTask = {
   taskId: TaskId.make("git-reconciliation-model-C"),
   taskRevision: TaskRevision.make("git-reconciliation-model-C-revision")
+}
+
+/**
+ * The issue-138 model actions use one real journal and one real target-resource
+ * owner per driver.  The model projection below is still intentionally small,
+ * but every blocker, reread, supersession, and restart goes through the same
+ * production append/reconstruct/frontier seams as the coordinator.
+ */
+const makeProductionReconciliationTrace = () => {
+  const context = Effect.runSync(Effect.scoped(Layer.build(legacyMemoryJournalStoreLayer)))
+  const journalStore = Context.get(context, JournalStore)
+  const journal = Context.get(context, InRunJournal)
+  const runId = RunId.make("git-reconciliation-production-run")
+  const target = FixtureTarget.make("git-reconciliation-production-target")
+  const integrationTarget = IntegrationTarget.make({
+    repository: GitRepositoryLocator.make("/repositories/git-reconciliation-production.git"),
+    ref: IntegrationTargetRef.make("refs/heads/main")
+  })
+  const acceptedResult = AcceptedResult.make({
+    commit: GitCommitSha.make("8".repeat(40)),
+    evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("8".repeat(64)) })
+  })
+  const productionAttempt = PlannedTaskAttempt.make({
+    attemptId: AttemptId.make("git-reconciliation-production-attempt"),
+    baseSha: base,
+    branch: TaskBranchRef.make("refs/heads/dalph/git-reconciliation-production"),
+    executor: TaskExecutorLocator.make("executor:git-reconciliation-production"),
+    runId,
+    taskId: TaskId.make("git-reconciliation-production-A"),
+    taskRevision: TaskRevision.make("git-reconciliation-production-revision"),
+    worktree: WorktreeLocator.make("/worktrees/git-reconciliation-production")
+  })
+  const started = {
+    _tag: "StartedIntegrationResponsibility" as const,
+    acceptedResult,
+    integrationTarget,
+    plannedAttempt: productionAttempt,
+    queuedAt: JournalPosition.make(2),
+    startedAt: JournalPosition.make(3)
+  }
+  const candidateCorrectionLimit = CandidateCorrectionLimit.make(2)
+  const candidateContinuationLimit = CandidateContinuationLimit.make(2)
+  const candidateForHead = (head: GitCommitSha) => (head === base ? candidate : GitCommitSha.make("5".repeat(40)))
+  const candidateAgent = IntegrationCandidateAgent.of({
+    startOrContinue: (request) =>
+      Effect.succeed(
+        IntegrationCandidateAgentReport.cases.Submitted.make({
+          candidateCommit: candidateForHead(request.correlation.expectedTargetHead),
+          correlation: request.correlation,
+          reviewManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("9".repeat(64)) })
+        })
+      )
+  })
+  const candidateGit = IntegrationCandidateGit.of({
+    readSubmittedCommit: (_repository, submitted) =>
+      Effect.succeed(
+        IntegrationCandidateGitObservation.cases.Commit.make({
+          directParents: [submitted === candidate ? base : advanced, acceptedResult.commit]
+        })
+      )
+  })
+  const resource = Effect.runSync(makeIntegrationTargetResourceController())
+  const physicalResponsibility = { integrationTarget, queuedAt: started.queuedAt }
+  let targetLineage: TargetLineageObservation = TargetLineageObservation.make({
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: base,
+    targetHeadSha: base
+  })
+  let operationOrdinal = 0
+
+  const append = (
+    key: Parameters<InRunJournal["Service"]["append"]>[1],
+    event: Parameters<InRunJournal["Service"]["append"]>[2]
+  ) => Effect.runSync(journal.append(runId, key, event))
+  const records = () => Effect.runSync(journal.read(runId))
+  const reconstruct = () => {
+    const result = reconstructRunState(runId, records())
+    if (result._tag !== "ValidReconstructedRun")
+      throw new Error(`production MBT trace reconstruction failed: ${result._tag}`)
+    return result.state
+  }
+  const frontier = () => {
+    const state = reconstruct()
+    const resourceSnapshot = Effect.runSync(resource.snapshot)
+    return {
+      state,
+      frontier: deriveIntegrationFrontier(state, {
+        currentTrackerTaskIds: new Set([started.plannedAttempt.taskId]),
+        heldResponsibilityPositions: resourceSnapshot.heldResponsibilityPositions,
+        integrationTarget: Option.some(integrationTarget),
+        candidateCorrectionLimit: Option.some(candidateCorrectionLimit),
+        candidateContinuationLimit: Option.some(candidateContinuationLimit),
+        targetLineageByAttemptId: new Map([[productionAttempt.attemptId, targetLineage]]),
+        targetPromotionConfigured: true,
+        taskClaimAuthorityByAttemptId: new Map([[productionAttempt.attemptId, { _tag: "Exact" as const }]])
+      }),
+      held: resourceSnapshot.heldResponsibilityPositions.has(started.queuedAt),
+      records: records()
+    }
+  }
+  const graph = (revision: string, prerequisiteCleared: boolean, prerequisiteComplete: boolean) => {
+    const blockerId = TaskId.make("git-reconciliation-production-B")
+    const independentId = TaskId.make("git-reconciliation-production-C")
+    const operation = makeTrackerGraphObservationOperation(
+      OperationId.make(`git-reconciliation-production-graph-${revision}-${++operationOrdinal}`),
+      target,
+      [],
+      [started.plannedAttempt.taskId, blockerId, independentId]
+    )
+    const projected = projectTrackerSnapshot({
+      revision,
+      tasks: [
+        {
+          id: started.plannedAttempt.taskId,
+          lifecycle: { _tag: "Open" as const },
+          parentTaskId: null,
+          prerequisiteIds: prerequisiteCleared ? [] : [blockerId]
+        },
+        {
+          id: blockerId,
+          lifecycle: prerequisiteComplete ? { _tag: "CompletedSuccessfully" as const } : { _tag: "Open" as const },
+          parentTaskId: null,
+          prerequisiteIds: []
+        },
+        { id: independentId, lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [] }
+      ]
+    })
+    if (projected._tag !== "Valid") throw new Error("production MBT graph projection failed")
+    append(intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+    append(
+      outcomeRecordKey(operation.operationId),
+      taskTrackerFactsObservedEvent(
+        operation.operationId,
+        makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
+      )
+    )
+    return frontier()
+  }
+  const incompleteGraphRead = () => {
+    const operation = makeTrackerGraphObservationOperation(
+      OperationId.make(`git-reconciliation-production-incomplete-${++operationOrdinal}`),
+      target,
+      [],
+      [started.plannedAttempt.taskId]
+    )
+    append(intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+    return frontier()
+  }
+  const targetRead = (head: GitCommitSha, compatible: boolean) => {
+    const operation = makeTargetLineageObservationOperation({
+      integrationTarget,
+      operationId: OperationId.make(`git-reconciliation-production-lineage-${++operationOrdinal}`),
+      plannedAttempt: productionAttempt,
+      predecessorOperationIds: []
+    })
+    targetLineage = TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: compatible,
+      plannedBaseSha: base,
+      targetHeadSha: head
+    })
+    append(
+      intentRecordKey(operation.operationId),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation,
+        version: workflowJournalEventVersion
+      })
+    )
+    append(
+      outcomeRecordKey(operation.operationId),
+      TargetLineageObservedEvent.make({
+        observation: targetLineage,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: operation.operationId,
+        plannedAttempt: productionAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    return frontier()
+  }
+  const candidateProtocol = (lineage: TargetLineageObservation) =>
+    Effect.runSync(
+      continueIntegrationCandidateConstruction(
+        started,
+        lineage,
+        candidateCorrectionLimit,
+        candidateContinuationLimit
+      ).pipe(
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(IntegrationCandidateAgent, candidateAgent),
+        Effect.provideService(IntegrationCandidateGit, candidateGit)
+      )
+    )
+  const recordUnrelatedSession = () => {
+    const unrelatedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("git-reconciliation-production-unrelated-attempt"),
+      baseSha: base,
+      branch: TaskBranchRef.make("refs/heads/dalph/git-reconciliation-production-unrelated"),
+      executor: TaskExecutorLocator.make("executor:git-reconciliation-production-unrelated"),
+      runId,
+      taskId: TaskId.make("git-reconciliation-production-C"),
+      taskRevision: TaskRevision.make("git-reconciliation-production-unrelated-revision"),
+      worktree: WorktreeLocator.make("/worktrees/git-reconciliation-production-unrelated")
+    })
+    const unrelatedTarget = IntegrationTarget.make({
+      repository: GitRepositoryLocator.make("/repositories/git-reconciliation-production-unrelated.git"),
+      ref: IntegrationTargetRef.make("refs/heads/main")
+    })
+    const unrelatedResult = AcceptedResult.make({
+      commit: acceptedResult.commit,
+      evidenceManifest: acceptedResult.evidenceManifest
+    })
+    const began = append(
+      integrationResponsibilityBeganRecordKey(unrelatedAttempt.attemptId),
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult: unrelatedResult,
+        integrationTarget: unrelatedTarget,
+        plannedAttempt: unrelatedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const startedRecord = append(
+      integrationStartedRecordKey(unrelatedAttempt.attemptId),
+      IntegrationStartedEvent.make({
+        acceptedResult: unrelatedResult,
+        integrationTarget: unrelatedTarget,
+        plannedAttempt: unrelatedAttempt,
+        responsibilityBeganAt: began.position,
+        version: workflowJournalEventVersion
+      })
+    )
+    const unrelated = {
+      _tag: "StartedIntegrationResponsibility" as const,
+      acceptedResult: unrelatedResult,
+      integrationTarget: unrelatedTarget,
+      plannedAttempt: unrelatedAttempt,
+      queuedAt: began.position,
+      startedAt: startedRecord.position
+    }
+    Effect.runSync(
+      continueIntegrationCandidateConstruction(
+        unrelated,
+        TargetLineageObservation.make({
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: base,
+          targetHeadSha: base
+        }),
+        candidateCorrectionLimit,
+        candidateContinuationLimit
+      ).pipe(
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(IntegrationCandidateAgent, candidateAgent),
+        Effect.provideService(IntegrationCandidateGit, candidateGit)
+      )
+    )
+    return records().filter(
+      ({ event }) =>
+        event._tag === "IntegrationCandidateConstructionIntended" &&
+        event.plannedAttempt.taskId === unrelatedAttempt.taskId
+    ).length
+  }
+
+  Effect.runSync(
+    journalStore.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }))
+  )
+  append(
+    integrationResponsibilityBeganRecordKey(productionAttempt.attemptId),
+    IntegrationResponsibilityBeganEvent.make({
+      acceptedResult,
+      integrationTarget,
+      plannedAttempt: productionAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  append(
+    integrationStartedRecordKey(productionAttempt.attemptId),
+    IntegrationStartedEvent.make({
+      acceptedResult,
+      integrationTarget,
+      plannedAttempt: productionAttempt,
+      responsibilityBeganAt: started.queuedAt,
+      version: workflowJournalEventVersion
+    })
+  )
+  Effect.runSync(resource.acquire(physicalResponsibility))
+  Effect.runSync(resource.publishAcceptedOwnership(physicalResponsibility))
+  candidateProtocol(targetLineage)
+
+  return {
+    appendGraph: graph,
+    appendIncompleteGraphRead: incompleteGraphRead,
+    appendTargetRead: targetRead,
+    candidateProtocol,
+    recordUnrelatedSession,
+    frontier,
+    records,
+    releaseTarget: () => Effect.runSync(resource.release(physicalResponsibility)),
+    reacquireTarget: () => {
+      Effect.runSync(resource.acquire(physicalResponsibility))
+      Effect.runSync(resource.publishAcceptedOwnership(physicalResponsibility))
+    },
+    restart: () => Effect.runSync(resource.releaseAll),
+    started,
+    targetLineage
+  }
 }
 
 const SpecProjection = Schema.Struct({
@@ -156,6 +504,7 @@ const gitReconciliationDriver = defineDriver(
     startOneSuccessorCandidate: {}
   },
   () => {
+    const production = makeProductionReconciliationTrace()
     let status: Status = "Running"
     let constraint: Constraint = "NoGitConstraint"
     let decision = "ContinueAttempt"
@@ -274,77 +623,142 @@ const gitReconciliationDriver = defineDriver(
         decidePromotion(PromotionTargetObservation.cases.AmbiguousTargetHead.make({}), true),
       observePrePromotionDependencyBlocker: () =>
         Effect.sync(() => {
-          decision = "GitConstraintWait"
-          positionHeld = false
-          trackerBlocker = "BeforePromotionBlocker"
+          const result = production.appendGraph("before-promotion-blocker", false, false)
+          production.releaseTarget()
+          const current = production.frontier()
+          positionHeld = current.held
+          decision = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
+            ? "GitConstraintWait"
+            : "ContinueAttempt"
+          trackerBlocker = result.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
+            ? "BeforePromotionBlocker"
+            : "NoTrackerBlocker"
         }),
       reopenPrePromotionBlockerAfterRestart: () =>
         Effect.sync(() => {
+          production.restart()
+          const current = production.frontier()
+          positionHeld = current.held
           decision = "GitConstraintWait"
-          positionHeld = false
         }),
       clearPrePromotionDependencyBlocker: () =>
         Effect.sync(() => {
+          production.appendGraph("clear-pre-promotion-edge", true, false)
+          production.reacquireTarget()
+          const current = production.frontier()
+          positionHeld = current.held
+          exactExpectedHeadObserved = false
+          compareAndSetAuthorized = false
+          overwriteAuthorized = false
           decision = "RereadTargetBeforePromotion"
-          trackerBlocker = "NoTrackerBlocker"
+          trackerBlocker = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
+            ? "BeforePromotionBlocker"
+            : "NoTrackerBlocker"
         }),
       observeFreshTargetAfterPrePromotionBlocker: () =>
         Effect.sync(() => {
+          const current = production.appendTargetRead(advanced, true)
+          compatibleAdvanceObserved = current.records.some(
+            ({ event }) => event._tag === "TargetLineageObserved" && event.observation.targetHeadSha === advanced
+          )
           decision = "ContinueAttempt"
-          compatibleAdvanceObserved = true
         }),
       recordIntegrationSessionSupersession: () =>
         Effect.sync(() => {
-          priorSupersessionCount += 1
-          sessionSuperseded = true
+          production.candidateProtocol(
+            TargetLineageObservation.make({
+              plannedBaseIsAncestorOfTargetHead: true,
+              plannedBaseSha: base,
+              targetHeadSha: advanced
+            })
+          )
+          priorSupersessionCount = production
+            .records()
+            .filter(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded").length
+          sessionSuperseded = priorSupersessionCount === 1
           decision = "ContinueAttempt"
         }),
       recordUnrelatedSessionSupersession: () =>
         Effect.sync(() => {
-          unrelatedSupersessionCount += 1
+          unrelatedSupersessionCount = production.recordUnrelatedSession()
         }),
       startOneSuccessorCandidate: () =>
         Effect.sync(() => {
-          successorOrdinal = priorSupersessionCount
-          successorStarted = true
+          production.candidateProtocol(
+            TargetLineageObservation.make({
+              plannedBaseIsAncestorOfTargetHead: true,
+              plannedBaseSha: base,
+              targetHeadSha: advanced
+            })
+          )
+          const successorIntents = production
+            .records()
+            .filter(
+              ({ event }) =>
+                event._tag === "IntegrationCandidateConstructionIntended" &&
+                event.plannedAttempt.attemptId === production.started.plannedAttempt.attemptId
+            ).length
+          successorOrdinal = Math.max(0, successorIntents - 1)
+          successorStarted = successorIntents === 2
           decision = "ContinueAttempt"
         }),
       observePostPromotionDependencyBlocker: () =>
         Effect.sync(() => {
-          decision = "GitConstraintWait"
-          positionHeld = false
+          const current = production.appendGraph("after-promotion-blocker", false, false)
+          production.releaseTarget()
+          positionHeld = production.frontier().held
+          exactExpectedHeadObserved = false
+          compareAndSetAuthorized = false
+          overwriteAuthorized = false
+          decision = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
+            ? "GitConstraintWait"
+            : "ContinueAttempt"
           trackerBlocker = "AfterPromotionBlocker"
         }),
       clearPostPromotionDependencyBlocker: () =>
         Effect.sync(() => {
+          production.appendGraph("clear-post-promotion-blocker", false, true)
+          production.reacquireTarget()
+          positionHeld = production.frontier().held
+          exactExpectedHeadObserved = false
+          compareAndSetAuthorized = false
+          overwriteAuthorized = false
           decision = "RereadTargetBeforePromotion"
           trackerBlocker = "NoTrackerBlocker"
         }),
       observeFreshPromotedCandidateAncestry: () =>
         Effect.sync(() => {
+          const current = production.appendTargetRead(candidate, true)
+          promotedCandidateAncestryProven = current.records.some(
+            ({ event }) => event._tag === "TargetLineageObserved" && event.observation.targetHeadSha === candidate
+          )
           decision = "ContinueAttempt"
-          promotedCandidateAncestryProven = true
         }),
       completeAfterPromotedCandidateAncestry: () =>
         Effect.sync(() => {
-          completionAuthorized = true
+          const current = production.frontier()
+          completionAuthorized = current.frontier.explanations.every(({ _tag }) => _tag !== "IntegrationDependencyWait")
           decision = "ContinueAttempt"
         }),
       observeIncompleteTrackerFacts: () =>
         Effect.sync(() => {
+          production.appendIncompleteGraphRead()
+          production.releaseTarget()
+          positionHeld = production.frontier().held
           decision = "GitConstraintWait"
-          positionHeld = false
           trackerBlocker = "IncompleteTrackerFacts"
         }),
       acceptCompletionAcrossPrerequisiteRace: () =>
         Effect.sync(() => {
-          completionAccepted = true
-          focusedCompletionConfirmed = true
-          completionWarning = true
+          const current = production.appendGraph("completion-race-reopened", false, false)
+          completionAccepted = current.records.some(({ event }) => event._tag === "TaskTrackerFactsObserved")
+          focusedCompletionConfirmed = completionAccepted
+          completionWarning = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
         }),
       clearDerivedCompletionWarning: () =>
         Effect.sync(() => {
-          completionWarning = false
+          const current = production.appendGraph("completion-race-cleared", false, true)
+          completionWarning = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
         }),
       observeCompatibleTargetAdvance: () =>
         Effect.sync(() => {

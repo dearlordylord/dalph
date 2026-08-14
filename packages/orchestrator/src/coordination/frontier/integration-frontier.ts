@@ -271,7 +271,7 @@ export const deriveIntegrationFrontier = (
           }
           if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
           const durableIntent = candidateIntentFor(responsibility)
-          const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
+          const lineage = runtimeFacts.targetLineageByAttemptId.get(responsibility.plannedAttempt.attemptId)
           if (durableIntent?._tag !== "IntegrationCandidateConstructionIntended" || lineage === undefined) return []
           return [
             RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
@@ -292,7 +292,7 @@ export const deriveIntegrationFrontier = (
         if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
         if (
           promotion === undefined &&
-          !runtimeFacts.targetLineageByAttemptId?.has(responsibility.plannedAttempt.attemptId)
+          !runtimeFacts.targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId)
         ) {
           return []
         }

@@ -45,6 +45,7 @@ import {
   CandidateContinuationLimit,
   CompletionClaimBoundary,
   CompletionTaskBoundary,
+  type CompletionTaskRequest,
   type BoundedTicketRank,
   DeliveryRelationPublicationObserver,
   evaluateDeliveryRelationInputBundle,
@@ -56,6 +57,7 @@ import {
   type JournaledTrackerGraphObservation,
   freshWorkflowRunId,
   GitTargetLineage,
+  GitTargetLineageReadFailure,
   IntegrationCandidateAgent,
   IntegrationCandidateAgentFailure,
   IntegrationCandidateAgentReport,
@@ -75,6 +77,7 @@ import {
   JournaledRunBootstrap,
   journaledRunBootstrapLayer,
   makeApplicationExitShell,
+  makeTrackerGraphObservationOperation,
   type JournaledRuntimeLayerInput,
   journaledWorkflowInterpreterLayer,
   type PauseProgressView,
@@ -1378,7 +1381,8 @@ const runAuthoredScenarioCassetteWith = (request: {
           memoryJournalStoreLayer,
           controlledTrackerMutationLayerFrom(cassette.startingFacts.taskClaims),
           gitTargetLineageTestLayer(
-            cassette.startingFacts.targetLineageObservation ??
+            cassette.startingFacts.targetLineageObservations?.[0] ??
+              cassette.startingFacts.targetLineageObservation ??
               TargetLineageObservation.make({
                 plannedBaseIsAncestorOfTargetHead: true,
                 plannedBaseSha: command.baseSha,
@@ -1546,6 +1550,14 @@ const runAuthoredScenarioCassetteWith = (request: {
                     if (candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag) {
                       yield* Deferred.succeed(candidateOutcomeRecorded, undefined)
                     }
+                    // A tracker observation may be durable before the
+                    // coordinator process dies.  Let an authored
+                    // CoordinatorProcessDies boundary consume exactly here,
+                    // so restart tests do not collapse this seam into an
+                    // unrelated Unpause or pre-read failure.
+                    if (event._tag === "TaskTrackerFactsObserved") {
+                      yield* cursor.pauseAtCoordinatorProcessDeath
+                    }
                     if (
                       event._tag !== "PlannedAttemptReplaced" &&
                       event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" &&
@@ -1686,16 +1698,19 @@ const runAuthoredScenarioCassetteWith = (request: {
           yield* applyInFlightControlDirection(plannedAttempt)
           yield* awaitExecutorPublicationHold(plannedAttempt, request)
         })
+      const beforeCompletionTask = yield* Ref.make<(request: CompletionTaskRequest) => Effect.Effect<void>>(
+        () => Effect.void
+      )
       const trackerAuthority = yield* Layer.build(
-        controlledTrackerAuthorityLayer(
-          cursor,
-          Context.get(sharedContext, TrackerMutation),
-          (failure) => Ref.set(authoredInteractionFailure, failure),
-          (operationId) =>
+        controlledTrackerAuthorityLayer(cursor, Context.get(sharedContext, TrackerMutation), {
+          reportInteractionMismatch: (failure) => Ref.set(authoredInteractionFailure, failure),
+          lookupAcquisitionOperationTask: (operationId) =>
             Ref.get(acquisitionTaskIds).pipe(
               Effect.map((operations) => Option.fromUndefinedOr(operations.get(operationId)))
-            )
-        )
+            ),
+          beforeCompleteTask: (request) =>
+            Ref.get(beforeCompletionTask).pipe(Effect.flatMap((boundary) => boundary(request)))
+        })
       )
       const trackerMutationLayer = Layer.succeed(TrackerMutation, Context.get(trackerAuthority, TrackerMutation))
       const completionClaimBoundary = Context.get(trackerAuthority, CompletionClaimBoundary)
@@ -1726,12 +1741,32 @@ const runAuthoredScenarioCassetteWith = (request: {
       })
       const gitWorktreeLayer = Layer.succeed(GitWorktree, authoredGitWorktree)
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
+      const authoredTargetLineage = yield* Ref.make(cassette.startingFacts.targetLineageObservations ?? [])
+      const authoredGitTargetLineage = GitTargetLineage.of({
+        read: (plannedBaseSha, target) =>
+          Effect.gen(function* () {
+            const next = yield* Ref.modify(
+              authoredTargetLineage,
+              (remaining) => [remaining[0], remaining.slice(1)] as const
+            )
+            if (next !== undefined) {
+              return next.plannedBaseSha === plannedBaseSha
+                ? next
+                : yield* new GitTargetLineageReadFailure({
+                    detail: "the authored observation names a different planned Base SHA",
+                    plannedBaseSha,
+                    target
+                  })
+            }
+            return yield* gitTargetLineage.read(plannedBaseSha, target)
+          })
+      })
       const testGitWorktree = Context.get(sharedContext, TestGitWorktree)
       const trackerLayer = controlledTrackerGraphReaderLayer(cursor)
       const ordinaryInterpreterLayer = workflowInterpreterLayer.pipe(
         Layer.provide(Layer.merge(trackerLayer, trackerMutationLayer)),
         Layer.provide(gitWorktreeLayer),
-        Layer.provide(Layer.succeed(GitTargetLineage, gitTargetLineage))
+        Layer.provide(Layer.succeed(GitTargetLineage, authoredGitTargetLineage))
       )
       const boundaryAdjustedInterpreterLayer = Layer.effect(
         WorkflowInterpreter,
@@ -1748,7 +1783,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 }
                 return yield* observePlannedAttemptWorktreeThrough(gitWorktree, operation)
               }),
-            readTargetLineage: (operation) => observeTargetLineageThrough(gitTargetLineage, operation),
+            readTargetLineage: (operation) => observeTargetLineageThrough(authoredGitTargetLineage, operation),
             reconcileTaskWorktree: (operation) =>
               runGitWorktreeReconciliation(gitWorktree, operation.plannedAttempt).pipe(
                 Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))
@@ -1934,7 +1969,30 @@ const runAuthoredScenarioCassetteWith = (request: {
           Layer.provide(Layer.succeed(WorkflowTrace, trace)),
           Layer.provide(planning)
         )
-        return activationLayer
+        return Layer.effectContext(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(activationLayer)
+            const interpreter = Context.get(context, WorkflowInterpreter)
+            yield* Ref.set(beforeCompletionTask, (request) =>
+              Effect.gen(function* () {
+                const item = yield* cursor.currentStoryItem
+                if (item?._tag !== "DalphSelects" || item.operation._tag !== "ReadTrackerGraph") return
+                const selected = yield* cursor.consumeDalphSelection
+                if (selected.operation._tag !== "ReadTrackerGraph") {
+                  return yield* Effect.die("authored completion prerequisite boundary selected a non-graph operation")
+                }
+                const operation = makeTrackerGraphObservationOperation(
+                  OperationId.make(`authored-completion-prerequisite-graph:${request.operationId}`),
+                  selected.operation.target,
+                  [],
+                  []
+                )
+                yield* interpreter.readTrackerGraph(operation).pipe(Effect.asVoid, Effect.orDie)
+              }).pipe(Effect.orDie)
+            )
+            return context
+          })
+        )
       }
       const runtimeLayer = (_input: JournaledRuntimeLayerInput) =>
         Layer.unwrap(

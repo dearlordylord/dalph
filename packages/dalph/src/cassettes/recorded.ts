@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
 import { Effect, Match, Schema } from "effect"
+import { evidenceReferenceEquals } from "@dalph/contracts"
 import {
   AttemptChoiceAppliedEvent,
   AttemptRestartAuthorityReadFailedEvent,
@@ -271,8 +272,6 @@ const recordCandidateConstructionEntry = (event: CandidateConstructionEvent): Re
         occurrenceClassification: "NonActionOccurrence",
         priorCandidateCommit: value.priorCandidateCommit,
         priorCorrelation: value.priorCorrelation,
-        responsibilityBeganAt: value.responsibilityBeganAt,
-        startedAt: value.startedAt,
         successorCorrelation: value.successorCorrelation
       }),
       IntegrationCandidateAgentReported: (value): RecordedCandidateConstructionEntry => ({
@@ -1078,8 +1077,34 @@ const eventForCandidateConstructionEntry = (
         observedTargetHead: value.observedTargetHead,
         priorCandidateCommit: value.priorCandidateCommit,
         priorCorrelation: value.priorCorrelation,
-        responsibilityBeganAt: JournalPosition.make(value.responsibilityBeganAt),
-        startedAt: JournalPosition.make(value.startedAt),
+        responsibilityBeganAt: priorEntryPosition(
+          entries,
+          index,
+          (candidate) =>
+            candidate._tag === "IntegrationResponsibilityBegan" &&
+            candidate.plannedAttempt.attemptId === value.priorCorrelation.attemptId &&
+            candidate.acceptedResult.commit === value.priorCorrelation.acceptedResultCommit &&
+            evidenceReferenceEquals(
+              candidate.acceptedResult.evidenceManifest,
+              value.priorCorrelation.acceptanceManifest
+            ) &&
+            candidate.integrationTarget.repository === value.priorCorrelation.integrationTarget.repository &&
+            candidate.integrationTarget.ref === value.priorCorrelation.integrationTarget.ref
+        ),
+        startedAt: priorEntryPosition(
+          entries,
+          index,
+          (candidate) =>
+            candidate._tag === "IntegrationStarted" &&
+            candidate.plannedAttempt.attemptId === value.priorCorrelation.attemptId &&
+            candidate.acceptedResult.commit === value.priorCorrelation.acceptedResultCommit &&
+            evidenceReferenceEquals(
+              candidate.acceptedResult.evidenceManifest,
+              value.priorCorrelation.acceptanceManifest
+            ) &&
+            candidate.integrationTarget.repository === value.priorCorrelation.integrationTarget.repository &&
+            candidate.integrationTarget.ref === value.priorCorrelation.integrationTarget.ref
+        ),
         successorCorrelation: value.successorCorrelation,
         version: workflowJournalEventVersion
       }),
