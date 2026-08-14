@@ -168,6 +168,52 @@ interface ControlledTraceOptions {
   >
 }
 
+const awaitTraceStoryBoundary = (cursor: StoryCursor, item: TraceItem): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    if (item._tag !== "OperationSelected") return
+    const current = yield* cursor.currentStoryItem
+    if (
+      current?._tag === "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary" &&
+      item.operation._tag !== "ReadTargetLineage"
+    ) {
+      yield* cursor.awaitCurrentStoryAdvance
+    }
+  })
+
+const awaitTraceTaskWorkSpecificationBoundary = (cursor: StoryCursor, actual: CassetteDecision): Effect.Effect<void> =>
+  actual._tag === "ReadTaskWorkSpecification"
+    ? cursor.awaitTaskWorkSpecificationReadBoundary(actual.taskId)
+    : Effect.void
+
+const awaitTraceOperatorControlGraphReadBoundary = (
+  item: TraceItem,
+  options: ControlledTraceOptions
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const gateRef = options.operatorControlGraphReadGate
+    if (gateRef === undefined) return
+    const gate = yield* Ref.get(gateRef)
+    const operatorControlGraphReadActive =
+      options.operatorControlGraphReadActive === undefined
+        ? false
+        : yield* Ref.get(options.operatorControlGraphReadActive)
+    const isOperatorGraphRead =
+      Option.isSome(gate) && operatorControlGraphReadActive && item._tag === "OperationSelected"
+    if (Option.isSome(gate) && !isOperatorGraphRead) yield* Deferred.await(gate.value.release)
+  })
+
+const awaitTraceBoundaries = (
+  cursor: StoryCursor,
+  item: TraceItem,
+  actual: CassetteDecision,
+  options: ControlledTraceOptions
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* awaitTraceStoryBoundary(cursor, item)
+    yield* awaitTraceTaskWorkSpecificationBoundary(cursor, actual)
+    yield* awaitTraceOperatorControlGraphReadBoundary(item, options)
+  })
+
 export const controlledTrace = (cursor: StoryCursor, options: ControlledTraceOptions = {}): WorkflowTrace["Service"] =>
   WorkflowTrace.of({
     emit: Effect.fn("AuthoredCassette.WorkflowTrace.emit")(function* (item) {
@@ -177,29 +223,7 @@ export const controlledTrace = (cursor: StoryCursor, options: ControlledTraceOpt
       if (item._tag === "OperationSelected") yield* cursor.pauseAtCoordinatorProcessDeath
       const actual = actualDecision(item)
       if (actual === undefined) return
-      if (item._tag === "OperationSelected") {
-        const current = yield* cursor.currentStoryItem
-        if (
-          current?._tag === "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary" &&
-          item.operation._tag !== "ReadTargetLineage"
-        ) {
-          yield* cursor.awaitCurrentStoryAdvance
-        }
-      }
-      if (actual._tag === "ReadTaskWorkSpecification") {
-        yield* cursor.awaitTaskWorkSpecificationReadBoundary(actual.taskId)
-      }
-      const operatorControlGraphReadGate = options.operatorControlGraphReadGate
-      if (operatorControlGraphReadGate !== undefined) {
-        const gate = yield* Ref.get(operatorControlGraphReadGate)
-        const operatorControlGraphReadActive =
-          options.operatorControlGraphReadActive === undefined
-            ? false
-            : yield* Ref.get(options.operatorControlGraphReadActive)
-        const isOperatorGraphRead =
-          Option.isSome(gate) && operatorControlGraphReadActive && item._tag === "OperationSelected"
-        if (Option.isSome(gate) && !isOperatorGraphRead) yield* Deferred.await(gate.value.release)
-      }
+      yield* awaitTraceBoundaries(cursor, item, actual, options)
       const expected = yield* cursor.consumeDalphSelection.pipe(
         Effect.mapError(
           (failure) =>

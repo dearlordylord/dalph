@@ -1534,6 +1534,37 @@ const runAuthoredScenarioCassetteWith = (request: {
           })
       }
       const observedExecutorLifecycleKeys = yield* Ref.make<ReadonlySet<string>>(new Set())
+      type AuthoredJournalAppendKey = JournalRecord["key"]
+      type AuthoredJournalAppendEvent = JournalRecord["event"]
+      const isExecutorLifecycleAppend = (event: AuthoredJournalAppendEvent): boolean =>
+        event._tag === "PlannedAttemptReplaced" ||
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
+        event._tag === "PlannedAttemptExecutorWorkReported"
+      const shouldPauseAfterTrackerFactsAppend = (event: AuthoredJournalAppendEvent): boolean =>
+        event._tag === "TaskTrackerFactsObserved" && !event.operationId.startsWith("attempt-restart:")
+      const pauseAfterJournalAppend = (
+        key: AuthoredJournalAppendKey,
+        event: AuthoredJournalAppendEvent
+      ): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          if (candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag) {
+            yield* Deferred.succeed(candidateOutcomeRecorded, undefined)
+          }
+          // A tracker observation may be durable before the
+          // coordinator process dies.  Let an authored
+          // CoordinatorProcessDies boundary consume exactly here,
+          // so restart tests do not collapse this seam into an
+          // unrelated Unpause or pre-read failure.
+          if (shouldPauseAfterTrackerFactsAppend(event)) yield* cursor.pauseAtCoordinatorProcessDeath
+          if (event._tag === "PlannedAttemptReplaced") yield* cursor.pauseAtCoordinatorProcessDeath
+          if (!isExecutorLifecycleAppend(event)) return
+          const firstDurableAppend = yield* Ref.modify(observedExecutorLifecycleKeys, (observed) => {
+            const encodedKey = String(key)
+            return [!observed.has(encodedKey), new Set([...observed, encodedKey])]
+          })
+          /* v8 ignore next -- @preserve Idempotent lifecycle redelivery must not consume an unrelated later death control. */
+          if (firstDurableAppend) yield* cursor.pauseAtCoordinatorProcessDeath
+        })
       const journalLayer = journalStoreCapabilities(
         Layer.succeed(
           JournalStore,
@@ -1550,38 +1581,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                       event
                     })
                     if (taskClaimHandled) return
-                    if (candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag) {
-                      yield* Deferred.succeed(candidateOutcomeRecorded, undefined)
-                    }
-                    // A tracker observation may be durable before the
-                    // coordinator process dies.  Let an authored
-                    // CoordinatorProcessDies boundary consume exactly here,
-                    // so restart tests do not collapse this seam into an
-                    // unrelated Unpause or pre-read failure.
-                    if (event._tag === "TaskTrackerFactsObserved") {
-                      // Restart authority reads are one compound protocol;
-                      // its authored crash boundary is the replacement
-                      // append, after all reads have completed.
-                      if (!event.operationId.startsWith("attempt-restart:")) {
-                        yield* cursor.pauseAtCoordinatorProcessDeath
-                      }
-                    }
-                    if (event._tag === "PlannedAttemptReplaced") {
-                      yield* cursor.pauseAtCoordinatorProcessDeath
-                    }
-                    if (
-                      event._tag !== "PlannedAttemptReplaced" &&
-                      event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-                      event._tag !== "PlannedAttemptExecutorWorkReported"
-                    ) {
-                      return
-                    }
-                    const firstDurableAppend = yield* Ref.modify(observedExecutorLifecycleKeys, (observed) => {
-                      const encodedKey = String(key)
-                      return [!observed.has(encodedKey), new Set([...observed, encodedKey])]
-                    })
-                    /* v8 ignore next -- @preserve Idempotent lifecycle redelivery must not consume an unrelated later death control. */
-                    if (firstDurableAppend) yield* cursor.pauseAtCoordinatorProcessDeath
+                    yield* pauseAfterJournalAppend(key, event)
                   })
                 )
               )
@@ -2213,27 +2213,44 @@ const runAuthoredScenarioCassetteWith = (request: {
               }
               /* v8 ignore stop -- @preserve */
             }).pipe(Effect.orDie)
-            const driveControlDirection = (
-              expected:
-                | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type
-                | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type
-            ) =>
+            type AuthoredControlDirectionItem =
+              | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirection.Type
+              | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type
+            type OperatorGraphReadGate = { readonly release: Deferred.Deferred<void>; readonly taskId: TaskId }
+            const operatorGraphReadGateFor = (
+              expected: AuthoredControlDirectionItem,
+              authoredItem: AuthoredCassetteStoryItem | undefined
+            ): Effect.Effect<Option.Option<OperatorGraphReadGate>> => {
+              const subject =
+                authoredItem?._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+                  ? authoredItem.subject
+                  : undefined
+              if (
+                expected._tag !== "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission" ||
+                authoredItem?._tag !== "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission" ||
+                subject?._tag !== "Task"
+              ) {
+                return Effect.succeed(Option.none())
+              }
+              return Deferred.make<void>().pipe(
+                Effect.map((release) => Option.some({ release, taskId: subject.taskId }))
+              )
+            }
+            const releaseOperatorGraphReadGate = Effect.gen(function* () {
+              const gate = yield* Ref.get(operatorControlGraphReadGate)
+              if (Option.isNone(gate)) return
+              yield* Ref.set(operatorControlGraphReadGate, Option.none())
+              yield* Deferred.succeed(gate.value.release, undefined)
+            })
+            const driveControlDirection = (expected: AuthoredControlDirectionItem) =>
               Effect.gen(function* () {
                 const authoredItem = yield* cursor.currentStoryItem
-                const operatorGraphReadGate =
-                  expected._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission" &&
-                  authoredItem?._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission" &&
-                  authoredItem.subject._tag === "Task"
-                    ? Option.some({ release: yield* Deferred.make<void>(), taskId: authoredItem.subject.taskId })
-                    : Option.none<{ readonly release: Deferred.Deferred<void>; readonly taskId: TaskId }>()
+                const operatorGraphReadGate = yield* operatorGraphReadGateFor(expected, authoredItem)
                 yield* Ref.set(operatorControlGraphReadGate, operatorGraphReadGate)
                 const direction = yield* cursor.consumeControlDirection(expected)
                 /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
                 if (Option.isNone(direction)) {
-                  if (Option.isSome(operatorGraphReadGate)) {
-                    yield* Ref.set(operatorControlGraphReadGate, Option.none())
-                    yield* Deferred.succeed(operatorGraphReadGate.value.release, undefined)
-                  }
+                  yield* releaseOperatorGraphReadGate
                   return
                 }
                 /* v8 ignore stop */
@@ -2269,24 +2286,11 @@ const runAuthoredScenarioCassetteWith = (request: {
                       })
                   })
                 )
-                if (Option.isSome(operatorGraphReadGate)) {
-                  yield* Ref.set(operatorControlGraphReadGate, Option.none())
-                  yield* Deferred.succeed(operatorGraphReadGate.value.release, undefined)
-                }
+                yield* releaseOperatorGraphReadGate
                 if (direction.value._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission") {
                   yield* cursor.completeControlDirectionBeforeDeliveryActionAdmission
                 }
-              }).pipe(
-                Effect.ensuring(
-                  Effect.gen(function* () {
-                    const gate = yield* Ref.get(operatorControlGraphReadGate)
-                    if (Option.isNone(gate)) return
-                    yield* Ref.set(operatorControlGraphReadGate, Option.none())
-                    yield* Deferred.succeed(gate.value.release, undefined)
-                  })
-                ),
-                Effect.orDie
-              )
+              }).pipe(Effect.ensuring(releaseOperatorGraphReadGate), Effect.orDie)
             const drivePauseObservationStart = Effect.gen(function* () {
               const authored = yield* cursor.consumePauseObservationStart
               /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current observation-start tag, and closure rejects overlapping starts. */

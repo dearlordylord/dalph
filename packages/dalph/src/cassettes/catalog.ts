@@ -3830,6 +3830,45 @@ export const deliveryFinalitySpineAuthoredCassette: ScenarioCassette = Schema.de
   story: deliveryFinalityBase
 })
 
+const isCompletedPrerequisiteAttempt = (item: DeliveryFinalityStoryItem): boolean =>
+  item._tag === "PlannedAttemptExecutorWorkReported" &&
+  item.report.attemptId === "attempt:B:0" &&
+  item.report._tag === "Terminal" &&
+  item.report.result._tag === "Completed"
+
+const isDeliveryFinalityGraphReadAt = (item: DeliveryFinalityStoryItem, revision: string): boolean =>
+  item._tag === "TrackerGraphReadReturned" && item.graph.revision === revision
+
+const prerequisiteReopensStoryItem = (
+  item: DeliveryFinalityStoryItem,
+  bWorkCompleted: boolean
+): ReadonlyArray<unknown> => {
+  if (isDeliveryFinalityGraphReadAt(item, "delivery-story-G5")) {
+    return [{ ...item, graph: deliveryFinalityPrerequisiteCompleteGraph }]
+  }
+  if (isDeliveryFinalityGraphReadAt(item, "delivery-story-G0")) {
+    return [{ ...item, graph: deliveryFinalityPrerequisiteStartingGraph }]
+  }
+  if (bWorkCompleted && isDeliveryFinalityGraphReadAt(item, "delivery-story-G6")) {
+    return [{ ...item, graph: deliveryFinalityPrerequisiteCompletedGraph }]
+  }
+  if (isDeliveryFinalityGraphReadAt(item, "delivery-story-G6")) {
+    return [{ ...item, graph: deliveryFinalityPrerequisiteACompleteGraph }]
+  }
+  if (item._tag === "CompletionTaskRequestReturned" && item.outcome === "Acknowledged") {
+    return [{ _tag: "CompletionTaskPrerequisiteReopened", graph: deliveryFinalityPrerequisiteReopenedGraph }, item]
+  }
+  return [item]
+}
+
+const prerequisiteReopensStory = (story: ReadonlyArray<DeliveryFinalityStoryItem>): ReadonlyArray<unknown> => {
+  let bWorkCompleted = false
+  return story.flatMap((item) => {
+    if (isCompletedPrerequisiteAttempt(item)) bWorkCompleted = true
+    return prerequisiteReopensStoryItem(item, bWorkCompleted)
+  })
+}
+
 /** B reopens between the focused eligibility read and accepted completion Q. */
 export const prerequisiteReopensDuringCompletionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
@@ -3843,35 +3882,7 @@ export const prerequisiteReopensDuringCompletionAuthoredCassette: ScenarioCasset
   // B is complete in the graph used to authorize A.  It reopens at a fresh,
   // journaled graph read immediately before Q.  The accepted Q response and A
   // completion remain historical and are never repaired by Dalph.
-  story: (() => {
-    let bWorkCompleted = false
-    return deliveryFinalitySpineAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
-      if (
-        item._tag === "PlannedAttemptExecutorWorkReported" &&
-        item.report.attemptId === "attempt:B:0" &&
-        item.report._tag === "Terminal" &&
-        item.report.result._tag === "Completed"
-      ) {
-        bWorkCompleted = true
-      }
-      if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === "delivery-story-G5") {
-        return [{ ...item, graph: deliveryFinalityPrerequisiteCompleteGraph }]
-      }
-      if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === "delivery-story-G0") {
-        return [{ ...item, graph: deliveryFinalityPrerequisiteStartingGraph }]
-      }
-      if (bWorkCompleted && item._tag === "TrackerGraphReadReturned" && item.graph.revision === "delivery-story-G6") {
-        return [{ ...item, graph: deliveryFinalityPrerequisiteCompletedGraph }]
-      }
-      if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === "delivery-story-G6") {
-        return [{ ...item, graph: deliveryFinalityPrerequisiteACompleteGraph }]
-      }
-      if (item._tag === "CompletionTaskRequestReturned" && item.outcome === "Acknowledged") {
-        return [{ _tag: "CompletionTaskPrerequisiteReopened", graph: deliveryFinalityPrerequisiteReopenedGraph }, item]
-      }
-      return [item]
-    })
-  })()
+  story: prerequisiteReopensStory(deliveryFinalitySpineAuthoredCassette.story)
 })
 
 /** The same A-to-B story when the tracker applies Q but its direct response is lost. */

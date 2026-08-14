@@ -112,6 +112,52 @@ export const integrationCandidateHasExactParents = (
   observation.directParents[0] === correlation.expectedTargetHead &&
   observation.directParents[1] === correlation.acceptedResultCommit
 
+interface CandidateSessionSupersessionFields {
+  readonly observedTargetHead: GitCommitSha
+  readonly priorCorrelation: IntegrationCandidateCorrelation
+  readonly successorCorrelation: IntegrationCandidateCorrelation
+}
+
+const candidateSessionSupersessionScopeIssue = (event: CandidateSessionSupersessionFields): string | undefined => {
+  if (event.priorCorrelation.runId !== event.successorCorrelation.runId) {
+    return "candidate session supersession must stay within one run"
+  }
+  if (event.priorCorrelation.attemptId !== event.successorCorrelation.attemptId) {
+    return "candidate session supersession must stay within one attempt"
+  }
+  if (event.priorCorrelation.integrationTarget.ref !== event.successorCorrelation.integrationTarget.ref) {
+    return "candidate session supersession must stay on one integration ref"
+  }
+  return event.priorCorrelation.integrationTarget.repository !== event.successorCorrelation.integrationTarget.repository
+    ? "candidate session supersession must stay on one integration repository"
+    : undefined
+}
+
+const candidateSessionSupersessionIdentityIssue = (event: CandidateSessionSupersessionFields): string | undefined => {
+  if (event.priorCorrelation.candidateResource === event.successorCorrelation.candidateResource) {
+    return "candidate session supersession must use a distinct candidate resource"
+  }
+  if (event.priorCorrelation.acceptedResultCommit !== event.successorCorrelation.acceptedResultCommit) {
+    return "candidate session supersession must preserve the accepted result commit"
+  }
+  if (
+    !evidenceReferenceEquals(event.priorCorrelation.acceptanceManifest, event.successorCorrelation.acceptanceManifest)
+  ) {
+    return "candidate session supersession must preserve the accepted result evidence"
+  }
+  if (event.priorCorrelation.candidateId === event.successorCorrelation.candidateId) {
+    return "candidate session supersession must use a new candidate identity"
+  }
+  return event.priorCorrelation.integrationSessionId === event.successorCorrelation.integrationSessionId
+    ? "candidate session supersession must use a new session identity"
+    : undefined
+}
+
+const candidateSessionSupersessionTargetHeadIssue = (event: CandidateSessionSupersessionFields): string | undefined =>
+  event.successorCorrelation.expectedTargetHead === event.observedTargetHead
+    ? undefined
+    : "candidate successor must bind the freshly observed target head"
+
 export const IntegrationCandidateConstructionIntendedEvent = Schema.TaggedStruct(
   "IntegrationCandidateConstructionIntended",
   {
@@ -140,41 +186,9 @@ export const IntegrationCandidateSessionSupersededEvent = Schema.TaggedStruct("I
   version: Schema.Literal(workflowJournalEventVersion)
 }).check(
   Schema.makeFilter((event) => {
-    if (event.priorCorrelation.runId !== event.successorCorrelation.runId) {
-      return "candidate session supersession must stay within one run"
-    }
-    if (event.priorCorrelation.attemptId !== event.successorCorrelation.attemptId) {
-      return "candidate session supersession must stay within one attempt"
-    }
-    if (event.priorCorrelation.integrationTarget.ref !== event.successorCorrelation.integrationTarget.ref) {
-      return "candidate session supersession must stay on one integration ref"
-    }
-    if (
-      event.priorCorrelation.integrationTarget.repository !== event.successorCorrelation.integrationTarget.repository
-    ) {
-      return "candidate session supersession must stay on one integration repository"
-    }
-    if (event.priorCorrelation.candidateResource === event.successorCorrelation.candidateResource) {
-      return "candidate session supersession must use a distinct candidate resource"
-    }
-    if (event.priorCorrelation.acceptedResultCommit !== event.successorCorrelation.acceptedResultCommit) {
-      return "candidate session supersession must preserve the accepted result commit"
-    }
-    if (
-      !evidenceReferenceEquals(event.priorCorrelation.acceptanceManifest, event.successorCorrelation.acceptanceManifest)
-    ) {
-      return "candidate session supersession must preserve the accepted result evidence"
-    }
-    if (event.priorCorrelation.candidateId === event.successorCorrelation.candidateId) {
-      return "candidate session supersession must use a new candidate identity"
-    }
-    if (event.priorCorrelation.integrationSessionId === event.successorCorrelation.integrationSessionId) {
-      return "candidate session supersession must use a new session identity"
-    }
-    if (event.successorCorrelation.expectedTargetHead !== event.observedTargetHead) {
-      return "candidate successor must bind the freshly observed target head"
-    }
-    return undefined
+    const scopeIssue = candidateSessionSupersessionScopeIssue(event)
+    if (scopeIssue !== undefined) return scopeIssue
+    return candidateSessionSupersessionIdentityIssue(event) ?? candidateSessionSupersessionTargetHeadIssue(event)
   })
 )
 export type IntegrationCandidateSessionSupersededEvent = typeof IntegrationCandidateSessionSupersededEvent.Type

@@ -26,13 +26,8 @@ import {
   rememberPassedTargetVerification,
   type TargetPromotionHistoryIndexes
 } from "./target-promotion-history.js"
-import {
-  addSetValue,
-  candidateKey,
-  priorSessionSupersessionKey,
-  sessionSupersessionKey,
-  setMapValue
-} from "./integration-history-run-binding.js"
+import { addSetValue, candidateKey, setMapValue } from "./integration-history-run-binding.js"
+import { invalidCandidateSessionSupersession } from "./integration-history-session-supersession.js"
 
 export interface IntegrationHistoryIndexes {
   readonly acceptedExecutorResults: Map<AttemptId, AcceptedResult>
@@ -331,62 +326,6 @@ const invalidContinuationLimitReachedCandidate = (
     event.continuationCount === continuationCount
     ? undefined
     : `candidate continuation limit has no exact final non-submitting report at ${event.lastReportAt}`
-}
-
-const invalidCandidateSessionSupersession = (
-  event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateSessionSuperseded" }>,
-  indexes: IntegrationHistoryIndexes
-): string | undefined => {
-  const priorIntent = indexes.integrationCandidateIntents.get(candidateKey(event.priorCorrelation))
-  const priorAlreadyRecorded = indexes.integrationCandidateSessionSupersessionsByPrior.has(
-    priorSessionSupersessionKey(event.priorCorrelation)
-  )
-  const successorAlreadyRecorded = indexes.integrationCandidateSessionSupersessions.has(
-    sessionSupersessionKey(event.successorCorrelation)
-  )
-  const priorConstructed = [...indexes.integrationCandidatesConstructed.values()].some(
-    (candidate) =>
-      candidate.correlation.candidateId === event.priorCorrelation.candidateId &&
-      integrationCandidateCorrelationEquals(candidate.correlation, event.priorCorrelation) &&
-      candidate.candidateCommit === event.priorCandidateCommit
-  )
-  const started = indexes.integrationStarted.get(event.startedAt)
-  const valid =
-    priorIntent !== undefined &&
-    integrationCandidateCorrelationEquals(priorIntent.correlation, event.priorCorrelation) &&
-    priorConstructed &&
-    started !== undefined &&
-    event.responsibilityBeganAt === priorIntent.responsibilityBeganAt &&
-    event.startedAt === priorIntent.startedAt &&
-    !priorAlreadyRecorded &&
-    !successorAlreadyRecorded &&
-    event.priorCorrelation.expectedTargetHead !== event.observedTargetHead &&
-    event.priorCorrelation.candidateResource !== event.successorCorrelation.candidateResource &&
-    event.priorCorrelation.integrationTarget.repository === event.successorCorrelation.integrationTarget.repository &&
-    event.priorCorrelation.integrationTarget.ref === event.successorCorrelation.integrationTarget.ref &&
-    acceptedResultEquivalence(started.acceptedResult, {
-      commit: event.priorCorrelation.acceptedResultCommit,
-      evidenceManifest: event.priorCorrelation.acceptanceManifest
-    }) &&
-    acceptedResultEquivalence(started.acceptedResult, {
-      commit: event.successorCorrelation.acceptedResultCommit,
-      evidenceManifest: event.successorCorrelation.acceptanceManifest
-    }) &&
-    started.integrationTarget.repository === event.priorCorrelation.integrationTarget.repository &&
-    started.integrationTarget.ref === event.priorCorrelation.integrationTarget.ref
-  if (valid) {
-    setMapValue(
-      indexes.integrationCandidateSessionSupersessions,
-      sessionSupersessionKey(event.successorCorrelation),
-      event
-    )
-    setMapValue(
-      indexes.integrationCandidateSessionSupersessionsByPrior,
-      priorSessionSupersessionKey(event.priorCorrelation),
-      event
-    )
-  }
-  return valid ? undefined : "candidate session supersession has no exact earlier constructed candidate"
 }
 
 const invalidTargetVerificationHistory = (

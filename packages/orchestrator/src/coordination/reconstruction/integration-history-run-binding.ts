@@ -1,4 +1,5 @@
 import type { RunId } from "@dalph/contracts"
+import { Match } from "effect"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { IntegrationCandidateCorrelation } from "../../workflow/protocols/integration-candidate-construction/events.js"
 
@@ -14,57 +15,91 @@ export const addSetValue = <T>(set: Set<T>, value: T): void => {
   Set.prototype.add.call(set, value)
 }
 
-const candidateCorrelatedEventTags: ReadonlySet<string> = new Set([
-  "IntegrationCandidateGitObserved",
-  "IntegrationCandidateGitValidationFailed",
-  "IntegrationCandidateConstructed",
-  "IntegrationCandidateCorrectionLimitReached",
-  "IntegrationCandidateContinuationLimitReached"
-])
+type TargetPromotionRunBindingEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "TargetPromotionIntended"
+      | "TargetPromotionAttemptIntended"
+      | "TargetPromotionObservedSuccess"
+      | "TargetPromotionStale"
+      | "TargetPromotionNonConvergence"
+  }
+>
 
-const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | undefined => {
-  if (
-    event._tag === "TargetPromotionIntended" ||
-    event._tag === "TargetPromotionAttemptIntended" ||
-    event._tag === "TargetPromotionObservedSuccess" ||
-    event._tag === "TargetPromotionStale" ||
-    event._tag === "TargetPromotionNonConvergence"
-  ) {
-    return event.correlation.candidateCorrelation.runId === runId &&
-      event.correlation.verificationCorrelation.candidateCorrelation.runId === runId
-      ? undefined
-      : `target promotion binds run ${event.correlation.candidateCorrelation.runId}`
+type TargetVerificationRunBindingEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "TargetVerificationIntended" | "TargetVerificationEvidenceSealed" }
+>
+
+type CandidateCorrelationRunBindingEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "IntegrationCandidateGitObserved"
+      | "IntegrationCandidateGitValidationFailed"
+      | "IntegrationCandidateConstructed"
+      | "IntegrationCandidateCorrectionLimitReached"
+      | "IntegrationCandidateContinuationLimitReached"
   }
-  if (event._tag === "TargetVerificationCorrelationContradicted") {
-    return event.expected.candidateCorrelation.runId === runId
-      ? undefined
-      : "target verification contradiction expectation binds a foreign run"
-  }
-  if (event._tag === "TargetVerificationIntended" || event._tag === "TargetVerificationEvidenceSealed") {
-    return event.correlation.candidateCorrelation.runId === runId
-      ? undefined
-      : `target verification binds run ${event.correlation.candidateCorrelation.runId}`
-  }
-  if (event._tag === "IntegrationCandidateConstructionIntended") {
-    return event.plannedAttempt.runId === runId && event.correlation.runId === runId
-      ? undefined
-      : `integration work for attempt ${event.plannedAttempt.attemptId} binds run ${event.plannedAttempt.runId}`
-  }
-  if (event._tag === "IntegrationCandidateSessionSuperseded") {
-    return event.priorCorrelation.runId === runId && event.successorCorrelation.runId === runId
-      ? undefined
-      : "candidate session supersession binds a foreign run"
-  }
-  if (event._tag === "IntegrationCandidateAgentReported") {
-    return event.expectedCorrelation.runId === runId
-      ? undefined
-      : `candidate report expectation binds run ${event.expectedCorrelation.runId}`
-  }
-  if (candidateCorrelatedEventTags.has(event._tag) && "correlation" in event) {
-    return event.correlation.runId === runId ? undefined : `candidate event binds run ${event.correlation.runId}`
-  }
-  return undefined
-}
+>
+
+const invalidTargetPromotionRunBinding = (event: TargetPromotionRunBindingEvent, runId: RunId): string | undefined =>
+  event.correlation.candidateCorrelation.runId === runId &&
+  event.correlation.verificationCorrelation.candidateCorrelation.runId === runId
+    ? undefined
+    : `target promotion binds run ${event.correlation.candidateCorrelation.runId}`
+
+const invalidTargetVerificationRunBinding = (
+  event: TargetVerificationRunBindingEvent,
+  runId: RunId
+): string | undefined =>
+  event.correlation.candidateCorrelation.runId === runId
+    ? undefined
+    : `target verification binds run ${event.correlation.candidateCorrelation.runId}`
+
+const invalidCandidateCorrelationRunBinding = (
+  event: CandidateCorrelationRunBindingEvent,
+  runId: RunId
+): string | undefined =>
+  event.correlation.runId === runId ? undefined : `candidate event binds run ${event.correlation.runId}`
+
+const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | undefined =>
+  Match.value(event).pipe(
+    Match.tags({
+      TargetPromotionIntended: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
+      TargetPromotionAttemptIntended: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
+      TargetPromotionObservedSuccess: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
+      TargetPromotionStale: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
+      TargetPromotionNonConvergence: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
+      TargetVerificationCorrelationContradicted: (candidate) =>
+        candidate.expected.candidateCorrelation.runId === runId
+          ? undefined
+          : "target verification contradiction expectation binds a foreign run",
+      TargetVerificationIntended: (candidate) => invalidTargetVerificationRunBinding(candidate, runId),
+      TargetVerificationEvidenceSealed: (candidate) => invalidTargetVerificationRunBinding(candidate, runId),
+      IntegrationCandidateConstructionIntended: (candidate) =>
+        candidate.plannedAttempt.runId === runId && candidate.correlation.runId === runId
+          ? undefined
+          : `integration work for attempt ${candidate.plannedAttempt.attemptId} binds run ${candidate.plannedAttempt.runId}`,
+      IntegrationCandidateSessionSuperseded: (candidate) =>
+        candidate.priorCorrelation.runId === runId && candidate.successorCorrelation.runId === runId
+          ? undefined
+          : "candidate session supersession binds a foreign run",
+      IntegrationCandidateAgentReported: (candidate) =>
+        candidate.expectedCorrelation.runId === runId
+          ? undefined
+          : `candidate report expectation binds run ${candidate.expectedCorrelation.runId}`,
+      IntegrationCandidateGitObserved: (candidate) => invalidCandidateCorrelationRunBinding(candidate, runId),
+      IntegrationCandidateGitValidationFailed: (candidate) => invalidCandidateCorrelationRunBinding(candidate, runId),
+      IntegrationCandidateConstructed: (candidate) => invalidCandidateCorrelationRunBinding(candidate, runId),
+      IntegrationCandidateCorrectionLimitReached: (candidate) =>
+        invalidCandidateCorrelationRunBinding(candidate, runId),
+      IntegrationCandidateContinuationLimitReached: (candidate) =>
+        invalidCandidateCorrelationRunBinding(candidate, runId)
+    }),
+    Match.orElse(() => undefined)
+  )
 
 export const invalidIntegrationRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | undefined => {
   if (event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted") {
