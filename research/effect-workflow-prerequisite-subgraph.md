@@ -1,31 +1,30 @@
 ```mermaid
 flowchart LR
-  subgraph generic["Generic executor boundary"]
-    i220["#220 Supply exact task instructions"]
+  subgraph concrete["Concrete Codex executor"]
+    i58["#58 Persistent Codex app-server executor<br/>implemented locally; integration gates running"]
+    i75["#75 Qualify sessions/processes<br/>pending"]
+    i68["#68 Retry/replace/quarantine integration session<br/>pending"]
+    i69["#69 Disposition-authorized cleanup<br/>pending"]
+    i77["#77 Qualify production cleanup<br/>pending"]
   end
 
-  subgraph concrete["Maintainer-selected executor implementation"]
-    i58["#58 Implement persistent Codex app-server executor"]
-    i75["#75 Qualify its sessions/processes"]
-    i68["#68 Retry/replace/quarantine integration session"]
-    i69["#69 Disposition-authorized cleanup"]
-    i77["#77 Qualify production cleanup"]
+  subgraph workflow["Effect Workflow readiness"]
+    i138["#138 Promotion blocker reconciliation<br/>implemented locally; integration gates running"]
+    i141["#141 Integration finality<br/>implemented on master; GitHub bookkeeping open"]
+    i142["#142 Complete conformance matrix<br/>pending"]
+    i143["#143 Delete superseded orchestration<br/>pending"]
+    effectWorkflow["Effect Workflow evaluation<br/>pending"]
   end
 
-  subgraph final["Final qualification"]
-    i142["#142 Complete conformance matrix"]
-    i143["#143 Delete superseded orchestration"]
-    effectWorkflow["Effect Workflow evaluation"]
-  end
-
-  i142 --> i143
-  i143 -. evaluation authorized .-> effectWorkflow
-
-  i220 --> i58
   i58 --> i75
   i58 --> i68
   i68 --> i69
   i69 --> i77
+
+  i138 --> i141
+  i141 --> i142
+  i142 --> i143
+  i143 -. evaluation authorized .-> effectWorkflow
 ```
 
 Completed prerequisites are removed from the active graph. Issue #66 was
@@ -37,12 +36,16 @@ Issue #140 was integrated at `d606b63fd`, adding fail-closed normalized
 projection outcomes without exposing executor internals.
 
 #219 selected one simple persistent Codex app-server executor and explicitly
-rejected a required review loop. The current generic executor call omits the
-tracker-authored task title/body, so #220 repairs that exact input first. The
-rewritten #58 then implements the selected private app-server/thread behavior,
-and #75 qualifies its real session and process lifecycle. The integration-
-session and cleanup chain continues through #68, #69, and #77.
+rejected a required review loop. #220 now supplies the tracker-authored task
+instructions to the generic executor boundary. #58 implements the selected
+private app-server/thread behavior; its local implementation is undergoing the
+combined integration gates before it is pushed and closed. #75 then qualifies
+its real session and process lifecycle. The integration-session and cleanup
+chain continues independently through #68, #69, and #77.
 
-The concrete-implementation branch does not block the focused Effect Workflow
-evaluation. With #140 complete, that evaluation remains blocked by #142 and
-#143 in that order. Closing #143 authorizes evaluation, not adoption.
+The concrete executor branch does not block the focused Effect Workflow
+evaluation. That readiness lane converges the completed #137 and #139 work with
+the locally implemented #138 behavior at #141. #141's implementation is already
+on master, while its GitHub issue remains open for bookkeeping and combined
+prerequisite verification. After that convergence is recorded, #142 and #143
+remain in order. Closing #143 authorizes evaluation, not adoption.
