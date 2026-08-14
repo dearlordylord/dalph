@@ -53,8 +53,12 @@ type FakeLinuxProcessStat =
   | { readonly _tag: "Read"; readonly text: string }
   | { readonly _tag: "Error"; readonly error: unknown }
 
-const processFilePath = (path: Parameters<typeof nodeFsPromises.readFile>[0]): string =>
-  typeof path === "string" ? path : path instanceof URL ? path.pathname : Buffer.from(path).toString("utf8")
+const processFilePath = (path: Parameters<typeof nodeFsPromises.readFile>[0]): string => {
+  if (typeof path === "string") return path
+  if (path instanceof URL) return path.pathname
+  if (Buffer.isBuffer(path)) return path.toString("utf8")
+  return "/controlled-procfs/unsupported-file-handle"
+}
 
 const linuxProcessStat = (pid: number, parentPid: number, processGroupId: number, startIdentity: string): string =>
   `${pid} (fixture-codex) ${[
@@ -381,9 +385,10 @@ it.effect("classifies controlled Linux process census observations at the public
     withFakeLinuxProc(
       entries,
       stats,
-      runCensus((census) => census.observe(thread("idle", []), [terminal(rootPid)]))
-        .pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
-        .pipe(Effect.map((observed) => expect(observed).toEqual(expected)))
+      runCensus((census) => census.observe(thread("idle", []), [terminal(rootPid)])).pipe(
+        Effect.provide(nodeCodexOwnedActivityCensusLayer),
+        Effect.map((observed) => expect(observed).toEqual(expected))
+      )
     )
   )
 })
