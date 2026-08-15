@@ -103,8 +103,8 @@ requires a setting that cannot correctly be shared.
   functions above cyclomatic complexity eight in each file.
 - `pnpm check:duplicates` enforces the configured TypeScript duplication budget.
 - `pnpm test` runs the deterministic Vitest suite.
-- `pnpm test:coverage` enforces the configured statements (98%), branches
-  (96%), functions (97%), and lines (98%) aggregate floors, then verifies at
+- `pnpm test:coverage` enforces 99% aggregate coverage for statements, branches,
+  functions, and lines, then verifies at
   least 99% coverage of changed executable production lines from
   `coverage/coverage-final.json`.
 - `pnpm test:mbt` runs the Quint-connected executable conformance suites.
@@ -118,9 +118,10 @@ requires a setting that cannot correctly be shared.
 - `pnpm check:all` runs the bounded local implementation gate, including
   Quint-connected MBT but not exhaustive formal model checking.
 
-The aggregate floors are an evidence-backed prototype boundary, not a waiver
-for new production paths. After the retained public-seam and chronological
-scenario tests, the full suite measured 16,261/16,575 statements (98.10%),
+The 99% aggregate goals deliberately exceed the recorded prototype baseline and
+make its remaining coverage debt visible in the repository gate. After the
+retained public-seam and chronological scenario tests, the full suite measured
+16,261/16,575 statements (98.10%),
 9,128/9,472 branches (96.36%), 5,247/5,375 functions (97.61%), and
 15,076/15,300 lines (98.53%). The 344 uncovered branches are concentrated in
 platform/process ownership and invariant-heavy recovery code: 69 in the
