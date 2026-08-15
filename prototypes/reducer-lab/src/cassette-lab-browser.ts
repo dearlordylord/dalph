@@ -413,7 +413,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       appendTextElement(
         article,
         "p",
-        "Production scheduler/restart chronology: the runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues. Each executor returns coarse Terminal Completed, and later controlled tracker graphs report task success. This chronology contains no accepted-result integration; issue #167 owns replacing that test seam.",
+        "Production scheduler/restart chronology: the runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues. This cassette also exercises the rejected candidate, verification, and integration split. The Lab keeps those frames only as historical regression evidence; issues #222, #223, #68, and #225 replace them with one outer Integrator session.",
         "delivery-story-scope"
       )
     }

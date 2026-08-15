@@ -24,7 +24,10 @@ if (nativeFiles.length > 0) {
   run(executable("oxlint"), ["-c", ".oxlintrc.json", "--deny-warnings", ...(fix ? ["--fix"] : []), ...nativeFiles])
 }
 
-const compatibilityFiles = (staged ? allFiles : selectedFiles).filter((file) => typedExtensions.has(extname(file)))
+const allCompatibilityFiles = allFiles.filter((file) => typedExtensions.has(extname(file)))
+const compatibilityFileSet = new Set(allCompatibilityFiles)
+const selectedCompatibilityFiles = selectedFiles.filter((file) => compatibilityFileSet.has(file))
+const compatibilityFiles = staged ? allCompatibilityFiles : selectedCompatibilityFiles
 const runCompatibility = (files, shouldFix) => {
   if (files.length === 0) return
   run(executable("eslint"), [
@@ -35,7 +38,6 @@ const runCompatibility = (files, shouldFix) => {
     "--suppressions-location",
     "eslint-functional-suppressions.json",
     "--no-error-on-unmatched-pattern",
-    "--no-warn-ignored",
     ...(shouldFix ? ["--fix"] : []),
     ...files
   ])
@@ -43,10 +45,7 @@ const runCompatibility = (files, shouldFix) => {
 
 if (staged && fix) {
   runCompatibility(compatibilityFiles, false)
-  runCompatibility(
-    selectedFiles.filter((file) => typedExtensions.has(extname(file))),
-    true
-  )
+  runCompatibility(selectedCompatibilityFiles, true)
 } else {
   runCompatibility(compatibilityFiles, fix)
 }

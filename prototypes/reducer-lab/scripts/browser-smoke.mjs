@@ -4,6 +4,8 @@ import { chromium } from "playwright"
 const labUrl = process.env.REDUCER_LAB_URL ?? "http://determined_johnson.orb.local:4173/"
 const terminalTimeoutMs = 180_000
 const insecureOriginCassette = "authored:candidateCorrectionAfterUnreadableGit"
+const applicationExitCassette = "application-exit:drainFailure"
+const codexExecutorCassette = "codex-executor:lostTurnResponseReconciled"
 const framedCassette = "authored:dependentTasksCompleteInOneRun"
 const acceptedIntegrationCassette = "authored:acceptedResultRestartsIntoIntegration"
 const linkedDeliveryStoryCassette = "authored:deliveryInvariantStory"
@@ -21,7 +23,14 @@ try {
   const selector = page.locator('[data-role="cassette-selector"]')
   const maintainedCassetteCount = await selector.locator("option").count()
   assert.ok(maintainedCassetteCount > 0)
-  assert.equal(await selector.locator("optgroup").count(), 3)
+  assert.equal(await selector.locator("optgroup").count(), 5)
+  assert.deepEqual(await selector.locator("optgroup").evaluateAll((groups) => groups.map(({ label }) => label)), [
+    "Authored coordinator stories",
+    "Application Exit lifecycle",
+    "Concrete Codex executor",
+    "Target promotion protocol",
+    "Integration finality protocol"
+  ])
   assert.equal(await page.locator('input[type="search"]').count(), 0)
 
   await selector.selectOption(insecureOriginCassette)
@@ -36,6 +45,23 @@ try {
     { timeout: terminalTimeoutMs }
   )
   assert.equal(await page.locator("#selected-cassette").getAttribute("data-state"), "Completed")
+
+  for (const [catalogKey, expectedEvidence] of [
+    [applicationExitCassette, ["outside every Run journal", "Process-end decision"]],
+    [codexExecutorCassette, ["private behind the generic executor boundary", "Generic executor reports"]]
+  ]) {
+    await page.reload({ waitUntil: "networkidle" })
+    await selector.selectOption(catalogKey)
+    await page.getByRole("button", { name: /Run selected cassette:/u }).click()
+    await page.waitForFunction(
+      (selectedKey) => document.querySelector("#selected-cassette")?.getAttribute("data-catalog-key") === selectedKey
+        && document.querySelector("#selected-cassette")?.getAttribute("data-state") === "Completed",
+      catalogKey,
+      { timeout: terminalTimeoutMs }
+    )
+    const evidence = await page.locator('[data-role="execution-evidence"]').textContent() ?? ""
+    for (const expected of expectedEvidence) assert.match(evidence, new RegExp(expected, "u"))
+  }
 
   await page.reload({ waitUntil: "networkidle" })
   await selector.selectOption(framedCassette)
@@ -394,7 +420,7 @@ try {
   await selector.selectOption(linkedDeliveryStoryCassette)
   assert.match(
     await page.locator("#selected-cassette .delivery-story-scope").textContent() ?? "",
-    /Each executor returns coarse Terminal Completed.*later controlled tracker graphs report task success.*contains no accepted-result integration.*issue #167 owns replacing that test seam/u
+    /rejected candidate, verification, and integration split.*historical regression evidence.*one outer Integrator session/u
   )
   await page.evaluate(() => {
     globalThis.__linkedDeliveryStoryTrace = []
@@ -466,20 +492,26 @@ try {
     previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
     assert.ok(previousWave >= 0, `missing rendered frontier wave ${wave || "empty"}`)
   }
-  const initialMiddle = linkedFrameTruth.find(({ facts, taskState }) =>
-    /Initial activation 1/u.test(facts) && /B/u.test(taskState) && /C/u.test(taskState) && /attempt:B:1/u.test(taskState) && /attempt:C:2/u.test(taskState)
+  const initialMiddle = linkedFrameTruth.find(({ taskState }) =>
+    /B/u.test(taskState) && /C/u.test(taskState) && /attempt:B:0/u.test(taskState) && /attempt:C:1/u.test(taskState)
   )
-  const laterMiddle = linkedFrameTruth.find(({ facts }) => /Later activation 2/u.test(facts))
+  const laterMiddle = initialMiddle === undefined
+    ? undefined
+    : linkedFrameTruth.find(({ index, offGraph }) =>
+        index > initialMiddle.index
+        && /Task B · graph not established/u.test(offGraph)
+        && /Task C · graph not established/u.test(offGraph)
+      )
   assert.ok(initialMiddle)
   assert.ok(laterMiddle)
-  assert.match(laterMiddle.taskState, /attempt:B:1/u)
-  assert.match(laterMiddle.taskState, /attempt:C:2/u)
+  assert.match(laterMiddle.taskState, /attempt:B:0/u)
+  assert.match(laterMiddle.taskState, /attempt:C:1/u)
   assert.match(laterMiddle.capacity, /2 held of capacity 2/u)
   assert.match(laterMiddle.capacity, /Anonymous process-local positions/u)
   assert.match(laterMiddle.offGraph, /Task B · graph not established/u)
   assert.match(laterMiddle.offGraph, /Task C · graph not established/u)
   assert.match(laterMiddle.offGraph, /placement GraphNotEstablished/u)
-  assert.match(laterMiddle.offGraph, /occupies capacity · Run .+ · attempt attempt:B:1/u)
+  assert.match(laterMiddle.offGraph, /occupies capacity · Run .+ · attempt attempt:B:0/u)
   assert.match(laterMiddle.offGraph, /planned-attempt executor responsibility/u)
   await linkedFrameSelector.selectOption(String(laterMiddle.index))
   await page.setViewportSize({ width: 390, height: 844 })
@@ -521,7 +553,10 @@ try {
       `missing landmark frontier ${wave || "empty"}: ${JSON.stringify(landmarkWaves)}`
     )
   }
-  for (const activation of ["Initial activation 1", "Later activation 2", "Later activation 3", "Later activation 4"]) {
+  const activationLabels = [...new Set(linkedFrameTruth.flatMap(({ facts }) =>
+    facts.match(/(?:Initial|Later) activation \d+/gu) ?? []
+  ))]
+  for (const activation of activationLabels) {
     assert.ok(landmarkWaves.some((value) => value.includes(activation)), `missing delivery landmark for ${activation}`)
   }
   for (const held of heldSequence.filter((value) => value !== "G")) {

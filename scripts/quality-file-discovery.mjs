@@ -11,6 +11,7 @@ const normalizedRelativePath = (path) => path.split(sep).join("/")
 
 const isAuthoredQualityFile = (path) => {
   const normalized = normalizedRelativePath(path)
+  if (normalized.split("/").some((segment) => ignoredDirectoryNames.has(segment))) return false
   if (fixturePathPattern.test(normalized)) return false
   if (normalized.split("/").length === 1) return rootConfigurationPattern.test(normalized)
   return authoredExtensions.has(extname(normalized))

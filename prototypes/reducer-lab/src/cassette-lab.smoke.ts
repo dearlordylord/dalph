@@ -646,6 +646,12 @@ await scenario("shows represented and off-graph responsibilities without inventi
     throw new Error("The staggered delivery story is missing")
   }
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  assert(
+    document.querySelector(".delivery-story-scope")?.textContent?.includes(
+      "keeps those frames only as historical regression evidence"
+    ) === true,
+    "The old candidate, verification, and integration frames must not be presented as current conformance evidence"
+  )
   const done = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await done

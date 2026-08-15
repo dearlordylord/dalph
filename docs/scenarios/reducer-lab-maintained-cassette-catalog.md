@@ -158,10 +158,12 @@ discards all displayed results.
 - `the real browser entry runs every maintained cassette and retains every terminal result`
   checks the browser update path and the exact completed/failed summary.
 - `browser-smoke drives the real Orb application through every maintained cassette`
-  runs through the package's `browser-smoke` command against `REDUCER_LAB_URL`, completes
-  the insecure-origin verification cassette, then discovers the current maintained
-  choice count from the ordinary selector and requires every choice to
-  settle with no failure or Lab defect and exercises retained frame navigation.
+  runs through the package's `browser-smoke` command against `REDUCER_LAB_URL`,
+  requires the selector's exact five production-catalog groups, completes the
+  insecure-origin verification, application-Exit, and concrete Codex-executor
+  checkpoints, then discovers the current maintained choice count and requires
+  every choice to settle with no failure or Lab defect while exercising
+  retained frame navigation.
 - `runs browser Run all sequentially without changing its complete cassette set`
   holds five controlled runners, proves only one starts initially, then proves
   the next starts as the prior cassette settles and every choice retains its result.
@@ -811,6 +813,12 @@ task whose exact facts are correlated below.
 
 ## A maintainer reads the journal-derived integration order beside task-work capacity
 
+This section preserves a browser regression view of the currently shipped but
+rejected candidate, verification, and integration split. It is not the queue
+or session model for the outer Integrator being introduced by #222, #223, #68,
+and #225. The Lab labels the affected cassette accordingly instead of presenting
+these frames as intended-design conformance evidence.
+
 ### Starting situation and trigger
 
 A Dalph maintainer selects the maintained authored cassette whose executor
@@ -871,10 +879,11 @@ proof of current process-local target ownership.
   proves their journal positions and exact correlations, and keeps the
   process-local ownership disclaimer visible. The production FIFO test above
   owns the multiple-same-target ordering claim.
-- The real-browser checkpoint `shows the accepted result enter and start its
-  journal-derived integration order` drives the maintained accepted-result
-  cassette through the served application and checks the waiting, queued, and
-  started visible states.
+- The historical real-browser checkpoint `shows the accepted result enter and
+  start its journal-derived integration order` drives the maintained
+  accepted-result cassette through the served application and checks the
+  waiting, queued, and started visible states without treating them as the
+  outer Integrator design.
 
 ## A maintainer inspects continuation authorization in the selected recovery cassette
 
