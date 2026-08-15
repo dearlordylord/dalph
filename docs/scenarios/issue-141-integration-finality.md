@@ -2,7 +2,12 @@
 
 Issue: [#141 Complete integration, tracker resolution, and responsibility finality](https://github.com/dearlordylord/dalph/issues/141)
 
-Status: accepted on 2026-08-08. Issue #141 starts after issue #60 has
+Status: **partially superseded on 2026-08-14**. Claim replacement/deletion and
+settling one promoted responsibility remain accepted. Any finality premise
+that requires #59 target-verification evidence must be replaced by the
+corrected Integrator evidence contract.
+
+The previously accepted chronology starts after issue #60 has
 durably proved an exact candidate promotion. It replaces and later deletes the
 task's exact claim and settles only that task's retained integration
 responsibility. Issue #61 owns the request that tells the tracker to complete

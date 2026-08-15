@@ -76,7 +76,7 @@ not incidental glue.
 | Current graph becomes coherent delivery consequences | `delivery` | none | current tracker graph, Run policy, exact obligations/current evidence, and established settlement evidence | `CurrentSignal<DeliveryConsequences>` | description | [`delivery.ts`](../packages/orchestrator/src/coordination/delivery/delivery.ts) |
 | Current frontier is viewed through current Run policy | `boundedParallelTickets` | current delivery frontier | current Run control policy | current bounded parallel tickets | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
 | Bounded placements and exact obligations become ticket deliveries | `executorResponsibilities` | current bounded parallel tickets | established exact obligations and their current evidence | `TicketDeliveryRelation` | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
-| Ticket deliveries become established settlement facts | `deliverySettlements` | ticket-delivery relation | established integration, verification, promotion, cleanup, and disposition evidence | `DeliverySettlementRelation` | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
+| Ticket deliveries become established settlement facts | `deliverySettlements` | ticket-delivery relation | established Integrator, Git qualification, promotion, cleanup, and disposition evidence | `DeliverySettlementRelation` | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
 | Settlement facts become coherent tracker-reflection meaning | `reflectDeliverySettlements` | delivery-settlement relation | none | `CurrentSignal<DeliveryConsequences>` with semantic tracker consequences, never executable proposals | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
 | Current delivery consequences and accepted action requirements become one checked proposal frontier | `deliveryActionPlanning` | current delivery consequences | named tracker-graph, ticket-delivery, settlement/integration, and tracker-reflection requirements | `CurrentSignal<DeliveryProposalFrontier>` | planning | [`delivery-action-planning.ts`](../packages/orchestrator/src/coordination/delivery/delivery-action-planning.ts) |
 
@@ -139,9 +139,8 @@ same ordinary delivery, planning, runtime, and stabilization interfaces.
 | Git | commits, lineage, refs, worktrees, and integration state | exact planned locators, journaled intents and observations, and current process-local projections |
 | Dalph executor | complete work for one planned attempt and its normalized running, safely suspended, or terminal report | exact planned-attempt correlation and journaled responsibility/report facts |
 | Execution substrate | agent session/context and process observations used internally by an executor | only observations exposed through an accepted executor protocol; no copied session state as authority |
-| Integration-candidate agent | its separately identified candidate-construction session and reports | journaled candidate intent, exact session correlation, and submitted candidate evidence |
-| Target repository verification wrapper | one exact request's guarded checks, terminal result, diagnostics, and heavy-lock lifecycle | journaled request intent plus content-addressed artifacts and the sealed manifest after complete rereads |
-| Evidence store | immutable bytes addressed by their content digest | exact references in workflow-journal verification events; never copied derived frontier or lock state |
+| Integrator | one exact resumable integration session, including merge construction, conflict resolution, repository checks, review, and provider-private recovery | exact session correlation, its prepared-candidate or conclusive unsuccessful report, and referenced evidence |
+| Evidence store | immutable bytes addressed by their content digest | exact references in workflow-journal evidence-bearing events; never copied derived frontier or lock state |
 | Dalph Journal | ordered workflow occurrences recorded by Dalph | the workflow history itself |
 
 Dalph does not turn a copied external fact into authority. After an ambiguous
@@ -221,8 +220,7 @@ exact safe-or-terminal executor report is required before releasing that
 attempt's task-work position. How an executor implementation handles its
 suspension request remains behind the executor boundary. An interruptible
 tracker or ordinary Git workflow call may instead leave a recoverable ambiguity
-behind its acknowledged intent. Candidate
-construction, target verification plus immutable evidence sealing, and target
+behind its acknowledged intent. An admitted Integrator call and target
 promotion are separately classified atomic integration actions: one admitted
 action may finish only inside the original drain, then releases its local owner
 without admitting a successor. Its existing protocol intent remains the basis
@@ -388,22 +386,22 @@ but it is not part of this production event vocabulary.
 An accepted executor result does not complete its tracker task. Dalph first
 establishes a durable integration obligation. Runtime serializes work for the
 same repository/ref target separately from task-work capacity. Integration
-uses a candidate resource distinct from the task worktree and must establish
-the exact accepted-head protocol before tracker completion or cleanup can be
-settled. After Git proves the exact two-parent candidate, Dalph reacquires the
-same-target process-local position, obtains current tracker and target-lineage
-facts, and invokes only the configured public verification wrapper. The
-wrapper owns its heavy lock. Dalph records one deterministic request intent,
-stores and rereads immutable evidence, and records a sealed terminal manifest.
-A non-passing terminal preserves the candidate and blocks promotion; a sealed
-passing manifest is only a premise for the later promotion protocol.
+uses a session and candidate resource distinct from the task worktree. Dalph
+gives the exact integration-ready result and target facts to one injected
+Integrator. The Integrator owns merge construction, conflict resolution,
+repository checks, review, and provider-private retry or recovery. Dalph does
+not model or invoke those internal stages separately.
+
+When the Integrator reports one prepared candidate M, Dalph asks Git to prove
+that M has exact ordered parents `[H, C]`. Only that Git-qualified report may
+reach target promotion. A conclusive unsuccessful report or an invalid
+reported candidate enters the #68 quarantine and operator-direction protocol.
 
 See [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md),
 [issue-56-queue-accepted-integration.md](scenarios/issue-56-queue-accepted-integration.md),
-and
-[issue-57-build-two-parent-integration-candidate.md](scenarios/issue-57-build-two-parent-integration-candidate.md).
-The verification continuation is specified by
-[issue-59-run-target-verification.md](scenarios/issue-59-run-target-verification.md).
+and [issue #222](https://github.com/dearlordylord/dalph/issues/222). The
+historical issue-57 and issue-59 scenarios predate this boundary correction and
+are not current acceptance authority.
 
 ## Formal Model and Executable Scenarios
 
@@ -429,7 +427,8 @@ depart from the community knowledge base.
 | [Journal and Reconstruction](architecture/journal-and-reconstruction.md) | Run establishment, journal publication, reduction, later-activation reconstruction, responsibility reconstruction, and failure locality |
 | [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md) | exclusive coordinator ownership, Run establishment and activation, pause, frontier/admission separation, capacity, waits, and stabilization |
 | [Tracker Graph and Claims](architecture/tracker-graph-and-claims.md) | tracker closure, observation evidence, GitHub consistency limits, named reads, mutations, and claims |
-| [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, candidate construction, verification, and exact-head promotion |
+| [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, outer Integrator, Git qualification, and exact-head promotion |
+| [Outer Integrator Boundary Migration](architecture/integrator-boundary-migration.md) | rejected split-stage runtime/model surface, retained behavior, and replacement scenario-to-test map |
 | [Control-plane latency and responsiveness](architecture/control-plane-latency-and-responsiveness.md) | tracker freshness, local derivation, admission, executor observation, local ownership contradiction, application drain, and recovery timing policy |
 | [CONTEXT.md](CONTEXT.md) | canonical domain vocabulary |
 | [scenarios/](scenarios/) | chronological behavior and acceptance-test mappings |

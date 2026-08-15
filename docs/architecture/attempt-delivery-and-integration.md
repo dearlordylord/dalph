@@ -2,8 +2,8 @@
 
 This page groups the protocols that begin after a task is eligible and claimed:
 immutable attempt planning, exact worktree reconciliation, planned-attempt
-executor work, accepted-result admission, and integration candidate
-construction, target verification, and exact-head promotion.
+executor work, accepted-result admission, one outer Integrator session, and
+exact-head promotion.
 
 ## Immutable planned attempt
 
@@ -125,61 +125,35 @@ See
 and the
 [`acceptedResultIntegration` Quint model](../../specs/acceptedResultIntegration.qnt).
 
-## Integration candidate
+## Integrator session and candidate
 
-After current target-lineage evidence permits integration, Dalph records the
-candidate-construction intent before asking the integration agent to start or
-continue one fixed session. The candidate resource is distinct from the
-planned task worktree and is identified by the intent.
+After current target-lineage evidence permits integration, Dalph records one
+exact session intent and gives the integration-ready result C, fixed target
+head H, and isolated candidate resource to the injected Integrator. The
+Integrator owns merge construction, conflict resolution, repository checks,
+review, and provider-private recovery. Dalph does not journal those internal
+stages or invoke a separate repository-verification wrapper.
 
-The integration agent submits one candidate commit. Git validates the object
-directly from the configured repository. A valid two-parent candidate has
-ordered direct parents exactly `[H, C]`, where `H` is the target head fixed by
-the intent and `C` is the accepted result commit.
+The Integrator may report one prepared candidate M. Dalph then asks Git about
+that named object. It accepts the report only when Git proves complete ordered
+direct parents exactly `[H, C]`; it never infers M from worktree HEAD, prose, or
+process exit. A conclusive unsuccessful Integrator result or invalid reported
+candidate enters quarantine under #68. Dalph restart instead returns an
+unfinished session to the Integrator automatically.
 
-Missing objects, non-commit objects, and wrong parents return concrete
-correction work to the same session. Unreadable Git records a typed validation
-failure and preserves the exact submission for a later read. Correlation
-contradictions stop before Git. Same-session correction and automatic
-continuation have separate positive limits. Production supplies both
-explicitly; neither has a default, and construction waits while either is
-missing. Exhausting either limit preserves the accepted result and isolated
-work and releases the process-local target resource.
-
-Constructing a candidate does not prove verification, accepted-head promotion,
-tracker completion, or cleanup. Those require their own established facts
-before delivery can call the integration obligation settled.
-
-See
-[issue-57-build-two-parent-integration-candidate.md](../scenarios/issue-57-build-two-parent-integration-candidate.md)
-and the
-[`acceptedResultIntegration` Quint model](../../specs/acceptedResultIntegration.qnt).
-
-## Target verification
-
-One configured public wrapper receives a deterministic request for the exact
-constructed-candidate occurrence and opaque repository-selected plan. Dalph
-records that request before the call. The wrapper owns its commands and any
-heavy-verification lock; Dalph neither interprets the plan nor acquires that
-lock separately.
-
-Every terminal artifact and the manifest are stored by content identity and
-reread before Dalph records the result. Only a sealed passing result can become
-promotion input. Failed, killed, partial, timed-out, contradictory, missing, or
-corrupt evidence preserves the candidate and cannot move the target ref.
-Process loss reconstructs no target position or wrapper lock and reuses the
-same request identity.
-
-See
-[issue-59-run-target-verification.md](../scenarios/issue-59-run-target-verification.md).
+See [issue #222](https://github.com/dearlordylord/dalph/issues/222), [issue
+#68](https://github.com/dearlordylord/dalph/issues/68), and ADR 0014. The
+historical #57 candidate-agent scenario, #59 target-verification scenario, and current
+accepted-result integration model still encode the superseded split-stage
+design and must not be used as implementation authority until replaced.
 
 ## Exact-head promotion
 
 After a current tracker observation still permits progress, Dalph records one
 deterministic promotion intent, then reads Git again. Only exact H authorizes a
 numbered attempt before Dalph asks Git to atomically replace H with exact
-candidate M. The request carries M's exact
-constructed occurrence and sealed passing verification manifest. Git's atomic
+candidate M. The request carries M's exact prepared-candidate correlation and
+the evidence required by the corrected Integrator contract. Git's atomic
 success or a later Git ancestry read—not equivalent content and not the intent
 alone—establishes promotion.
 

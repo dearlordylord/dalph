@@ -2,8 +2,11 @@
 
 Issue: [#59 Run target-selected verification](https://github.com/dearlordylord/dalph/issues/59)
 
-Status: accepted on 2026-08-08 as the chronological elaboration of issue #59's
-provider-neutral, repository-selected verification requirement.
+Status: **superseded on 2026-08-14; historical evidence only**. The outer
+Integrator owns repository checks and any related locking, review, and retry
+behavior. Dalph no longer has a separate target-verification workflow. Issue
+#59 is closed completed because this workflow shipped; no scenario in this
+file remains current implementation authority. Issue #225 owns its removal.
 
 No person directly starts these scenarios. The running Dalph coordinator acts
 after Git has proved an exact integration candidate. A maintainer can observe

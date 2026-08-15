@@ -92,7 +92,7 @@ apply because they are explicitly deferred by #57.
 
 The maintainer can distinguish exact parents, a missing object, a non-commit,
 an invalid parent shape, and unreadable Git. Dalph must not reverse parent
-order, accept equivalent content, promote an unverified object, or discard
+order, accept equivalent content, promote an unqualified object, or discard
 the isolated session after a read failure.
 
 ### Acceptance test
@@ -105,8 +105,9 @@ the same temporary repository.
 
 ### Starting situation
 
-No person directly triggers this qualification. A verified candidate `M` has
-exact first parent `H`, and the target ref currently resolves to `H`. The
+No person directly triggers this qualification. The Integrator has reported
+candidate `M`, Git has qualified its exact first parent as `H`, and the target
+ref currently resolves to `H`. The
 promotion request names only that repository, ref, candidate, and expected
 head. The process-local coordinator ownership guard is supplied by #214 at a
 higher boundary; this adapter test concerns Git's exact ref effect.

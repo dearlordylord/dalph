@@ -6,8 +6,9 @@ registered worktrees. Dalph records only the reads it initiates, the facts Git
 returns, and the task-local constraint or next reconciliation choice derived
 from those facts.
 
-Issue #57 later constructs an exact two-parent candidate, #59 later verifies
-that candidate, and #60 later sends the compare-and-set promotion request.
+Issue #57 later asks one outer Integrator to prepare an exact two-parent
+candidate and Git-qualifies the reported commit; #60 later sends the
+compare-and-set promotion request.
 Issue #73 qualifies lineage, candidate shape, and ambiguous ref mutation
 against real Git repositories. Issue #74 qualifies exact real-worktree
 registration, ownership, contradiction, and preservation behavior.
@@ -150,12 +151,12 @@ Acceptance seams:
 - existing Git worktree contract scenarios for untracked, foreign, conflicting,
   competing, detached, and Base-mismatch observations
 
-## Scenario 13: the target changes after candidate verification
+## Scenario 13: the target changes after candidate qualification
 
-No person directly triggers the race. A later #57/#59 protocol has produced and
-verified candidate `m1` whose first parent and compare-and-set expectation are
-target head `b1`. Before #60 asks Git to promote it, another integration
-advances the target to `b2`.
+No person directly triggers the race. A later #57 protocol has received
+candidate `m1` from the Integrator and Git-qualified its first parent and
+compare-and-set expectation as target head `b1`. Before #60 asks Git to promote
+it, another integration advances the target to `b2`.
 
 The provider-neutral reconciliation input records the expected head `b1`, the
 candidate `m1`, and Git's current head `b2`. The pure #139 decision is
@@ -171,7 +172,7 @@ without pretending the external effect already exists.
 
 The maintainer sees the expected and current target heads and a candidate
 reconciliation choice. Dalph must not overwrite `b2`, treat equivalent content
-as exact ancestry, or reuse `m1` without rebuilding/reverification.
+as exact ancestry, or reuse `m1` for a session fixed to a different head.
 
 Acceptance seams:
 

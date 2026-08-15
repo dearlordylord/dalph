@@ -2,6 +2,12 @@
 
 Issue: [#207](https://github.com/dearlordylord/dalph/issues/207)
 
+Status: **partially superseded on 2026-08-14**. The Exit admission cutoff,
+bounded drain, no-success-from-process-exit rule, and restart reconciliation
+remain accepted. The separate target-verification boundary is obsolete; the
+replacement scenario must classify one outer Integrator call and target
+promotion instead.
+
 ## Exit arrives after one integration-family action has entered its boundary
 
 ### Starting situation

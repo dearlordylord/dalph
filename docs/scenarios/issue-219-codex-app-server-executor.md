@@ -279,8 +279,8 @@ For the MVP implementation:
 
 The accepted-result manifest proves only that P accepted that exact commit. It
 does not imply review and does not replace later result-commit qualification,
-candidate construction, target verification, promotion, or tracker
-completion.
+the outer Integrator, Git qualification of its reported candidate, promotion,
+or tracker completion.
 
 If Codex's final message is missing, malformed, contradictory, names a foreign
 attempt, or claims a commit Git cannot establish, the implementation cannot
@@ -419,5 +419,5 @@ review round belongs to the MVP.
 - Treating the Codex thread id as another generic executor identity.
 - Remote WebSocket deployment or a Dalph user interface for Codex history.
 - Deleting, archiving, forking, or replacing a materialized attempt thread.
-- Changing accepted-result integration, target verification, promotion, or
+- Changing accepted-result integration, Integrator, promotion, or
   task completion semantics.

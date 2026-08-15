@@ -92,15 +92,14 @@ _Avoid_: In-flight Boolean, persisted request state, inferred outside outcome,
 Exit recovery mode
 
 **Atomic integration Exit boundary**:
-The one already-admitted delivery action currently constructing an integration
-candidate, running target verification and sealing its immutable evidence, or
+The one already-admitted delivery action currently inside an Integrator call or
 reading/updating the target ref for promotion. If Exit closes admission while
 that action is inside its boundary, the action may record its produced result
 and release its process-local owner, but it cannot enter a successor delivery
 action. The application drain limit may still force nonzero process termination;
 restart uses the boundary family's existing journaled intent and ordinary
 reconciliation protocol.
-_Avoid_: Whole integration obligation, unbounded verification completion,
+_Avoid_: Whole integration obligation, unbounded Integrator completion,
 Exit-specific workflow recovery, durable integration lock
 
 **Exit drain**:
@@ -719,6 +718,9 @@ _Avoid_: Operator identity, attempt identity, operation identity, idempotency ke
 **Accepted result**:
 The exact Git commit and content-addressed executor evidence manifest returned
 after the executor's whole bounded workflow accepts one planned attempt. It
+is executor-scoped language: downstream delivery does not continue to call the
+commit "accepted." Instead, after the evidence qualifies, delivery derives an
+integration-ready result from this historical executor outcome. It
 does not imply review, select repository policy, prove integration lineage,
 promote a ref, or complete the tracker task. An ordinary accepted result enters
 one integration responsibility after its terminal report is recorded and
@@ -729,12 +731,21 @@ responsibility, and may supply current executor quiescence for the matching
 replacement only after fresh facts are checked.
 _Avoid_: Completed task, integrated commit, promoted result
 
+**Integration-ready result**:
+The integration-facing projection of one exact executor Accepted result after
+its commit and content-addressed acceptance evidence qualify for the configured
+integration target. It is the input carried into integration; it is not a
+second persisted result and does not mean that its commit has been merged,
+verified, promoted, or reflected to the tracker.
+_Avoid_: Accepted result outside the executor boundary, executed result,
+integrated result, completed task
+
 **Accepted-result evidence manifest**:
 The executor-produced content-addressed envelope proving that one exact planned
 attempt reported acceptance of one exact Git commit. Its immutable bytes do not
-imply an internal review stage and are distinct from later target-verification
-evidence.
-_Avoid_: Verified commit, review approval, target verification evidence
+imply an internal review or repository-check stage and do not prove the later
+Integrator result or Git promotion.
+_Avoid_: Prepared candidate, review approval, promotion evidence
 
 **Immutable evidence bytes**:
 Evidence-store bytes whose content digest is their identity, so different bytes
@@ -763,14 +774,32 @@ responsibility waits on tracker prerequisites, and recreated empty after
 process restart. The journal never stores its ownership.
 _Avoid_: Integration responsibility, durable lock, queue position
 
+**Integrator**:
+The injected boundary that owns one resumable integration session from merge
+construction through repository checks and reports either a prepared candidate
+or a conclusive unsuccessful result.
+_Avoid_: Dalph executor, candidate agent, target-verification wrapper
+
+**Integrator implementation**:
+The opaque provider mechanism behind one Integrator. Its processes, turns,
+checks, review, and technical retries are not Dalph workflow stages.
+_Avoid_: Dalph executor implementation, generic integration algorithm
+
+**Integration-agent run**:
+One bounded request for the Integrator to advance an exact
+integration session. Reconnecting to or observing that same work continues the
+run; only another explicit request after a conclusive result begins another run.
+_Avoid_: Codex turn, process invocation, technical retry, integration responsibility
+
 **Integration session**:
 One resumable integration-agent responsibility bound to a started integration
-responsibility, its accepted result, one fixed expected target head, and a
+responsibility, its integration-ready result, one fixed expected target head, and a
 persisted isolated candidate resource. At most one session for an accepted
 result is unsettled; a superseded session may be followed by one bound to the
 newly observed head. Its resource is distinct from the planned task worktree. A
-conflict, process restart, or invalid submitted object continues the existing
-identity and does not supersede it or authorize a successor session.
+conflict or process restart continues the existing identity. An invalid
+reported object quarantines that identity; it does not
+itself supersede the session or authorize a successor.
 _Avoid_: Process invocation, retry attempt, worktree tip, candidate commit
 
 **Integration-session supersession**:
@@ -781,42 +810,51 @@ the same accepted result and newly observed target head.
 _Avoid_: Integration-session settlement, retry, replacement session, delivery settlement
 
 **Integration candidate**:
-The first explicitly submitted commit that Git proves has exactly two ordered
-direct parents: the fixed expected target head first and the immutable accepted
-result second. Construction does not verify the contents, update the target
-ref, or complete the tracker task.
-_Avoid_: Worktree HEAD, agent success, verified candidate, promoted result
+The first commit named by the integrator as prepared for this exact session
+that Git proves has exactly two ordered direct parents: the fixed expected
+target head first and the immutable integration-ready result second. A commit
+that merely exists in the isolated resource, including its current HEAD, is not
+selected implicitly. Git qualification does not repeat the Integrator's private
+checks, update the target ref, or complete the tracker task.
+_Avoid_: Worktree HEAD, agent success, promoted result
 
-**Target verification request**:
-The deterministic initial request derived from one exact constructed-candidate
-journal occurrence and one configured public verification plan. Every wrapper
-result carries its complete candidate, session, target, plan, and request
-correlation. Recovery reuses this request; it does not allocate a replacement
-to escape an ambiguous response.
-_Avoid_: Verification process, command invocation, retry attempt, OperationId
+**Candidate prepared**:
+The Integrator report naming the exact Git commit prepared for one integration
+session. Dalph still asks Git to prove the reported commit; the report does not
+mean that any target or separate integration branch was updated.
+_Avoid_: Merged into target, pushed integration branch, inferred worktree HEAD,
+free-form agent claim
 
-**Target verification evidence manifest**:
-The immutable content-addressed envelope for one exact terminal target
-verification result. It names the constructed-candidate occurrence, complete
-request correlation, terminal outcome, and separately content-addressed
-artifacts. Dalph rereads every object and the manifest before recording the
-sealed result. Only a sealed `Passed` manifest can become a later promotion
-premise.
-_Avoid_: Process exit, log file, verification success flag, promoted candidate
+**Candidate not prepared**:
+The integrator's conclusive report that its exact integration-agent run ended
+without naming a prepared candidate commit. Dalph records the report and
+quarantines the session immediately. It preserves the isolated resource, does
+not infer a candidate from Git state, and starts no automatic follow-up run;
+Operator Retry may start one new run in the same session.
+_Avoid_: Candidate failure inferred from process exit, automatic continuation,
+empty candidate, worktree-HEAD submission
 
-**Public target-verification wrapper**:
-The repository-selected boundary that runs or resumes one target verification
-request and owns any heavy-verification lock needed by its commands. Dalph
-does not acquire that lock separately, inspect private commands, or nest a
-guarded invocation.
-_Avoid_: Dalph lock controller, package script, internal verification command
+**Integration-agent run failure**:
+The conclusive unsuccessful result of one exact Integrator run after its owned
+activity is proven absent. Ambiguity, coordinator crash, or recoverable
+application shutdown is not this result.
+_Avoid_: Dalph crash, app-server disconnect, ambiguous response, automatic retry
+
+**Integration shutdown recovery**:
+Automatic restoration of an unfinished integration session after Dalph
+deliberately interrupted its implementation activity for recoverable
+application shutdown. On the next startup, ordinary delivery gives the same
+session back to the integrator. A provider turn marked interrupted by that
+shutdown is not a conclusive integration-agent run failure and does not
+quarantine the session.
+_Avoid_: Operator Retry, new integration-agent run, quarantine, Full rerun
 
 **Target promotion request**:
-The deterministic request that offers one exact verified candidate M to one
+The deterministic request that offers one exact Git-qualified prepared candidate M to one
 repository/ref target by atomically replacing M's fixed first parent H. It
-binds the constructed-candidate occurrence and sealed passing verification
-manifest. Recovery reuses it; another operation identity cannot change H, M,
-the target, or the evidence.
+binds the prepared-candidate occurrence and required Integrator evidence.
+Recovery reuses it; another operation identity cannot change H, M, the target,
+or the evidence.
 _Avoid_: Force update, target-head observation, candidate replacement, tracker completion
 
 **Target promotion attempt intent**:
@@ -832,9 +870,76 @@ _Avoid_: Retry loop iteration, Git read, promotion request identity, candidate a
 **Promoted integration proof**:
 The durable fact that Git either accepted the exact `H -> M` compare-and-set or
 later proved M is the target head or its ancestor. It retains M's ordered
-parents and sealed passing verification manifest. Equivalent content, a patch
-match, or a journaled request without Git ancestry is not this proof.
-_Avoid_: Verification pass, compare-and-set intent, target head alone, completed tracker task
+parents and required Integrator evidence. Equivalent content, a patch match,
+or a journaled request without Git ancestry is not this proof.
+_Avoid_: Candidate-prepared report, compare-and-set intent, target head alone, completed tracker task
+
+**Integration success**:
+The established condition that Git supplies a promoted integration proof and
+current agent evidence proves that the exact integration session has no
+running activity. It does not prove tracker completion or settle the retained
+integration responsibility.
+_Avoid_: Candidate submission, agent completion, promotion alone, tracker completion
+
+**Integration quarantine**:
+The durable disposition that stops automatic work for one exact integration
+responsibility while preserving its integration-ready result, integration session,
+candidate resource, and evidence for an Operator decision. It keeps its place
+ahead of later responsibilities for the same integration target, but it does
+not stop runnable delivery work that has no dependency or target conflict with
+the quarantined responsibility. Its process-local target permit may be
+released while its durable same-target ordering constraint remains.
+_Avoid_: Cleanup, integration failure, delivery settlement, resource deletion
+
+**Quarantined integration quiescence**:
+The runtime condition in which a quarantined integration retains no live
+integration worker, target permit, or session-specific polling. The Run remains
+incomplete and its durable responsibility remains reconstructable. A later
+Operator Retry or Full rerun direction changes Journal facts, after which
+ordinary activation may select work again.
+_Avoid_: Run completion, live quarantined worker, retained target permit,
+background retry loop
+
+**Integration Retry direction**:
+The Operator direction that resumes one quarantined integration responsibility
+through its same integration session and starts one new integration-agent run.
+Once its direction choice is durable, ordinary recovery carries it out without
+another Operator request. Before the agent call, Dalph checks that the
+session's fixed target head is still current. A changed target starts no agent
+run, records this Retry as not applicable, and establishes a fresh quarantine
+occurrence from which the Operator may choose Full rerun.
+_Avoid_: New integration session, automatic retry, Full rerun
+
+**Integration-quarantine direction fingerprint**:
+The stable subject for idempotent Operator redelivery, formed from the exact
+integration session, the Journal position of its quarantine occurrence, and
+the requested direction such as Retry or Full rerun. Unrelated Run changes do
+not alter it. Internally Dalph retains the typed components; a transport may
+hash their canonical encoding for an idempotency key. The Journal records the
+applied direction and supplies deduplication after restart, so no process-local
+cache or retry counter owns this fact.
+_Avoid_: Whole-Run state hash, in-memory idempotency cache, retry counter,
+integration-agent run identity
+
+**Integration-quarantine direction choice**:
+The first Journaled Retry or Full rerun direction for one exact quarantine
+occurrence. That occurrence accepts exactly one choice. Exact redelivery of the
+winning choice returns its recorded result; a competing direction for the same
+occurrence is stale and starts no integration-agent run or replacement
+session.
+_Avoid_: Last-write-wins direction, two actions for one quarantine, UI-local choice
+
+**Integration Full rerun direction**:
+The Operator direction that gives one quarantined integration responsibility a
+new integration session and candidate resource for its same accepted result.
+It reads and qualifies the current target head before fixing the successor
+session; it does not reuse the quarantined session's stale head merely because
+the responsibility kept its queue position. Once the direction is durable,
+ordinary recovery carries it out without another Operator request.
+The integration responsibility retains its original derived queue position;
+Full rerun does not re-enqueue it behind later work for the same target. The
+quarantined predecessor remains available for later authorized cleanup.
+_Avoid_: Retry, new integration responsibility, task re-execution, cleanup
 
 **Non-convergent target promotion**:
 The durable preservation disposition after three exact target-promotion
@@ -909,9 +1014,10 @@ _Avoid_: Executor result, candidate verification, integration success
 
 **Exact-head promotion decision**:
 The pure authorization immediately before the concrete promotion protocol. A
-verified candidate may be offered only by compare-and-set against its exact
-expected target head. A stale exact head selects candidate reconciliation; an
-ambiguous head requires a reread. Neither decision authorizes a force update.
+prepared candidate that Dalph has Git-qualified may be offered only by
+compare-and-set against its exact expected target head. A stale exact head
+selects session reconciliation; an ambiguous head requires a reread. Neither
+decision authorizes a force update.
 _Avoid_: Target overwrite, promotion result, integration start
 
 **Task revision fingerprint**:

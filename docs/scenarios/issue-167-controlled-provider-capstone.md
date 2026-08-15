@@ -1,5 +1,11 @@
 # Issue 167: complete controlled-provider delivery through maintained cassettes
 
+> **Architecture correction, 2026-08-14:** This file truthfully records the
+> currently implemented controlled-provider journey, but its separate
+> candidate-agent and target-verification stages are no longer intended product
+> behavior. It is regression evidence, not authority for the replacement
+> Integrator design.
+
 ## A five-task dependency diamond completes only from tracker-confirmed success
 
 No person triggers individual steps. A maintainer has started one Dalph Run

@@ -2,8 +2,11 @@
 
 Issue: [#60 Compare-and-set promote or reconcile a stale accepted head](https://github.com/dearlordylord/dalph/issues/60)
 
-Status: accepted on 2026-08-08 after the operator selected at most three total
-automatic compare-and-set attempts for one exact verified candidate.
+Status: **partially superseded on 2026-08-14**. The exact compare-and-set,
+reconciliation, ancestry, and three-attempt rules remain accepted. The separate
+#59 verification-wrapper premise and its manifest are obsolete; this scenario
+must be rewritten around a Git-qualified Integrator-reported candidate before
+promotion implementation is changed.
 
 No person directly starts these actions. The running Dalph coordinator acts
 after the target repository's public verification wrapper has returned passing

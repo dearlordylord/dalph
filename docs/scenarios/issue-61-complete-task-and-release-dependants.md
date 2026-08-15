@@ -3,11 +3,16 @@
 Issue:
 [Complete the tracker task and release dependants](https://github.com/dearlordylord/dalph/issues/61)
 
-Status: accepted chronological scenarios for issue #61 on 2026-08-10. The
-maintainer approved the focused-success/complete-graph split, exact ancestry
-and evidence premises, exact-request reconciliation, three-call bound, and
-task-local conflict behavior. Runtime implementation may proceed from this
-file and the issue.
+Status: **partially superseded on 2026-08-14**. Tracker completion,
+focused-success observation, exact promoted ancestry, bounded request
+reconciliation, and dependant release remain accepted. Evidence premises that
+require the separate #59 target-verification stage must be replaced by the
+corrected Integrator evidence contract before implementation changes.
+
+The previously accepted chronology selected the focused-success/complete-graph
+split, exact ancestry and evidence premises, exact-request reconciliation,
+three-call bound, and task-local conflict behavior. Runtime implementation may
+not proceed from this file until its evidence premise is reconciled.
 
 Issue #61 currently states completion criteria and a fake-provider outcome, but
 does not choose the ordered boundary calls, crash and retry behavior, or human

@@ -2,6 +2,11 @@
 
 Issue: [#76 Qualify production evidence storage](https://github.com/dearlordylord/dalph/issues/76)
 
+Status: **partially superseded on 2026-08-14**. Filesystem atomicity,
+immutability, content identity, reopen, and executor-acceptance evidence remain
+accepted. Any chain element dedicated to the removed #59 target-verification
+stage is historical and must not be required by corrected integration finality.
+
 This issue qualifies the real filesystem evidence-store boundary after the
 provider-neutral acceptance and completion protocols exist. No person directly
 starts these scenarios. The running Dalph coordinator and the executor cross

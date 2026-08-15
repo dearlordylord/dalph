@@ -1,6 +1,10 @@
 # Issue 78 — qualify repository verification locking
 
-Status: accepted, implemented locally for review (GitHub issue #78 remains open; declared blocking edges are #59 and #167).
+Status: **superseded on 2026-08-14; historical evidence only**. The outer
+Integrator owns repository checks and their internal resource locking. Dalph
+does not invoke or observe a separate verification-wrapper lock protocol.
+Issue #78 is closed completed because this workflow shipped. Issue #225 owns
+its removal.
 
 This qualification starts after the provider-neutral target-verification journey from #59/#167 has selected one exact candidate occurrence and one opaque verification plan. The person affected is the coordinator operating the Dalph run. The systems at the boundary are Dalph, the target repository's configured public verification wrapper, the wrapper-owned repository/resource lock, and the operating-system child process. Dalph's workflow journal contains the request intent; Git owns candidate/ref facts; the execution substrate owns the child-process observation. Dalph does not create a second record for the repository lock.
 

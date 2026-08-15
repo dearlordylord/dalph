@@ -10,9 +10,11 @@ one real Run consumes the staggered
 graph A → B+C → D → E+F → H+I → G with X added
 during process loss between A and G, and reconstructs the exact B and C
 task-work positions before newly observed X can use capacity. Every executor
-returns an immutable accepted commit; each result then crosses candidate
-construction, Git validation, public verification, exact-head promotion,
-tracker completion, exact completion-claim deletion, and delivery settlement.
+returns an immutable accepted commit; each result then crosses one outer
+Integrator session, Dalph's Git validation of the explicitly reported
+candidate, exact-head promotion, tracker completion, exact completion-claim
+deletion, and delivery settlement. Merge construction, repository checks,
+review, and private retries are inside the Integrator and are not Dalph stages.
 Later complete tracker graphs—not executor completion reports—release each
 dependent wave and finally authorize `RunMayTerminate`. The separate
 `authored:deliveryFinalitySpine` retains the real A promotion and
@@ -82,16 +84,21 @@ attempt.
 **14.** A's accepted result is queued for integration, and Dalph acquires the
 integration target.
 
-**15.** Dalph builds A's integration candidate with exactly two ordered parents:
-the expected target head first, the immutable accepted result second.
+**15.** Dalph gives A's exact integration session, expected target head, and
+immutable accepted result to the Integrator. The Integrator performs its whole
+private workflow and reports one prepared candidate. Dalph asks Git to prove
+that reported commit has exactly two ordered parents: the expected target head
+first, the immutable accepted result second.
 
 **16.** Dalph offers the candidate by compare-and-set against that exact
 expected head. The head has moved. The offer does not apply, and the stale head
 selects reconciliation rather than a force update.
 
-**17.** Dalph re-reads the target head, rebuilds the candidate against it, and
-promotes. The physical integration-target position is released, but promotion
-does not settle A. Dalph replaces A's exact active claim with a
+**17.** Dalph re-reads the target head and follows the accepted stale-head
+session reconciliation before a fresh Integrator session reports a candidate
+for that head. Dalph Git-qualifies and promotes that candidate. The physical
+integration-target position is released, but promotion does not settle A.
+Dalph replaces A's exact active claim with a
 promotion-correlated completion claim. A later complete tracker read reports A
 successfully completed in `G₃` with that exact completion claim. Dalph deletes
 only that claim, records A's delivery settlement, and removes A's retained
@@ -108,10 +115,10 @@ closure. `G₅`. Dalph's next complete read finds them eligible, and they wait f
 capacity behind the three tasks already running.
 
 **21.** B, C and D report accepted results in turn. Each task releases its
-task-work position, passes through the same exact candidate, verification,
-promotion, completion-claim replacement, focused task-completion success, claim-deletion,
-and delivery-settlement protocol as A, and then admits one of E, F, G in graph
-order.
+task-work position, passes through the same outer Integrator, Git qualification,
+promotion, completion-claim replacement, focused task-completion success,
+claim-deletion, and delivery-settlement protocol as A, and then admits one of
+E, F, G in graph order.
 
 **22.** E, F and G report accepted results and each passes through that same
 production integration and completion-finality protocol. A later complete
@@ -138,7 +145,7 @@ record normal termination.
 | 12 | Alice continues B | G₂ | 2 | A D | B C | — | D15 D20 |
 | 13 | A accepted; B admitted | G₂ | 2 | B D | A C | — | D10 D24 |
 | 14 | A queued for integration | G₂ | 2 | B D | A C | — | D10 |
-| 15 | candidate built | G₂ | 2 | B D | A C | — | **D26** |
+| 15 | Integrator reports candidate; Dalph proves its parents | G₂ | 2 | B D | A C | — | **D26 D28** |
 | 16 | promotion finds a stale head | G₂ | 2 | B D | A C | — | **D27** |
 | 17 | A promoted; exact completion claim deleted after a focused task read proves success; A settles | G₃ | 2 | B D | C | — | D24 D27 D28 D33 |
 | 18 | C reopened | G₄ | 2 | B D | C | — | D9 D19 |
