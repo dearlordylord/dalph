@@ -38,6 +38,9 @@ export default defineConfig({
       find: /^node:fs\/promises$/,
       replacement: fileURLToPath(new URL("./src/node-only-module-shim.ts", import.meta.url))
     }, {
+      find: /^node:(?:buffer|child_process|crypto|fs|path|process|timers|util)$/,
+      replacement: fileURLToPath(new URL("./src/node-only-module-shim.ts", import.meta.url))
+    }, {
       find: /^@effect\/platform-node$/,
       replacement: fileURLToPath(new URL("./src/platform-node-shim.ts", import.meta.url))
     }]

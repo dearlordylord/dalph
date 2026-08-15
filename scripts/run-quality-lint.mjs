@@ -35,6 +35,7 @@ const runCompatibility = (files, shouldFix) => {
     "--suppressions-location",
     "eslint-functional-suppressions.json",
     "--no-error-on-unmatched-pattern",
+    "--no-warn-ignored",
     ...(shouldFix ? ["--fix"] : []),
     ...files
   ])

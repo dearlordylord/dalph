@@ -26,19 +26,42 @@ import {
 import {
   runTargetPromotionProtocolCassette
 } from "../../../packages/dalph/src/cassettes/target-promotion-protocol-cassette.ts"
+import {
+  maintainedApplicationExitProtocolCassetteCatalog
+} from "../../../packages/dalph/src/cassettes/application-exit-protocol-cassette-domain.ts"
+import {
+  runApplicationExitProtocolCassette
+} from "../../../packages/dalph/src/cassettes/application-exit-protocol-cassette.ts"
+import {
+  maintainedCodexPlannedAttemptExecutorCassetteCatalog
+} from "../../../packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette-domain.ts"
+import {
+  runCodexPlannedAttemptExecutorCassette
+} from "../../../packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette.ts"
 
 type AuthoredCassetteKey = `authored:${keyof typeof maintainedAuthoredCassetteCatalog & string}`
 type IntegrationFinalityCassetteKey =
   `integration-finality:${keyof typeof maintainedIntegrationFinalityProtocolCassetteCatalog & string}`
 type TargetPromotionCassetteKey =
   `target-promotion:${keyof typeof maintainedTargetPromotionProtocolCassetteCatalog & string}`
+type ApplicationExitCassetteKey =
+  `application-exit:${keyof typeof maintainedApplicationExitProtocolCassetteCatalog & string}`
+type CodexExecutorCassetteKey =
+  `codex-executor:${keyof typeof maintainedCodexPlannedAttemptExecutorCassetteCatalog & string}`
 
 export type MaintainedCassetteKey =
   | AuthoredCassetteKey
   | IntegrationFinalityCassetteKey
   | TargetPromotionCassetteKey
+  | ApplicationExitCassetteKey
+  | CodexExecutorCassetteKey
 
-export type CassetteCategory = "Authored" | "IntegrationFinality" | "TargetPromotion"
+export type CassetteCategory =
+  | "ApplicationExit"
+  | "Authored"
+  | "CodexExecutor"
+  | "IntegrationFinality"
+  | "TargetPromotion"
 
 interface CassetteCategoryMetadata {
   readonly controlledBoundaries: string
@@ -48,11 +71,23 @@ interface CassetteCategoryMetadata {
 }
 
 const cassetteCategoryMetadata = {
+  ApplicationExit: {
+    controlledBoundaries: "application admission, executor and local drains, coordinator lock, and process end",
+    itemName: "steps",
+    label: "Application Exit lifecycle",
+    runnerName: "runApplicationExitProtocolCassette"
+  },
   Authored: {
     controlledBoundaries: "tracker, claims, Git, executor, journal, verification, and promotion",
     itemName: "interactions",
     label: "Authored coordinator stories",
     runnerName: "runAuthoredScenarioCassette"
+  },
+  CodexExecutor: {
+    controlledBoundaries: "Codex app server, private attempt store, owned activity census, Git, and evidence store",
+    itemName: "steps",
+    label: "Concrete Codex executor",
+    runnerName: "runCodexPlannedAttemptExecutorCassette"
   },
   IntegrationFinality: {
     controlledBoundaries: "completion-claim tracker boundary and journal",
@@ -266,8 +301,60 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
   storyName: cassette.name
 }))
 
+const applicationExitDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.entries(
+  maintainedApplicationExitProtocolCassetteCatalog
+).map(([key, cassette]) => ({
+  catalogKey: `application-exit:${key}` as ApplicationExitCassetteKey,
+  category: "ApplicationExit",
+  execute: async () => {
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(runApplicationExitProtocolCassette(cassette)).pipe(Effect.provide(cassetteRuntimeLayer))
+    )
+    return Exit.map(exit, (run) => ({
+      activationOrdinals: [],
+      deliveryFrames: null,
+      evidence: run,
+      journalRecords: [],
+      runId: null
+    }))
+  },
+  input: cassette,
+  surface: { _tag: "DirectProtocolSurface" },
+  story: cassette.story,
+  storyItemLandmarks: cassette.story.map(() => null),
+  storyItemSummaries: cassette.story.map((item) => storyItemSummary(item)),
+  storyName: cassette.name
+}))
+
+const codexExecutorDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.entries(
+  maintainedCodexPlannedAttemptExecutorCassetteCatalog
+).map(([key, cassette]) => ({
+  catalogKey: `codex-executor:${key}` as CodexExecutorCassetteKey,
+  category: "CodexExecutor",
+  execute: async () => {
+    const exit = await Effect.runPromiseExit(
+      runCodexPlannedAttemptExecutorCassette(cassette).pipe(Effect.provide(cassetteRuntimeLayer))
+    )
+    return Exit.map(exit, (run) => ({
+      activationOrdinals: [],
+      deliveryFrames: null,
+      evidence: run,
+      journalRecords: [],
+      runId: null
+    }))
+  },
+  input: cassette,
+  surface: { _tag: "DirectProtocolSurface" },
+  story: cassette.story,
+  storyItemLandmarks: cassette.story.map(() => null),
+  storyItemSummaries: cassette.story.map((item) => storyItemSummary(item)),
+  storyName: cassette.name
+}))
+
 const descriptors = [
   ...authoredDescriptors,
+  ...applicationExitDescriptors,
+  ...codexExecutorDescriptors,
   ...targetPromotionDescriptors,
   ...integrationFinalityDescriptors
 ] as const

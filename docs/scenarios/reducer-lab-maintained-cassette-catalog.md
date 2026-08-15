@@ -1,11 +1,18 @@
 # Reducer Lab: run every maintained cassette through production
 
-These scenarios add a throwaway Lab over all three production-owned maintained
+These scenarios add a throwaway Lab over the production-owned maintained
 cassette catalogs. They do not change a Dalph command, workflow decision,
 tracker or Git request, durable journal fact, retry rule, cleanup action, or
-production-visible result. The Lab imports the authored, target-promotion, and
-integration-finality catalogs and their production runners; it does not define
-another cassette catalog or workflow interpreter.
+production-visible result. The Lab imports the authored, application-Exit,
+Codex planned-attempt executor, target-promotion, and integration-finality
+catalogs and their production runners; it does not define another cassette
+catalog or workflow interpreter.
+
+The candidate-agent, separate repository-verification, and verification-bound
+integration-finality stories remain historical regression evidence for the
+currently shipped but rejected integration split. This synchronization does not
+add, reinterpret, or present those stories as conformance evidence. Issues
+#222, #223, #68, and #225 own their replacement with the outer Integrator.
 
 The shared authored-cassette harness also resolves a recovery scheduling race.
 After an authored `CoordinatorProcessDies`, the recovered production
@@ -31,12 +38,13 @@ does not retry or manufacture the event.
 ### Starting situation
 
 A Dalph maintainer opens the Reducer Lab. The checked-in maintained cassette
-catalogs contain stories with their own tracker, claim, Git, executor,
-integration-candidate, verification, promotion, control, and journal starting
-facts. No real GitHub repository, Git worktree, executor process, or durable
-journal is changed: each cassette declares controlled boundary results and the
-production cassette runner constructs fresh in-memory adapters and a fresh
-in-memory journal for that run.
+catalogs contain coordinator stories with their own tracker, claim, Git,
+executor, historical integration, control, and journal facts;
+application-lifecycle stories outside every Run; and concrete Codex-executor
+stories with controlled app-server, private store, Git, and evidence results.
+No real GitHub repository, Git worktree, Codex process, or durable journal is
+changed: each cassette declares controlled boundary results and its production
+runner constructs fresh in-memory adapters and stores.
 
 The maintainer may reach the Docker-hosted Lab over an ordinary Orb HTTP host,
 where browsers expose secure random bytes but do not expose `crypto.subtle`.
@@ -48,6 +56,8 @@ requiring a secure origin or substituting a made-up digest.
 
 The maintainer selects a catalog entry and chooses **Run cassette**. The Lab
 passes that exact catalog value to `runAuthoredScenarioCassette`,
+`runApplicationExitProtocolCassette`,
+`runCodexPlannedAttemptExecutorCassette`,
 `runTargetPromotionProtocolCassette`, or
 `runIntegrationFinalityProtocolCassette`, according to the production catalog
 that owns it. The production runner validates the story, invokes the implemented
@@ -58,7 +68,10 @@ or manufacture a successful result.
 
 When the production run consumes the terminal assertion or observation, the
 Lab displays the story name, completed status, exact consumed-item count, and
-the production journal records returned by the runner. The maintainer may run
+the production journal records returned by the runner when that protocol owns
+Run-journal facts. Application Exit returns its separate lifecycle trace, and
+the concrete Codex executor returns its normalized reports plus explicitly
+private diagnostic state without fabricating a Run-journal record. The maintainer may run
 the same cassette again; every runner creates fresh controlled runtime state.
 The authored runner also creates a fresh journal and Run identity, so a second
 authored result does not reuse the first run's state. Protocol fixtures retain
@@ -87,8 +100,18 @@ in-memory adapters; recovery inside a cassette occurs only at an authored
   checks the exact SHA-256 identity used by the browser evidence-store adapter
   without reading the secure-origin-only Web Crypto digest API.
 - `runs every maintained cassette through production to its declared end`
-  enumerates the exact three public catalogs, delegates every entry to its
+  enumerates the exact public catalogs, delegates every entry to its
   production runner, and requires complete story consumption.
+- `runs maintained application Exit stories through the production request boundary`
+  proves that an idle Exit closes admission before the quick drains, reports
+  one result, and requests the matching process end without writing a Run
+  journal; it also proves that one conclusive drain failure still completes
+  independent quick drains before forced termination.
+- `runs maintained Codex executor stories through the concrete production executor`
+  proves that the concrete executor records the thread association before the
+  first turn, reconciles a lost turn response without sending a second turn,
+  seals one accepted terminal commit with evidence, and suspends the same
+  attempt only after controlled owned activity becomes absent.
 - `reports the exact authored item when production cannot complete a cassette`
   runs a deliberately mismatched story and requires a visible failure rather
   than skipped input or synthetic success.
@@ -149,7 +172,8 @@ discards all displayed results.
 
 A Dalph maintainer opens the Lab against one exact source revision. Forty or
 more maintained cassettes may be present across authored coordinator,
-target-promotion, and integration-finality catalogs. No cassette is running.
+application-Exit, concrete Codex executor, target-promotion, and
+integration-finality catalogs. No cassette is running.
 The maintainer may not already know a catalog key or which production runner
 owns the behavior they need to inspect.
 
@@ -187,9 +211,11 @@ that cassette completion means reaching the declared end, which may include an
 expected protocol failure. After a single run it no longer claims that the
 whole catalog is merely ready.
 
-A selected completed cassette shows a compact execution summary: the runner, coordinator
-activations and Run identity when those concepts apply, and interpreted
-journal or terminal facts. Protocol-specific counters remain under a secondary
+A selected completed cassette shows a compact execution summary: the runner,
+coordinator activations and Run identity when those concepts apply, interpreted
+journal or terminal facts, and an explicit explanation when application or
+executor-private facts correctly produce no Run-journal records.
+Protocol-specific counters remain under a secondary
 diagnostic disclosure. Journal records appear separately, grouped by Run
 identity and described as chronological only within each Run.
 The complete returned object remains available only under **Raw execution
@@ -510,14 +536,13 @@ worktree, and integration responsibilities. Terms such as
 `IdentityFreeWorkflowRoute` stay in the secondary exact JSON rather than
 becoming the human action label.
 
-The linked `authored:deliveryInvariantStory` is the normal controlled-provider
-delivery capstone. Every executor returns an accepted commit. Dalph then records
-the exact integration responsibility, constructs and validates its candidate,
-runs public verification, promotes by exact expected head, asks the tracker to
-complete the task, confirms completion in a later focused read, deletes the
-exact completion claim, and records settlement. Only a later complete graph
-observation releases dependants. The Lab states those concrete calls and facts
-without treating executor, Git, or mutation responses as tracker success.
+The linked `authored:deliveryInvariantStory` is historical regression evidence
+for the current controlled-provider runtime, not conformance evidence for the
+corrected integration boundary. It still makes Dalph construct a candidate and
+run public verification as separate stages. The replacement story must instead
+give one exact session to the outer Integrator, Git-qualify the candidate it
+reports, promote by exact expected head, and then perform tracker completion,
+claim deletion, settlement, and later dependant release.
 
 A coordinator crash after B and C occupy task-work positions does not become a
 workflow event. Restart reconstructs their exact Run, attempts, claims,

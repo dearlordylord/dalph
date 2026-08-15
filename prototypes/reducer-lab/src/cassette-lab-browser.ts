@@ -40,7 +40,13 @@ export interface CassetteLabBrowserInput {
   ) => Promise<CassetteLabResult>
 }
 
-const categoryOrder: ReadonlyArray<CassetteCategory> = ["Authored", "TargetPromotion", "IntegrationFinality"]
+const categoryOrder: ReadonlyArray<CassetteCategory> = [
+  "Authored",
+  "ApplicationExit",
+  "CodexExecutor",
+  "TargetPromotion",
+  "IntegrationFinality"
+]
 const browserBatchConcurrency = 1
 
 const appendTextElement = <K extends keyof HTMLElementTagNameMap>(

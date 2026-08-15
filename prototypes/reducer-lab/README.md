@@ -13,10 +13,13 @@ task-work positions. It also shows graph-read provenance, quiescence, and the
 downstream action-planning result without presenting a proposal as an action
 that ran. Desired tickets and held positions remain visibly distinct.
 
-Target-promotion and integration-finality cassettes still run through their real
-protocol runners, but do not receive a fabricated task graph: those direct
-protocol fixtures never execute the graph-level delivery composition. The Lab
-does not contain a second workflow reducer or scheduler.
+Application-Exit, concrete Codex executor, target-promotion, and
+integration-finality cassettes run through their real production boundaries,
+but do not receive a fabricated task graph: those direct protocol fixtures
+never execute the graph-level delivery composition. Application-Exit facts
+stay outside every Run journal, while Codex thread and turn facts stay private
+behind the generic executor boundary. The Lab does not contain a second
+workflow reducer or scheduler.
 
 The browser offers the maintained catalog as one selector and projects only the
 selected cassette into one shared surface. Choosing a new cassette replaces the
@@ -33,11 +36,15 @@ defect. Each run receives fresh in-memory runtime state and a deterministic test
 Authored runs additionally receive browser cryptography and a fresh production
 Run identity; protocol fixtures retain their declared identities.
 
-An authored cassette controls tracker, claim, Git, executor, integration,
-verification, promotion, trace, and journal boundary results. Implemented
-Dalph coordinator and protocol code executes normally. A mismatched or
-unsupported story item fails at that item and is displayed as a failure; the
-Lab never skips it or manufactures a completed result.
+An authored cassette controls tracker, claim, Git, executor, historical
+integration, trace, and journal boundary results. Direct non-integration
+cassettes control application drains, process-end decisions, the Codex app
+server, private executor storage, owned activity observations, Git, and
+evidence storage. Implemented Dalph coordinator and protocol code executes
+normally. A mismatched or unsupported story item fails at that item and is
+displayed as a failure; the Lab never skips it or manufactures a completed
+result. The historical candidate/verification catalogs remain regression
+evidence only until the outer Integrator replaces them.
 
 The browser build imports the production package sources directly. Its Vite
 composition replaces only the unavailable Node platform layers; none of the

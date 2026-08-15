@@ -4,6 +4,8 @@ import { renderAuthoredStoryItemLandmark } from "../../../packages/dalph/src/cas
 import "./delivery-playback.test.ts"
 import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts"
 import { maintainedTargetPromotionProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/target-promotion-protocol-cassette-domain.ts"
+import { maintainedApplicationExitProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/application-exit-protocol-cassette-domain.ts"
+import { maintainedCodexPlannedAttemptExecutorCassetteCatalog } from "../../../packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette-domain.ts"
 import { parseHTML } from "linkedom"
 import {
   cassetteSettledEvent,
@@ -20,7 +22,13 @@ import {
   runEveryMaintainedCassette,
   runMaintainedCassette
 } from "./cassette-lab.ts"
-import { resultEvidenceText, resultStatusText, runAllSummaryText } from "./cassette-lab-view.ts"
+import {
+  executionSummaryItems,
+  protocolDiagnosticItems,
+  resultEvidenceText,
+  resultStatusText,
+  runAllSummaryText
+} from "./cassette-lab-view.ts"
 
 const assert = (condition: boolean, message: string): void => {
   if (!condition) throw new Error(message)
@@ -34,6 +42,8 @@ const scenario = async (name: string, body: () => void | Promise<void>): Promise
 const expectedCatalogSize = Object.keys(maintainedAuthoredCassetteCatalog).length
   + Object.keys(maintainedTargetPromotionProtocolCassetteCatalog).length
   + Object.keys(maintainedIntegrationFinalityProtocolCassetteCatalog).length
+  + Object.keys(maintainedApplicationExitProtocolCassetteCatalog).length
+  + Object.keys(maintainedCodexPlannedAttemptExecutorCassetteCatalog).length
 
 let everyResult = await runEveryMaintainedCassette()
 let mismatchedResult: Awaited<ReturnType<typeof runAuthoredCassetteInput>> | undefined
@@ -48,7 +58,7 @@ await scenario("hashes verification evidence without requiring browser crypto.su
 })
 
 await scenario("runs every maintained cassette through production to its declared end", () => {
-  assert(maintainedCassetteKeys.length === expectedCatalogSize, "The Lab must enumerate all three exact catalogs")
+  assert(maintainedCassetteKeys.length === expectedCatalogSize, "The Lab must enumerate every exact catalog")
   assert(everyResult.length === expectedCatalogSize, "Every catalog entry must retain one terminal result")
   const failures = everyResult.filter((result) => result._tag === "Failed")
   assert(
@@ -61,7 +71,11 @@ await scenario("runs every maintained cassette through production to its declare
     assert(result._tag === "Completed", `${result.catalogKey} must complete`)
     if (result._tag !== "Completed") continue
     assert(result.consumedItemCount === result.totalItemCount, `${result.catalogKey} must consume its whole story`)
-    assert(result.journalRecordCount > 0, `${result.catalogKey} must return production journal evidence`)
+    if (result.category === "ApplicationExit" || result.category === "CodexExecutor") {
+      assert(result.journalRecordCount === 0, `${result.catalogKey} must not fabricate Run-journal evidence`)
+    } else {
+      assert(result.journalRecordCount > 0, `${result.catalogKey} must return production journal evidence`)
+    }
     if (result.category === "Authored") {
       assert(result.activationOrdinals.length > 0, `${result.catalogKey} must invoke the production coordinator`)
       assert(
@@ -71,6 +85,57 @@ await scenario("runs every maintained cassette through production to its declare
     } else {
       assert(result.deliveryFrames === null, `${result.catalogKey} must not fabricate graph-level delivery frames`)
     }
+  }
+})
+
+await scenario("runs maintained application Exit stories through the production request boundary", () => {
+  const idle = everyResult.find(({ catalogKey }) => catalogKey === "application-exit:idleSuccess")
+  const failed = everyResult.find(({ catalogKey }) => catalogKey === "application-exit:drainFailure")
+  assert(idle?._tag === "Completed", "The idle application Exit story must complete")
+  assert(failed?._tag === "Completed", "The conclusive application Exit failure story must reach its declared end")
+  if (idle?._tag !== "Completed" || failed?._tag !== "Completed") return
+  assert(
+    JSON.stringify(idle.executionEvidence).includes("RequestGracefulTermination"),
+    "Idle Exit must request graceful process termination"
+  )
+  assert(
+    JSON.stringify(failed.executionEvidence).includes("RequestForcedTermination"),
+    "A conclusive drain failure must request forced process termination"
+  )
+  assert(
+    executionSummaryItems(idle).some(({ description }) => description.includes("outside every Run journal")),
+    "Application Exit evidence must not be presented as a Run-journal record"
+  )
+  assert(
+    protocolDiagnosticItems(failed).some(({ term }) => term === "Process-end decision"),
+    "Application Exit diagnostics must expose the production process-end decision"
+  )
+})
+
+await scenario("runs maintained Codex executor stories through the concrete production executor", () => {
+  for (const key of [
+    "codex-executor:firstTurnRunning",
+    "codex-executor:lostTurnResponseReconciled",
+    "codex-executor:acceptedTerminal",
+    "codex-executor:safelySuspended"
+  ] as const) {
+    const result = everyResult.find(({ catalogKey }) => catalogKey === key)
+    assert(result?._tag === "Completed", `${key} must complete through the concrete executor`)
+  }
+  const lost = everyResult.find(({ catalogKey }) => catalogKey === "codex-executor:lostTurnResponseReconciled")
+  assert(
+    lost?._tag === "Completed" && JSON.stringify(lost.executionEvidence).includes('"turnStartCount":1'),
+    "Lost turn response recovery must retain exactly one turn/start call"
+  )
+  if (lost?._tag === "Completed") {
+    assert(
+      executionSummaryItems(lost).some(({ description }) => description.includes("private behind the generic executor boundary")),
+      "Codex-private facts must not be presented as Run-journal records"
+    )
+    assert(
+      protocolDiagnosticItems(lost).some(({ term }) => term === "Generic executor reports"),
+      "Codex diagnostics must expose only its normalized outer reports"
+    )
   }
 })
 
@@ -99,7 +164,7 @@ await scenario("shows the staggered double-diamond frontier being consumed on on
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   assert(
     row?.storyName ===
-      "coarse executor reports and later tracker observations consume a staggered double diamond while restart-delayed X waits for capacity",
+      "accepted results settle through integration and later tracker observations consume a staggered double diamond while restart-delayed X waits for capacity",
     "The linked graph story title must name its concrete production chronology"
   )
   assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The linked story must complete with frames")
@@ -119,13 +184,13 @@ await scenario("shows the staggered double-diamond frontier being consumed on on
     (found, wave) => [...found, eligible.indexOf(wave, (found.at(-1) ?? -1) + 1)],
     []
   )
-  const heldMiddle = (activationOrdinal: number) => frames.find(
-    (frame) => activationOrdinal === frame.activationOrdinal && ["B", "C"].every((taskId) =>
+  const heldMiddle = (frame: (typeof frames)[number]) => ["B", "C"].every((taskId) =>
       frame.heldPositions.some((position) => position.taskId === taskId)
     )
-  )
-  const initial = heldMiddle(1)
-  const later = frames.find(({ activationOrdinal }) => activationOrdinal === 2)
+  const initial = frames.find(heldMiddle)
+  const later = initial === undefined
+    ? undefined
+    : frames.find((frame) => frame.activationOrdinal > initial.activationOrdinal && heldMiddle(frame))
   const heldSequence = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"].reduce<ReadonlyArray<number>>(
     (found, tasks) => [...found, frames.findIndex((frame, index) =>
       index > (found.at(-1) ?? -1)
@@ -146,7 +211,7 @@ await scenario("shows the staggered double-diamond frontier being consumed on on
   assert(heldSequence.every((position) => position >= 0), "The graph must expose each staggered held-position release in order")
   assert(initial !== undefined && later !== undefined, "B and C must remain held across restart")
   if (initial !== undefined && later !== undefined) {
-    assert(later.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C", "The first later-activation frame must retain both middle-wave positions")
+    assert(later.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C", "The first post-restart frame with reconstructed positions must retain both middle-wave positions")
     assert(correlations(later).join(",") === correlations(initial).join(","), "A later activation must preserve both exact positions")
   }
 })
@@ -380,11 +445,11 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
   const selectorLabel = selector?.closest("label")
   if (selector === null) throw new Error("The cassette selector is missing")
   assert(selectorLabel?.textContent?.includes(`Choose cassette(${expectedCatalogSize} available)`) === true, "The ordinary selector must clearly state its action and available choice count")
-  assert(selector.querySelectorAll("optgroup").length === 3, "The ordinary selector must group choices under the three maintained catalogs")
+  assert(selector.querySelectorAll("optgroup").length === 5, "The ordinary selector must group choices under every maintained catalog")
   const groupLabels = [...selector.querySelectorAll<HTMLOptGroupElement>("optgroup")].map(({ label }) => label).join("|")
   assert(
-    groupLabels === "Authored coordinator stories|Target promotion protocol|Integration finality protocol",
-    `The selector groups must name the three maintained catalogs: ${groupLabels}`
+    groupLabels === "Authored coordinator stories|Application Exit lifecycle|Concrete Codex executor|Target promotion protocol|Integration finality protocol",
+    `The selector groups must name every maintained catalog: ${groupLabels}`
   )
   const malformedOptions = [...selector.options].filter((option) => {
     const choice = maintainedCassetteRows.find(({ catalogKey }) => option.value === catalogKey)
@@ -593,18 +658,23 @@ await scenario("shows represented and off-graph responsibilities without inventi
     }
     select.dispatchEvent(new Event("change"))
   }
-  const restartIndex = result.deliveryFrames.findIndex((frame) =>
-    frame.activationOrdinal === 2
-    && frame.graph._tag === "NotEstablished"
-    && frame.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C"
+  const beforeRestart = result.deliveryFrames.find((frame) =>
+    frame.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C"
   )
+  const restartIndex = beforeRestart === undefined
+    ? -1
+    : result.deliveryFrames.findIndex((frame) =>
+        frame.activationOrdinal > beforeRestart.activationOrdinal
+        && frame.graph._tag === "NotEstablished"
+        && frame.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C"
+      )
   if (restartIndex < 0) throw new Error("The restart frame with reconstructed B/C positions is missing")
   selectFrame(restartIndex)
   const capacity = document.querySelector("[data-role='delivery-capacity-positions']")
   const rail = document.querySelector("[data-role='delivery-off-graph-responsibilities']")
   assert(capacity?.textContent?.includes("2 held of capacity 2") === true, "The capacity strip must show both reconstructed positions")
-  assert(capacity?.textContent?.includes("B · attempt:B:1") === true, "The capacity strip must correlate B's exact attempt")
-  assert(capacity?.textContent?.includes("C · attempt:C:2") === true, "The capacity strip must correlate C's exact attempt")
+  assert(capacity?.textContent?.includes("B · attempt:B:0") === true, "The capacity strip must correlate B's exact attempt")
+  assert(capacity?.textContent?.includes("C · attempt:C:1") === true, "The capacity strip must correlate C's exact attempt")
   assert(capacity?.textContent?.toLowerCase().includes("anonymous") === true, "The capacity strip must not invent durable slot identities")
   assert(rail?.textContent?.includes("B") === true && rail.textContent.includes("C"), "The off-graph rail must retain both responsibilities")
   assert(rail?.textContent?.includes("graph not established") === true, "The rail must explain why the responsibilities are outside the graph")
@@ -1007,7 +1077,7 @@ await scenario("uses production authored prose for current story items", () => {
   )
 })
 
-await scenario("reports zero established settlements and keeps the direct-protocol caveat secondary", async () => {
+await scenario("reports the established dependency-story settlements and keeps the direct-protocol caveat secondary", async () => {
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
   if (row === undefined) throw new Error("The dependency delivery row is missing")
@@ -1016,8 +1086,10 @@ await scenario("reports zero established settlements and keeps the direct-protoc
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await done
   assert(
-    document.querySelector(".delivery-settlement-coverage")?.textContent === "Established settlements in this timeline: 0.",
-    "The workbench must report the timeline's zero established settlements without unrelated primary explanation"
+    document.querySelector(".delivery-settlement-coverage")?.textContent?.startsWith(
+      "This timeline contains 2 distinct established delivery settlements"
+    ) === true,
+    "The workbench must report the timeline's exact established settlements without unrelated primary explanation"
   )
   assert(
     document.querySelector(".delivery-reading-guide:not([open]) .delivery-direct-protocol-note")?.textContent?.includes("Direct integration-finality cassettes") === true,

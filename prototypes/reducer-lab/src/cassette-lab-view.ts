@@ -94,7 +94,19 @@ export const executionSummaryItems = (result: CassetteLabResult): ReadonlyArray<
     })
   }
   if (result.runId !== null) base.push({ term: "Run identity", description: result.runId })
-  base.push({ term: "Journal evidence", description: `${result.journalRecordCount} records, ordered within each Run` })
+  if (result.category === "ApplicationExit") {
+    base.push({
+      term: "Run journal evidence",
+      description: "None; application-lifecycle facts stay outside every Run journal"
+    })
+  } else if (result.category === "CodexExecutor") {
+    base.push({
+      term: "Run journal evidence",
+      description: "None; Codex thread and turn facts remain private behind the generic executor boundary"
+    })
+  } else {
+    base.push({ term: "Journal evidence", description: `${result.journalRecordCount} records, ordered within each Run` })
+  }
   if (result.runId === null) {
     const journalRunIds = [...new Set(result.journalRecords.flatMap((record) => {
       const runId = objectRecord(record)?.runId
@@ -127,6 +139,31 @@ export const protocolDiagnosticItems = (
 ): ReadonlyArray<ExecutionSummaryItem> => {
   if (result._tag === "Failed") return []
   const diagnostics: Array<ExecutionSummaryItem> = []
+  if (result.category === "ApplicationExit") {
+    const trace = evidenceProperty(result, "trace")
+    const processEnds = evidenceProperty(result, "processEndDecisions")
+    if (Array.isArray(trace)) diagnostics.push({ term: "Application lifecycle trace", description: `${trace.length} events` })
+    if (Array.isArray(processEnds)) {
+      diagnostics.push({
+        term: "Process-end decision",
+        description: processEnds.map((decision) => valueText(objectRecord(decision)?._tag)).join(" → ")
+      })
+    }
+  }
+  if (result.category === "CodexExecutor") {
+    const reports = evidenceProperty(result, "reports")
+    const privateRecord = objectRecord(evidenceProperty(result, "privateRecord"))
+    if (Array.isArray(reports)) {
+      diagnostics.push({
+        term: "Generic executor reports",
+        description: reports.map((report) => valueText(objectRecord(report)?._tag)).join(" → ")
+      })
+    }
+    diagnostics.push({
+      term: "Private Codex record",
+      description: valueText(privateRecord?._tag ?? "none")
+    })
+  }
   const boundaryCalls = evidenceProperty(result, "boundaryCalls")
   if (Array.isArray(boundaryCalls)) {
     diagnostics.push({ term: "Boundary-call sequence", description: `${boundaryCalls.length}: ${boundaryCalls.join(" → ")}` })
