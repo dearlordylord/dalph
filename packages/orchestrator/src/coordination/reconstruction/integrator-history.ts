@@ -290,8 +290,9 @@ const validateNonRunIntegratorHistoryEvent = (
 /** Validates and indexes only the events owned by the outer Integrator protocol. */
 export const validateIntegratorHistoryEvent = (
   record: JournalRecord,
-  indexes: IntegratorHistoryIndexes
+  indexes: IntegratorHistoryIndexes,
+  records: ReadonlyArray<JournalRecord> = [record]
 ): IntegratorHistoryValidationResult => {
-  const runHistory = validateIntegratorRunHistoryEvent(record, indexes)
+  const runHistory = validateIntegratorRunHistoryEvent(record, indexes, records)
   return runHistory.handled ? runHistory : validateNonRunIntegratorHistoryEvent(record, indexes)
 }

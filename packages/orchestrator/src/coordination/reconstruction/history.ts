@@ -2289,7 +2289,8 @@ const validateRecord = (
     runId,
     indexes,
     (detail) => identityIssue(issues, runId, record.position, detail),
-    (detail) => semanticIssue(issues, runId, record.position, detail)
+    (detail) => semanticIssue(issues, runId, record.position, detail),
+    records.slice(0, index + 1)
   )
   validateIntegrationFinalityHistoryRecord(
     record,

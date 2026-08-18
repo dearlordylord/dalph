@@ -36,6 +36,10 @@ import {
   IntegratorCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent,
   IntegratorResult,
   IntegratorCandidateGitObservedEvent,
   IntegratorResultRecordedEvent,
@@ -205,6 +209,43 @@ it.effect("quarantines one conclusively unsuccessful Integrator session and pres
     expect(state.quarantine.basis).toEqual(event.basis)
     expect(state.quarantine.correlation).toEqual(event.correlation)
     expect(state.quarantineAt).toBe(record.position)
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("accepts conclusive evidence bound to the exact initial Integrator run", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const correlation = correlationFor("run-bound-not-prepared")
+    const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
+    yield* journal.append(
+      runId,
+      JournalRecordKey.make("integration-quarantine-test:run-bound:start"),
+      IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
+    )
+    const detail = IntegratorNotPreparedDetail.make("the exact initial run returned no candidate")
+    const result = yield* journal.append(
+      runId,
+      JournalRecordKey.make("integration-quarantine-test:run-bound:result"),
+      IntegratorRunResultRecordedEvent.make({
+        result: IntegratorResult.cases.NotPrepared.make({ correlation, detail }),
+        run,
+        version: workflowJournalEventVersion
+      })
+    )
+    const quarantine = IntegrationQuarantinedEvent.make({
+      basis: conclusiveBasisFor(IntegrationQuarantineCause.cases.NotPrepared.make({ detail }), result.position),
+      correlation,
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    })
+    yield* journal.append(runId, integrationQuarantinedRecordKey(correlation.sessionId, quarantine.basis), quarantine)
+
+    expect(deriveIntegrationQuarantineState(yield* journal.read(runId), correlation.sessionId)._tag).toBe("Quarantined")
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 

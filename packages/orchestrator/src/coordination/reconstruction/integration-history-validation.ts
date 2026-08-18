@@ -8,10 +8,11 @@ export const validateIntegrationHistoryRecord = (
   runId: RunId,
   indexes: IntegrationHistoryIndexes,
   recordIdentityIssue: (detail: string) => void,
-  recordSemanticIssue: (detail: string) => void
+  recordSemanticIssue: (detail: string) => void,
+  records: ReadonlyArray<JournalRecord> = [record]
 ): void => {
   const bindingIssue = invalidIntegrationRunBinding(record.event, runId)
   if (bindingIssue !== undefined) recordIdentityIssue(bindingIssue)
-  const historyIssue = invalidIntegrationHistoryEvent(record, indexes)
+  const historyIssue = invalidIntegrationHistoryEvent(record, indexes, records)
   if (historyIssue !== undefined) recordSemanticIssue(historyIssue)
 }

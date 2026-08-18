@@ -77,7 +77,13 @@ export const integratorCorrelationFor = (input: IntegratorPreparationInput): Int
 export const integratorRunCorrelationFor = (
   input: IntegratorPreparationInput,
   ordinal: IntegratorRunOrdinal
-): IntegratorRunCorrelation => IntegratorRunCorrelation.make({ ordinal, session: integratorCorrelationFor(input) })
+): IntegratorRunCorrelation => integratorRunCorrelationForSession(integratorCorrelationFor(input), ordinal)
+
+/** Constructs one run identity for an already-fixed session, including an operator-authorized Retry. */
+export const integratorRunCorrelationForSession = (
+  session: IntegratorCorrelation,
+  ordinal: IntegratorRunOrdinal
+): IntegratorRunCorrelation => IntegratorRunCorrelation.make({ ordinal, session })
 
 /** The first opaque call for a fixed session always has run ordinal one. */
 export const integratorInitialRunCorrelationFor = (input: IntegratorPreparationInput): IntegratorRunCorrelation =>
@@ -173,21 +179,27 @@ const targetLineageIntentFor = (
       event.operation.operationId === operationId
   )
 
-export const hasMatchingIntegratorTargetLineageObservation = (
+// eslint-disable-next-line complexity -- One exact lineage pair must bind operation, target, attempt, observation, and Journal positions.
+export const matchingIntegratorTargetLineageIntentPosition = (
   records: ReadonlyArray<JournalRecord>,
   input: IntegratorPreparationInput
-): boolean => {
+): JournalPosition | undefined => {
   const record = records.find(({ position }) => position === input.targetLineageObservedAt)
-  if (record?.event._tag !== "TargetLineageObserved") return false
+  if (record?.event._tag !== "TargetLineageObserved") return undefined
   const intent = targetLineageIntentFor(records, record.position, record.event.operationId)
-  return (
-    intent?.event._tag === "GitReadIntentRecorded" &&
+  return intent?.event._tag === "GitReadIntentRecorded" &&
     intent.event.operation._tag === "ReadTargetLineage" &&
     integrationTargetEquivalence(intent.event.operation.integrationTarget, input.responsibility.integrationTarget) &&
     targetLineageObservationEquivalence(record.event.observation, input.targetLineage) &&
     plannedAttemptEquivalence(record.event.plannedAttempt, input.responsibility.plannedAttempt)
-  )
+    ? intent.position
+    : undefined
 }
+
+export const hasMatchingIntegratorTargetLineageObservation = (
+  records: ReadonlyArray<JournalRecord>,
+  input: IntegratorPreparationInput
+): boolean => matchingIntegratorTargetLineageIntentPosition(records, input) !== undefined
 
 export const readRecordedIntegratorSession = (
   records: ReadonlyArray<JournalRecord>,

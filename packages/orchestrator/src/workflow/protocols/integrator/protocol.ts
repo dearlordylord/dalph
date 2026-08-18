@@ -21,6 +21,7 @@ import {
   IntegratorRunOrdinal,
   IntegratorRunProtocolResult,
   IntegratorRunResultRecordedEvent,
+  integratorRetryRunOrdinal,
   IntegratorCandidateResourceLocator,
   IntegratorSessionId,
   IntegratorState,
@@ -45,9 +46,11 @@ import {
   integratorInitialRunCorrelationFor,
   integratorLineageIsCompatible,
   integratorRunCorrelationFor,
+  integratorRunCorrelationForSession,
   readRecordedIntegratorSession
 } from "./session.js"
 import type { IntegratorRunPreparationInput } from "./session.js"
+import { integratorRetryAuthorizationIssue } from "./retry-authorization.js"
 import {
   appendRunGitReadIntentIfNeeded,
   readLegacyInitialResultForRun,
@@ -75,7 +78,8 @@ export {
   IntegratorPreparationInput,
   integratorCorrelationFor,
   integratorInitialRunCorrelationFor,
-  integratorRunCorrelationFor
+  integratorRunCorrelationFor,
+  integratorRunCorrelationForSession
 }
 export type {
   IntegratorPreparationInput as IntegratorPreparationInputType,
@@ -272,6 +276,40 @@ const qualifyOrNotPreparedForRun = Effect.fn("IntegratorProtocol.qualifyOrNotPre
   return qualifyRunCandidate(result, run, observation)
 })
 
+const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForRequestedRun")(function* (
+  journal: InRunJournal["Service"],
+  request: IntegratorRunPreparationInput,
+  records: ReadonlyArray<JournalRecord>
+) {
+  if (request.run.ordinal === 1) return yield* correlationForPreparation(journal, request.preparation, records)
+  const runId = request.preparation.responsibility.plannedAttempt.runId
+  if (request.run.ordinal !== integratorRetryRunOrdinal) {
+    return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
+  }
+  const recordedSession = yield* readRecordedIntegratorSession(records, request.preparation.responsibility)
+  if (Option.isNone(recordedSession) || !integratorCorrelationsEqual(recordedSession.value, request.run.session)) {
+    return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
+  }
+  if (!integratorLineageIsCompatible(request.preparation)) {
+    return yield* new IntegratorTargetLineageIncompatible({
+      observation: request.preparation.targetLineage,
+      responsibility: request.preparation.responsibility
+    })
+  }
+  const authorizationIssue = integratorRetryAuthorizationIssue(records, request)
+  if (authorizationIssue !== undefined) {
+    return yield* new IntegratorJournalContradiction({ detail: authorizationIssue, runId })
+  }
+  if (recordedSession.value.expectedTargetHead !== request.preparation.targetLineage.targetHeadSha) {
+    return yield* new IntegratorTargetHeadChanged({
+      observedTargetHead: request.preparation.targetLineage.targetHeadSha,
+      recordedTargetHead: recordedSession.value.expectedTargetHead,
+      responsibility: request.preparation.responsibility
+    })
+  }
+  return recordedSession.value
+})
+
 /**
  * Runs one exact outer Integrator ordinal. New calls always write
  * IntegratorRunStarted before the opaque provider call and persist all result
@@ -283,14 +321,11 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
   const journal = yield* InRunJournal
   const input = requestInput.preparation
   const runId = input.responsibility.plannedAttempt.runId
-  if (requestInput.run.ordinal !== 1) {
-    return yield* new IntegratorJournalContradiction({
-      detail: "successor Integrator run requires exact Journal-authorized Retry evidence",
-      runId
-    })
+  if (requestInput.run.ordinal > integratorRetryRunOrdinal) {
+    return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
   }
   const records = yield* journal.read(runId)
-  const session = yield* correlationForPreparation(journal, input, records)
+  const session = yield* correlationForRequestedRun(journal, requestInput, records)
   if (!integratorCorrelationsEqual(session, requestInput.run.session)) {
     return yield* new IntegratorJournalContradiction({
       detail: "requested Integrator run belongs to a foreign session",
@@ -307,7 +342,13 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
     return yield* qualifyOrNotPreparedForRun(journal, run, legacyResult)
   }
 
-  const reconciledRunResult = yield* reconcileRunResult(journal, run, recordsAfterSession, recordedRunResult)
+  const reconciledRunResult = yield* reconcileRunResult(
+    journal,
+    run,
+    recordsAfterSession,
+    recordedRunResult,
+    run.ordinal === integratorRetryRunOrdinal
+  )
   let result: IntegratorResult
   if (Option.isSome(reconciledRunResult)) {
     result = reconciledRunResult.value

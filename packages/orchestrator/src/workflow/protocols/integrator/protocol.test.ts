@@ -23,8 +23,19 @@ import { makeTargetLineageObservationOperation } from "../../registry/operation.
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { integratorResultRecordedRecordKey } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
+import {
+  IntegrationQuarantineBasis,
+  IntegrationQuarantineCause,
+  IntegrationQuarantineDirectionAppliedEvent,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantinedEvent,
+  IntegrationProviderRunActivityAbsentEvent,
+  IntegrationQuarantineFailureDetail
+} from "../integration-quarantine/events.js"
 import {
   Integrator,
   IntegratorCallFailure,
@@ -44,10 +55,11 @@ import {
   hasMatchingIntegratorTargetLineageObservation,
   integratorCorrelationFor,
   integratorInitialRunCorrelationFor,
-  integratorRunCorrelationFor,
+  integratorRunCorrelationForSession,
   readRecordedIntegratorSession
 } from "./session.js"
 import { integratorRunQualifiedCandidateFromState } from "./state.js"
+import { integratorRunTwoAuthorizationIssue } from "./retry-authorization.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
@@ -55,6 +67,8 @@ import {
   IntegratorRunQualifiedCandidate,
   IntegratorRunOrdinal,
   IntegratorNotPreparedDetail,
+  IntegratorResultRecordedEvent,
+  type IntegratorCorrelation,
   type IntegratorProtocolResult,
   type IntegratorRunProtocolResult,
   IntegratorResult
@@ -158,7 +172,8 @@ interface Harness {
   readonly run: (input: IntegratorPreparationInput) => Effect.Effect<IntegratorProtocolResult, unknown>
   readonly runExact: (
     input: IntegratorPreparationInput,
-    ordinal: IntegratorRunOrdinal
+    ordinal: IntegratorRunOrdinal,
+    session?: IntegratorCorrelation
   ) => Effect.Effect<IntegratorRunProtocolResult, unknown>
   readonly readRecords: Effect.Effect<ReadonlyArray<JournalRecord>>
 }
@@ -241,8 +256,15 @@ const makeHarness = (
         Effect.provideService(IntegratorGit, git),
         Effect.provideService(InRunJournal, journal)
       )
-    const runExact = (input: IntegratorPreparationInput, ordinal: IntegratorRunOrdinal) =>
-      prepareIntegrationCandidateRun({ preparation: input, run: integratorRunCorrelationFor(input, ordinal) }).pipe(
+    const runExact = (
+      input: IntegratorPreparationInput,
+      ordinal: IntegratorRunOrdinal,
+      session = integratorCorrelationFor(input)
+    ) =>
+      prepareIntegrationCandidateRun({
+        preparation: input,
+        run: integratorRunCorrelationForSession(session, ordinal)
+      }).pipe(
         Effect.provideService(Integrator, integrator),
         Effect.provideService(IntegratorGit, git),
         Effect.provideService(InRunJournal, journal)
@@ -250,6 +272,108 @@ const makeHarness = (
 
     return { integratorCalls, gitCalls, gitCandidates, journal, records, readRecords: Ref.get(records), run, runExact }
   })
+
+const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAuthorization")(function* (
+  harness: Harness,
+  freshHead: GitCommitSha = targetHead,
+  evidence: "ConclusiveResult" | "ProviderRunFailure" = "ConclusiveResult"
+) {
+  const records = yield* harness.readRecords
+  const sessionRecord = records.find(({ event }) => event._tag === "IntegratorSessionFixed")
+  if (sessionRecord?.event._tag !== "IntegratorSessionFixed") return yield* Effect.die("expected fixed session")
+  const session = sessionRecord.event.correlation
+  let basis: IntegrationQuarantineBasis
+  if (evidence === "ConclusiveResult") {
+    const resultRecord = records.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+    if (resultRecord?.event._tag !== "IntegratorRunResultRecorded") {
+      return yield* Effect.die("expected ordinal-one result")
+    }
+    basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+      cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: notPreparedDetail }),
+      evidence: { resultRecordedAt: resultRecord.position }
+    })
+  } else {
+    const detail = IntegrationQuarantineFailureDetail.make("provider reports no owned activity for run one")
+    const absence = yield* harness.journal.append(
+      runId,
+      JournalRecordKey.make("integrator-retry:provider-absence"),
+      IntegrationProviderRunActivityAbsentEvent.make({
+        correlation: session,
+        detail,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+    )
+    basis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+      detail,
+      ownedActivityProvenAbsentAt: absence.position
+    })
+  }
+  const quarantine = yield* harness.journal.append(
+    runId,
+    JournalRecordKey.make("integrator-retry:quarantine"),
+    IntegrationQuarantinedEvent.make({
+      basis,
+      correlation: session,
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    })
+  )
+  const direction = yield* harness.journal.append(
+    runId,
+    JournalRecordKey.make("integrator-retry:direction"),
+    IntegrationQuarantineDirectionAppliedEvent.make({
+      fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+        direction: "Retry",
+        quarantineAt: quarantine.position,
+        sessionId: session.sessionId
+      }),
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "integrator-retry", runId }),
+      version: workflowJournalEventVersion
+    })
+  )
+  const operationId = OperationId.make("operation-target-lineage-retry")
+  const intent = yield* harness.journal.append(
+    runId,
+    JournalRecordKey.make("integrator-retry:lineage-intent"),
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: makeTargetLineageObservationOperation({
+        integrationTarget: target,
+        operationId,
+        plannedAttempt,
+        predecessorOperationIds: []
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
+  const observation = yield* harness.journal.append(
+    runId,
+    JournalRecordKey.make("integrator-retry:lineage-observation"),
+    TargetLineageObservedEvent.make({
+      observation: TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: base,
+        targetHeadSha: freshHead
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  return {
+    direction,
+    input: compatibleInput(freshHead, observation.position),
+    intent,
+    observation,
+    quarantine,
+    session
+  }
+})
 
 describe("outer Integrator protocol", () => {
   it.effect("fails closed when a concurrent writer fixes a different session", () =>
@@ -481,7 +605,7 @@ describe("outer Integrator protocol", () => {
     })
   )
 
-  it.effect("rejects run ordinal two until exact Journal-authorized Retry evidence is supplied", () =>
+  it.effect("starts run two only after exact Retry and a fresh matching target-head read", () =>
     Effect.gen(function* () {
       const input = compatibleInput()
       const harness = yield* makeHarness(
@@ -491,17 +615,242 @@ describe("outer Integrator protocol", () => {
 
       const initial = yield* harness.runExact(input, IntegratorRunOrdinal.make(1))
       const retryFailure = yield* harness.runExact(input, IntegratorRunOrdinal.make(2)).pipe(Effect.flip)
+      const authorization = yield* appendRetryAuthorization(harness)
+      const retried = yield* harness.runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
       const records = yield* harness.readRecords
-      const runTwo = integratorRunCorrelationFor(input, IntegratorRunOrdinal.make(2))
+      const runTwo = integratorRunCorrelationForSession(authorization.session, IntegratorRunOrdinal.make(2))
+      const runTwoStart = records.find(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === 2)
 
       expect(initial._tag).toBe("NotPrepared")
       expect(retryFailure).toBeInstanceOf(IntegratorJournalContradiction)
-      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(1)
-      expect(deriveIntegratorRunState(records, responsibility, runTwo)._tag).toBe("Absent")
+      expect(retried._tag).toBe("NotPrepared")
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(2)
+      expect(deriveIntegratorRunState(records, responsibility, runTwo)._tag).toBe("NotPrepared")
       expect(records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
-      expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(1)
-      expect(records.filter(({ event }) => event._tag === "IntegratorRunResultRecorded")).toHaveLength(1)
+      expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(2)
+      expect(records.filter(({ event }) => event._tag === "IntegratorRunResultRecorded")).toHaveLength(2)
+      expect(authorization.quarantine.position).toBeLessThan(authorization.direction.position)
+      expect(authorization.direction.position).toBeLessThan(authorization.intent.position)
+      expect(authorization.intent.position).toBeLessThan(authorization.observation.position)
+      expect(authorization.observation.position).toBeLessThan(runTwoStart?.position ?? 0)
+      expect(
+        runTwoStart === undefined
+          ? "missing run-two start"
+          : integratorRunTwoAuthorizationIssue(records, runTwo, { beforePosition: runTwoStart.position })
+      ).toBeUndefined()
     })
+  )
+
+  it.effect("reuses the same authorized run two after process loss without another Retry direction", () =>
+    Effect.gen(function* () {
+      let calls = 0
+      const harness = yield* makeHarness(
+        (request) => {
+          calls += 1
+          return calls < 3
+            ? Effect.fail(new IntegratorCallFailure({ correlation: request.correlation, detail: "process lost" }))
+            : Effect.succeed(notPrepared(request))
+        },
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+
+      yield* Effect.exit(harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1)))
+      const authorization = yield* appendRetryAuthorization(harness, targetHead, "ProviderRunFailure")
+      const firstRetry = yield* Effect.exit(
+        harness.runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
+      )
+      const secondRetry = yield* harness.runExact(
+        authorization.input,
+        IntegratorRunOrdinal.make(2),
+        authorization.session
+      )
+      const records = yield* harness.readRecords
+
+      expect(firstRetry._tag).toBe("Failure")
+      expect(secondRetry._tag).toBe("NotPrepared")
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(3)
+      expect(records.filter(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")).toHaveLength(1)
+      expect(
+        records.filter(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === 2)
+      ).toHaveLength(1)
+    })
+  )
+
+  it.effect("accepts exact legacy initial-run result evidence as the migration authority for Retry", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      const authorization = yield* appendRetryAuthorization(harness)
+      yield* Ref.update(harness.records, (records) =>
+        records
+          .filter(({ event }) => event._tag !== "IntegratorRunStarted" || event.run.ordinal !== 1)
+          .map((record) =>
+            record.event._tag === "IntegratorRunResultRecorded" && record.event.run.ordinal === 1
+              ? {
+                  ...record,
+                  event: IntegratorResultRecordedEvent.make({
+                    result: record.event.result,
+                    version: workflowJournalEventVersion
+                  }),
+                  key: integratorResultRecordedRecordKey(authorization.session)
+                }
+              : record
+          )
+      )
+
+      const retried = yield* harness.runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
+
+      expect(retried._tag).toBe("NotPrepared")
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(2)
+    })
+  )
+
+  it.effect("starts no Retry run when the fresh target head differs from the fixed session head", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      const authorization = yield* appendRetryAuthorization(harness, changedTargetHead)
+
+      const failure = yield* harness
+        .runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
+        .pipe(Effect.flip)
+      const records = yield* harness.readRecords
+
+      expect(failure).toBeInstanceOf(IntegratorTargetHeadChanged)
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(1)
+      expect(
+        records.filter(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === 2)
+      ).toHaveLength(0)
+    })
+  )
+
+  it.effect("rejects Retry evidence bound to a foreign Run before crossing the Integrator boundary", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      const authorization = yield* appendRetryAuthorization(harness)
+      yield* Ref.update(harness.records, (records) =>
+        records.map((record) =>
+          record.position === authorization.direction.position &&
+          record.event._tag === "IntegrationQuarantineDirectionApplied"
+            ? {
+                ...record,
+                event: {
+                  ...record.event,
+                  requestId: IntegrationQuarantineDirectionRequestId.make({
+                    nonce: "foreign-retry",
+                    runId: RunId.make("foreign-run")
+                  })
+                }
+              }
+            : record
+        )
+      )
+
+      const failure = yield* harness
+        .runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
+        .pipe(Effect.flip)
+
+      expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(1)
+    })
+  )
+
+  it.effect("rejects non-Retry, conflicting, stale-lineage, and wrong-quarantine evidence before run two", () =>
+    Effect.forEach(
+      ["FullRerun", "ConflictingDirection", "LineageBeforeDirection", "WrongQuarantineEvidence"] as const,
+      (invalidCase) =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness(
+            (request) => Effect.succeed(notPrepared(request)),
+            successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+          )
+          yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+          const authorization = yield* appendRetryAuthorization(harness)
+
+          if (invalidCase === "ConflictingDirection") {
+            yield* harness.journal.append(
+              runId,
+              JournalRecordKey.make("integrator-retry:conflicting-direction"),
+              IntegrationQuarantineDirectionAppliedEvent.make({
+                fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+                  direction: "FullRerun",
+                  quarantineAt: authorization.quarantine.position,
+                  sessionId: authorization.session.sessionId
+                }),
+                initiatedBy: { _tag: "Operator" },
+                occurrenceClassification: "InitiatedAction",
+                requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "conflicting-full-rerun", runId }),
+                version: workflowJournalEventVersion
+              })
+            )
+          } else {
+            yield* Ref.update(harness.records, (records) =>
+              records.map((record) => {
+                if (
+                  invalidCase === "FullRerun" &&
+                  record.position === authorization.direction.position &&
+                  record.event._tag === "IntegrationQuarantineDirectionApplied"
+                ) {
+                  return {
+                    ...record,
+                    event: {
+                      ...record.event,
+                      fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+                        ...record.event.fingerprint,
+                        direction: "FullRerun"
+                      })
+                    }
+                  }
+                }
+                if (invalidCase === "LineageBeforeDirection" && record.position === authorization.direction.position) {
+                  return { ...record, position: JournalPosition.make(Number(authorization.observation.position) + 1) }
+                }
+                if (
+                  invalidCase === "WrongQuarantineEvidence" &&
+                  record.position === authorization.quarantine.position &&
+                  record.event._tag === "IntegrationQuarantined" &&
+                  record.event.basis._tag === "ConclusiveResult"
+                ) {
+                  return {
+                    ...record,
+                    event: {
+                      ...record.event,
+                      basis: IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+                        cause: record.event.basis.cause,
+                        evidence: { resultRecordedAt: JournalPosition.make(999) }
+                      })
+                    }
+                  }
+                }
+                return record
+              })
+            )
+          }
+
+          const failure = yield* harness
+            .runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
+            .pipe(Effect.flip)
+          const records = yield* harness.readRecords
+
+          expect(failure, invalidCase).toBeInstanceOf(IntegratorJournalContradiction)
+          expect(yield* Ref.get(harness.integratorCalls), invalidCase).toHaveLength(1)
+          expect(
+            records.filter(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === 2),
+            invalidCase
+          ).toHaveLength(0)
+        }),
+      { concurrency: 1 }
+    ).pipe(Effect.asVoid)
   )
 
   it.effect("rejects successor ordinals before crossing the Integrator boundary", () =>

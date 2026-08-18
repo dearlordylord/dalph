@@ -359,9 +359,10 @@ const invalidCandidateHistory = (record: JournalRecord, indexes: IntegrationHist
 
 export const invalidIntegrationHistoryEvent = (
   record: JournalRecord,
-  indexes: IntegrationHistoryIndexes
+  indexes: IntegrationHistoryIndexes,
+  records: ReadonlyArray<JournalRecord> = [record]
 ): string | undefined => {
-  const integrator = validateIntegratorHistoryEvent(record, indexes)
+  const integrator = validateIntegratorHistoryEvent(record, indexes, records)
   if (integrator.handled) return integrator.issue
   const event = record.event
   if (event._tag === "IntegrationResponsibilityBegan") {

@@ -49,6 +49,9 @@ export type IntegratorCorrelation = IntegratorSessionCorrelation
 export const IntegratorRunOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.brand("IntegratorRunOrdinal"))
 export type IntegratorRunOrdinal = typeof IntegratorRunOrdinal.Type
 
+/** The only successor ordinal admitted by one operator-authorized Retry. */
+export const integratorRetryRunOrdinal = IntegratorRunOrdinal.make(Number(IntegratorRunOrdinal.make(1)) + 1)
+
 /** Exact identity of one outer-Integrator run, including its owning session. */
 export const IntegratorRunCorrelation = Schema.Struct({
   ordinal: IntegratorRunOrdinal,

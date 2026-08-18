@@ -8,9 +8,11 @@ import {
 import {
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
+  integratorRetryRunOrdinal,
   integratorRunCorrelationsEqual
 } from "../../workflow/protocols/integrator/events.js"
 import { integratorCorrelationsEqual } from "../../workflow/protocols/integrator/state.js"
+import { integratorRunTwoAuthorizationIssue } from "../../workflow/protocols/integrator/retry-authorization.js"
 import { setMapValue } from "./integration-history-run-binding.js"
 
 type IntegratorSessionFixed = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorSessionFixed" }>
@@ -115,21 +117,30 @@ const previousRunIsConclusive = (
 const invalidIntegratorRunStarted = (
   record: JournalRecord,
   event: IntegratorRunStarted,
-  indexes: IntegratorRunHistoryValidationIndexes
+  indexes: IntegratorRunHistoryValidationIndexes,
+  records: ReadonlyArray<JournalRecord>
 ): string | undefined => {
   const key = integratorRunKey(event.run)
   const existing = indexes.integratorRunStarted.get(key)
   const session = exactSessionForCorrelation(event.run.session, record, indexes)
   const previous = previousIntegratorRun(event.run)
   const previousConclusive = previousRunIsConclusive(previous, record, indexes)
+  const authorizationIssue =
+    event.run.ordinal === 1
+      ? undefined
+      : event.run.ordinal === integratorRetryRunOrdinal
+        ? integratorRunTwoAuthorizationIssue(records, event.run, { beforePosition: record.position })
+        : `Integrator run ordinal ${event.run.ordinal} exceeds Retry bound`
   setMapValue(indexes.integratorRunStarted, key, { event, position: record.position })
   return existing !== undefined
     ? `Integrator run repeats exact session ordinal ${event.run.ordinal}`
     : !session
       ? `Integrator run has no exact earlier fixed session at ${event.run.session.startedAt}`
-      : !previousConclusive
-        ? `Integrator run ordinal ${event.run.ordinal} has no exact conclusive predecessor run`
-        : undefined
+      : authorizationIssue !== undefined
+        ? authorizationIssue
+        : event.run.ordinal === 1 && !previousConclusive
+          ? `Integrator run ordinal ${event.run.ordinal} has no exact conclusive predecessor run`
+          : undefined
 }
 
 const exactIntegratorRunStart = (
@@ -221,11 +232,12 @@ const invalidIntegratorRunCandidateGitObservation = (
 /** Validates and indexes the run-bound events owned by the outer Integrator protocol. */
 export const validateIntegratorRunHistoryEvent = (
   record: JournalRecord,
-  indexes: IntegratorRunHistoryValidationIndexes
+  indexes: IntegratorRunHistoryValidationIndexes,
+  records: ReadonlyArray<JournalRecord> = [record]
 ): { readonly handled: true; readonly issue: string | undefined } | { readonly handled: false } => {
   const event = record.event
   if (event._tag === "IntegratorRunStarted") {
-    return { handled: true, issue: invalidIntegratorRunStarted(record, event, indexes) }
+    return { handled: true, issue: invalidIntegratorRunStarted(record, event, indexes, records) }
   }
   if (event._tag === "IntegratorRunResultRecorded") {
     return { handled: true, issue: invalidIntegratorRunResult(record, event, indexes) }

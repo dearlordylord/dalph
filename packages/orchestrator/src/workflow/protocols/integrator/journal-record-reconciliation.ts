@@ -337,10 +337,11 @@ export const reconcileRunResult = Effect.fn("IntegratorProtocol.reconcileRunResu
   journal: InRunJournal["Service"],
   run: IntegratorRunCorrelation,
   records: ReadonlyArray<JournalRecord>,
-  recordedRunResult: Option.Option<IntegratorResult>
+  recordedRunResult: Option.Option<IntegratorResult>,
+  successorAuthorized: boolean
 ) {
   if (Option.isNone(recordedRunResult)) {
-    if (!previousRunIsDurablyConclusive(records, run)) {
+    if (!successorAuthorized && !previousRunIsDurablyConclusive(records, run)) {
       return yield* new IntegratorJournalContradiction({
         detail: "requested retry has no exact conclusive predecessor run",
         runId: runIdForCorrelation(run.session)

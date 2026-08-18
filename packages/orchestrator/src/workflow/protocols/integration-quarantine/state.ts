@@ -12,7 +12,7 @@ import {
   type IntegrationQuarantineBasis,
   sameIntegrationQuarantineDirectionSubject
 } from "./events.js"
-import { IntegratorGitObservation, IntegratorSessionId } from "../integrator/events.js"
+import { IntegratorGitObservation, IntegratorSessionId, integratorRunCorrelationsEqual } from "../integrator/events.js"
 import { integratorCorrelationsEqual } from "../integrator/state.js"
 
 /** Reconstructed disposition for one exact Integrator session; no process-local choice cache is retained. */
@@ -79,19 +79,26 @@ const providerActivityAbsenceMatches = (
   integratorCorrelationsEqual(record.event.correlation, correlation)
 
 type IntegratorResultRecord = JournalRecord & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorResultRecorded" }>
+  readonly event: Extract<
+    JournalRecord["event"],
+    { readonly _tag: "IntegratorResultRecorded" | "IntegratorRunResultRecorded" }
+  >
 }
 
 type IntegratorCandidateObservationRecord = JournalRecord & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorCandidateGitObserved" }>
+  readonly event: Extract<
+    JournalRecord["event"],
+    { readonly _tag: "IntegratorCandidateGitObserved" | "IntegratorRunCandidateGitObserved" }
+  >
 }
 
 const isIntegratorResultRecord = (record: JournalRecord | undefined): record is IntegratorResultRecord =>
-  record?.event._tag === "IntegratorResultRecorded"
+  record?.event._tag === "IntegratorResultRecorded" || record?.event._tag === "IntegratorRunResultRecorded"
 
 const isIntegratorCandidateObservationRecord = (
   record: JournalRecord | undefined
-): record is IntegratorCandidateObservationRecord => record?.event._tag === "IntegratorCandidateGitObserved"
+): record is IntegratorCandidateObservationRecord =>
+  record?.event._tag === "IntegratorCandidateGitObserved" || record?.event._tag === "IntegratorRunCandidateGitObserved"
 
 const isDirectionRecord = (record: JournalRecord | undefined): record is DirectionRecord =>
   record?.event._tag === "IntegrationQuarantineDirectionApplied"
@@ -103,7 +110,23 @@ const resultRecordFor = (
 ): IntegratorResultRecord | undefined => {
   const record = recordAt(records, position)
   if (!isIntegratorResultRecord(record)) return undefined
+  const matchingRunStart = (() => {
+    if (record.event._tag === "IntegratorResultRecorded") return true
+    const run = record.event.run
+    return records.some(
+      (candidate) =>
+        candidate.position < record.position &&
+        candidate.event._tag === "IntegratorRunStarted" &&
+        integratorRunCorrelationsEqual(candidate.event.run, run)
+    )
+  })()
+  const exactInitialRun =
+    record.event._tag === "IntegratorResultRecorded" ||
+    (record.event.run.ordinal === 1 &&
+      integratorCorrelationsEqual(record.event.run.session, quarantine.event.correlation))
   return record.position < quarantine.position &&
+    matchingRunStart &&
+    exactInitialRun &&
     integratorCorrelationsEqual(record.event.result.correlation, quarantine.event.correlation)
     ? record
     : undefined
@@ -131,10 +154,12 @@ const candidateObservationRecordFor = (
 ): IntegratorCandidateObservationRecord | undefined => {
   const record = recordAt(records, position)
   if (!isIntegratorCandidateObservationRecord(record)) return undefined
-  return record.position < quarantine.position &&
-    integratorCorrelationsEqual(record.event.correlation, quarantine.event.correlation)
-    ? record
-    : undefined
+  const exactInitialRun =
+    record.event._tag === "IntegratorCandidateGitObserved"
+      ? integratorCorrelationsEqual(record.event.correlation, quarantine.event.correlation)
+      : record.event.run.ordinal === 1 &&
+        integratorCorrelationsEqual(record.event.run.session, quarantine.event.correlation)
+  return record.position < quarantine.position && exactInitialRun ? record : undefined
 }
 
 const candidateObservationMatches = (
