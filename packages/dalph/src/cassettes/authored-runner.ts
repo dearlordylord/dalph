@@ -65,6 +65,14 @@ import {
   IntegrationCandidateGit,
   IntegrationReviewManifest,
   IntegrationCandidateGitReadFailure,
+  Integrator,
+  IntegratorCallFailure,
+  IntegratorCandidateText,
+  IntegratorGit,
+  IntegratorGitObservation,
+  IntegratorGitReadFailure,
+  IntegratorNotPreparedDetail,
+  IntegratorResult,
   GitWorktree,
   GitWorktreeCreateFailure,
   gitTargetLineageTestLayer,
@@ -102,9 +110,9 @@ import {
   TargetPromotionCompareAndSetFailure,
   TargetPromotionCompareAndSetResult,
   TargetPromotionRequest,
-  TargetPromotionRequestId,
   TargetPromotionGitReadFailure,
   TargetPromotionGitReadObservation,
+  targetPromotionCorrelationFor,
   type TargetPromotionGitService,
   memoryEvidenceStoreLayer,
   EvidenceStore,
@@ -369,8 +377,6 @@ const authoredDeliveryProposalIdOf = (proposal: DeliveryProposal, runId: RunId):
 }
 
 const authoredAcceptanceManifestDigest = "1111111111111111111111111111111111111111111111111111111111111111"
-const authoredReviewManifestDigest = "2222222222222222222222222222222222222222222222222222222222222222"
-const authoredVerificationManifestDigest = "3333333333333333333333333333333333333333333333333333333333333333"
 
 const authoredTargetPromotionRequestOf = (request: TargetPromotionRequest, runId: RunId): TargetPromotionRequest => {
   const normalized = Schema.decodeUnknownSync(TargetPromotionRequest)(
@@ -378,29 +384,30 @@ const authoredTargetPromotionRequestOf = (request: TargetPromotionRequest, runId
   )
   return Schema.decodeUnknownSync(TargetPromotionRequest)({
     ...normalized,
-    acceptanceManifest: { ...normalized.acceptanceManifest, digest: authoredAcceptanceManifestDigest },
-    candidateCorrelation: {
-      ...normalized.candidateCorrelation,
-      acceptanceManifest: {
-        ...normalized.candidateCorrelation.acceptanceManifest,
-        digest: authoredAcceptanceManifestDigest
-      }
-    },
-    reviewManifest: { ...normalized.reviewManifest, digest: authoredReviewManifestDigest },
-    verificationCorrelation: {
-      ...normalized.verificationCorrelation,
-      reviewManifest: { ...normalized.verificationCorrelation.reviewManifest, digest: authoredReviewManifestDigest },
-      candidateCorrelation: {
-        ...normalized.verificationCorrelation.candidateCorrelation,
-        acceptanceManifest: {
-          ...normalized.verificationCorrelation.candidateCorrelation.acceptanceManifest,
-          digest: authoredAcceptanceManifestDigest
+    qualifiedCandidate: {
+      ...normalized.qualifiedCandidate,
+      correlation: {
+        ...normalized.qualifiedCandidate.correlation,
+        acceptedResult: {
+          ...normalized.qualifiedCandidate.correlation.acceptedResult,
+          evidenceManifest: {
+            ...normalized.qualifiedCandidate.correlation.acceptedResult.evidenceManifest,
+            digest: authoredAcceptanceManifestDigest
+          }
         }
       }
-    },
-    verificationManifest: { ...normalized.verificationManifest, digest: authoredVerificationManifestDigest }
+    }
   })
 }
+
+const authoredTargetPromotionGitRequestMatches = (
+  request: Parameters<TargetPromotionGitService["read"]>[0],
+  expected: TargetPromotionRequest
+): boolean =>
+  request.candidateCommit === expected.qualifiedCandidate.candidateCommit &&
+  request.expectedTargetHead === expected.qualifiedCandidate.correlation.expectedTargetHead &&
+  request.integrationTarget.repository === expected.qualifiedCandidate.correlation.integrationTarget.repository &&
+  request.integrationTarget.ref === expected.qualifiedCandidate.correlation.integrationTarget.ref
 
 const targetPromotionRequestOf = (
   transition: Extract<
@@ -409,18 +416,7 @@ const targetPromotionRequestOf = (
   >,
   runId: RunId
 ): TargetPromotionRequest => {
-  const request = TargetPromotionRequest.make({
-    acceptanceManifest: transition.candidate.correlation.acceptanceManifest,
-    candidateCommit: transition.candidate.candidateCommit,
-    candidateConstructedAt: transition.candidate.constructedAt,
-    candidateCorrelation: transition.candidate.correlation,
-    expectedTargetHead: transition.candidate.correlation.expectedTargetHead,
-    integrationTarget: transition.candidate.correlation.integrationTarget,
-    reviewManifest: transition.candidate.reviewManifest,
-    requestId: TargetPromotionRequestId.make(`target-promotion:${transition.candidate.correlation.candidateId}`),
-    verificationCorrelation: transition.verification.correlation,
-    verificationManifest: transition.verification.manifest
-  })
+  const request = targetPromotionCorrelationFor(transition.candidate)
   return authoredTargetPromotionRequestOf(request, runId)
 }
 
@@ -1458,11 +1454,10 @@ const runAuthoredScenarioCassetteWith = (request: {
           Effect.gen(function* () {
             const authoredDeath = yield* cursor.consumeTargetPromotionReconciliationReadBoundaryDeath
             if (Option.isSome(authoredDeath)) {
-              const normalizedRequest = authoredTargetPromotionRequestOf(request, runId)
               /* v8 ignore start -- @preserve The request-correlated death item is constructed from this exact normalized promotion request. */
-              if (JSON.stringify(normalizedRequest) !== JSON.stringify(authoredDeath.value.request)) {
+              if (!authoredTargetPromotionGitRequestMatches(request, authoredDeath.value.request)) {
                 return yield* Effect.die(
-                  `target-promotion reconciliation-read death expected ${JSON.stringify(authoredDeath.value.request)}, received ${JSON.stringify(normalizedRequest)}`
+                  `target-promotion reconciliation-read death expected ${JSON.stringify(authoredDeath.value.request)}, received ${JSON.stringify(request)}`
                 )
               }
               /* v8 ignore stop -- @preserve */
@@ -1473,11 +1468,10 @@ const runAuthoredScenarioCassetteWith = (request: {
             }
             const authoredHold = yield* cursor.consumeTargetPromotionReconciliationReadBoundaryHold
             if (Option.isSome(authoredHold)) {
-              const normalizedRequest = authoredTargetPromotionRequestOf(request, runId)
               /* v8 ignore start -- @preserve The paired hold is constructed from this exact normalized promotion request and closure allows only one active hold. */
-              if (JSON.stringify(normalizedRequest) !== JSON.stringify(authoredHold.value.request)) {
+              if (!authoredTargetPromotionGitRequestMatches(request, authoredHold.value.request)) {
                 return yield* Effect.die(
-                  `held target-promotion reconciliation read expected ${JSON.stringify(authoredHold.value.request)}, received ${JSON.stringify(normalizedRequest)}`
+                  `held target-promotion reconciliation read expected ${JSON.stringify(authoredHold.value.request)}, received ${JSON.stringify(request)}`
                 )
               }
               if (Option.isSome(yield* Ref.get(targetPromotionReconciliationReadBoundaryGate))) {
@@ -1917,6 +1911,109 @@ const runAuthoredScenarioCassetteWith = (request: {
           })
         )
       )
+      const integratorLayer = Layer.merge(
+        Layer.succeed(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              cursor.consumeIntegrationCandidateAgentReport(request.correlation.plannedAttempt.attemptId).pipe(
+                Effect.mapError(
+                  (failure) =>
+                    new IntegratorCallFailure({
+                      correlation: request.correlation,
+                      detail: `${failure._tag}: ${failure.storyPosition}`
+                    })
+                ),
+                Effect.flatMap((candidateReport) => {
+                  /* v8 ignore next -- @preserve Accepted authored stories declare every report; retain the candidate-boundary diagnostic for malformed runtime re-entry. */
+                  if (Option.isNone(candidateReport)) {
+                    return Effect.die(
+                      `candidate frontier invoked the agent without an authored report for ${JSON.stringify(request.correlation)}`
+                    )
+                  }
+                  const authored = candidateReport.value.report
+                  return Match.value(authored).pipe(
+                    Match.tagsExhaustive({
+                      Conflict: () =>
+                        Effect.succeed(
+                          IntegratorResult.cases.NotPrepared.make({
+                            correlation: request.correlation,
+                            detail: IntegratorNotPreparedDetail.make("outer Integrator reported Conflict")
+                          })
+                        ),
+                      CorrelationContradiction: () =>
+                        Effect.succeed(
+                          IntegratorResult.cases.NotPrepared.make({
+                            correlation: request.correlation,
+                            detail: IntegratorNotPreparedDetail.make(
+                              "outer Integrator reported CorrelationContradiction"
+                            )
+                          })
+                        ),
+                      ExitedWithoutCandidate: () =>
+                        Effect.succeed(
+                          IntegratorResult.cases.NotPrepared.make({
+                            correlation: request.correlation,
+                            detail: IntegratorNotPreparedDetail.make(
+                              "outer Integrator reported ExitedWithoutCandidate"
+                            )
+                          })
+                        ),
+                      Submitted: ({ candidateCommit }) =>
+                        Effect.succeed(
+                          IntegratorResult.cases.PreparedCandidate.make({
+                            candidateText: IntegratorCandidateText.make(String(candidateCommit)),
+                            correlation: request.correlation
+                          })
+                        ),
+                      Working: () =>
+                        Effect.succeed(
+                          IntegratorResult.cases.NotPrepared.make({
+                            correlation: request.correlation,
+                            detail: IntegratorNotPreparedDetail.make("outer Integrator reported Working")
+                          })
+                        )
+                    })
+                  )
+                })
+              )
+          })
+        ),
+        Layer.succeed(
+          IntegratorGit,
+          IntegratorGit.of({
+            readCandidate: (target, candidateText) => {
+              const candidateCommit = GitCommitSha.make(String(candidateText))
+              return cursor.consumeIntegrationCandidateGitValidation(target.repository, candidateCommit).pipe(
+                Effect.mapError(
+                  (failure) =>
+                    new IntegratorGitReadFailure({
+                      candidateText,
+                      detail: `${failure._tag}: ${"detail" in failure ? failure.detail : "interaction mismatch"} at story position ${failure.storyPosition}`,
+                      target
+                    })
+                ),
+                Effect.map(({ observation }) => {
+                  if (observation._tag === "Missing") {
+                    return IntegratorGitObservation.cases.Missing.make({ candidateText })
+                  }
+                  if (observation._tag === "NonCommit") {
+                    return IntegratorGitObservation.cases.NonCommit.make({
+                      candidateText,
+                      objectType: observation.objectType
+                    })
+                  }
+                  return IntegratorGitObservation.cases.Commit.make({
+                    candidateText,
+                    commit: candidateCommit,
+                    directParents: observation.directParents
+                  })
+                })
+              )
+            }
+          })
+        )
+      )
       const coordinatorOwnership = CoordinatorOwnership.of({
         /* v8 ignore next -- Activation construction requires capability presence; cassette mutations use controlled authorities. */
         release: Effect.void,
@@ -1950,6 +2047,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           evidenceStore
         ).pipe(
           Layer.provide(candidateLayer),
+          Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),
           Layer.provide(controlPolicyLayer),
           Layer.provide(executorLayer),
