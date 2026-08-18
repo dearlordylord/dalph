@@ -19,7 +19,8 @@ import type {
 import type {
   IntegratorCandidateText,
   IntegratorCorrelation,
-  IntegratorResponsibilityFacts
+  IntegratorResponsibilityFacts,
+  IntegratorSessionId
 } from "../workflow/protocols/integrator/events.js"
 import type { TargetVerificationRequestId } from "../workflow/protocols/target-verification/events.js"
 import type {
@@ -32,6 +33,11 @@ import type {
   CompletionTaskRequest,
   CompletionTaskRequestOrdinal
 } from "../workflow/protocols/integration-finality/events.js"
+import {
+  type IntegrationQuarantineBasis,
+  type IntegrationQuarantineDirectionSubject,
+  integrationQuarantineBasisKey
+} from "../workflow/protocols/integration-quarantine/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -293,6 +299,23 @@ export const completionClaimDeletedRecordKey = (operationId: OperationId): Journ
 /** Stable journal key for one task-scoped integration finality settlement. */
 export const integrationFinalitySettledRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>
   JournalRecordKey.make(`integration-finality:${requestId}:settled`)
+
+/** Stable key for one exact conclusive quarantine occurrence of one Integrator session. */
+export const integrationQuarantinedRecordKey = (
+  sessionId: IntegratorSessionId,
+  basis: IntegrationQuarantineBasis
+): JournalRecordKey =>
+  JournalRecordKey.make(`integration-quarantine:${sessionId}:${integrationQuarantineBasisKey(basis)}:quarantined`)
+
+/** Stable key for exact proof that one provider run has no owned activity. */
+export const integrationProviderRunActivityAbsentRecordKey = (correlation: IntegratorCorrelation): JournalRecordKey =>
+  JournalRecordKey.make(`integration-quarantine:${correlation.sessionId}:provider-activity-absent`)
+
+/** Stable key for the one winning operator direction for an exact quarantine subject. */
+export const integrationQuarantineDirectionAppliedRecordKey = (
+  subject: IntegrationQuarantineDirectionSubject
+): JournalRecordKey =>
+  JournalRecordKey.make(`integration-quarantine-direction:${subject.sessionId}:${subject.quarantineAt}:applied`)
 
 const completionTaskRecordKeyPrefix = (operationId: OperationId): string => `completion-task:${operationId}`
 

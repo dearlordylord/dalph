@@ -71,9 +71,13 @@ import {
   completionTaskRejectedRecordKey,
   completionTaskResponseLostRecordKey,
   plannedAttemptContinuationAuthorizedRecordKey,
-  plannedAttemptReplacedRecordKey
+  plannedAttemptReplacedRecordKey,
+  integrationQuarantinedRecordKey,
+  integrationQuarantineDirectionAppliedRecordKey,
+  integrationProviderRunActivityAbsentRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
+import { integrationQuarantineDirectionSubject } from "../protocols/integration-quarantine/events.js"
 import type {
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal
@@ -464,6 +468,20 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     IntegrationFinalitySettled: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integrationFinalitySettledRecordKey(event.claim.promotionCorrelation.requestId)
+    }),
+    IntegrationQuarantined: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationQuarantinedRecordKey(event.correlation.sessionId, event.basis)
+    }),
+    IntegrationProviderRunActivityAbsent: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationProviderRunActivityAbsentRecordKey(event.correlation)
+    }),
+    IntegrationQuarantineDirectionApplied: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integrationQuarantineDirectionAppliedRecordKey(
+        integrationQuarantineDirectionSubject(event.fingerprint)
+      )
     }),
     CompletionTaskIntended: (event) => ({
       _tag: "GenericEventDescriptor",

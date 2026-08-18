@@ -32,6 +32,7 @@ import { IntegratorJournalEvent } from "../protocols/integrator/events.js"
 import { TargetVerificationJournalEvent } from "../protocols/target-verification/events.js"
 import { TargetPromotionJournalEvent } from "../protocols/target-promotion/events.js"
 import { IntegrationFinalityJournalEvent } from "../protocols/integration-finality/events.js"
+import { IntegrationQuarantineJournalEvent } from "../protocols/integration-quarantine/events.js"
 import {
   AttemptChoiceAppliedEvent,
   AttemptImplementationAbandonedEvent,
@@ -56,7 +57,8 @@ const ResponsibilityJournalEvent = Schema.Union([
   IntegratorJournalEvent,
   TargetVerificationJournalEvent,
   TargetPromotionJournalEvent,
-  IntegrationFinalityJournalEvent
+  IntegrationFinalityJournalEvent,
+  IntegrationQuarantineJournalEvent
 ])
 
 /**
