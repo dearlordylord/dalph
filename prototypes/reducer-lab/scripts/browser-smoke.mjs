@@ -204,6 +204,27 @@ try {
   )
   const frameCount = await frameSelector.locator("option").count()
   assert.ok(frameCount > 2)
+  const containedMomentTruth = await page.evaluate(() => {
+    const frame = document.querySelector('[data-role="delivery-frame"]')
+    const selector = document.querySelector('[data-role="delivery-workbench"] select')
+    const moment = frame?.querySelector(".delivery-moment-evidence")
+    if (!(selector instanceof HTMLSelectElement) || !(moment instanceof HTMLElement)) return null
+    const selected = selector.value
+    const heights = [...selector.options].map((option) => {
+      selector.value = option.value
+      selector.dispatchEvent(new Event("change"))
+      return moment.getBoundingClientRect().height
+    })
+    selector.value = selected
+    selector.dispatchEvent(new Event("change"))
+    return {
+      bottommost: frame?.lastElementChild === moment,
+      heightRange: Math.max(...heights) - Math.min(...heights),
+      overflowY: getComputedStyle(moment).overflowY
+    }
+  })
+  assert.deepEqual(containedMomentTruth, { bottommost: true, heightRange: 0, overflowY: "auto" })
+  console.log("✓ contains changing observed-moment evidence at the bottom of the frame")
   assert.equal(await frameSelector.inputValue(), "0")
   await workbench.getByRole("button", { name: "Follow live" }).click()
   assert.equal(await frameSelector.inputValue(), String(frameCount - 1))

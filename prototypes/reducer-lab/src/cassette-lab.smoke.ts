@@ -923,6 +923,20 @@ await scenario("renders the prototype source instrument beside its synchronized 
   assert(document.querySelector(".delivery-graph-freshness")?.classList.contains("stale") === true, "A retained frame at a story/runtime moment must use the prototype stale treatment")
 })
 
+await scenario("keeps current observed moment contained at the bottom of the frame", async () => {
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  if (row === undefined) throw new Error("The prototype cassette is missing")
+  const { document, root, settled } = installDom()
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const frame = document.querySelector<HTMLElement>("[data-role='delivery-frame']")
+  const moment = frame?.querySelector<HTMLElement>(".delivery-moment-evidence")
+  assert(frame?.lastElementChild === moment, "Current observed moment must be the bottommost Delivery-frame section")
+  assert(moment?.dataset.layout === "contained", "Current observed moment must expose its fixed-height layout contract")
+})
+
 await scenario("updates an observed runtime task tone without fabricating a delivery publication", async () => {
   const match = everyResult.flatMap((result) => {
     if (result._tag !== "Completed" || result.observationMoments === null) return []

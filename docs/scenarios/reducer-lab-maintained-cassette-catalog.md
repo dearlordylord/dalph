@@ -465,6 +465,12 @@ at the next capture order. Display timestamps never order these events.
 and terminal landmarks. **Live** follows the newest observation; rewinding
 keeps the chosen moment stable while newer moments arrive.
 
+The compact **Current observed moment** region is the last section in the
+Delivery frame. It keeps one fixed viewport height and scrolls its own longer
+story or runtime evidence. As new moments arrive, changing evidence must not
+move the source instrument, graph, task facts, or the maintainer's reading
+position.
+
 A Delivery-publication moment compares each current source-stage output only
 with the preceding Delivery publication and highlights only changed rows. A
 story-only or runtime-only moment retains the last Delivery values, highlights
@@ -496,7 +502,8 @@ Unrelated nodes and edges dim without disappearing.
 The Lab must not replace the prototype code window with prose labels and a raw
 JSON list, draw a graph whose surrounding canvas no longer resembles the
 prototype, fabricate Pause/Unpause frames that were never captured by the
-chosen cassette, or let source and graph show different observed moments.
+chosen cassette, let source and graph show different observed moments, or let
+variable observed-moment evidence make the workbench jump vertically.
 
 ### Process loss, rerun, and direct protocols
 
@@ -534,6 +541,8 @@ the removed throwaway visualization as a second runnable surface.
 - `renders the prototype source instrument beside its synchronized graph`
   proves the maintained prototype cassette renders the seven literal source
   lines, visible typed data rectangles, and graph canvas as peer panels.
+- `keeps current observed moment contained at the bottom of the frame` proves
+  that variable story/runtime evidence cannot move the instrument or task facts.
 - `browser-smoke` proves the same source/graph geometry and visible data-cell
   interaction in the real served application at desktop and narrow widths.
 - `does not fabricate delivery visualization for direct protocol cassettes` proves

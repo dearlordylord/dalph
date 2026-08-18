@@ -932,6 +932,7 @@ const renderTimeline = (
   const change = appendText(frameHost, "p", "", "delivery-frame-change")
   const momentEvidence = document.createElement("section")
   momentEvidence.className = "delivery-moment-evidence"
+  momentEvidence.dataset.layout = "contained"
   const sourceExplanation = document.createElement("section")
   sourceExplanation.className = "delivery-source-explanation delivery-instrument"
   sourceExplanation.dataset.role = "delivery-source-explanation"
@@ -970,14 +971,13 @@ const renderTimeline = (
   taskFactsDisclosure.append(taskFactsHost)
   frameHost.prepend(
     capacityPositions,
-    momentEvidence,
     instrumentLayout,
     integrationOrder,
     offGraphResponsibilities,
     settlementCoverage
   )
   settlementCoverage.after(readingGuide)
-  frameHost.append(factsHost, taskFactsDisclosure)
+  frameHost.append(factsHost, taskFactsDisclosure, momentEvidence)
   let moments = initialMoments
   let running = initiallyRunning
   let renderedFrame: AuthoredDeliveryFrame | undefined

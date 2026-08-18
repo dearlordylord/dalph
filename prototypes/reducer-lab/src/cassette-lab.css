@@ -390,7 +390,11 @@ dd {
 
 .delivery-moment-evidence {
   border: 1px solid #c8c0b3;
+  box-sizing: border-box;
+  height: 12rem;
   margin: 0.8rem 0;
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: 0.75rem;
 }
 
