@@ -132,9 +132,6 @@ button{color:inherit}
 
 .freshness{border:1px solid #9fc8b9;background:#ebf6f1;color:#266b56!important;border-radius:99px;padding:5px 8px;white-space:nowrap}
 .freshness.stale{border-color:#d6b77d;background:#fbf3e4;color:#835e20!important}
-.graph-observation{min-height:38px;border-bottom:1px solid #d9dad2;background:#f1f4f1;padding:7px 12px;display:flex;align-items:center;gap:10px}
-.graph-observation b{flex:0 0 auto;border:1px solid #9ba9a1;border-radius:99px;background:#fff;padding:4px 7px;color:#466056;font-size:6px;letter-spacing:.08em}
-.graph-observation span{color:#59675f;font-size:7px;line-height:1.35}
 .graph-canvas{height:390px;position:relative;background:radial-gradient(circle,#ced1ca 1px,transparent 1px) 0 0/19px 19px,#f7f7f2;overflow:hidden}
 .graph-host{position:absolute;inset:0}
 .mounted-graph .graph-host{cursor:grab;overflow:hidden}

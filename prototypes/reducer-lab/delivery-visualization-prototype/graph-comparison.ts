@@ -11,8 +11,7 @@ import type { Frame, TaskKey } from "./prototype.ts"
 
 export const graphDefinition = {
   name: "Original",
-  source: "Cytoscape + trace state fills",
-  note: "Node fills show task state. Position, frontier, and ticket encodings remain present."
+  source: "Cytoscape + trace state fills"
 } as const
 
 const taskState = (task: TaskKey, frame: Frame): string => {
