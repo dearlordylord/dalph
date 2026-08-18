@@ -10,9 +10,9 @@ type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" |
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
 const viewKeys = [
-  "original", "outline", "solid", "square", "soft", "compact", "roomy",
-  "top-rule", "left-rail", "code-underline", "code-plate", "alternating",
-  "label-band"
+  "original", "large-code", "small-code", "source-wide", "data-wide",
+  "gutter-badges", "row-lines", "floating-panels", "transparent-panels",
+  "value-first", "centered-values", "source-block", "quiet-labels"
 ] as const
 type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
@@ -259,19 +259,19 @@ const story: Scenario = {
 }
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
-  { key: "original", name: "Syntax original · leading", description: "The retained shared row uses syntax color on the original dark neutral surface." },
-  { key: "outline", name: "Outline cells", description: "Transparent rectangles rely on state-colored outlines over the original surface." },
-  { key: "solid", name: "Solid tiles", description: "Borderless opaque rectangles make each live-data value a compact solid block." },
-  { key: "square", name: "Square technical", description: "Hard corners and exact edges give the shared row a technical-instrument treatment." },
-  { key: "soft", name: "Soft raised cards", description: "Rounded rectangles and restrained shadows lift live data from the source surface." },
-  { key: "compact", name: "Compact density", description: "Shorter rows and cells test higher information density without removing data." },
-  { key: "roomy", name: "Roomy density", description: "Larger gaps and cells test whether more breathing room improves scanning." },
-  { key: "top-rule", name: "State top rules", description: "Each rectangle becomes a flat panel identified by a strong state-colored top edge." },
-  { key: "left-rail", name: "State left rails", description: "A strong left rail carries state while the remaining rectangle edges disappear." },
-  { key: "code-underline", name: "Underlined source", description: "A quiet rule under each code expression separates source without enclosing it." },
-  { key: "code-plate", name: "Source plates", description: "Each production expression sits on a small solid plate beside unchanged rectangles." },
-  { key: "alternating", name: "Alternating rows", description: "Solid alternating row fills separate stages while keeping code and data together." },
-  { key: "label-band", name: "Rectangle label bands", description: "Rectangle labels use a separate solid band above each dynamic value." }
+  { key: "original", name: "State top rules · leading", description: "The retained original identifies each live-data rectangle with a strong state-colored top rule." },
+  { key: "large-code", name: "Large source type", description: "Production expressions grow while rectangle density remains unchanged." },
+  { key: "small-code", name: "Small source type", description: "Production expressions become quieter and denser beside unchanged state panels." },
+  { key: "source-wide", name: "Wide source field", description: "More row width is assigned to code while every rectangle remains visible." },
+  { key: "data-wide", name: "Wide data field", description: "More row width is assigned to live rectangles while source remains readable." },
+  { key: "gutter-badges", name: "Gutter badges", description: "Line numbers become circular markers that give each source stage a stronger anchor." },
+  { key: "row-lines", name: "Stage separators", description: "Horizontal rules make each code-and-data stage read as a distinct band." },
+  { key: "floating-panels", name: "Floating state panels", description: "Top-rule rectangles gain depth while their state colors stay unchanged." },
+  { key: "transparent-panels", name: "Transparent state panels", description: "Rectangle fills disappear so state top rules and values carry the hierarchy." },
+  { key: "value-first", name: "Value before label", description: "Dynamic values move above their descriptive labels inside every rectangle." },
+  { key: "centered-values", name: "Centered values", description: "Rectangle contents use centered alignment to test faster shape scanning." },
+  { key: "source-block", name: "Solid source block", description: "Each production expression receives a quiet solid field without changing row geometry." },
+  { key: "quiet-labels", name: "Quiet rectangle labels", description: "Labels recede so dynamic values and state top rules dominate each rectangle." }
 ]
 
 let frameIndex = 0
