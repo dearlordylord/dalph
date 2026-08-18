@@ -323,7 +323,6 @@ const authoredOperationIdOf = (operationId: string, runId: RunId) =>
 const authoredDeliveryProposalIdOf = (proposal: DeliveryProposal, runId: RunId): AuthoredDeliveryProposalId => {
   const taskId = taskIdOfPauseProposal(proposal)
   const identity = Match.valueTags(proposal.route, {
-    /* v8 ignore start -- @preserve #63 authored Pause views exercise exact worktree and identity-free actions; accepted-operation subvariants retain exhaustive authoring support and are covered by their workflow protocols. */
     AcceptedWorkflowRoute: ({ transition }) => [
       "AcceptedWorkflowRoute",
       transition._tag,
@@ -334,7 +333,6 @@ const authoredDeliveryProposalIdOf = (proposal: DeliveryProposal, runId: RunId):
           : authoredOperationIdOf(transition.operation.operationId, runId),
       taskId
     ],
-    /* v8 ignore stop -- @preserve */
     FreshExecutorWorkflowRoute: ({ step }) => [
       "FreshExecutorWorkflowRoute",
       step._tag,
@@ -344,28 +342,23 @@ const authoredDeliveryProposalIdOf = (proposal: DeliveryProposal, runId: RunId):
     FreshWorkflowRoute: ({ step }) => [
       "FreshWorkflowRoute",
       step._tag,
-      /* v8 ignore next -- @preserve Fresh steps without a planned attempt retain task correlation; #63 Pause actions exercise the attempt-correlated branch. */
       "plannedAttempt" in step ? step.plannedAttempt.attemptId : null,
       taskId
     ],
     IdentityFreeWorkflowRoute: ({ transition }) => [
       "IdentityFreeWorkflowRoute",
       transition._tag,
-      /* v8 ignore next -- @preserve The exhaustive identity records both protocol-bearing and task-only identity-free actions; #63 exercises protocol-bearing suspension and promotion. */
       proposal.admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired"
         ? proposal.admission.plannedAttemptProtocol.correlation.attemptId
         : null,
-      /* v8 ignore next -- @preserve The exhaustive identity records both integration-target and non-integration identity-free actions. */
       proposal.admission.integrationTarget._tag === "IntegrationTargetResourceRequired"
         ? proposal.admission.integrationTarget.queuedAt
         : null,
       taskId
     ],
-    /* v8 ignore next -- @preserve Recovered-new route identity is required by the exhaustive authoring boundary; #63 maintained views exercise the equivalent attempt/task correlations on fresh and identity-free routes. */
     RecoveredNewActionRoute: ({ action }) => [
       "RecoveredNewActionRoute",
       action._tag,
-      /* v8 ignore next -- @preserve Exhaustive recovered-new identity retains both task-only and attempt-correlated actions; #63 authored blockers do not use this route. */
       "plannedAttempt" in action ? (action.plannedAttempt?.attemptId ?? null) : null,
       taskId
     ],
@@ -434,14 +427,12 @@ const targetPromotionRequestOf = (
 const authoredTaskOrAttemptCorrelationOf = (
   plannedAttempt: PlannedTaskAttempt | null
 ): Extract<AuthoredPauseProposal, { readonly _tag: "RecoveredNewActionRoute" }>["correlation"] =>
-  /* v8 ignore next -- @preserve Exhaustive fresh/recovered projection retains task-only actions; maintained #63 Pause action blockers are attempt-correlated. */
   plannedAttempt === null ? { _tag: "Task" } : { _tag: "Attempt", attemptId: plannedAttempt.attemptId }
 
 const authoredPauseProposalOf = (proposal: DeliveryProposal, runId: RunId): AuthoredPauseProposal => {
   const proposalId = authoredDeliveryProposalIdOf(proposal, runId)
   const taskId = taskIdOfPauseProposal(proposal)
   return Match.valueTags(proposal.route, {
-    /* v8 ignore start -- @preserve #63 authored Pause views exercise exact worktree and identity-free actions; accepted-operation subvariants retain exhaustive authoring support and are covered by their workflow protocols. */
     AcceptedWorkflowRoute: ({ transition }) => ({
       _tag: "AcceptedWorkflowRoute" as const,
       operationId:
@@ -453,7 +444,6 @@ const authoredPauseProposalOf = (proposal: DeliveryProposal, runId: RunId): Auth
       proposalId,
       taskId
     }),
-    /* v8 ignore stop -- @preserve */
     FreshExecutorWorkflowRoute: ({ step }) => ({
       _tag: "FreshExecutorWorkflowRoute" as const,
       attemptId: step.plannedAttempt.attemptId,
@@ -463,7 +453,6 @@ const authoredPauseProposalOf = (proposal: DeliveryProposal, runId: RunId): Auth
     FreshWorkflowRoute: ({ step }) => ({
       _tag: "FreshWorkflowRoute" as const,
       correlation:
-        /* v8 ignore next -- @preserve Fresh steps without a planned attempt retain task correlation; #63 Pause actions exercise the attempt-correlated branch. */
         "plannedAttempt" in step ? authoredTaskOrAttemptCorrelationOf(step.plannedAttempt) : { _tag: "Task" as const },
       proposalId,
       taskId
@@ -471,7 +460,6 @@ const authoredPauseProposalOf = (proposal: DeliveryProposal, runId: RunId): Auth
     IdentityFreeWorkflowRoute: ({ transition }) => {
       const integration = proposal.admission.integrationTarget
       const protocol = proposal.admission.plannedAttemptProtocol
-      /* v8 ignore start -- @preserve The exhaustive authoring boundary retains all identity-free correlation shapes; #63 cassettes exercise planned-attempt suspension and exact target promotion. */
       const correlation =
         transition._tag === "RunTargetPromotion"
           ? {
@@ -491,16 +479,11 @@ const authoredPauseProposalOf = (proposal: DeliveryProposal, runId: RunId): Auth
             : protocol._tag === "PlannedAttemptProtocolRequired"
               ? { _tag: "PlannedAttempt" as const, attemptId: protocol.correlation.attemptId }
               : { _tag: "Task" as const }
-      /* v8 ignore stop -- @preserve */
       return { _tag: "IdentityFreeWorkflowRoute" as const, correlation, proposalId, taskId }
     },
-    /* v8 ignore next -- @preserve Recovered-new route projection is required by the exhaustive authoring boundary; #63 maintained views exercise the equivalent attempt/task correlations on fresh and identity-free routes. */
     RecoveredNewActionRoute: ({ action }) => ({
       _tag: "RecoveredNewActionRoute" as const,
-      correlation: authoredTaskOrAttemptCorrelationOf(
-        /* v8 ignore next -- @preserve Exhaustive recovered-new identity retains both task-only and attempt-correlated actions; #63 authored blockers do not use this route. */
-        "plannedAttempt" in action ? action.plannedAttempt : null
-      ),
+      correlation: authoredTaskOrAttemptCorrelationOf("plannedAttempt" in action ? action.plannedAttempt : null),
       proposalId,
       taskId
     }),
@@ -531,12 +514,10 @@ const authoredPauseLiveOwnerOf = (
       operationId: authoredOperationIdOf(operationId, runId),
       proposal: authoredPauseProposalOf(proposal, runId)
     }),
-    /* v8 ignore next -- @preserve Settled-owner variants are covered by the production Pause projector; maintained authored chronologies observe proposed, admitted, and materialized boundaries. */
     SettledBeforeMaterialization: ({ proposal }) => ({
       _tag: "SettledBeforeMaterialization" as const,
       proposal: authoredPauseProposalOf(proposal, runId)
     }),
-    /* v8 ignore next -- @preserve Settled-owner variants are covered by the production Pause projector; maintained authored chronologies observe proposed, admitted, and materialized boundaries. */
     SettledMaterializedDeliveryAction: ({ intent, operationId, proposal }) => ({
       _tag: "SettledMaterializedDeliveryAction" as const,
       intent,
@@ -564,7 +545,6 @@ const authoredPauseResponsibilityOf = (
     }
   }
   return Match.valueTags(responsibility.obligation, {
-    /* v8 ignore next -- @preserve Accepted-only safe-boundary projection is covered by the production projector; #63's authored A+D chronology observes the later started-integration boundary. */
     AcceptedAwaitingIntegration: ({ accepted }) => ({
       _tag: "AcceptedAwaitingIntegration" as const,
       attemptId: accepted.plannedAttempt.attemptId,
@@ -572,7 +552,6 @@ const authoredPauseResponsibilityOf = (
       taskId: responsibility.taskId,
       terminalAt: accepted.terminalAt
     }),
-    /* v8 ignore next -- @preserve Queued-only safe-boundary projection is covered by the production projector; #63's authored A+D chronology observes the later started-integration boundary. */
     QueuedIntegration: ({ responsibility: queued }) => ({
       _tag: "QueuedIntegration" as const,
       attemptId: queued.plannedAttempt.attemptId,
@@ -599,7 +578,6 @@ const authoredPauseResponsibilityOf = (
         }
       }
       return Match.valueTags(workflow, {
-        /* v8 ignore next -- @preserve Claim acquisition responsibility projection is covered by ordinary authored obligation diagnostics; #63 Pause cassettes exercise executor and worktree responsibilities. */
         TaskClaimResponsibility: ({ acquisition, beganAt }) => ({
           _tag: "WorkflowOperation" as const,
           beganAt,
@@ -608,7 +586,6 @@ const authoredPauseResponsibilityOf = (
           responsibilityTag: workflow._tag,
           taskId: responsibility.taskId
         }),
-        /* v8 ignore next -- @preserve Claim release responsibility projection is covered by ordinary authored obligation diagnostics; #63 Pause cassettes exercise executor and worktree responsibilities. */
         TaskClaimReleaseResponsibility: ({ beganAt, operation }) => ({
           _tag: "WorkflowOperation" as const,
           beganAt,
@@ -630,7 +607,7 @@ const authoredPauseResponsibilityOf = (
   })
 }
 
-const pauseObservationResultOf = (view: PauseProgressView, runId: RunId): AuthoredPauseObservationResult => {
+export const pauseObservationResultOf = (view: PauseProgressView, runId: RunId): AuthoredPauseObservationResult => {
   if (view._tag === "PauseNoLongerApplied") {
     return decodeAuthoredPauseProgressResult({ _tag: "PauseNoLongerApplied" })
   }
@@ -712,14 +689,10 @@ const authoredIntegrationOrderOf = (
             ]
           : []
       )
-      .toSorted(
-        /* v8 ignore next -- @preserve Ordering is observable only with multiple simultaneous accepted results; the maintained responsibility-slot cassettes cover the single-result boundary. */
-        (left, right) => left.terminalAt - right.terminalAt
-      ),
-    responsibilities: obligations.flatMap(authoredOrderedIntegrationResponsibilityOf).toSorted(
-      /* v8 ignore next -- @preserve Ordering is observable only with multiple simultaneous integration responsibilities; the maintained responsibility-slot cassettes cover one exact queued position. */
-      (left, right) => left.queuedAt - right.queuedAt
-    )
+      .toSorted((left, right) => left.terminalAt - right.terminalAt),
+    responsibilities: obligations
+      .flatMap(authoredOrderedIntegrationResponsibilityOf)
+      .toSorted((left, right) => left.queuedAt - right.queuedAt)
   }
 }
 
@@ -727,7 +700,6 @@ const authoredWorkflowResponsibilityCorrelation = (
   responsibility: WorkflowResponsibility
 ): Pick<AuthoredObligationDiagnostic, "attemptId" | "summary"> =>
   Match.valueTags(responsibility, {
-    /* v8 ignore next -- @preserve Pause scenario diagnostics exercise executor/worktree responsibilities; claim responsibility wording is fixed by this exhaustive mapping. */
     TaskClaimResponsibility: () => ({ attemptId: null, summary: "task-claim acquisition responsibility" }),
     TaskClaimReleaseResponsibility: () => ({ attemptId: null, summary: "task-claim release responsibility" }),
     TaskWorktreeResponsibility: () => ({ attemptId: null, summary: "Git worktree responsibility" }),

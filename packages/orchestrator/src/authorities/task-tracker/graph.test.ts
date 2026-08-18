@@ -145,6 +145,27 @@ it("reports separate prerequisite cycles in the established traversal order", ()
   })
 })
 
+it("preserves cycle traversal order through an acyclic connector", () => {
+  const result = projectTrackerSnapshot({
+    revision: "connected-cycle-order-v1",
+    tasks: [
+      { id: "A", lifecycle: open, parentTaskId: null, prerequisiteIds: ["D"] },
+      { id: "B", lifecycle: open, parentTaskId: null, prerequisiteIds: ["C"] },
+      { id: "C", lifecycle: open, parentTaskId: null, prerequisiteIds: ["B"] },
+      { id: "D", lifecycle: open, parentTaskId: null, prerequisiteIds: ["A", "E"] },
+      { id: "E", lifecycle: open, parentTaskId: null, prerequisiteIds: ["B"] }
+    ]
+  })
+
+  expect(result).toMatchObject({
+    _tag: "Invalid",
+    issues: [
+      { _tag: "Cycle", taskIds: ["B", "C"] },
+      { _tag: "Cycle", taskIds: ["A", "D"] }
+    ]
+  })
+})
+
 it("places newly unblocked B before unrelated Z in the stable topological order", () => {
   const graph = validSnapshot({
     revision: "stable-topology-v1",

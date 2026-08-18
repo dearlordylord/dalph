@@ -1,6 +1,7 @@
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Option } from "effect"
 import { expect, it } from "vitest"
+import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -24,6 +25,7 @@ import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.j
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { UntrackedWorktreePath, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -57,6 +59,27 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   PlannedAttemptExecutorWorkReportedEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  CandidateContinuationLimit,
+  CandidateCorrectionLimit,
+  IntegrationCandidateConstructionIntendedEvent,
+  IntegrationCandidateId,
+  IntegrationCandidateResourceLocator,
+  IntegrationSessionId
+} from "../../workflow/protocols/integration-candidate-construction/events.js"
+import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
+import {
+  TargetVerificationCandidate,
+  TargetVerificationIntendedEvent,
+  TargetVerificationPlan,
+  TargetVerificationPlanId,
+  targetVerificationCorrelationFor
+} from "../../workflow/protocols/target-verification/events.js"
+import { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
+import {
+  TargetPromotionIntendedEvent,
+  targetPromotionRequestFor
+} from "../../workflow/protocols/target-promotion/events.js"
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import type { PlannedAttemptWorktreeObservation } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import {
@@ -73,6 +96,7 @@ import {
   continuationDecisionFor,
   continuationFreshnessBaselineForAttempt,
   deriveJournalResponsibilityFacts,
+  filterFrontierForActivePauses,
   makeRunRecoveryProjection,
   safelySuspendedAttemptMayContinue,
   taskPauseSuspensionIsOwed
@@ -260,6 +284,129 @@ const continuationRecords = (
         )
       ]
     : records
+}
+
+const runPause = (ordinal: number) =>
+  ControlDirectionAppliedEvent.make({
+    direction: "Pause",
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    ordinal: ControlDirectionApplicationOrdinal.make(ordinal),
+    subject: { _tag: "Run", runId: coverageRunId },
+    version: workflowJournalEventVersion
+  })
+
+const runUnpause = (ordinal: number) =>
+  ControlDirectionAppliedEvent.make({
+    direction: "Unpause",
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    ordinal: ControlDirectionApplicationOrdinal.make(ordinal),
+    subject: { _tag: "Run", runId: coverageRunId },
+    version: workflowJournalEventVersion
+  })
+
+const executorReport = (position: number, report: PlannedAttemptExecutorReport, ordinal = position): JournalRecord =>
+  coverageRecord(
+    position,
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(ordinal),
+      report,
+      version: workflowJournalEventVersion
+    })
+  )
+
+type PausedIntegrationScenario = {
+  readonly responsibility: StartedIntegrationResponsibility
+  readonly transitions: readonly [
+    RunnableFrontierTransition,
+    RunnableFrontierTransition,
+    RunnableFrontierTransition,
+    RunnableFrontierTransition
+  ]
+  readonly intents: readonly [JournalRecord["event"], JournalRecord["event"], JournalRecord["event"]]
+}
+
+const pausedIntegrationScenario = (suffix: string, startedAt: number): PausedIntegrationScenario => {
+  const acceptedResult = acceptedResultFixture(GitCommitSha.make("b".repeat(40)))
+  const integrationTarget = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("/repositories/recovery-activation-paused-integration.git")
+  })
+  const responsibility = StartedIntegrationResponsibility.make({
+    acceptedResult,
+    integrationTarget,
+    plannedAttempt: coverageAttempt,
+    queuedAt: JournalPosition.make(7),
+    startedAt: JournalPosition.make(startedAt)
+  })
+  const candidate = TargetVerificationCandidate.make({
+    candidateCommit: GitCommitSha.make("c".repeat(40)),
+    constructedAt: JournalPosition.make(13),
+    correlation: {
+      acceptanceManifest: acceptedResult.evidenceManifest,
+      acceptedResultCommit: acceptedResult.commit,
+      attemptId: coverageAttempt.attemptId,
+      candidateId: IntegrationCandidateId.make(`paused-integration-candidate-${suffix}`),
+      candidateResource: IntegrationCandidateResourceLocator.make(`paused-integration-resource-${suffix}`),
+      expectedTargetHead: coverageAttempt.baseSha,
+      integrationSessionId: IntegrationSessionId.make(`paused-integration-session-${suffix}`),
+      integrationTarget,
+      runId: coverageRunId
+    },
+    reviewManifest: acceptedResult.evidenceManifest
+  })
+  const plan = TargetVerificationPlan.make({
+    planId: TargetVerificationPlanId.make(`paused-integration-plan-${suffix}`),
+    target: integrationTarget
+  })
+  const verificationCorrelation = targetVerificationCorrelationFor(candidate, plan.planId)
+  const verification = TargetVerificationState.cases.VerificationPassed.make({
+    correlation: verificationCorrelation,
+    manifest: acceptedResult.evidenceManifest
+  })
+  const promotion = targetPromotionRequestFor(candidate, {
+    correlation: verification.correlation,
+    manifest: verification.manifest
+  })
+  const candidateIntent = IntegrationCandidateConstructionIntendedEvent.make({
+    continuationLimit: CandidateContinuationLimit.make(1),
+    correctionLimit: CandidateCorrectionLimit.make(1),
+    correlation: candidate.correlation,
+    plannedAttempt: coverageAttempt,
+    responsibilityBeganAt: responsibility.queuedAt,
+    startedAt: responsibility.startedAt,
+    version: workflowJournalEventVersion
+  })
+  const verificationIntent = TargetVerificationIntendedEvent.make({
+    correlation: verificationCorrelation,
+    version: workflowJournalEventVersion
+  })
+  const promotionIntent = TargetPromotionIntendedEvent.make({
+    correlation: promotion,
+    version: workflowJournalEventVersion
+  })
+  const lineage = TargetLineageObservation.make({
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: coverageAttempt.baseSha,
+    targetHeadSha: coverageAttempt.baseSha
+  })
+  return {
+    responsibility,
+    transitions: [
+      RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility }),
+      RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
+        acceptedCandidateProgressAt: null,
+        continuationLimit: CandidateContinuationLimit.make(1),
+        correctionLimit: CandidateCorrectionLimit.make(1),
+        lineage,
+        responsibility
+      }),
+      RunnableFrontierTransition.RunTargetVerification({ candidate, plan, responsibility }),
+      RunnableFrontierTransition.RunTargetPromotion({ candidate, responsibility, verification })
+    ],
+    intents: [candidateIntent, verificationIntent, promotionIntent]
+  }
 }
 
 const currentProjectionJournal = (
@@ -515,6 +662,63 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   ).toBe(true)
 })
 
+it("retains an owed Run Pause suspension after Unpause until the exact executor report arrives", () => {
+  const pause = coverageRecord(5, runPause(1))
+  const unpause = coverageRecord(6, runUnpause(2))
+  const crashedAfterPause = [...coveragePlanRecords(), pause, unpause]
+  const [owedFacts] = deriveJournalResponsibilityFacts(coverageRunState(crashedAfterPause, [coverageResponsibility]))
+
+  expect(owedFacts).toMatchObject({
+    _tag: "PlannedAttemptExecutorFreshFacts",
+    disposition: { _tag: "PlannedAttemptExecutorSuspensionRequested" }
+  })
+
+  const safelySuspended = executorReport(
+    7,
+    PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+      correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+    })
+  )
+  const [settledFacts] = deriveJournalResponsibilityFacts(
+    coverageRunState([...crashedAfterPause, safelySuspended], [coverageResponsibility])
+  )
+
+  expect(settledFacts).toMatchObject({
+    _tag: "PlannedAttemptExecutorFreshFacts",
+    disposition: { _tag: "Ready", acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: 7 } }
+  })
+})
+
+it("does not suspend an attempt that began after a historical Run Pause or was already safely reported", () => {
+  const historicalPause = coverageRecord(2, runPause(1))
+  const beganAfterPause = deriveJournalResponsibilityFacts(
+    coverageRunState([...coveragePlanRecords(), historicalPause], [coverageResponsibility])
+  )[0]
+  expect(beganAfterPause).toMatchObject({ _tag: "PlannedAttemptExecutorFreshFacts", disposition: { _tag: "Ready" } })
+
+  const runningBeforePause = executorReport(
+    5,
+    PlannedAttemptExecutorReport.cases.Running.make({ correlation: plannedAttemptExecutorCorrelation(coverageAttempt) })
+  )
+  const safeBeforePause = executorReport(
+    6,
+    PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+      correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+    })
+  )
+  const pauseAfterSafeReport = coverageRecord(7, runPause(1))
+  const [alreadySettledFacts] = deriveJournalResponsibilityFacts(
+    coverageRunState(
+      [...coveragePlanRecords(), runningBeforePause, safeBeforePause, pauseAfterSafeReport],
+      [coverageResponsibility]
+    )
+  )
+  expect(alreadySettledFacts).toMatchObject({
+    _tag: "PlannedAttemptExecutorFreshFacts",
+    disposition: { _tag: "Ready", acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: 6 } }
+  })
+})
+
 it("keeps a claim-backed attempt suspended when Git reports an untracked worktree path", () => {
   const worktreeOperation = makeTaskWorktreeObservationOperation({
     operationId: OperationId.make("recovery-activation-coverage-untracked-worktree"),
@@ -630,6 +834,52 @@ it("waits for integration configuration after an applied Continue choice has cur
       wakeCondition: "IntegrationTargetConfigured"
     }
   })
+})
+
+it("reconciles each exact pre-Pause integration intent but filters a post-Pause request", () => {
+  const beforePause = pausedIntegrationScenario("before", 8)
+  const afterPause = pausedIntegrationScenario("after", 12)
+  const runPausedWithTaskPause = coverageRunState(
+    [
+      coverageRecord(1, beforePause.intents[0]),
+      coverageRecord(2, beforePause.intents[1]),
+      coverageRecord(3, beforePause.intents[2]),
+      coverageRecord(10, runPause(1)),
+      coverageRecord(
+        11,
+        ControlDirectionAppliedEvent.make({
+          direction: "Pause",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: ControlDirectionApplicationOrdinal.make(2),
+          subject: { _tag: "Task", runId: coverageRunId, taskId: coverageAttempt.taskId },
+          version: workflowJournalEventVersion
+        })
+      ),
+      coverageRecord(12, afterPause.intents[0]),
+      coverageRecord(13, afterPause.intents[1]),
+      coverageRecord(14, afterPause.intents[2])
+    ],
+    [],
+    coverageRunId
+  )
+  const pausedState: ReconstructedRunState = {
+    ...runPausedWithTaskPause,
+    pause: { run: { _tag: "RunPaused" }, tasks: { _tag: "TaskPauses", taskIds: [coverageAttempt.taskId] } }
+  }
+
+  for (const index of [0, 1, 2, 3]) {
+    const beforeTransition = Option.getOrThrow(Option.fromUndefinedOr(beforePause.transitions[index]))
+    const afterTransition = Option.getOrThrow(Option.fromUndefinedOr(afterPause.transitions[index]))
+    const frontier = filterFrontierForActivePauses(
+      { explanations: [], transitions: [beforeTransition, afterTransition] },
+      pausedState,
+      undefined,
+      new Set(),
+      new Set()
+    )
+    expect(frontier.transitions).toEqual([beforeTransition])
+  }
 })
 
 effectIt.effect("uses the current reconstructed state for configured projection and rejects a mismatched run", () =>

@@ -1,7 +1,8 @@
 import { Exit } from "effect"
 import { expect, it } from "vitest"
+import { RunId } from "@dalph/contracts"
 import { AuthoredCassetteInteractionMismatch } from "./authored-cursor.js"
-import { authoredInteractionMismatchFrom } from "./authored-runner.js"
+import { authoredInteractionMismatchFrom, pauseObservationResultOf } from "./authored-runner.js"
 
 it("extracts only the authored interaction mismatch from an Effect exit", () => {
   const mismatch = new AuthoredCassetteInteractionMismatch({ actual: "actual", expected: "expected", storyPosition: 1 })
@@ -9,4 +10,174 @@ it("extracts only the authored interaction mismatch from an Effect exit", () => 
   expect(authoredInteractionMismatchFrom(Exit.fail("ordinary failure"))).toBeUndefined()
   expect(authoredInteractionMismatchFrom(Exit.die("defect"))).toBeUndefined()
   expect(authoredInteractionMismatchFrom(Exit.fail(mismatch))).toBe(mismatch)
+})
+
+it("projects every workflow safe-boundary responsibility into authored Pause output", () => {
+  const plannedAttempt = { attemptId: "attempt:A:0", runId: "run:projection", taskId: "A" }
+  const coverage = { _tag: "RunPauseCoverage" }
+  const taskId = "A"
+  const responsibilities = [
+    {
+      _tag: "PauseAcceptedIntegrationResponsibility",
+      coverage,
+      taskId,
+      obligation: { _tag: "AcceptedAwaitingIntegration", accepted: { plannedAttempt, terminalAt: 11 } }
+    },
+    {
+      _tag: "PauseQueuedIntegrationResponsibility",
+      coverage,
+      taskId,
+      obligation: { _tag: "QueuedIntegration", responsibility: { plannedAttempt, queuedAt: 12 } }
+    },
+    {
+      _tag: "PauseWorkflowOperationResponsibility",
+      coverage,
+      taskId,
+      obligation: {
+        _tag: "WorkflowResponsibility",
+        responsibility: {
+          _tag: "TaskClaimResponsibility",
+          acquisition: { operationId: "run:projection:claim" },
+          beganAt: 13
+        }
+      }
+    },
+    {
+      _tag: "PauseWorkflowOperationResponsibility",
+      coverage,
+      taskId,
+      obligation: {
+        _tag: "WorkflowResponsibility",
+        responsibility: {
+          _tag: "TaskClaimReleaseResponsibility",
+          operation: { release: { operationId: "run:projection:release" } },
+          beganAt: 14
+        }
+      }
+    }
+  ]
+  const projected = pauseObservationResultOf(
+    {
+      _tag: "PauseConfirmed",
+      atBoundary: responsibilities.map((responsibility) => ({ _tag: "PauseResponsibilityAtBoundary", responsibility })),
+      subject: { _tag: "Run" }
+    } as never,
+    RunId.make("run:projection")
+  )
+
+  expect(projected).toMatchObject({
+    _tag: "PauseConfirmed",
+    atBoundary: [
+      { _tag: "AcceptedAwaitingIntegration", terminalAt: 11 },
+      { _tag: "QueuedIntegration", queuedAt: 12 },
+      { _tag: "WorkflowOperation", operationId: "$authored-run:claim" },
+      { _tag: "WorkflowOperation", operationId: "$authored-run:release" }
+    ]
+  })
+})
+
+it("projects every task-bearing delivery route and correlation shape into authored Pause output", () => {
+  const taskId = "A"
+  const plannedAttempt = { attemptId: "attempt:A:0", runId: "run:projection", taskId }
+  const order = { _tag: "FreshWorkflowOrder", frontierOrdinal: 0, step: "controlled", taskId }
+  const noAdmission = {
+    integrationTarget: { _tag: "NoIntegrationTargetResource" },
+    plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" },
+    taskWorkPosition: { _tag: "NoTaskWorkPosition" }
+  }
+  const protocolAdmission = {
+    ...noAdmission,
+    plannedAttemptProtocol: {
+      _tag: "PlannedAttemptProtocolRequired",
+      correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId, taskId }
+    }
+  }
+  const integrationAdmission = {
+    ...noAdmission,
+    integrationTarget: {
+      _tag: "IntegrationTargetResourceRequired",
+      access: "UseHeld",
+      integrationTarget: { owner: "controlled", ref: "refs/heads/master", repository: "/repo" },
+      queuedAt: 21
+    }
+  }
+  const proposals = [
+    { route: { _tag: "FreshWorkflowRoute", step: { _tag: "ReadTaskClaim" } }, admission: noAdmission, order },
+    {
+      route: { _tag: "RecoveredNewActionRoute", action: { _tag: "ReadTaskClaim", taskId } },
+      admission: noAdmission,
+      order
+    },
+    {
+      route: { _tag: "RecoveredNewActionRoute", action: { _tag: "ReadTaskClaim", plannedAttempt: null, taskId } },
+      admission: noAdmission,
+      order
+    },
+    {
+      route: { _tag: "AcceptedWorkflowRoute", transition: { _tag: "ObserveClaim", operationId: "run:projection:1" } },
+      admission: noAdmission,
+      order
+    },
+    {
+      route: {
+        _tag: "AcceptedWorkflowRoute",
+        transition: {
+          _tag: "ReleaseClaim",
+          operation: { _tag: "ReleaseTaskClaim", release: { operationId: "run:projection:2" } }
+        }
+      },
+      admission: noAdmission,
+      order
+    },
+    {
+      route: {
+        _tag: "AcceptedWorkflowRoute",
+        transition: {
+          _tag: "ObserveWorktree",
+          operation: { _tag: "ReadTaskWorktree", operationId: "run:projection:3" }
+        }
+      },
+      admission: noAdmission,
+      order
+    },
+    {
+      route: { _tag: "IdentityFreeWorkflowRoute", transition: { _tag: "ReadTaskClaim" } },
+      admission: noAdmission,
+      order
+    },
+    {
+      route: { _tag: "IdentityFreeWorkflowRoute", transition: { _tag: "Integrate" } },
+      admission: integrationAdmission,
+      order
+    },
+    {
+      route: { _tag: "IdentityFreeWorkflowRoute", transition: { _tag: "SuspendPlannedAttemptExecutorWork" } },
+      admission: protocolAdmission,
+      order
+    }
+  ]
+  const projected = proposals.map((proposal) =>
+    pauseObservationResultOf(
+      {
+        _tag: "PauseWaiting",
+        atBoundary: [],
+        preventing: [
+          {
+            _tag: "PauseResponsibilityPreventingBoundary",
+            blockers: [{ _tag: "ProposedDeliveryAction", proposal }],
+            responsibility: {
+              _tag: "PauseDeliveryActionResponsibility",
+              coverage: { _tag: "RunPauseCoverage" },
+              proposal,
+              taskId
+            }
+          }
+        ],
+        subject: { _tag: "Run" }
+      } as never,
+      RunId.make("run:projection")
+    )
+  )
+
+  expect(projected.every((result) => result._tag === "PauseWaiting")).toBe(true)
 })

@@ -946,7 +946,6 @@ export const deriveJournalResponsibilityFacts = (
      * A later Unpause cannot erase an executor request that may already have
      * crossed its boundary; only a correlated executor report settles it.
      */
-    /* v8 ignore start -- @preserve Maintained crash cassettes cover owed and settled suspension; these chronological guards exclude historical Pause cycles and already-safe attempts. */
     const runPauseSuspensionOwed = suspensionWasOwedAfterPause(
       records,
       responsibility.plannedAttempt,
@@ -959,7 +958,6 @@ export const deriveJournalResponsibilityFacts = (
       responsibility.beganAt,
       Option.getOrUndefined(latestTaskGraph)
     )
-    /* v8 ignore stop -- @preserve */
     const changedSpecification = changedTaskSpecification(responsibility.plannedAttempt)
     const exactChangedSpecificationMayContinue = () =>
       Option.isSome(changedSpecification) &&
@@ -1432,7 +1430,6 @@ const isPausedIntegrationReconciliation = (
 ): transition is PausedIntegrationReconciliation => pausedIntegrationReconciliationTags.has(transition._tag)
 
 /** A crashed candidate request may finish only when its exact intent predates the active Run Pause. */
-/* v8 ignore start -- @preserve Candidate protocol tests cover durable intent correlation; the authored cursor cannot yet crash inside this boundary. */
 const startedIntegrationIntentMayReconcileBeforePause = (
   transition: RunnableFrontierTransition,
   records: ReadonlyArray<JournalRecord>,
@@ -1495,7 +1492,7 @@ const activeTaskPausePosition = (
   )?.position
 }
 
-const filterFrontierForActivePauses = (
+export const filterFrontierForActivePauses = (
   frontier: RunnableFrontier,
   runState: ReconstructedRunState,
   currentTaskGraph: TaskDagSnapshot | undefined,
@@ -1534,8 +1531,6 @@ const filterFrontierForActivePauses = (
       : frontier.transitions.filter(transitionMayRunWhileTaskPaused)
   return { ...frontier, transitions }
 }
-/* v8 ignore stop -- @preserve */
-
 type CurrentGraphObservation = {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
   readonly position: JournalPosition

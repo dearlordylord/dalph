@@ -469,12 +469,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const gateFor = (correlation: PlannedAttemptExecutorCorrelation) =>
       Effect.gen(function* () {
         const key = plannedAttemptExecutorCorrelationKey(correlation)
-        const existing = (yield* Ref.get(gates)).get(key)
-        if (existing !== undefined) return existing
         const created = yield* Semaphore.make(1)
         return yield* Ref.modify(gates, (current) => {
           const present = current.get(key)
-          /* v8 ignore next -- @preserve One permit serializes creation for this correlation before Ref.modify runs. */
           if (present !== undefined) return [present, current] as const
           return [created, new Map(current).set(key, created)] as const
         })

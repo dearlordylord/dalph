@@ -15,7 +15,7 @@ import {
   CodexAppServer,
   CodexAppServerFailure,
   CodexProcessStartIdentity,
-  codexAppServerLayer,
+  codexAppServerLayer as rawCodexAppServerLayer,
   codexAppServerNodeLayer,
   controlledCodexProcessOwnershipLayer
 } from "./codex-app-server.js"
@@ -30,6 +30,10 @@ import {
   type CodexAttemptStoreService,
   memoryCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
+import { nodeCodexProcessNativeLayer } from "./codex-process-native.js"
+
+const codexAppServerLayer = (config?: Parameters<typeof rawCodexAppServerLayer>[0]) =>
+  rawCodexAppServerLayer(config).pipe(Layer.provide(nodeCodexProcessNativeLayer))
 
 const fakeServer = String.raw`#!/usr/bin/env node
 const fs = require("node:fs")

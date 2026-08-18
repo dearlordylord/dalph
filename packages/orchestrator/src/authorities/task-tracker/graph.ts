@@ -212,41 +212,63 @@ const cycleTaskIds = (
   graph: Graph.DirectedGraph<TaskGraphNode, TaskGraphEdge>,
   relation: TaskGraphEdge["_tag"]
 ): ReadonlyArray<ReadonlyArray<TaskId>> => {
-  const components = Graph.stronglyConnectedComponents(graphForRelation(graph, relation))
-    .filter((component) => component.length > 1)
-    .map((component) => sorted(component.map((nodeIndex) => taskNodeAt(graph, nodeIndex).id)))
-
   const nodeIndexByTaskId = HashMap.fromIterable(
     Array.from(Graph.nodes(graph), ([nodeIndex, node]) => [node.id, nodeIndex] as const)
   )
-  const componentByTaskId = new Map<TaskId, ReadonlyArray<TaskId>>()
-  for (const component of components) {
-    for (const taskId of component) componentByTaskId.set(taskId, component)
+  let nextIndex = 0
+  const indexes = new Map<TaskId, number>()
+  const lowLinks = new Map<TaskId, number>()
+  const stack: Array<TaskId> = []
+  const onStack = new Set<TaskId>()
+  const components: Array<ReadonlyArray<TaskId>> = []
+
+  const recordComponent = (rootTaskId: TaskId): void => {
+    const component: Array<TaskId> = []
+    while (stack.length > 0) {
+      const member = Option.getOrThrow(Option.fromUndefinedOr(stack.pop()))
+      onStack.delete(member)
+      component.push(member)
+      if (member === rootTaskId) break
+    }
+    if (component.length > 1) components.push(sorted(component))
   }
 
-  const emitted = new Set<ReadonlyArray<TaskId>>()
-  const ordered: Array<ReadonlyArray<TaskId>> = []
-  const visit = (component: ReadonlyArray<TaskId>): void => {
-    if (emitted.has(component)) return
-    emitted.add(component)
-    const precedingComponents = sorted(
-      new Set(
-        component.flatMap((taskId) =>
-          taskIdsForRelation(graph, relation, HashMap.getUnsafe(nodeIndexByTaskId, taskId), "incoming")
+  const visit = (taskId: TaskId): void => {
+    const index = nextIndex++
+    indexes.set(taskId, index)
+    lowLinks.set(taskId, index)
+    stack.push(taskId)
+    onStack.add(taskId)
+
+    for (const adjacentTaskId of taskIdsForRelation(
+      graph,
+      relation,
+      HashMap.getUnsafe(nodeIndexByTaskId, taskId),
+      "incoming"
+    )) {
+      if (!indexes.has(adjacentTaskId)) {
+        visit(adjacentTaskId)
+        lowLinks.set(
+          taskId,
+          Math.min(getMapValueOrThrow(lowLinks, taskId), getMapValueOrThrow(lowLinks, adjacentTaskId))
         )
-      )
-    ).flatMap((taskId) => {
-      const preceding = componentByTaskId.get(taskId)
-      return preceding === undefined || preceding === component ? [] : [preceding]
-    })
-    for (const preceding of precedingComponents) visit(preceding)
-    ordered.push(component)
+      } else if (onStack.has(adjacentTaskId)) {
+        lowLinks.set(
+          taskId,
+          Math.min(getMapValueOrThrow(lowLinks, taskId), getMapValueOrThrow(indexes, adjacentTaskId))
+        )
+      }
+    }
+
+    if (getMapValueOrThrow(lowLinks, taskId) === getMapValueOrThrow(indexes, taskId)) {
+      recordComponent(taskId)
+    }
   }
 
-  const head = (component: ReadonlyArray<TaskId>): TaskId => Option.getOrThrow(Option.fromUndefinedOr(component[0]))
-  for (const component of [...components].sort((left, right) => compareTaskIds(head(left), head(right))))
-    visit(component)
-  return ordered
+  for (const taskId of sorted(HashMap.keys(nodeIndexByTaskId))) {
+    if (!indexes.has(taskId)) visit(taskId)
+  }
+  return components
 }
 
 export class TaskDagSnapshot {

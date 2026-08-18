@@ -1,8 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- controlled descriptor doubles exercise the private filesystem boundary. */
-import nodeProcess from "node:process"
 import nodePath from "node:path"
-import nodeOs from "node:os"
-import nodeFsPromises from "node:fs/promises"
 import type { Stats } from "node:fs"
 import type { FileHandle } from "node:fs/promises"
 import { Effect, Exit } from "effect"
@@ -30,17 +27,38 @@ import {
   processUid,
   readPrivateDescriptor,
   readPrivateFile,
+  closeLeaseDescriptor,
+  releaseAfterAcquireFailure,
   releaseLeaseNativeFailure,
   storeOperationFailure,
   validatePrivateDescriptor
 } from "./codex-attempt-store.js"
+import {
+  CodexAttemptStoreNative,
+  controlledCodexAttemptStoreNativeLayer,
+  type CodexAttemptStoreNativeService
+} from "./codex-attempt-store-native.js"
+
+const controlledNative = (overrides: Partial<CodexAttemptStoreNativeService> = {}): CodexAttemptStoreNativeService => ({
+  processUid: () => 1_000,
+  path: nodePath,
+  lstat: async () => {
+    throw Object.assign(new Error("absent"), { code: "ENOENT" })
+  },
+  mkdir: async () => undefined,
+  open: async () => {
+    throw new Error("open failed")
+  },
+  lock: async () => undefined,
+  ...overrides
+})
 
 const fakeStat = ({
   directory = true,
   file = true,
   mode = 0o600,
   symbolicLink = false,
-  uid = typeof nodeProcess.getuid === "function" ? nodeProcess.getuid() : 0
+  uid = 1_000
 }: {
   readonly directory?: boolean
   readonly file?: boolean
@@ -91,7 +109,7 @@ it("classifies primitive and native coded failures", () => {
 })
 
 it("classifies every private directory and descriptor disposition", async () => {
-  const uid = typeof nodeProcess.getuid === "function" ? nodeProcess.getuid() : 0
+  const uid = 1_000
   expect(privateDirectoryStatFailure(fakeStat({ symbolicLink: true }), "/state", true, uid)).toContain("symlink")
   expect(privateDirectoryStatFailure(fakeStat({ directory: false }), "/state", true, uid)).toContain("not a directory")
   expect(privateDirectoryStatFailure(fakeStat({ uid: uid + 1 }), "/state", true, uid)).toContain("foreign")
@@ -127,7 +145,8 @@ it("rejects every non-canonical locator and unsafe private-file disposition", as
   expect(invalidStateDirectory("/", nodePath)).toBe(false)
   expect(invalidStateDirectory("/state", nodePath)).toBe(false)
 
-  const uid = processUid()
+  const native = controlledNative()
+  const uid = processUid(native)
   expect(privateFileStatFailure(fakeStat({ symbolicLink: true }), "/state/file", uid)).toContain("symlink")
   expect(privateFileStatFailure(fakeStat({ file: false }), "/state/file", uid)).toContain("not a regular file")
   if (uid !== undefined) {
@@ -135,37 +154,59 @@ it("rejects every non-canonical locator and unsafe private-file disposition", as
   }
   expect(privateFileStatFailure(fakeStat({ mode: 0o644 }), "/state/file", uid)).toContain("not owner-only")
   expect(privateFileStatFailure(fakeStat(), "/state/file", uid)).toBeUndefined()
-  expect((await inspectPrivateFile("/definitely/missing/dalph-private-file"))._tag).toBe("Absent")
-  expect((await inspectPrivateFile("/invalid\u0000private-file"))._tag).toBe("Failure")
-  expect((await ensurePrivateDirectory(nodePath.parse(nodeProcess.cwd()).root))._tag).toBe("Failure")
-  expect((await ensurePrivateDirectory("/invalid\u0000private-directory"))._tag).toBe("Failure")
+  expect((await inspectPrivateFile("/state/missing", native))._tag).toBe("Absent")
+  expect(
+    (
+      await inspectPrivateFile(
+        "/state/unreadable",
+        controlledNative({ lstat: async () => Promise.reject(new Error("unreadable")) })
+      )
+    )._tag
+  ).toBe("Failure")
+  expect((await ensurePrivateDirectory(nodePath.parse("/").root, native))._tag).toBe("Failure")
+  expect((await ensurePrivateDirectory("/invalid\u0000private-directory", native))._tag).toBe("Failure")
   expect(nativeFailureDetail(new CodexAttemptStoreNativeFailure({ cause: "native" }))).toBe("Error: native")
-
-  const originalGetuid = nodeProcess.getuid
-  try {
-    Object.defineProperty(nodeProcess, "getuid", { configurable: true, value: undefined })
-    expect(processUid()).toBeUndefined()
-  } finally {
-    Object.defineProperty(nodeProcess, "getuid", { configurable: true, value: originalGetuid })
-  }
+  expect(processUid(controlledNative({ processUid: () => undefined }))).toBeUndefined()
 })
 
 it("keeps descriptor read and append failures inside the typed Effect boundary", async () => {
   const zeroRead = { stat: async () => ({ size: 3 }), read: async () => ({ bytesRead: 0 }) } as FileHandle
   expect(await readPrivateDescriptor(zeroRead)).toBe("")
 
-  const temporaryDirectory = await nodeFsPromises.mkdtemp(nodePath.join(nodeOs.tmpdir(), "dalph-closed-descriptor-"))
-  try {
-    const appendFailure = await nodeFsPromises.open(nodePath.join(temporaryDirectory, "snapshot"), "a")
-    await appendFailure.close()
-    expect(Exit.isFailure(await Effect.runPromiseExit(appendPrivateSnapshot(appendFailure, "payload")))).toBe(true)
-  } finally {
-    await nodeFsPromises.rm(temporaryDirectory, { recursive: true })
+  const appendFailure = {
+    writeFile: async () => Promise.reject(new Error("append failed")),
+    chmod: async () => undefined,
+    sync: async () => undefined
   }
-  expect(Exit.isFailure(await Effect.runPromiseExit(readPrivateFile("/definitely/missing/dalph-private-state")))).toBe(
-    true
+  expect(Exit.isFailure(await Effect.runPromiseExit(appendPrivateSnapshot(appendFailure, "payload")))).toBe(true)
+  const failingNative = controlledNative()
+  expect(Exit.isFailure(await Effect.runPromiseExit(readPrivateFile("/state/missing", failingNative)))).toBe(true)
+  await expect(openPrivateAppendDescriptor("/state/missing", failingNative)).rejects.toBeDefined()
+  await expect(openPrivateLeaseDescriptor("/state/missing", failingNative)).rejects.toBeDefined()
+})
+
+it("selects controlled native calls through an Effect Layer", async () => {
+  const uid = await Effect.runPromise(
+    Effect.gen(function* () {
+      return (yield* CodexAttemptStoreNative).processUid()
+    }).pipe(Effect.provide(controlledCodexAttemptStoreNativeLayer(controlledNative())))
   )
-  expect(Exit.isFailure(await Effect.runPromiseExit(readPrivateFile(nodeProcess.cwd())))).toBe(true)
-  await expect(openPrivateAppendDescriptor("/definitely/missing/dalph-private-state")).rejects.toBeDefined()
-  await expect(openPrivateLeaseDescriptor("/definitely/missing/dalph-private-lease")).rejects.toBeDefined()
+  expect(uid).toBe(1_000)
+})
+
+it("retains both failures when lease cleanup compounds", async () => {
+  const unlockFailure = { cause: "unlock failed" }
+  const closeFailure = new CodexAttemptStoreFailure({ detail: "close failed", operation: "releaseServerLease" })
+  const release = await Effect.runPromise(
+    Effect.flip(closeLeaseDescriptor(Effect.fail(unlockFailure), Effect.fail(closeFailure)))
+  )
+  expect(release.detail).toContain("unlock failed")
+  expect(release.detail).toContain("close failed")
+
+  const acquisition = new CodexAttemptStoreFailure({ detail: "persist failed", operation: "acquireServerLease" })
+  const compensation = await Effect.runPromise(
+    Effect.flip(releaseAfterAcquireFailure(acquisition, Effect.fail(unlockFailure)))
+  )
+  expect(compensation.detail).toContain("persist failed")
+  expect(compensation.detail).toContain("unlock failed")
 })

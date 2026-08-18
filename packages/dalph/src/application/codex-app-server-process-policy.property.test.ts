@@ -1,6 +1,3 @@
-/* eslint-disable import/no-nodejs-modules -- these tests classify controlled process observations only. */
-import nodeProcess from "node:process"
-import nodeFsPromises from "node:fs/promises"
 import { ApplicationExitDiagnostic, ApplicationExitDrainFailure } from "@dalph/orchestrator"
 import { Cause, Effect, Exit } from "effect"
 import * as fc from "fast-check"
@@ -24,10 +21,10 @@ import {
   launchCommandFacts,
   launchExecutableMatches,
   makeNodeCodexProcessOwnershipService,
+  makeNodeCodexOwnedActivityCensusService,
+  makeNodeCodexProcessGroupCensusService,
   normalizeInitializeResponse,
   numericProcessId,
-  nodeCodexOwnedActivityCensusService,
-  nodeCodexProcessGroupCensusService,
   processErrorCode,
   processGroupLeaderFailure,
   processIdentityFromIncarnation,
@@ -42,6 +39,12 @@ import {
   windowsProcessIdentity,
   type LinuxProcessStat
 } from "./codex-app-server.js"
+import {
+  controlledCodexProcessNativeLayer,
+  CodexProcessNative,
+  nodeCodexProcessNativeService
+} from "./codex-process-native.js"
+import type { CodexProcessNativeService } from "./codex-process-native.js"
 import {
   CodexAttemptStoreFailure,
   CodexServerIncarnation,
@@ -65,7 +68,34 @@ const linuxStatText = (entry: LinuxProcessStat): string =>
     entry.startIdentity.replace("linux:", "")
   ].join(" ")}`
 
+const native = (overrides: Partial<CodexProcessNativeService> = {}): CodexProcessNativeService => ({
+  platform: "linux",
+  pid: 1,
+  kill: () => undefined,
+  readFile: async () => "",
+  readdir: async () => [],
+  execFile: async () => ({ stdout: "" }),
+  wait: () => Effect.void,
+  ...overrides
+})
+
+const withNative = <A>(service: CodexProcessNativeService, use: (native: CodexProcessNativeService) => A): A => {
+  return Effect.runSync(
+    Effect.gen(function* () {
+      const selected = yield* CodexProcessNative
+      return use(selected)
+    }).pipe(Effect.provide(controlledCodexProcessNativeLayer(service)))
+  )
+}
+
 describe("Codex process observation policy", () => {
+  it("runs Node's native exec adapter on success and failure", async () => {
+    await expect(nodeCodexProcessNativeService.execFile("/bin/sh", ["-c", "printf native-ok"])).resolves.toEqual({
+      stdout: "native-ok"
+    })
+    await expect(nodeCodexProcessNativeService.execFile("/definitely-missing-dalph-command", [])).rejects.toBeDefined()
+  })
+
   it("classifies native absence codes through direct and wrapped failures", () => {
     expect(processErrorCode(null)).toBe("")
     expect(processErrorCode("ESRCH")).toBe("")
@@ -191,7 +221,6 @@ describe("Codex process observation policy", () => {
     expect(Exit.isSuccess(await Effect.runPromiseExit(awaitOwnedGroupAbsent(eventuallyAbsent, launch, 1)))).toBe(true)
 
     const member = stat(24, 20, 24, "linux:member")
-    const originalReadFile = nodeFsPromises.readFile
     const readCases: ReadonlyArray<{ readonly result: string | Error; readonly failure: boolean }> = [
       { result: Object.assign(new Error("gone"), { code: "ESRCH" }), failure: false },
       { result: Object.assign(new Error("I/O"), { code: "EIO" }), failure: true },
@@ -202,31 +231,41 @@ describe("Codex process observation policy", () => {
       },
       { result: linuxStatText(member), failure: true }
     ]
-    try {
-      for (const { failure, result } of readCases) {
-        Object.defineProperty(nodeFsPromises, "readFile", {
-          configurable: true,
-          value: async () => {
-            if (result instanceof Error) throw result
-            return result
-          }
-        })
-        const outcome = await Effect.runPromiseExit(awaitExactMembersAbsent([member], 0))
-        expect(Exit.isFailure(outcome)).toBe(failure)
-      }
-      let exactReads = 0
-      Object.defineProperty(nodeFsPromises, "readFile", {
-        configurable: true,
-        value: async () => {
-          exactReads += 1
-          if (exactReads === 1) return linuxStatText(member)
-          throw Object.assign(new Error("gone"), { code: "ESRCH" })
+    for (const { failure, result } of readCases) {
+      const selected = native({
+        readFile: async () => {
+          if (result instanceof Error) throw result
+          return result
         }
       })
-      expect(Exit.isSuccess(await Effect.runPromiseExit(awaitExactMembersAbsent([member], 1)))).toBe(true)
-    } finally {
-      Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: originalReadFile })
+      const outcome = await Effect.runPromiseExit(
+        awaitExactMembersAbsent(
+          [member],
+          0,
+          withNative(selected, (value) => value)
+        )
+      )
+      expect(Exit.isFailure(outcome)).toBe(failure)
     }
+    let exactReads = 0
+    const selected = native({
+      readFile: async () => {
+        exactReads += 1
+        if (exactReads === 1) return linuxStatText(member)
+        throw Object.assign(new Error("gone"), { code: "ESRCH" })
+      }
+    })
+    expect(
+      Exit.isSuccess(
+        await Effect.runPromiseExit(
+          awaitExactMembersAbsent(
+            [member],
+            1,
+            withNative(selected, (value) => value)
+          )
+        )
+      )
+    ).toBe(true)
   })
 
   it("maps unexpected native census failures to typed ownership failures", async () => {
@@ -236,30 +275,27 @@ describe("Codex process observation policy", () => {
       phase: "Live",
       pid: 40
     })
-    const originalReaddir = nodeFsPromises.readdir
-    try {
-      Object.defineProperty(nodeFsPromises, "readdir", {
-        configurable: true,
-        value: async () => {
-          throw new Error("procfs unavailable")
-        }
-      })
-      expect(
-        Exit.isFailure(
-          await Effect.runPromiseExit(
-            nodeCodexOwnedActivityCensusService.observe(
-              { cwd: "/worktree", id: CodexThreadId.make("census-thread"), status: "idle", turns: [] },
-              [{ command: "work", cwd: "/worktree", itemId: "item", osPid: 40, processId: "process" }]
-            )
+    const unavailableNative = native({
+      readdir: async () => {
+        throw new Error("procfs unavailable")
+      }
+    })
+    const selectedNative = withNative(unavailableNative, (value) => value)
+    const activityCensus = makeNodeCodexOwnedActivityCensusService(selectedNative)
+    const groupCensus = makeNodeCodexProcessGroupCensusService(selectedNative)
+    expect(
+      Exit.isFailure(
+        await Effect.runPromiseExit(
+          activityCensus.observe(
+            { cwd: "/worktree", id: CodexThreadId.make("census-thread"), status: "idle", turns: [] },
+            [{ command: "work", cwd: "/worktree", itemId: "item", osPid: 40, processId: "process" }]
           )
         )
-      ).toBe(true)
-      expect(Exit.isFailure(await Effect.runPromiseExit(nodeCodexProcessGroupCensusService.observe(launch)))).toBe(true)
-      const ownership = makeNodeCodexProcessOwnershipService(nodeCodexProcessGroupCensusService)
-      expect(Exit.isFailure(await Effect.runPromiseExit(ownership.discover(launch.incarnation)))).toBe(true)
-    } finally {
-      Object.defineProperty(nodeFsPromises, "readdir", { configurable: true, value: originalReaddir })
-    }
+      )
+    ).toBe(true)
+    expect(Exit.isFailure(await Effect.runPromiseExit(groupCensus.observe(launch)))).toBe(true)
+    const ownership = makeNodeCodexProcessOwnershipService(groupCensus, selectedNative)
+    expect(Exit.isFailure(await Effect.runPromiseExit(ownership.discover(launch.incarnation)))).toBe(true)
 
     const throwingMember = new Proxy(stat(41, 40, 41, "linux:member"), {
       get: (target, property, receiver) => {
@@ -268,45 +304,29 @@ describe("Codex process observation policy", () => {
         return Reflect.get(target, property, receiver)
       }
     })
+    expect(Exit.isFailure(await Effect.runPromiseExit(activityCensus.terminateDescendants([throwingMember])))).toBe(
+      true
+    )
+    expect(
+      Exit.isFailure(await Effect.runPromiseExit(awaitExactMembersAbsent([throwingMember], 0, selectedNative)))
+    ).toBe(true)
+    const malformedIdentity = {
+      ...stat(42, 40, 42, "linux:escaped"),
+      get startIdentity(): CodexProcessStartIdentity {
+        // eslint-disable-next-line functional/no-throw-statements -- the getter emulates a malformed native observation.
+        throw new Error("invalid identity")
+      }
+    }
     expect(
       Exit.isFailure(
-        await Effect.runPromiseExit(nodeCodexOwnedActivityCensusService.terminateDescendants([throwingMember]))
+        await Effect.runPromiseExit(
+          signalExactDetachedDescendants(launch, { _tag: "ExactLive", members: [malformedIdentity] }, selectedNative)
+        )
       )
     ).toBe(true)
-    expect(Exit.isFailure(await Effect.runPromiseExit(awaitExactMembersAbsent([throwingMember], 0)))).toBe(true)
-    const originalReadFile = nodeFsPromises.readFile
-    try {
-      Object.defineProperty(nodeFsPromises, "readFile", {
-        configurable: true,
-        value: async () => linuxStatText(stat(42, 40, 42, "linux:escaped"))
-      })
-      expect(
-        Exit.isFailure(
-          await Effect.runPromiseExit(
-            signalExactDetachedDescendants(launch, {
-              _tag: "ExactLive",
-              members: [
-                {
-                  ...stat(42, 40, 42, "linux:escaped"),
-                  get startIdentity(): CodexProcessStartIdentity {
-                    // eslint-disable-next-line functional/no-throw-statements -- the getter emulates a malformed native observation.
-                    throw new Error("invalid identity")
-                  }
-                }
-              ]
-            })
-          )
-        )
-      ).toBe(true)
-    } finally {
-      Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: originalReadFile })
-    }
   })
 
   it("classifies platform-specific identity, handshake, census, and discovery boundaries", async () => {
-    const originalPlatform = nodeProcess.platform
-    const originalReadFile = nodeFsPromises.readFile
-    const originalReaddir = nodeFsPromises.readdir
     const launch = CodexServerLaunchRecord.make({
       command: ["codex", "app-server"],
       incarnation: CodexServerIncarnation.make("platform|linux%3Aexpected"),
@@ -314,98 +334,130 @@ describe("Codex process observation policy", () => {
       pid: 60
     })
     const initialize = { codexHome: "/codex", platformFamily: "unix", platformOs: "linux", userAgent: "codex" }
-    try {
-      Object.defineProperty(nodeFsPromises, "readFile", {
-        configurable: true,
-        value: async () => linuxStatText(stat(60, 1, 60, "linux:expected"))
-      })
-      expect(await incarnationWithProcessIdentity(CodexServerIncarnation.make("platform"), 60)).toBe(
-        "platform|linux%3Aexpected"
+    const linuxNative = native({ readFile: async () => linuxStatText(stat(60, 1, 60, "linux:expected")) })
+    expect(
+      await incarnationWithProcessIdentity(
+        CodexServerIncarnation.make("platform"),
+        60,
+        withNative(linuxNative, (value) => value)
       )
-      expect(
-        await validateLaunchedProcessObservation(
-          launch,
-          60,
-          { expectedExecutable: "codex", expectedMode: "app-server" },
-          ["/usr/bin/codex", "app-server"]
-        )
-      ).toEqual({ _tag: "ExactLive", pid: 60 })
-
-      Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: async () => "malformed" })
-      expect(await incarnationWithProcessIdentity(CodexServerIncarnation.make("platform"), 60)).toBeUndefined()
-
-      Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "darwin" })
-      expect(await incarnationWithProcessIdentity(CodexServerIncarnation.make("platform"), 60)).toBeUndefined()
-      expect(
-        await validateLaunchedProcessObservation(
-          launch,
-          60,
-          { expectedExecutable: "codex", expectedMode: "app-server" },
-          ["codex", "app-server"]
-        )
-      ).toMatchObject({ _tag: "Unreadable" })
-      expect(normalizeInitializeResponse({ ...initialize, platformOs: "macos" })).toBe(true)
-      expect(normalizeInitializeResponse(initialize)).toBeInstanceOf(CodexAppServerFailure)
-      expect(
-        normalizeInitializeResponse({ ...initialize, platformFamily: "windows", platformOs: "macos" })
-      ).toBeInstanceOf(CodexAppServerFailure)
-      expect(await Effect.runPromise(nodeCodexProcessGroupCensusService.observe(launch))).toMatchObject({
-        _tag: "Unreadable"
-      })
-      expect(await discoverAppServerProcesses(launch.incarnation)).toMatchObject({ _tag: "Unreadable" })
-      expect(
-        await Effect.runPromise(
-          makeNodeCodexProcessOwnershipService(nodeCodexProcessGroupCensusService).observe({
-            ...launch,
-            phase: "Launching",
-            pid: null
-          })
-        )
-      ).toMatchObject({ _tag: "Unreadable" })
-
-      Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "win32" })
-      expect(normalizeInitializeResponse({ ...initialize, platformFamily: "windows", platformOs: "windows" })).toBe(
-        true
+    ).toBe("platform|linux%3Aexpected")
+    expect(
+      await validateLaunchedProcessObservation(
+        launch,
+        60,
+        { expectedExecutable: "codex", expectedMode: "app-server" },
+        ["/usr/bin/codex", "app-server"],
+        withNative(linuxNative, (value) => value)
       )
-      await expect(incarnationWithProcessIdentity(CodexServerIncarnation.make("platform"), 60)).rejects.toBeDefined()
+    ).toEqual({ _tag: "ExactLive", pid: 60 })
 
-      Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "linux" })
-      expect(
-        await Effect.runPromise(
-          nodeCodexProcessGroupCensusService.observe({ ...launch, phase: "Launching", pid: null })
-        )
-      ).toMatchObject({ _tag: "Unreadable" })
-      expect(
-        await Effect.runPromise(
-          nodeCodexProcessGroupCensusService.observe({
-            ...launch,
-            incarnation: CodexServerIncarnation.make("without-process-identity")
-          })
-        )
-      ).toMatchObject({ _tag: "Unreadable" })
-      Object.defineProperty(nodeFsPromises, "readdir", { configurable: true, value: async () => ["60"] })
-      Object.defineProperty(nodeFsPromises, "readFile", {
-        configurable: true,
-        value: async () => {
-          throw Object.assign(new Error("stat unreadable"), { code: "EIO" })
-        }
-      })
-      expect(await Effect.runPromise(nodeCodexProcessGroupCensusService.observe(launch))).toMatchObject({
-        _tag: "Unreadable"
-      })
-      Object.defineProperty(nodeFsPromises, "readFile", {
-        configurable: true,
-        value: async () => linuxStatText(stat(60, 1, 60, "linux:expected"))
-      })
-      expect(await Effect.runPromise(nodeCodexProcessGroupCensusService.observe(launch))).toMatchObject({
-        _tag: "ExactLive",
-        members: [expect.objectContaining({ pid: 60 })]
-      })
-    } finally {
-      Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform })
-      Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: originalReadFile })
-      Object.defineProperty(nodeFsPromises, "readdir", { configurable: true, value: originalReaddir })
-    }
+    const malformedNative = native({ readFile: async () => "malformed" })
+    expect(
+      await incarnationWithProcessIdentity(
+        CodexServerIncarnation.make("platform"),
+        60,
+        withNative(malformedNative, (value) => value)
+      )
+    ).toBeUndefined()
+
+    const darwinNative = native({ platform: "darwin" })
+    expect(
+      await incarnationWithProcessIdentity(
+        CodexServerIncarnation.make("platform"),
+        60,
+        withNative(darwinNative, (value) => value)
+      )
+    ).toBeUndefined()
+    expect(
+      await validateLaunchedProcessObservation(
+        launch,
+        60,
+        { expectedExecutable: "codex", expectedMode: "app-server" },
+        ["codex", "app-server"],
+        withNative(darwinNative, (value) => value)
+      )
+    ).toMatchObject({ _tag: "Unreadable" })
+    expect(
+      normalizeInitializeResponse(
+        { ...initialize, platformOs: "macos" },
+        withNative(darwinNative, (value) => value)
+      )
+    ).toBe(true)
+    expect(
+      normalizeInitializeResponse(
+        initialize,
+        withNative(darwinNative, (value) => value)
+      )
+    ).toBeInstanceOf(CodexAppServerFailure)
+    expect(
+      normalizeInitializeResponse(
+        { ...initialize, platformFamily: "windows", platformOs: "macos" },
+        withNative(darwinNative, (value) => value)
+      )
+    ).toBeInstanceOf(CodexAppServerFailure)
+    const darwinGroup = makeNodeCodexProcessGroupCensusService(withNative(darwinNative, (value) => value))
+    expect(await Effect.runPromise(darwinGroup.observe(launch))).toMatchObject({ _tag: "Unreadable" })
+    expect(
+      await discoverAppServerProcesses(
+        launch.incarnation,
+        withNative(darwinNative, (value) => value)
+      )
+    ).toMatchObject({ _tag: "Unreadable" })
+    expect(
+      await Effect.runPromise(
+        makeNodeCodexProcessOwnershipService(
+          darwinGroup,
+          withNative(darwinNative, (value) => value)
+        ).observe({ ...launch, phase: "Launching", pid: null })
+      )
+    ).toMatchObject({ _tag: "Unreadable" })
+
+    const windowsNative = native({
+      platform: "win32",
+      execFile: async () => {
+        throw new Error("powershell unavailable")
+      }
+    })
+    expect(
+      normalizeInitializeResponse(
+        { ...initialize, platformFamily: "windows", platformOs: "windows" },
+        withNative(windowsNative, (value) => value)
+      )
+    ).toBe(true)
+    await expect(
+      incarnationWithProcessIdentity(
+        CodexServerIncarnation.make("platform"),
+        60,
+        withNative(windowsNative, (value) => value)
+      )
+    ).rejects.toBeDefined()
+
+    const noPidLaunch = { ...launch, phase: "Launching" as const, pid: null }
+    const linuxGroup = makeNodeCodexProcessGroupCensusService(withNative(linuxNative, (value) => value))
+    expect(await Effect.runPromise(linuxGroup.observe(noPidLaunch))).toMatchObject({ _tag: "Unreadable" })
+    expect(
+      await Effect.runPromise(
+        linuxGroup.observe({ ...launch, incarnation: CodexServerIncarnation.make("without-process-identity") })
+      )
+    ).toMatchObject({ _tag: "Unreadable" })
+    const unreadableNative = native({
+      readdir: async () => ["60"],
+      readFile: async () => {
+        throw Object.assign(new Error("stat unreadable"), { code: "EIO" })
+      }
+    })
+    const unreadableGroup = makeNodeCodexProcessGroupCensusService(withNative(unreadableNative, (value) => value))
+    expect(await Effect.runPromise(unreadableGroup.observe(launch))).toMatchObject({ _tag: "Unreadable" })
+    const exactNative = native({
+      readdir: async () => ["60"],
+      readFile: async () => linuxStatText(stat(60, 1, 60, "linux:expected"))
+    })
+    const exactGroup = makeNodeCodexProcessGroupCensusService(withNative(exactNative, (value) => value))
+    expect(await Effect.runPromise(exactGroup.observe(launch))).toMatchObject({
+      _tag: "ExactLive",
+      members: [expect.objectContaining({ pid: 60 })]
+    })
   })
 
   it("rejects every non-exact launch observation before authorizing a signal", async () => {
@@ -466,38 +518,35 @@ describe("Codex process observation policy", () => {
       )
     ).toBe(true)
 
-    const originalKill = nodeProcess.kill.bind(nodeProcess)
     let signals = 0
-    try {
-      Object.defineProperty(nodeProcess, "kill", {
-        configurable: true,
-        value: () => {
+    const selectedNative = withNative(
+      native({
+        kill: () => {
           signals += 1
-          return true
         }
-      })
-      expect(
-        Exit.isSuccess(
-          await Effect.runPromiseExit(
-            stopOwnedAppServer(service({ _tag: "ExactLive" }), group({ _tag: "Absent" }), launch)
+      }),
+      (value) => value
+    )
+    expect(
+      Exit.isSuccess(
+        await Effect.runPromiseExit(
+          stopOwnedAppServer(service({ _tag: "ExactLive" }), group({ _tag: "Absent" }), launch, selectedNative)
+        )
+      )
+    ).toBe(true)
+    expect(
+      Exit.isSuccess(
+        await Effect.runPromiseExit(
+          stopOwnedAppServer(
+            service({ _tag: "ExactLive" }),
+            { observe: () => Effect.succeed({ _tag: "ExactLive" as const, members: [] }) },
+            launch,
+            selectedNative
           )
         )
-      ).toBe(true)
-      expect(
-        Exit.isSuccess(
-          await Effect.runPromiseExit(
-            stopOwnedAppServer(
-              service({ _tag: "ExactLive" }),
-              { observe: () => Effect.succeed({ _tag: "ExactLive" as const, members: [] }) },
-              launch
-            )
-          )
-        )
-      ).toBe(true)
-      expect(signals).toBe(2)
-    } finally {
-      Object.defineProperty(nodeProcess, "kill", { configurable: true, value: originalKill })
-    }
+      )
+    ).toBe(true)
+    expect(signals).toBe(2)
   })
 
   it("preserves already typed app-server failures and wraps foreign failures", () => {
@@ -555,28 +604,22 @@ describe("Codex process observation policy", () => {
   })
 
   it("signals Unix and Windows process groups through typed outcomes", async () => {
-    const originalKill = nodeProcess.kill.bind(nodeProcess)
-    const originalPlatform = nodeProcess.platform
-    try {
-      for (const failure of [undefined, Object.assign(new Error("gone"), { code: "ESRCH" }), new Error("denied")]) {
-        Object.defineProperty(nodeProcess, "kill", {
-          configurable: true,
-          value: () => {
+    for (const failure of [undefined, Object.assign(new Error("gone"), { code: "ESRCH" }), new Error("denied")]) {
+      const selectedNative = withNative(
+        native({
+          kill: () => {
             // eslint-disable-next-line functional/no-throw-statements -- the controlled signal boundary emits the selected native failure.
             if (failure !== undefined) throw failure
-            return true
           }
-        })
-        const outcome = await Effect.runPromiseExit(signalOwnedProcessGroup(50))
-        expect(Exit.isFailure(outcome)).toBe(failure instanceof Error && !processWasAbsent(failure))
-      }
-      Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "win32" })
-      const windowsOutcome = await Effect.runPromiseExit(signalOwnedProcessGroup(50))
-      expect(Exit.isSuccess(windowsOutcome) || Exit.isFailure(windowsOutcome)).toBe(true)
-    } finally {
-      Object.defineProperty(nodeProcess, "kill", { configurable: true, value: originalKill })
-      Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform })
+        }),
+        (value) => value
+      )
+      const outcome = await Effect.runPromiseExit(signalOwnedProcessGroup(50, selectedNative))
+      expect(Exit.isFailure(outcome)).toBe(failure instanceof Error && !processWasAbsent(failure))
     }
+    const windowsNative = withNative(native({ platform: "win32" }), (value) => value)
+    const windowsOutcome = await Effect.runPromiseExit(signalOwnedProcessGroup(50, windowsNative))
+    expect(Exit.isSuccess(windowsOutcome) || Exit.isFailure(windowsOutcome)).toBe(true)
   })
 
   it("signals only an escaped descendant whose exact identity is freshly reread", async () => {
@@ -588,108 +631,99 @@ describe("Codex process observation policy", () => {
     })
     const leader = stat(30, 1, 30, "linux:expected")
     const escaped = stat(31, 30, 31, "linux:escaped")
+    const linuxNative = withNative(native(), (value) => value)
     expect(
       Exit.isSuccess(
-        await Effect.runPromiseExit(signalExactDetachedDescendants(launch, { _tag: "ExactLive", members: [leader] }))
+        await Effect.runPromiseExit(
+          signalExactDetachedDescendants(launch, { _tag: "ExactLive", members: [leader] }, linuxNative)
+        )
       )
     ).toBe(true)
 
-    const originalPlatform = nodeProcess.platform
-    Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "darwin" })
-    try {
-      expect(
-        Exit.isSuccess(
-          await Effect.runPromiseExit(
-            signalExactDetachedDescendants(launch, { _tag: "ExactLive", members: [leader, escaped] })
+    expect(
+      Exit.isSuccess(
+        await Effect.runPromiseExit(
+          signalExactDetachedDescendants(
+            launch,
+            { _tag: "ExactLive", members: [leader, escaped] },
+            withNative(native({ platform: "darwin" }), (value) => value)
           )
         )
-      ).toBe(true)
-    } finally {
-      Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform })
-    }
+      )
+    ).toBe(true)
     expect(
       Exit.isSuccess(
         await Effect.runPromiseExit(
           signalExactDetachedDescendants(
             { ...launch, phase: "Launching", pid: null },
-            { _tag: "ExactLive", members: [escaped] }
+            { _tag: "ExactLive", members: [escaped] },
+            linuxNative
           )
         )
       )
     ).toBe(true)
 
-    const originalReadFile = nodeFsPromises.readFile
-    const originalKill = nodeProcess.kill.bind(nodeProcess)
     let reads = 0
     let signaled = 0
-    try {
-      Object.defineProperty(nodeFsPromises, "readFile", {
-        configurable: true,
-        value: async () => {
+    const successfulNative = withNative(
+      native({
+        readFile: async () => {
           reads += 1
           if (reads === 1) return linuxStatText(escaped)
           throw Object.assign(new Error("gone"), { code: "ESRCH" })
-        }
-      })
-      Object.defineProperty(nodeProcess, "kill", {
-        configurable: true,
-        value: () => {
+        },
+        kill: () => {
           signaled += 1
-          return true
         }
-      })
-      const outcome = await Effect.runPromiseExit(
-        signalExactDetachedDescendants(launch, { _tag: "ExactLive", members: [leader, escaped] })
-      )
-      expect(Exit.isSuccess(outcome)).toBe(true)
-      expect(signaled).toBe(1)
+      }),
+      (value) => value
+    )
+    const outcome = await Effect.runPromiseExit(
+      signalExactDetachedDescendants(launch, { _tag: "ExactLive", members: [leader, escaped] }, successfulNative)
+    )
+    expect(Exit.isSuccess(outcome)).toBe(true)
+    expect(signaled).toBe(1)
 
-      const failureCases: ReadonlyArray<{
-        readonly firstRead: string | Error
-        readonly killError?: Error
-        readonly shouldFail: boolean
-      }> = [
-        { firstRead: Object.assign(new Error("gone"), { code: "ESRCH" }), shouldFail: false },
-        { firstRead: Object.assign(new Error("I/O"), { code: "EIO" }), shouldFail: true },
-        { firstRead: "malformed", shouldFail: true },
-        {
-          firstRead: linuxStatText({ ...escaped, startIdentity: CodexProcessStartIdentity.make("linux:changed") }),
-          shouldFail: true
-        },
-        {
-          firstRead: linuxStatText(escaped),
-          killError: Object.assign(new Error("gone"), { code: "ESRCH" }),
-          shouldFail: false
-        },
-        { firstRead: linuxStatText(escaped), killError: new Error("signal denied"), shouldFail: true }
-      ]
-      for (const { firstRead, killError, shouldFail } of failureCases) {
-        let caseReads = 0
-        Object.defineProperty(nodeFsPromises, "readFile", {
-          configurable: true,
-          value: async () => {
+    const failureCases: ReadonlyArray<{
+      readonly firstRead: string | Error
+      readonly killError?: Error
+      readonly shouldFail: boolean
+    }> = [
+      { firstRead: Object.assign(new Error("gone"), { code: "ESRCH" }), shouldFail: false },
+      { firstRead: Object.assign(new Error("I/O"), { code: "EIO" }), shouldFail: true },
+      { firstRead: "malformed", shouldFail: true },
+      {
+        firstRead: linuxStatText({ ...escaped, startIdentity: CodexProcessStartIdentity.make("linux:changed") }),
+        shouldFail: true
+      },
+      {
+        firstRead: linuxStatText(escaped),
+        killError: Object.assign(new Error("gone"), { code: "ESRCH" }),
+        shouldFail: false
+      },
+      { firstRead: linuxStatText(escaped), killError: new Error("signal denied"), shouldFail: true }
+    ]
+    for (const { firstRead, killError, shouldFail } of failureCases) {
+      let caseReads = 0
+      const caseNative = withNative(
+        native({
+          readFile: async () => {
             caseReads += 1
             if (caseReads > 1) throw Object.assign(new Error("gone"), { code: "ESRCH" })
             if (firstRead instanceof Error) throw firstRead
             return firstRead
-          }
-        })
-        Object.defineProperty(nodeProcess, "kill", {
-          configurable: true,
-          value: () => {
+          },
+          kill: () => {
             // eslint-disable-next-line functional/no-throw-statements -- the controlled signal boundary emits the selected native failure.
             if (killError !== undefined) throw killError
-            return true
           }
-        })
-        const result = await Effect.runPromiseExit(
-          signalExactDetachedDescendants(launch, { _tag: "ExactLive", members: [leader, escaped] })
-        )
-        expect(Exit.isFailure(result)).toBe(shouldFail)
-      }
-    } finally {
-      Object.defineProperty(nodeFsPromises, "readFile", { configurable: true, value: originalReadFile })
-      Object.defineProperty(nodeProcess, "kill", { configurable: true, value: originalKill })
+        }),
+        (value) => value
+      )
+      const result = await Effect.runPromiseExit(
+        signalExactDetachedDescendants(launch, { _tag: "ExactLive", members: [leader, escaped] }, caseNative)
+      )
+      expect(Exit.isFailure(result)).toBe(shouldFail)
     }
   })
 
@@ -708,13 +742,12 @@ describe("Codex process observation policy", () => {
     expect(launchExecutableMatches("/opt/codex", ["/opt/codex", "app-server"])).toBe(true)
     expect(launchExecutableMatches("relative/codex", ["/elsewhere/codex", "app-server"])).toBe(false)
 
-    const originalPlatform = nodeProcess.platform
-    Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "darwin" })
-    try {
-      expect(launchCommandFacts(complete)).toMatchObject({ _tag: "Unreadable" })
-    } finally {
-      Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform })
-    }
+    expect(
+      launchCommandFacts(
+        complete,
+        withNative(native({ platform: "darwin" }), (value) => value)
+      )
+    ).toMatchObject({ _tag: "Unreadable" })
   })
 
   it("projects process ids, discovery candidates, and observation failures exhaustively", () => {
