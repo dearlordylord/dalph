@@ -9,7 +9,7 @@ type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" |
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
-const viewKeys = ["original", "state-reason", "position-capacity", "source-freshness", "full-fact"] as const
+const viewKeys = ["original", "position-capacity", "source-freshness", "full-fact"] as const
 type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
@@ -256,8 +256,7 @@ const story: Scenario = {
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
   { key: "original", name: "Original · retained", description: "State-colored top rules with the retained two-line title and value grammar." },
-  { key: "state-reason", name: "State + reason", description: "Each task rectangle leads with current state and the concrete reason for that state." },
-  { key: "position-capacity", name: "Position + capacity", description: "Each task rectangle leads with its ordered position or its relationship to the capacity bound." },
+  { key: "position-capacity", name: "Position + capacity · survives", description: "Each task rectangle leads with its ordered position or its relationship to the capacity bound." },
   { key: "source-freshness", name: "Source + freshness", description: "Each rectangle names its factual basis and the complete graph observation used at this landmark." },
   { key: "full-fact", name: "Full fact grammar", description: "Entity, current fact, position, factual basis, and graph observation share one rectangle." }
 ]
@@ -380,21 +379,6 @@ const stateFor = (cell: Cell, item: Frame): string => {
   return taskLabel[item.tasks[cell.task]]
 }
 
-const reasonFor = (cell: Cell, item: Frame): string => {
-  if (cell.task === undefined) return cell.title.toLowerCase()
-  if (item.control.tasks.includes(cell.task)) return "task pause suppresses a desired ticket"
-  if (item.control.resumePending.includes(cell.task)) return "unpause requires task-scoped fresh facts"
-  const reasons: Record<TaskState, string> = {
-    blocked: `prerequisites incomplete in ${item.graph.revision}`,
-    waiting: item.held.length >= capacity ? `both ${capacity} positions are held` : "outside the desired prefix",
-    desired: "inside the desired prefix; responsibility not begun",
-    running: "responsibility holds one task-work position",
-    integrating: "terminal accepted; integration not settled",
-    settled: "integration finality accepted"
-  }
-  return reasons[item.tasks[cell.task]]
-}
-
 const positionFor = (stage: StageKey, cell: Cell, item: Frame): string => {
   if (cell.task === undefined) return stage === "read" || stage === "graph" ? `${item.graph.taskCount} task complete view` : "stage aggregate"
   const task = cell.task
@@ -419,7 +403,6 @@ const rectangleContent = (stage: StageKey, cell: Cell, item: Frame): string => {
   const position = positionFor(stage, cell, item)
   const basis = basisFor(stage)
   const observation = `${item.graph.revision} · ${item.graph.age}`
-  if (view() === "state-reason") return `<small>${entity}</small><b>${state}</b><em>${reasonFor(cell, item)}</em>`
   if (view() === "position-capacity") return `<small>${entity}</small><b>${position}</b><em>${state}</em>`
   if (view() === "source-freshness") return `<small>${entity}</small><b>${cell.value}</b><span class="fact-pair"><i>BASIS</i>${basis}</span><span class="fact-pair"><i>GRAPH</i>${observation}</span>`
   return `<small>${entity}</small><b>${state}</b><span class="fact-pair"><i>POSITION</i>${position}</span><span class="fact-pair"><i>BASIS</i>${basis}</span><span class="fact-pair"><i>GRAPH</i>${observation}</span>`

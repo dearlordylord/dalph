@@ -8,7 +8,7 @@ The prototype changes no Dalph runtime behavior.
 
 | Priority | Direction | Concrete user question | Why it comes here | Prototype decision | Success evidence |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | Rectangle semantics | What must one rectangle say for its stage to be understood without explanatory prose? | Every later direction depends on a stable information grammar. | Compare the original with state/reason, position/capacity, source/freshness, and full-fact grammars. | A user can identify the entity, current fact, reason, and relevant position without consulting the graph legend. |
+| 1 | Rectangle semantics | What must one rectangle say for its stage to be understood without explanatory prose? | Every later direction depends on a stable information grammar. | Compare the original with position/capacity, source/freshness, and full-fact grammars. | A user can identify the entity, current fact, and relevant position without consulting the graph legend. |
 | 2 | Temporal behavior | What changed between adjacent accepted landmarks? | Static content must be correct before motion or transition marks explain its change. | Show entered, stayed, moved, admitted, paused, resumed, integrated, and settled changes without leaving ghost entities. | A user can narrate two adjacent frames and identify the changed rectangle. |
 | 3 | Frontier and capacity | Which tasks are ordered in the frontier, inside the desired prefix, holding positions, or waiting beyond capacity? | This is the central scheduling relationship and uses the rectangle grammar plus temporal changes. | Test explicit rank, capacity boundary, held-position occupancy, and task-by-task frontier consumption. | A user predicts which task can advance next and why another task waits. |
 | 4 | Epistemic state | Which facts are complete, fresh, stale, or awaiting a required read? | Crash, pause, and restart are misleading unless observation status is explicit. | Distinguish complete graph publication, observation age, frozen state, and fresh-read gates. Never show a partial graph. | A user distinguishes stale-but-complete facts from current tracker facts. |
@@ -42,10 +42,8 @@ The prototype changes no Dalph runtime behavior.
 
 ## Active experiment: Priority 1 — rectangle semantics
 
-The original two-line rectangle remains the baseline. Four alternatives test different information grammars without changing rectangle placement, state top rules, graph state, or chronology:
+The original two-line rectangle remains the baseline. The Position + capacity option survives the first review. Source + freshness and Full fact grammar remain under review. The options do not change rectangle placement, state top rules, graph state, or chronology:
 
-1. State and reason.
-2. Position and capacity.
-3. Source and freshness.
-4. Full fact grammar.
-
+1. Position and capacity — survives.
+2. Source and freshness — under review.
+3. Full fact grammar — under review.

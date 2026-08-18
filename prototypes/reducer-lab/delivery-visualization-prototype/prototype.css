@@ -108,7 +108,7 @@ button{color:inherit}
 .data-rectangle em{color:var(--cell-label);font:6px/1.35 DM Mono,monospace;font-style:normal;margin-top:5px}
 .fact-pair{display:grid;grid-template-columns:34px minmax(0,1fr);gap:4px;color:var(--cell-fg);font:5.5px/1.3 DM Mono,monospace;margin-top:4px}
 .fact-pair i{color:var(--cell-label);font-style:normal}
-.view-state-reason .data-rectangle,.view-position-capacity .data-rectangle{min-height:70px}
+.view-position-capacity .data-rectangle{min-height:70px}
 .view-source-freshness .data-rectangle{min-height:84px}
 .view-full-fact .data-rectangle{min-height:100px}
 .view-source-freshness .stage-graph,.view-source-freshness .stage-settlements{min-height:300px}
