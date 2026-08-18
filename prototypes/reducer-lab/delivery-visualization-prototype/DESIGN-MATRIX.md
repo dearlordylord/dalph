@@ -1,6 +1,6 @@
 # Delivery visualization design matrix
 
-This matrix prioritizes independent design questions for the delivery visualization prototype. Each experiment keeps the accepted Position + capacity rectangle grammar as the baseline and changes one direction at a time.
+This matrix prioritizes independent design questions for the delivery visualization prototype. Each experiment keeps the accepted Position + capacity grammar and fixed capacity slots as the baseline and changes one direction at a time.
 
 The prototype changes no Dalph runtime behavior.
 
@@ -10,7 +10,7 @@ The prototype changes no Dalph runtime behavior.
 | ---: | --- | --- | --- | --- | --- |
 | 1 | Rectangle semantics | What must one rectangle say for its stage to be understood without explanatory prose? | Every later direction depends on a stable information grammar. | Accepted: Position + capacity becomes the new original. | A user can identify the entity, current fact, and relevant position without consulting the graph legend. |
 | 2 | Temporal behavior | What changed between adjacent accepted landmarks? | Static content must be correct before motion or transition marks explain its change. | Rejected: step navigation already exposes the state change; added temporal labels duplicate it. | A user can narrate two adjacent frames and identify the changed rectangle. |
-| 3 | Frontier and capacity | Which tasks are ordered in the frontier, inside the desired prefix, holding positions, or waiting beyond capacity? | This is the central scheduling relationship and uses the rectangle grammar plus temporal changes. | Test explicit rank, capacity boundary, held-position occupancy, and task-by-task frontier consumption. | A user predicts which task can advance next and why another task waits. |
+| 3 | Frontier and capacity | Which tasks are ordered in the frontier, inside the desired prefix, holding positions, or waiting beyond capacity? | This is the central scheduling relationship and uses the rectangle grammar plus temporal changes. | Accepted: fixed capacity slots become the new original. | A user predicts which task can advance next and why another task waits. |
 | 4 | Epistemic state | Which facts are complete, fresh, stale, or awaiting a required read? | Crash, pause, and restart are misleading unless observation status is explicit. | Distinguish complete graph publication, observation age, frozen state, and fresh-read gates. Never show a partial graph. | A user distinguishes stale-but-complete facts from current tracker facts. |
 | 5 | Code–data–graph mapping | Which exact source stage, rectangles, graph nodes, and dependency edges describe the same fact? | Exact synchronization needs stable rectangle meaning and freshness. | Refine selection from incident-edge highlighting to the smallest correct dependency path. | Selecting any surface produces the same bounded set of related facts. |
 | 6 | Crash and recovery causality | What survives a crash, what freezes, and what is reconstructed before new work? | Recovery comprehension depends on epistemic state and exact mapping. | Place crash events only where durable responsibility and visible recovery facts change the outcome. | A user identifies why B and C remain held and why X cannot displace them. |
@@ -48,11 +48,15 @@ Position + capacity is the new original. Every current task rectangle shows its 
 
 Change receipts, Before → now rectangles, and Stability age duplicated differences that are already visible when the user moves between landmarks. No temporal overlay remains.
 
-## Active experiment: Priority 3 — frontier and capacity
+## Accepted foundation: Priority 3 — frontier and capacity
 
-The scenario, graph, accepted rectangle grammar, and eventual full integration remain fixed. Four treatments test facts that step navigation does not directly expose:
+Fixed capacity slots is the new original. The tickets row always shows both task-work positions, including empty positions, plus the complete remainder after the bound.
 
-1. Original — Position + capacity remains the baseline.
-2. Fixed capacity slots — the tickets row always shows both task-work positions, including empty positions, plus a complete remainder rectangle for tasks after the bound.
-3. Admission forecast — current task rectangles state whether admission is permitted or which current boundary blocks it.
-4. Constraint ledger — frontier, tickets, and responsibilities receive an equation for ordered tasks, held positions, vacancies, and tasks after the bound.
+## Active experiment: Priority 4 — epistemic state
+
+The scenario, graph, accepted rectangle grammar, fixed slots, and eventual full integration remain fixed. Four treatments test what supports the visible facts:
+
+1. Original — fixed capacity slots remain the baseline.
+2. Observation envelope — each source stage receives the complete graph revision, observation age, and factual basis.
+3. Fresh-read gates — each source stage distinguishes fresh, stale-but-complete, frozen, durable, paused, and read-required facts.
+4. Authority map — each current rectangle names the system or derivation that supports it.

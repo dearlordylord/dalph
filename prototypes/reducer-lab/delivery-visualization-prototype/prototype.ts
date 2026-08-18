@@ -1,15 +1,15 @@
 import "./prototype.css"
 
 // THROWAWAY PROTOTYPE
-// Question: Which capacity treatment makes vacancies, waiting, and the next
-// admissible task predictable without changing the accepted rectangle grammar?
+// Question: Which epistemic treatment makes complete, stale, frozen, and
+// fresh-read-gated facts understandable without suggesting a partial graph?
 
 type TaskKey = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "X"
 type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" | "settlements" | "reflection"
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
-const viewKeys = ["original", "fixed-slots", "admission-forecast", "constraint-ledger"] as const
+const viewKeys = ["original", "observation-envelope", "fresh-read-gates", "authority-map"] as const
 type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
@@ -255,10 +255,10 @@ const story: Scenario = {
 }
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
-  { key: "original", name: "Original · position + capacity", description: "The accepted rectangles show each current entity, position or capacity relationship, and state." },
-  { key: "fixed-slots", name: "Fixed capacity slots", description: "The tickets row always renders both task-work positions, including explicit vacancies and the complete waiting remainder." },
-  { key: "admission-forecast", name: "Admission forecast", description: "Frontier, ticket, and responsibility rectangles state what currently permits or prevents admission." },
-  { key: "constraint-ledger", name: "Constraint ledger", description: "Relevant source stages receive a compact equation for held positions, vacancies, frontier size, and waiting tasks." }
+  { key: "original", name: "Original · fixed capacity slots", description: "The accepted Position + capacity grammar always renders both task-work positions and the complete waiting remainder." },
+  { key: "observation-envelope", name: "Observation envelope", description: "Each source stage receives one explicit rectangle for complete graph revision, observation age, and factual basis." },
+  { key: "fresh-read-gates", name: "Fresh-read gates", description: "Each source stage states whether its facts are fresh, stale-but-complete, frozen, durable, paused, or awaiting a required read." },
+  { key: "authority-map", name: "Authority map", description: "Every live-data rectangle names the system or derivation that supports its current fact." }
 ]
 
 let frameIndex = 0
@@ -386,20 +386,6 @@ const positionFor = (stage: StageKey, cell: Cell, item: Frame): string => {
   return "not position-bearing"
 }
 
-const admissionForecast = (stage: StageKey, cell: Cell, item: Frame): string | undefined => {
-  if (cell.task === undefined || !(["frontier", "tickets", "responsibilities"] as ReadonlyArray<StageKey>).includes(stage)) return undefined
-  const task = cell.task
-  if (item.held.includes(task)) return "already holds a task-work position"
-  if (item.app === "down") return "waits for restart and fresh facts"
-  if (item.app === "restarting") return "recovery blocks new admission"
-  if (item.control.run === "paused") return "Run Pause blocks new admission"
-  if (item.control.tasks.includes(task)) return "Task Pause suppresses its ticket"
-  if (item.control.resumePending.includes(task)) return "task-scoped fresh read required"
-  if (item.bounded.includes(task)) return "inside the desired prefix; admission permitted"
-  if (item.frontier.includes(task)) return "waits beyond the capacity boundary"
-  return "not currently eligible for admission"
-}
-
 const fixedSlotCells = (item: Frame): ReadonlyArray<Cell> => {
   const slots = Array.from({ length: capacity }, (_, index): Cell => {
     const task = item.bounded[index]
@@ -414,19 +400,39 @@ const fixedSlotCells = (item: Frame): ReadonlyArray<Cell> => {
   ]
 }
 
-const constraintLedger = (stage: StageKey, item: Frame): string => {
-  if (stage !== "frontier" && stage !== "tickets" && stage !== "responsibilities") return ""
-  const open = capacity - item.held.length
-  const outside = item.frontier.filter((task) => !item.bounded.includes(task))
-  const equation = stage === "frontier"
-    ? `${item.frontier.length} frontier · ${outside.length} after bound`
-    : stage === "tickets"
-      ? `${capacity} capacity − ${item.held.length} held = ${open} open`
-      : `${item.held.length}/${capacity} held · ${open} vacant`
-  const detail = stage === "frontier"
-    ? `ordered: ${item.frontier.length === 0 ? "empty" : item.frontier.join(" → ")}`
-    : `held: ${item.held.length === 0 ? "none" : item.held.join(" + ")}`
-  return `<span class="constraint-ledger"><small>CAPACITY EQUATION</small><b>${equation}</b><em>${detail}</em></span>`
+const stageAuthority: Record<StageKey, string> = {
+  read: "tracker read",
+  graph: "complete tracker graph",
+  frontier: "derived from complete graph",
+  tickets: "capacity rule",
+  responsibilities: "journal + executor",
+  settlements: "Git + journal",
+  reflection: "delivery signal"
+}
+
+const observationEnvelope = (stage: StageKey, item: Frame): string => `<span class="epistemic-extra observation-envelope"><small>OBSERVATION ENVELOPE</small><b>${item.graph.kind} ${item.graph.revision}</b><em>${item.graph.age} · ${stageAuthority[stage]}</em></span>`
+
+const readGate = (stage: StageKey, item: Frame): readonly [string, string] => {
+  if (stage === "responsibilities" && (item.app === "down" || item.app === "restarting")) return ["DURABLE", `${item.held.length}/${capacity} exact positions survive`]
+  if (item.app === "down") return ["FROZEN", "last complete publication; no new observation"]
+  if (item.app === "restarting" && (["read", "graph", "frontier", "tickets"] as ReadonlyArray<StageKey>).includes(stage)) return ["FRESH READ REQUIRED", "recovery completes before new work"]
+  if (item.control.run === "paused") return ["RUN PAUSED", "no new selection; held work remains"]
+  if (item.event.includes("unpauses the Run") && stage !== "responsibilities" && stage !== "settlements") return ["FRESH READ REQUIRED", "pre-pause facts cannot start new work"]
+  if (item.control.tasks.length > 0 && (stage === "frontier" || stage === "tickets")) return ["TASK PAUSED", `${item.control.tasks.join(" + ")} cannot receive a ticket`]
+  if (item.control.resumePending.length > 0 && (stage === "frontier" || stage === "tickets")) return ["TASK READ REQUIRED", `${item.control.resumePending.join(" + ")} cannot use pre-pause facts`]
+  if (item.graph.age === "fresh") return ["FRESH COMPLETE", `${item.graph.revision} accepted at ${item.graph.observedAt}`]
+  return ["STALE COMPLETE", `${item.graph.revision} remains the whole accepted graph`]
+}
+
+const freshReadGate = (stage: StageKey, item: Frame): string => {
+  const [status, detail] = readGate(stage, item)
+  return `<span class="epistemic-extra read-gate"><small>FACT STATUS</small><b>${status}</b><em>${detail}</em></span>`
+}
+
+const epistemicExtra = (stage: StageKey, item: Frame): string => {
+  if (view() === "observation-envelope") return observationEnvelope(stage, item)
+  if (view() === "fresh-read-gates") return freshReadGate(stage, item)
+  return ""
 }
 
 const rectangleContent = (stage: StageKey, cell: Cell, item: Frame): string => {
@@ -434,17 +440,16 @@ const rectangleContent = (stage: StageKey, cell: Cell, item: Frame): string => {
   const state = stateFor(cell, item)
   const position = positionFor(stage, cell, item)
   const base = `<small>${entity}</small><b>${position}</b><em>${state}</em>`
-  if (view() !== "admission-forecast") return base
-  const forecast = admissionForecast(stage, cell, item)
-  return forecast === undefined ? base : `${base}<span class="admission-forecast"><i>NEXT</i>${forecast}</span>`
+  if (view() !== "authority-map") return base
+  return `${base}<span class="authority-line"><i>BASIS</i>${stageAuthority[stage]}</span>`
 }
 
 const rectangles = (stage: StageKey, cells: ReadonlyArray<Cell>, item: Frame): string => {
-  const displayCells = view() === "fixed-slots" && stage === "tickets" ? fixedSlotCells(item) : cells
-  const ledger = view() === "constraint-ledger" ? constraintLedger(stage, item) : ""
-  if (displayCells.length === 0) return `<span class="rectangles">${ledger}<span class="no-delta">empty</span></span>`
+  const displayCells = stage === "tickets" ? fixedSlotCells(item) : cells
+  const extra = epistemicExtra(stage, item)
+  if (displayCells.length === 0) return `<span class="rectangles">${extra}<span class="no-delta">empty</span></span>`
   const active = activeTasks(item)
-  return `<span class="rectangles">${ledger}${displayCells.map((cell) => {
+  return `<span class="rectangles">${extra}${displayCells.map((cell) => {
     const related = selectionMode === "stage" ? stage === selectedStage : selectionMode === "task" && cell.task === selectedTask
     const selection = related ? "selection-related" : active.length > 0 ? "selection-muted" : ""
     return `<span class="data-rectangle tone-${cell.tone ?? "fact"} ${selection}" ${cell.task === undefined ? "" : `data-cell-task="${cell.task}"`}>${rectangleContent(stage, cell, item)}</span>`
@@ -495,7 +500,7 @@ const graphPanel = (item: Frame): string => `<section class="graph-panel instrum
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
 const switcher = (): string => {
   const index = views.findIndex(({ key }) => key === view())
-  return `<nav class="switcher" aria-label="Capacity treatment prototype"><button data-cycle="-1" aria-label="Previous capacity treatment">←</button><label><small>CAPACITY TREATMENT ${index + 1} / ${views.length}</small><select data-view-select aria-label="Capacity treatment">${views.map(({ key, name }) => `<option value="${key}" ${key === view() ? "selected" : ""}>${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next capacity treatment">→</button></nav>`
+  return `<nav class="switcher" aria-label="Epistemic treatment prototype"><button data-cycle="-1" aria-label="Previous epistemic treatment">←</button><label><small>EPISTEMIC TREATMENT ${index + 1} / ${views.length}</small><select data-view-select aria-label="Epistemic treatment">${views.map(({ key, name }) => `<option value="${key}" ${key === view() ? "selected" : ""}>${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next epistemic treatment">→</button></nav>`
 }
 
 const selectView = (next: ViewKey): void => {
