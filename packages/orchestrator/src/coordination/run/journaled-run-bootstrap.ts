@@ -1,5 +1,5 @@
 import { type RunId } from "@dalph/contracts"
-import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Semaphore, Stream } from "effect"
+import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
@@ -15,6 +15,12 @@ import {
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
+import {
+  type IntegrationQuarantineDirectionControlService,
+  makeIntegrationQuarantineDirectionControl
+} from "../../workflow/protocols/integration-quarantine/control.js"
+import { ApplyIntegrationQuarantineDirectionRequest } from "../../workflow/protocols/integration-quarantine/events.js"
+import { ReadIntegrationQuarantineDirectionRequest } from "../../workflow/protocols/integration-quarantine/request.js"
 import { Journal, journalLayer } from "../delivery/journal.js"
 import {
   DeliveryRuntimeResources,
@@ -40,12 +46,7 @@ import {
 } from "./run.js"
 import { inspectStartupRecovery, StartupRecoveryBlocked } from "./startup-recovery.js"
 import { observePauseProgress } from "./pause-progress-observer.js"
-import {
-  type InRunJournal,
-  type JournalReadError,
-  JournalStore,
-  RunLifecycleJournal
-} from "../../workflow-journal/store.js"
+import { InRunJournal, type JournalReadError, JournalStore, RunLifecycleJournal } from "../../workflow-journal/store.js"
 import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
 import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
@@ -65,6 +66,7 @@ interface RuntimeControls {
   readonly attemptChoice: AttemptChoiceControl["Service"]
   readonly controlDirection: ControlDirectionApplication["Service"]
   readonly deliveryRuntimeResources: DeliveryRuntimeResourcesService
+  readonly integrationQuarantineDirection: IntegrationQuarantineDirectionControlService
   readonly journal: Journal["Service"]
   readonly operationIdAllocator: OperationIdAllocatorService
   readonly runId: RunId
@@ -153,6 +155,9 @@ export const journaledRunBootstrapLayer = (
         ...storage,
         append: (...input) => observeProducedWrite(`append:${input[1]}`, "append", storage.append(...input))
       })
+      const integrationQuarantineDirection = yield* makeIntegrationQuarantineDirectionControl(
+        InRunJournal.of({ append: exitAwareStorage.append, read: exitAwareStorage.read })
+      )
       const runtimeState = yield* Ref.make<RuntimeControlState>({ _tag: "RuntimeInactive" })
       const activation = yield* Semaphore.make(1)
       const processRuntimeCapabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
@@ -201,6 +206,20 @@ export const journaledRunBootstrapLayer = (
       const withRuntimeControls = <A, E>(use: (controls: RuntimeControls) => Effect.Effect<A, E>) =>
         Effect.acquireUseRelease(acquireControlLease(), ({ controls }) => use(controls), releaseControlLease)
 
+      const withJournalControl = <A, E>(control: Effect.Effect<A, E>) =>
+        Effect.acquireUseRelease(
+          admission.acquireForwardOwner("InterruptibleBoundary"),
+          () => control,
+          (owner) => owner.release
+        )
+
+      const withPublishedOrStoredQuarantineControl = <A, E>(
+        use: (control: IntegrationQuarantineDirectionControlService) => Effect.Effect<A, E>
+      ) =>
+        withRuntimeControls(({ integrationQuarantineDirection }) => use(integrationQuarantineDirection)).pipe(
+          Effect.catchTag("JournaledRunNotActive", () => withJournalControl(use(integrationQuarantineDirection)))
+        )
+
       const closeControlAdmission = Effect.fn("JournaledRunBootstrap.closeControlAdmission")(function* () {
         const wait = yield* Ref.modify(runtimeState, (current) => {
           /* v8 ignore start -- runWithJournal opens admission exactly once before closing it exactly once. */
@@ -232,6 +251,9 @@ export const journaledRunBootstrapLayer = (
               )
               const context = yield* Layer.build(runtime)
               const journal = Context.get(context, Journal)
+              const publishedIntegrationQuarantineDirection = yield* makeIntegrationQuarantineDirectionControl(
+                InRunJournal.of({ append: journal.append, read: journal.read })
+              )
               yield* applicationExit.registerExecutorDrain({
                 suspendRunningExecutorWork: suspendRunningExecutorWorkForApplicationExit().pipe(Effect.provide(context))
               })
@@ -239,6 +261,7 @@ export const journaledRunBootstrapLayer = (
                 attemptChoice: Context.get(context, AttemptChoiceControl),
                 controlDirection: Context.get(context, ControlDirectionApplication),
                 deliveryRuntimeResources: Context.get(context, DeliveryRuntimeResources),
+                integrationQuarantineDirection: publishedIntegrationQuarantineDirection,
                 journal,
                 operationIdAllocator: Context.get(context, OperationIdAllocator),
                 runId,
@@ -346,6 +369,16 @@ export const journaledRunBootstrapLayer = (
         )
 
       const operatorControl: JournaledRunBootstrapService["operatorControl"] = {
+        applyIntegrationQuarantineDirection: (input) =>
+          Effect.gen(function* () {
+            const request = yield* Schema.decodeUnknownEffect(ApplyIntegrationQuarantineDirectionRequest, {
+              onExcessProperty: "error"
+            })(input)
+            if (request.requestId.runId !== expectedRunId) {
+              return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: request.requestId.runId })
+            }
+            return yield* withPublishedOrStoredQuarantineControl((control) => control.apply(request))
+          }),
         applyAttemptChoice: (input) => withRuntimeControls(({ attemptChoice }) => attemptChoice.apply(input)),
         applyControlDirection: (input) =>
           withRuntimeControls(
@@ -361,6 +394,16 @@ export const journaledRunBootstrapLayer = (
         applyTaskClaimReacquisition: (input) =>
           withRuntimeControls(({ taskClaimReacquisition }) => taskClaimReacquisition.apply(input)),
         readAttemptChoice: (input) => withRuntimeControls(({ attemptChoice }) => attemptChoice.read(input)),
+        readIntegrationQuarantineDirection: (input) =>
+          Effect.gen(function* () {
+            const request = yield* Schema.decodeUnknownEffect(ReadIntegrationQuarantineDirectionRequest, {
+              onExcessProperty: "error"
+            })(input)
+            if (request.requestId.runId !== expectedRunId) {
+              return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: request.requestId.runId })
+            }
+            return yield* withPublishedOrStoredQuarantineControl((control) => control.read(request))
+          }),
         readTaskWorkCapacity: (runId) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.read(runId)),
         observePause: (input) =>
           Stream.unwrap(

@@ -106,6 +106,7 @@ import {
   IntegratorGit,
   IntegratorGitReadFailure,
   IntegratorNotPreparedDetail,
+  IntegratorRunProtocolResult,
   IntegratorResult
 } from "../../workflow/protocols/integrator/protocol.js"
 import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
@@ -577,6 +578,22 @@ describe("delivery proposal route matrix", () => {
         transition: RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started })
       },
       {
+        access: "NoIntegrationTargetResource",
+        owner: "DeliverySettlement",
+        position: null,
+        transition: RunnableFrontierTransition.RecordInitialConclusiveIntegrationQuarantine({
+          responsibility: started,
+          result: IntegratorRunProtocolResult.cases.NotPrepared.make({
+            detail: IntegratorNotPreparedDetail.make("route matrix conclusive result"),
+            run: integratorInitialRunCorrelationFor({
+              responsibility: started,
+              targetLineage: lineage,
+              targetLineageObservedAt: JournalPosition.make(91)
+            })
+          })
+        })
+      },
+      {
         access: "UseHeld",
         owner: "DeliverySettlement",
         position: null,
@@ -893,6 +910,36 @@ describe("delivery proposal route matrix", () => {
         Effect.provideService(InRunJournal, integratorJournal)
       )
       expect(completed).toMatchObject({ _tag: "ActionCompleted", proposalId: integratorProposal.id })
+      expect((yield* Ref.get(integratorRecords)).map(({ event }) => event._tag).slice(-2)).toEqual([
+        "IntegratorRunResultRecorded",
+        "IntegrationQuarantined"
+      ])
+
+      yield* Ref.update(integratorRecords, (records) =>
+        records.filter(({ event }) => event._tag !== "IntegrationQuarantined")
+      )
+      const recovery = RunnableFrontierTransition.RecordInitialConclusiveIntegrationQuarantine({
+        responsibility: started,
+        result: IntegratorRunProtocolResult.cases.NotPrepared.make({
+          detail: IntegratorNotPreparedDetail.make("controlled route result"),
+          run: runIntegrator.run
+        })
+      })
+      const recoveryProposal = proposalsFor(recovery).proposals[0]
+      if (recoveryProposal === undefined || !isIdentityFreeProposal(recoveryProposal)) {
+        return yield* Effect.die("missing initial quarantine recovery proposal")
+      }
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: recoveryProposal },
+          recovery,
+          inertLease,
+          target
+        ).pipe(Effect.provideService(InRunJournal, integratorJournal))
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: recoveryProposal.id })
+      expect(
+        (yield* Ref.get(integratorRecords)).filter(({ event }) => event._tag === "IntegrationQuarantined")
+      ).toHaveLength(1)
     })
   )
 

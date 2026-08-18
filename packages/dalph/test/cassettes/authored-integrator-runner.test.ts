@@ -56,9 +56,10 @@ for (const seam of ["AfterResult", "AfterGitIntent"] as const) {
       const tags = run.records.map(({ event }) => event._tag)
 
       expect(tags.filter((tag) => tag === "IntegratorSessionFixed")).toHaveLength(1)
-      expect(tags.filter((tag) => tag === "IntegratorResultRecorded")).toHaveLength(1)
-      expect(tags.filter((tag) => tag === "IntegratorCandidateGitReadIntended")).toHaveLength(1)
-      expect(tags.filter((tag) => tag === "IntegratorCandidateGitObserved")).toHaveLength(1)
+      expect(tags.filter((tag) => tag === "IntegratorRunStarted")).toHaveLength(1)
+      expect(tags.filter((tag) => tag === "IntegratorRunResultRecorded")).toHaveLength(1)
+      expect(tags.filter((tag) => tag === "IntegratorRunCandidateGitReadIntended")).toHaveLength(1)
+      expect(tags.filter((tag) => tag === "IntegratorRunCandidateGitObserved")).toHaveLength(1)
       expect(tags.filter((tag) => tag === "TargetLineageObserved")).toHaveLength(1)
     })
   )

@@ -36,6 +36,7 @@ import {
   IntegrationProviderRunActivityAbsentEvent,
   IntegrationQuarantineFailureDetail
 } from "../integration-quarantine/events.js"
+import { appendInitialConclusiveIntegrationQuarantine } from "../integration-quarantine/initial-conclusive.js"
 import {
   Integrator,
   IntegratorCallFailure,
@@ -899,6 +900,65 @@ describe("outer Integrator protocol", () => {
       expect(records.filter(({ event }) => event._tag.startsWith("Integrator")).map(({ event }) => event._tag)).toEqual(
         ["IntegratorSessionFixed", "IntegratorRunStarted", "IntegratorRunResultRecorded"]
       )
+    })
+  )
+
+  it.effect("records one initial quarantine from the exact modern NotPrepared run evidence", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      const result = yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      if (result._tag !== "NotPrepared") return yield* Effect.die("expected exact NotPrepared result")
+
+      const first = yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(
+        Effect.provideService(InRunJournal, harness.journal)
+      )
+      const redelivered = yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(
+        Effect.provideService(InRunJournal, harness.journal)
+      )
+      const records = yield* harness.readRecords
+
+      expect(redelivered).toEqual(first)
+      expect(records.filter(({ event }) => event._tag === "IntegrationQuarantined")).toHaveLength(1)
+      expect(first.event).toMatchObject({
+        _tag: "IntegrationQuarantined",
+        basis: { _tag: "ConclusiveResult", cause: { _tag: "NotPrepared", detail: notPreparedDetail } },
+        correlation: result.run.session
+      })
+      expect(records.map(({ event }) => event._tag).slice(-2)).toEqual([
+        "IntegratorRunResultRecorded",
+        "IntegrationQuarantined"
+      ])
+    })
+  )
+
+  it.effect("records invalid-candidate quarantine only after the exact run Git observation", () =>
+    Effect.gen(function* () {
+      const observation = IntegratorGitObservation.cases.NonCommit.make({ candidateText, objectType: "tree" })
+      const harness = yield* makeHarness((request) => Effect.succeed(prepared(request)), successfulGitRead(observation))
+      const result = yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      if (result._tag !== "CandidateRejected") return yield* Effect.die("expected exact rejected candidate")
+
+      const quarantine = yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(
+        Effect.provideService(InRunJournal, harness.journal)
+      )
+      const records = yield* harness.readRecords
+      const observationAt = records.find(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")?.position
+
+      expect(quarantine.event).toMatchObject({
+        _tag: "IntegrationQuarantined",
+        basis: {
+          _tag: "ConclusiveResult",
+          cause: { _tag: "InvalidCandidate", candidateText, observation },
+          evidence: { candidateObservationAt: observationAt }
+        }
+      })
+      expect(records.map(({ event }) => event._tag).slice(-2)).toEqual([
+        "IntegratorRunCandidateGitObserved",
+        "IntegrationQuarantined"
+      ])
     })
   )
 

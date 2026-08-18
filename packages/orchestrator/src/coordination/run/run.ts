@@ -7,6 +7,7 @@ import type { ControlDirectionApplication } from "../../workflow/protocols/contr
 import type { TaskControlSubjectOutsideRun } from "../../workflow/protocols/control-direction-application/task-subject.js"
 import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import type { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
+import type { IntegrationQuarantineDirectionControl } from "../../workflow/protocols/integration-quarantine/control.js"
 import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import type {
@@ -100,6 +101,14 @@ export interface JournaledRunBootstrapService {
     RInitial | Exclude<R, JournaledRunServices>
   >
   readonly operatorControl: {
+    readonly applyIntegrationQuarantineDirection: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<IntegrationQuarantineDirectionControl["Service"]["apply"]>>,
+      | Effect.Error<ReturnType<IntegrationQuarantineDirectionControl["Service"]["apply"]>>
+      | ApplicationExiting
+      | JournaledRunIdentityMismatch
+    >
     readonly applyAttemptChoice: (
       input: unknown
     ) => Effect.Effect<
@@ -130,6 +139,14 @@ export interface JournaledRunBootstrapService {
     ) => Effect.Effect<
       Effect.Success<ReturnType<AttemptChoiceControl["Service"]["read"]>>,
       Effect.Error<ReturnType<AttemptChoiceControl["Service"]["read"]>> | ApplicationExiting | JournaledRunNotActive
+    >
+    readonly readIntegrationQuarantineDirection: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<IntegrationQuarantineDirectionControl["Service"]["read"]>>,
+      | Effect.Error<ReturnType<IntegrationQuarantineDirectionControl["Service"]["read"]>>
+      | ApplicationExiting
+      | JournaledRunIdentityMismatch
     >
     readonly readTaskWorkCapacity: (
       runId: RunId

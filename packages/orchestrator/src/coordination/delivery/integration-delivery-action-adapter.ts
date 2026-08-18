@@ -53,7 +53,7 @@ import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-bo
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
-import { executeIntegratorAction } from "./integrator-delivery-action.js"
+import { executeIntegratorAction, recordInitialConclusiveIntegrationQuarantine } from "./integrator-delivery-action.js"
 import { recordChangedHeadRetryQuarantine } from "./integration-quarantine-disposition-action.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
@@ -86,7 +86,13 @@ type CompletePromotedTask = Extract<IntegrationTransition, { readonly _tag: "Com
 type ObserveFocusedTaskCompletion = Extract<IntegrationTransition, { readonly _tag: "ObserveFocusedTaskCompletion" }>
 type OuterIntegratorTransition = Extract<
   IntegrationTransition,
-  { readonly _tag: "ContinueStartedIntegrationCandidate" | "RecordChangedHeadRetryQuarantine" | "RunIntegrator" }
+  {
+    readonly _tag:
+      | "ContinueStartedIntegrationCandidate"
+      | "RecordChangedHeadRetryQuarantine"
+      | "RecordInitialConclusiveIntegrationQuarantine"
+      | "RunIntegrator"
+  }
 >
 type CompletionConfirmationBasis = Extract<
   JournalRecord["event"],
@@ -373,6 +379,9 @@ const executeOuterIntegratorAction = Effect.fn("DeliveryAction.executeOuterInteg
 ) {
   if (transition._tag === "RecordChangedHeadRetryQuarantine") {
     return yield* recordChangedHeadRetryQuarantine(action, transition, lease)
+  }
+  if (transition._tag === "RecordInitialConclusiveIntegrationQuarantine") {
+    return yield* recordInitialConclusiveIntegrationQuarantine(action, transition, lease)
   }
   if (transition._tag === "RunIntegrator") return yield* executeIntegratorAction(action, transition, lease)
   return yield* continueIntegrationCandidate(action, transition, lease)

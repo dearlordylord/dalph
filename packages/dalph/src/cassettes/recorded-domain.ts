@@ -57,6 +57,10 @@ import {
   IntegratorGitObservation,
   IntegratorResult,
   IntegratorRunCorrelation,
+  IntegrationQuarantineBasis,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineFailureDetail,
   EvidenceReference,
   TargetVerificationCorrelation,
   TargetVerificationOutcome,
@@ -177,6 +181,23 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     candidateText: IntegratorCandidateText,
     observation: IntegratorGitObservation,
     run: IntegratorRunCorrelation
+  },
+  /** Quarantine facts retain the exact outer session, disposition evidence, and operator occurrence semantics. */
+  IntegrationProviderRunActivityAbsent: {
+    correlation: IntegratorCorrelation,
+    detail: IntegrationQuarantineFailureDetail,
+    ...nonActionOccurrence
+  },
+  IntegrationQuarantined: {
+    basis: IntegrationQuarantineBasis,
+    correlation: IntegratorCorrelation,
+    ...nonActionOccurrence
+  },
+  IntegrationQuarantineDirectionApplied: {
+    fingerprint: IntegrationQuarantineDirectionFingerprint,
+    initiatedBy: WorkflowActor.cases.Operator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    requestId: IntegrationQuarantineDirectionRequestId
   },
   IntegrationCandidateConstructionIntended: {
     correlation: IntegrationCandidateCorrelation,

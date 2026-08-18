@@ -41,14 +41,16 @@ const journalTagsBeforeIntegrator = [
 const journalTagsAfterPreparedCandidate = [
   ...journalTagsBeforeIntegrator,
   "IntegratorSessionFixed",
-  "IntegratorResultRecorded",
-  "IntegratorCandidateGitReadIntended",
-  "IntegratorCandidateGitObserved"
+  "IntegratorRunStarted",
+  "IntegratorRunResultRecorded",
+  "IntegratorRunCandidateGitReadIntended",
+  "IntegratorRunCandidateGitObserved"
 ]
 const journalTagsAfterNotPrepared = [
   ...journalTagsBeforeIntegrator,
   "IntegratorSessionFixed",
-  "IntegratorResultRecorded"
+  "IntegratorRunStarted",
+  "IntegratorRunResultRecorded"
 ]
 
 const acceptedResultFor = (commit: GitCommitSha): AcceptedResult =>

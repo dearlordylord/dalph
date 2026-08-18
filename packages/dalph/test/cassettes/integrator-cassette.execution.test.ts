@@ -52,9 +52,10 @@ describe("maintained outer Integrator cassettes", () => {
             "GitReadIntentRecorded",
             "TargetLineageObserved",
             "IntegratorSessionFixed",
-            "IntegratorResultRecorded",
-            "IntegratorCandidateGitReadIntended",
-            "IntegratorCandidateGitObserved"
+            "IntegratorRunStarted",
+            "IntegratorRunResultRecorded",
+            "IntegratorRunCandidateGitReadIntended",
+            "IntegratorRunCandidateGitObserved"
           ])
         })
       )
@@ -108,7 +109,8 @@ describe("maintained outer Integrator cassettes", () => {
             "GitReadIntentRecorded",
             "TargetLineageObserved",
             "IntegratorSessionFixed",
-            "IntegratorResultRecorded"
+            "IntegratorRunStarted",
+            "IntegratorRunResultRecorded"
           ])
         })
       )

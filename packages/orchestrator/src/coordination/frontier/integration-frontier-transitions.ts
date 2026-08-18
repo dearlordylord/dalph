@@ -24,7 +24,11 @@ import {
   integratorInitialRunCorrelationFor,
   integratorRunCorrelationForSession
 } from "../../workflow/protocols/integrator/session.js"
-import { integratorRetryRunOrdinal, type IntegratorRunCorrelation } from "../../workflow/protocols/integrator/events.js"
+import {
+  IntegratorRunProtocolResult,
+  integratorRetryRunOrdinal,
+  type IntegratorRunCorrelation
+} from "../../workflow/protocols/integrator/events.js"
 import { integratorRunTwoAuthorizationIssue } from "../../workflow/protocols/integrator/retry-authorization.js"
 import {
   deriveIntegrationQuarantineState,
@@ -123,6 +127,38 @@ const runBoundIntegratorStateFor = (
   state: CurrentIntegratorState
 ): Extract<CurrentIntegratorState, { readonly run: IntegratorRunCorrelation }> | undefined =>
   "run" in state ? state : undefined
+
+const initialConclusiveQuarantineResultFor = (
+  state: CurrentIntegratorState
+): Extract<IntegratorRunProtocolResult, { readonly _tag: "NotPrepared" | "CandidateRejected" }> | undefined => {
+  if (state._tag === "NotPrepared") {
+    return IntegratorRunProtocolResult.cases.NotPrepared.make({ detail: state.detail, run: state.run })
+  }
+  if (state._tag === "CandidateRejected") {
+    return IntegratorRunProtocolResult.cases.CandidateRejected.make({
+      candidateText: state.candidateText,
+      observation: state.observation,
+      run: state.run
+    })
+  }
+  return undefined
+}
+
+/** Finds a conclusive modern run-1 result whose Q append was interrupted or never dispatched. */
+const initialConclusiveQuarantineFor = (
+  runState: ReconstructedRunState,
+  integratorState: CurrentIntegratorState
+): Extract<IntegratorRunProtocolResult, { readonly _tag: "NotPrepared" | "CandidateRejected" }> | undefined => {
+  const runBoundState = runBoundIntegratorStateFor(integratorState)
+  if (runBoundState === undefined || runBoundState.run.ordinal !== 1) return undefined
+  const result = initialConclusiveQuarantineResultFor(integratorState)
+  if (result === undefined) return undefined
+  const quarantine = deriveIntegrationQuarantineState(
+    runState.workflowHistory.records,
+    runBoundState.run.session.sessionId
+  )
+  return quarantine._tag === "NoQuarantine" ? result : undefined
+}
 
 const retryQuarantineStateFor = (
   runState: ReconstructedRunState,
@@ -326,6 +362,15 @@ const transitionsBeforeStartedIntegrationAdmission = (
       waiting,
       trackerFactsAreCurrentFor(responsibility)
     )
+  }
+  const initialConclusiveResult = initialConclusiveQuarantineFor(runState, integratorState)
+  if (initialConclusiveResult !== undefined) {
+    return [
+      RunnableFrontierTransition.RecordInitialConclusiveIntegrationQuarantine({
+        result: initialConclusiveResult,
+        responsibility
+      })
+    ]
   }
   if (!trackerFactsAreCurrentFor(responsibility)) return releaseStartedIntegrationTargetFor(responsibility, held)
   if (!claimIsExactFor(responsibility)) return []

@@ -42,6 +42,7 @@ import type {
   IntegratorRunCorrelation,
   IntegratorRunQualifiedCandidate
 } from "../../workflow/protocols/integrator/events.js"
+import type { InitialConclusiveIntegrationQuarantineInput } from "../../workflow/protocols/integration-quarantine/initial-conclusive.js"
 import type {
   CompletionTaskClaim,
   CompletionClaimDeletionRequest,
@@ -185,6 +186,11 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly request: ChangedHeadRetryQuarantineInput
     readonly responsibility: StartedIntegrationResponsibility
   }
+  /** Records Q after a modern initial Integrator run already has a conclusive result but Q is absent. */
+  RecordInitialConclusiveIntegrationQuarantine: {
+    readonly result: InitialConclusiveIntegrationQuarantineInput
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   RunTargetVerification: {
     readonly candidate: TargetVerificationCandidate
     readonly plan: TargetVerificationPlan
@@ -271,6 +277,7 @@ const transitionTrackerGraphRequirements = {
   ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
   ContinueStartedIntegrationCandidate: "CurrentTrackerGraphRequired",
   RecordChangedHeadRetryQuarantine: "CurrentTrackerGraphRequired",
+  RecordInitialConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
   RunIntegrator: "CurrentTrackerGraphRequired",
   RunTargetVerification: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",

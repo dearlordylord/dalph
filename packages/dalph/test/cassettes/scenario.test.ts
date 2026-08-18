@@ -41,6 +41,10 @@ import {
   decodeFreshWorkflowRunIdForDiagnostics,
   deriveIntegrationFrontier,
   deriveIntegrationAdmission,
+  IntegrationQuarantineBasis,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineFailureDetail,
   deriveRunnableFrontier,
   describeJournalEvent,
   EvidenceDigest,
@@ -6542,6 +6546,9 @@ it.effect(
         IntegratorRunResultRecorded: true,
         IntegratorRunCandidateGitReadIntended: true,
         IntegratorRunCandidateGitObserved: true,
+        IntegrationProviderRunActivityAbsent: true,
+        IntegrationQuarantineDirectionApplied: true,
+        IntegrationQuarantined: true,
         CompletionTaskIntended: true,
         CompletionTaskAttemptIntended: true,
         CompletionTaskAcknowledged: true,
@@ -6818,6 +6825,44 @@ it.effect(
       const completionEntries: ReadonlyArray<RecordedCassetteEntry> = (yield* Effect.all(
         [completionRun, lostCompletionRun, rejectedCompletionRun].map(({ records }) => projectRecordedCassette(records))
       )).flatMap(({ entries }) => entries.filter(({ _tag }) => _tag.startsWith("Integrator")))
+      const fixedSession = completionEntries.find((entry) => entry._tag === "IntegratorSessionFixed")
+      if (fixedSession?._tag !== "IntegratorSessionFixed") {
+        return yield* Effect.die("quarantine alpha-renaming fixture requires one fixed Integrator session")
+      }
+      const absenceDetail = IntegrationQuarantineFailureDetail.make("no provider-owned activity remains")
+      const absenceAt = JournalPosition.make(1)
+      const quarantineAt = JournalPosition.make(2)
+      const quarantineEntries = [
+        {
+          _tag: "IntegrationProviderRunActivityAbsent" as const,
+          correlation: fixedSession.correlation,
+          detail: absenceDetail,
+          occurrenceClassification: "NonActionOccurrence" as const
+        },
+        {
+          _tag: "IntegrationQuarantined" as const,
+          basis: IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+            detail: absenceDetail,
+            ownedActivityProvenAbsentAt: absenceAt
+          }),
+          correlation: fixedSession.correlation,
+          occurrenceClassification: "NonActionOccurrence" as const
+        },
+        {
+          _tag: "IntegrationQuarantineDirectionApplied" as const,
+          fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+            direction: "FullRerun",
+            quarantineAt,
+            sessionId: fixedSession.correlation.sessionId
+          }),
+          initiatedBy: { _tag: "Operator" as const },
+          occurrenceClassification: "InitiatedAction" as const,
+          requestId: IntegrationQuarantineDirectionRequestId.make({
+            nonce: "alpha-renaming-quarantine-direction",
+            runId: completionRun.runId
+          })
+        }
+      ] satisfies ReadonlyArray<RecordedCassetteEntry>
       expect(
         new Set(
           [
@@ -6829,7 +6874,8 @@ it.effect(
             ...replacementRecorded.entries,
             ...restartFailureRecorded.entries,
             ...executorObservationVariants.entries,
-            ...completionEntries
+            ...completionEntries,
+            ...quarantineEntries
           ].map(({ _tag }) => _tag)
         )
       ).toEqual(

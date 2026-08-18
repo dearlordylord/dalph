@@ -28,8 +28,8 @@ import {
 import { describeJournalEvent } from "../../../orchestrator/src/workflow/registry/event-descriptor.js"
 import { makeTargetLineageObservationOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
 import {
-  integratorCandidateGitReadIntendedRecordKey,
-  integratorResultRecordedRecordKey,
+  integratorRunCandidateGitReadIntendedRecordKey,
+  integratorRunResultRecordedRecordKey,
   integratorSessionFixedRecordKey
 } from "../../../orchestrator/src/workflow-journal/record-key.js"
 import type { JournalRecordKey } from "../../../orchestrator/src/workflow-journal/identity.js"
@@ -48,21 +48,25 @@ import {
   IntegratorGitReadFailure,
   IntegratorPreparationInput,
   IntegratorRequest,
-  deriveIntegratorState,
+  deriveIntegratorRunState,
   integratorCorrelationFor,
+  integratorInitialRunCorrelationFor,
   prepareIntegrationCandidate
 } from "../../../orchestrator/src/workflow/protocols/integrator/protocol.js"
+import { deriveCurrentIntegratorState } from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
+import { appendInitialConclusiveIntegrationQuarantine } from "../../../orchestrator/src/workflow/protocols/integration-quarantine/initial-conclusive.js"
 import {
   IntegratorCandidateText,
-  IntegratorCandidateGitReadIntendedEvent,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   IntegratorResponsibilityFacts,
   IntegratorResult,
-  IntegratorResultRecordedEvent,
+  IntegratorRunCandidateGitReadIntendedEvent,
+  IntegratorRunResultRecordedEvent,
   IntegratorSessionFixedEvent,
   type IntegratorCorrelation,
   type IntegratorProtocolResult,
+  type IntegratorRunState,
   type IntegratorState
 } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
 
@@ -120,6 +124,7 @@ type Phase =
   | "CandidateGitReadPending"
   | "CandidateReady"
   | "CandidateRejected"
+  | "Quarantined"
   | "PromotionPremise"
   | "PromotionIntent"
   | "PromotionAttemptIntended"
@@ -464,13 +469,15 @@ const resultCorrelation = (
   return session?.event.correlation ?? integratorCorrelationFor(makeInput(id, modelResults))
 }
 
-const isIntegratorResultState = (state: IntegratorState): boolean =>
+type ReconstructedIntegratorState = IntegratorState | IntegratorRunState
+
+const isIntegratorResultState = (state: ReconstructedIntegratorState): boolean =>
   state._tag === "NotPrepared" ||
   state._tag === "PreparedAwaitingGit" ||
   state._tag === "CandidateRejected" ||
   state._tag === "GitQualifiedPrepared"
 
-const candidateTextFromState = (state: IntegratorState): IntegratorCandidateText | undefined => {
+const candidateTextFromState = (state: ReconstructedIntegratorState): IntegratorCandidateText | undefined => {
   if (
     state._tag === "PreparedAwaitingGit" ||
     state._tag === "CandidateRejected" ||
@@ -481,7 +488,7 @@ const candidateTextFromState = (state: IntegratorState): IntegratorCandidateText
   return undefined
 }
 
-const candidateObservationFromState = (state: IntegratorState): IntegratorGitObservation | undefined =>
+const candidateObservationFromState = (state: ReconstructedIntegratorState): IntegratorGitObservation | undefined =>
   state._tag === "CandidateRejected"
     ? state.observation
     : state._tag === "GitQualifiedPrepared"
@@ -531,6 +538,7 @@ const phaseNeedsResult = (phase: Phase): boolean =>
     "CandidateGitReadPending",
     "CandidateReady",
     "CandidateRejected",
+    "Quarantined",
     "PromotionPremise",
     "PromotionIntent",
     "PromotionAttemptIntended",
@@ -738,6 +746,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     reportIntegratorCandidateOne31: {},
     reportIntegratorCandidateOne32: {},
     reportIntegratorNotPreparedOne: {},
+    recordQuarantineOne: {},
     recordPromotionAttemptIntentOne: {},
     recordPromotionIntentOne: {},
     reconcileCandidateGitOne: {},
@@ -793,22 +802,20 @@ const acceptedResultIntegrationDriver = defineDriver(
       )
     }
 
-    const appendIntegratorResult = (id: bigint, result: IntegratorResult) =>
-      appendEvent(
-        integratorResultRecordedRecordKey(correlationFor(id)),
-        IntegratorResultRecordedEvent.make({ result, version: workflowJournalEventVersion })
+    const appendIntegratorResult = (id: bigint, result: IntegratorResult) => {
+      const run = integratorInitialRunCorrelationFor(makeInput(id, modelResults))
+      return appendEvent(
+        integratorRunResultRecordedRecordKey(run),
+        IntegratorRunResultRecordedEvent.make({ result, run, version: workflowJournalEventVersion })
       )
+    }
 
     const appendCandidateIntent = (id: bigint) => {
-      const correlation = correlationFor(id)
+      const run = integratorInitialRunCorrelationFor(makeInput(id, modelResults))
       const candidateText = candidateTextOf(modelResultFor(id).submittedCandidate)
       return appendEvent(
-        integratorCandidateGitReadIntendedRecordKey(correlation, candidateText),
-        IntegratorCandidateGitReadIntendedEvent.make({
-          candidateText,
-          correlation,
-          version: workflowJournalEventVersion
-        })
+        integratorRunCandidateGitReadIntendedRecordKey(run, candidateText),
+        IntegratorRunCandidateGitReadIntendedEvent.make({ candidateText, run, version: workflowJournalEventVersion })
       )
     }
 
@@ -944,13 +951,18 @@ const acceptedResultIntegrationDriver = defineDriver(
       updateModelResult(id, (result) => ({
         ...result,
         phase: "IntegratorNotPrepared",
-        targetHeld: false,
+        targetHeld: true,
         integratorOutcome: "NotPrepared",
         integratorResultRecorded: true,
         candidateReported: false,
         promotionAuthorized: false,
         integratorResponseAmbiguous: false
       }))
+
+    const modelRecordQuarantine = (id: bigint): void => {
+      modelNextJournalPosition += 1n
+      updateModelResult(id, (result) => ({ ...result, phase: "Quarantined", targetHeld: false }))
+    }
 
     const modelCandidate = (id: bigint, candidate: bigint): void =>
       updateModelResult(id, (result) => ({
@@ -1195,7 +1207,7 @@ const acceptedResultIntegrationDriver = defineDriver(
 
     const modelStateFor = (id: bigint): ModelResult => {
       const model = modelResultFor(id)
-      const actual = deriveIntegratorState(runtime.readRecords(), makeResponsibility(id, modelResults))
+      const actual = deriveCurrentIntegratorState(runtime.readRecords(), makeResponsibility(id, modelResults))
       if (actual._tag === "Contradiction") {
         return rejectImpossibleTransition(`integrator adapter contradiction: ${actual.detail}`)
       }
@@ -1228,7 +1240,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         }
       }
 
-      const correlation = actual._tag === "Absent" ? undefined : actual.correlation
+      const correlation = actual._tag === "Absent" ? undefined : actual.run.session
       if (correlation !== undefined) {
         const responsibility = makeResponsibility(id, modelResults)
         const expectedCorrelation = integratorCorrelationFor(makeInput(id, modelResults))
@@ -1274,7 +1286,14 @@ const acceptedResultIntegrationDriver = defineDriver(
         actualText !== undefined &&
         runtime
           .readRecords()
-          .some((record) => record.key === integratorCandidateGitReadIntendedRecordKey(correlation, actualText))
+          .some(
+            (record) =>
+              record.key ===
+              integratorRunCandidateGitReadIntendedRecordKey(
+                integratorInitialRunCorrelationFor(makeInput(id, modelResults)),
+                actualText
+              )
+          )
 
       if (model.integratorResultRecorded !== isIntegratorResultState(actual)) {
         return rejectImpossibleTransition("model/runtime durable outer-result flag mismatch")
@@ -1305,8 +1324,8 @@ const acceptedResultIntegrationDriver = defineDriver(
           .readRecords()
           .find(
             (record) =>
-              record.event._tag === "IntegratorCandidateGitObserved" &&
-              record.event.correlation.sessionId === correlation?.sessionId
+              record.event._tag === "IntegratorRunCandidateGitObserved" &&
+              record.event.run.session.sessionId === correlation?.sessionId
           )
         if (observationRecord === undefined || observationRecord.position <= targetLineagePositionFor(id)) {
           return rejectImpossibleTransition("qualified candidate lacks a later durable Git observation")
@@ -1470,6 +1489,19 @@ const acceptedResultIntegrationDriver = defineDriver(
           yield* appendIntegratorResult(1n, result)
           yield* Effect.exit(runtime.runProtocol(1n))
           modelNotPrepared(1n)
+        }),
+      recordQuarantineOne: () =>
+        Effect.gen(function* () {
+          const responsibility = makeResponsibility(1n, modelResults)
+          const run = integratorInitialRunCorrelationFor(makeInput(1n, modelResults))
+          const result = deriveIntegratorRunState(runtime.readRecords(), responsibility, run)
+          if (result._tag !== "NotPrepared" && result._tag !== "CandidateRejected") {
+            return rejectImpossibleTransition(`cannot quarantine non-conclusive Integrator state ${result._tag}`)
+          }
+          yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(
+            Effect.provideService(InRunJournal, runtime.journal)
+          )
+          modelRecordQuarantine(1n)
         }),
       recordPromotionAttemptIntentOne: () => Effect.sync(() => modelPromotionAttemptIntent(1n)),
       recordPromotionIntentOne: () => Effect.sync(() => modelPromotionIntent(1n)),

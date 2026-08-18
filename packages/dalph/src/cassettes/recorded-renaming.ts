@@ -48,6 +48,10 @@ import {
   type IntegrationCandidateCorrelation,
   type IntegrationCandidateId,
   IntegrationCandidateResourceLocator,
+  type IntegrationQuarantineBasis,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  type IntegrationQuarantineFailureDetail,
   IntegratorCandidateResourceLocator,
   type IntegratorCandidateText,
   IntegrationSessionId,
@@ -158,6 +162,7 @@ type PreservedCassetteBrand =
   | EvidenceDigest
   | IntegratorCandidateText
   | IntegratorNotPreparedDetail
+  | IntegrationQuarantineFailureDetail
   | TargetVerificationPlanId
   | TargetPromotionAttemptOrdinal
   | TargetPromotionAttemptLimit
@@ -403,6 +408,65 @@ const renameIntegratorGitObservation = (observation: IntegratorGitObservationTyp
         candidateText: preserveCassetteValue(value.candidateText),
         objectType: preserveCassetteValue(value.objectType)
       })
+  })
+
+const renameIntegrationQuarantineBasis = (basis: IntegrationQuarantineBasis): IntegrationQuarantineBasis =>
+  Match.valueTags(basis, {
+    ConclusiveResult: (value) =>
+      completeFields<typeof value>({
+        _tag: "ConclusiveResult",
+        cause: Match.valueTags(value.cause, {
+          InvalidCandidate: (cause) =>
+            completeFields<typeof cause>({
+              _tag: "InvalidCandidate",
+              candidateText: preserveCassetteValue(cause.candidateText),
+              observation: renameIntegratorGitObservation(cause.observation)
+            }),
+          NotPrepared: (cause) =>
+            completeFields<typeof cause>({ _tag: "NotPrepared", detail: preserveCassetteValue(cause.detail) })
+        }),
+        evidence:
+          value.evidence.candidateObservationAt === undefined
+            ? { resultRecordedAt: preserveCassetteValue(value.evidence.resultRecordedAt) }
+            : {
+                candidateObservationAt: preserveCassetteValue(value.evidence.candidateObservationAt),
+                resultRecordedAt: preserveCassetteValue(value.evidence.resultRecordedAt)
+              }
+      }),
+    ProviderRunFailure: (value) =>
+      completeFields<typeof value>({
+        _tag: "ProviderRunFailure",
+        detail: preserveCassetteValue(value.detail),
+        ownedActivityProvenAbsentAt: preserveCassetteValue(value.ownedActivityProvenAbsentAt)
+      }),
+    RetryTargetHeadChanged: (value) =>
+      completeFields<typeof value>({
+        _tag: "RetryTargetHeadChanged",
+        direction: preserveCassetteValue(value.direction),
+        directionAppliedAt: preserveCassetteValue(value.directionAppliedAt),
+        observedTargetHead: preserveCassetteValue(value.observedTargetHead),
+        priorQuarantineAt: preserveCassetteValue(value.priorQuarantineAt),
+        targetLineageObservedAt: preserveCassetteValue(value.targetLineageObservedAt)
+      })
+  })
+
+const renameIntegrationQuarantineDirectionFingerprint = (
+  fingerprint: IntegrationQuarantineDirectionFingerprint,
+  maps: IdentityRenamingMaps
+): IntegrationQuarantineDirectionFingerprint =>
+  IntegrationQuarantineDirectionFingerprint.make({
+    direction: preserveCassetteValue(fingerprint.direction),
+    quarantineAt: preserveCassetteValue(fingerprint.quarantineAt),
+    sessionId: renameIntegratorSession(fingerprint.sessionId, maps)
+  })
+
+const renameIntegrationQuarantineDirectionRequestId = (
+  requestId: IntegrationQuarantineDirectionRequestId,
+  maps: IdentityRenamingMaps
+): IntegrationQuarantineDirectionRequestId =>
+  IntegrationQuarantineDirectionRequestId.make({
+    nonce: preserveCassetteValue(requestId.nonce),
+    runId: renamed(requestId.runId, maps.runIds)
   })
 
 const renameIntegratorResult = (result: IntegratorResultType, maps: IdentityRenamingMaps): IntegratorResultType =>
@@ -804,6 +868,28 @@ const renameRecordedCassetteEntry = (
           candidateText: preserveCassetteValue(entry.candidateText),
           observation: renameIntegratorGitObservation(entry.observation),
           run: renameIntegratorRunCorrelation(entry.run, maps)
+        }),
+      IntegrationProviderRunActivityAbsent: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegrationProviderRunActivityAbsent",
+          correlation: renameIntegratorCorrelation(entry.correlation, maps),
+          detail: preserveCassetteValue(entry.detail),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      IntegrationQuarantined: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegrationQuarantined",
+          basis: renameIntegrationQuarantineBasis(entry.basis),
+          correlation: renameIntegratorCorrelation(entry.correlation, maps),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      IntegrationQuarantineDirectionApplied: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegrationQuarantineDirectionApplied",
+          fingerprint: renameIntegrationQuarantineDirectionFingerprint(entry.fingerprint, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          requestId: renameIntegrationQuarantineDirectionRequestId(entry.requestId, maps)
         }),
       IntegrationCandidateConstructionIntended: (candidateEntry) => {
         const correlation = renameCandidateCorrelation(candidateEntry.correlation, maps)

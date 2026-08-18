@@ -10,6 +10,9 @@ import {
   describeJournalEvent,
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent,
+  IntegrationProviderRunActivityAbsentEvent,
+  IntegrationQuarantineDirectionAppliedEvent,
+  IntegrationQuarantinedEvent,
   IntegratorJournalEvent,
   IntegrationCandidateAgentReportedEvent,
   IntegrationCandidateConstructedEvent,
@@ -769,7 +772,7 @@ type OuterIntegratorEvent = Extract<
   }
 >
 
-type UnsupportedRecordedEvent = Extract<
+type IntegrationQuarantineEvent = Extract<
   WorkflowJournalEvent,
   {
     readonly _tag:
@@ -779,7 +782,7 @@ type UnsupportedRecordedEvent = Extract<
   }
 >
 
-const isUnsupportedRecordedEvent = (event: WorkflowJournalEvent): event is UnsupportedRecordedEvent =>
+const isIntegrationQuarantineEvent = (event: WorkflowJournalEvent): event is IntegrationQuarantineEvent =>
   event._tag === "IntegrationProviderRunActivityAbsent" ||
   event._tag === "IntegrationQuarantineDirectionApplied" ||
   event._tag === "IntegrationQuarantined"
@@ -843,9 +846,45 @@ const recordOuterIntegratorEntry = (event: OuterIntegratorEvent): RecordedOuterI
     })
   })
 
+type RecordedIntegrationQuarantineEntry = Extract<
+  RecordedCassetteEntry,
+  { readonly _tag: IntegrationQuarantineEvent["_tag"] }
+>
+
+const isRecordedIntegrationQuarantineEntry = (
+  entry: RecordedCassetteEntry
+): entry is RecordedIntegrationQuarantineEntry =>
+  entry._tag === "IntegrationProviderRunActivityAbsent" ||
+  entry._tag === "IntegrationQuarantineDirectionApplied" ||
+  entry._tag === "IntegrationQuarantined"
+
+const recordIntegrationQuarantineEntry = (event: IntegrationQuarantineEvent): RecordedIntegrationQuarantineEntry =>
+  Match.valueTags(event, {
+    IntegrationProviderRunActivityAbsent: (value): RecordedIntegrationQuarantineEntry => ({
+      _tag: value._tag,
+      correlation: value.correlation,
+      detail: value.detail,
+      occurrenceClassification: value.occurrenceClassification
+    }),
+    IntegrationQuarantineDirectionApplied: (value): RecordedIntegrationQuarantineEntry => ({
+      _tag: value._tag,
+      fingerprint: value.fingerprint,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      requestId: value.requestId
+    }),
+    IntegrationQuarantined: (value): RecordedIntegrationQuarantineEntry => ({
+      _tag: value._tag,
+      basis: value.basis,
+      correlation: value.correlation,
+      occurrenceClassification: value.occurrenceClassification
+    })
+  })
+
 // eslint-disable-next-line complexity -- The closed journal vocabulary has one total projection into recorded cassette entries.
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
   if (isOuterIntegratorEvent(event)) return recordOuterIntegratorEntry(event)
+  if (isIntegrationQuarantineEvent(event)) return recordIntegrationQuarantineEntry(event)
   if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
   if (isOperatorDirectionEvent(event)) return recordedOperatorDirectionEntryFor(event)
   if (isAttemptStopEvent(event)) return recordedAttemptStopEntryFor(event)
@@ -886,9 +925,6 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
       plannedAttempt: event.plannedAttempt,
       witness: event.witness
     }
-  }
-  if (isUnsupportedRecordedEvent(event)) {
-    return Effect.runSync(Effect.die(`recorded cassette cannot represent event ${event._tag}`))
   }
   return recordTaskBoundaryEntry(event)
 }
@@ -1045,6 +1081,32 @@ const eventForTrackerEntry = (entry: RecordedTrackerEntry): WorkflowJournalEvent
 
 const eventForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): WorkflowJournalEvent =>
   Schema.decodeUnknownSync(IntegratorJournalEvent)({ ...entry, version: workflowJournalEventVersion })
+
+const eventForIntegrationQuarantineEntry = (entry: RecordedIntegrationQuarantineEntry): WorkflowJournalEvent =>
+  Match.valueTags(entry, {
+    IntegrationProviderRunActivityAbsent: (value) =>
+      IntegrationProviderRunActivityAbsentEvent.make({
+        correlation: value.correlation,
+        detail: value.detail,
+        occurrenceClassification: value.occurrenceClassification,
+        version: workflowJournalEventVersion
+      }),
+    IntegrationQuarantineDirectionApplied: (value) =>
+      IntegrationQuarantineDirectionAppliedEvent.make({
+        fingerprint: value.fingerprint,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        requestId: value.requestId,
+        version: workflowJournalEventVersion
+      }),
+    IntegrationQuarantined: (value) =>
+      IntegrationQuarantinedEvent.make({
+        basis: value.basis,
+        correlation: value.correlation,
+        occurrenceClassification: value.occurrenceClassification,
+        version: workflowJournalEventVersion
+      })
+  })
 
 const eventForIntegrationEntry = (
   entry: RecordedIntegrationEntry,
@@ -1520,6 +1582,7 @@ const eventForOtherRecordedEntry = (
     return AttemptRestartAuthorityReadFailedEvent.make({ ...entry, version: workflowJournalEventVersion })
   }
   if (isRecordedOuterIntegratorEntry(entry)) return eventForOuterIntegratorEntry(entry)
+  if (isRecordedIntegrationQuarantineEntry(entry)) return eventForIntegrationQuarantineEntry(entry)
   if (isRecordedIntegrationPreparationEntry(entry)) return eventForIntegrationPreparationEntry(entry, entries, index)
   if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return eventForExecutorEntry(entry)
@@ -1639,35 +1702,39 @@ const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
     ? `Dalph observed ${entry.evidence._tag} through tracker read ${entry.originatingActionOperationId}.`
     : `Dalph coordinator initiated ${entry.operation._tag} for the task tracker.`
 
-// eslint-disable-next-line complexity -- Every closed outer-Integrator occurrence receives one concrete actor-first lyric.
-const lyricForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): string => {
-  if (entry._tag === "IntegratorSessionFixed") {
-    return `Dalph coordinator fixed Integrator session ${entry.correlation.sessionId} for target head ${entry.correlation.expectedTargetHead}.`
-  }
-  if (entry._tag === "IntegratorResultRecorded") {
-    return entry.result._tag === "PreparedCandidate"
-      ? `The Integrator reported candidate ${entry.result.candidateText} for session ${entry.result.correlation.sessionId}.`
-      : `The Integrator reported NotPrepared for session ${entry.result.correlation.sessionId}: ${entry.result.detail}.`
-  }
-  if (entry._tag === "IntegratorCandidateGitReadIntended") {
-    return `Dalph coordinator intended to ask Git about explicitly reported candidate ${entry.candidateText}.`
-  }
-  if (entry._tag === "IntegratorRunStarted") {
-    return `Dalph coordinator intended Integrator run ${entry.run.ordinal} in session ${entry.run.session.sessionId}.`
-  }
-  if (entry._tag === "IntegratorRunResultRecorded") {
-    return entry.result._tag === "PreparedCandidate"
-      ? `Integrator run ${entry.run.ordinal} reported candidate ${entry.result.candidateText} for session ${entry.run.session.sessionId}.`
-      : `Integrator run ${entry.run.ordinal} reported NotPrepared for session ${entry.run.session.sessionId}: ${entry.result.detail}.`
-  }
-  if (entry._tag === "IntegratorRunCandidateGitReadIntended") {
-    return `Dalph coordinator intended to ask Git about candidate ${entry.candidateText} from Integrator run ${entry.run.ordinal}.`
-  }
-  if (entry._tag === "IntegratorRunCandidateGitObserved") {
-    return `Git reported ${entry.observation._tag} for candidate ${entry.candidateText} from Integrator run ${entry.run.ordinal}.`
-  }
-  return `Git reported ${entry.observation._tag} for explicitly reported candidate ${entry.candidateText}.`
-}
+const lyricForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): string =>
+  Match.valueTags(entry, {
+    IntegratorSessionFixed: (value) =>
+      `Dalph coordinator fixed Integrator session ${value.correlation.sessionId} for target head ${value.correlation.expectedTargetHead}.`,
+    IntegratorResultRecorded: (value) =>
+      value.result._tag === "PreparedCandidate"
+        ? `The Integrator reported candidate ${value.result.candidateText} for session ${value.result.correlation.sessionId}.`
+        : `The Integrator reported NotPrepared for session ${value.result.correlation.sessionId}: ${value.result.detail}.`,
+    IntegratorCandidateGitReadIntended: (value) =>
+      `Dalph coordinator intended to ask Git about explicitly reported candidate ${value.candidateText}.`,
+    IntegratorCandidateGitObserved: (value) =>
+      `Git reported ${value.observation._tag} for explicitly reported candidate ${value.candidateText}.`,
+    IntegratorRunStarted: (value) =>
+      `Dalph coordinator intended Integrator run ${value.run.ordinal} in session ${value.run.session.sessionId}.`,
+    IntegratorRunResultRecorded: (value) =>
+      value.result._tag === "PreparedCandidate"
+        ? `Integrator run ${value.run.ordinal} reported candidate ${value.result.candidateText} for session ${value.run.session.sessionId}.`
+        : `Integrator run ${value.run.ordinal} reported NotPrepared for session ${value.run.session.sessionId}: ${value.result.detail}.`,
+    IntegratorRunCandidateGitReadIntended: (value) =>
+      `Dalph coordinator intended to ask Git about candidate ${value.candidateText} from Integrator run ${value.run.ordinal}.`,
+    IntegratorRunCandidateGitObserved: (value) =>
+      `Git reported ${value.observation._tag} for candidate ${value.candidateText} from Integrator run ${value.run.ordinal}.`
+  })
+
+const lyricForIntegrationQuarantineEntry = (entry: RecordedIntegrationQuarantineEntry): string =>
+  Match.valueTags(entry, {
+    IntegrationProviderRunActivityAbsent: (value) =>
+      `The provider reported no owned Integrator activity for session ${value.correlation.sessionId}: ${value.detail}.`,
+    IntegrationQuarantineDirectionApplied: (value) =>
+      `Operator applied ${value.fingerprint.direction} to the Integrator quarantine at ${value.fingerprint.quarantineAt}.`,
+    IntegrationQuarantined: (value) =>
+      `Dalph quarantined Integrator session ${value.correlation.sessionId} on ${value.basis._tag} evidence.`
+  })
 
 // eslint-disable-next-line complexity -- Every closed candidate occurrence receives one concrete actor-first lyric.
 const lyricForCandidateConstructionEntry = (entry: RecordedCandidateConstructionEntry): string =>
@@ -1792,6 +1859,7 @@ const lyricForTaskBoundaryEntry = (
     | RecordedTargetPromotionEntry
     | RecordedIntegrationFinalityEntry
     | RecordedOuterIntegratorEntry
+    | RecordedIntegrationQuarantineEntry
     | { readonly _tag: "PlannedAttemptContinuationAuthorized" }
     | { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
@@ -1840,6 +1908,7 @@ type RecordedPresentationResidualEntry = Exclude<
   | RecordedIntegrationPreparationEntry
   | RecordedOperatorDirectionEntry
   | RecordedOuterIntegratorEntry
+  | RecordedIntegrationQuarantineEntry
 >
 
 const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string => {
@@ -1854,6 +1923,7 @@ const lyricForOtherRecordedEntry = (entry: RecordedOtherEntry): string => {
   if (isRecordedOperatorDirectionEntry(entry)) return lyricForRecordedOperatorDirectionEntry(entry)
   if (isRecordedAttemptStopEntry(entry)) return lyricForRecordedAttemptStopEntry(entry)
   if (isRecordedOuterIntegratorEntry(entry)) return lyricForOuterIntegratorEntry(entry)
+  if (isRecordedIntegrationQuarantineEntry(entry)) return lyricForIntegrationQuarantineEntry(entry)
   if (isRecordedIntegrationPreparationEntry(entry)) return lyricForIntegrationPreparationEntry(entry)
   return lyricForRecordedPresentationResidual(entry)
 }

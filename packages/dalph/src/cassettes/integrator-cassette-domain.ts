@@ -23,6 +23,7 @@ import {
   IntegratorCorrelation,
   IntegratorSessionId,
   IntegratorResult,
+  IntegratorRunCorrelation,
   JournalPosition,
   JournalRecord,
   OperationId,
@@ -112,18 +113,38 @@ export const RecordedIntegratorCassetteEntry = Schema.TaggedUnion({
     position: JournalPosition,
     runId: RunId
   },
+  IntegratorRunCandidateGitObserved: {
+    candidateText: IntegratorCandidateText,
+    observation: IntegratorGitObservation,
+    position: JournalPosition,
+    run: IntegratorRunCorrelation,
+    runId: RunId
+  },
   IntegratorCandidateGitReadIntended: {
     candidateText: IntegratorCandidateText,
     correlation: Schema.suspend(() => IntegratorCorrelation),
     position: JournalPosition,
     runId: RunId
   },
+  IntegratorRunCandidateGitReadIntended: {
+    candidateText: IntegratorCandidateText,
+    position: JournalPosition,
+    run: IntegratorRunCorrelation,
+    runId: RunId
+  },
   IntegratorResultRecorded: { position: JournalPosition, result: Schema.suspend(() => IntegratorResult), runId: RunId },
+  IntegratorRunResultRecorded: {
+    position: JournalPosition,
+    result: Schema.suspend(() => IntegratorResult),
+    run: IntegratorRunCorrelation,
+    runId: RunId
+  },
   IntegratorSessionFixed: {
     correlation: Schema.suspend(() => IntegratorCorrelation),
     position: JournalPosition,
     runId: RunId
   },
+  IntegratorRunStarted: { position: JournalPosition, run: IntegratorRunCorrelation, runId: RunId },
   TargetLineageObserved: {
     observation: TargetLineageObservation,
     operationId: OperationId,
@@ -168,10 +189,33 @@ export const IntegratorCassetteTerminalExpectation = Schema.Struct({
     "GitQualifiedPrepared",
     "NotPrepared",
     "PreparedAwaitingGit",
+    "RunUnfinished",
     "SessionUnfinished"
   ])
 })
 export type IntegratorCassetteTerminalExpectation = typeof IntegratorCassetteTerminalExpectation.Type
+
+/** Run-bound reconstruction retains the exact ordinal and session instead of collapsing to session-only state. */
+const RecordedIntegratorRunState = Schema.TaggedUnion({
+  Absent: { run: IntegratorRunCorrelation },
+  CandidateRejected: {
+    candidateText: IntegratorCandidateText,
+    observation: IntegratorGitObservation,
+    run: IntegratorRunCorrelation
+  },
+  Contradiction: { detail: Schema.String },
+  GitQualifiedPrepared: {
+    candidateCommit: GitCommitSha,
+    candidateText: IntegratorCandidateText,
+    observation: Schema.Struct({ directParents: Schema.Tuple([GitCommitSha, GitCommitSha]) }),
+    qualifiedAt: JournalPosition,
+    run: IntegratorRunCorrelation
+  },
+  NotPrepared: { detail: IntegratorNotPreparedDetail, run: IntegratorRunCorrelation },
+  PreparedAwaitingGit: { candidateText: IntegratorCandidateText, run: IntegratorRunCorrelation },
+  RunUnfinished: { run: IntegratorRunCorrelation }
+})
+const RecordedIntegratorState = Schema.Union([IntegratorState, RecordedIntegratorRunState])
 
 /** A run result keeps authored input and recorded output together for cassette review. */
 export const IntegratorCassetteRun = Schema.Struct({
@@ -183,7 +227,7 @@ export const IntegratorCassetteRun = Schema.Struct({
   outcomes: Schema.Array(RecordedIntegratorOutcome),
   records: Schema.Array(JournalRecord),
   recorded: RecordedIntegratorCassette,
-  state: IntegratorState,
+  state: RecordedIntegratorState,
   sessionIds: Schema.Array(IntegratorSessionId),
   candidateResources: Schema.Array(IntegratorCandidateResourceLocator)
 })
@@ -229,6 +273,7 @@ const recordedDeliveryEntryFor = (record: JournalRecordType): RecordedIntegrator
   return undefined
 }
 
+// eslint-disable-next-line complexity -- The maintained projection exhaustively names every legacy and run-bound Integrator occurrence.
 const recordedOuterIntegratorEntryFor = (record: JournalRecordType): RecordedIntegratorCassetteEntry | undefined => {
   const { event } = record
   if (event._tag === "IntegratorSessionFixed") {
@@ -245,11 +290,34 @@ const recordedOuterIntegratorEntryFor = (record: JournalRecordType): RecordedInt
       runId: record.runId
     })
   }
+  if (event._tag === "IntegratorRunStarted") {
+    return RecordedIntegratorCassetteEntry.cases.IntegratorRunStarted.make({
+      position: record.position,
+      run: event.run,
+      runId: record.runId
+    })
+  }
+  if (event._tag === "IntegratorRunResultRecorded") {
+    return RecordedIntegratorCassetteEntry.cases.IntegratorRunResultRecorded.make({
+      position: record.position,
+      result: event.result,
+      run: event.run,
+      runId: record.runId
+    })
+  }
   if (event._tag === "IntegratorCandidateGitReadIntended") {
     return RecordedIntegratorCassetteEntry.cases.IntegratorCandidateGitReadIntended.make({
       candidateText: event.candidateText,
       correlation: event.correlation,
       position: record.position,
+      runId: record.runId
+    })
+  }
+  if (event._tag === "IntegratorRunCandidateGitReadIntended") {
+    return RecordedIntegratorCassetteEntry.cases.IntegratorRunCandidateGitReadIntended.make({
+      candidateText: event.candidateText,
+      position: record.position,
+      run: event.run,
       runId: record.runId
     })
   }
@@ -259,6 +327,15 @@ const recordedOuterIntegratorEntryFor = (record: JournalRecordType): RecordedInt
       correlation: event.correlation,
       observation: event.observation,
       position: record.position,
+      runId: record.runId
+    })
+  }
+  if (event._tag === "IntegratorRunCandidateGitObserved") {
+    return RecordedIntegratorCassetteEntry.cases.IntegratorRunCandidateGitObserved.make({
+      candidateText: event.candidateText,
+      observation: event.observation,
+      position: record.position,
+      run: event.run,
       runId: record.runId
     })
   }

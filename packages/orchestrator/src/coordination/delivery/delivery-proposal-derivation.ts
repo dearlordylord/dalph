@@ -107,6 +107,7 @@ const integrationResponsibilityFor = (
 }
 
 const transitionsWithoutIntegrationTarget = new Set<RunnableFrontierTransition["_tag"]>([
+  "RecordInitialConclusiveIntegrationQuarantine",
   "ReplacePromotedTaskClaim",
   "CompletePromotedTask",
   "ObserveFocusedTaskCompletion",

@@ -714,8 +714,7 @@ const acceptedResultIntegrationInvariants = acceptedResultIntegrationObligations
 const acceptedResultIntegrationWitnesses = acceptedResultIntegrationObligations.witnesses
 const acceptedResultIntegrationQuarantineProofInvariants =
   acceptedResultIntegrationQuarantineProofObligations.invariants
-const acceptedResultIntegrationQuarantineProofWitnesses =
-  acceptedResultIntegrationQuarantineProofObligations.witnesses
+const acceptedResultIntegrationQuarantineProofWitnesses = acceptedResultIntegrationQuarantineProofObligations.witnesses
 
 await run("accepted-result integration model typecheck", ["typecheck", "specs/acceptedResultIntegration.qnt"])
 await run("accepted-result integration deterministic tests", [

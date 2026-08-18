@@ -8,9 +8,7 @@ import {
   InRunJournal,
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
-import {
-  integrationQuarantineDirectionAppliedRecordKey
-} from "../../../workflow-journal/record-key.js"
+import { integrationQuarantineDirectionAppliedRecordKey } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   ApplyIntegrationQuarantineDirectionRequest,
@@ -26,49 +24,44 @@ import { ReadIntegrationQuarantineDirectionRequest } from "./request.js"
 import { quarantineRecordForFingerprint } from "./state.js"
 
 /** A transport identity was redelivered with different exact direction content. */
-export class IntegrationQuarantineDirectionRequestIdentityContradiction extends Schema.TaggedError<
-  IntegrationQuarantineDirectionRequestIdentityContradiction
->()("IntegrationQuarantineDirectionRequestIdentityContradiction", {
-  existingPosition: JournalPosition,
-  requestId: IntegrationQuarantineDirectionRequestId,
-  runId: RunId
-}) {}
+export class IntegrationQuarantineDirectionRequestIdentityContradiction extends Schema.TaggedError<IntegrationQuarantineDirectionRequestIdentityContradiction>()(
+  "IntegrationQuarantineDirectionRequestIdentityContradiction",
+  { existingPosition: JournalPosition, requestId: IntegrationQuarantineDirectionRequestId, runId: RunId }
+) {}
 
 /** A request transport Run must match the Run bound to the quarantined responsibility. */
-export class IntegrationQuarantineDirectionRequestRunMismatch extends Schema.TaggedError<
-  IntegrationQuarantineDirectionRequestRunMismatch
->()("IntegrationQuarantineDirectionRequestRunMismatch", {
-  boundRunId: RunId,
-  requestId: IntegrationQuarantineDirectionRequestId,
-  subjectRunId: RunId
-}) {}
+export class IntegrationQuarantineDirectionRequestRunMismatch extends Schema.TaggedError<IntegrationQuarantineDirectionRequestRunMismatch>()(
+  "IntegrationQuarantineDirectionRequestRunMismatch",
+  { boundRunId: RunId, requestId: IntegrationQuarantineDirectionRequestId, subjectRunId: RunId }
+) {}
 
 /** A different direction or transport request already won this quarantine occurrence. */
-export class IntegrationQuarantineDirectionAlreadyApplied extends Schema.TaggedError<
-  IntegrationQuarantineDirectionAlreadyApplied
->()("IntegrationQuarantineDirectionAlreadyApplied", {
-  existingPosition: JournalPosition,
-  requestId: IntegrationQuarantineDirectionRequestId,
-  runId: RunId,
-  winningFingerprint: ApplyIntegrationQuarantineDirectionRequest.fields.fingerprint,
-  winningRequestId: IntegrationQuarantineDirectionRequestId
-}) {}
+export class IntegrationQuarantineDirectionAlreadyApplied extends Schema.TaggedError<IntegrationQuarantineDirectionAlreadyApplied>()(
+  "IntegrationQuarantineDirectionAlreadyApplied",
+  {
+    existingPosition: JournalPosition,
+    requestId: IntegrationQuarantineDirectionRequestId,
+    runId: RunId,
+    winningFingerprint: ApplyIntegrationQuarantineDirectionRequest.fields.fingerprint,
+    winningRequestId: IntegrationQuarantineDirectionRequestId
+  }
+) {}
 
 /** The requested Journal position is not an exact quarantine for the named session. */
-export class IntegrationQuarantineDirectionNotAvailable extends Schema.TaggedError<
-  IntegrationQuarantineDirectionNotAvailable
->()("IntegrationQuarantineDirectionNotAvailable", {
-  fingerprint: ApplyIntegrationQuarantineDirectionRequest.fields.fingerprint,
-  reason: Schema.Literals(["MissingQuarantine", "SessionMismatch"]),
-  runId: RunId
-}) {}
+export class IntegrationQuarantineDirectionNotAvailable extends Schema.TaggedError<IntegrationQuarantineDirectionNotAvailable>()(
+  "IntegrationQuarantineDirectionNotAvailable",
+  {
+    fingerprint: ApplyIntegrationQuarantineDirectionRequest.fields.fingerprint,
+    reason: Schema.Literals(["MissingQuarantine", "SessionMismatch"]),
+    runId: RunId
+  }
+) {}
 
 /** No durable applied direction exists for the requested transport identity. */
-export class IntegrationQuarantineDirectionResultNotFound extends Schema.TaggedError<
-  IntegrationQuarantineDirectionResultNotFound
->()("IntegrationQuarantineDirectionResultNotFound", {
-  requestId: IntegrationQuarantineDirectionRequestId
-}) {}
+export class IntegrationQuarantineDirectionResultNotFound extends Schema.TaggedError<IntegrationQuarantineDirectionResultNotFound>()(
+  "IntegrationQuarantineDirectionResultNotFound",
+  { requestId: IntegrationQuarantineDirectionRequestId }
+) {}
 
 type AppliedRecord = JournalRecord & { readonly event: IntegrationQuarantineDirectionAppliedEvent }
 
@@ -88,7 +81,7 @@ type IntegrationQuarantineDirectionControlError =
   | Schema.SchemaError
   | WorkflowRunNotBegan
 
-interface IntegrationQuarantineDirectionControlService {
+export interface IntegrationQuarantineDirectionControlService {
   readonly apply: (
     input: unknown
   ) => Effect.Effect<IntegrationQuarantineDirectionApplicationResult, IntegrationQuarantineDirectionControlError>
@@ -129,14 +122,16 @@ const appliedRecordsForSubject = (
   return records.filter(
     (record): record is AppliedRecord =>
       record.event._tag === "IntegrationQuarantineDirectionApplied" &&
-      sameIntegrationQuarantineDirectionSubject(integrationQuarantineDirectionSubject(record.event.fingerprint), subject)
+      sameIntegrationQuarantineDirectionSubject(
+        integrationQuarantineDirectionSubject(record.event.fingerprint),
+        subject
+      )
   )
 }
 
-export const integrationQuarantineDirectionControlLayer = Layer.effect(
-  IntegrationQuarantineDirectionControl,
-  Effect.gen(function* () {
-    const journal = yield* InRunJournal
+/** Builds the narrow Journal-backed control for use both during and between Run activations. */
+export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQuarantineDirectionControl.make")(
+  function* (journal: InRunJournal["Service"]) {
     const applications = yield* Semaphore.make(1)
     const applyUnserialized = Effect.fn("IntegrationQuarantineDirectionControl.apply")(function* (input: unknown) {
       const request = yield* Schema.decodeUnknownEffect(ApplyIntegrationQuarantineDirectionRequest, {
@@ -260,5 +255,10 @@ export const integrationQuarantineDirectionControlLayer = Layer.effect(
       apply: (input) => applications.withPermit(applyUnserialized(input)),
       read: (input) => applications.withPermit(readUnserialized(input))
     })
-  })
+  }
+)
+
+export const integrationQuarantineDirectionControlLayer = Layer.effect(
+  IntegrationQuarantineDirectionControl,
+  InRunJournal.pipe(Effect.flatMap(makeIntegrationQuarantineDirectionControl))
 )

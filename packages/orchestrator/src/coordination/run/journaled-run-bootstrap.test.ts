@@ -38,9 +38,14 @@ import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
 import { projectWorkflowOccurrences } from "../../workflow/registry/occurrence-projection.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
-import { intentRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  integrationQuarantinedRecordKey,
+  integratorRunResultRecordedRecordKey,
+  integratorRunStartedRecordKey,
+  intentRecordKey
+} from "../../workflow-journal/record-key.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { freshWorkflowRunId } from "./fresh-run-identity.js"
+import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap } from "./run.js"
 import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
@@ -55,6 +60,22 @@ import { controlDirectionApplicationLayer } from "../../workflow/protocols/contr
 import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
 import { taskClaimReacquisitionControlLayer } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
+import {
+  IntegrationQuarantineBasis,
+  IntegrationQuarantineCause,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineResultEvidence,
+  IntegrationQuarantinedEvent
+} from "../../workflow/protocols/integration-quarantine/events.js"
+import {
+  IntegratorNotPreparedDetail,
+  IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent,
+  IntegratorResult
+} from "../../workflow/protocols/integrator/events.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { deterministicOperationIdAllocatorLayer } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 
@@ -1045,6 +1066,87 @@ it.effect("publishes an Operator Pause through the active journal without exposi
           .applyControlDirection({ direction: "Unpause", subject: { _tag: "Run", runId } })
           .pipe(Effect.flip)
       ).toMatchObject({ _tag: "JournaledRunNotActive" })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("keeps the Journal-backed quarantine direction route available after delivery stabilizes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-quarantine-direction")
+      const runId = AllocatedWorkflowRunId.make(integrationFinalityFixture.runId)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      yield* bootstrap.activate(
+        target,
+        Effect.succeed(initialPolicy),
+        runId,
+        Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+      )
+
+      const run = integrationFinalityFixture.qualifiedCandidate.run
+      yield* storage.append(
+        runId,
+        integratorRunStartedRecordKey(run),
+        IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
+      )
+      const detail = IntegratorNotPreparedDetail.make("operator must choose the next disposition")
+      const result = yield* storage.append(
+        runId,
+        integratorRunResultRecordedRecordKey(run),
+        IntegratorRunResultRecordedEvent.make({
+          result: IntegratorResult.cases.NotPrepared.make({ correlation: run.session, detail }),
+          run,
+          version: workflowJournalEventVersion
+        })
+      )
+      const basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+        cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail }),
+        evidence: IntegrationQuarantineResultEvidence.make({ resultRecordedAt: result.position })
+      })
+      const quarantine = yield* storage.append(
+        runId,
+        integrationQuarantinedRecordKey(run.session.sessionId, basis),
+        IntegrationQuarantinedEvent.make({
+          basis,
+          correlation: run.session,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        })
+      )
+      const requestId = IntegrationQuarantineDirectionRequestId.make({ nonce: "post-stabilization", runId })
+      const request = {
+        fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+          direction: "Retry",
+          quarantineAt: quarantine.position,
+          sessionId: run.session.sessionId
+        }),
+        requestId
+      }
+      const applied = yield* bootstrap.operatorControl.applyIntegrationQuarantineDirection(request)
+
+      expect(applied.application.event.fingerprint.direction).toBe("Retry")
+      expect(yield* bootstrap.operatorControl.applyIntegrationQuarantineDirection(request)).toEqual(applied)
+      expect(yield* bootstrap.operatorControl.readIntegrationQuarantineDirection({ requestId })).toEqual(applied)
+      expect(
+        yield* bootstrap.operatorControl
+          .applyIntegrationQuarantineDirection({
+            ...request,
+            requestId: IntegrationQuarantineDirectionRequestId.make({
+              nonce: "foreign-bootstrap",
+              runId: RunId.make("foreign-quarantine-direction-run")
+            })
+          })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "JournaledRunIdentityMismatch", expectedRunId: runId })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan",
+        "IntegratorRunStarted",
+        "IntegratorRunResultRecorded",
+        "IntegrationQuarantined",
+        "IntegrationQuarantineDirectionApplied"
+      ])
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

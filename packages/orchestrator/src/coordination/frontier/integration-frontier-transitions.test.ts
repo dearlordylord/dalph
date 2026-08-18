@@ -262,6 +262,41 @@ const transitionsFor = (scenario: ReturnType<typeof retryHistory>) =>
     [responsibility]
   ).transitions()
 
+it("recovers a durable initial Integrator result by recording Q before any fresh tracker read", () => {
+  const scenario = retryHistory("ConclusiveResult", fixedHead)
+  const records = scenario.records.filter(({ position }) => position <= JournalPosition.make(7))
+  const runState: ReconstructedRunState = {
+    ...scenario.runState,
+    appliedThrough: JournalPosition.make(7),
+    workflowHistory: { records }
+  }
+
+  const transitions = deriveStartedIntegrationFrontier(
+    runState,
+    {
+      activeResponsibilityPositions: new Set(),
+      currentTrackerTaskIds: new Set(),
+      heldResponsibilityPositions: new Set(),
+      integrationTarget: Option.some(target),
+      targetLineageByAttemptId: new Map(),
+      targetLineageRefreshRequiredAttemptIds: new Set(),
+      taskClaimAuthorityByAttemptId: new Map()
+    },
+    [responsibility]
+  ).transitions()
+
+  expect(transitions).toHaveLength(1)
+  expect(transitions[0]).toMatchObject({
+    _tag: "RecordInitialConclusiveIntegrationQuarantine",
+    responsibility,
+    result: {
+      _tag: "NotPrepared",
+      detail: notPreparedDetail,
+      run: { ordinal: IntegratorRunOrdinal.make(1), session: scenario.session }
+    }
+  })
+})
+
 it("starts one unchanged Retry run with the same session and fresh lineage position", () => {
   const scenario = retryHistory("ConclusiveResult", fixedHead)
   const transitions = transitionsFor(scenario)

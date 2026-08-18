@@ -15,6 +15,7 @@ import {
   OperationId,
   TargetLineageObservedEvent,
   WorkflowActor,
+  deriveIntegratorRunState,
   deriveIntegratorState,
   describeJournalEvent,
   makeTargetLineageObservationOperation,
@@ -224,6 +225,21 @@ const outcomeFor = (result: IntegratorCassettePublicResult): RecordedIntegratorO
   })
 }
 
+const currentStateFor = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: AuthoredIntegratorStartingFacts["responsibility"]
+) => {
+  const latestRun = records.reduce<
+    Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunStarted" }>["run"] | undefined
+  >((latest, record) => {
+    if (record.event._tag !== "IntegratorRunStarted") return latest
+    return latest === undefined || record.event.run.ordinal > latest.ordinal ? record.event.run : latest
+  }, undefined)
+  return latestRun === undefined
+    ? deriveIntegratorState(records, responsibility)
+    : deriveIntegratorRunState(records, responsibility, latestRun)
+}
+
 const runOne = Effect.fn("IntegratorCassette.runOne")(function* (runtime: IntegratorCassetteRuntime) {
   const result = yield* prepareIntegrationCandidate(runtime.input).pipe(
     Effect.result,
@@ -255,7 +271,7 @@ const terminalObservationFor = Effect.fn("IntegratorCassette.terminalObservation
     outcomes,
     recordedTags: recorded.entries.map(({ _tag }) => _tag),
     sessionIdPrefixes: sessionIds.map((session) => session.slice(0, "integrator-session:".length)),
-    stateTag: deriveIntegratorState(records, runtime.cassette.startingFacts.responsibility)._tag
+    stateTag: currentStateFor(records, runtime.cassette.startingFacts.responsibility)._tag
   })
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     return yield* Effect.die(
@@ -306,7 +322,7 @@ export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.run
     records,
     recorded,
     sessionIds: requests.map(({ correlation }) => correlation.sessionId),
-    state: deriveIntegratorState(records, cassette.startingFacts.responsibility)
+    state: currentStateFor(records, cassette.startingFacts.responsibility)
   })
 })
 

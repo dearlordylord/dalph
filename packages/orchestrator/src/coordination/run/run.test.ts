@@ -56,10 +56,12 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
         return Effect.succeed(finality)
       },
       operatorControl: {
+        applyIntegrationQuarantineDirection: () => Effect.die("unused"),
         applyAttemptChoice: () => Effect.die("unused"),
         applyControlDirection: () => Effect.die("unused"),
         applyTaskClaimReacquisition: () => Effect.die("unused"),
         readAttemptChoice: () => Effect.die("unused"),
+        readIntegrationQuarantineDirection: () => Effect.die("unused"),
         readTaskWorkCapacity: () => Effect.die("unused"),
         observePause: () => Stream.empty,
         setTaskWorkCapacity: () => Effect.die("unused")
