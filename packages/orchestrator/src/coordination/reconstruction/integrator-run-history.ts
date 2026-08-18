@@ -47,7 +47,7 @@ interface IntegratorRunHistoryValidationIndexes extends IntegratorRunHistoryInde
   readonly integratorResultsByStartedAt: Map<JournalPosition, PositionedIntegratorEvent<IntegratorResultRecorded>>
 }
 
-const integratorRunKey = (run: IntegratorRunCorrelation): string => integratorRunRecordKeyPrefix(run)
+const integratorRunKey = integratorRunRecordKeyPrefix
 
 const exactSessionForCorrelation = (
   correlation: IntegratorRunCorrelation["session"],

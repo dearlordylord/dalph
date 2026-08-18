@@ -765,6 +765,29 @@ type OuterIntegratorEvent = Extract<
   }
 >
 
+type UnsupportedRecordedEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "IntegrationProviderRunActivityAbsent"
+      | "IntegrationQuarantineDirectionApplied"
+      | "IntegrationQuarantined"
+      | "IntegratorRunCandidateGitObserved"
+      | "IntegratorRunCandidateGitReadIntended"
+      | "IntegratorRunResultRecorded"
+      | "IntegratorRunStarted"
+  }
+>
+
+const isUnsupportedRecordedEvent = (event: WorkflowJournalEvent): event is UnsupportedRecordedEvent =>
+  event._tag === "IntegrationProviderRunActivityAbsent" ||
+  event._tag === "IntegrationQuarantineDirectionApplied" ||
+  event._tag === "IntegrationQuarantined" ||
+  event._tag === "IntegratorRunCandidateGitObserved" ||
+  event._tag === "IntegratorRunCandidateGitReadIntended" ||
+  event._tag === "IntegratorRunResultRecorded" ||
+  event._tag === "IntegratorRunStarted"
+
 const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterIntegratorEvent =>
   event._tag === "IntegratorCandidateGitObserved" ||
   event._tag === "IntegratorCandidateGitReadIntended" ||
@@ -842,6 +865,9 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
       plannedAttempt: event.plannedAttempt,
       witness: event.witness
     }
+  }
+  if (isUnsupportedRecordedEvent(event)) {
+    return Effect.runSync(Effect.die(`recorded cassette cannot represent event ${event._tag}`))
   }
   return recordTaskBoundaryEntry(event)
 }

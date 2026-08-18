@@ -152,22 +152,6 @@ export const appendIntegratorRunStartedIfNeeded = Effect.fn("IntegratorProtocol.
   return appended
 })
 
-export const readRecordedIntegratorRunStarted = (
-  records: ReadonlyArray<JournalRecord>,
-  run: IntegratorRunCorrelation
-): Effect.Effect<Option.Option<JournalRecord>, IntegratorJournalContradiction> => {
-  const existing = integratorFindEventAtKey(records, integratorRunStartedRecordKey(run))
-  if (existing === undefined) return Effect.succeed(Option.none())
-  return runStartRecordMatches(existing, run) && existing.event._tag === "IntegratorRunStarted"
-    ? Effect.succeed(Option.some(existing))
-    : Effect.fail(
-        new IntegratorJournalContradiction({
-          detail: "run-start key contains a foreign event or precedes the fixed lineage",
-          runId: runIdForCorrelation(run.session)
-        })
-      )
-}
-
 export const integratorLineageIsCompatible = (input: IntegratorPreparationInput): boolean =>
   input.targetLineage.plannedBaseIsAncestorOfTargetHead &&
   input.targetLineage.plannedBaseSha === input.responsibility.plannedAttempt.baseSha

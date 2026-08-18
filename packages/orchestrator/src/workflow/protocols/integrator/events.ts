@@ -22,7 +22,7 @@ export const IntegratorNotPreparedDetail = Schema.NonEmptyString.pipe(Schema.bra
 export type IntegratorNotPreparedDetail = typeof IntegratorNotPreparedDetail.Type
 
 /** Exact facts that identify one outer-integrator session and its durable replay identity. */
-export const IntegratorSessionCorrelation = Schema.Struct({
+const IntegratorSessionCorrelation = Schema.Struct({
   acceptedResult: AcceptedResult,
   candidateResource: IntegratorCandidateResourceLocator,
   expectedTargetHead: GitCommitSha,
@@ -34,7 +34,7 @@ export const IntegratorSessionCorrelation = Schema.Struct({
   /** Position of the durable TargetLineageObserved fact that supplied H. */
   targetLineageObservedAt: JournalPosition
 })
-export type IntegratorSessionCorrelation = typeof IntegratorSessionCorrelation.Type
+type IntegratorSessionCorrelation = typeof IntegratorSessionCorrelation.Type
 
 /**
  * Compatibility name for the session-only correlation used by the original
@@ -56,10 +56,8 @@ export const IntegratorRunCorrelation = Schema.Struct({
 })
 export type IntegratorRunCorrelation = typeof IntegratorRunCorrelation.Type
 
-const integratorSessionCorrelationEquivalence = Schema.toEquivalence(IntegratorSessionCorrelation)
 const integratorRunCorrelationEquivalence = Schema.toEquivalence(IntegratorRunCorrelation)
 
-export const integratorSessionCorrelationsEqual = integratorSessionCorrelationEquivalence
 export const integratorRunCorrelationsEqual = integratorRunCorrelationEquivalence
 
 /** Responsibility facts flattened into the correlation without importing admission protocol code. */

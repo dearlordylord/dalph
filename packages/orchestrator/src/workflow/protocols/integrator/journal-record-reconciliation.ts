@@ -93,10 +93,10 @@ export const runObservationFromAppendedRecord = (
   return Effect.succeed(record.event.observation)
 }
 
-export const integratorRunMatches = (left: IntegratorRunCorrelation, right: IntegratorRunCorrelation): boolean =>
+const integratorRunMatches = (left: IntegratorRunCorrelation, right: IntegratorRunCorrelation): boolean =>
   left.ordinal === right.ordinal && integratorCorrelationsEqual(left.session, right.session)
 
-export const readRecordedRunGitObservation = (
+const readRecordedRunGitObservation = (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation,
   candidateText: IntegratorCandidateText
@@ -158,7 +158,7 @@ export const appendRunGitReadIntentIfNeeded = Effect.fn("IntegratorProtocol.appe
   return appended
 })
 
-export const readRunGitReadIntent = (
+const readRunGitReadIntent = (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation,
   candidateText: IntegratorCandidateText
@@ -180,7 +180,7 @@ export const readRunGitReadIntent = (
   return Effect.succeed(true)
 }
 
-export const readRecordedResult = (
+const readRecordedResult = (
   records: ReadonlyArray<JournalRecord>,
   correlation: IntegratorCorrelation
 ): Effect.Effect<Option.Option<IntegratorResult>, IntegratorJournalContradiction> => {
@@ -205,7 +205,7 @@ export const readRecordedResult = (
   return Effect.succeed(Option.some(existing.event.result))
 }
 
-export const readRecordedGitObservation = (
+const readRecordedGitObservation = (
   records: ReadonlyArray<JournalRecord>,
   correlation: IntegratorCorrelation,
   candidateText: IntegratorCandidateText
@@ -243,7 +243,7 @@ export const readRecordedGitObservation = (
   return Effect.succeed(Option.some(existing.event.observation))
 }
 
-export const readGitReadIntent = (
+const readGitReadIntent = (
   records: ReadonlyArray<JournalRecord>,
   correlation: IntegratorCorrelation,
   candidateText: IntegratorCandidateText
@@ -318,7 +318,7 @@ const previousRunHasDurableResult = (
   )
 }
 
-export const previousRunIsDurablyConclusive = (
+const previousRunIsDurablyConclusive = (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation
 ): boolean => {
