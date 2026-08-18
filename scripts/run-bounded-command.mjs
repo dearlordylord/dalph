@@ -22,6 +22,7 @@ export const runBoundedCommand = ({
   acceptedExitCodes = [0],
   args,
   captureOutput = false,
+  environment,
   executable,
   forwardOutput = true,
   name,
@@ -31,6 +32,7 @@ export const runBoundedCommand = ({
   new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       detached: process.platform !== "win32",
+      env: environment,
       stdio: ["inherit", "pipe", "pipe"]
     })
     const stdoutLineCounter = { endsWithLineBreak: true, lineBreaks: 0, wasWritten: false }

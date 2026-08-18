@@ -45,6 +45,20 @@ test("captures output and an accepted nonzero exit for verdict inspection", asyn
   expect(result).toEqual({ exitCode: 7, output: "verdict", outputLineCount: 1 })
 })
 
+test("passes a controlled environment to the bounded child", async () => {
+  const result = await runBoundedCommand({
+    args: ["-e", "process.stdout.write(process.env.DALPH_BOUNDED_COMMAND_FIXTURE ?? 'absent')"],
+    captureOutput: true,
+    environment: { ...process.env, DALPH_BOUNDED_COMMAND_FIXTURE: "present" },
+    executable: process.execPath,
+    forwardOutput: false,
+    name: "environment fixture",
+    timeoutMilliseconds: 2000
+  })
+
+  expect(result).toEqual({ exitCode: 0, output: "present", outputLineCount: 1 })
+})
+
 test.skipIf(process.platform === "win32")(
   "kills a resistant descendant after the process-group leader exits",
   async () => {

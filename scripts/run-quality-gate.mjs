@@ -5,6 +5,10 @@ const SECOND = 1_000
 const maximumSuccessfulOutputLines = 400
 const pnpmEntryPoint = process.env.npm_execpath
 const withoutQuint = process.argv.includes("--without-quint")
+const testEnvironment = {
+  ...process.env,
+  NODE_OPTIONS: [process.env.NODE_OPTIONS, "--disable-warning=ExperimentalWarning"].filter(Boolean).join(" ")
+}
 
 if (pnpmEntryPoint === undefined) {
   throw new Error("Run the quality gate through pnpm so its executable can be resolved safely")
@@ -23,7 +27,7 @@ const gates = [
   ...(withoutQuint
     ? []
     : [{ args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 5 * 60 * SECOND }]),
-  { args: ["test:coverage"], name: "tests and coverage", timeout: 5 * 60 * SECOND },
+  { args: ["test:coverage"], environment: testEnvironment, name: "tests and coverage", timeout: 5 * 60 * SECOND },
   { args: ["check:secrets"], name: "secret scan", timeout: 5 * 60 * SECOND }
 ]
 
@@ -32,6 +36,7 @@ let successfulOutputLines = 0
 for (const gate of gates) {
   const result = await runBoundedCommand({
     args: [pnpmEntryPoint, ...gate.args],
+    environment: gate.environment,
     executable: process.execPath,
     name: `Quality gate '${gate.name}'`,
     timeoutMilliseconds: gate.timeout
