@@ -30,7 +30,11 @@ import {
   type CodexAttemptStoreService,
   memoryCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
-import { nodeCodexProcessNativeLayer } from "./codex-process-native.js"
+import {
+  controlledCodexProcessNativeLayer,
+  nodeCodexProcessNativeLayer,
+  nodeCodexProcessNativeService
+} from "./codex-process-native.js"
 
 const codexAppServerLayer = (config?: Parameters<typeof rawCodexAppServerLayer>[0]) =>
   rawCodexAppServerLayer(config).pipe(Layer.provide(nodeCodexProcessNativeLayer))
@@ -529,12 +533,11 @@ it.effect("fails initialization closed when the server identity contradicts the 
   )
 )
 
-it.effect("fails closed before starting an app-server on an unsupported host", () => {
-  const originalPlatform = nodeProcess.platform
-  Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "darwin" })
-  return Effect.scoped(
+it.effect("fails closed before starting an app-server on an unsupported host", () =>
+  Effect.scoped(
     Effect.gen(function* () {
-      const appLayer = codexAppServerLayer().pipe(
+      const appLayer = rawCodexAppServerLayer().pipe(
+        Layer.provide(controlledCodexProcessNativeLayer({ ...nodeCodexProcessNativeService, platform: "darwin" })),
         Layer.provide(
           controlledCodexProcessOwnershipLayer({
             observe: () => Effect.succeed({ _tag: "Absent" as const }),
@@ -550,12 +553,8 @@ it.effect("fails closed before starting an app-server on an unsupported host", (
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
       expect(Exit.isSuccess(result)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
-  ).pipe(
-    Effect.ensuring(
-      Effect.sync(() => Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform }))
-    )
   )
-})
+)
 
 it.effect("fails closed when the recorded launch command cannot identify app-server", () =>
   Effect.forEach([["fixture-codex"] as const, ["fixture-codex", "not-app-server"] as const], (command) =>
