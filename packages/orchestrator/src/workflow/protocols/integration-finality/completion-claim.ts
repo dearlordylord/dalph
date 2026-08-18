@@ -5,7 +5,11 @@ import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
-import { TargetPromotionCorrelation, targetPromotionCorrelationEquals } from "../target-promotion/events.js"
+import {
+  TargetPromotionCorrelation,
+  targetPromotionCorrelationEquals,
+  targetPromotionPlannedAttemptOf
+} from "../target-promotion/events.js"
 
 /** A temporary tracker record that binds task completion to one promoted Integrator candidate. */
 export const CompletionTaskClaim = Schema.TaggedStruct("CompletionTaskClaim", {
@@ -14,15 +18,11 @@ export const CompletionTaskClaim = Schema.TaggedStruct("CompletionTaskClaim", {
   promotionCorrelation: TargetPromotionCorrelation
 }).check(
   Schema.makeFilter((claim) => {
-    const promotionAttempt = claim.promotionCorrelation.qualifiedCandidate.correlation.plannedAttempt.attemptId
-    const promotionRun = claim.promotionCorrelation.qualifiedCandidate.correlation.plannedAttempt.runId
-    const promotionAttemptMatches = plannedTaskAttemptEquivalence(
-      claim.promotionCorrelation.qualifiedCandidate.correlation.plannedAttempt,
-      claim.plannedAttempt
-    )
+    const promotionAttempt = targetPromotionPlannedAttemptOf(claim.promotionCorrelation)
+    const promotionAttemptMatches = plannedTaskAttemptEquivalence(promotionAttempt, claim.plannedAttempt)
     return claim.originalClaim.taskId === claim.plannedAttempt.taskId &&
-      promotionAttempt === claim.plannedAttempt.attemptId &&
-      promotionRun === claim.plannedAttempt.runId &&
+      promotionAttempt.attemptId === claim.plannedAttempt.attemptId &&
+      promotionAttempt.runId === claim.plannedAttempt.runId &&
       promotionAttemptMatches
       ? undefined
       : "completion claim must bind its original claim, planned attempt, and promotion to one task attempt"

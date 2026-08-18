@@ -58,7 +58,7 @@ import {
   integratorRunCorrelationForSession,
   readRecordedIntegratorSession
 } from "./session.js"
-import { integratorRunQualifiedCandidateFromState } from "./state.js"
+import { deriveCurrentIntegratorState, integratorRunQualifiedCandidateFromState } from "./state.js"
 import { integratorRunTwoAuthorizationIssue } from "./retry-authorization.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -524,6 +524,7 @@ describe("outer Integrator protocol", () => {
       const gitCalls = yield* Ref.get(harness.gitCalls)
       const records = yield* harness.readRecords
       const state = initialRunState(records, compatibleInput())
+      const current = deriveCurrentIntegratorState(records, responsibility)
 
       expect(result._tag).toBe("PreparedCandidate")
       expect(replay._tag).toBe("PreparedCandidate")
@@ -532,6 +533,8 @@ describe("outer Integrator protocol", () => {
       expect(calls).toHaveLength(1)
       expect(gitCalls).toBe(1)
       expect(state._tag).toBe("GitQualifiedPrepared")
+      expect(current._tag).toBe("GitQualifiedPrepared")
+      expect(current._tag === "GitQualifiedPrepared" ? current.run.ordinal : undefined).toBe(1)
       if (state._tag !== "GitQualifiedPrepared") return yield* Effect.die("expected Git-qualified state")
       const qualified = integratorRunQualifiedCandidateFromState(state)
       const gitObservation = records.findLast(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
@@ -700,6 +703,7 @@ describe("outer Integrator protocol", () => {
               : record
           )
       )
+      expect(deriveCurrentIntegratorState(yield* harness.readRecords, responsibility)._tag).toBe("Contradiction")
 
       const retried = yield* harness.runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
 

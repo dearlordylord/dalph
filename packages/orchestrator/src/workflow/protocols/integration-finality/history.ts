@@ -15,7 +15,7 @@ import {
   type CompletionTaskClaim,
   type CompletionSuccessObservation
 } from "./events.js"
-import { targetPromotionCorrelationEquals } from "../target-promotion/events.js"
+import { targetPromotionCorrelationEquals, targetPromotionRunIdOf } from "../target-promotion/events.js"
 import { causalPredecessorOperationIds } from "../../causal-history.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { isExactTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
@@ -327,7 +327,7 @@ const isIntegrationFinalityEvent = (event: WorkflowJournalEvent): event is Integ
 const integrationFinalityEventBindsRun = (event: IntegrationFinalityEvent, runId: RunId): boolean =>
   [
     event.claim.plannedAttempt.runId === runId,
-    event.claim.promotionCorrelation.qualifiedCandidate.correlation.plannedAttempt.runId === runId
+    targetPromotionRunIdOf(event.claim.promotionCorrelation) === runId
   ].every(Boolean)
 
 const invalidDeletionRead = (

@@ -37,8 +37,8 @@ import { taskTrackerReadIntent, TaskAttemptPlannedEvent, TaskClaimAcquiredEvent 
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCorrelation,
-  IntegratorQualifiedCandidate,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
   IntegratorSessionId
 } from "../integrator/events.js"
 import {
@@ -92,7 +92,7 @@ export const integrationFinalityFixture = (() => {
     worktree: WorktreeLocator.make("/worktrees/integration-finality")
   })
   const acceptedResult = AcceptedResult.make({ commit: acceptedResultCommit, evidenceManifest: acceptedResultEvidence })
-  const integratorCorrelation = IntegratorCorrelation.make({
+  const integratorSession = {
     acceptedResult,
     candidateResource: IntegratorCandidateResourceLocator.make("/candidate/integration-finality"),
     expectedTargetHead,
@@ -102,13 +102,13 @@ export const integrationFinalityFixture = (() => {
     sessionId: IntegratorSessionId.make("integration-finality-session"),
     startedAt: JournalPosition.make(integratorStartedPosition),
     targetLineageObservedAt: JournalPosition.make(targetLineageObservedPosition)
-  })
-  const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+  }
+  const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
     candidateCommit,
     candidateText: IntegratorCandidateText.make("refs/heads/integration-finality-candidate"),
-    correlation: integratorCorrelation,
     directParents: [expectedTargetHead, acceptedResultCommit],
-    qualifiedAt: JournalPosition.make(constructedPosition)
+    qualifiedAt: JournalPosition.make(constructedPosition),
+    run: { ordinal: IntegratorRunOrdinal.make(1), session: integratorSession }
   })
   const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
   const activeClaim = ActiveTaskClaim.make({

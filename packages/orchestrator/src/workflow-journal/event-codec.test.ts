@@ -43,9 +43,9 @@ it.effect("round-trips the outer Integrator session with its exact causal identi
     const fixture = integrationFinalityFixture
     const event = IntegratorSessionFixedEvent.make({
       correlation: IntegratorCorrelation.make({
-        acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
+        acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult,
         candidateResource: IntegratorCandidateResourceLocator.make("resource:event-codec-integrator"),
-        expectedTargetHead: fixture.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead,
+        expectedTargetHead: fixture.promotionCorrelation.qualifiedCandidate.run.session.expectedTargetHead,
         integrationTarget: fixture.integrationTarget,
         plannedAttempt: fixture.plannedAttempt,
         queuedAt: JournalPosition.make(7),

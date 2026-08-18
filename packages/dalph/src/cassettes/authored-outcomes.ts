@@ -1,6 +1,6 @@
 import { Effect, Match, Option, Schema } from "effect"
 import { type AttemptId, type PlannedAttemptExecutorReport, type TaskId } from "@dalph/contracts"
-import { type JournalRecord } from "@dalph/orchestrator"
+import { type JournalRecord, targetPromotionExpectedHeadOf, targetPromotionPlannedAttemptOf } from "@dalph/orchestrator"
 import {
   AuthoredExpectedBehavior,
   AuthoredObservedBehavior,
@@ -309,9 +309,8 @@ const targetPromotionEvidenceFor = (
   event: TargetPromotionEvidenceEvent,
   taskByAttempt: ReadonlyMap<AttemptId, TaskId>
 ): ReadonlyArray<OrchestrationEvidence> => {
-  const taskId = Option.getOrThrow(
-    Option.fromUndefinedOr(taskByAttempt.get(event.correlation.qualifiedCandidate.correlation.plannedAttempt.attemptId))
-  )
+  const plannedAttempt = targetPromotionPlannedAttemptOf(event.correlation)
+  const taskId = Option.getOrThrow(Option.fromUndefinedOr(taskByAttempt.get(plannedAttempt.attemptId)))
   return Match.value(event).pipe(
     Match.tagsExhaustive({
       TargetPromotionObservedSuccess: (event): ReadonlyArray<OrchestrationEvidence> => [
@@ -319,7 +318,7 @@ const targetPromotionEvidenceFor = (
           _tag: "TargetPromotionSucceeded",
           basis: event.basis,
           candidateCommit: event.correlation.qualifiedCandidate.candidateCommit,
-          expectedTargetHead: event.correlation.qualifiedCandidate.correlation.expectedTargetHead,
+          expectedTargetHead: targetPromotionExpectedHeadOf(event.correlation),
           observedTargetHead: event.observation.targetHeadSha,
           observation: event.observation._tag,
           taskId
@@ -339,7 +338,7 @@ const targetPromotionEvidenceFor = (
           _tag: "TargetPromotionStale",
           basis: event.basis,
           candidateCommit: event.correlation.qualifiedCandidate.candidateCommit,
-          expectedTargetHead: event.correlation.qualifiedCandidate.correlation.expectedTargetHead,
+          expectedTargetHead: targetPromotionExpectedHeadOf(event.correlation),
           observedTargetHead: event.observation.observedHeadSha,
           observation: event.observation._tag,
           taskId

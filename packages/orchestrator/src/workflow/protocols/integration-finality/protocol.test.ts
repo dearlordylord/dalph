@@ -17,6 +17,8 @@ import {
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import { describeJournalEvent } from "../../registry/event-descriptor.js"
+import { IntegratorRunOrdinal, IntegratorRunQualifiedCandidate } from "../integrator/events.js"
+import { TargetPromotionObservedSuccessEvent, targetPromotionCorrelationFor } from "../target-promotion/events.js"
 import {
   CompletionClaimBoundary,
   CompletionClaimDeletionAttemptIntendedEvent,
@@ -340,8 +342,9 @@ const runWith = <A, E>(effect: Effect.Effect<A, E, InRunJournal>, records: Ref.R
 
 const tags = (records: ReadonlyArray<JournalRecord>) => records.map(({ event }) => event._tag)
 
-it.effect("requires exact promotion success before replacing the active claim", () =>
+it.effect("requires exact promotion success and Integrator run before replacing the active claim", () =>
   Effect.gen(function* () {
+    expect(fixture.promotionCorrelation.qualifiedCandidate.run.ordinal).toBe(IntegratorRunOrdinal.make(1))
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
@@ -356,6 +359,28 @@ it.effect("requires exact promotion success before replacing the active claim", 
     expect(failure).toBeInstanceOf(CompletionClaimPromotionRequired)
     expect(yield* Ref.get(replacementCalls)).toBe(0)
     expect(yield* Ref.get(records)).toEqual([])
+
+    const foreignCandidate = IntegratorRunQualifiedCandidate.make({
+      ...fixture.qualifiedCandidate,
+      run: { ...fixture.qualifiedCandidate.run, ordinal: IntegratorRunOrdinal.make(2) }
+    })
+    const foreignPromotion = TargetPromotionObservedSuccessEvent.make({
+      ...fixture.promotionSuccess,
+      correlation: targetPromotionCorrelationFor(foreignCandidate)
+    })
+    const foreignRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+      recordOf(1, targetPromotionObservedSuccessRecordKey(foreignPromotion.correlation.requestId), foreignPromotion)
+    ])
+    const foreignFailure = yield* runWith(
+      runCompletionClaimReplacementProtocol(
+        makeBoundary({ initial: [fixture.activeClaim], replacementCalls, deletionCalls, readCalls }),
+        { claim: fixture.claim, operationId: replacementOperationFor(fixture.claim) }
+      ).pipe(Effect.flip),
+      foreignRecords
+    )
+    expect(foreignFailure).toBeInstanceOf(CompletionClaimPromotionRequired)
+    expect(yield* Ref.get(replacementCalls)).toBe(0)
+    expect(yield* Ref.get(foreignRecords)).toHaveLength(1)
   })
 )
 

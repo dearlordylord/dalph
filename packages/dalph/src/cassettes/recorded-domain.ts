@@ -56,6 +56,7 @@ import {
   IntegratorCorrelation,
   IntegratorGitObservation,
   IntegratorResult,
+  IntegratorRunCorrelation,
   EvidenceReference,
   TargetVerificationCorrelation,
   TargetVerificationOutcome,
@@ -167,6 +168,15 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     candidateText: IntegratorCandidateText,
     correlation: IntegratorCorrelation,
     observation: IntegratorGitObservation
+  },
+  /** Run-scoped Integrator facts retain the exact run ordinal and owning session. */
+  IntegratorRunStarted: { run: IntegratorRunCorrelation },
+  IntegratorRunResultRecorded: { result: IntegratorResult, run: IntegratorRunCorrelation },
+  IntegratorRunCandidateGitReadIntended: { candidateText: IntegratorCandidateText, run: IntegratorRunCorrelation },
+  IntegratorRunCandidateGitObserved: {
+    candidateText: IntegratorCandidateText,
+    observation: IntegratorGitObservation,
+    run: IntegratorRunCorrelation
   },
   IntegrationCandidateConstructionIntended: {
     correlation: IntegrationCandidateCorrelation,

@@ -89,7 +89,8 @@ import { TargetPromotionPendingRetry, TargetPromotionState } from "../../workflo
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorQualifiedCandidate,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
   IntegratorSessionId
 } from "../../workflow/protocols/integrator/events.js"
 import {
@@ -677,19 +678,22 @@ it.effect("updates Alice's public task Pause view as accepted executor and Git f
         startedAt: JournalPosition.make(41)
       })
       const candidateCommit = GitCommitSha.make("4".repeat(40))
-      const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+      const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
         candidateCommit,
         candidateText: IntegratorCandidateText.make("refs/candidates/pause-public-D"),
-        correlation: {
-          acceptedResult: integration.acceptedResult,
-          candidateResource: IntegratorCandidateResourceLocator.make("resource:pause-public-D"),
-          expectedTargetHead: dAttempt.baseSha,
-          integrationTarget: integration.integrationTarget,
-          plannedAttempt: dAttempt,
-          queuedAt: integration.queuedAt,
-          sessionId: IntegratorSessionId.make("session:pause-public-D"),
-          startedAt: integration.startedAt,
-          targetLineageObservedAt: JournalPosition.make(39)
+        run: {
+          ordinal: IntegratorRunOrdinal.make(1),
+          session: {
+            acceptedResult: integration.acceptedResult,
+            candidateResource: IntegratorCandidateResourceLocator.make("resource:pause-public-D"),
+            expectedTargetHead: dAttempt.baseSha,
+            integrationTarget: integration.integrationTarget,
+            plannedAttempt: dAttempt,
+            queuedAt: integration.queuedAt,
+            sessionId: IntegratorSessionId.make("session:pause-public-D"),
+            startedAt: integration.startedAt,
+            targetLineageObservedAt: JournalPosition.make(39)
+          }
         },
         directParents: [dAttempt.baseSha, integration.acceptedResult.commit],
         qualifiedAt: JournalPosition.make(42)

@@ -39,7 +39,7 @@ import {
   TargetPromotionJournalEvent,
   type TargetPromotionGitRequest
 } from "./events.js"
-import type { IntegratorQualifiedCandidate } from "../integrator/events.js"
+import type { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 import {
   deriveTargetPromotionState,
   targetPromotionCorrelationConflictFor,
@@ -339,7 +339,9 @@ const runPending = Effect.fn("TargetPromotion.runPending")(function* (
 })
 
 /** Performs at most one compare-and-set and one reconciliation read for one Integrator-qualified candidate. */
-export const runTargetPromotion = Effect.fn("TargetPromotion.run")(function* (candidate: IntegratorQualifiedCandidate) {
+export const runTargetPromotion = Effect.fn("TargetPromotion.run")(function* (
+  candidate: IntegratorRunQualifiedCandidate
+) {
   const request = targetPromotionCorrelationFor(candidate)
   const journal = yield* InRunJournal
   const records = yield* journal.read(targetPromotionRunIdOf(request))
@@ -378,7 +380,7 @@ const promotionStateByPrefix = new WeakMap<ReadonlyArray<JournalOccurrence>, Arr
 
 export const deriveTargetPromotionStateFor = (
   records: ReadonlyArray<JournalOccurrence>,
-  candidate: IntegratorQualifiedCandidate
+  candidate: IntegratorRunQualifiedCandidate
 ): TargetPromotionState | undefined => {
   const request = targetPromotionCorrelationFor(candidate)
   const cachedByRequest = promotionStateByPrefix.get(records)

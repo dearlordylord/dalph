@@ -51,7 +51,7 @@ import { integrationFinalityExplanationFor } from "./integration-finality-fronti
 
 const fixture = integrationFinalityFixture
 const responsibility = StartedIntegrationResponsibility.make({
-  acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
+  acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult,
   integrationTarget: fixture.integrationTarget,
   plannedAttempt: fixture.plannedAttempt,
   queuedAt: JournalPosition.make(4),
@@ -523,7 +523,7 @@ describe("#141 integration-finality frontier", () => {
     }
     const acceptedA = responsibility.acceptedResult
     const acceptedB = acceptedResultFixture(
-      fixture.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead
+      fixture.promotionCorrelation.qualifiedCandidate.run.session.expectedTargetHead
     )
     const queueA = IntegrationResponsibilityBeganEvent.make({
       acceptedResult: acceptedA,

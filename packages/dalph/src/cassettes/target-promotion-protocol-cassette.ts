@@ -21,7 +21,9 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorCorrelation,
-  IntegratorQualifiedCandidate,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
   IntegratorSessionId,
   JournalPosition,
   JournalRecord,
@@ -83,22 +85,23 @@ const preparedPromotion = (participant: PromotionParticipant) => {
     taskRevision: TaskRevision.make(`target-promotion-protocol-revision-${owner}`),
     worktree: WorktreeLocator.make(`/worktrees/target-promotion-protocol-${owner.toLowerCase()}`)
   })
-  const candidate = IntegratorQualifiedCandidate.make({
+  const correlation = IntegratorCorrelation.make({
+    acceptedResult,
+    candidateResource: IntegratorCandidateResourceLocator.make(`/candidates/${owner}`),
+    expectedTargetHead: expectedHead,
+    integrationTarget: target,
+    plannedAttempt,
+    queuedAt,
+    sessionId: IntegratorSessionId.make(`target-promotion-protocol-session-${owner}`),
+    startedAt: JournalPosition.make(queuedAt + targetLineagePositionOffset),
+    targetLineageObservedAt: JournalPosition.make(queuedAt + targetLineagePositionOffset)
+  })
+  const candidate = IntegratorRunQualifiedCandidate.make({
     candidateCommit,
     candidateText: IntegratorCandidateText.make(`refs/heads/target-promotion-protocol-${owner.toLowerCase()}`),
-    correlation: IntegratorCorrelation.make({
-      acceptedResult,
-      candidateResource: IntegratorCandidateResourceLocator.make(`/candidates/${owner}`),
-      expectedTargetHead: expectedHead,
-      integrationTarget: target,
-      plannedAttempt,
-      queuedAt,
-      sessionId: IntegratorSessionId.make(`target-promotion-protocol-session-${owner}`),
-      startedAt: JournalPosition.make(queuedAt + targetLineagePositionOffset),
-      targetLineageObservedAt: JournalPosition.make(queuedAt + targetLineagePositionOffset)
-    }),
     directParents: [expectedHead, acceptedResult.commit],
-    qualifiedAt: JournalPosition.make(queuedAt + candidateConstructedPositionOffset)
+    qualifiedAt: JournalPosition.make(queuedAt + candidateConstructedPositionOffset),
+    run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
   })
   return { candidate, responsibility: { integrationTarget: target, queuedAt }, runId }
 }

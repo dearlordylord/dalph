@@ -47,7 +47,9 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorCorrelation,
-  IntegratorQualifiedCandidate,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
   IntegratorSessionId,
   JournalPosition,
   JournalRecord,
@@ -132,12 +134,12 @@ const makePreparedFinality = Effect.fn("IntegrationFinalityProtocolCassette.make
       startedAt: JournalPosition.make(integratorStartedPosition),
       targetLineageObservedAt: JournalPosition.make(integratorStartedPosition)
     })
-    const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+    const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
       candidateCommit,
       candidateText: IntegratorCandidateText.make("refs/heads/integration-finality-protocol-candidate"),
-      correlation: integratorCorrelation,
       directParents: [expectedTargetHead, acceptedResult.commit],
-      qualifiedAt: JournalPosition.make(candidateConstructedPosition)
+      qualifiedAt: JournalPosition.make(candidateConstructedPosition),
+      run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: integratorCorrelation })
     })
     const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
     const activeClaim = ActiveTaskClaim.make({
@@ -208,7 +210,7 @@ const initialRecordsFor = (prepared: PreparedFinality) => {
 const promotedPlanFor = (records: ReadonlyArray<JournalRecord>) => {
   const promotion = records.findLast(({ event }) => event._tag === "TargetPromotionObservedSuccess")?.event
   if (promotion?._tag !== "TargetPromotionObservedSuccess") return undefined
-  const promotedAttempt = promotion.correlation.qualifiedCandidate.correlation.plannedAttempt
+  const promotedAttempt = promotion.correlation.qualifiedCandidate.run.session.plannedAttempt
   const planned = records
     .flatMap(({ event }) =>
       event._tag === "TaskAttemptPlanned"

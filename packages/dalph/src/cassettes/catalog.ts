@@ -2972,30 +2972,33 @@ const pauseExecutorAndPromotionRequestD = {
   qualifiedCandidate: {
     candidateCommit: promotionCandidateCommit,
     candidateText: "refs/heads/pause-boundaries-candidate",
-    correlation: {
-      acceptedResult: pauseExecutorAndPromotionAcceptedResult,
-      candidateResource: `integrator-resource:${pauseExecutorAndPromotionSessionSuffix}`,
-      expectedTargetHead: promotionExpectedHead,
-      integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
-      plannedAttempt: {
-        attemptId: "attempt:D:0",
-        baseSha: promotionExpectedHead,
-        branch: "refs/heads/dalph/attempt-D-0",
-        executor: "executor:cassette",
-        runId: "$authored-run",
-        taskId: "D",
-        taskRevision: "tr1.eyJib2R5IjoiUHJvZHVjZSBEJ3MgYWNjZXB0ZWQgY29tbWl0LiIsInRpdGxlIjoiSW50ZWdyYXRlIEQifQ",
-        worktree: "/dalph/cassettes/pause-boundaries/attempt-D-0"
-      },
-      queuedAt: 22,
-      sessionId: `integrator-session:${pauseExecutorAndPromotionSessionSuffix}`,
-      startedAt: 23,
-      targetLineageObservedAt: 27
+    run: {
+      ordinal: 1,
+      session: {
+        acceptedResult: pauseExecutorAndPromotionAcceptedResult,
+        candidateResource: `integrator-resource:${pauseExecutorAndPromotionSessionSuffix}`,
+        expectedTargetHead: promotionExpectedHead,
+        integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
+        plannedAttempt: {
+          attemptId: "attempt:D:0",
+          baseSha: promotionExpectedHead,
+          branch: "refs/heads/dalph/attempt-D-0",
+          executor: "executor:cassette",
+          runId: "$authored-run",
+          taskId: "D",
+          taskRevision: "tr1.eyJib2R5IjoiUHJvZHVjZSBEJ3MgYWNjZXB0ZWQgY29tbWl0LiIsInRpdGxlIjoiSW50ZWdyYXRlIEQifQ",
+          worktree: "/dalph/cassettes/pause-boundaries/attempt-D-0"
+        },
+        queuedAt: 22,
+        sessionId: `integrator-session:${pauseExecutorAndPromotionSessionSuffix}`,
+        startedAt: 23,
+        targetLineageObservedAt: 27
+      }
     },
     directParents: [promotionExpectedHead, pauseExecutorAndPromotionAcceptedResult.commit],
     qualifiedAt: 31
   },
-  requestId: `target-promotion:integrator-session:${pauseExecutorAndPromotionSessionSuffix}:${promotionCandidateCommit}`
+  requestId: `target-promotion:integrator-session:${pauseExecutorAndPromotionSessionSuffix}:1:${promotionCandidateCommit}`
 } as const
 
 const pauseExecutorAndPromotionSuspendA = {
@@ -3102,7 +3105,7 @@ const pauseExecutorAtBoundaryAndPromotionWaiting = (promotionBlockers: ReadonlyA
 
 const targetPromotionSuccessTailForD = [
   { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:0", taskId: "D" } },
-  { _tag: "IntegratorRequestReceived", correlation: pauseExecutorAndPromotionRequestD.qualifiedCandidate.correlation },
+  { _tag: "IntegratorRequestReceived", correlation: pauseExecutorAndPromotionRequestD.qualifiedCandidate.run.session },
   {
     _tag: "IntegratorResultReturned",
     result: { _tag: "PreparedCandidate", candidateText: "refs/heads/pause-boundaries-candidate" }

@@ -92,7 +92,7 @@ candidate, session, claim, or request.
 - `packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts::successful preparation returns only the Git-qualified canonical M`
 - `packages/dalph/test/cassettes/scenario.test.ts::records one outer Integrator result and exact Git parents for M`
 - `packages/dalph/test/cassettes/scenario.test.ts::promotes Git-qualified M by exact compare-and-set and records exact ancestry`
-- `packages/orchestrator/src/workflow/protocols/integration-finality/protocol.test.ts::requires exact promotion success before replacing the active claim`
+- `packages/orchestrator/src/workflow/protocols/integration-finality/protocol.test.ts::requires exact promotion success and Integrator run before replacing the active claim`
 - `packages/dalph/test/cassettes/scenario.test.ts::replaces the exact active claim with a promotion-bound completion claim`
 - `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::completes exact A only after current authorization and durable request intents`
 - `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::rereads accepted-result and Integrator-returned evidence before task completion`

@@ -2,10 +2,12 @@
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
-import { integratorCandidateRecordKeyPrefix } from "../../workflow-journal/record-key.js"
-import { integratorCandidateHasExactParents } from "../../workflow/protocols/integrator/events.js"
-import type { IntegratorQualifiedCandidate } from "../../workflow/protocols/integrator/events.js"
-import { integratorCorrelationsEqual } from "../../workflow/protocols/integrator/state.js"
+import { integratorRunCandidateRecordKeyPrefix } from "../../workflow-journal/record-key.js"
+import {
+  integratorCandidateHasExactParents,
+  integratorRunCorrelationsEqual,
+  type IntegratorRunQualifiedCandidate
+} from "../../workflow/protocols/integrator/events.js"
 import {
   targetPromotionAttemptLimit,
   targetPromotionCorrelationEquals,
@@ -13,15 +15,18 @@ import {
   type TargetPromotionRequestId
 } from "../../workflow/protocols/target-promotion/events.js"
 
-type IntegratorQualifiedObservation = ReadonlyMap<
+type IntegratorRunQualifiedObservation = ReadonlyMap<
   string,
   {
-    readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorCandidateGitObserved" }>
+    readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunCandidateGitObserved" }>
     readonly position: JournalPosition
   }
 >
 
-type QualifiedCandidateObservation = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorCandidateGitObserved" }>
+type QualifiedCandidateObservation = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "IntegratorRunCandidateGitObserved" }
+>
 
 export interface TargetPromotionHistoryIndexes {
   readonly intents: Map<
@@ -43,10 +48,10 @@ export const makeTargetPromotionHistoryIndexes = (): TargetPromotionHistoryIndex
 
 const exactQualifiedCandidatePrior = (
   record: JournalRecord,
-  candidate: IntegratorQualifiedCandidate,
-  observations: IntegratorQualifiedObservation
+  candidate: IntegratorRunQualifiedCandidate,
+  observations: IntegratorRunQualifiedObservation
 ): boolean => {
-  const key = integratorCandidateRecordKeyPrefix(candidate.correlation, candidate.candidateText)
+  const key = integratorRunCandidateRecordKeyPrefix(candidate.run, candidate.candidateText)
   const observed = observations.get(key)
   if (observed === undefined) return false
   if (observed.position !== candidate.qualifiedAt) return false
@@ -55,18 +60,18 @@ const exactQualifiedCandidatePrior = (
 }
 
 const exactQualifiedCandidateObservationFor = (
-  candidate: IntegratorQualifiedCandidate,
+  candidate: IntegratorRunQualifiedCandidate,
   event: QualifiedCandidateObservation
 ): boolean => {
-  if (!integratorCorrelationsEqual(event.correlation, candidate.correlation)) return false
+  if (!integratorRunCorrelationsEqual(event.run, candidate.run)) return false
   if (event.candidateText !== candidate.candidateText) return false
   if (event.observation._tag !== "Commit") return false
   return (
     event.observation.commit === candidate.candidateCommit &&
     integratorCandidateHasExactParents(
       event.observation,
-      candidate.correlation.expectedTargetHead,
-      candidate.correlation.acceptedResult.commit
+      candidate.run.session.expectedTargetHead,
+      candidate.run.session.acceptedResult.commit
     ) &&
     event.observation.directParents[0] === candidate.directParents[0] &&
     event.observation.directParents[1] === candidate.directParents[1]
@@ -78,7 +83,7 @@ const invalidTargetPromotionIntent = (
   record: JournalRecord,
   event: Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionIntended" }>,
   indexes: TargetPromotionHistoryIndexes,
-  integratorObservations: IntegratorQualifiedObservation
+  integratorObservations: IntegratorRunQualifiedObservation
 ): string | undefined => {
   const correlation = event.correlation
   const candidate = correlation.qualifiedCandidate
@@ -107,7 +112,7 @@ const promotionAttemptsFor = (
 type PromotionAttempt = Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionAttemptIntended" }>
 
 const exactPromotionAttemptReason = (event: PromotionAttempt, ordinal: number): boolean => {
-  const expectedHead = event.correlation.qualifiedCandidate.correlation.expectedTargetHead
+  const expectedHead = event.correlation.qualifiedCandidate.run.session.expectedTargetHead
   if (ordinal === 1) {
     return event.reason._tag === "Initial" && event.reason.observedHeadSha === expectedHead
   }
@@ -158,7 +163,7 @@ type PromotionTerminal = PromotionSuccess | PromotionStale | PromotionNonConverg
 
 const candidateCommitOf = (event: PromotionTerminal): string => event.correlation.qualifiedCandidate.candidateCommit
 const expectedHeadOf = (event: PromotionTerminal): string =>
-  event.correlation.qualifiedCandidate.correlation.expectedTargetHead
+  event.correlation.qualifiedCandidate.run.session.expectedTargetHead
 
 const validPromotionSuccessObservation = (event: PromotionSuccess): boolean => {
   const exactObservation =
@@ -238,7 +243,7 @@ const invalidTargetPromotionTerminal = (
 export const invalidTargetPromotionHistory = (
   record: JournalRecord,
   indexes: TargetPromotionHistoryIndexes,
-  integratorObservations: IntegratorQualifiedObservation
+  integratorObservations: IntegratorRunQualifiedObservation
 ): string | undefined => {
   const event = record.event
   if (event._tag === "TargetPromotionIntended") {

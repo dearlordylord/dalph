@@ -12,16 +12,13 @@ import type { WorkflowJournalEvent } from "../../registry/event.js"
 import {
   integratorCandidateHasExactParents,
   IntegratorResponsibilityFacts,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
+  IntegratorRunState,
   IntegratorState
 } from "./events.js"
-import type {
-  IntegratorCandidateText,
-  IntegratorCorrelation,
-  IntegratorResult,
-  IntegratorRunCorrelation,
-  IntegratorRunState
-} from "./events.js"
+import type { IntegratorCandidateText, IntegratorCorrelation, IntegratorResult } from "./events.js"
 import { deriveIntegratorRunStateFromHistory } from "./run-state.js"
 
 const responsibilityFactsEquivalence = Schema.toEquivalence(IntegratorResponsibilityFacts)
@@ -247,6 +244,44 @@ export const deriveIntegratorRunState = (
     responsibilityFactsEqual: integratorResponsibilityFactsEqual,
     correlationsEqual: integratorCorrelationsEqual
   })
+
+/**
+ * The latest exact run state for one fixed Integrator session. Before a
+ * session exists, reconstruction retains the responsibility-bound Absent or
+ * Contradiction state because no run identity can yet be constructed.
+ */
+export type CurrentIntegratorState =
+  | Extract<IntegratorState, { readonly _tag: "Absent" | "Contradiction" }>
+  | IntegratorRunState
+
+const latestStartedRunFor = (
+  records: ReadonlyArray<JournalRecord>,
+  session: IntegratorCorrelation
+): IntegratorRunCorrelation | undefined =>
+  records.reduce<IntegratorRunCorrelation | undefined>((latest, { event }) => {
+    if (event._tag !== "IntegratorRunStarted" || !integratorCorrelationsEqual(event.run.session, session)) {
+      return latest
+    }
+    return latest === undefined || event.run.ordinal > latest.ordinal ? event.run : latest
+  }, undefined)
+
+/** Reconstructs the latest exact Integrator run, including the initial legacy-history migration. */
+export const deriveCurrentIntegratorState = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: StartedIntegrationResponsibility
+): CurrentIntegratorState => {
+  const sessionState = deriveIntegratorState(records, responsibility)
+  if (sessionState._tag === "Absent" || sessionState._tag === "Contradiction") return sessionState
+  const session = sessionState.correlation
+  const startedRun = latestStartedRunFor(records, session)
+  if (startedRun === undefined && sessionState._tag !== "SessionUnfinished") {
+    return IntegratorRunState.cases.Contradiction.make({
+      detail: "session-only terminal Integrator history cannot authorize run-bound promotion"
+    })
+  }
+  const run = startedRun ?? IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
+  return deriveIntegratorRunState(records, responsibility, run)
+}
 
 /** Materializes exact-run promotion evidence from reconstructed run state. */
 export const integratorRunQualifiedCandidateFromState = (

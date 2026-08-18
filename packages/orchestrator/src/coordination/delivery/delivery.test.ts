@@ -174,7 +174,7 @@ const exactAttemptEvidence = (taskId: TaskId) => ({
 const releaseChronologyEvidence = (focusedSuccessAt: number, settled = false) => {
   const fixture = integrationFinalityFixture
   const responsibility = StartedIntegrationResponsibility.make({
-    acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
+    acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult,
     integrationTarget: fixture.integrationTarget,
     plannedAttempt: fixture.plannedAttempt,
     queuedAt: JournalPosition.make(2),

@@ -62,7 +62,7 @@ import {
   rereadCompletionEvidence
 } from "../../../orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
-import { IntegratorQualifiedCandidate } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
+import { IntegratorRunQualifiedCandidate } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
 import {
   TargetPromotionGit,
   TargetPromotionGitReadFailure,
@@ -624,7 +624,7 @@ const integrationAttempt = integrationFinalityFixture.plannedAttempt
 // and its derived TargetPromotionCorrelation. The candidate resource/text are
 // retained only inside this correlation; finality rereads accepted-result bytes
 // rather than any target-verification-owned manifests.
-const productionQualifiedCandidate: IntegratorQualifiedCandidate = integrationFinalityFixture.qualifiedCandidate
+const productionQualifiedCandidate: IntegratorRunQualifiedCandidate = integrationFinalityFixture.qualifiedCandidate
 const productionPromotionCorrelation: TargetPromotionCorrelation = integrationFinalityFixture.promotionCorrelation
 
 const integrationResponsibility: WorkflowResponsibilityEntry = {
@@ -640,12 +640,12 @@ const encodeEvidence = (value: unknown): Uint8Array => new TextEncoder().encode(
 
 const productionEvidenceObjects = new Map([
   [
-    productionCompletionRequest.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult
+    productionCompletionRequest.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult
       .evidenceManifest.digest,
     encodeEvidence(
       AcceptedResultEvidenceManifest.make({
         commit:
-          productionCompletionRequest.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.commit,
+          productionCompletionRequest.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.commit,
         correlation: {
           attemptId: productionCompletionRequest.claim.plannedAttempt.attemptId,
           runId: productionCompletionRequest.claim.plannedAttempt.runId
@@ -1347,8 +1347,8 @@ const assertProductionFinality = (current: ModelState, productionState: Producti
       productionQualifiedCandidate.candidateCommit ||
     productionPromotionCorrelation.qualifiedCandidate.candidateText !== productionQualifiedCandidate.candidateText ||
     productionPromotionCorrelation.qualifiedCandidate.qualifiedAt !== productionQualifiedCandidate.qualifiedAt ||
-    productionQualifiedCandidate.directParents[0] !== productionQualifiedCandidate.correlation.expectedTargetHead ||
-    productionQualifiedCandidate.directParents[1] !== productionQualifiedCandidate.correlation.acceptedResult.commit
+    productionQualifiedCandidate.directParents[0] !== productionQualifiedCandidate.run.session.expectedTargetHead ||
+    productionQualifiedCandidate.directParents[1] !== productionQualifiedCandidate.run.session.acceptedResult.commit
   ) {
     failTest("production finality fixture lost the outer Integrator candidate qualification")
   }
@@ -1365,9 +1365,12 @@ const assertProductionFinality = (current: ModelState, productionState: Producti
     ...productionClaimIdentity.plannedAttempt,
     taskRevision: TaskRevision.make("changed")
   }
-  const changedCandidate = IntegratorQualifiedCandidate.make({
+  const changedCandidate = IntegratorRunQualifiedCandidate.make({
     ...productionQualifiedCandidate,
-    correlation: { ...productionQualifiedCandidate.correlation, plannedAttempt: changedPlannedAttempt }
+    run: {
+      ...productionQualifiedCandidate.run,
+      session: { ...productionQualifiedCandidate.run.session, plannedAttempt: changedPlannedAttempt }
+    }
   })
   const changedClaim = CompletionTaskClaim.make({
     ...productionClaimIdentity,

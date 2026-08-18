@@ -65,12 +65,7 @@ import {
   CandidateCorrectionLimit,
   IntegrationCandidateConstructionState
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
-import {
-  IntegratorCandidateResourceLocator,
-  IntegratorCorrelation,
-  IntegratorSessionId,
-  IntegratorState
-} from "../../workflow/protocols/integrator/events.js"
+import { IntegratorRunState } from "../../workflow/protocols/integrator/events.js"
 import { TargetPromotionPendingRetry, TargetPromotionState } from "../../workflow/protocols/target-promotion/state.js"
 import {
   TargetPromotionNonConvergenceObservation,
@@ -246,7 +241,7 @@ describe("#181 graph and bounded projections", () => {
   it("releases B even while A's exact completion-claim cleanup remains recoverably pending", () => {
     const fixture = integrationFinalityFixture
     const responsibility = StartedIntegrationResponsibility.make({
-      acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
+      acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult,
       integrationTarget: fixture.integrationTarget,
       plannedAttempt: fixture.plannedAttempt,
       queuedAt: JournalPosition.make(2),
@@ -287,7 +282,7 @@ describe("#181 graph and bounded projections", () => {
   it("releases B only when a graph reporting A successful is later than A's exact focused success", () => {
     const fixture = integrationFinalityFixture
     const responsibility = StartedIntegrationResponsibility.make({
-      acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
+      acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult,
       integrationTarget: fixture.integrationTarget,
       plannedAttempt: fixture.plannedAttempt,
       queuedAt: JournalPosition.make(2),
@@ -533,7 +528,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
   it("retains every durable integration evidence family with its matching standing", () => {
     const fixture = integrationFinalityFixture
     const queued = QueuedIntegrationResponsibility.make({
-      acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
+      acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult,
       integrationTarget: fixture.integrationTarget,
       plannedAttempt: fixture.plannedAttempt,
       preIntegrationCancellation: {
@@ -550,7 +545,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
       queuedAt: queued.queuedAt,
       startedAt: JournalPosition.make(3)
     })
-    const expectedTargetHead = fixture.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead
+    const expectedTargetHead = fixture.promotionCorrelation.qualifiedCandidate.run.session.expectedTargetHead
     const candidateCorrelation = IntegrationCandidateCorrelation.make({
       acceptanceManifest: queued.acceptedResult.evidenceManifest,
       acceptedResultCommit: queued.acceptedResult.commit,
@@ -562,18 +557,8 @@ describe("#181 ticket-delivery positive and negative space", () => {
       integrationTarget: queued.integrationTarget,
       runId: queued.plannedAttempt.runId
     })
-    const integratorState = IntegratorState.cases.SessionUnfinished.make({
-      correlation: IntegratorCorrelation.make({
-        acceptedResult: queued.acceptedResult,
-        candidateResource: IntegratorCandidateResourceLocator.make("resource:projection-integrator"),
-        expectedTargetHead: candidateCorrelation.expectedTargetHead,
-        integrationTarget: queued.integrationTarget,
-        plannedAttempt: queued.plannedAttempt,
-        queuedAt: queued.queuedAt,
-        sessionId: IntegratorSessionId.make("session:projection-integrator"),
-        startedAt: started.startedAt,
-        targetLineageObservedAt: JournalPosition.make(4)
-      })
+    const integratorState = IntegratorRunState.cases.RunUnfinished.make({
+      run: fixture.promotionCorrelation.qualifiedCandidate.run
     })
     const candidateStates = [
       IntegrationCandidateConstructionState.cases.CandidateConstructed.make({

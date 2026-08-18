@@ -2,7 +2,7 @@ import { Context, type Effect, Schema } from "effect"
 import { GitCommitSha, IntegrationTarget } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { IntegratorQualifiedCandidate } from "../integrator/events.js"
+import { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 
 /** Identifies one immutable compare-and-set request for one qualified Integrator candidate. */
 export const TargetPromotionRequestId = Schema.NonEmptyString.pipe(Schema.brand("TargetPromotionRequestId"))
@@ -23,29 +23,31 @@ export type TargetPromotionAttemptLimit = typeof TargetPromotionAttemptLimit.Typ
 
 /** Stable identity for one Integrator-qualified candidate promotion. */
 export const targetPromotionRequestIdForCandidate = (
-  candidate: IntegratorQualifiedCandidate
+  candidate: IntegratorRunQualifiedCandidate
 ): TargetPromotionRequestId =>
-  TargetPromotionRequestId.make(`target-promotion:${candidate.correlation.sessionId}:${candidate.candidateCommit}`)
+  TargetPromotionRequestId.make(
+    `target-promotion:${candidate.run.session.sessionId}:${candidate.run.ordinal}:${candidate.candidateCommit}`
+  )
 
 /**
  * The exact outer promotion identity. The nested qualified candidate binds the
- * Integrator session S, fixed target head H, accepted result C, reported text,
+ * Integrator run, fixed target head H, accepted result C, reported text,
  * canonical commit M, target, and ordered parents [H, C].
  */
 export const TargetPromotionCorrelation = Schema.Struct({
-  qualifiedCandidate: IntegratorQualifiedCandidate,
+  qualifiedCandidate: IntegratorRunQualifiedCandidate,
   requestId: TargetPromotionRequestId
 }).check(
   Schema.makeFilter((correlation) =>
     correlation.requestId === targetPromotionRequestIdForCandidate(correlation.qualifiedCandidate)
       ? undefined
-      : "promotion request identity must derive from the Integrator session and canonical candidate"
+      : "promotion request identity must derive from the exact Integrator run and canonical candidate"
   )
 )
 export type TargetPromotionCorrelation = typeof TargetPromotionCorrelation.Type
 
 /** Constructs the exact outer promotion identity from a Git-qualified Integrator result. */
-export const targetPromotionCorrelationFor = (candidate: IntegratorQualifiedCandidate): TargetPromotionCorrelation =>
+export const targetPromotionCorrelationFor = (candidate: IntegratorRunQualifiedCandidate): TargetPromotionCorrelation =>
   TargetPromotionCorrelation.make({
     qualifiedCandidate: candidate,
     requestId: targetPromotionRequestIdForCandidate(candidate)
@@ -66,8 +68,8 @@ export type TargetPromotionGitRequest = typeof TargetPromotionGitRequest.Type
 export const targetPromotionGitRequestFor = (correlation: TargetPromotionCorrelation): TargetPromotionGitRequest =>
   TargetPromotionGitRequest.make({
     candidateCommit: correlation.qualifiedCandidate.candidateCommit,
-    expectedTargetHead: correlation.qualifiedCandidate.correlation.expectedTargetHead,
-    integrationTarget: correlation.qualifiedCandidate.correlation.integrationTarget
+    expectedTargetHead: correlation.qualifiedCandidate.run.session.expectedTargetHead,
+    integrationTarget: correlation.qualifiedCandidate.run.session.integrationTarget
   })
 
 /** A retry is either the first request or follows one recorded exact-H read. */
@@ -205,7 +207,7 @@ export const TargetPromotionJournalEvent = Schema.Union([
 export type TargetPromotionJournalEvent = typeof TargetPromotionJournalEvent.Type
 
 /** Compares the exact nested Integrator-qualified candidate and deterministic request identity. */
-const qualifiedCandidateEquivalence = Schema.toEquivalence(IntegratorQualifiedCandidate)
+const qualifiedCandidateEquivalence = Schema.toEquivalence(IntegratorRunQualifiedCandidate)
 export const targetPromotionCorrelationEquals = (
   left: TargetPromotionCorrelation,
   right: TargetPromotionCorrelation
@@ -214,7 +216,7 @@ export const targetPromotionCorrelationEquals = (
 
 /** Returns the fixed H bound by one promotion correlation. */
 export const targetPromotionExpectedHeadOf = (correlation: TargetPromotionCorrelation): GitCommitSha =>
-  correlation.qualifiedCandidate.correlation.expectedTargetHead
+  correlation.qualifiedCandidate.run.session.expectedTargetHead
 
 /** Returns the canonical M bound by one promotion correlation. */
 export const targetPromotionCandidateCommitOf = (correlation: TargetPromotionCorrelation): GitCommitSha =>
@@ -222,4 +224,12 @@ export const targetPromotionCandidateCommitOf = (correlation: TargetPromotionCor
 
 /** Returns the run owning one promotion correlation. */
 export const targetPromotionRunIdOf = (correlation: TargetPromotionCorrelation) =>
-  correlation.qualifiedCandidate.correlation.plannedAttempt.runId
+  correlation.qualifiedCandidate.run.session.plannedAttempt.runId
+
+/** Returns the exact planned task attempt bound by one promotion correlation. */
+export const targetPromotionPlannedAttemptOf = (correlation: TargetPromotionCorrelation) =>
+  correlation.qualifiedCandidate.run.session.plannedAttempt
+
+/** Returns the accepted task result bound by one promotion correlation. */
+export const targetPromotionAcceptedResultOf = (correlation: TargetPromotionCorrelation) =>
+  correlation.qualifiedCandidate.run.session.acceptedResult

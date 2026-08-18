@@ -56,7 +56,8 @@ import { TargetPromotionPendingRetry, TargetPromotionState } from "../../workflo
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorQualifiedCandidate,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
   IntegratorSessionId
 } from "../../workflow/protocols/integrator/events.js"
 import { observePauseProgress } from "./pause-progress-observer.js"
@@ -349,19 +350,22 @@ it.effect("attaches D's pending promotion only to its exact started integration 
       startedAt: JournalPosition.make(9)
     })
     const candidateCommit = GitCommitSha.make("3".repeat(40))
-    const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+    const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
       candidateCommit,
       candidateText: IntegratorCandidateText.make("refs/candidates/pause-progress-exact-promotion"),
-      correlation: {
-        acceptedResult: integration.acceptedResult,
-        candidateResource: IntegratorCandidateResourceLocator.make("resource:pause-progress-exact-promotion"),
-        expectedTargetHead: dAttempt.baseSha,
-        integrationTarget: integration.integrationTarget,
-        plannedAttempt: dAttempt,
-        queuedAt: integration.queuedAt,
-        sessionId: IntegratorSessionId.make("session:pause-progress-exact-promotion"),
-        startedAt: integration.startedAt,
-        targetLineageObservedAt: JournalPosition.make(7)
+      run: {
+        ordinal: IntegratorRunOrdinal.make(1),
+        session: {
+          acceptedResult: integration.acceptedResult,
+          candidateResource: IntegratorCandidateResourceLocator.make("resource:pause-progress-exact-promotion"),
+          expectedTargetHead: dAttempt.baseSha,
+          integrationTarget: integration.integrationTarget,
+          plannedAttempt: dAttempt,
+          queuedAt: integration.queuedAt,
+          sessionId: IntegratorSessionId.make("session:pause-progress-exact-promotion"),
+          startedAt: integration.startedAt,
+          targetLineageObservedAt: JournalPosition.make(7)
+        }
       },
       directParents: [dAttempt.baseSha, integration.acceptedResult.commit],
       qualifiedAt: JournalPosition.make(10)

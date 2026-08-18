@@ -38,7 +38,7 @@ import type {
   TargetVerificationCandidate,
   TargetVerificationPlan
 } from "../../workflow/protocols/target-verification/events.js"
-import type { IntegratorQualifiedCandidate } from "../../workflow/protocols/integrator/events.js"
+import type { IntegratorRunQualifiedCandidate } from "../../workflow/protocols/integrator/events.js"
 import type {
   CompletionTaskClaim,
   CompletionClaimDeletionRequest,
@@ -180,7 +180,7 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly responsibility: StartedIntegrationResponsibility
   }
   RunTargetPromotion: {
-    readonly candidate: IntegratorQualifiedCandidate
+    readonly candidate: IntegratorRunQualifiedCandidate
     readonly responsibility: StartedIntegrationResponsibility
   }
   ReplacePromotedTaskClaim: {

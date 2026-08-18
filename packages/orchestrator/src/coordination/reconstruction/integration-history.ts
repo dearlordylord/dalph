@@ -331,7 +331,11 @@ const invalidTargetVerificationHistory = (
   }
   return event._tag === "TargetVerificationEvidenceSealed" || event._tag === "TargetVerificationCorrelationContradicted"
     ? invalidTargetVerificationTerminal(event, indexes)
-    : invalidTargetPromotionHistory(record, indexes.targetPromotionHistory, indexes.integratorCandidateGitObservations)
+    : invalidTargetPromotionHistory(
+        record,
+        indexes.targetPromotionHistory,
+        indexes.integratorRunCandidateGitObservations
+      )
 }
 
 const invalidCandidateHistory = (record: JournalRecord, indexes: IntegrationHistoryIndexes): string | undefined => {

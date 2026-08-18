@@ -82,7 +82,8 @@ import {
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorQualifiedCandidate,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
   IntegratorSessionId as OuterIntegratorSessionId
 } from "../../workflow/protocols/integrator/events.js"
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
@@ -366,19 +367,22 @@ const pausedIntegrationScenario = (suffix: string, startedAt: number): PausedInt
     target: integrationTarget
   })
   const verificationCorrelation = targetVerificationCorrelationFor(candidate, plan.planId)
-  const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+  const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
     candidateCommit: candidate.candidateCommit,
     candidateText: IntegratorCandidateText.make(`refs/candidates/paused-integration-${suffix}`),
-    correlation: {
-      acceptedResult,
-      candidateResource: IntegratorCandidateResourceLocator.make(`resource:paused-integration-${suffix}`),
-      expectedTargetHead: coverageAttempt.baseSha,
-      integrationTarget,
-      plannedAttempt: coverageAttempt,
-      queuedAt: responsibility.queuedAt,
-      sessionId: OuterIntegratorSessionId.make(`session:paused-integration-${suffix}`),
-      startedAt: responsibility.startedAt,
-      targetLineageObservedAt: JournalPosition.make(6)
+    run: {
+      ordinal: IntegratorRunOrdinal.make(1),
+      session: {
+        acceptedResult,
+        candidateResource: IntegratorCandidateResourceLocator.make(`resource:paused-integration-${suffix}`),
+        expectedTargetHead: coverageAttempt.baseSha,
+        integrationTarget,
+        plannedAttempt: coverageAttempt,
+        queuedAt: responsibility.queuedAt,
+        sessionId: OuterIntegratorSessionId.make(`session:paused-integration-${suffix}`),
+        startedAt: responsibility.startedAt,
+        targetLineageObservedAt: JournalPosition.make(6)
+      }
     },
     directParents: [coverageAttempt.baseSha, acceptedResult.commit],
     qualifiedAt: JournalPosition.make(14)

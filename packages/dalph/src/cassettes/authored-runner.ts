@@ -383,13 +383,16 @@ const authoredTargetPromotionRequestOf = (request: TargetPromotionRequest, runId
     ...normalized,
     qualifiedCandidate: {
       ...normalized.qualifiedCandidate,
-      correlation: {
-        ...normalized.qualifiedCandidate.correlation,
-        acceptedResult: {
-          ...normalized.qualifiedCandidate.correlation.acceptedResult,
-          evidenceManifest: {
-            ...normalized.qualifiedCandidate.correlation.acceptedResult.evidenceManifest,
-            digest: authoredAcceptanceManifestDigest
+      run: {
+        ...normalized.qualifiedCandidate.run,
+        session: {
+          ...normalized.qualifiedCandidate.run.session,
+          acceptedResult: {
+            ...normalized.qualifiedCandidate.run.session.acceptedResult,
+            evidenceManifest: {
+              ...normalized.qualifiedCandidate.run.session.acceptedResult.evidenceManifest,
+              digest: authoredAcceptanceManifestDigest
+            }
           }
         }
       }
@@ -416,9 +419,9 @@ const authoredTargetPromotionGitRequestMatches = (
   expected: TargetPromotionRequest
 ): boolean =>
   request.candidateCommit === expected.qualifiedCandidate.candidateCommit &&
-  request.expectedTargetHead === expected.qualifiedCandidate.correlation.expectedTargetHead &&
-  request.integrationTarget.repository === expected.qualifiedCandidate.correlation.integrationTarget.repository &&
-  request.integrationTarget.ref === expected.qualifiedCandidate.correlation.integrationTarget.ref
+  request.expectedTargetHead === expected.qualifiedCandidate.run.session.expectedTargetHead &&
+  request.integrationTarget.repository === expected.qualifiedCandidate.run.session.integrationTarget.repository &&
+  request.integrationTarget.ref === expected.qualifiedCandidate.run.session.integrationTarget.ref
 
 const targetPromotionRequestOf = (
   transition: Extract<
@@ -1359,10 +1362,10 @@ const runAuthoredScenarioCassetteWith = (request: {
         : authoredIntegratorResult === undefined
           ? "IntegratorSessionFixed"
           : authoredIntegratorResult.result._tag === "NotPrepared"
-            ? "IntegratorResultRecorded"
+            ? "IntegratorRunResultRecorded"
             : hasAuthoredIntegratorGitObservation
-              ? "IntegratorCandidateGitObserved"
-              : "IntegratorCandidateGitReadIntended"
+              ? "IntegratorRunCandidateGitObserved"
+              : "IntegratorRunCandidateGitReadIntended"
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
@@ -1537,9 +1540,10 @@ const runAuthoredScenarioCassetteWith = (request: {
         event._tag === "TaskTrackerFactsObserved" && !event.operationId.startsWith("attempt-restart:")
       const isIntegratorBoundaryAppend = (event: AuthoredJournalAppendEvent): boolean =>
         event._tag === "IntegratorSessionFixed" ||
-        event._tag === "IntegratorResultRecorded" ||
-        event._tag === "IntegratorCandidateGitReadIntended" ||
-        event._tag === "IntegratorCandidateGitObserved"
+        event._tag === "IntegratorRunStarted" ||
+        event._tag === "IntegratorRunResultRecorded" ||
+        event._tag === "IntegratorRunCandidateGitReadIntended" ||
+        event._tag === "IntegratorRunCandidateGitObserved"
       const pauseAtAuthoredJournalBoundary = (event: AuthoredJournalAppendEvent): Effect.Effect<void> => {
         // A tracker observation may be durable before the coordinator process
         // dies. Authored Integrator boundaries and replacement appends use the

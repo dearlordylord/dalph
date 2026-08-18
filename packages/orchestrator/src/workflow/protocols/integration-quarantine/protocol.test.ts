@@ -56,7 +56,7 @@ import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapter
 
 const runId = integrationFinalityFixture.runId
 const target = FixtureTarget.make("integration-quarantine-target")
-const baseCorrelation = integrationFinalityFixture.qualifiedCandidate.correlation
+const baseCorrelation = integrationFinalityFixture.qualifiedCandidate.run.session
 
 const correlationFor = (suffix: string) =>
   IntegratorCorrelation.make({

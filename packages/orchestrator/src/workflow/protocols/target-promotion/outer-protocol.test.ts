@@ -21,7 +21,8 @@ import { InRunJournal, type JournalRecord } from "../../../workflow-journal/stor
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorQualifiedCandidate,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
   IntegratorSessionId
 } from "../integrator/events.js"
 import {
@@ -52,28 +53,31 @@ const acceptedCommit = GitCommitSha.make("2".repeat(40))
 const candidateCommit = GitCommitSha.make("3".repeat(40))
 const candidateText = IntegratorCandidateText.make("refs/candidates/outer-promotion")
 
-const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
   candidateCommit,
   candidateText,
-  correlation: {
-    acceptedResult: acceptedResultFixture(acceptedCommit),
-    candidateResource: IntegratorCandidateResourceLocator.make("resource:outer-promotion"),
-    expectedTargetHead: expectedHead,
-    integrationTarget: target,
-    plannedAttempt: PlannedTaskAttempt.make({
-      attemptId: AttemptId.make("outer-promotion-attempt"),
-      baseSha: expectedHead,
-      branch: TaskBranchRef.make("refs/heads/dalph/outer-promotion"),
-      executor: TaskExecutorLocator.make("executor:outer-promotion"),
-      runId,
-      taskId: TaskId.make("outer-promotion-task"),
-      taskRevision: TaskRevision.make("outer-promotion-revision"),
-      worktree: WorktreeLocator.make("/worktrees/outer-promotion")
-    }),
-    queuedAt: JournalPosition.make(3),
-    sessionId: IntegratorSessionId.make("session:outer-promotion"),
-    startedAt: JournalPosition.make(4),
-    targetLineageObservedAt: JournalPosition.make(2)
+  run: {
+    ordinal: IntegratorRunOrdinal.make(2),
+    session: {
+      acceptedResult: acceptedResultFixture(acceptedCommit),
+      candidateResource: IntegratorCandidateResourceLocator.make("resource:outer-promotion"),
+      expectedTargetHead: expectedHead,
+      integrationTarget: target,
+      plannedAttempt: PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("outer-promotion-attempt"),
+        baseSha: expectedHead,
+        branch: TaskBranchRef.make("refs/heads/dalph/outer-promotion"),
+        executor: TaskExecutorLocator.make("executor:outer-promotion"),
+        runId,
+        taskId: TaskId.make("outer-promotion-task"),
+        taskRevision: TaskRevision.make("outer-promotion-revision"),
+        worktree: WorktreeLocator.make("/worktrees/outer-promotion")
+      }),
+      queuedAt: JournalPosition.make(3),
+      sessionId: IntegratorSessionId.make("session:outer-promotion"),
+      startedAt: JournalPosition.make(4),
+      targetLineageObservedAt: JournalPosition.make(2)
+    }
   },
   directParents: [expectedHead, acceptedCommit],
   qualifiedAt: JournalPosition.make(5)
@@ -103,7 +107,7 @@ const run = (service: TargetPromotionGitService, records: Ref.Ref<ReadonlyArray<
   runFor(qualifiedCandidate, service, records)
 
 const runFor = (
-  candidate: IntegratorQualifiedCandidate,
+  candidate: IntegratorRunQualifiedCandidate,
   service: TargetPromotionGitService,
   records: Ref.Ref<ReadonlyArray<JournalRecord>>
 ) =>
@@ -133,6 +137,7 @@ it.effect("promotes exact M once and records its Integrator correlation and ance
     expect(state.correlation.qualifiedCandidate.candidateCommit).toBe(candidateCommit)
     expect(state.correlation.qualifiedCandidate.candidateText).toBe(candidateText)
     expect(state.correlation.qualifiedCandidate.directParents).toEqual([expectedHead, acceptedCommit])
+    expect(state.correlation.requestId).toBe(`target-promotion:session:outer-promotion:2:${candidateCommit}`)
     expect("verificationManifest" in state.correlation).toBe(false)
     expect(yield* Ref.get(requests)).toEqual([targetPromotionGitRequestFor(request)])
     expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
@@ -224,8 +229,8 @@ it.effect("records non-convergence after three ambiguous attempts and sends no f
 
 it("process success cannot authorize promotion without an Integrator result", () => {
   expect(
-    Schema.is(IntegratorQualifiedCandidate)({
-      correlation: qualifiedCandidate.correlation,
+    Schema.is(IntegratorRunQualifiedCandidate)({
+      run: qualifiedCandidate.run,
       directParents: qualifiedCandidate.directParents,
       qualifiedAt: qualifiedCandidate.qualifiedAt
     })
@@ -233,15 +238,13 @@ it("process success cannot authorize promotion without an Integrator result", ()
 })
 
 it("candidate resource HEAD cannot authorize promotion without an Integrator report", () => {
-  expect(
-    Schema.is(IntegratorQualifiedCandidate)({ candidateCommit, correlation: qualifiedCandidate.correlation })
-  ).toBe(false)
+  expect(Schema.is(IntegratorRunQualifiedCandidate)({ candidateCommit, run: qualifiedCandidate.run })).toBe(false)
   expect(Schema.is(TargetPromotionCorrelation)({ candidateCommit, expectedTargetHead: expectedHead })).toBe(false)
 })
 
 it("equivalent content cannot authorize promotion without exact M ancestry", () => {
   expect(
-    Schema.is(IntegratorQualifiedCandidate)({ ...qualifiedCandidate, directParents: [acceptedCommit, expectedHead] })
+    Schema.is(IntegratorRunQualifiedCandidate)({ ...qualifiedCandidate, directParents: [acceptedCommit, expectedHead] })
   ).toBe(false)
 })
 
@@ -294,37 +297,46 @@ it.effect("rejects recovery for a foreign exact promotion correlation sharing th
     const foreignCandidates = [
       [
         "H",
-        IntegratorQualifiedCandidate.make({
+        IntegratorRunQualifiedCandidate.make({
           ...qualifiedCandidate,
-          correlation: { ...qualifiedCandidate.correlation, expectedTargetHead: changedHead },
+          run: {
+            ...qualifiedCandidate.run,
+            session: { ...qualifiedCandidate.run.session, expectedTargetHead: changedHead }
+          },
           directParents: [changedHead, acceptedCommit]
         })
       ],
       [
         "C",
-        IntegratorQualifiedCandidate.make({
+        IntegratorRunQualifiedCandidate.make({
           ...qualifiedCandidate,
-          correlation: { ...qualifiedCandidate.correlation, acceptedResult: changedAcceptedResult },
+          run: {
+            ...qualifiedCandidate.run,
+            session: { ...qualifiedCandidate.run.session, acceptedResult: changedAcceptedResult }
+          },
           directParents: [expectedHead, changedHead]
         })
       ],
       [
         "target",
-        IntegratorQualifiedCandidate.make({
+        IntegratorRunQualifiedCandidate.make({
           ...qualifiedCandidate,
-          correlation: { ...qualifiedCandidate.correlation, integrationTarget: changedTarget }
+          run: {
+            ...qualifiedCandidate.run,
+            session: { ...qualifiedCandidate.run.session, integrationTarget: changedTarget }
+          }
         })
       ],
       [
         "candidate text",
-        IntegratorQualifiedCandidate.make({
+        IntegratorRunQualifiedCandidate.make({
           ...qualifiedCandidate,
           candidateText: IntegratorCandidateText.make("refs/candidates/foreign-outer-promotion")
         })
       ],
       [
         "qualifiedAt",
-        IntegratorQualifiedCandidate.make({ ...qualifiedCandidate, qualifiedAt: JournalPosition.make(6) })
+        IntegratorRunQualifiedCandidate.make({ ...qualifiedCandidate, qualifiedAt: JournalPosition.make(6) })
       ]
     ] as const
 
@@ -341,6 +353,6 @@ it.effect("rejects recovery for a foreign exact promotion correlation sharing th
 
 it("rejects changed ordered parents before a candidate can become a promotion correlation", () => {
   expect(
-    Schema.is(IntegratorQualifiedCandidate)({ ...qualifiedCandidate, directParents: [acceptedCommit, expectedHead] })
+    Schema.is(IntegratorRunQualifiedCandidate)({ ...qualifiedCandidate, directParents: [acceptedCommit, expectedHead] })
   ).toBe(false)
 })

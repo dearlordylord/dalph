@@ -761,6 +761,10 @@ type OuterIntegratorEvent = Extract<
       | "IntegratorCandidateGitObserved"
       | "IntegratorCandidateGitReadIntended"
       | "IntegratorResultRecorded"
+      | "IntegratorRunCandidateGitObserved"
+      | "IntegratorRunCandidateGitReadIntended"
+      | "IntegratorRunResultRecorded"
+      | "IntegratorRunStarted"
       | "IntegratorSessionFixed"
   }
 >
@@ -772,26 +776,22 @@ type UnsupportedRecordedEvent = Extract<
       | "IntegrationProviderRunActivityAbsent"
       | "IntegrationQuarantineDirectionApplied"
       | "IntegrationQuarantined"
-      | "IntegratorRunCandidateGitObserved"
-      | "IntegratorRunCandidateGitReadIntended"
-      | "IntegratorRunResultRecorded"
-      | "IntegratorRunStarted"
   }
 >
 
 const isUnsupportedRecordedEvent = (event: WorkflowJournalEvent): event is UnsupportedRecordedEvent =>
   event._tag === "IntegrationProviderRunActivityAbsent" ||
   event._tag === "IntegrationQuarantineDirectionApplied" ||
-  event._tag === "IntegrationQuarantined" ||
-  event._tag === "IntegratorRunCandidateGitObserved" ||
-  event._tag === "IntegratorRunCandidateGitReadIntended" ||
-  event._tag === "IntegratorRunResultRecorded" ||
-  event._tag === "IntegratorRunStarted"
+  event._tag === "IntegrationQuarantined"
 
 const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterIntegratorEvent =>
   event._tag === "IntegratorCandidateGitObserved" ||
   event._tag === "IntegratorCandidateGitReadIntended" ||
   event._tag === "IntegratorResultRecorded" ||
+  event._tag === "IntegratorRunCandidateGitObserved" ||
+  event._tag === "IntegratorRunCandidateGitReadIntended" ||
+  event._tag === "IntegratorRunResultRecorded" ||
+  event._tag === "IntegratorRunStarted" ||
   event._tag === "IntegratorSessionFixed"
 
 type RecordedOuterIntegratorEntry = Extract<RecordedCassetteEntry, { readonly _tag: OuterIntegratorEvent["_tag"] }>
@@ -800,6 +800,10 @@ const isRecordedOuterIntegratorEntry = (entry: RecordedCassetteEntry): entry is 
   entry._tag === "IntegratorCandidateGitObserved" ||
   entry._tag === "IntegratorCandidateGitReadIntended" ||
   entry._tag === "IntegratorResultRecorded" ||
+  entry._tag === "IntegratorRunCandidateGitObserved" ||
+  entry._tag === "IntegratorRunCandidateGitReadIntended" ||
+  entry._tag === "IntegratorRunResultRecorded" ||
+  entry._tag === "IntegratorRunStarted" ||
   entry._tag === "IntegratorSessionFixed"
 
 const recordOuterIntegratorEntry = (event: OuterIntegratorEvent): RecordedOuterIntegratorEntry =>
@@ -819,6 +823,23 @@ const recordOuterIntegratorEntry = (event: OuterIntegratorEvent): RecordedOuterI
       candidateText: value.candidateText,
       correlation: value.correlation,
       observation: value.observation
+    }),
+    IntegratorRunStarted: (value): RecordedOuterIntegratorEntry => ({ _tag: value._tag, run: value.run }),
+    IntegratorRunResultRecorded: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      result: value.result,
+      run: value.run
+    }),
+    IntegratorRunCandidateGitReadIntended: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      candidateText: value.candidateText,
+      run: value.run
+    }),
+    IntegratorRunCandidateGitObserved: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      candidateText: value.candidateText,
+      observation: value.observation,
+      run: value.run
     })
   })
 
@@ -1630,6 +1651,20 @@ const lyricForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): stri
   if (entry._tag === "IntegratorCandidateGitReadIntended") {
     return `Dalph coordinator intended to ask Git about explicitly reported candidate ${entry.candidateText}.`
   }
+  if (entry._tag === "IntegratorRunStarted") {
+    return `Dalph coordinator intended Integrator run ${entry.run.ordinal} in session ${entry.run.session.sessionId}.`
+  }
+  if (entry._tag === "IntegratorRunResultRecorded") {
+    return entry.result._tag === "PreparedCandidate"
+      ? `Integrator run ${entry.run.ordinal} reported candidate ${entry.result.candidateText} for session ${entry.run.session.sessionId}.`
+      : `Integrator run ${entry.run.ordinal} reported NotPrepared for session ${entry.run.session.sessionId}: ${entry.result.detail}.`
+  }
+  if (entry._tag === "IntegratorRunCandidateGitReadIntended") {
+    return `Dalph coordinator intended to ask Git about candidate ${entry.candidateText} from Integrator run ${entry.run.ordinal}.`
+  }
+  if (entry._tag === "IntegratorRunCandidateGitObserved") {
+    return `Git reported ${entry.observation._tag} for candidate ${entry.candidateText} from Integrator run ${entry.run.ordinal}.`
+  }
   return `Git reported ${entry.observation._tag} for explicitly reported candidate ${entry.candidateText}.`
 }
 
@@ -1669,7 +1704,7 @@ const lyricForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry)
 const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): string =>
   Match.valueTags(entry, {
     TargetPromotionIntended: (value) =>
-      `Dalph coordinator fixed exact promotion ${value.correlation.qualifiedCandidate.correlation.expectedTargetHead} -> ${value.correlation.qualifiedCandidate.candidateCommit}.`,
+      `Dalph coordinator fixed exact promotion ${value.correlation.qualifiedCandidate.run.session.expectedTargetHead} -> ${value.correlation.qualifiedCandidate.candidateCommit}.`,
     TargetPromotionAttemptIntended: (value) =>
       `Dalph coordinator sent exact compare-and-set attempt ${value.attemptOrdinal} for candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`,
     TargetPromotionObservedSuccess: (value) =>

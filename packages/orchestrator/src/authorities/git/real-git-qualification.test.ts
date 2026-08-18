@@ -30,7 +30,9 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorCorrelation,
-  IntegratorQualifiedCandidate,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
   IntegratorSessionId
 } from "../../workflow/protocols/integrator/events.js"
 import {
@@ -124,19 +126,22 @@ const promotionCorrelationFor = (
     taskRevision: TaskRevision.make("real-git-promotion-revision"),
     worktree: WorktreeLocator.make("/worktrees/real-git-promotion")
   })
-  const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+  const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
     candidateCommit,
     candidateText: IntegratorCandidateText.make("real-git-promotion-candidate"),
-    correlation: IntegratorCorrelation.make({
-      acceptedResult,
-      candidateResource: IntegratorCandidateResourceLocator.make("real-git-promotion-resource"),
-      expectedTargetHead: expectedHead,
-      integrationTarget: target,
-      plannedAttempt,
-      queuedAt: JournalPosition.make(1),
-      sessionId: IntegratorSessionId.make("real-git-promotion-session"),
-      startedAt: JournalPosition.make(2),
-      targetLineageObservedAt: JournalPosition.make(3)
+    run: IntegratorRunCorrelation.make({
+      ordinal: IntegratorRunOrdinal.make(1),
+      session: IntegratorCorrelation.make({
+        acceptedResult,
+        candidateResource: IntegratorCandidateResourceLocator.make("real-git-promotion-resource"),
+        expectedTargetHead: expectedHead,
+        integrationTarget: target,
+        plannedAttempt,
+        queuedAt: JournalPosition.make(1),
+        sessionId: IntegratorSessionId.make("real-git-promotion-session"),
+        startedAt: JournalPosition.make(2),
+        targetLineageObservedAt: JournalPosition.make(3)
+      })
     }),
     directParents: [expectedHead, acceptedResultCommit],
     qualifiedAt: JournalPosition.make(4)

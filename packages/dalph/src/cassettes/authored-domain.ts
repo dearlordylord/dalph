@@ -577,7 +577,7 @@ const promotionResultIssue = (
     )
   })
   return (responsibility._tag !== "QueuedIntegration" && responsibility._tag !== "StartedIntegration") ||
-    request.qualifiedCandidate.correlation.plannedAttempt.attemptId !== responsibility.attemptId ||
+    request.qualifiedCandidate.run.session.plannedAttempt.attemptId !== responsibility.attemptId ||
     !exactPromotionActionExists
     ? "promotion-result blocker must equal its exact integration responsibility and promotion action"
     : undefined

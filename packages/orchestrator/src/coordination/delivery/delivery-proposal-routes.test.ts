@@ -279,14 +279,14 @@ const completionEvidenceStore: EvidenceStoreService = {
   read: (reference) => {
     if (
       reference.digest ===
-      integrationFinalityFixture.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult
+      integrationFinalityFixture.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult
         .evidenceManifest.digest
     ) {
       return Effect.succeed(
         encodedEvidence(
           AcceptedResultEvidenceManifest.make({
             commit:
-              integrationFinalityFixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.commit,
+              integrationFinalityFixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.commit,
             correlation: {
               attemptId: integrationFinalityFixture.plannedAttempt.attemptId,
               runId: integrationFinalityFixture.runId

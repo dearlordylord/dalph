@@ -14,11 +14,11 @@ import {
   type RunnableFrontierTransition as RunnableFrontierTransitionType
 } from "./frontier.js"
 import type { IntegrationFrontierRuntimeFacts } from "./integration-frontier.js"
-import { deriveIntegratorState } from "../../workflow/protocols/integrator/state.js"
 import {
-  integratorQualifiedCandidateFromState,
-  type IntegratorState
-} from "../../workflow/protocols/integrator/events.js"
+  deriveCurrentIntegratorState,
+  integratorRunQualifiedCandidateFromState,
+  type CurrentIntegratorState
+} from "../../workflow/protocols/integrator/state.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 
@@ -87,14 +87,14 @@ const durableTargetLineageFor = (
 }
 
 const fixedTargetLineageFor = (
-  state: Exclude<IntegratorState, { readonly _tag: "Absent" | "Contradiction" }>
+  state: Exclude<CurrentIntegratorState, { readonly _tag: "Absent" | "Contradiction" }>
 ): DurableTargetLineage => ({
   observation: {
     plannedBaseIsAncestorOfTargetHead: true,
-    plannedBaseSha: state.correlation.plannedAttempt.baseSha,
-    targetHeadSha: state.correlation.expectedTargetHead
+    plannedBaseSha: state.run.session.plannedAttempt.baseSha,
+    targetHeadSha: state.run.session.expectedTargetHead
   },
-  observedAt: state.correlation.targetLineageObservedAt
+  observedAt: state.run.session.targetLineageObservedAt
 })
 
 const targetLineageIsIncompatible = (
@@ -104,13 +104,13 @@ const targetLineageIsIncompatible = (
   lineage.plannedBaseSha !== responsibility.plannedAttempt.baseSha || !lineage.plannedBaseIsAncestorOfTargetHead
 
 const fixedIntegratorSessionLineageChanged = (
-  state: IntegratorState,
+  state: CurrentIntegratorState,
   lineage: TargetLineageObservation,
   responsibility: StartedIntegrationResponsibility
 ): boolean =>
   state._tag !== "Absent" &&
   state._tag !== "Contradiction" &&
-  (lineage.targetHeadSha !== state.correlation.expectedTargetHead ||
+  (lineage.targetHeadSha !== state.run.session.expectedTargetHead ||
     targetLineageIsIncompatible(lineage, responsibility))
 
 const releaseStartedIntegrationTargetFor = (
@@ -123,7 +123,7 @@ const explanationAfterPrerequisitesFor = (
   runState: ReconstructedRunState,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
-  integratorState: IntegratorState,
+  integratorState: CurrentIntegratorState,
   promotion: PromotionState
 ): FrontierExplanation => {
   if (promotion?._tag === "PromotionSucceeded") {
@@ -164,20 +164,20 @@ const promotionSucceededTransitionsFor = (
   return integrationFinalityTransitionsFor(runState.workflowHistory.records, responsibility, promotion, runtimeFacts)
 }
 
-const integratorStateBlocksProgress = (state: IntegratorState, promotion: PromotionState): boolean => {
+const integratorStateBlocksProgress = (state: CurrentIntegratorState, promotion: PromotionState): boolean => {
   if (state._tag === "Contradiction" || state._tag === "NotPrepared" || state._tag === "CandidateRejected") return true
   return promotion?._tag === "PromotionStale" || promotion?._tag === "PromotionNonConvergent"
 }
 
 const targetPromotionConfigurationIsMissing = (
-  state: IntegratorState,
+  state: CurrentIntegratorState,
   runtimeFacts: IntegrationFrontierRuntimeFacts
 ): boolean => state._tag === "GitQualifiedPrepared" && runtimeFacts.targetPromotionConfigured !== true
 
 const fixedLineageRequiresRelease = (
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
-  state: IntegratorState
+  state: CurrentIntegratorState
 ): boolean => {
   if (state._tag !== "GitQualifiedPrepared") return false
   const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
@@ -188,7 +188,7 @@ const settledIntegrationMustReleaseTarget = (
   waiting: boolean,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
-  integratorState: IntegratorState,
+  integratorState: CurrentIntegratorState,
   promotion: PromotionState
 ): boolean =>
   waiting ||
@@ -202,7 +202,7 @@ const transitionsBeforeStartedIntegrationAdmission = (
   responsibility: StartedIntegrationResponsibility,
   waiting: boolean,
   held: boolean,
-  integratorState: IntegratorState,
+  integratorState: CurrentIntegratorState,
   promotion: PromotionState,
   trackerFactsAreCurrentFor: (responsibility: { readonly plannedAttempt: { readonly taskId: TaskId } }) => boolean,
   claimIsExactFor: (responsibility: ClaimSubject) => boolean
@@ -252,13 +252,13 @@ const absentIntegratorProgressTransitionsFor = (
 const qualifiedIntegratorProgressTransitionsFor = (
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
-  state: Extract<IntegratorState, { readonly _tag: "GitQualifiedPrepared" }>
+  state: Extract<CurrentIntegratorState, { readonly _tag: "GitQualifiedPrepared" }>
 ): ReadonlyArray<RunnableFrontierTransitionType> =>
   runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true
     ? []
     : [
         RunnableFrontierTransition.RunTargetPromotion({
-          candidate: integratorQualifiedCandidateFromState(state),
+          candidate: integratorRunQualifiedCandidateFromState(state),
           responsibility
         })
       ]
@@ -267,7 +267,7 @@ const startedIntegrationProgressTransitionFor = (
   runState: ReconstructedRunState,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
-  integratorState: IntegratorState,
+  integratorState: CurrentIntegratorState,
   held: boolean
 ): ReadonlyArray<RunnableFrontierTransitionType> => {
   // A fixed Integrator session or qualified candidate may outlive a released
@@ -306,10 +306,10 @@ export const deriveStartedIntegrationFrontier = (
     return authority._tag === "Exact" ? undefined : authority
   }
   const integratorStateFor = (responsibility: StartedIntegrationResponsibility) =>
-    deriveIntegratorState(runState.workflowHistory.records, responsibility)
-  const promotionFor = (state: IntegratorState) =>
+    deriveCurrentIntegratorState(runState.workflowHistory.records, responsibility)
+  const promotionFor = (state: CurrentIntegratorState) =>
     state._tag === "GitQualifiedPrepared"
-      ? deriveTargetPromotionStateFor(runState.workflowHistory.records, integratorQualifiedCandidateFromState(state))
+      ? deriveTargetPromotionStateFor(runState.workflowHistory.records, integratorRunQualifiedCandidateFromState(state))
       : undefined
   const succeededPromotionFor = (responsibility: StartedIntegrationResponsibility) => {
     const promotion = promotionFor(integratorStateFor(responsibility))

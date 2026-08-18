@@ -15,7 +15,7 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import { makeCompletionTaskFactsObservationOperation } from "../../registry/operation.js"
 import { taskTrackerReadIntent } from "../../registry/event.js"
-import { IntegratorCorrelation, IntegratorQualifiedCandidate } from "../integrator/events.js"
+import { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 import {
   TargetPromotionGit,
   TargetPromotionGitReadFailure,
@@ -65,7 +65,7 @@ import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 const encode = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
 
 const completionEvidenceRequest = (
-  acceptedCommit = fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.commit
+  acceptedCommit = fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.commit
 ) =>
   Effect.gen(function* () {
     const store = yield* EvidenceStore
@@ -81,9 +81,12 @@ const completionEvidenceRequest = (
       )
     )
     const acceptedResult = AcceptedResult.make({ commit: acceptedCommit, evidenceManifest })
-    const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+    const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
       ...fixture.qualifiedCandidate,
-      correlation: IntegratorCorrelation.make({ ...fixture.qualifiedCandidate.correlation, acceptedResult }),
+      run: {
+        ...fixture.qualifiedCandidate.run,
+        session: { ...fixture.qualifiedCandidate.run.session, acceptedResult }
+      },
       directParents: [fixture.qualifiedCandidate.directParents[0], acceptedCommit]
     })
     const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
@@ -173,7 +176,7 @@ it.effect("rereads accepted-result and Integrator-returned evidence before task 
     const evidence = yield* rereadCompletionEvidence(request).pipe(Effect.provideService(EvidenceStore, countingStore))
 
     expect(evidence.commit).toBe(
-      request.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.commit
+      request.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.commit
     )
     expect(yield* Ref.get(reads)).toBe(1)
   }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
@@ -205,20 +208,20 @@ it.effect("malformed, missing, and foreign accepted-result evidence stop before 
       {
         label: "malformed",
         read: (
-          reference: typeof valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest
+          reference: typeof valid.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.evidenceManifest
         ) =>
           reference.digest ===
-          valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest.digest
+          valid.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.evidenceManifest.digest
             ? Effect.succeed(encode("not-json"))
             : store.read(reference)
       },
       {
         label: "missing",
         read: (
-          reference: typeof valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest
+          reference: typeof valid.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.evidenceManifest
         ) =>
           reference.digest ===
-          valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest.digest
+          valid.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.evidenceManifest.digest
             ? Effect.fail(
                 new EvidenceStoreFailure({
                   detail: "accepted-result evidence is missing",
@@ -230,10 +233,10 @@ it.effect("malformed, missing, and foreign accepted-result evidence stop before 
       {
         label: "foreign",
         read: (
-          reference: typeof valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest
+          reference: typeof valid.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.evidenceManifest
         ) =>
           reference.digest ===
-          valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest.digest
+          valid.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.evidenceManifest.digest
             ? Effect.succeed(
                 encode(
                   AcceptedResultEvidenceManifest.make({
@@ -884,7 +887,7 @@ it.effect("rejects current authorization when Git no longer contains the promote
       read: () =>
         Effect.succeed({
           _tag: "CandidateNotInAncestry",
-          currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead
+          currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.run.session.expectedTargetHead
         })
     })
 
@@ -921,7 +924,7 @@ it.effect("waits when Git cannot read current candidate ancestry", () =>
           new TargetPromotionGitReadFailure({
             candidateCommit: request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit,
             detail: "controlled Git read unavailable",
-            target: request.claim.promotionCorrelation.qualifiedCandidate.correlation.integrationTarget
+            target: request.claim.promotionCorrelation.qualifiedCandidate.run.session.integrationTarget
           })
         )
     })
@@ -1552,7 +1555,7 @@ it("classifies both current and ancestor promoted candidates", () => {
   expect(
     candidateAncestryFor({
       _tag: "CandidateNotInAncestry",
-      currentHeadSha: fixture.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead
+      currentHeadSha: fixture.promotionCorrelation.qualifiedCandidate.run.session.expectedTargetHead
     })
   ).toBeUndefined()
 })

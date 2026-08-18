@@ -59,6 +59,7 @@ import {
 import { EvidenceStore } from "../target-verification/evidence-store.js"
 import {
   TargetPromotionGit,
+  targetPromotionAcceptedResultOf,
   targetPromotionGitRequestFor,
   type TargetPromotionGitReadObservation
 } from "../target-promotion/events.js"
@@ -1015,7 +1016,7 @@ export const rereadCompletionEvidence = Effect.fn("IntegrationFinality.rereadCom
           request
         })
     })
-  const acceptedResult = request.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult
+  const acceptedResult = targetPromotionAcceptedResultOf(request.claim.promotionCorrelation)
   const reference = acceptedResult.evidenceManifest
   const decoded = yield* store.read(reference).pipe(
     Effect.mapError(

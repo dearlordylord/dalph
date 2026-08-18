@@ -2,6 +2,7 @@ import type { RunId } from "@dalph/contracts"
 import { Match } from "effect"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { IntegrationCandidateCorrelation } from "../../workflow/protocols/integration-candidate-construction/events.js"
+import { targetPromotionRunIdOf } from "../../workflow/protocols/target-promotion/events.js"
 
 export const candidateKey = (correlation: IntegrationCandidateCorrelation): string =>
   JSON.stringify([correlation.runId, correlation.candidateId])
@@ -45,9 +46,9 @@ type CandidateCorrelationRunBindingEvent = Extract<
 >
 
 const invalidTargetPromotionRunBinding = (event: TargetPromotionRunBindingEvent, runId: RunId): string | undefined =>
-  event.correlation.qualifiedCandidate.correlation.plannedAttempt.runId === runId
+  targetPromotionRunIdOf(event.correlation) === runId
     ? undefined
-    : `target promotion binds run ${event.correlation.qualifiedCandidate.correlation.plannedAttempt.runId}`
+    : `target promotion binds run ${targetPromotionRunIdOf(event.correlation)}`
 
 const invalidTargetVerificationRunBinding = (
   event: TargetVerificationRunBindingEvent,

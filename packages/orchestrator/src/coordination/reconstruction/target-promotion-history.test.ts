@@ -16,14 +16,15 @@ import {
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { integratorCandidateRecordKeyPrefix } from "../../workflow-journal/record-key.js"
+import { integratorRunCandidateRecordKeyPrefix } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCandidateGitObservedEvent,
+  IntegratorRunCandidateGitObservedEvent,
   IntegratorGitObservation,
-  IntegratorQualifiedCandidate,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
   IntegratorSessionId
 } from "../../workflow/protocols/integrator/events.js"
 import {
@@ -48,48 +49,51 @@ const expectedHead = GitCommitSha.make("a".repeat(40))
 const acceptedCommit = GitCommitSha.make("b".repeat(40))
 const candidateCommit = GitCommitSha.make("c".repeat(40))
 const candidateText = IntegratorCandidateText.make("refs/candidates/promotion-history")
-const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
   candidateCommit,
   candidateText,
-  correlation: {
-    acceptedResult: acceptedResultFixture(acceptedCommit),
-    candidateResource: IntegratorCandidateResourceLocator.make("resource:promotion-history"),
-    expectedTargetHead: expectedHead,
-    integrationTarget: target,
-    plannedAttempt: PlannedTaskAttempt.make({
-      attemptId: AttemptId.make("promotion-history-attempt"),
-      baseSha: expectedHead,
-      branch: TaskBranchRef.make("refs/heads/dalph/promotion-history"),
-      executor: TaskExecutorLocator.make("executor:promotion-history"),
-      runId,
-      taskId: TaskId.make("promotion-history-task"),
-      taskRevision: TaskRevision.make("promotion-history-revision"),
-      worktree: WorktreeLocator.make("/worktrees/promotion-history")
-    }),
-    queuedAt: JournalPosition.make(3),
-    sessionId: IntegratorSessionId.make("session:promotion-history"),
-    startedAt: JournalPosition.make(4),
-    targetLineageObservedAt: JournalPosition.make(2)
+  run: {
+    ordinal: IntegratorRunOrdinal.make(2),
+    session: {
+      acceptedResult: acceptedResultFixture(acceptedCommit),
+      candidateResource: IntegratorCandidateResourceLocator.make("resource:promotion-history"),
+      expectedTargetHead: expectedHead,
+      integrationTarget: target,
+      plannedAttempt: PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("promotion-history-attempt"),
+        baseSha: expectedHead,
+        branch: TaskBranchRef.make("refs/heads/dalph/promotion-history"),
+        executor: TaskExecutorLocator.make("executor:promotion-history"),
+        runId,
+        taskId: TaskId.make("promotion-history-task"),
+        taskRevision: TaskRevision.make("promotion-history-revision"),
+        worktree: WorktreeLocator.make("/worktrees/promotion-history")
+      }),
+      queuedAt: JournalPosition.make(3),
+      sessionId: IntegratorSessionId.make("session:promotion-history"),
+      startedAt: JournalPosition.make(4),
+      targetLineageObservedAt: JournalPosition.make(2)
+    }
   },
   directParents: [expectedHead, acceptedCommit],
   qualifiedAt: JournalPosition.make(5)
 })
 const correlation = targetPromotionCorrelationFor(qualifiedCandidate)
 
-const qualification = IntegratorCandidateGitObservedEvent.make({
+const qualification = IntegratorRunCandidateGitObservedEvent.make({
   candidateText,
-  correlation: qualifiedCandidate.correlation,
   observation: IntegratorGitObservation.cases.Commit.make({
     candidateText,
     commit: candidateCommit,
     directParents: [expectedHead, acceptedCommit]
   }),
+  run: qualifiedCandidate.run,
   version: workflowJournalEventVersion
 })
 
 const integratorObservations = new Map([
   [
-    integratorCandidateRecordKeyPrefix(qualifiedCandidate.correlation, candidateText),
+    integratorRunCandidateRecordKeyPrefix(qualifiedCandidate.run, candidateText),
     { event: qualification, position: qualifiedCandidate.qualifiedAt }
   ]
 ])

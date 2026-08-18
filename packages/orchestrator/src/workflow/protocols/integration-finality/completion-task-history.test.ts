@@ -444,7 +444,7 @@ it("rejects stale authorization, unnumbered outcomes, and mismatched acknowledge
       ...ancestry,
       observation: {
         _tag: "CandidateNotInAncestry",
-        currentHeadSha: fixture.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead
+        currentHeadSha: fixture.promotionCorrelation.qualifiedCandidate.run.session.expectedTargetHead
       }
     })
   )

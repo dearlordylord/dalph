@@ -10,8 +10,10 @@ import {
   deriveConstructedIntegrationCandidateOccurrence,
   deriveIntegrationCandidateConstruction
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
-import { deriveIntegratorState } from "../../workflow/protocols/integrator/state.js"
-import { integratorQualifiedCandidateFromState } from "../../workflow/protocols/integrator/events.js"
+import {
+  deriveCurrentIntegratorState,
+  integratorRunQualifiedCandidateFromState
+} from "../../workflow/protocols/integrator/state.js"
 import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
 import { deriveIntegrationFinalityStateFor } from "../../workflow/protocols/integration-finality/state.js"
@@ -27,7 +29,7 @@ type StartedDeliveryResponsibility = Extract<
   { readonly _tag: "StartedIntegrationResponsibility" }
 >
 type IntegrationConstructionState = ReturnType<typeof deriveIntegrationCandidateConstruction>
-type IntegratorReconstructionState = ReturnType<typeof deriveIntegratorState>
+type IntegratorReconstructionState = ReturnType<typeof deriveCurrentIntegratorState>
 
 const focusedTaskCompletionSuccessOf = (
   { event, position }: JournalRecord,
@@ -84,7 +86,7 @@ const targetPromotionEvidenceOf = (
   integratorState: IntegratorReconstructionState
 ): ReadonlyArray<ExactTicketDeliveryEvidence> => {
   if (integratorState._tag !== "GitQualifiedPrepared") return []
-  const promotion = deriveTargetPromotionStateFor(records, integratorQualifiedCandidateFromState(integratorState))
+  const promotion = deriveTargetPromotionStateFor(records, integratorRunQualifiedCandidateFromState(integratorState))
   if (promotion === undefined) return []
   return [{ _tag: "TargetPromotion", responsibility, state: promotion }]
 }
@@ -110,7 +112,7 @@ const integrationEvidenceOf = (
       : ({ _tag: "StartedIntegration", responsibility } as const)
   if (responsibility._tag !== "StartedIntegrationResponsibility") return [initial]
   const state = deriveIntegrationCandidateConstruction(records, responsibility)
-  const integratorState = deriveIntegratorState(records, responsibility)
+  const integratorState = deriveCurrentIntegratorState(records, responsibility)
   return [
     initial,
     ...candidateEvidenceOf(responsibility, state, integratorState),

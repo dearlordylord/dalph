@@ -55,7 +55,8 @@ import {
   type IntegratorGitObservationType,
   type IntegratorNotPreparedDetail,
   type IntegratorResultType,
-  type IntegratorQualifiedCandidate,
+  type IntegratorRunCorrelation,
+  type IntegratorRunQualifiedCandidate,
   IntegratorSessionId,
   type JournalPosition,
   type EvidenceReference,
@@ -361,16 +362,28 @@ const renameIntegratorCorrelation = (
     targetLineageObservedAt: preserveCassetteValue(correlation.targetLineageObservedAt)
   })
 
-const renameIntegratorQualifiedCandidate = (
-  candidate: IntegratorQualifiedCandidate,
+const renameIntegratorRunCorrelation = (
+  run: IntegratorRunCorrelation,
   maps: IdentityRenamingMaps
-): IntegratorQualifiedCandidate =>
-  completeFields<IntegratorQualifiedCandidate>({
+): IntegratorRunCorrelation =>
+  completeFields<IntegratorRunCorrelation>({
+    ordinal: run.ordinal,
+    session: renameIntegratorCorrelation(run.session, maps)
+  })
+
+const renameIntegratorRunQualifiedCandidate = (
+  candidate: IntegratorRunQualifiedCandidate,
+  maps: IdentityRenamingMaps
+): IntegratorRunQualifiedCandidate =>
+  completeFields<IntegratorRunQualifiedCandidate>({
     candidateCommit: preserveCassetteValue(candidate.candidateCommit),
     candidateText: preserveCassetteValue(candidate.candidateText),
-    correlation: renameIntegratorCorrelation(candidate.correlation, maps),
     directParents: preserveCassetteValue(candidate.directParents),
-    qualifiedAt: preserveCassetteValue(candidate.qualifiedAt)
+    qualifiedAt: preserveCassetteValue(candidate.qualifiedAt),
+    run: completeFields<typeof candidate.run>({
+      ordinal: candidate.run.ordinal,
+      session: renameIntegratorCorrelation(candidate.run.session, maps)
+    })
   })
 
 const renameIntegratorGitObservation = (observation: IntegratorGitObservationType): IntegratorGitObservationType =>
@@ -412,7 +425,7 @@ const renameTargetPromotionCorrelation = (
   correlation: TargetPromotionCorrelation,
   maps: IdentityRenamingMaps
 ): TargetPromotionCorrelation => {
-  const qualifiedCandidate = renameIntegratorQualifiedCandidate(correlation.qualifiedCandidate, maps)
+  const qualifiedCandidate = renameIntegratorRunQualifiedCandidate(correlation.qualifiedCandidate, maps)
   return completeFields<TargetPromotionCorrelation>({
     qualifiedCandidate,
     requestId: targetPromotionRequestIdForCandidate(qualifiedCandidate)
@@ -767,6 +780,30 @@ const renameRecordedCassetteEntry = (
           candidateText: preserveCassetteValue(entry.candidateText),
           correlation: renameIntegratorCorrelation(entry.correlation, maps),
           observation: renameIntegratorGitObservation(entry.observation)
+        }),
+      IntegratorRunStarted: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorRunStarted",
+          run: renameIntegratorRunCorrelation(entry.run, maps)
+        }),
+      IntegratorRunResultRecorded: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorRunResultRecorded",
+          result: renameIntegratorResult(entry.result, maps),
+          run: renameIntegratorRunCorrelation(entry.run, maps)
+        }),
+      IntegratorRunCandidateGitReadIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorRunCandidateGitReadIntended",
+          candidateText: preserveCassetteValue(entry.candidateText),
+          run: renameIntegratorRunCorrelation(entry.run, maps)
+        }),
+      IntegratorRunCandidateGitObserved: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorRunCandidateGitObserved",
+          candidateText: preserveCassetteValue(entry.candidateText),
+          observation: renameIntegratorGitObservation(entry.observation),
+          run: renameIntegratorRunCorrelation(entry.run, maps)
         }),
       IntegrationCandidateConstructionIntended: (candidateEntry) => {
         const correlation = renameCandidateCorrelation(candidateEntry.correlation, maps)

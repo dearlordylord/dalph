@@ -54,9 +54,10 @@ import {
 import {
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey,
-  integratorCandidateGitObservedRecordKey,
-  integratorCandidateGitReadIntendedRecordKey,
-  integratorResultRecordedRecordKey,
+  integratorRunCandidateGitObservedRecordKey,
+  integratorRunCandidateGitReadIntendedRecordKey,
+  integratorRunResultRecordedRecordKey,
+  integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
   attemptPlanRecordKey,
   intentRecordKey,
@@ -100,14 +101,16 @@ import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import {
-  IntegratorCandidateGitObservedEvent,
-  IntegratorCandidateGitReadIntendedEvent,
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorGitObservation,
-  IntegratorQualifiedCandidate,
   IntegratorResult,
-  IntegratorResultRecordedEvent,
+  IntegratorRunCandidateGitObservedEvent,
+  IntegratorRunCandidateGitReadIntendedEvent,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
+  IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent,
   IntegratorSessionFixedEvent,
   IntegratorSessionId as OuterIntegratorSessionId
 } from "../integrator/events.js"
@@ -414,6 +417,7 @@ const outerIntegratorRecordsFor = (
     startedAt: responsibility.startedAt,
     targetLineageObservedAt: JournalPosition.make(nextPosition)
   }
+  const run = { ordinal: IntegratorRunOrdinal.make(1), session: correlation }
   const record = (position: number, key: JournalRecordKey, event: JournalRecord["event"]) =>
     JournalRecord.make({
       event,
@@ -443,40 +447,46 @@ const outerIntegratorRecordsFor = (
   )
   const result = record(
     nextPosition + 2,
-    integratorResultRecordedRecordKey(correlation),
-    IntegratorResultRecordedEvent.make({
+    integratorRunStartedRecordKey(run),
+    IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
+  )
+  const runResult = record(
+    nextPosition + 3,
+    integratorRunResultRecordedRecordKey(run),
+    IntegratorRunResultRecordedEvent.make({
       result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation }),
+      run,
       version: workflowJournalEventVersion
     })
   )
   const readIntent = record(
-    nextPosition + 3,
-    integratorCandidateGitReadIntendedRecordKey(correlation, candidateText),
-    IntegratorCandidateGitReadIntendedEvent.make({ candidateText, correlation, version: workflowJournalEventVersion })
+    nextPosition + 4,
+    integratorRunCandidateGitReadIntendedRecordKey(run, candidateText),
+    IntegratorRunCandidateGitReadIntendedEvent.make({ candidateText, run, version: workflowJournalEventVersion })
   )
   const observed = record(
-    nextPosition + 4,
-    integratorCandidateGitObservedRecordKey(correlation, candidateText),
-    IntegratorCandidateGitObservedEvent.make({
+    nextPosition + 5,
+    integratorRunCandidateGitObservedRecordKey(run, candidateText),
+    IntegratorRunCandidateGitObservedEvent.make({
       candidateText,
-      correlation,
       observation: IntegratorGitObservation.cases.Commit.make({
         candidateText,
         commit: candidateCommit,
         directParents: [targetHeadSha, responsibility.acceptedResult.commit]
       }),
+      run,
       version: workflowJournalEventVersion
     })
   )
   return {
-    candidate: IntegratorQualifiedCandidate.make({
+    candidate: IntegratorRunQualifiedCandidate.make({
       candidateCommit,
       candidateText,
-      correlation,
+      run,
       directParents: [targetHeadSha, responsibility.acceptedResult.commit],
       qualifiedAt: observed.position
     }),
-    records: [...records, lineage, fixed, result, readIntent, observed]
+    records: [...records, lineage, fixed, result, runResult, readIntent, observed]
   }
 }
 
@@ -1590,7 +1600,7 @@ it.effect(
             TargetLineageObservation.make({
               plannedBaseIsAncestorOfTargetHead: true,
               plannedBaseSha: attempt.baseSha,
-              targetHeadSha: candidateState.candidate.correlation.expectedTargetHead
+              targetHeadSha: candidateState.candidate.run.session.expectedTargetHead
             })
           ]
         ]),
@@ -2027,7 +2037,7 @@ it.effect("releases stale and non-convergent promotions from the exact held resp
         attemptOrdinal: TargetPromotionAttemptOrdinal.make(3),
         correlation: promotion,
         lastObservation: TargetPromotionNonConvergenceObservation.cases.ExpectedHeadStillObserved.make({
-          observedHeadSha: promotion.qualifiedCandidate.correlation.expectedTargetHead
+          observedHeadSha: promotion.qualifiedCandidate.run.session.expectedTargetHead
         }),
         version: workflowJournalEventVersion
       })
@@ -2042,7 +2052,7 @@ it.effect("releases stale and non-convergent promotions from the exact held resp
           TargetLineageObservation.make({
             plannedBaseIsAncestorOfTargetHead: true,
             plannedBaseSha: attempt.baseSha,
-            targetHeadSha: candidateState.candidate.correlation.expectedTargetHead
+            targetHeadSha: candidateState.candidate.run.session.expectedTargetHead
           })
         ]
       ]),
