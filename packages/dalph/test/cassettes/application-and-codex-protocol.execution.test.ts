@@ -8,6 +8,11 @@ import {
   runApplicationExitProtocolCassette,
   runCodexPlannedAttemptExecutorCassette
 } from "../../src/cassettes/index.js"
+import { codexAttemptRecordOrNull } from "../../src/cassettes/codex-planned-attempt-executor-cassette.js"
+
+it("reports an absent private Codex record as null", () => {
+  expect(codexAttemptRecordOrNull(undefined)).toBeNull()
+})
 
 it.effect("runs maintained application Exit stories through the production request boundary", () =>
   Effect.gen(function* () {
@@ -48,6 +53,7 @@ it.effect("runs maintained Codex executor stories through the concrete productio
     expect(first?.reports.map(({ _tag }) => _tag)).toEqual(["Running"])
     expect(first?.threadStartCount).toBe(1)
     expect(first?.turnStartCount).toBe(1)
+    expect(first?.activeActivity._tag).toBe("ExactLive")
     expect(lost?.reports.map(({ _tag }) => _tag)).toEqual(["Running"])
     expect(lost?.turnStartCount).toBe(1)
     expect(accepted?.reports.map(({ _tag }) => _tag)).toEqual(["Running", "Terminal"])

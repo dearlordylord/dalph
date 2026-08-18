@@ -12,7 +12,8 @@ import {
   installLinuxSupervisorExitSignalAdapter,
   makeApplicationHostLifecyclePorts,
   makeLinuxSupervisorApplicationExitHost,
-  makeNodeApplicationHostProcessBoundary
+  makeNodeApplicationHostProcessBoundary,
+  nodeApplicationHostProcessBoundary
 } from "./supervisor-exit.js"
 
 const controlledSignalBoundary = Effect.fn("SupervisorExit.Test.controlledSignalBoundary")(function* () {
@@ -144,5 +145,14 @@ it.effect("adapts the exact Node process signal, diagnostic, and status capabili
 
     expect(processEnd).toMatchObject({ _tag: "Failure" })
     expect(chronology).toEqual(["installed", "reported:ExitRequested", "removed:true", "ended:1"])
+  })
+)
+
+it.effect("installs, removes, and reports through the real Node host without ending the process", () =>
+  Effect.gen(function* () {
+    const listener = () => undefined
+    yield* nodeApplicationHostProcessBoundary.addSigtermListener(listener)
+    yield* nodeApplicationHostProcessBoundary.removeSigtermListener(listener)
+    yield* nodeApplicationHostProcessBoundary.reportLifecycleEvent({ _tag: "AdmissionCutoffClosed" })
   })
 )

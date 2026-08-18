@@ -120,7 +120,7 @@ type RestartQuiescence =
   | { readonly _tag: "Rejected"; readonly reason: AttemptRestartRejectedReason }
   | { readonly _tag: "Unproved" }
 
-const terminalRestartQuiescence = (
+export const terminalRestartQuiescence = (
   evidence: PlannedAttemptExecutorEvidence,
   application: RestartApplicationRecord
 ): RestartQuiescence => {

@@ -1,5 +1,6 @@
 import { it } from "@effect/vitest"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
+import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -24,12 +25,26 @@ import { GitTargetLineageReadFailure, TargetLineageObservation } from "../../../
 import { ActiveTaskClaim, UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { FixtureReadError } from "../../../authorities/task-tracker/graph-reader.js"
-import { projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.js"
+import {
+  FixtureReadError,
+  TrackerAdapterReadError,
+  TrackerReadError
+} from "../../../authorities/task-tracker/graph-reader.js"
+import { GraphProjectionError, projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.js"
 import { TaskLifecycle, TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
-import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
+import {
+  reduceWorkflowJournalHistory,
+  replacementFollowsIntegrationCutoff,
+  replacementProofIsSafeOrLateAccepted,
+  replacementResourceConflict
+} from "../../../coordination/reconstruction/history.js"
+import {
+  gitReadIntentHasOutcome,
+  makeRunRecoveryProjection,
+  recordBeforePause,
+  restartReplacementDisposition
+} from "../../../coordination/run/recovery-activation.js"
 import { causalPredecessorOperationIds } from "../../causal-history.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
@@ -56,6 +71,7 @@ import {
   WorkflowInterpreter
 } from "../../interpretation/interpreter.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { terminalRestartQuiescence } from "./restart-authority.js"
 import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
@@ -284,6 +300,8 @@ interface RestartHarnessOptions {
   readonly target?: "Readable" | "Unreadable"
   readonly taskEligible?: boolean
   readonly taskFacts?: "Readable" | "Unreadable"
+  readonly taskFactsFailure?: "Adapter" | "Projection" | "Read"
+  readonly specificationFailure?: "Adapter" | "Fixture" | "Read"
   readonly retryAfterPending?: boolean
   readonly restartAttempts?: number
   readonly worktree?: "NotReady" | "Ready" | "Unreadable"
@@ -292,6 +310,14 @@ interface RestartHarnessOptions {
 const exerciseRestart = (options: RestartHarnessOptions) =>
   Effect.gen(function* () {
     yield* appendExposedRestart
+    const exposedRecords = yield* (yield* JournalStore).read(runId)
+    expect(
+      restartReplacementDisposition(exposedRecords, plannedAttempt, Option.none(), Option.some(integrationTarget))
+    ).toMatchObject({ _tag: "AttemptRestartRequired", requestId, subject })
+    expect(restartReplacementDisposition(exposedRecords, plannedAttempt, Option.none(), Option.none())).toMatchObject({
+      _tag: "AttemptRestartWait",
+      reason: "IntegrationTargetUnavailable"
+    })
     if (options.postChoiceClaimReacquired === true) {
       const journal = yield* JournalStore
       const lossRead = makeTaskClaimObservationOperation(
@@ -472,18 +498,56 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
                   })
                 })
               }),
-        readTrackerGraph: () =>
-          options.taskFacts === "Unreadable"
+        readTrackerGraph: () => {
+          if (options.taskFactsFailure === "Projection") {
+            return Effect.fail(
+              new GraphProjectionError({ issues: [{ _tag: "BoundaryDecodeFailed", detail: "invalid graph" }] })
+            )
+          }
+          if (options.taskFactsFailure === "Adapter") {
+            return Effect.fail(
+              new TrackerAdapterReadError({
+                context: { _tag: "Fixture", operation: "TrackerGraphReader.selectAdapter" },
+                detail: "adapter unavailable",
+                reason: { _tag: "Transport" }
+              })
+            )
+          }
+          if (options.taskFactsFailure === "Read") {
+            return Effect.fail(
+              new TrackerReadError({ detail: "tracker read failed", operation: "TrackerGraphReader.parse" })
+            )
+          }
+          return options.taskFacts === "Unreadable"
             ? Effect.fail(new FixtureReadError({ detail: "task facts unreadable", target }))
-            : Effect.succeed(options.taskEligible === false ? independentOnlyGraph : graph),
-        readTaskWorkSpecification: () =>
-          Ref.getAndUpdate(specificationReads, (count) => count + 1).pipe(
+            : Effect.succeed(options.taskEligible === false ? independentOnlyGraph : graph)
+        },
+        readTaskWorkSpecification: () => {
+          if (options.specificationFailure === "Fixture") {
+            return Effect.fail(new FixtureReadError({ detail: "specification unavailable", target }))
+          }
+          if (options.specificationFailure === "Adapter") {
+            return Effect.fail(
+              new TrackerAdapterReadError({
+                context: { _tag: "Fixture", operation: "TrackerGraphReader.selectAdapter" },
+                detail: "specification adapter unavailable",
+                reason: { _tag: "Transport" }
+              })
+            )
+          }
+          if (options.specificationFailure === "Read") {
+            return Effect.fail(
+              new TrackerReadError({ detail: "specification read failed", operation: "TrackerGraphReader.parse" })
+            )
+          }
+          return Ref.getAndUpdate(specificationReads, (count) => count + 1).pipe(
             Effect.map((count) =>
               options.specification === "F3" || (options.specification === "F3ThenF2" && count === 0)
                 ? thirdSpecification
                 : changedSpecification
             )
-          ),
+          )
+        },
         reconcileTaskWorktree: unused,
         recordTaskAttemptPlan: unused,
         releaseTaskClaim: unused
@@ -551,6 +615,148 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       suspensionCalls: yield* Ref.get(suspensionCalls)
     }
   })
+
+it("accepts only safe suspension or a late accepted terminal as replacement quiescence", () => {
+  const applicationPosition = JournalPosition.make(10)
+  const proof = (report: PlannedAttemptExecutorReport, observedAt: number) => ({
+    observedAt: JournalPosition.make(observedAt),
+    report,
+    source: { _tag: "CommandResponse" as const, ordinal: PlannedAttemptExecutorReportOrdinal.make(1) }
+  })
+  const acceptedResult = acceptedResultFixture(targetHeadSha)
+  expect(
+    replacementProofIsSafeOrLateAccepted(
+      proof(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }), 9),
+      applicationPosition
+    )
+  ).toBe(true)
+  expect(
+    replacementProofIsSafeOrLateAccepted(
+      proof(PlannedAttemptExecutorReport.cases.Running.make({ correlation }), 11),
+      applicationPosition
+    )
+  ).toBe(false)
+  expect(
+    replacementProofIsSafeOrLateAccepted(
+      proof(
+        PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Accepted", acceptedResult } }),
+        11
+      ),
+      applicationPosition
+    )
+  ).toBe(true)
+  expect(
+    replacementProofIsSafeOrLateAccepted(
+      proof(
+        PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Accepted", acceptedResult } }),
+        9
+      ),
+      applicationPosition
+    )
+  ).toBe(false)
+  expect(
+    replacementProofIsSafeOrLateAccepted(
+      proof(PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } }), 11),
+      applicationPosition
+    )
+  ).toBe(false)
+})
+
+it("classifies every terminal replacement-quiescence result at the Restart application boundary", () => {
+  const application = { position: JournalPosition.make(10) } as Parameters<typeof terminalRestartQuiescence>[1]
+  const evidence = (report: PlannedAttemptExecutorReport, observedAt: number) =>
+    ({ observedAt: JournalPosition.make(observedAt), report }) as Parameters<typeof terminalRestartQuiescence>[0]
+  const accepted = PlannedAttemptExecutorReport.cases.Terminal.make({
+    correlation,
+    result: { _tag: "Accepted", acceptedResult: acceptedResultFixture(targetHeadSha) }
+  })
+  expect(
+    terminalRestartQuiescence(
+      evidence(PlannedAttemptExecutorReport.cases.Running.make({ correlation }), 11),
+      application
+    )
+  ).toEqual({ _tag: "Unproved" })
+  expect(
+    terminalRestartQuiescence(
+      evidence(PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } }), 11),
+      application
+    )
+  ).toMatchObject({ _tag: "Rejected", reason: "CompletedDoesNotAuthorizeReplacement" })
+  expect(
+    terminalRestartQuiescence(
+      evidence(PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } }), 11),
+      application
+    )
+  ).toMatchObject({ _tag: "Rejected", reason: "FailedDoesNotAuthorizeReplacement" })
+  expect(terminalRestartQuiescence(evidence(accepted, 11), application)).toMatchObject({ _tag: "Proof" })
+  expect(terminalRestartQuiescence(evidence(accepted, 9), application)).toEqual({ _tag: "Unproved" })
+})
+
+it("classifies every resource event that would invalidate a planned-attempt replacement", () => {
+  type ResourceEvent = Parameters<typeof replacementResourceConflict>[0]
+  const witness = { expectedClaim: exactClaim } as Parameters<typeof replacementResourceConflict>[2]
+  const conflict = (event: unknown) => replacementResourceConflict(event as ResourceEvent, plannedAttempt, witness)
+
+  expect(conflict({ _tag: "WorkflowRunBegan" })).toBe(false)
+  expect(conflict({ _tag: "TaskClaimReacquisitionDirected", subject: { runId, taskId } })).toBe(true)
+  expect(conflict({ _tag: "TaskClaimReacquisitionDirected", subject: { runId, taskId: independentTaskId } })).toBe(
+    false
+  )
+  expect(conflict({ _tag: "TaskClaimAcquisitionIntended", operation: { acquisition: exactClaim } })).toBe(true)
+  expect(
+    conflict({
+      _tag: "TaskClaimAcquisitionIntended",
+      operation: { acquisition: { ...exactClaim, taskId: independentTaskId } }
+    })
+  ).toBe(false)
+  expect(conflict({ _tag: "TaskClaimReleaseIntended", operation: { release: { claim: exactClaim } } })).toBe(true)
+  expect(conflict({ _tag: "TaskClaimReleased", release: { claim: exactClaim } })).toBe(true)
+  expect(conflict({ _tag: "TaskWorktreeReconciliationIntended", operation: { plannedAttempt } })).toBe(true)
+  expect(
+    conflict({ _tag: "TaskWorktreeReconciliationIntended", operation: { plannedAttempt: independentAttempt } })
+  ).toBe(false)
+})
+
+it("recognizes only the exact attempt's integration-start cutoff", () => {
+  type HistoryRecord = Parameters<typeof replacementFollowsIntegrationCutoff>[0][number]
+  const record = (event: unknown) => ({ event }) as HistoryRecord
+  expect(replacementFollowsIntegrationCutoff([record({ _tag: "WorkflowRunBegan" })], plannedAttempt)).toBe(false)
+  expect(
+    replacementFollowsIntegrationCutoff(
+      [record({ _tag: "IntegrationStarted", plannedAttempt: independentAttempt })],
+      plannedAttempt
+    )
+  ).toBe(false)
+  expect(
+    replacementFollowsIntegrationCutoff([record({ _tag: "IntegrationStarted", plannedAttempt })], plannedAttempt)
+  ).toBe(true)
+})
+
+it("recognizes every terminal outcome for a pending Git read intent", () => {
+  type HistoryRecord = Parameters<typeof gitReadIntentHasOutcome>[0][number]
+  const operationId = OperationId.make("pending-git-read")
+  const record = (event: unknown) => ({ event }) as HistoryRecord
+  const hasOutcome = (event: unknown) => gitReadIntentHasOutcome([record(event)], operationId)
+
+  expect(hasOutcome({ _tag: "WorkflowRunBegan" })).toBe(false)
+  expect(hasOutcome({ _tag: "PlannedAttemptWorktreeObserved", operationId })).toBe(true)
+  expect(hasOutcome({ _tag: "TargetLineageObserved", operationId })).toBe(true)
+  expect(
+    hasOutcome({
+      _tag: "AttemptRestartAuthorityReadFailed",
+      failure: { _tag: "AttemptRestartGitReadFailure" },
+      operationId
+    })
+  ).toBe(true)
+  expect(
+    hasOutcome({
+      _tag: "AttemptRestartAuthorityReadFailed",
+      failure: { _tag: "AttemptRestartTaskFactsReadFailure" },
+      operationId
+    })
+  ).toBe(false)
+  expect(hasOutcome({ _tag: "TargetLineageObserved", operationId: OperationId.make("another-read") })).toBe(false)
+})
 
 it.effect("rejects a replacement when the planner returns a non-distinct successor", () =>
   Effect.flip(exerciseRestart({ planner: "Wrong" })).pipe(
@@ -667,6 +873,14 @@ it.effect("atomically supersedes exact P1 with clean P2 from fresh F2 K1 W1 and 
     expect(records.some(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")).toBe(false)
     expect(authorizedClaimForAttempt(records, successorAttempt)?.claim).toEqual(exactClaim)
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+    const replacementPosition = replacements[0]?.position
+    if (replacementPosition === undefined) return expect.fail("expected replacement position")
+    expect(recordBeforePause(records, replacementPosition, ({ event }) => event._tag === "WorkflowRunBegan")).toBe(true)
+    expect(recordBeforePause(records, JournalPosition.make(1), () => true)).toBe(false)
+    expect(recordBeforePause(records, replacementPosition, () => false)).toBe(false)
+    expect(
+      restartReplacementDisposition(records, plannedAttempt, Option.none(), Option.some(integrationTarget))
+    ).toBeUndefined()
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
@@ -1023,6 +1237,161 @@ it.effect("rejects replacement authority whose boundary intent predates the appl
   )
 )
 
+it.effect("rejects every missing or superseding replacement authority fact", () =>
+  exerciseRestart({}).pipe(
+    Effect.tap(({ records }) =>
+      Effect.sync(() => {
+        const replacement = records.find(({ event }) => event._tag === "PlannedAttemptReplaced")?.event
+        if (replacement?._tag !== "PlannedAttemptReplaced") return expect.fail("expected replacement")
+        const operationIds = [
+          replacement.witness.graphObservationOperationId,
+          replacement.witness.specificationObservationOperationId,
+          replacement.witness.claimObservationOperationId,
+          replacement.witness.oldWorktreeObservationOperationId,
+          replacement.witness.targetLineageObservationOperationId
+        ]
+        const applicationIndex = records.findIndex(
+          ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
+        )
+        if (applicationIndex < 0) return expect.fail("expected applied Restart")
+        const reindex = (candidate: typeof records) =>
+          candidate.map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
+        const assertAuthorityFailure = (candidate: typeof records) => {
+          const reduction = reduceWorkflowJournalHistory(runId, reindex(candidate))
+          expect(reduction).toMatchObject({
+            _tag: "InvalidWorkflowJournalHistory",
+            issues: expect.arrayContaining([
+              expect.objectContaining({
+                detail: "PlannedAttemptReplaced lacks exact fresh F2, K1, W1, or H2 authority"
+              })
+            ])
+          })
+        }
+
+        for (const operationId of operationIds) {
+          const withoutOutcome = records.filter(
+            ({ event }) => !("operationId" in event && event.operationId === operationId)
+          )
+          assertAuthorityFailure(withoutOutcome)
+
+          const intentIndex = records.findIndex(
+            ({ event }) =>
+              (event._tag === "TaskTrackerReadIntentRecorded" || event._tag === "GitReadIntentRecorded") &&
+              event.operation.operationId === operationId
+          )
+          const outcomeIndex = records.findIndex(
+            ({ event }) => "operationId" in event && event.operationId === operationId
+          )
+          if (intentIndex < 0 || outcomeIndex < 0) return expect.fail(`expected authority records for ${operationId}`)
+          const intent = records[intentIndex]
+          const outcome = records[outcomeIndex]
+          if (intent === undefined) return expect.fail(`expected authority intent for ${operationId}`)
+          if (outcome === undefined) return expect.fail(`expected authority outcome for ${operationId}`)
+          assertAuthorityFailure(records.filter((_, index) => index !== intentIndex))
+
+          const withoutOutcomeRecord = records.filter((_, index) => index !== outcomeIndex)
+          const shiftedApplicationIndex = withoutOutcomeRecord.findIndex(
+            ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
+          )
+          assertAuthorityFailure([
+            ...withoutOutcomeRecord.slice(0, shiftedApplicationIndex),
+            outcome,
+            ...withoutOutcomeRecord.slice(shiftedApplicationIndex)
+          ])
+
+          const withoutIntent = records.filter((_, index) => index !== intentIndex)
+          const shiftedOutcomeIndex = withoutIntent.findIndex(
+            ({ event }) => "operationId" in event && event.operationId === operationId
+          )
+          const intentAfterOutcome = [
+            ...withoutIntent.slice(0, shiftedOutcomeIndex + 1),
+            intent,
+            ...withoutIntent.slice(shiftedOutcomeIndex + 1)
+          ]
+          assertAuthorityFailure(intentAfterOutcome)
+        }
+
+        const claimIntent = records.find(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation.operationId === replacement.witness.claimObservationOperationId
+        )
+        if (
+          claimIntent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
+          claimIntent.event.operation._tag !== "ReadTaskClaim"
+        ) {
+          return expect.fail("expected replacement claim intent")
+        }
+        const claimOperation = claimIntent.event.operation
+        assertAuthorityFailure(
+          records.map((record) =>
+            "operationId" in record.event &&
+            record.event.operationId === replacement.witness.claimObservationOperationId
+              ? {
+                  ...record,
+                  event: taskTrackerFactsObservedEvent(
+                    replacement.witness.claimObservationOperationId,
+                    makeFocusedTaskClaimFactsObserved(
+                      claimOperation,
+                      UnclaimedTask.make({ taskId: plannedAttempt.taskId })
+                    )
+                  )
+                }
+              : record
+          )
+        )
+
+        assertAuthorityFailure(
+          records.map((record) =>
+            record.event._tag === "PlannedAttemptWorktreeObserved" &&
+            record.event.operationId === replacement.witness.oldWorktreeObservationOperationId
+              ? {
+                  ...record,
+                  event: PlannedAttemptWorktreeObservedEvent.make({
+                    observation: AttemptWorktreeLost.make({ plannedAttempt }),
+                    occurrenceClassification: "NonActionOccurrence",
+                    operationId: replacement.witness.oldWorktreeObservationOperationId,
+                    version: workflowJournalEventVersion
+                  })
+                }
+              : record
+          )
+        )
+
+        assertAuthorityFailure(records.filter(({ event }) => event._tag !== "TaskClaimAcquired"))
+
+        const claimIntentIndex = records.findIndex(({ event }) => event._tag === "TaskClaimAcquisitionIntended")
+        const replacementIndex = records.findIndex(({ event }) => event._tag === "PlannedAttemptReplaced")
+        const claimAcquisitionIntent = records[claimIntentIndex]
+        if (claimIntentIndex < 0 || replacementIndex < 0 || claimAcquisitionIntent === undefined) {
+          return expect.fail("expected claim acquisition and replacement records")
+        }
+        const withoutClaimAcquisitionIntent = records.filter((_, index) => index !== claimIntentIndex)
+        const shiftedReplacementIndex = withoutClaimAcquisitionIntent.findIndex(
+          ({ event }) => event._tag === "PlannedAttemptReplaced"
+        )
+        assertAuthorityFailure([
+          ...withoutClaimAcquisitionIntent.slice(0, shiftedReplacementIndex),
+          claimAcquisitionIntent,
+          ...withoutClaimAcquisitionIntent.slice(shiftedReplacementIndex)
+        ])
+
+        const replacementRecord = records[replacementIndex]
+        if (replacementRecord === undefined) return expect.fail("expected replacement record")
+        expect(
+          reduceWorkflowJournalHistory(
+            runId,
+            reindex([...records.slice(0, replacementIndex), replacementRecord, ...records.slice(replacementIndex)])
+          )._tag
+        ).toBe("InvalidWorkflowJournalHistory")
+      })
+    ),
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
+
 it.effect("rejects replacement when a later task read supersedes the named F2 authority", () =>
   Effect.gen(function* () {
     yield* exerciseRestart({})
@@ -1127,6 +1496,18 @@ const nonAuthorizingCases = [
     reason: "TaskFactsUnreadable",
     tag: "AttemptRestartPending"
   },
+  ...(["Adapter", "Projection", "Read"] as const).map((taskFactsFailure) => ({
+    name: `waits when the graph read fails through ${taskFactsFailure}`,
+    options: { taskFactsFailure },
+    reason: "TaskFactsUnreadable" as const,
+    tag: "AttemptRestartPending" as const
+  })),
+  ...(["Adapter", "Fixture", "Read"] as const).map((specificationFailure) => ({
+    name: `waits when the specification read fails through ${specificationFailure}`,
+    options: { specificationFailure },
+    reason: "TaskFactsUnreadable" as const,
+    tag: "AttemptRestartPending" as const
+  })),
   {
     name: "waits when the changed task is not currently eligible",
     options: { taskEligible: false },
@@ -1193,8 +1574,35 @@ for (const fixture of nonAuthorizingCases) {
             fixture.reason === "TargetHeadUnreadable"
           ) {
             expect(records.filter(({ event }) => event._tag === "AttemptRestartAuthorityReadFailed")).toHaveLength(1)
+            const failure = records.find(({ event }) => event._tag === "AttemptRestartAuthorityReadFailed")?.event
+            if (failure?._tag !== "AttemptRestartAuthorityReadFailed") {
+              return expect.fail("expected Restart authority read failure")
+            }
+            const withoutIntent = records.filter(
+              ({ event }) =>
+                !(
+                  (event._tag === "TaskTrackerReadIntentRecorded" || event._tag === "GitReadIntentRecorded") &&
+                  event.operation.operationId === failure.operationId
+                )
+            )
+            expect(reduceWorkflowJournalHistory(runId, withoutIntent)._tag).toBe("InvalidWorkflowJournalHistory")
+            const withoutApplication = records.filter(
+              ({ event }) =>
+                !(
+                  event._tag === "AttemptChoiceApplied" &&
+                  event.choice === "RestartTaskImplementation" &&
+                  event.requestId.nonce === failure.requestId.nonce
+                )
+            )
+            expect(reduceWorkflowJournalHistory(runId, withoutApplication)._tag).toBe("InvalidWorkflowJournalHistory")
           }
           expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+          expect(
+            restartReplacementDisposition(records, plannedAttempt, Option.none(), Option.some(integrationTarget))
+          ).toMatchObject({
+            _tag: fixture.tag === "AttemptRestartPending" ? "AttemptRestartWait" : fixture.tag,
+            reason: fixture.reason
+          })
         })
       ),
       Effect.provide(attemptChoiceControlLayer),

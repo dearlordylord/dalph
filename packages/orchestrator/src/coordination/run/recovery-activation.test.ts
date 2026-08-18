@@ -1,7 +1,12 @@
+import { it as effectIt } from "@effect/vitest"
+import { Effect, Option } from "effect"
 import { expect, it } from "vitest"
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -10,16 +15,31 @@ import {
   TaskId,
   TaskRevision,
   WorktreeLocator,
+  makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { validSnapshot } from "../../../test/task-dag.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { InitialControlPolicy } from "../../control/policy.js"
+import { TaskWorkCapacity } from "../admission/capacity.js"
+import { UntrackedWorktreePath, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { OperationId } from "../../workflow/identity.js"
-import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskClaimObservationOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
@@ -34,10 +54,226 @@ import {
   PlannedAttemptExecutorCommandProjectionObservation,
   PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   PlannedAttemptExecutorWorkReportedEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import { safelySuspendedAttemptMayContinue, taskPauseSuspensionIsOwed } from "./recovery-activation.js"
-import { ReconstructedPauseState } from "../reconstruction/state.js"
+import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
+import type { PlannedAttemptWorktreeObservation } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
+import {
+  GitReadIntentRecordedEvent,
+  PlannedAttemptWorktreeObservedEvent,
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent
+} from "../../workflow/registry/event.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  continuationDecisionFor,
+  continuationFreshnessBaselineForAttempt,
+  deriveJournalResponsibilityFacts,
+  makeRunRecoveryProjection,
+  safelySuspendedAttemptMayContinue,
+  taskPauseSuspensionIsOwed
+} from "./recovery-activation.js"
+import { authorizedClaimForAttempt } from "./recovery-authority.js"
+import { ReconstructedPauseState, type ReconstructedRunState } from "../reconstruction/state.js"
+import { RunnableFrontierTransition } from "../frontier/frontier.js"
+
+const coverageRunId = RunId.make("recovery-activation-coverage-run")
+const coverageTarget = FixtureTarget.make("recovery-activation-coverage-target")
+const coverageAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("recovery-activation-coverage-attempt"),
+  baseSha: GitCommitSha.make("a".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/recovery-activation-coverage"),
+  executor: TaskExecutorLocator.make("executor:recovery-activation-coverage"),
+  runId: coverageRunId,
+  taskId: TaskId.make("recovery-activation-coverage-task"),
+  taskRevision: TaskRevision.make("recovery-activation-planned-revision"),
+  worktree: WorktreeLocator.make("/worktrees/recovery-activation-coverage")
+})
+const coveragePolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+
+const coverageRecord = (position: number, event: JournalRecord["event"], runId = coverageRunId): JournalRecord => ({
+  event,
+  key: outcomeRecordKey(OperationId.make(`recovery-activation-coverage-record-${position}`)),
+  position: JournalPosition.make(position),
+  runId
+})
+
+const coverageRunState = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: ReconstructedRunState["responsibility"]["entries"] = [],
+  runId = coverageRunId
+): ReconstructedRunState => ({
+  appliedThrough: records.at(-1)?.position ?? null,
+  controlPolicy: Option.none(),
+  graphKnowledge: { taskTrackerFacts: [] },
+  pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+  responsibility: { entries: responsibility },
+  runId,
+  workflowHistory: { records }
+})
+
+const coverageAcquisition = {
+  operationId: OperationId.make("recovery-activation-coverage-acquisition"),
+  owner: ClaimOwner.make("dalph"),
+  taskId: coverageAttempt.taskId,
+  token: ClaimToken.make("recovery-activation-coverage-token")
+}
+const coverageClaim = ActiveTaskClaim.make(coverageAcquisition)
+const coverageAcquireOperation = makeTaskClaimAcquisitionOperation({
+  acquisition: coverageAcquisition,
+  predecessorOperationIds: []
+})
+const coveragePlanOperation = makeTaskAttemptPlanOperation({
+  operationId: OperationId.make("recovery-activation-coverage-plan"),
+  plannedAttempt: coverageAttempt,
+  predecessorOperationIds: [coverageAcquisition.operationId]
+})
+const coverageResponsibility = {
+  _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+  beganAt: JournalPosition.make(4),
+  plannedAttempt: coverageAttempt
+}
+
+const coveragePlanRecords = (): ReadonlyArray<JournalRecord> => [
+  coverageRecord(
+    1,
+    TaskClaimAcquisitionIntendedEvent.make({
+      operation: coverageAcquireOperation,
+      version: workflowJournalEventVersion
+    })
+  ),
+  coverageRecord(2, TaskClaimAcquiredEvent.make({ claim: coverageClaim, version: workflowJournalEventVersion })),
+  coverageRecord(
+    3,
+    TaskAttemptPlannedEvent.make({ operation: coveragePlanOperation, version: workflowJournalEventVersion })
+  ),
+  coverageRecord(
+    4,
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+]
+
+const coverageGraphOperation = makeTrackerGraphObservationOperation(
+  OperationId.make("recovery-activation-coverage-graph"),
+  coverageTarget,
+  [],
+  [coverageAttempt.taskId]
+)
+const coverageGraph = validSnapshot({
+  revision: "recovery-activation-coverage-graph-revision",
+  tasks: [{ id: coverageAttempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+})
+const coverageGraphEvent = taskTrackerFactsObservedEvent(
+  coverageGraphOperation.operationId,
+  makeCompleteTaskTrackerFactsObserved(coverageGraphOperation, coverageGraph)
+)
+const coverageSpecification = makeTaskWorkSpecification({
+  body: "coverage body",
+  taskId: coverageAttempt.taskId,
+  title: "coverage title"
+})
+const coverageSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
+  OperationId.make("recovery-activation-coverage-specification"),
+  coverageTarget,
+  coverageAttempt.taskId,
+  [coverageGraphOperation.operationId]
+)
+const coverageSpecificationEvent = taskTrackerFactsObservedEvent(
+  coverageSpecificationOperation.operationId,
+  makeFocusedTaskWorkSpecificationFactsObserved(coverageSpecificationOperation, coverageSpecification)
+)
+const coverageClaimOperation = makeTaskClaimObservationOperation(
+  OperationId.make("recovery-activation-coverage-claim"),
+  coverageTarget,
+  coverageAttempt.taskId,
+  [coverageGraphOperation.operationId, coverageSpecificationOperation.operationId]
+)
+const coverageClaimEvent = taskTrackerFactsObservedEvent(
+  coverageClaimOperation.operationId,
+  makeFocusedTaskClaimFactsObserved(coverageClaimOperation, coverageClaim)
+)
+const coverageContinuationTransition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+  acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(4) },
+  plannedAttempt: coverageAttempt
+})
+
+const continuationRecords = (
+  claimEvent: typeof coverageClaimEvent,
+  worktreeObservation: PlannedAttemptWorktreeObservation,
+  includeContinueChoice = false
+): ReadonlyArray<JournalRecord> => {
+  const worktreeOperation = makeTaskWorktreeObservationOperation({
+    operationId: OperationId.make("recovery-activation-coverage-worktree"),
+    plannedAttempt: coverageAttempt,
+    predecessorOperationIds: [coverageClaimOperation.operationId]
+  })
+  const records = [
+    ...coveragePlanRecords(),
+    coverageRecord(5, coverageGraphEvent),
+    coverageRecord(6, coverageSpecificationEvent),
+    coverageRecord(7, claimEvent),
+    coverageRecord(
+      8,
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: worktreeOperation,
+        version: workflowJournalEventVersion
+      })
+    ),
+    coverageRecord(
+      9,
+      PlannedAttemptWorktreeObservedEvent.make({
+        observation: worktreeObservation,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: worktreeOperation.operationId,
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
+  return includeContinueChoice
+    ? [
+        ...records,
+        coverageRecord(
+          10,
+          AttemptChoiceAppliedEvent.make({
+            choice: "ContinueExistingAttempt",
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            requestId: AttemptChoiceRequestId.make({
+              nonce: "recovery-activation-coverage-continue",
+              runId: coverageRunId
+            }),
+            subject: {
+              observedTaskRevision: TaskRevision.make("recovery-activation-observed-revision"),
+              plannedAttempt: coverageAttempt
+            },
+            version: workflowJournalEventVersion
+          })
+        )
+      ]
+    : records
+}
+
+const currentProjectionJournal = (
+  runId: RunId,
+  target: typeof coverageTarget,
+  reconstructed: ReconstructedRunState
+) => {
+  const began = makeWorkflowRunBeganRecord(runId, target, coveragePolicy)
+  const journal = InRunJournal.of({
+    append: () => Effect.die("projection coverage does not append"),
+    read: () => Effect.succeed([began])
+  })
+  return Object.assign(journal, { state: { get: Effect.succeed({ reconstructed }) } })
+}
 
 it("suspends a running grouping descendant and reopens it after current facts move it outside the parent", () => {
   const runId = RunId.make("grouping-descendant-suspension-run")
@@ -278,3 +514,155 @@ it("suspends a running grouping descendant and reopens it after current facts mo
     )
   ).toBe(true)
 })
+
+it("keeps a claim-backed attempt suspended when Git reports an untracked worktree path", () => {
+  const worktreeOperation = makeTaskWorktreeObservationOperation({
+    operationId: OperationId.make("recovery-activation-coverage-untracked-worktree"),
+    plannedAttempt: coverageAttempt,
+    predecessorOperationIds: [coveragePlanOperation.operationId]
+  })
+  const records = [
+    ...coveragePlanRecords(),
+    coverageRecord(5, coverageClaimEvent),
+    coverageRecord(
+      6,
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: worktreeOperation,
+        version: workflowJournalEventVersion
+      })
+    ),
+    coverageRecord(
+      7,
+      PlannedAttemptWorktreeObservedEvent.make({
+        observation: UntrackedWorktreePath.make({ worktree: coverageAttempt.worktree }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: worktreeOperation.operationId,
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
+  expect(authorizedClaimForAttempt(records, coverageAttempt)?.claim).toEqual(coverageClaim)
+  const [facts] = deriveJournalResponsibilityFacts(coverageRunState(records, [coverageResponsibility]))
+
+  expect(facts).toMatchObject({
+    _tag: "PlannedAttemptExecutorFreshFacts",
+    disposition: { _tag: "PlannedAttemptExecutorSuspensionRequested" }
+  })
+})
+
+it("uses the latest completed run pause as an attempt baseline and returns none without pause facts", () => {
+  const pause = ControlDirectionAppliedEvent.make({
+    direction: "Pause",
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    ordinal: ControlDirectionApplicationOrdinal.make(1),
+    subject: { _tag: "Run", runId: coverageRunId },
+    version: workflowJournalEventVersion
+  })
+  const unpause = ControlDirectionAppliedEvent.make({
+    direction: "Unpause",
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    ordinal: ControlDirectionApplicationOrdinal.make(2),
+    subject: { _tag: "Run", runId: coverageRunId },
+    version: workflowJournalEventVersion
+  })
+  const pausedHistory = coverageRunState([coverageRecord(1, pause), coverageRecord(2, unpause)])
+
+  expect(continuationFreshnessBaselineForAttempt(pausedHistory, Option.none(), coverageAttempt, undefined)).toEqual(
+    Option.some(JournalPosition.make(2))
+  )
+  expect(
+    continuationFreshnessBaselineForAttempt(coverageRunState([]), Option.none(), coverageAttempt, undefined)
+  ).toEqual(Option.none())
+})
+
+it("stops continuation after a foreign current claim, and preserves a transition for a non-ready worktree", () => {
+  const foreignClaim = ActiveTaskClaim.make({
+    ...coverageAcquisition,
+    owner: ClaimOwner.make("another-owner"),
+    token: ClaimToken.make("another-token")
+  })
+  const foreignClaimEvent = taskTrackerFactsObservedEvent(
+    coverageClaimOperation.operationId,
+    makeFocusedTaskClaimFactsObserved(coverageClaimOperation, foreignClaim)
+  )
+  const foreignDecision = continuationDecisionFor(
+    coverageContinuationTransition,
+    continuationRecords(foreignClaimEvent, UntrackedWorktreePath.make({ worktree: coverageAttempt.worktree })),
+    { event: coverageGraphEvent, position: JournalPosition.make(5) },
+    Option.none(),
+    Option.none()
+  )
+  expect(foreignDecision).toEqual({})
+
+  const worktreeDecision = continuationDecisionFor(
+    coverageContinuationTransition,
+    continuationRecords(coverageClaimEvent, UntrackedWorktreePath.make({ worktree: coverageAttempt.worktree })),
+    { event: coverageGraphEvent, position: JournalPosition.make(5) },
+    Option.none(),
+    Option.none()
+  )
+  expect(worktreeDecision).toEqual({ transition: coverageContinuationTransition })
+})
+
+it("waits for integration configuration after an applied Continue choice has current ready facts", () => {
+  const ready = PlannedWorktreeReady.make({
+    baseSha: coverageAttempt.baseSha,
+    branch: coverageAttempt.branch,
+    headSha: coverageAttempt.baseSha,
+    worktree: coverageAttempt.worktree
+  })
+  const decision = continuationDecisionFor(
+    coverageContinuationTransition,
+    continuationRecords(coverageClaimEvent, ready, true),
+    { event: coverageGraphEvent, position: JournalPosition.make(5) },
+    Option.none(),
+    Option.none()
+  )
+
+  expect(decision).toEqual({
+    explanation: {
+      _tag: "IntegrationConfigurationWait",
+      plannedAttempt: coverageAttempt,
+      wakeCondition: "IntegrationTargetConfigured"
+    }
+  })
+})
+
+effectIt.effect("uses the current reconstructed state for configured projection and rejects a mismatched run", () =>
+  Effect.gen(function* () {
+    const matchingState = coverageRunState([])
+    const configuredJournal = currentProjectionJournal(coverageRunId, coverageTarget, matchingState)
+    const integrationTarget = IntegrationTarget.make({
+      ref: IntegrationTargetRef.make("refs/heads/main"),
+      repository: GitRepositoryLocator.make("/repositories/recovery-activation-coverage.git")
+    })
+    const configuredRecovery = yield* makeRunRecoveryProjection(coverageRunId, integrationTarget).pipe(
+      Effect.provideService(InRunJournal, configuredJournal)
+    )
+    const configuredProjection = yield* configuredRecovery.readDeliveryProjection
+    if (configuredProjection.evidence._tag !== "AvailableDeliveryProjectionEvidence") {
+      return expect.fail("expected configured delivery projection evidence")
+    }
+    expect(configuredProjection.evidence.facts).toEqual([])
+
+    const otherRunId = RunId.make("recovery-activation-other-run")
+    const mismatchedJournal = currentProjectionJournal(
+      coverageRunId,
+      coverageTarget,
+      coverageRunState([], [], otherRunId)
+    )
+    const mismatchedRecovery = yield* makeRunRecoveryProjection(coverageRunId).pipe(
+      Effect.provideService(InRunJournal, mismatchedJournal)
+    )
+    const failure = yield* mismatchedRecovery.readDeliveryProjection.pipe(Effect.flip)
+    expect(failure).toMatchObject({
+      _tag: "RunRecoveryProjectionRunMismatch",
+      expectedRunId: coverageRunId,
+      receivedRunId: otherRunId
+    })
+  })
+)

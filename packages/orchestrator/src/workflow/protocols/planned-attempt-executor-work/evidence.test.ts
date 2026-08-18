@@ -9,8 +9,10 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
+import { Effect, Exit } from "effect"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -22,7 +24,11 @@ import {
   PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptExecutorStateObservedEvent
 } from "./events.js"
-import { latestPlannedAttemptExecutorEvidence, plannedAttemptExecutorEvidence } from "./evidence.js"
+import {
+  latestPlannedAttemptExecutorEvidence,
+  plannedAttemptExecutorEvidence,
+  plannedAttemptExecutorRequestFor
+} from "./evidence.js"
 
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("evidence-attempt"),
@@ -118,4 +124,42 @@ it.each([
       plannedAttempt
     )?.observedAt
   ).toBe(3)
+})
+
+it("classifies selected and journal-derived task work specifications exactly", async () => {
+  const wrongTask = makeTaskWorkSpecification({ body: "wrong", taskId: TaskId.make("other"), title: "wrong" })
+  const stale = makeTaskWorkSpecification({ body: "stale", taskId: plannedAttempt.taskId, title: "stale" })
+  const exact = makeTaskWorkSpecification({ body: "exact", taskId: plannedAttempt.taskId, title: "exact" })
+  const exactAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, taskRevision: exact.fingerprint })
+
+  expect(
+    Exit.isFailure(await Effect.runPromiseExit(plannedAttemptExecutorRequestFor([], plannedAttempt, wrongTask)))
+  ).toBe(true)
+  expect(Exit.isFailure(await Effect.runPromiseExit(plannedAttemptExecutorRequestFor([], plannedAttempt, stale)))).toBe(
+    true
+  )
+  expect(Exit.isFailure(await Effect.runPromiseExit(plannedAttemptExecutorRequestFor([], plannedAttempt)))).toBe(true)
+  expect(
+    Exit.isFailure(await Effect.runPromiseExit(plannedAttemptExecutorRequestFor([], plannedAttempt, undefined)))
+  ).toBe(true)
+  expect(Exit.isSuccess(await Effect.runPromiseExit(plannedAttemptExecutorRequestFor([], exactAttempt, exact)))).toBe(
+    true
+  )
+})
+
+it("applies the executor-evidence position cutoff inclusively", () => {
+  const event = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+      report: PlannedAttemptExecutorReport.cases.Running.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+      })
+    }),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const records = [{ event, position: JournalPosition.make(2) }]
+  expect(plannedAttemptExecutorEvidence(records, plannedAttempt, JournalPosition.make(2))).toEqual([])
+  expect(plannedAttemptExecutorEvidence(records, plannedAttempt, JournalPosition.make(1))).toHaveLength(1)
 })

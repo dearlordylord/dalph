@@ -51,7 +51,7 @@ type JsonRecord = Record<string, unknown>
 
 const isJsonRecord = (value: unknown): value is JsonRecord => typeof value === "object" && value !== null
 
-const commandFailure = (
+export const commandFailure = (
   command: "StartOrContinue" | "Suspend",
   correlation: PlannedAttemptExecutorCorrelation,
   error: unknown
@@ -61,6 +61,13 @@ const commandFailure = (
     correlation,
     detail: error instanceof Error ? error.message : String(error)
   })
+
+export const preserveCommandFailure = (
+  command: "StartOrContinue" | "Suspend",
+  correlation: PlannedAttemptExecutorCorrelation,
+  error: unknown
+): PlannedAttemptExecutorCommandFailure =>
+  error instanceof PlannedAttemptExecutorCommandFailure ? error : commandFailure(command, correlation, error)
 
 const running = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorReportType =>
   PlannedAttemptExecutorReport.cases.Running.make({ correlation })
@@ -247,33 +254,47 @@ const isAcceptedTerminalRecord = (record: CodexTerminalRecord): record is CodexA
   record.terminal._tag === "Accepted" && record.evidenceManifest !== null
 
 const isPersistableOwnedRecord = (
-  record: OwnedTurnRecord
+  record: CodexAttemptRecord
 ): record is CodexObservedRecord | CodexRunningRecord | CodexSafelySuspendedRecord =>
   record._tag !== "TurnIntentRecorded" && record._tag !== "Terminal"
 
-const ownedTurnTokenCounts = (turns: ReadonlyArray<CodexTurnSnapshot>): ReadonlyMap<string, number> =>
+export const ownedRecordPersistenceDisposition = (
+  tag: CodexAttemptRecord["_tag"]
+): "Intent" | "Persistable" | "Reject" => {
+  switch (tag) {
+    case "TurnIntentRecorded":
+      return "Intent"
+    case "TurnObserved":
+    case "Running":
+    case "SafelySuspended":
+      return "Persistable"
+    case "EmptyPreTurn":
+    case "AssociatedPreTurn":
+    case "Terminal":
+      return "Reject"
+  }
+}
+
+export const ownedTurnTokenCounts = (turns: ReadonlyArray<CodexTurnSnapshot>): ReadonlyMap<string, number> =>
   turns.reduce<ReadonlyMap<string, number>>((counts, turn) => {
     if (turn.ownedTurnToken === undefined) return counts
     return new Map([...counts, [turn.ownedTurnToken, (counts.get(turn.ownedTurnToken) ?? 0) + 1] as const])
   }, new Map())
 
-const hasDuplicateOwnedTurnTokens = (tokenCounts: ReadonlyMap<string, number>): boolean =>
+export const hasDuplicateOwnedTurnTokens = (tokenCounts: ReadonlyMap<string, number>): boolean =>
   [...tokenCounts.values()].some((count) => count > 1)
 
 const ownedTurnMatch = (thread: CodexThreadSnapshot, record: OwnedTurnRecord): TurnLookup => {
   if (hasDuplicateOwnedTurnTokens(ownedTurnTokenCounts(thread.turns))) return { _tag: "Contradiction" }
-  const matching = thread.turns.filter((turn) => turn.ownedTurnToken === record.currentToken)
-  if (matching.length > 1) return { _tag: "Contradiction" }
-  if (matching.length === 0) {
+  const turn = thread.turns.find((candidate) => candidate.ownedTurnToken === record.currentToken)
+  if (turn === undefined) {
     if (record._tag === "TurnIntentRecorded") return { _tag: "Missing" }
     return { _tag: "Contradiction" }
   }
-  const turn = matching[0]
-  if (turn === undefined) return { _tag: "Contradiction" }
   return { _tag: "Found", turn }
 }
 
-const priorObservedTurnIsConsistent = (
+export const priorObservedTurnIsConsistent = (
   thread: CodexThreadSnapshot,
   record: OwnedTurnRecord,
   turn: CodexTurnSnapshot
@@ -296,7 +317,7 @@ const ownedTurnCorrelation = (record: OwnedTurnRecord, turn: CodexTurnSnapshot):
   return { _tag: "Found", turn }
 }
 
-const ownedTurnForRecord = (thread: CodexThreadSnapshot, record: CodexAttemptRecord): TurnLookup => {
+export const ownedTurnForRecord = (thread: CodexThreadSnapshot, record: CodexAttemptRecord): TurnLookup => {
   if (record._tag === "EmptyPreTurn" || record._tag === "AssociatedPreTurn") return { _tag: "Missing" }
   const match = ownedTurnMatch(thread, record)
   if (match._tag !== "Found") return match
@@ -304,13 +325,13 @@ const ownedTurnForRecord = (thread: CodexThreadSnapshot, record: CodexAttemptRec
   return ownedTurnCorrelation(record, match.turn)
 }
 
-const isTerminalTurn = (turn: CodexTurnSnapshot | undefined): boolean =>
+export const isTerminalTurn = (turn: CodexTurnSnapshot | undefined): boolean =>
   turn !== undefined && (turn.status === "completed" || turn.status === "failed")
 
-const isActiveThread = (thread: CodexThreadSnapshot, turn: CodexTurnSnapshot | undefined): boolean =>
+export const isActiveThread = (thread: CodexThreadSnapshot, turn: CodexTurnSnapshot | undefined): boolean =>
   thread.status === "active" || turn?.status === "inProgress"
 
-const collectText = (value: unknown): string => {
+export const collectText = (value: unknown): string => {
   if (typeof value === "string") return value
   if (!isJsonRecord(value)) return ""
   const text = value["text"]
@@ -321,7 +342,7 @@ type ParsedCommitMessage =
   | { readonly _tag: "Valid"; readonly candidate: string | undefined }
   | { readonly _tag: "Invalid" }
 
-const parsedCommitFromMessage = (
+export const parsedCommitFromMessage = (
   finalMessage: string,
   expectedCorrelation: PlannedAttemptExecutorCorrelation
 ): ParsedCommitMessage => {
@@ -338,7 +359,7 @@ const parsedCommitFromMessage = (
   }
 }
 
-const commitCandidates = (finalMessage: string, parsedCandidate: string | undefined): ReadonlySet<string> =>
+export const commitCandidates = (finalMessage: string, parsedCandidate: string | undefined): ReadonlySet<string> =>
   new Set<string>([
     ...(parsedCandidate !== undefined && /^[0-9a-f]{40}$/.test(parsedCandidate) ? [parsedCandidate] : []),
     ...Array.from(finalMessage.matchAll(commitPattern), (match) => match[1]).filter(
@@ -346,15 +367,7 @@ const commitCandidates = (finalMessage: string, parsedCandidate: string | undefi
     )
   ])
 
-const decodeCommit = (candidate: string): GitCommitSha | undefined => {
-  try {
-    return Schema.decodeUnknownSync(GitCommitSha)(candidate)
-  } catch {
-    return undefined
-  }
-}
-
-const decodeAcceptedManifest = (bytes: Uint8Array): typeof AcceptedResultEvidenceManifest.Type | undefined => {
+export const decodeAcceptedManifest = (bytes: Uint8Array): typeof AcceptedResultEvidenceManifest.Type | undefined => {
   try {
     return Schema.decodeUnknownSync(AcceptedResultEvidenceManifest)(JSON.parse(new TextDecoder().decode(bytes)))
   } catch {
@@ -362,15 +375,18 @@ const decodeAcceptedManifest = (bytes: Uint8Array): typeof AcceptedResultEvidenc
   }
 }
 
-const acceptedManifestMatches = (bytes: Uint8Array, expected: typeof AcceptedResultEvidenceManifest.Type): boolean => {
+export const acceptedManifestMatches = (
+  bytes: Uint8Array,
+  expected: typeof AcceptedResultEvidenceManifest.Type
+): boolean => {
   const decoded = decodeAcceptedManifest(bytes)
   return decoded !== undefined && sameAcceptedManifest(decoded, expected)
 }
 
-const commitMatchesHead = (head: GitCommitSha | undefined, commit: GitCommitSha): boolean =>
+export const commitMatchesHead = (head: GitCommitSha | undefined, commit: GitCommitSha): boolean =>
   head !== undefined && head === commit
 
-const commitFromTurn = (
+export const commitFromTurn = (
   turn: CodexTurnSnapshot | undefined,
   expectedCorrelation: PlannedAttemptExecutorCorrelation
 ): GitCommitSha | undefined => {
@@ -385,9 +401,7 @@ const commitFromTurn = (
   if (parsedMessage._tag === "Invalid") return undefined
   const candidates = commitCandidates(finalMessage, parsedMessage.candidate)
   if (candidates.size !== 1) return undefined
-  const candidate = [...candidates][0]
-  if (candidate === undefined) return undefined
-  return decodeCommit(candidate)
+  return GitCommitSha.make(String([...candidates][0]))
 }
 
 const taskTurnText = (attempt: PlannedTaskAttempt, specification: TaskWorkSpecification): string =>
@@ -408,11 +422,11 @@ const taskTurnText = (attempt: PlannedTaskAttempt, specification: TaskWorkSpecif
 
 const storeFailure = (error: unknown): error is CodexAttemptStoreFailure => error instanceof CodexAttemptStoreFailure
 
-interface ThreadReconciliation {
-  readonly _tag: "Running" | "Idle" | "Terminal" | "Unresolved"
-  readonly thread: CodexThreadSnapshot
-  readonly turn: CodexTurnSnapshot | undefined
-}
+type ThreadReconciliation =
+  | { readonly _tag: "Running"; readonly thread: CodexThreadSnapshot; readonly turn: CodexTurnSnapshot }
+  | { readonly _tag: "Terminal"; readonly thread: CodexThreadSnapshot; readonly turn: CodexTurnSnapshot }
+  | { readonly _tag: "Idle"; readonly thread: CodexThreadSnapshot; readonly turn: CodexTurnSnapshot | undefined }
+  | { readonly _tag: "Unresolved"; readonly thread: CodexThreadSnapshot; readonly turn: undefined }
 
 type StartedTurnResult =
   | { readonly _tag: "Turn"; readonly turn: CodexTurnSnapshot }
@@ -437,7 +451,10 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const gates = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map())
     const freshOwnedTurnToken = Effect.gen(function* () {
       return CodexOwnedTurnToken.make(yield* crypto.randomUUIDv4)
-    }).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({})))
+    }).pipe(
+      /* v8 ignore next -- @preserve Crypto.randomUUIDv4 has an uninhabited error channel in the production Crypto service. */
+      Effect.mapError(() => new CodexTurnBoundaryUnknown({}))
+    )
     const referenceMatchesBytes = Effect.fn("CodexPlannedAttemptExecutor.referenceMatchesBytes")(function* (
       reference: EvidenceReference,
       bytes: Uint8Array
@@ -457,6 +474,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         const created = yield* Semaphore.make(1)
         return yield* Ref.modify(gates, (current) => {
           const present = current.get(key)
+          /* v8 ignore next -- @preserve One permit serializes creation for this correlation before Ref.modify runs. */
           if (present !== undefined) return [present, current] as const
           return [created, new Map(current).set(key, created)] as const
         })
@@ -499,6 +517,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const requiredReconciliationTurn = (
       reconciliation: ThreadReconciliation
     ): Effect.Effect<CodexTurnSnapshot, CodexTurnBoundaryUnknown> =>
+      /* v8 ignore next -- @preserve Every caller has already narrowed reconciliation to Running, whose turn is required. */
       reconciliation.turn === undefined
         ? Effect.fail(new CodexTurnBoundaryUnknown({}))
         : Effect.succeed(reconciliation.turn)
@@ -518,9 +537,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       if (lookup._tag === "Contradiction") return Effect.fail(new CodexTurnBoundaryUnknown({}))
       if (lookup._tag === "Foreign") return Effect.fail(new ForeignAttemptRecord({ observed: lookup.observed }))
       if (lookup._tag === "Missing") {
-        return record._tag === "TurnIntentRecorded"
-          ? Effect.succeed({ _tag: "Unresolved" as const, thread, turn: undefined })
-          : Effect.fail(new CodexTurnBoundaryUnknown({}))
+        return Effect.succeed({ _tag: "Unresolved" as const, thread, turn: undefined })
       }
       if (isTerminalTurn(lookup.turn)) return Effect.succeed({ _tag: "Terminal" as const, thread, turn: lookup.turn })
       if (isActiveThread(thread, lookup.turn))
@@ -533,6 +550,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexAttemptRecord
     ) {
+      /* v8 ignore next -- @preserve Reconciliation is called only after allocation or a durable thread-backed record read. */
       if (record._tag === "EmptyPreTurn") return yield* Effect.fail(new CodexThreadMismatch({}))
       const thread = yield* app.resumeThread(record.threadId, attempt.worktree)
       yield* enforceThreadIdentity(attempt, correlation, record.threadId, thread)
@@ -636,19 +654,17 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const acceptedCommit = Effect.fn("CodexPlannedAttemptExecutor.acceptedCommit")(function* (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
-      record: CodexAttemptRecord,
+      record: OwnedTurnRecord,
       turn: CodexTurnSnapshot,
       thread: CodexThreadSnapshot
     ) {
       const commit = commitFromTurn(turn, correlation)
       const head = yield* readHead(attempt)
       if (commit === undefined) {
-        if (!hasOwnedTurnRecord(record)) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
         return { _tag: "Report" as const, report: yield* failed(attempt, correlation, record, turn.id, thread) }
       }
       if (head === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
       if (commit !== head) {
-        if (!hasOwnedTurnRecord(record)) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
         return { _tag: "Report" as const, report: yield* failed(attempt, correlation, record, turn.id, thread) }
       }
       return { _tag: "Commit" as const, commit }
@@ -682,7 +698,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const accepted = Effect.fn("CodexPlannedAttemptExecutor.accepted")(function* (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
-      record: CodexAttemptRecord,
+      record: OwnedTurnRecord,
       turn: CodexTurnSnapshot,
       thread: CodexThreadSnapshot
     ) {
@@ -697,7 +713,6 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       const finalCensus = yield* observeOwnedActivityByThreadId(thread.id)
       if (finalCensus._tag !== "Absent") return running(correlation)
       const sealed = CodexSealedTerminal.cases.Accepted.make({ commit, evidenceManifest: reference })
-      if (!hasOwnedTurnRecord(record)) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       yield* save(terminalRecordFor(attempt, record, turn.id, sealed, reference))
       return terminal(
         correlation,
@@ -708,13 +723,10 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const rereadAccepted = Effect.fn("CodexPlannedAttemptExecutor.rereadAccepted")(function* (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
-      record: CodexTerminalRecord,
+      record: CodexAcceptedTerminalRecord,
       turn: CodexTurnSnapshot,
       thread: CodexThreadSnapshot
     ) {
-      if (!isAcceptedTerminalRecord(record)) {
-        return yield* Effect.fail(new CodexEvidenceInvalid({}))
-      }
       if (Option.isNone(evidenceStore)) return yield* Effect.fail(new CodexEvidenceUnavailable({}))
       if (commitFromTurn(turn, correlation) !== record.terminal.commit)
         return yield* Effect.fail(new CodexEvidenceInvalid({}))
@@ -762,10 +774,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const observedRecordForTerminal = Effect.fn("CodexPlannedAttemptExecutor.observedRecordForTerminal")(function* (
       attempt: CodexAttemptContext,
       record: CodexAttemptRecord,
-      reconciliation: ThreadReconciliation
+      reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>
     ) {
       if (record._tag === "TurnIntentRecorded") {
-        if (reconciliation.turn === undefined) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
         const observed = observedRecordFor(
           attempt,
           record.threadId,
@@ -776,6 +787,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         yield* save(observed)
         return observed
       }
+      /* v8 ignore next -- @preserve Reconciliation reaches this helper only with its thread-backed owned record. */
       if (hasOwnedTurnRecord(record)) return record
       return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
     })
@@ -783,11 +795,10 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const runningAfterActivity = Effect.fn("CodexPlannedAttemptExecutor.runningAfterActivity")(function* (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
-      observedRecord: OwnedTurnRecord,
-      reconciliation: ThreadReconciliation
+      observedRecord: OwnedTurnRecord
     ) {
-      if (reconciliation.turn === undefined) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       if (observedRecord._tag === "Terminal") return running(correlation)
+      /* v8 ignore next -- @preserve Terminal observation converts TurnIntentRecorded before this function is called. */
       if (!isPersistableOwnedRecord(observedRecord)) {
         return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       }
@@ -799,16 +810,15 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
       observedRecord: OwnedTurnRecord,
-      reconciliation: ThreadReconciliation
+      reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>
     ) {
       const turn = reconciliation.turn
-      if (turn?.status === "completed") {
-        if (observedRecord._tag === "Terminal" && observedRecord.terminal._tag === "Accepted") {
+      if (turn.status === "completed") {
+        if (observedRecord._tag === "Terminal" && isAcceptedTerminalRecord(observedRecord)) {
           return yield* rereadAccepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
         }
         return yield* accepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
       }
-      if (turn === undefined) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       return yield* failed(attempt, correlation, observedRecord, turn.id, reconciliation.thread)
     })
 
@@ -816,12 +826,12 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexAttemptRecord,
-      reconciliation: ThreadReconciliation
+      reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>
     ) {
       const observedRecord = yield* observedRecordForTerminal(attempt, record, reconciliation)
       const census = yield* observeOwnedActivity(reconciliation.thread)
       if (censusHasActivity(census)) {
-        return yield* runningAfterActivity(attempt, correlation, observedRecord, reconciliation)
+        return yield* runningAfterActivity(attempt, correlation, observedRecord)
       }
       return yield* finishTerminalOrFailed(attempt, correlation, observedRecord, reconciliation)
     })
@@ -829,28 +839,23 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const reconcileAfterTurnBoundary = Effect.fn("CodexPlannedAttemptExecutor.reconcileAfterTurnBoundary")(function* (
       attempt: PlannedTaskAttempt,
       correlation: PlannedAttemptExecutorCorrelation,
-      record: CodexAttemptRecord
+      record: CodexIntentRecord
     ) {
       const reconciliation = yield* reconcile(attempt, correlation, record)
       if (reconciliation._tag === "Running") {
-        if (record._tag === "TurnIntentRecorded") {
-          const turn = yield* requiredReconciliationTurn(reconciliation)
-          const observed = observedRecordFor(
-            attempt,
-            record.threadId,
-            record.currentToken,
-            turn.id,
-            record.priorObservedTurnId
-          )
-          yield* save(observed)
-          yield* save(runningRecordFor(attempt, observed))
-        } else if (record._tag === "TurnObserved" || record._tag === "Running" || record._tag === "SafelySuspended") {
-          yield* save(runningRecordFor(attempt, record))
-        } else {
-          return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
-        }
+        const turn = yield* requiredReconciliationTurn(reconciliation)
+        const observed = observedRecordFor(
+          attempt,
+          record.threadId,
+          record.currentToken,
+          turn.id,
+          record.priorObservedTurnId
+        )
+        yield* save(observed)
+        yield* save(runningRecordFor(attempt, observed))
         return running(correlation)
       }
+      /* v8 ignore next -- @preserve The caller handles Terminal reconciliation before requesting a running record. */
       if (reconciliation._tag === "Terminal")
         return yield* terminalOrRunning(attempt, correlation, record, reconciliation)
       return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
@@ -927,7 +932,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexAttemptRecord
     ) {
+      /* v8 ignore next -- @preserve sendTurn is called only after allocation has persisted an associated thread. */
       if (record._tag === "EmptyPreTurn") return yield* Effect.fail(new CodexThreadMismatch({}))
+      /* v8 ignore next -- @preserve A durable turn intent is reconciled before another turn can be sent. */
       if (record._tag === "TurnIntentRecorded") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       const priorObservedTurnId = record._tag === "AssociatedPreTurn" ? null : record.observedTurnId
       const currentToken = yield* freshOwnedTurnToken
@@ -943,13 +950,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       attempt: PlannedTaskAttempt,
       correlation: PlannedAttemptExecutorCorrelation
     ) {
-      let found: Option.Option<CodexAttemptRecord>
-      try {
-        found = yield* readRecord(correlation, attempt)
-      } catch (error) {
-        if (error instanceof ForeignAttemptRecord) return yield* Effect.fail(error)
-        return yield* Effect.fail(error)
-      }
+      const found = yield* readRecord(correlation, attempt)
       if (Option.isNone(found)) {
         return yield* allocateThread(attempt, correlation)
       }
@@ -974,9 +975,11 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         // Only a conclusively absent empty pre-turn thread may be replaced.
         return yield* allocateThread(attempt, correlation)
       }
+      /* v8 ignore next -- @preserve An associated pre-turn record has no owned turn that can be Running or Terminal. */
       if (reconciliation._tag === "Running" || reconciliation._tag === "Terminal") {
         return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       }
+      /* v8 ignore next -- @preserve Associated pre-turn reconciliation is either idle or conclusively absent. */
       if (reconciliation._tag === "Unresolved") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       return record
     })
@@ -987,7 +990,8 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       record: CodexThreadBackedRecord,
       reconciliation: ThreadReconciliation
     ) {
-      if (record._tag === "TurnIntentRecorded") {
+      const disposition = ownedRecordPersistenceDisposition(record._tag)
+      if (disposition === "Intent" && record._tag === "TurnIntentRecorded") {
         const turn = yield* requiredReconciliationTurn(reconciliation)
         const observed = observedRecordFor(
           attempt,
@@ -998,8 +1002,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         )
         yield* save(observed)
         yield* save(runningRecordFor(attempt, observed))
-      } else if (record._tag === "TurnObserved" || record._tag === "Running" || record._tag === "SafelySuspended") {
+      } else if (disposition === "Persistable" && isPersistableOwnedRecord(record)) {
         yield* save(runningRecordFor(attempt, record))
+        /* v8 ignore next -- @preserve Thread-backed records are exhaustively classified as Intent or Persistable here. */
       } else {
         return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       }
@@ -1068,7 +1073,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       record: CodexAttemptRecord,
       turn: CodexTurnSnapshot | undefined
     ) {
-      if (record._tag === "TurnIntentRecorded") {
+      const disposition = ownedRecordPersistenceDisposition(record._tag)
+      if (disposition === "Intent" && record._tag === "TurnIntentRecorded") {
+        /* v8 ignore next -- @preserve Intent disposition is selected only from reconciliation carrying the observed turn. */
         if (turn === undefined) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
         const observed = observedRecordFor(
           attempt,
@@ -1079,8 +1086,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         )
         yield* save(observed)
         yield* save(safelySuspendedRecordFor(attempt, observed))
-      } else if (record._tag === "TurnObserved" || record._tag === "Running" || record._tag === "SafelySuspended") {
+      } else if (disposition === "Persistable" && isPersistableOwnedRecord(record)) {
         yield* save(safelySuspendedRecordFor(attempt, record))
+        /* v8 ignore next -- @preserve Suspendable owned records are exhaustively classified as Intent or Persistable here. */
       } else {
         return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       }
@@ -1121,6 +1129,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     ) {
       if (after._tag === "Terminal") return yield* terminalOrRunning(attempt, correlation, record, after)
       if (after._tag === "Running") return running(correlation)
+      /* v8 ignore next -- @preserve suspendAfterInterrupt is called only after the bounded interrupt read resolves. */
       if (after._tag === "Unresolved") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       yield* quiesceOwnedActivity(record.threadId)
       yield* saveSuspendedRecord(attempt, record, after.turn)
@@ -1239,11 +1248,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
           Effect.catch((error: unknown) =>
             error instanceof ForeignAttemptRecord ? Effect.succeed(foreignReport(error.observed)) : Effect.fail(error)
           ),
-          Effect.mapError((error) =>
-            error instanceof PlannedAttemptExecutorCommandFailure
-              ? error
-              : commandFailure("Suspend", correlation, error)
-          )
+          Effect.mapError((error) => preserveCommandFailure("Suspend", correlation, error))
         )
       },
       startOrContinue: (request) => {
@@ -1253,11 +1258,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
           Effect.catch((error: unknown) =>
             error instanceof ForeignAttemptRecord ? Effect.succeed(foreignReport(error.observed)) : Effect.fail(error)
           ),
-          Effect.mapError((error) =>
-            error instanceof PlannedAttemptExecutorCommandFailure
-              ? error
-              : commandFailure("StartOrContinue", correlation, error)
-          )
+          Effect.mapError((error) => preserveCommandFailure("StartOrContinue", correlation, error))
         )
       }
     }

@@ -234,10 +234,12 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       return
     return yield* refresh
   })
+  const failReactiveDelivery = (cause: Cause.Cause<ReactiveDeliveryFailure>) =>
+    SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed" as const, cause })
 
   yield* journal.state.changes.pipe(
     Stream.runForEach(({ position }) => refreshAfterJournalChange(position)),
-    Effect.catchCause((cause) => SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed", cause })),
+    Effect.catchCause(failReactiveDelivery),
     Effect.forkScoped
   )
   const resourceSubscribed = yield* Deferred.make<void>()
@@ -245,7 +247,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     Stream.tap(() => Deferred.succeed(resourceSubscribed, undefined)),
     Stream.drop(1),
     Stream.runForEach(() => refresh),
-    Effect.catchCause((cause) => SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed", cause })),
+    Effect.catchCause(failReactiveDelivery),
     Effect.forkScoped
   )
   yield* Deferred.await(resourceSubscribed)

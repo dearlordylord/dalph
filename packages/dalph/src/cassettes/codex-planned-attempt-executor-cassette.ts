@@ -19,6 +19,7 @@ import {
   controlledCodexAppServerLayer,
   controlledCodexOwnedActivityCensusLayer,
   type CodexAppServerService,
+  type CodexOwnedActivityCensusProjection,
   type CodexThreadSnapshot,
   type CodexTurnSnapshot
 } from "../application/codex-app-server.js"
@@ -26,6 +27,7 @@ import {
   CodexAttemptStore,
   type CodexAttemptRecord,
   type CodexAttemptStoreService,
+  CodexOwnedTurnToken,
   CodexServerIncarnation,
   CodexThreadId,
   CodexTurnId
@@ -56,11 +58,13 @@ const attempt = PlannedTaskAttempt.make({
 })
 const request = PlannedAttemptExecutorRequest.make({ plannedAttempt: attempt, specification })
 const recordKey = `${attempt.runId}\u0000${attempt.attemptId}`
+const defaultOwnedTurnToken = CodexOwnedTurnToken.make("codex-cassette-owned-turn")
+const unusedBoundary = Effect.die.bind(undefined, "the maintained Codex executor cassette must not cross this boundary")
 
 const git: GitCommandService = {
-  run: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
+  run: unusedBoundary,
   runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: `${acceptedCommit}\n` }),
-  runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
+  runBytesInWorktree: unusedBoundary
 }
 
 const unavailableTurnStart = new CodexAppServerFailure({
@@ -83,6 +87,18 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (lo
       (current): CodexThreadSnapshot => ({ ...current, status: "idle", turns: current.turns.map(update) })
     )
 
+  const observeOwnedActivity = (current: CodexThreadSnapshot): Effect.Effect<CodexOwnedActivityCensusProjection> =>
+    Effect.succeed(
+      current.turns.some((turn) => turn.status === "inProgress")
+        ? {
+            _tag: "ExactLive" as const,
+            activities: current.turns
+              .filter((turn) => turn.status === "inProgress")
+              .map((turn) => ({ _tag: "ActiveTurn" as const, turnId: turn.id }))
+          }
+        : { _tag: "Absent" as const }
+    )
+
   const app: CodexAppServerService = {
     incarnation: CodexServerIncarnation.make("codex-cassette-incarnation"),
     startThread: (cwd) =>
@@ -91,14 +107,14 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (lo
       ),
     readThread: () => Ref.get(thread),
     resumeThread: (_threadId, cwd) => Ref.updateAndGet(thread, (current) => ({ ...current, cwd })),
-    startTurn: (_threadId, cwd, _text, ownedTurnToken) =>
+    startTurn: (_threadId, cwd, _text, ownedTurnToken = defaultOwnedTurnToken) =>
       Effect.gen(function* () {
         const ordinal = yield* Ref.updateAndGet(turnStartCount, (count) => count + 1)
         const turn: CodexTurnSnapshot = {
           id: CodexTurnId.make(`codex-cassette-turn-${ordinal}`),
           status: "inProgress",
           items: [],
-          ...(ownedTurnToken === undefined ? {} : { ownedTurnToken })
+          ownedTurnToken
         }
         yield* Ref.update(
           thread,
@@ -113,7 +129,7 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (lo
     interruptTurn: (_threadId, turnId) =>
       updateTurn((turn) => (turn.id === turnId ? { ...turn, status: "interrupted" } : turn)),
     listBackgroundTerminals: () => Effect.succeed([]),
-    terminateBackgroundTerminal: () => Effect.succeed(false),
+    terminateBackgroundTerminal: unusedBoundary,
     close: Effect.void
   }
   const store: CodexAttemptStoreService = {
@@ -129,11 +145,11 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (lo
       Ref.update(records, (current) =>
         new Map(current).set(`${record.correlationRunId}\u0000${record.correlationAttemptId}`, record)
       ),
-    readServerLaunch: () => Effect.succeed(Option.none()),
-    writeServerLaunch: () => Effect.void,
-    clearServerLaunch: () => Effect.void,
-    acquireServerLease: () => Effect.void,
-    releaseServerLease: () => Effect.void
+    readServerLaunch: unusedBoundary,
+    writeServerLaunch: unusedBoundary,
+    clearServerLaunch: unusedBoundary,
+    acquireServerLease: unusedBoundary,
+    releaseServerLease: unusedBoundary
   }
   return {
     app,
@@ -150,6 +166,9 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (lo
         }
       ]
     })),
+    interruptForeignTurn: app.interruptTurn(threadId, CodexTurnId.make("codex-cassette-foreign-turn")),
+    observeOwnedActivity,
+    observeCurrentActivity: Ref.get(thread).pipe(Effect.flatMap(observeOwnedActivity)),
     currentRecord: Ref.get(records).pipe(Effect.map((current) => current.get(recordKey))),
     store,
     threadStartCount,
@@ -159,11 +178,16 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (lo
 
 export interface CodexPlannedAttemptExecutorCassetteRun {
   readonly cassette: CodexPlannedAttemptExecutorCassetteType
+  readonly activeActivity: CodexOwnedActivityCensusProjection
   readonly privateRecord: CodexAttemptRecord | null
   readonly reports: ReadonlyArray<PlannedAttemptExecutorReport>
   readonly threadStartCount: number
   readonly turnStartCount: number
 }
+
+/** Preserves the cassette result's nullable diagnostic shape when no private record is available. */
+export const codexAttemptRecordOrNull = (record: CodexAttemptRecord | undefined): CodexAttemptRecord | null =>
+  record ?? null
 
 /** Runs one maintained story through the concrete Codex planned-attempt executor layer. */
 export const runCodexPlannedAttemptExecutorCassette = Effect.fn("CodexPlannedAttemptExecutorCassette.run")(function* (
@@ -174,39 +198,34 @@ export const runCodexPlannedAttemptExecutorCassette = Effect.fn("CodexPlannedAtt
   const dependencies = Layer.mergeAll(
     controlledCodexAppServerLayer(harness.app),
     controlledCodexOwnedActivityCensusLayer({
-      observe: (thread) =>
-        Effect.succeed(
-          thread.turns.some((turn) => turn.status === "inProgress")
-            ? {
-                _tag: "ExactLive" as const,
-                activities: thread.turns
-                  .filter((turn) => turn.status === "inProgress")
-                  .map((turn) => ({ _tag: "ActiveTurn" as const, turnId: turn.id }))
-              }
-            : { _tag: "Absent" as const }
-        ),
-      terminateDescendants: () => Effect.void
+      observe: harness.observeOwnedActivity,
+      terminateDescendants: unusedBoundary
     }),
     Layer.succeed(CodexAttemptStore, harness.store),
     Layer.succeed(GitCommand, git),
     memoryEvidenceStoreLayer
   )
   const executorLayer = codexPlannedAttemptExecutorLayer.pipe(Layer.provide(dependencies))
-  const reports = yield* Effect.gen(function* () {
+  const execution = yield* Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     const first = yield* executor.startOrContinue(request)
-    if (cassette.scenario === "FirstTurnRunning" || cassette.scenario === "LostTurnResponse") return [first]
+    const activeActivity = yield* harness.observeCurrentActivity
+    if (cassette.scenario === "FirstTurnRunning" || cassette.scenario === "LostTurnResponse") {
+      return { activeActivity, reports: [first] }
+    }
     if (cassette.scenario === "AcceptedTerminal") {
       yield* harness.completeTurn
-      return [first, yield* executor.startOrContinue(request)]
+      return { activeActivity, reports: [first, yield* executor.startOrContinue(request)] }
     }
-    return [first, yield* executor.requestSuspension(attempt)]
+    yield* harness.interruptForeignTurn
+    return { activeActivity, reports: [first, yield* executor.requestSuspension(attempt)] }
   }).pipe(Effect.provide(executorLayer))
 
   return {
     cassette,
-    privateRecord: (yield* harness.currentRecord) ?? null,
-    reports,
+    activeActivity: execution.activeActivity,
+    privateRecord: codexAttemptRecordOrNull(yield* harness.currentRecord),
+    reports: execution.reports,
     threadStartCount: yield* Ref.get(harness.threadStartCount),
     turnStartCount: yield* Ref.get(harness.turnStartCount)
   } satisfies CodexPlannedAttemptExecutorCassetteRun

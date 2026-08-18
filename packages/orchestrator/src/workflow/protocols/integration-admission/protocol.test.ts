@@ -91,7 +91,7 @@ import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-ac
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../../test/controlled-planned-attempt-executor.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../../workflow/interpretation/interpreter.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
-import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
+import { TaskLifecycle, TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
@@ -132,10 +132,12 @@ import {
 } from "../target-promotion/events.js"
 
 import {
+  makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../task-tracker-facts/observation.js"
+import { projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.js"
 
 const exactClaimAuthorities = (...attemptIds: ReadonlyArray<AttemptId>) =>
   new Map(attemptIds.map((attemptId) => [attemptId, { _tag: "Exact" as const }]))
@@ -1052,6 +1054,14 @@ it.effect("fails closed without current tracker facts and orders authorized inte
     expect(staleStartedFrontier.transitions).toEqual([])
     expect(
       deriveIntegrationFrontier(startedRun.state, {
+        currentTrackerTaskIds: new Set(),
+        heldResponsibilityPositions: new Set([queuedA.queuedAt]),
+        integrationTarget: Option.some(integrationTarget),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(a.attemptId)
+      }).transitions
+    ).toMatchObject([{ _tag: "ReleaseStartedIntegrationTarget", responsibility: { plannedAttempt: a } }])
+    expect(
+      deriveIntegrationFrontier(startedRun.state, {
         currentTrackerTaskIds: new Set([a.taskId, b.taskId]),
         heldResponsibilityPositions: new Set([queuedA.queuedAt]),
         integrationTarget: Option.some(integrationTarget),
@@ -1333,6 +1343,108 @@ it.effect("routes a constructed candidate through configuration and compatible t
         targetVerificationPlan: Option.some(plan)
       }).transitions
     ).toMatchObject([{ _tag: "ReleaseStartedIntegrationTarget" }])
+    expect(
+      deriveIntegrationFrontier(runState, {
+        ...common,
+        heldResponsibilityPositions: new Set(),
+        targetLineageByAttemptId: new Map([[attempt.attemptId, incompatible]]),
+        targetVerificationPlan: Option.some(plan)
+      }).transitions
+    ).toEqual([])
+  }).pipe(Effect.provide(protocolTestLayer))
+)
+
+it.effect("keeps pending verification passive while an observed prerequisite remains incomplete", () =>
+  Effect.gen(function* () {
+    const prerequisiteTaskId = TaskId.make("A")
+    const attempt = plannedAttempt("B", 2)
+    const result = acceptedResult("b")
+    yield* beginRun
+    yield* recordAcceptedTerminal(attempt, result)
+    const queued = yield* queueAcceptedResultIntegrationResponsibility(attempt, result, integrationTarget)
+    yield* startQueuedIntegration(queued)
+
+    const journal = yield* JournalStore
+    const graphRead = makeTrackerGraphObservationOperation(
+      OperationId.make("pending-verification-prerequisite-graph"),
+      FixtureTarget.make("integration-admission-target")
+    )
+    const projected = projectTrackerSnapshot({
+      revision: TrackerRevision.make("pending-verification-prerequisite-revision"),
+      tasks: [
+        {
+          id: prerequisiteTaskId,
+          lifecycle: TaskLifecycle.cases.Open.make({}),
+          parentTaskId: null,
+          prerequisiteIds: []
+        },
+        {
+          id: attempt.taskId,
+          lifecycle: TaskLifecycle.cases.Open.make({}),
+          parentTaskId: null,
+          prerequisiteIds: [prerequisiteTaskId]
+        }
+      ]
+    })
+    if (projected._tag !== "Valid") return yield* Effect.die("expected valid prerequisite graph")
+    yield* journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(graphRead.operationId),
+      taskTrackerFactsObservedEvent(
+        graphRead.operationId,
+        makeCompleteTaskTrackerFactsObserved(graphRead, projected.snapshot)
+      )
+    )
+
+    const reconstructed = reconstructRunState(runId, yield* journal.read(runId))
+    if (reconstructed._tag !== "ValidReconstructedRun") return yield* Effect.die("expected started run")
+    const started = deriveIntegrationAdmission(reconstructed.state.workflowHistory.records).responsibilities.find(
+      (responsibility): responsibility is StartedIntegrationResponsibility =>
+        responsibility._tag === "StartedIntegrationResponsibility"
+    )
+    if (started === undefined) return yield* Effect.die("expected started integration responsibility")
+    const candidateState = candidateFrontierRecordsFor(
+      reconstructed.state.workflowHistory.records,
+      started,
+      "pending-verification-prerequisite"
+    )
+    const plan = TargetVerificationPlan.make({
+      planId: TargetVerificationPlanId.make("pending-verification-prerequisite-plan"),
+      target: integrationTarget
+    })
+    const verificationIntent = frontierRecord(
+      runId,
+      Math.max(...candidateState.records.map(({ position }) => Number(position))) + 1,
+      TargetVerificationIntendedEvent.make({
+        correlation: targetVerificationCorrelationFor(candidateState.candidate, plan.planId),
+        version: workflowJournalEventVersion
+      })
+    )
+    const runState = {
+      ...reconstructed.state,
+      workflowHistory: { records: [...candidateState.records, verificationIntent] }
+    }
+
+    expect(
+      deriveIntegrationFrontier(runState, {
+        currentTrackerTaskIds: new Set([attempt.taskId]),
+        heldResponsibilityPositions: new Set(),
+        integrationTarget: Option.some(integrationTarget),
+        targetVerificationPlan: Option.some(plan),
+        taskClaimAuthorityByAttemptId: exactClaimAuthorities(attempt.attemptId)
+      })
+    ).toMatchObject({
+      explanations: [
+        {
+          _tag: "IntegrationDependencyWait",
+          plannedAttempt: attempt,
+          prerequisiteTaskIds: [prerequisiteTaskId],
+          wakeCondition: "TaskTrackerFactsObserved"
+        }
+      ],
+      transitions: []
+    })
   }).pipe(Effect.provide(protocolTestLayer))
 )
 

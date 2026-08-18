@@ -267,6 +267,8 @@ it.effect("speaks the normalized app-server protocol with exact per-call cwd", (
         expect(resumed.turns[0]?.ownedTurnToken).toBe(ownedToken)
         expect((yield* app.listBackgroundTerminals(thread.id)).length).toBe(0)
         yield* app.close
+        expect(Exit.isFailure(yield* Effect.exit(app.startThread("/closed/worktree")))).toBe(true)
+        yield* app.close
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
       expect(result).toBeUndefined()
     }).pipe(Effect.provide(NodeServices.layer))

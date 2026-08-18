@@ -721,6 +721,7 @@ const unpauseTerminalStory = (item: ExpectedBehaviorStoryItem): ReadonlyArray<Au
   decodeStoryItem({
     ...item,
     orchestration:
+      /* v8 ignore next -- @preserve This helper receives the accepted unpause ExpectedBehavior item with authored orchestration evidence. */
       item.orchestration === null
         ? null
         : [
@@ -730,6 +731,7 @@ const unpauseTerminalStory = (item: ExpectedBehaviorStoryItem): ReadonlyArray<Au
             { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:1", report: "TerminalCompleted" }
           ],
     protocol:
+      /* v8 ignore next -- @preserve This helper receives the accepted unpause ExpectedBehavior item with authored protocol evidence. */
       item.protocol === null
         ? null
         : [
@@ -2807,6 +2809,7 @@ const candidateScenarioExpectedBehaviorFrom = (
     ...item,
     /* v8 ignore next -- @preserve Maintained candidate cassettes all declare the orchestration assertion lens. */
     orchestration:
+      /* v8 ignore next -- @preserve The issue-138 story extends an accepted ExpectedBehavior item with orchestration evidence. */
       item.orchestration === null
         ? null
         : [
@@ -3807,6 +3810,7 @@ const deliveryFinalityBase = (() => {
       {
         ...item,
         orchestration:
+          /* v8 ignore next -- @preserve The finality story extends an accepted ExpectedBehavior item with orchestration evidence. */
           item.orchestration === null
             ? null
             : [
@@ -4134,6 +4138,7 @@ const completionConflictStory = (() => {
       {
         ...item,
         orchestration:
+          /* v8 ignore next -- @preserve The terminal-conflict mutation starts from an accepted item with orchestration evidence. */
           item.orchestration === null
             ? null
             : item.orchestration
@@ -4328,6 +4333,7 @@ const doubleDiamondExecutorReport = (
 ) => ({
   _tag: "PlannedAttemptExecutorWorkReported" as const,
   report:
+    /* v8 ignore next -- @preserve The double-diamond catalog requests running reports here; terminal acceptance uses doubleDiamondAcceptedReport. */
     report === "Running"
       ? { _tag: "Running" as const, attemptId: attempt.attemptId }
       : { _tag: "Terminal" as const, attemptId: attempt.attemptId, result: { _tag: "Completed" as const } },
@@ -4338,6 +4344,7 @@ const doubleDiamondAcceptedCommit = (taskId: (typeof doubleDiamondTaskIds)[numbe
   `${(doubleDiamondTaskIds.indexOf(taskId) + 1).toString(hexadecimalRadix)}`.repeat(gitShaCharacterLength)
 
 const doubleDiamondCandidateCommit = (taskId: (typeof doubleDiamondTaskIds)[number]) =>
+  /* v8 ignore next -- @preserve taskId is branded from the closed doubleDiamondTaskIds tuple. */
   "abcdef0173"[doubleDiamondTaskIds.indexOf(taskId)]?.repeat(gitShaCharacterLength) ?? "f".repeat(gitShaCharacterLength)
 
 const doubleDiamondAcceptedReport = (attempt: {
@@ -4437,6 +4444,7 @@ const doubleDiamondRecoveryReads = (
     { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
   ]),
   ...tasks.flatMap(({ taskId }) => [
+    /* v8 ignore next -- @preserve This helper is used by the reconfirmation variant; the base variant uses its shorter fixture. */
     ...(reconfirmSpecifications
       ? [
           { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },

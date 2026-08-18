@@ -22,6 +22,7 @@ import { InRunJournal, type JournalRecord } from "../../../workflow-journal/stor
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import type { WorkflowJournalEvent } from "../../registry/event.js"
 import type { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import {
   IntegrationCandidateAgentReportedEvent,
@@ -744,17 +745,20 @@ const latestCandidateIntentFor = (
   return event?._tag === "IntegrationCandidateConstructionIntended" ? event : undefined
 }
 
+export const supersededSessionMatches = (
+  event: WorkflowJournalEvent,
+  priorCorrelation: IntegrationCandidateCorrelation,
+  targetHead: GitCommitSha
+): event is IntegrationCandidateSessionSupersededEvent =>
+  event._tag === "IntegrationCandidateSessionSuperseded" &&
+  integrationCandidateCorrelationEquals(event.priorCorrelation, priorCorrelation) &&
+  event.observedTargetHead === targetHead
+
 const supersededSessionFor = (
   records: ReadonlyArray<JournalRecord>,
   priorCorrelation: IntegrationCandidateCorrelation,
   targetHead: GitCommitSha
-) =>
-  records.findLast(
-    ({ event }) =>
-      event._tag === "IntegrationCandidateSessionSuperseded" &&
-      integrationCandidateCorrelationEquals(event.priorCorrelation, priorCorrelation) &&
-      event.observedTargetHead === targetHead
-  )?.event
+) => records.findLast(({ event }) => supersededSessionMatches(event, priorCorrelation, targetHead))?.event
 
 const supersessionBelongsToResponsibility = (
   event: IntegrationCandidateSessionSupersededEvent,

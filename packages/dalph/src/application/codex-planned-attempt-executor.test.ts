@@ -1934,6 +1934,49 @@ it.effect("reconstructs a persisted failed terminal without sending another task
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
+it.effect("fails closed when a persisted terminal is presented while its turn is still active during start", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.startOrContinue(request)
+    const current = harness.currentRecord()
+    expect(current?._tag).toBe("Running")
+    if (current?._tag !== "Running") return
+    harness.setRecord(
+      CodexAttemptRecord.cases.Terminal.make({
+        ...current,
+        _tag: "Terminal",
+        evidenceManifest: null,
+        terminal: CodexSealedTerminal.cases.Failed.make({})
+      })
+    )
+    expect(yield* executor.startOrContinue(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect(
+  "fails closed when a persisted terminal is presented while its turn is still active during suspension",
+  () => {
+    const harness = makeHarness()
+    return Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.startOrContinue(request)
+      const current = harness.currentRecord()
+      expect(current?._tag).toBe("Running")
+      if (current?._tag !== "Running") return
+      harness.setRecord(
+        CodexAttemptRecord.cases.Terminal.make({
+          ...current,
+          _tag: "Terminal",
+          evidenceManifest: null,
+          terminal: CodexSealedTerminal.cases.Failed.make({})
+        })
+      )
+      expect(yield* executor.requestSuspension(attempt).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
+    }).pipe(Effect.provide(layerFor(harness)))
+  }
+)
+
 it.effect("fails closed when an associated thread already contains owned activity", () => {
   const harness = makeHarness()
   return Effect.gen(function* () {

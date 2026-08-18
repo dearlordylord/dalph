@@ -299,7 +299,7 @@
   },
   "packages/orchestrator/src/workflow-journal/run-lifecycle.ts": {
     "import-x/no-unused-modules": {
-      "count": 2
+      "count": 1
     }
   },
   "packages/orchestrator/src/workflow/interpretation/interpreter.ts": {

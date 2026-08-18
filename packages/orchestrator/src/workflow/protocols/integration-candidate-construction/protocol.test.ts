@@ -92,6 +92,7 @@ import {
   IntegrationCandidateTargetLineageRejected,
   IntegrationSessionId,
   integrationCandidateSuccessorOrdinalFor,
+  supersededSessionMatches,
   type IntegrationCandidateAgentRequest
 } from "./protocol.js"
 
@@ -429,6 +430,24 @@ it.effect("supersedes a stale pre-promotion session before starting one successo
     expect(supersessionAt).toBeLessThan(intents[1]?.position ?? Number.POSITIVE_INFINITY)
     expect(records.filter(({ event }) => event._tag === "IntegrationCandidateConstructed")).toHaveLength(2)
     expect(records.filter(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded")).toHaveLength(1)
+    const supersession = records.find(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded")?.event
+    if (supersession?._tag !== "IntegrationCandidateSessionSuperseded") return expect.fail("expected supersession")
+    expect(supersededSessionMatches(supersession, supersession.priorCorrelation, advancedHead)).toBe(true)
+    expect(
+      supersededSessionMatches(
+        supersession,
+        { ...supersession.priorCorrelation, integrationSessionId: IntegrationSessionId.make("another-session") },
+        advancedHead
+      )
+    ).toBe(false)
+    expect(supersededSessionMatches(supersession, supersession.priorCorrelation, head)).toBe(false)
+    expect(
+      supersededSessionMatches(
+        { _tag: "WorkflowRunBegan" } as Parameters<typeof supersededSessionMatches>[0],
+        supersession.priorCorrelation,
+        advancedHead
+      )
+    ).toBe(false)
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
 
     const repeated = yield* continueIntegrationCandidateConstruction(

@@ -1161,7 +1161,7 @@ const isAuthoredCoordinatorProcessDeath = (exit: Exit.Exit<unknown, unknown>): b
   )
 
 /** Extracts a typed authored-correlation failure captured inside a journal append callback. */
-const authoredInteractionMismatchFrom = (
+export const authoredInteractionMismatchFrom = (
   exit: Exit.Exit<unknown, unknown>
 ): AuthoredCassetteInteractionMismatch | undefined => {
   if (Exit.isFailure(exit)) {
@@ -1213,6 +1213,7 @@ const handleAuthoredTaskClaimJournalEvent = (request: {
       yield* Ref.set(request.authoredInteractionFailure, expectedMismatch)
       return true
     }
+    /* v8 ignore next -- @preserve This cursor operation's only typed failure is the mismatch handled immediately above. */
     if (Exit.isFailure(expectedExit)) {
       return yield* Effect.die(expectedExit.cause)
     }
@@ -1710,6 +1711,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           yield* awaitExecutorPublicationHold(plannedAttempt, request)
         })
       const beforeCompletionTask = yield* Ref.make<(request: CompletionTaskRequest) => Effect.Effect<void>>(
+        /* v8 ignore next -- @preserve Most authored stories have no completion-task hold; tests replace this hook when chronology needs one. */
         () => Effect.void
       )
       const trackerAuthority = yield* Layer.build(
@@ -1760,6 +1762,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               authoredTargetLineage,
               (remaining) => [remaining[0], remaining.slice(1)] as const
             )
+            /* v8 ignore next -- @preserve Each authored target-lineage read is paired with its next declared observation. */
             if (next !== undefined) {
               return next.plannedBaseSha === plannedBaseSha
                 ? next
@@ -2000,7 +2003,10 @@ const runAuthoredScenarioCassetteWith = (request: {
             Effect.map((ordinal) => runtimeLayerFor(AuthoredRunActivationOrdinal.make(ordinal)))
           )
         )
-      const applicationExit = yield* makeApplicationExitShell(coordinatorOwnership, { requestEnd: () => Effect.void })
+      const applicationExit = yield* makeApplicationExitShell(coordinatorOwnership, {
+        /* v8 ignore next -- @preserve Authored cassettes observe exit chronology without terminating the test process. */
+        requestEnd: () => Effect.void
+      })
       const operatorControlGraphReadBoundary = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         Effect.gen(function* () {
           yield* Ref.set(operatorControlGraphReadActive, true)
@@ -2146,6 +2152,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                   )
                 }
                 /* v8 ignore stop -- @preserve */
+                /* v8 ignore next -- @preserve Accepted cassette stories do not intentionally drive the attempt-choice boundary to a typed failure. */
                 return yield* Effect.die(
                   new Error(`authored attempt choice ${item.requestNonce} failed with ${reason}`)
                 )
@@ -2312,6 +2319,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 }),
                 Effect.catch((failure) => {
                   const absence = { _tag: "PauseNotApplied" } as const
+                  /* v8 ignore next -- @preserve Pause observation exposes only the closed PauseNotApplied failure. */
                   return failure._tag === "PauseNotApplied"
                     ? Queue.offer(observed, absence)
                     : Effect.die("authored Pause observation failed with an unexpected error")
@@ -2707,6 +2715,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         yield* Effect.raceFirst(
           cursor.awaitTerminalAssertions,
           Fiber.join(coordinator).pipe(
+            /* v8 ignore next -- @preserve Accepted stories reach terminal assertions before their coordinator activation can stop. */
             Effect.andThen(
               Effect.flatMap(cursor.storyPosition, (storyPosition) =>
                 Ref.get(acceptedEvidencePublicationFailure).pipe(
