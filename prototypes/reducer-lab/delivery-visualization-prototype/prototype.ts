@@ -1,15 +1,15 @@
 import "./prototype.css"
 
 // THROWAWAY PROTOTYPE
-// Question: Which visual relationship between live rectangles and production
-// source makes synchronized state easiest to read?
+// Question: Which temporal treatment makes change between adjacent delivery
+// landmarks easiest to read without changing the accepted current-state grammar?
 
 type TaskKey = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "X"
 type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" | "settlements" | "reflection"
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
-const viewKeys = ["original", "position-capacity", "source-freshness", "full-fact"] as const
+const viewKeys = ["original", "change-receipts", "before-after", "stability-age"] as const
 type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
@@ -255,10 +255,10 @@ const story: Scenario = {
 }
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
-  { key: "original", name: "Original · retained", description: "State-colored top rules with the retained two-line title and value grammar." },
-  { key: "position-capacity", name: "Position + capacity · survives", description: "Each task rectangle leads with its ordered position or its relationship to the capacity bound." },
-  { key: "source-freshness", name: "Source + freshness", description: "Each rectangle names its factual basis and the complete graph observation used at this landmark." },
-  { key: "full-fact", name: "Full fact grammar", description: "Entity, current fact, position, factual basis, and graph observation share one rectangle." }
+  { key: "original", name: "Original · position + capacity", description: "The accepted position-and-capacity rectangles use the existing changed-row marker and Before/After strip." },
+  { key: "change-receipts", name: "Change receipts", description: "Each source stage receives an explicit landmark receipt for entries, exits, moves, and fact updates." },
+  { key: "before-after", name: "Before → now rectangles", description: "Each current rectangle carries its preceding fact beside its accepted current position and state." },
+  { key: "stability-age", name: "Stability age", description: "Each rectangle reports whether its source stage changed now or how many landmarks it has remained stable." }
 ]
 
 let frameIndex = 0
@@ -362,16 +362,6 @@ const stageSelectionClass = (stage: StageKey, item: Frame): string => {
   return tasksForStage(stage, item).includes(selectedTask) ? "selection-related" : "selection-muted"
 }
 
-const basisFor = (stage: StageKey): string => ({
-  read: "tracker read",
-  graph: "complete graph",
-  frontier: "derived from graph",
-  tickets: "capacity rule",
-  responsibilities: "journal + executor",
-  settlements: "integration history",
-  reflection: "delivery signal"
-})[stage]
-
 const stateFor = (cell: Cell, item: Frame): string => {
   if (cell.task === undefined) return cell.value
   if (item.control.tasks.includes(cell.task)) return "paused by user"
@@ -396,22 +386,78 @@ const positionFor = (stage: StageKey, cell: Cell, item: Frame): string => {
   return "not position-bearing"
 }
 
+const cellForTask = (stage: StageKey, task: TaskKey, item: Frame): Cell => ({
+  title: `TASK ${task}`,
+  value: taskLabel[item.tasks[task]],
+  task
+})
+
+const temporalTasksForStage = (stage: StageKey, item: Frame): ReadonlyArray<TaskKey> => {
+  if (stage === "read" || stage === "reflection") return []
+  return tasksForStage(stage, item)
+}
+
+const taskFact = (stage: StageKey, task: TaskKey, item: Frame): string => {
+  const cell = cellForTask(stage, task, item)
+  return `${positionFor(stage, cell, item)} · ${stateFor(cell, item)}`
+}
+
+const changeReceipt = (stage: StageKey, item: Frame): string => {
+  if (frameIndex === 0) return '<span class="change-receipt initial"><small>LANDMARK CHANGE</small><b>initial accepted fact</b></span>'
+  const before = previous()
+  const beforeTasks = temporalTasksForStage(stage, before)
+  const nowTasks = temporalTasksForStage(stage, item)
+  const entered = nowTasks.filter((task) => !beforeTasks.includes(task)).map((task) => `${task} entered`)
+  const left = beforeTasks.filter((task) => !nowTasks.includes(task)).map((task) => `${task} left`)
+  const changed = nowTasks.filter((task) => beforeTasks.includes(task) && taskFact(stage, task, before) !== taskFact(stage, task, item)).map((task) => `${task} changed`)
+  const facts = [...entered, ...left, ...changed]
+  if (facts.length === 0 && item.changed.includes(stage)) facts.push("stage fact updated")
+  if (facts.length === 0) facts.push("no stage change")
+  const visible = facts.slice(0, 3)
+  const remainder = facts.length - visible.length
+  return `<span class="change-receipt ${facts[0] === "no stage change" ? "stable" : "changed"}"><small>LANDMARK CHANGE</small><b>${visible.join(" · ")}</b>${remainder > 0 ? `<em>+${remainder} more change${remainder === 1 ? "" : "s"}</em>` : ""}</span>`
+}
+
+const previousFactFor = (stage: StageKey, cell: Cell): string => {
+  if (frameIndex === 0) return "initial accepted fact"
+  const before = previous()
+  if (cell.task !== undefined) {
+    const priorTaskCell = cellsFor(stage, before).find((candidate) => candidate.task === cell.task)
+    if (priorTaskCell === undefined) return "not in this stage"
+    return taskFact(stage, cell.task, before)
+  }
+  const priorCell = cellsFor(stage, before).find((candidate) => candidate.task === undefined && candidate.title === cell.title)
+  return priorCell?.value ?? "not present"
+}
+
+const stableLandmarks = (stage: StageKey): number => {
+  if (frameIndex === 0) return 0
+  let lastChange = 0
+  for (let index = frameIndex; index >= 0; index -= 1) {
+    if (story.frames[index]!.changed.includes(stage)) {
+      lastChange = index
+      break
+    }
+  }
+  return frameIndex - lastChange
+}
+
 const rectangleContent = (stage: StageKey, cell: Cell, item: Frame): string => {
-  if (view() === "original") return `<small>${cell.title}</small><b>${cell.value}</b>`
   const entity = cell.task === undefined ? cell.title : `TASK ${cell.task}`
   const state = stateFor(cell, item)
   const position = positionFor(stage, cell, item)
-  const basis = basisFor(stage)
-  const observation = `${item.graph.revision} · ${item.graph.age}`
-  if (view() === "position-capacity") return `<small>${entity}</small><b>${position}</b><em>${state}</em>`
-  if (view() === "source-freshness") return `<small>${entity}</small><b>${cell.value}</b><span class="fact-pair"><i>BASIS</i>${basis}</span><span class="fact-pair"><i>GRAPH</i>${observation}</span>`
-  return `<small>${entity}</small><b>${state}</b><span class="fact-pair"><i>POSITION</i>${position}</span><span class="fact-pair"><i>BASIS</i>${basis}</span><span class="fact-pair"><i>GRAPH</i>${observation}</span>`
+  const base = `<small>${entity}</small><b>${position}</b><em>${state}</em>`
+  if (view() === "original" || view() === "change-receipts") return base
+  if (view() === "before-after") return `${base}<span class="temporal-pair"><i>BEFORE</i>${previousFactFor(stage, cell)}</span><span class="temporal-pair now"><i>NOW</i>${position} · ${state}</span>`
+  const age = stableLandmarks(stage)
+  return `${base}<span class="temporal-age ${age === 0 ? "changed" : "stable"}"><i>${frameIndex === 0 ? "INITIAL" : age === 0 ? "CHANGED" : "STABLE"}</i>${frameIndex === 0 ? "accepted fact" : age === 0 ? "this landmark" : `${age} landmark${age === 1 ? "" : "s"}`}</span>`
 }
 
 const rectangles = (stage: StageKey, cells: ReadonlyArray<Cell>, item: Frame): string => {
-  if (cells.length === 0) return '<span class="no-delta">empty</span>'
+  const receipt = view() === "change-receipts" ? changeReceipt(stage, item) : ""
+  if (cells.length === 0) return `<span class="rectangles">${receipt}<span class="no-delta">empty</span></span>`
   const active = activeTasks(item)
-  return `<span class="rectangles">${cells.map((cell) => {
+  return `<span class="rectangles">${receipt}${cells.map((cell) => {
     const related = selectionMode === "stage" ? stage === selectedStage : selectionMode === "task" && cell.task === selectedTask
     const selection = related ? "selection-related" : active.length > 0 ? "selection-muted" : ""
     return `<span class="data-rectangle tone-${cell.tone ?? "fact"} ${selection}" ${cell.task === undefined ? "" : `data-cell-task="${cell.task}"`}>${rectangleContent(stage, cell, item)}</span>`
@@ -462,7 +508,7 @@ const graphPanel = (item: Frame): string => `<section class="graph-panel instrum
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
 const switcher = (): string => {
   const index = views.findIndex(({ key }) => key === view())
-  return `<nav class="switcher" aria-label="Rectangle grammar prototype"><button data-cycle="-1" aria-label="Previous rectangle grammar">←</button><label><small>RECTANGLE GRAMMAR ${index + 1} / ${views.length}</small><select data-view-select aria-label="Rectangle grammar">${views.map(({ key, name }) => `<option value="${key}" ${key === view() ? "selected" : ""}>${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next rectangle grammar">→</button></nav>`
+  return `<nav class="switcher" aria-label="Temporal treatment prototype"><button data-cycle="-1" aria-label="Previous temporal treatment">←</button><label><small>TEMPORAL TREATMENT ${index + 1} / ${views.length}</small><select data-view-select aria-label="Temporal treatment">${views.map(({ key, name }) => `<option value="${key}" ${key === view() ? "selected" : ""}>${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next temporal treatment">→</button></nav>`
 }
 
 const selectView = (next: ViewKey): void => {

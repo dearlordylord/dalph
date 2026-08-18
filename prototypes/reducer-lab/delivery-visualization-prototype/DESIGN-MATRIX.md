@@ -1,6 +1,6 @@
 # Delivery visualization design matrix
 
-This matrix prioritizes independent design questions for the delivery visualization prototype. Each experiment keeps the accepted state-top-rule original as the baseline and changes one direction at a time.
+This matrix prioritizes independent design questions for the delivery visualization prototype. Each experiment keeps the accepted Position + capacity rectangle grammar as the baseline and changes one direction at a time.
 
 The prototype changes no Dalph runtime behavior.
 
@@ -8,7 +8,7 @@ The prototype changes no Dalph runtime behavior.
 
 | Priority | Direction | Concrete user question | Why it comes here | Prototype decision | Success evidence |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | Rectangle semantics | What must one rectangle say for its stage to be understood without explanatory prose? | Every later direction depends on a stable information grammar. | Compare the original with position/capacity, source/freshness, and full-fact grammars. | A user can identify the entity, current fact, and relevant position without consulting the graph legend. |
+| 1 | Rectangle semantics | What must one rectangle say for its stage to be understood without explanatory prose? | Every later direction depends on a stable information grammar. | Accepted: Position + capacity becomes the new original. | A user can identify the entity, current fact, and relevant position without consulting the graph legend. |
 | 2 | Temporal behavior | What changed between adjacent accepted landmarks? | Static content must be correct before motion or transition marks explain its change. | Show entered, stayed, moved, admitted, paused, resumed, integrated, and settled changes without leaving ghost entities. | A user can narrate two adjacent frames and identify the changed rectangle. |
 | 3 | Frontier and capacity | Which tasks are ordered in the frontier, inside the desired prefix, holding positions, or waiting beyond capacity? | This is the central scheduling relationship and uses the rectangle grammar plus temporal changes. | Test explicit rank, capacity boundary, held-position occupancy, and task-by-task frontier consumption. | A user predicts which task can advance next and why another task waits. |
 | 4 | Epistemic state | Which facts are complete, fresh, stale, or awaiting a required read? | Crash, pause, and restart are misleading unless observation status is explicit. | Distinguish complete graph publication, observation age, frozen state, and fresh-read gates. Never show a partial graph. | A user distinguishes stale-but-complete facts from current tracker facts. |
@@ -40,10 +40,15 @@ The prototype changes no Dalph runtime behavior.
 | Run and task pause cycles | No new forward work starts from pre-unpause facts; fresh reads permit progress. |
 | Completion sequence | Settlement totals grow and the final frame shows full integration for every task. |
 
-## Active experiment: Priority 1 — rectangle semantics
+## Accepted foundation: Priority 1 — rectangle semantics
 
-The original two-line rectangle remains the baseline. The Position + capacity option survives the first review. Source + freshness and Full fact grammar remain under review. The options do not change rectangle placement, state top rules, graph state, or chronology:
+Position + capacity is the new original. Every current task rectangle shows its entity, ordered position or capacity relationship, and current state.
 
-1. Position and capacity — survives.
-2. Source and freshness — under review.
-3. Full fact grammar — under review.
+## Active experiment: Priority 2 — temporal behavior
+
+The scenario, graph, rectangle grammar, selection behavior, and eventual full integration remain fixed. Four treatments test how the UI communicates change between adjacent accepted landmarks:
+
+1. Original — the accepted rectangles, changed-row marker, and Before/After strip.
+2. Change receipts — an extra rectangle summarizes entries, exits, moves, and stage updates. Exited tasks appear only as past-tense receipt text, never as current-state rectangles or graph nodes.
+3. Before → now rectangles — each current rectangle carries its preceding fact and its accepted current fact.
+4. Stability age — each rectangle shows whether its source stage changed at this landmark or how many landmarks it has remained stable.
