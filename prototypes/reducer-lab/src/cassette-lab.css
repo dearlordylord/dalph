@@ -625,8 +625,9 @@ dd {
 
 .delivery-data-rectangle.tone-fresh,
 .delivery-data-rectangle.tone-running,
-.delivery-data-rectangle.tone-settled,
-.delivery-data-rectangle.tone-output { border-top-color: #52b78f; }
+.delivery-data-rectangle.tone-responsibility { border-top-color: #52b78f; }
+.delivery-data-rectangle.tone-settled { border-top-color: #b18bd0; }
+.delivery-data-rectangle.tone-output { border-top-color: #8fa09a; }
 .delivery-data-rectangle.tone-waiting { border-top-color: #d0a24b; border-top-style: dashed; }
 .delivery-data-rectangle.tone-desired { border-top-color: #55a6c2; }
 .delivery-data-rectangle.tone-blocked { border-top-color: #9c8178; opacity: 0.68; }

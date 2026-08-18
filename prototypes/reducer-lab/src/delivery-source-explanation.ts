@@ -12,7 +12,7 @@ export type DeliverySourceStageId =
   | "settlements"
   | "trackerReflection"
 
-export type DeliverySourceCellTone = "blocked" | "desired" | "fresh" | "output" | "rule" | "running" | "settled" | "waiting"
+export type DeliverySourceCellTone = "blocked" | "desired" | "fresh" | "output" | "responsibility" | "rule" | "running" | "settled" | "waiting"
 
 export interface DeliverySourceCell {
   readonly detail: string
@@ -89,6 +89,28 @@ const ticketCells = (frame: AuthoredDeliveryFrame): ReadonlyArray<DeliverySource
   return [...represented, ...emptySlots]
 }
 
+const deliveryCell = (delivery: AuthoredDeliveryFrame["deliveries"][number]): DeliverySourceCell => {
+  if (delivery.obligations.length > 0) {
+    const noun = delivery.obligations.length === 1 ? "obligation" : "obligations"
+    return cell(
+      "RESPONSIBILITY",
+      delivery.taskId,
+      `${delivery.placement.kind} · ${delivery.obligations.length} live ${noun}`,
+      "responsibility",
+      delivery.taskId
+    )
+  }
+  const settled = delivery.evidence.some(({ kind }) => kind === "IntegrationFinalitySettlement")
+    || delivery.standings.some(({ kind }) => kind === "IntegrationFinalitySettled")
+  return cell(
+    settled ? "SETTLED EVIDENCE" : "DELIVERY EVIDENCE",
+    delivery.taskId,
+    `${delivery.placement.kind} · no live obligations`,
+    settled ? "settled" : "output",
+    delivery.taskId
+  )
+}
+
 const valuesOf = (frame: AuthoredDeliveryFrame): ReadonlyArray<StageValue> => [
   {
     id: "read",
@@ -139,13 +161,7 @@ const valuesOf = (frame: AuthoredDeliveryFrame): ReadonlyArray<StageValue> => [
     taskIds: frame.deliveries.map(({ taskId }) => taskId),
     value: frame.deliveries,
     changeTracked: true,
-    cells: frame.deliveries.map(({ obligations, placement, taskId }) => cell(
-      "RESPONSIBILITY",
-      taskId,
-      `${placement.kind} · ${obligations.length} obligations`,
-      frame.heldPositions.some((held) => held.taskId === taskId) ? "running" : "output",
-      taskId
-    ))
+    cells: frame.deliveries.map(deliveryCell)
   },
   {
     id: "settlements",

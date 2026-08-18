@@ -131,6 +131,31 @@ await scenario("keeps selected waiting and excluded ticket cells visibly distinc
   assert(frontier.some(({ detail, tone }) => detail === "EligibleOutsideBound" && tone === "waiting"), "An eligible frontier task beyond capacity must not be called desired")
 })
 
+await scenario("distinguishes live responsibilities from retained settled evidence", () => {
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:productionShapedFiveTaskDiamond")
+  if (result?._tag !== "Completed" || result.observationMoments === null) {
+    throw new Error("The five-task diamond observations are unavailable")
+  }
+  const settledIndex = result.observationMoments.findLastIndex((moment) =>
+    moment.deliveryFrame?.deliveries.length === 5
+    && moment.deliveryFrame.deliveries.every(({ obligations }) => obligations.length === 0)
+    && moment.deliveryFrame.settlements.length === 5
+  )
+  const liveIndex = result.observationMoments.findIndex((moment) =>
+    moment.deliveryFrame?.deliveries.some(({ obligations }) => obligations.length > 0) === true
+  )
+  const settled = deliverySourceExplanationAt(result.observationMoments, settledIndex)
+  const live = deliverySourceExplanationAt(result.observationMoments, liveIndex)
+  if (settled._tag !== "DeliverySourceAvailable" || live._tag !== "DeliverySourceAvailable") {
+    throw new Error("The five-task responsibility explanations are unavailable")
+  }
+  const settledCells = settled.rows.find(({ id }) => id === "deliveries")?.cells ?? []
+  const liveCells = live.rows.find(({ id }) => id === "deliveries")?.cells ?? []
+  assert(settledCells.length === 5, "The final frame must retain all five exact Delivery evidence rows")
+  assert(settledCells.every(({ detail, label, tone }) => label === "SETTLED EVIDENCE" && detail.includes("no live obligations") && tone === "settled"), "Finality evidence must not look like five live responsibilities")
+  assert(liveCells.some(({ detail, label, tone }) => label === "RESPONSIBILITY" && detail.includes("live obligation") && tone === "responsibility"), "A nonempty obligation must retain responsibility treatment")
+})
+
 await scenario("keeps an integration owner live while a newer graph publication changes source stages", () => {
   const match = everyResult.flatMap((result) => {
     if (result._tag !== "Completed" || result.observationMoments === null) return []

@@ -489,6 +489,13 @@ explanation. The graph panel uses the same trace-fill palette, fitted layout,
 freshness treatment, and pan/zoom controls as the prototype. On a narrow screen
 the two panels stack without losing either surface.
 
+The responsibilities stage names a task **RESPONSIBILITY** only while its
+captured Delivery row has at least one live obligation. A row with no live
+obligation and exact integration-finality evidence is **SETTLED EVIDENCE**;
+other zero-obligation rows are **DELIVERY EVIDENCE**. Their distinct cell
+treatments must not imply that retained descriptive evidence is still live
+work.
+
 The graph derives one dominant presentation-only fill tone in this order:
 established settlement, observed live integration owner, held task-work
 position, selected desired ticket, eligible work waiting beyond the bound,
@@ -543,6 +550,9 @@ the removed throwaway visualization as a second runnable surface.
   lines, visible typed data rectangles, and graph canvas as peer panels.
 - `keeps current observed moment contained at the bottom of the frame` proves
   that variable story/runtime evidence cannot move the instrument or task facts.
+- `distinguishes live responsibilities from retained settled evidence` proves
+  that completed graph tasks do not remain visibly described as live
+  responsibilities merely because Delivery retains their exact evidence.
 - `browser-smoke` proves the same source/graph geometry and visible data-cell
   interaction in the real served application at desktop and narrow widths.
 - `does not fabricate delivery visualization for direct protocol cassettes` proves
