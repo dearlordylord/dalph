@@ -1,16 +1,14 @@
 import "./prototype.css"
 
 // THROWAWAY PROTOTYPE
-// Question: Which crash placement exposes a distinct recovery fact that is
-// useful enough to justify another scenario?
+// Accepted synchronized code, rectangle, and graph treatment for one complete
+// delivery scenario.
 
 type TaskKey = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "X"
 type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" | "settlements" | "reflection"
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
-const viewKeys = ["original", "between-admissions", "integration-intent", "run-pause"] as const
-type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
 
@@ -256,91 +254,10 @@ const originalStory: Scenario = {
   ]
 }
 
-const oneHeldR42 = taskStates({ A: "settled", B: "running", C: "desired" })
-const oneHeldR43 = taskStates({ A: "settled", B: "running", C: "desired", X: "waiting" })
-const oneHeldFrame = (source: Frame): Frame => ({
-  ...source,
-  tasks: oneHeldR43,
-  frontier: ["C", "X"],
-  bounded: ["B", "C"],
-  held: ["B"]
-})
-
-const betweenAdmissionsStory: Scenario = {
-  name: "One responsibility survives; one task stays desired",
-  question: "Can restart preserve B without turning desired task C into a responsibility or admitting newly observed X first?",
-  placement: "After B is admitted, before C is admitted",
-  value: "The crash separates a durable held position from a derived desired ticket.",
-  frames: [
-    ...originalStory.frames.slice(0, 5),
-    frame({ time: "10:42:26", event: "Application crashes between admissions", boundary: "PROCESS · coordinator exits after B admission", kind: "crash", app: "down", graph: { kind: "Complete", revision: "R42", observedAt: "10:42:23", age: "frozen · 3s", taskCount: 9 }, tasks: oneHeldR42, frontier: ["C"], bounded: ["B", "C"], held: ["B"], integrations: [], settled: ["A"], changed: [], durable: "Journaled B responsibility only", expected: "B stays held; C stays desired", forbidden: "C becomes a recovered responsibility" }),
-    frame({ time: "10:42:30", event: "Alice adds X in the tracker", boundary: "TRACKER · external graph mutation while app is down", kind: "external", app: "down", graph: { kind: "Complete", revision: "R42", observedAt: "10:42:23", age: "frozen · tracker newer", taskCount: 9 }, tasks: oneHeldR42, frontier: ["C"], bounded: ["B", "C"], held: ["B"], integrations: [], settled: ["A"], changed: [], durable: "UI still has complete R42 only", expected: "No X node appears yet", forbidden: "Ghost X from an unobserved graph" }),
-    frame({ time: "10:42:34", event: "B is reconstructed; C remains desired", boundary: "RESTART · exact responsibility recovered before fresh work", kind: "recovery", app: "restarting", graph: { kind: "Complete", revision: "R42", observedAt: "10:42:23", age: "stale · 11s", taskCount: 9 }, tasks: oneHeldR42, frontier: ["C"], bounded: ["B", "C"], held: ["B"], integrations: [], settled: ["A"], changed: ["responsibilities", "reflection"], durable: "Same B run and attempt identity", expected: "One held position and one desired task", forbidden: "C or X admitted before graph observation" }),
-    frame({ time: "10:42:38", event: "R43 adds X behind C", boundary: "JOURNAL · complete ten-task graph accepted", kind: "publication", graph: { kind: "Complete", revision: "R43", observedAt: "10:42:38", age: "fresh", taskCount: 10 }, tasks: oneHeldR43, frontier: ["C", "X"], bounded: ["B", "C"], held: ["B"], integrations: [], settled: ["A"], changed: ["read", "graph", "frontier", "reflection"], durable: "Complete R43 graph containing C and X", expected: "C keeps priority; X waits after the bound", forbidden: "X displaces C" }),
-    { ...oneHeldFrame(originalStory.frames[10]!), durable: "Run Pause decision and B responsibility", expected: "B remains held; C and X do not start", forbidden: "C or X starts while the Run is paused" },
-    { ...oneHeldFrame(originalStory.frames[11]!), durable: "Run Unpause decision and B responsibility", expected: "C and X wait for a fresh graph read", forbidden: "C admitted from pre-pause facts" },
-    { ...oneHeldFrame(originalStory.frames[12]!), expected: "Fresh facts permit C admission; X remains after the bound" },
-    ...completionFrames(
-      { revision: "R43", observedAt: "10:42:44", taskCount: 10, frontier: ["C", "X"], held: ["B"], integrations: [], settled: ["A"], pausedTasks: [], resumePending: [] },
-      [{ kind: "admit", task: "C", time: "10:42:44" }, ...completionActions]
-    )
-  ]
-}
-
-const integrationState: CompletionState = { revision: "R43", observedAt: "10:42:44", taskCount: 10, frontier: ["X"], held: ["C"], integrations: ["B"], settled: ["A"], pausedTasks: [], resumePending: [] }
-const integrationTasks = completionTasks(integrationState)
-const integrationIntentStory: Scenario = {
-  name: "Integration intent survives restart",
-  question: "Can restart preserve B integration intent and C task work without admitting X from stale facts?",
-  placement: "After B leaves task work, before B integration settles",
-  value: "The crash distinguishes durable integration intent from later integration observation.",
-  frames: [
-    ...originalStory.frames.slice(0, 13),
-    ...completionFrames(
-      { revision: "R43", observedAt: "10:42:44", taskCount: 10, frontier: ["X"], held: ["B", "C"], integrations: [], settled: ["A"], pausedTasks: [], resumePending: [] },
-      [{ kind: "terminal", task: "B", time: "10:42:44.500" }]
-    ),
-    frame({ time: "10:42:45", event: "Application crashes during B integration", boundary: "PROCESS · coordinator exits after integration intent", kind: "crash", app: "down", graph: { kind: "Complete", revision: "R43", observedAt: "10:42:44", age: "frozen · 1s", taskCount: 10 }, tasks: integrationTasks, frontier: ["X"], bounded: ["C", "X"], held: ["C"], integrations: ["B"], settled: ["A"], changed: [], durable: "B integration intent and C responsibility", expected: "B stays integrating; C stays held", forbidden: "B becomes settled without observation" }),
-    frame({ time: "10:42:45.500", event: "B integration and C work are reconstructed", boundary: "RESTART · intent and exact responsibility recovered", kind: "recovery", app: "restarting", graph: { kind: "Complete", revision: "R43", observedAt: "10:42:44", age: "stale · restart", taskCount: 10 }, tasks: integrationTasks, frontier: ["X"], bounded: ["C", "X"], held: ["C"], integrations: ["B"], settled: ["A"], changed: ["responsibilities", "settlements", "reflection"], durable: "Same B integration intent and C run identity", expected: "X remains desired but not held", forbidden: "Duplicate B integration or X admission" }),
-    ...completionFrames(integrationState, completionActions.slice(1))
-  ]
-}
-
-const runPauseStory: Scenario = {
-  name: "Run Pause and held positions survive restart",
-  question: "Can restart preserve the Run Pause boundary and both held positions before any fresh work is selected?",
-  placement: "After Run Pause, before Run Unpause",
-  value: "The crash tests user control recovery separately from task-work recovery.",
-  frames: [
-    ...originalStory.frames.slice(0, 11),
-    { ...originalStory.frames[10]!, time: "10:42:41", event: "Application crashes while the Run is paused", boundary: "PROCESS · coordinator exits under Run Pause", kind: "crash", app: "down", graph: { ...originalStory.frames[10]!.graph, age: "frozen · 3s" }, durable: "Run Pause decision and B/C responsibilities", expected: "Pause boundary and both positions remain", forbidden: "X starts or either position opens" },
-    { ...originalStory.frames[10]!, time: "10:42:41.500", event: "Run Pause and B/C are reconstructed", boundary: "RESTART · control decision and responsibilities recovered", kind: "recovery", app: "restarting", graph: { ...originalStory.frames[10]!.graph, age: "stale · restart" }, changed: ["responsibilities", "reflection"], durable: "Run Pause decision and exact B/C identities", expected: "No new selection before Unpause and fresh read", forbidden: "Restart silently clears Run Pause" },
-    originalStory.frames[11]!,
-    originalStory.frames[12]!,
-    ...completionAfterRestart()
-  ]
-}
-
-const stories: Record<ViewKey, Scenario> = {
-  original: originalStory,
-  "between-admissions": betweenAdmissionsStory,
-  "integration-intent": integrationIntentStory,
-  "run-pause": runPauseStory
-}
-
-for (const candidate of Object.values(stories)) {
-  const finalFrame = candidate.frames.at(-1)!
-  if (finalFrame.settled.length !== finalFrame.graph.taskCount) throw new Error(`${candidate.name} does not reach full integration`)
-  if (!candidate.frames.some((item) => item.app === "down") || !candidate.frames.some((item) => item.app === "restarting")) throw new Error(`${candidate.name} does not exercise crash and restart`)
-  if (!candidate.frames.some((item) => item.control.run === "paused") || !candidate.frames.some((item) => item.control.tasks.length > 0)) throw new Error(`${candidate.name} does not exercise Run Pause and Task Pause`)
-}
-
-const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
-  { key: "original", name: "Original · both positions held", description: "The crash preserves B and C while a complete graph change adds X during downtime." },
-  { key: "between-admissions", name: "Between admissions", description: "The crash preserves held B while C remains desired and ordered before newly observed X." },
-  { key: "integration-intent", name: "During integration intent", description: "The crash preserves B integration intent and C task work before integration finality is observed." },
-  { key: "run-pause", name: "During Run Pause", description: "The crash preserves the user control boundary together with both held positions." }
-]
+const finalFrame = originalStory.frames.at(-1)!
+if (finalFrame.settled.length !== finalFrame.graph.taskCount) throw new Error("Original does not reach full integration")
+if (!originalStory.frames.some((item) => item.app === "down") || !originalStory.frames.some((item) => item.app === "restarting")) throw new Error("Original does not exercise crash and restart")
+if (!originalStory.frames.some((item) => item.control.run === "paused") || !originalStory.frames.some((item) => item.control.tasks.length > 0)) throw new Error("Original does not exercise Run Pause and Task Pause")
 
 let frameIndex = 0
 let selectedStage: StageKey = "frontier"
@@ -351,18 +268,14 @@ let reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches
 let timer: number | undefined
 const root = document.querySelector<HTMLElement>("#prototype-root")!
 
-const view = (): ViewKey => {
-  const value = new URLSearchParams(location.search).get("view")
-  return views.some(({ key }) => key === value) ? value as ViewKey : "original"
-}
-const scenario = (): Scenario => stories[view()]
+const scenario = (): Scenario => originalStory
 const current = (): Frame => scenario().frames[frameIndex] ?? scenario().frames[0]!
 const previous = (): Frame => scenario().frames[Math.max(0, frameIndex - 1)]!
 const visibleTasks = (item: Frame): ReadonlyArray<TaskKey> => item.graph.taskCount === 10 ? allTasks : originalTasks
 
-const header = (): string => `<header class="topbar"><div><span class="kicker">THROWAWAY · CRASH PLACEMENT LAB</span><h1>${scenario().name}</h1><p>${scenario().question}</p></div><div class="top-controls"><button data-end class="end">View full integration</button><button data-play class="play">${playing ? "■ Stop" : "▶ Play scenario"}</button><label class="motion"><input data-motion type="checkbox" ${reducedMotion ? "checked" : ""}><span></span>Reduce motion</label></div></header>`
+const header = (): string => `<header class="topbar"><div><span class="kicker">THROWAWAY · DELIVERY VISUALIZATION PROTOTYPE</span><h1>${scenario().name}</h1><p>${scenario().question}</p></div><div class="top-controls"><button data-end class="end">View full integration</button><button data-play class="play">${playing ? "■ Stop" : "▶ Play scenario"}</button><label class="motion"><input data-motion type="checkbox" ${reducedMotion ? "checked" : ""}><span></span>Reduce motion</label></div></header>`
 
-const placement = (): string => `<section class="placement"><div><small>CRASH PLACEMENT UNDER TEST</small><b>${scenario().placement}</b><p>${scenario().value}</p></div><ul><li>visible app-state change</li><li>durable recovery fact</li><li>safe/forbidden contrast</li><li>predictable user outcome</li></ul><span>4 / 4</span></section>`
+const placement = (): string => `<section class="placement"><div><small>SCENARIO</small><b>${scenario().placement}</b><p>${scenario().value}</p></div><ul><li>complete graph</li><li>ordered frontier</li><li>fixed capacity</li><li>full integration</li></ul><span>10</span></section>`
 
 const timeline = (): string => `<section class="timeline" style="--moments:${scenario().frames.length}">${scenario().frames.map((item, index) => `<button data-frame="${index}" class="frame-step kind-${item.kind} ${index === frameIndex ? "active" : ""}"><i>${index + 1}</i><b>${item.event}</b><small>${item.time}</small></button>`).join("")}</section>`
 
@@ -510,7 +423,7 @@ const codeMarkup = (code: string): string => {
   }).join("")
 }
 
-const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${scenario().frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i></span><code>${codeMarkup(stage.code)}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>${views.find(({ key }) => key === view())!.description}</span></div></section>`
+const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${scenario().frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i></span><code>${codeMarkup(stage.code)}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>position + capacity · fixed slots · incident-edge selection</span></div></section>`
 
 const nodePositions: Record<TaskKey, readonly [number, number]> = {
   A: [5, 43], B: [21, 17], C: [21, 69], D: [39, 43], E: [55, 17], F: [55, 69], H: [71, 17], I: [71, 69], X: [39, 84], G: [88, 43]
@@ -543,30 +456,10 @@ const chip = (task: TaskKey, item: Frame): string => {
 const graphPanel = (item: Frame): string => `<section class="graph-panel instrument"><div class="panel-head"><div><span class="panel-kind">COMPLETE GRAPH + DELIVERY OVERLAY</span><h2>${item.graph.revision} · ${item.graph.taskCount} tasks · ${item.settled.length}/${item.graph.taskCount} integrated</h2></div><span class="freshness ${item.graph.age === "fresh" ? "fresh" : "stale"}">${item.settled.length === item.graph.taskCount ? "FULL INTEGRATION" : `${item.graph.age} · observed ${item.graph.observedAt}`}</span></div><div class="graph-canvas ${item.app === "down" ? "frozen" : ""}"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.map((edge) => svgEdge(edge, item)).join("")}</svg>${visibleTasks(item).map((task) => node(task, item)).join("")}${item.app === "down" ? '<div class="crash-shutter"><b>APPLICATION DOWN</b><span>Complete graph remains visible but frozen</span></div>' : ""}</div><div class="flow-model"><div class="flow-group frontier-group"><small>ORDERED FRONTIER · CURRENT MEMBERSHIP</small><div>${item.frontier.length === 0 ? '<span class="empty">empty</span>' : item.frontier.map((task) => chip(task, item)).join("")}</div><p>${item.frontier.filter((task) => !item.bounded.includes(task)).length} task(s) wait beyond the desired prefix.</p></div><span class="capacity-arrow">→<small>capacity ${capacity}</small></span><div class="flow-group capacity-group"><small>DESIRED TICKETS / ACTUAL HELD POSITIONS</small><div>${item.bounded.length === 0 ? '<span class="empty">no desired tickets</span>' : item.bounded.map((task) => chip(task, item)).join("")}</div><p>Held: ${item.held.length === 0 ? "none" : item.held.join(" + ")}</p></div></div></section>`
 
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
-const switcher = (): string => {
-  const index = views.findIndex(({ key }) => key === view())
-  return `<nav class="switcher" aria-label="Crash arrangement prototype"><button data-cycle="-1" aria-label="Previous crash arrangement">←</button><label><small>CRASH ARRANGEMENT ${index + 1} / ${views.length} · KEYS 1–${views.length} · ⌘←/→ STEPS</small><select data-view-select aria-label="Crash arrangement">${views.map(({ key, name }, optionIndex) => `<option value="${key}" ${key === view() ? "selected" : ""}>${optionIndex + 1} · ${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next crash arrangement">→</button></nav>`
-}
-
-const selectView = (next: ViewKey): void => {
-  const url = new URL(location.href)
-  if (next === "original") url.searchParams.delete("view")
-  else url.searchParams.set("view", next)
-  history.pushState({}, "", url)
-  frameIndex = 0
-  selectionMode = "none"
-  render()
-}
-
-const cycleView = (delta: number): void => {
-  const index = views.findIndex(({ key }) => key === view())
-  selectView(views[(index + delta + views.length) % views.length]!.key)
-}
-
 const render = (): void => {
   const item = current()
-  root.className = `prototype view-${view()} app-${item.app} ${reducedMotion ? "reduce-motion" : ""}`
-  root.innerHTML = `${header()}${placement()}${timeline()}${transition(item)}<main><div class="layout">${codePanel(item)}${graphPanel(item)}</div>${evidence(item)}</main>${switcher()}`
+  root.className = `prototype app-${item.app} ${reducedMotion ? "reduce-motion" : ""}`
+  root.innerHTML = `${header()}${placement()}${timeline()}${transition(item)}<main><div class="layout">${codePanel(item)}${graphPanel(item)}</div>${evidence(item)}</main>`
   bind()
 }
 
@@ -595,8 +488,6 @@ const bind = (): void => {
   document.querySelector<HTMLElement>("[data-end]")?.addEventListener("click", () => { frameIndex = scenario().frames.length - 1; render() })
   document.querySelector<HTMLElement>("[data-play]")?.addEventListener("click", () => { playing = !playing; if (timer !== undefined) clearInterval(timer); if (playing) timer = window.setInterval(() => { frameIndex = (frameIndex + 1) % scenario().frames.length; render() }, reducedMotion ? 2600 : 1900); render() })
   document.querySelector<HTMLInputElement>("[data-motion]")?.addEventListener("change", (event) => { reducedMotion = (event.currentTarget as HTMLInputElement).checked; render() })
-  document.querySelectorAll<HTMLElement>("[data-cycle]").forEach((element) => element.addEventListener("click", () => cycleView(Number(element.dataset.cycle))))
-  document.querySelector<HTMLSelectElement>("[data-view-select]")?.addEventListener("change", (event) => selectView((event.currentTarget as HTMLSelectElement).value as ViewKey))
 }
 
 addEventListener("keydown", (event) => {
@@ -609,14 +500,7 @@ addEventListener("keydown", (event) => {
     render()
     return
   }
-  if (!event.altKey && !event.ctrlKey && !event.metaKey && /^[1-9]$/.test(event.key)) {
-    const selectedView = views[Number(event.key) - 1]
-    if (selectedView !== undefined) selectView(selectedView.key)
-  }
   if (event.key === "[") { frameIndex = Math.max(0, frameIndex - 1); render() }
   if (event.key === "]") { frameIndex = Math.min(scenario().frames.length - 1, frameIndex + 1); render() }
-  if (event.key === "ArrowLeft") cycleView(-1)
-  if (event.key === "ArrowRight") cycleView(1)
 })
-addEventListener("popstate", () => { frameIndex = 0; render() })
 render()
