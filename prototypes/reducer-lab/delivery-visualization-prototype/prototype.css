@@ -5,7 +5,7 @@
 body{margin:0;min-width:340px}
 button,input{font:inherit}
 button{color:inherit}
-.prototype{--code-bg:#16211c;--code-fg:#d9e3de;--code-muted:#71837a;--code-divider:#3d5047;--cell-bg:#1e2c26;--cell-border:#455a50;--cell-label:#81978d;--cell-fg:#d4e1da;--syntax-keyword:#e795c4;--syntax-call:#70c8e5;--success:#3a9978;--warning:#a37a32;--info:#4b91b8;--integration:#477f9f;--rule:#8e6ca8;--selection:#52a8dc;--blocked:#665d57;min-height:100vh;padding:22px clamp(14px,2.8vw,44px) 32px;background:radial-gradient(circle at 8% -10%,#fffdf4 0,transparent 34%),#e9e8e0}
+.prototype{--code-bg:#16211c;--code-fg:#d9e3de;--code-muted:#71837a;--code-divider:#3d5047;--cell-bg:#1e2c26;--cell-border:#455a50;--cell-label:#81978d;--cell-fg:#d4e1da;--syntax-keyword:#e795c4;--syntax-call:#70c8e5;--success:#3a9978;--warning:#a37a32;--info:#4b91b8;--integration:#477f9f;--rule:#8e6ca8;--selection:#52a8dc;--blocked:#665d57;min-height:100vh;padding:22px clamp(14px,2.8vw,44px) 104px;background:radial-gradient(circle at 8% -10%,#fffdf4 0,transparent 34%),#e9e8e0}
 .topbar,.placement,.timeline,.transition-strip,main{max-width:1560px;margin-left:auto;margin-right:auto}
 
 .topbar{display:flex;justify-content:space-between;align-items:end;gap:24px;margin-bottom:11px}
@@ -105,6 +105,14 @@ button{color:inherit}
 .data-rectangle small,.data-rectangle b{display:block;white-space:normal;overflow:visible}
 .data-rectangle small{color:var(--cell-label);font:6px DM Mono,monospace;letter-spacing:.06em}
 .data-rectangle b{color:var(--cell-fg);font:7px/1.2 DM Mono,monospace}
+.data-rectangle em{color:var(--cell-label);font:6px/1.35 DM Mono,monospace;font-style:normal;margin-top:5px}
+.fact-pair{display:grid;grid-template-columns:34px minmax(0,1fr);gap:4px;color:var(--cell-fg);font:5.5px/1.3 DM Mono,monospace;margin-top:4px}
+.fact-pair i{color:var(--cell-label);font-style:normal}
+.view-state-reason .data-rectangle,.view-position-capacity .data-rectangle{min-height:70px}
+.view-source-freshness .data-rectangle{min-height:84px}
+.view-full-fact .data-rectangle{min-height:100px}
+.view-source-freshness .stage-graph,.view-source-freshness .stage-settlements{min-height:300px}
+.view-full-fact .stage-graph,.view-full-fact .stage-settlements{min-height:340px}
 .tone-fresh,.tone-running,.tone-settled,.tone-output{border-color:var(--success);background:color-mix(in srgb,var(--success) 20%,var(--cell-bg))}
 .tone-stale,.tone-waiting{border-color:var(--warning);background:color-mix(in srgb,var(--warning) 20%,var(--cell-bg))}
 .tone-waiting{border-style:dashed}
@@ -179,6 +187,14 @@ button{color:inherit}
 .evidence>div:last-child{border-right:0;background:#fff4f1}
 .evidence b{display:block;font-size:8px;margin-top:3px}
 
+.switcher{position:fixed;z-index:20;left:50%;bottom:16px;transform:translateX(-50%);display:grid;grid-template-columns:38px minmax(230px,320px) 38px;align-items:stretch;border:1px solid #394c43;border-radius:10px;background:#142019;color:#e8f0ec;box-shadow:0 12px 34px #1420194a;overflow:hidden}
+.switcher button{border:0;background:#20332a;color:#b8d9ca;font:16px DM Mono,monospace;cursor:pointer}
+.switcher button:hover,.switcher button:focus-visible{background:#2c5746;color:#fff}
+.switcher label{display:grid;gap:2px;padding:7px 10px;border-left:1px solid #394c43;border-right:1px solid #394c43}
+.switcher small{color:#7f9c8f;font:6px DM Mono,monospace;letter-spacing:.12em}
+.switcher select{min-width:0;border:0;background:transparent;color:#e8f0ec;font:8px DM Mono,monospace;outline:none;cursor:pointer}
+.switcher option{background:#142019;color:#e8f0ec}
+
 .reduce-motion *{animation-duration:.001ms!important;animation-iteration-count:1!important}
 @media(prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;animation-iteration-count:1!important}}
 
@@ -191,7 +207,7 @@ button{color:inherit}
   .placement ul{grid-row:2;grid-column:1/-1;flex-wrap:wrap}
 }
 @media(max-width:720px){
-  .prototype{padding:14px 8px 28px}
+  .prototype{padding:14px 8px 96px}
   .topbar{display:grid}
   .placement,.transition-strip,.evidence{grid-template-columns:1fr}
   .placement>span{position:absolute;right:20px}
@@ -202,4 +218,5 @@ button{color:inherit}
   .flow-model{grid-template-columns:1fr}
   .capacity-arrow{transform:rotate(90deg)}
   .evidence>div{border-right:0;border-bottom:1px solid #deded6}
+  .switcher{bottom:10px;width:calc(100% - 20px);grid-template-columns:36px minmax(0,1fr) 36px}
 }

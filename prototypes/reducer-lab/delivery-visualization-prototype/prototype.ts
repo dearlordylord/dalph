@@ -9,6 +9,8 @@ type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" |
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
+const viewKeys = ["original", "state-reason", "position-capacity", "source-freshness", "full-fact"] as const
+type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
 
@@ -252,7 +254,13 @@ const story: Scenario = {
   ]
 }
 
-const originalDescription = "State-colored top rules identify each live-data rectangle while source and data remain in one shared row."
+const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
+  { key: "original", name: "Original · retained", description: "State-colored top rules with the retained two-line title and value grammar." },
+  { key: "state-reason", name: "State + reason", description: "Each task rectangle leads with current state and the concrete reason for that state." },
+  { key: "position-capacity", name: "Position + capacity", description: "Each task rectangle leads with its ordered position or its relationship to the capacity bound." },
+  { key: "source-freshness", name: "Source + freshness", description: "Each rectangle names its factual basis and the complete graph observation used at this landmark." },
+  { key: "full-fact", name: "Full fact grammar", description: "Entity, current fact, position, factual basis, and graph observation share one rectangle." }
+]
 
 let frameIndex = 0
 let selectedStage: StageKey = "frontier"
@@ -263,6 +271,10 @@ let reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches
 let timer: number | undefined
 const root = document.querySelector<HTMLElement>("#prototype-root")!
 
+const view = (): ViewKey => {
+  const value = new URLSearchParams(location.search).get("view")
+  return views.some(({ key }) => key === value) ? value as ViewKey : "original"
+}
 const current = (): Frame => story.frames[frameIndex] ?? story.frames[0]!
 const previous = (): Frame => story.frames[Math.max(0, frameIndex - 1)]!
 const visibleTasks = (item: Frame): ReadonlyArray<TaskKey> => item.graph.taskCount === 10 ? allTasks : originalTasks
@@ -350,13 +362,76 @@ const stageSelectionClass = (stage: StageKey, item: Frame): string => {
   if (selectionMode === "stage") return selectedStage === stage ? "selected selection-related" : "selection-muted"
   return tasksForStage(stage, item).includes(selectedTask) ? "selection-related" : "selection-muted"
 }
+
+const basisFor = (stage: StageKey): string => ({
+  read: "tracker read",
+  graph: "complete graph",
+  frontier: "derived from graph",
+  tickets: "capacity rule",
+  responsibilities: "journal + executor",
+  settlements: "integration history",
+  reflection: "delivery signal"
+})[stage]
+
+const stateFor = (cell: Cell, item: Frame): string => {
+  if (cell.task === undefined) return cell.value
+  if (item.control.tasks.includes(cell.task)) return "paused by user"
+  if (item.control.resumePending.includes(cell.task)) return "fresh read required"
+  return taskLabel[item.tasks[cell.task]]
+}
+
+const reasonFor = (cell: Cell, item: Frame): string => {
+  if (cell.task === undefined) return cell.title.toLowerCase()
+  if (item.control.tasks.includes(cell.task)) return "task pause suppresses a desired ticket"
+  if (item.control.resumePending.includes(cell.task)) return "unpause requires task-scoped fresh facts"
+  const reasons: Record<TaskState, string> = {
+    blocked: `prerequisites incomplete in ${item.graph.revision}`,
+    waiting: item.held.length >= capacity ? `both ${capacity} positions are held` : "outside the desired prefix",
+    desired: "inside the desired prefix; responsibility not begun",
+    running: "responsibility holds one task-work position",
+    integrating: "terminal accepted; integration not settled",
+    settled: "integration finality accepted"
+  }
+  return reasons[item.tasks[cell.task]]
+}
+
+const positionFor = (stage: StageKey, cell: Cell, item: Frame): string => {
+  if (cell.task === undefined) return stage === "read" || stage === "graph" ? `${item.graph.taskCount} task complete view` : "stage aggregate"
+  const task = cell.task
+  if (stage === "frontier") return `frontier ${item.frontier.indexOf(task) + 1}/${item.frontier.length}`
+  if (stage === "tickets") {
+    const position = item.bounded.indexOf(task)
+    return position < 0 ? `beyond capacity ${capacity}` : `desired ${position + 1}/${capacity}`
+  }
+  if (stage === "responsibilities") return `held ${item.held.indexOf(task) + 1}/${capacity}`
+  if (stage === "settlements") {
+    if (item.integrations.includes(task)) return "integration live"
+    return `settled ${item.settled.indexOf(task) + 1}/${item.graph.taskCount}`
+  }
+  if (stage === "graph") return `graph task ${visibleTasks(item).indexOf(task) + 1}/${item.graph.taskCount}`
+  return "not position-bearing"
+}
+
+const rectangleContent = (stage: StageKey, cell: Cell, item: Frame): string => {
+  if (view() === "original") return `<small>${cell.title}</small><b>${cell.value}</b>`
+  const entity = cell.task === undefined ? cell.title : `TASK ${cell.task}`
+  const state = stateFor(cell, item)
+  const position = positionFor(stage, cell, item)
+  const basis = basisFor(stage)
+  const observation = `${item.graph.revision} · ${item.graph.age}`
+  if (view() === "state-reason") return `<small>${entity}</small><b>${state}</b><em>${reasonFor(cell, item)}</em>`
+  if (view() === "position-capacity") return `<small>${entity}</small><b>${position}</b><em>${state}</em>`
+  if (view() === "source-freshness") return `<small>${entity}</small><b>${cell.value}</b><span class="fact-pair"><i>BASIS</i>${basis}</span><span class="fact-pair"><i>GRAPH</i>${observation}</span>`
+  return `<small>${entity}</small><b>${state}</b><span class="fact-pair"><i>POSITION</i>${position}</span><span class="fact-pair"><i>BASIS</i>${basis}</span><span class="fact-pair"><i>GRAPH</i>${observation}</span>`
+}
+
 const rectangles = (stage: StageKey, cells: ReadonlyArray<Cell>, item: Frame): string => {
   if (cells.length === 0) return '<span class="no-delta">empty</span>'
   const active = activeTasks(item)
   return `<span class="rectangles">${cells.map((cell) => {
     const related = selectionMode === "stage" ? stage === selectedStage : selectionMode === "task" && cell.task === selectedTask
     const selection = related ? "selection-related" : active.length > 0 ? "selection-muted" : ""
-    return `<span class="data-rectangle tone-${cell.tone ?? "fact"} ${selection}" ${cell.task === undefined ? "" : `data-cell-task="${cell.task}"`}><small>${cell.title}</small><b>${cell.value}</b></span>`
+    return `<span class="data-rectangle tone-${cell.tone ?? "fact"} ${selection}" ${cell.task === undefined ? "" : `data-cell-task="${cell.task}"`}>${rectangleContent(stage, cell, item)}</span>`
   }).join("")}</span>`
 }
 
@@ -370,7 +445,7 @@ const codeMarkup = (code: string): string => {
   }).join("")
 }
 
-const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${story.frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i></span><code>${codeMarkup(stage.code)}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>${originalDescription}</span></div></section>`
+const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${story.frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i></span><code>${codeMarkup(stage.code)}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>${views.find(({ key }) => key === view())!.description}</span></div></section>`
 
 const nodePositions: Record<TaskKey, readonly [number, number]> = {
   A: [5, 43], B: [21, 17], C: [21, 69], D: [39, 43], E: [55, 17], F: [55, 69], H: [71, 17], I: [71, 69], X: [39, 84], G: [88, 43]
@@ -402,10 +477,28 @@ const chip = (task: TaskKey, item: Frame): string => {
 const graphPanel = (item: Frame): string => `<section class="graph-panel instrument"><div class="panel-head"><div><span class="panel-kind">COMPLETE GRAPH + DELIVERY OVERLAY</span><h2>${item.graph.revision} · ${item.graph.taskCount} tasks · ${item.settled.length}/${item.graph.taskCount} integrated</h2></div><span class="freshness ${item.graph.age === "fresh" ? "fresh" : "stale"}">${item.settled.length === item.graph.taskCount ? "FULL INTEGRATION" : `${item.graph.age} · observed ${item.graph.observedAt}`}</span></div><div class="graph-canvas ${item.app === "down" ? "frozen" : ""}"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.map((edge) => svgEdge(edge, item)).join("")}</svg>${visibleTasks(item).map((task) => node(task, item)).join("")}${item.app === "down" ? '<div class="crash-shutter"><b>APPLICATION DOWN</b><span>Complete graph remains visible but frozen</span></div>' : ""}</div><div class="flow-model"><div class="flow-group frontier-group"><small>ORDERED FRONTIER · CURRENT MEMBERSHIP</small><div>${item.frontier.length === 0 ? '<span class="empty">empty</span>' : item.frontier.map((task) => chip(task, item)).join("")}</div><p>${item.frontier.filter((task) => !item.bounded.includes(task)).length} task(s) wait beyond the desired prefix.</p></div><span class="capacity-arrow">→<small>capacity ${capacity}</small></span><div class="flow-group capacity-group"><small>DESIRED TICKETS / ACTUAL HELD POSITIONS</small><div>${item.bounded.length === 0 ? '<span class="empty">no desired tickets</span>' : item.bounded.map((task) => chip(task, item)).join("")}</div><p>Held: ${item.held.length === 0 ? "none" : item.held.join(" + ")}</p></div></div></section>`
 
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
+const switcher = (): string => {
+  const index = views.findIndex(({ key }) => key === view())
+  return `<nav class="switcher" aria-label="Rectangle grammar prototype"><button data-cycle="-1" aria-label="Previous rectangle grammar">←</button><label><small>RECTANGLE GRAMMAR ${index + 1} / ${views.length}</small><select data-view-select aria-label="Rectangle grammar">${views.map(({ key, name }) => `<option value="${key}" ${key === view() ? "selected" : ""}>${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next rectangle grammar">→</button></nav>`
+}
+
+const selectView = (next: ViewKey): void => {
+  const url = new URL(location.href)
+  if (next === "original") url.searchParams.delete("view")
+  else url.searchParams.set("view", next)
+  history.pushState({}, "", url)
+  render()
+}
+
+const cycleView = (delta: number): void => {
+  const index = views.findIndex(({ key }) => key === view())
+  selectView(views[(index + delta + views.length) % views.length]!.key)
+}
+
 const render = (): void => {
   const item = current()
-  root.className = `prototype view-original app-${item.app} ${reducedMotion ? "reduce-motion" : ""}`
-  root.innerHTML = `${header()}${placement()}${timeline()}${transition(item)}<main><div class="layout">${codePanel(item)}${graphPanel(item)}</div>${evidence(item)}</main>`
+  root.className = `prototype view-${view()} app-${item.app} ${reducedMotion ? "reduce-motion" : ""}`
+  root.innerHTML = `${header()}${placement()}${timeline()}${transition(item)}<main><div class="layout">${codePanel(item)}${graphPanel(item)}</div>${evidence(item)}</main>${switcher()}`
   bind()
 }
 
@@ -417,17 +510,33 @@ const bind = (): void => {
     selectedStage = stage
     render()
   }))
-  document.querySelectorAll<HTMLElement>("[data-task]").forEach((element) => element.addEventListener("click", () => { selectedTask = element.dataset.task as TaskKey; selectionMode = "task"; render() }))
-  document.querySelectorAll<HTMLElement>("[data-cell-task]").forEach((element) => element.addEventListener("click", (event) => { event.stopPropagation(); selectedStage = element.closest<HTMLElement>("[data-stage]")?.dataset.stage as StageKey ?? selectedStage; selectedTask = element.dataset.cellTask as TaskKey; selectionMode = "task"; render() }))
+  document.querySelectorAll<HTMLElement>("[data-task]").forEach((element) => element.addEventListener("click", () => {
+    const task = element.dataset.task as TaskKey
+    selectionMode = selectionMode === "task" && selectedTask === task ? "none" : "task"
+    selectedTask = task
+    render()
+  }))
+  document.querySelectorAll<HTMLElement>("[data-cell-task]").forEach((element) => element.addEventListener("click", (event) => {
+    event.stopPropagation()
+    const task = element.dataset.cellTask as TaskKey
+    selectedStage = element.closest<HTMLElement>("[data-stage]")?.dataset.stage as StageKey ?? selectedStage
+    selectionMode = selectionMode === "task" && selectedTask === task ? "none" : "task"
+    selectedTask = task
+    render()
+  }))
   document.querySelector<HTMLElement>("[data-end]")?.addEventListener("click", () => { frameIndex = story.frames.length - 1; render() })
   document.querySelector<HTMLElement>("[data-play]")?.addEventListener("click", () => { playing = !playing; if (timer !== undefined) clearInterval(timer); if (playing) timer = window.setInterval(() => { frameIndex = (frameIndex + 1) % story.frames.length; render() }, reducedMotion ? 2600 : 1900); render() })
   document.querySelector<HTMLInputElement>("[data-motion]")?.addEventListener("change", (event) => { reducedMotion = (event.currentTarget as HTMLInputElement).checked; render() })
+  document.querySelectorAll<HTMLElement>("[data-cycle]").forEach((element) => element.addEventListener("click", () => cycleView(Number(element.dataset.cycle))))
+  document.querySelector<HTMLSelectElement>("[data-view-select]")?.addEventListener("change", (event) => selectView((event.currentTarget as HTMLSelectElement).value as ViewKey))
 }
 
 addEventListener("keydown", (event) => {
-  if ((event.target as HTMLElement | null)?.matches("input,textarea,[contenteditable]")) return
+  if ((event.target as HTMLElement | null)?.matches("input,textarea,select,[contenteditable]")) return
   if (event.key === "[") { frameIndex = Math.max(0, frameIndex - 1); render() }
   if (event.key === "]") { frameIndex = Math.min(story.frames.length - 1, frameIndex + 1); render() }
+  if (event.key === "ArrowLeft") cycleView(-1)
+  if (event.key === "ArrowRight") cycleView(1)
 })
 addEventListener("popstate", () => { frameIndex = 0; render() })
 render()
