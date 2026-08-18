@@ -161,6 +161,7 @@ const evidenceTaskId = (evidence: TicketDeliveryEvidence): TaskId =>
     AcceptedAwaitingIntegration: ({ accepted }) => accepted.plannedAttempt.taskId,
     FocusedTaskCompletionSuccess: ({ observed }) => observed.observation.facts.taskId,
     IntegrationCandidate: ({ responsibility }) => responsibility.plannedAttempt.taskId,
+    IntegratorPreparation: ({ responsibility }) => responsibility.plannedAttempt.taskId,
     IntegrationWait: ({ wait }) => integrationWaitTaskId(wait),
     IntegrationFinalitySettlement: ({ settlement }) => settlement.claim.plannedAttempt.taskId,
     QueuedIntegration: ({ responsibility }) => responsibility.plannedAttempt.taskId,
@@ -188,6 +189,13 @@ const evidenceIdentity = (evidence: TicketDeliveryEvidence): string =>
     FocusedTaskCompletionSuccess: ({ observed }) => JSON.stringify(["focused-task-completion", observed.operationId]),
     IntegrationCandidate: ({ responsibility }) =>
       JSON.stringify(["candidate", exactAttemptIdentity(responsibility.plannedAttempt), responsibility.startedAt]),
+    IntegratorPreparation: ({ responsibility, state }) =>
+      JSON.stringify([
+        "integrator",
+        exactAttemptIdentity(responsibility.plannedAttempt),
+        responsibility.startedAt,
+        state._tag
+      ]),
     IntegrationWait: ({ wait }) => JSON.stringify(["integration-wait", integrationWaitTaskId(wait), wait._tag]),
     IntegrationFinalitySettlement: ({ settlement }) =>
       JSON.stringify(["integration-finality", settlement.claim.promotionCorrelation.requestId]),
@@ -231,6 +239,7 @@ const obligationFrom = (evidence: TicketDeliveryEvidence): ReadonlyArray<ExactWo
     AcceptedAwaitingIntegration: ({ accepted }) => [{ _tag: "AcceptedAwaitingIntegration" as const, accepted }],
     FocusedTaskCompletionSuccess: () => [],
     IntegrationCandidate: () => [],
+    IntegratorPreparation: () => [],
     IntegrationWait: () => [],
     IntegrationFinalitySettlement: () => [],
     QueuedIntegration: ({ responsibility }) => [{ _tag: "QueuedIntegration" as const, responsibility }],
@@ -292,6 +301,7 @@ const standingFrom = (
     AcceptedAwaitingIntegration: ({ accepted }) => [{ _tag: "AcceptedAwaitingIntegrationQueue" as const, accepted }],
     FocusedTaskCompletionSuccess: () => [],
     IntegrationCandidate: ({ state }) => candidateStandingFrom(state),
+    IntegratorPreparation: ({ state }) => [{ _tag: "IntegratorPreparation" as const, state }],
     IntegrationWait: ({ wait }) => [{ _tag: "IntegrationWait" as const, wait }],
     IntegrationFinalitySettlement: ({ settlement }) => [{ _tag: "IntegrationFinalitySettled" as const, settlement }],
     QueuedIntegration: ({ responsibility }) => [{ _tag: "QueuedIntegration" as const, responsibility }],

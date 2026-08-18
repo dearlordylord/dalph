@@ -96,7 +96,23 @@ const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): 
       IntegrationCandidateCorrectionLimitReached: (candidate) =>
         invalidCandidateCorrelationRunBinding(candidate, runId),
       IntegrationCandidateContinuationLimitReached: (candidate) =>
-        invalidCandidateCorrelationRunBinding(candidate, runId)
+        invalidCandidateCorrelationRunBinding(candidate, runId),
+      IntegratorSessionFixed: (candidate) =>
+        candidate.correlation.plannedAttempt.runId === runId
+          ? undefined
+          : `Integrator session binds run ${candidate.correlation.plannedAttempt.runId}`,
+      IntegratorResultRecorded: (candidate) =>
+        candidate.result.correlation.plannedAttempt.runId === runId
+          ? undefined
+          : `Integrator result binds run ${candidate.result.correlation.plannedAttempt.runId}`,
+      IntegratorCandidateGitReadIntended: (candidate) =>
+        candidate.correlation.plannedAttempt.runId === runId
+          ? undefined
+          : `Integrator candidate Git-read intent binds run ${candidate.correlation.plannedAttempt.runId}`,
+      IntegratorCandidateGitObserved: (candidate) =>
+        candidate.correlation.plannedAttempt.runId === runId
+          ? undefined
+          : `Integrator candidate Git observation binds run ${candidate.correlation.plannedAttempt.runId}`
     }),
     Match.orElse(() => undefined)
   )

@@ -48,7 +48,11 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import {
+  GitReadIntentRecordedEvent,
+  TargetLineageObservedEvent,
+  taskTrackerReadIntent
+} from "../../workflow/registry/event.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
@@ -96,6 +100,13 @@ import type {
 } from "./delivery-action-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
 import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
+import {
+  Integrator,
+  IntegratorGit,
+  IntegratorNotPreparedDetail,
+  IntegratorResult
+} from "../../workflow/protocols/integrator/protocol.js"
+import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executeFreshTrackerGraphRead, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import { executePlannedAttemptTransition } from "./planned-attempt-delivery-action-adapter.js"
@@ -774,6 +785,94 @@ describe("delivery proposal route matrix", () => {
         Effect.flip
       )
       expect(missingGit).toEqual(new IntegrationCandidateBoundaryUnavailable({ boundary: "Git" }))
+
+      const runIntegrator = RunnableFrontierTransition.RunIntegrator({
+        lineage,
+        lineageObservedAt: JournalPosition.make(19),
+        responsibility: started
+      })
+      const integratorProposal = proposalsFor(runIntegrator).proposals[0]
+      if (integratorProposal === undefined || !isIdentityFreeProposal(integratorProposal)) {
+        return yield* Effect.die("missing identity-free Integrator proposal")
+      }
+      const integratorAction = { _tag: "IdentityFreeAction" as const, proposal: integratorProposal }
+      expect(
+        yield* executeIntegrationAction(integratorAction, runIntegrator, inertLease, target).pipe(
+          Effect.provideService(InRunJournal, candidateJournal),
+          Effect.flip
+        )
+      ).toEqual(new IntegratorBoundaryUnavailable({ boundary: "Integrator" }))
+      expect(
+        yield* executeIntegrationAction(integratorAction, runIntegrator, inertLease, target).pipe(
+          Effect.provideService(
+            Integrator,
+            Integrator.of({ prepare: () => Effect.die("Integrator must not run without its Git boundary") })
+          ),
+          Effect.provideService(InRunJournal, candidateJournal),
+          Effect.flip
+        )
+      ).toEqual(new IntegratorBoundaryUnavailable({ boundary: "Git" }))
+
+      const lineageOperationId = OperationId.make("route-matrix-integrator-lineage")
+      const lineageOperation = makeTargetLineageObservationOperation({
+        integrationTarget: started.integrationTarget,
+        operationId: lineageOperationId,
+        plannedAttempt: started.plannedAttempt,
+        predecessorOperationIds: []
+      })
+      const integratorRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        {
+          event: GitReadIntentRecordedEvent.make({
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            operation: lineageOperation,
+            version: workflowJournalEventVersion
+          }),
+          key: JournalRecordKey.make("route-matrix-integrator-lineage:intent"),
+          position: JournalPosition.make(18),
+          runId
+        },
+        {
+          event: TargetLineageObservedEvent.make({
+            observation: lineage,
+            occurrenceClassification: "NonActionOccurrence",
+            operationId: lineageOperationId,
+            plannedAttempt: started.plannedAttempt,
+            version: workflowJournalEventVersion
+          }),
+          key: JournalRecordKey.make("route-matrix-integrator-lineage:observed"),
+          position: JournalPosition.make(19),
+          runId
+        }
+      ])
+      const integratorJournal = InRunJournal.of({
+        append: (requestedRunId, key, event) =>
+          Ref.modify(integratorRecords, (records) => {
+            const existing = records.find((record) => record.key === key)
+            if (existing !== undefined) return [Effect.succeed(existing), records] as const
+            const position = JournalPosition.make(Math.max(...records.map((record) => record.position)) + 1)
+            const appended: JournalRecord = { event, key, position, runId: requestedRunId }
+            return [Effect.succeed(appended), [...records, appended]] as const
+          }).pipe(Effect.flatten),
+        read: () => Ref.get(integratorRecords)
+      })
+      const completed = yield* executeIntegrationAction(integratorAction, runIntegrator, inertLease, target).pipe(
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Effect.succeed(
+                IntegratorResult.cases.NotPrepared.make({
+                  correlation: request.correlation,
+                  detail: IntegratorNotPreparedDetail.make("controlled route result")
+                })
+              )
+          })
+        ),
+        Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+        Effect.provideService(InRunJournal, integratorJournal)
+      )
+      expect(completed).toMatchObject({ _tag: "ActionCompleted", proposalId: integratorProposal.id })
     })
   )
 

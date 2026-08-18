@@ -6,6 +6,7 @@ import {
   FixtureTarget,
   GithubIssueTarget,
   InitialControlPolicy,
+  type IntegratorBoundaryUnavailable,
   makeCompleteTaskTrackerFactsObserved,
   makeTrackerGraphObservationOperation,
   OperationSelected,
@@ -144,6 +145,13 @@ const dalphCommand = Command.make("dalph").pipe(Command.withSubcommands([runComm
 
 const commandConfiguration = { version: "0.0.0" }
 
-export const runCli = Command.runWith(dalphCommand, commandConfiguration)
+const runCliCommand = Command.runWith(dalphCommand, commandConfiguration)
 
-export const runCliFromStdio = Command.run(dalphCommand, commandConfiguration)
+export const runCli = (input: ReadonlyArray<string>) =>
+  runCliCommand(input).pipe(
+    Effect.catchTag("IntegratorBoundaryUnavailable", (failure: IntegratorBoundaryUnavailable) => Effect.fail(failure))
+  )
+
+export const runCliFromStdio = Command.run(dalphCommand, commandConfiguration).pipe(
+  Effect.catchTag("IntegratorBoundaryUnavailable", (failure: IntegratorBoundaryUnavailable) => Effect.fail(failure))
+)

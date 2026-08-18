@@ -1,10 +1,8 @@
-// Models issues #56, #57, and #59: ordinary accepted-result admission plus one
-// fixed integration session that accepts only an explicit submitted commit
-// whose ordered direct parents are [current target head, accepted result]. Its
-// only issue-66 responsibility is the admission exception: Accepted arriving
-// after an already committed Restart remains evidence and creates no
-// integration responsibility. Replacement facts and P2 remain owned by
-// taskFactReconciliation.
+// Models issue #56 admission, issue #222's one outer Integrator boundary, and
+// the issue-60 exact-head promotion protocol. The Integrator owns merge
+// construction, repository checks, review, and private retries. Dalph models
+// only one fixed session, its durable result, an explicit candidate report,
+// and Git's ordered-parent qualification.
 module acceptedResultIntegration {
   type Phase =
     | NoAcceptedResult
@@ -13,25 +11,15 @@ module acceptedResultIntegration {
     | Queued
     | Started
     | DependencyWait
-    | CandidatePending
-    | CorrectionRequired
+    | IntegratorSessionFixed
+    | IntegratorInFlight
+    | IntegratorResponseLost
+    | IntegratorNotPrepared
+    | IntegratorResultRecorded
+    | CandidateGitReadIntent
+    | CandidateGitReadPending
     | CandidateReady
-    | CorrectionLimitReached
-    | ContinuationLimitReached
-    | CorrelationContradiction
-    | CorrelationContradictionReleased
-    | VerificationIntent
-    | VerificationInvoked
-    | VerificationResponseLost
-    | VerificationReconciling
-    | VerificationPassedPendingSeal
-    | VerificationPassed
-    | VerificationFailed
-    | VerificationKilled
-    | VerificationTimedOut
-    | VerificationPartial
-    | VerificationCorrelationContradiction
-    | VerificationEvidenceFailure
+    | CandidateRejected
     | PromotionPremise
     | PromotionIntent
     | PromotionAttemptIntended
@@ -44,19 +32,25 @@ module acceptedResultIntegration {
     | PromotionStale
     | PromotionExhausted
 
-  // The wrapper's terminal report is exhaustive. A passing report is kept
-  // separate from its sealed evidence because the report alone cannot permit
-  // promotion.
-  type VerificationOutcome =
-    | NoVerificationOutcome
-    | Passed
-    | Failed
-    | Killed
-    | TimedOut
-    | Partial
+  // An outer Integrator result is either conclusive without a candidate or
+  // names one explicit commit. Process success and resource HEAD are not
+  // result variants.
+  type IntegratorOutcome =
+    | NoIntegratorOutcome
+    | NotPrepared
+    | PreparedCandidate
 
-  // Git observations are exact identities, not equivalent trees or patches.
-  // An unreadable observation cannot establish either promotion or staleness.
+  // Git qualifies only the explicitly reported candidate object. Missing,
+  // non-commit, and wrong-parent observations are distinct from success.
+  type CandidateGitObservation =
+    | NoCandidateGitObservation
+    | CandidateMissing
+    | CandidateNonCommit
+    | CandidateWrongParents
+    | CandidateExactParents
+
+  // Promotion Git observations are exact identities, not equivalent trees or
+  // patches. An unreadable observation cannot establish promotion or staleness.
   type PromotionGitObservation =
     | NoPromotionGitObservation
     | PromotionExactExpectedHead
@@ -64,19 +58,6 @@ module acceptedResultIntegration {
     | PromotionCandidateAncestor
     | PromotionOtherHead
     | PromotionUnreadableHead
-
-  // This is the exact request Dalph derives from one constructed candidate.
-  // `plan` is opaque to the model: it is fixed and carried through the public
-  // wrapper, not selected by inspecting the target repository.
-  type VerificationRequest = {
-    requestId: int,
-    acceptedResult: int,
-    candidate: int,
-    candidatePosition: int,
-    integrationSession: int,
-    target: int,
-    plan: int,
-  }
 
   type ResultState = {
     phase: Phase,
@@ -89,34 +70,50 @@ module acceptedResultIntegration {
     integrationResponsibilityCount: int,
     queuePosition: int,
     // The finite model gives both accepted results one target. Keeping the
-    // locator explicit makes the queue guard target-scoped if another target
-    // is added later.
+    // locator explicit makes the queue guard target-scoped.
     integrationTarget: int,
     preIntegrationCancellation: bool,
     targetHeld: bool,
     integrationSession: int,
-    submittedCandidate: int,
-    candidateJournalPosition: int,
+    // The isolated candidate resource is a distinct identity fixed with S and
+    // bound to the exact target, H, and accepted-result commit C.
+    candidateResource: int,
+    resourceBoundTarget: int,
+    resourceBoundHead: int,
+    resourceBoundCommit: int,
+    // The planned target head is known before an outer session is created.
+    // expectedTargetHead is fixed once the responsibility starts and never
+    // changes for that session.
+    plannedTargetHead: int,
     expectedTargetHead: int,
     acceptedResultCommit: int,
+    lineageCompatible: bool,
+    sessionFixed: bool,
+    integratorInvocationCount: int,
+    integratorResumeCount: int,
+    integratorOutcome: IntegratorOutcome,
+    integratorResultRecorded: bool,
+    // A prepared outcome is not enough: this records the explicit report
+    // boundary that supplied the candidate to Dalph.
+    candidateReported: bool,
+    integratorResponseAmbiguous: bool,
+    submittedCandidate: int,
+    candidateJournalPosition: int,
+    candidateGitReadIntentRecorded: bool,
+    candidateGitReadCount: int,
+    candidateGitResponseAmbiguous: bool,
+    candidateGitObservation: CandidateGitObservation,
+    candidateQualificationProven: bool,
     observedFirstParent: int,
     observedSecondParent: int,
-    correctionCount: int,
-    continuationCount: int,
-    verificationRequest: VerificationRequest,
-    verificationOutcome: VerificationOutcome,
-    verificationIntentRecorded: bool,
-    // Counts underlying wrapper executions for V. A run-or-resume boundary
-    // call made during reconciliation changes `reconciliationCount`, not this
-    // execution count.
-    wrapperInvocationCount: int,
-    reconciliationCount: int,
-    verificationEvidenceReread: bool,
-    verificationManifestSealed: bool,
-    promotionAuthorized: bool,
-    verificationReplacementCount: int,
-    // Promotion intent and attempt intents are journal facts. The count
+    // These are forbidden evidence-shaped values used by the negative model.
+    // Normal protocol actions never write them.
+    resourceHeadCandidate: int,
+    processSuccessObserved: bool,
+    legacyVerificationEvidence: bool,
+    // Promotion intent and attempt intents are durable facts. The count
     // survives a restart and counts durable attempt ordinals, never Git reads.
+    promotionAuthorized: bool,
     promotionIntentRecorded: bool,
     promotionAttemptCount: int,
     promotionLastAttempt: int,
@@ -146,58 +143,19 @@ module acceptedResultIntegration {
   }
 
   pure val RESULT_IDS = Set(1, 2)
-  pure val CORRECTION_LIMIT = 1
-  pure val CONTINUATION_LIMIT = 2
-  pure val VERIFICATION_RESULT_ID = 1
-  pure val VERIFICATION_PLAN = 7000
   pure val PROMOTION_ATTEMPT_LIMIT = 3
   // Finite model bounds for exploration; neither is a production policy.
-  pure val RESTART_LIMIT = 2
+  // Enough finite recovery turns to exercise all three promotion ordinals;
+  // this bounds the model only and is not a production retry policy.
+  pure val RESTART_LIMIT = 4
   pure val RECONCILIATION_LIMIT = 2
   var state: State
 
   pure def sameIntegrationTarget(left: ResultState, right: ResultState): bool =
     left.integrationTarget == right.integrationTarget
 
-  // A StartedIntegrationResponsibility remains a logical same-target blocker
-  // until its later promotion/settlement protocol, even after its local lease
-  // is released. The process-local `targetHeld` bit is intentionally absent
-  // from this predicate.
-  pure def logicalIntegrationBlockerPhase(phase: Phase): bool =
-    Set(
-      Started,
-      DependencyWait,
-      CandidatePending,
-      CorrectionRequired,
-      CandidateReady,
-      CorrectionLimitReached,
-      ContinuationLimitReached,
-      CorrelationContradiction,
-      CorrelationContradictionReleased,
-      VerificationIntent,
-      VerificationInvoked,
-      VerificationResponseLost,
-      VerificationReconciling,
-      VerificationPassedPendingSeal,
-      VerificationPassed,
-      VerificationFailed,
-      VerificationKilled,
-      VerificationTimedOut,
-      VerificationPartial,
-      VerificationCorrelationContradiction,
-      VerificationEvidenceFailure,
-      PromotionPremise,
-      PromotionIntent,
-      PromotionAttemptIntended,
-      PromotionInFlight,
-      PromotionResponseLost,
-      PromotionReconciliation,
-      PromotionRetryReady,
-      PromotionReadPending,
-      PromotionSucceeded,
-      PromotionStale,
-      PromotionExhausted,
-    ).contains(phase)
+  pure def promotionTerminalPhase(phase: Phase): bool =
+    Set(PromotionSucceeded, PromotionStale, PromotionExhausted).contains(phase)
 
   pure def promotionProtocolPhase(phase: Phase): bool =
     Set(
@@ -214,16 +172,63 @@ module acceptedResultIntegration {
       PromotionExhausted,
     ).contains(phase)
 
-  pure def promotionTerminalPhase(phase: Phase): bool =
+  pure def integratorActivePhase(phase: Phase): bool =
     Set(
+      Started,
+      IntegratorSessionFixed,
+      IntegratorInFlight,
+      IntegratorResponseLost,
+      IntegratorResultRecorded,
+      CandidateGitReadIntent,
+      CandidateGitReadPending,
+    ).contains(phase)
+
+  // Once S is fixed, resuming the opaque call or qualifying its reported M
+  // uses S's durable original H. A current target-head read belongs to later
+  // promotion, not to replay of the outer boundary.
+  pure def fixedIntegratorSessionPhase(phase: Phase): bool =
+    Set(
+      IntegratorSessionFixed,
+      IntegratorInFlight,
+      IntegratorResponseLost,
+      IntegratorResultRecorded,
+      CandidateGitReadIntent,
+      CandidateGitReadPending,
+    ).contains(phase)
+
+  pure def candidateQualificationPhase(phase: Phase): bool =
+    Set(
+      CandidateReady,
+      PromotionPremise,
+      PromotionIntent,
+      PromotionAttemptIntended,
+      PromotionInFlight,
+      PromotionResponseLost,
+      PromotionReconciliation,
+      PromotionRetryReady,
+      PromotionReadPending,
       PromotionSucceeded,
       PromotionStale,
       PromotionExhausted,
     ).contains(phase)
 
-  // A fully settled promotion has no work that could consume fresh tracker or
-  // target facts after restart. Keeping those global facts stable avoids
-  // manufacturing a recovery obligation with no possible consumer.
+  pure def candidateResultPhase(phase: Phase): bool =
+    Set(
+      IntegratorResultRecorded,
+      CandidateGitReadIntent,
+      CandidateGitReadPending,
+      CandidateReady,
+      CandidateRejected,
+    ).contains(phase)
+
+  // A started responsibility remains a logical same-target blocker until
+  // later promotion and settlement, even after a local lease is released.
+  pure def logicalIntegrationBlockerPhase(phase: Phase): bool =
+    phase != NoAcceptedResult
+      and phase != AcceptedResult
+      and phase != LateAcceptedEvidence
+      and phase != Queued
+
   pure def restartRequiresFreshAuthorityFacts(s: State): bool =
     RESULT_IDS.exists(id => {
       val phase = s.results.get(id).phase
@@ -238,6 +243,9 @@ module acceptedResultIntegration {
       result.phase == Queued,
       s.trackerFactsCurrent,
       s.targetFactsCurrent,
+      result.lineageCompatible,
+      // A known changed H cannot create a fresh S for the queued result.
+      s.targetHeadProof == 0 or s.targetHeadProof == result.plannedTargetHead,
       not(RESULT_IDS.exists(other =>
         other != id
           and sameIntegrationTarget(s.results.get(other), result)
@@ -258,123 +266,85 @@ module acceptedResultIntegration {
     }
   }
 
+  pure def targetReacquisitionPhase(phase: Phase): bool =
+    Set(
+      Started,
+      IntegratorSessionFixed,
+      IntegratorInFlight,
+      IntegratorResponseLost,
+      IntegratorResultRecorded,
+      CandidateGitReadIntent,
+      CandidateGitReadPending,
+      CandidateReady,
+      PromotionPremise,
+    ).contains(phase)
+
   val acceptedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == AcceptedResult)
-
   val restartCommittedBeforeAcceptedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).restartChoiceCommittedBeforeTerminal)
-
   val lateAcceptedEvidenceReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == LateAcceptedEvidence)
-
   val queuedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == Queued)
-
   val startedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == Started)
-
   val dependencyWaitReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == DependencyWait)
-
   val restartReached: bool = state.recovered
-
   val targetHeadProofReached: bool =
     state.targetFactsCurrent and state.targetHeadProof != 0
-
+  val incompatibleTargetLineageReached: bool =
+    RESULT_IDS.exists(id =>
+      state.results.get(id).phase == Queued and not(state.results.get(id).lineageCompatible)
+    )
+  val integratorSessionFixedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == IntegratorSessionFixed)
+  val integratorInFlightReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == IntegratorInFlight)
+  val integratorResponseLostReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == IntegratorResponseLost)
+  val integratorResumedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).integratorResumeCount > 0)
+  val integratorNotPreparedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == IntegratorNotPrepared)
+  val integratorResultRecordedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == IntegratorResultRecorded)
+  val candidateGitReadIntentReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == CandidateGitReadIntent)
+  val candidateGitReadPendingReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == CandidateGitReadPending)
   val candidateReadyReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == CandidateReady)
-
-  val correctionRequiredReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == CorrectionRequired)
-
-  val correctionLimitReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == CorrectionLimitReached)
-
-  val continuationLimitReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == ContinuationLimitReached)
-
-  val correlationContradictionReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == CorrelationContradiction)
-
-  val correlationContradictionReleasedReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == CorrelationContradictionReleased)
-
-  val verificationIntentReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationIntent)
-
-  val verificationInvokedReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationInvoked)
-
-  val verificationResponseLostReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationResponseLost)
-
-  val verificationReconcilingReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationReconciling)
-
-  val verificationPassedPendingSealReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationPassedPendingSeal)
-
-  val verificationPassedReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationPassed)
-
-  val verificationFailedReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationFailed)
-
-  val verificationKilledReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationKilled)
-
-  val verificationTimedOutReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationTimedOut)
-
-  val verificationPartialReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationPartial)
-
-  val verificationCorrelationContradictionReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationCorrelationContradiction)
-
-  val verificationEvidenceFailureReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == VerificationEvidenceFailure)
-
+  val candidateRejectedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == CandidateRejected)
   val promotionPremiseReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionPremise)
-
   val promotionIntentReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionIntent)
-
   val promotionAttemptIntendedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionAttemptIntended)
-
   val promotionInFlightReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionInFlight)
-
   val promotionResponseLostReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionResponseLost)
-
   val promotionReconciliationReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionReconciliation)
-
   val promotionRetryReadyReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionRetryReady)
-
   val promotionReadPendingReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionReadPending)
-
   val promotionSucceededReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionSucceeded)
-
   val promotionStaleReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionStale)
-
   val promotionExhaustedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionExhausted)
-
   val releasedLogicalBlockerReached: bool =
     RESULT_IDS.exists(id =>
       Set(
-        CorrectionLimitReached,
-        ContinuationLimitReached,
-        CorrelationContradictionReleased,
-        VerificationPassed,
+        IntegratorNotPrepared,
+        CandidateRejected,
         PromotionPremise,
         PromotionIntent,
         PromotionAttemptIntended,
@@ -390,19 +360,12 @@ module acceptedResultIntegration {
         and not(state.results.get(id).targetHeld)
     )
 
-  val dependencyWaitReleasedTarget: bool =
-    state.results.get(1).phase == DependencyWait
-      and not(state.results.get(1).targetHeld)
-
   val cancellationExactlyQueued: bool =
     RESULT_IDS.forall(id =>
       state.results.get(id).preIntegrationCancellation
         == (state.results.get(id).phase == Queued)
     )
 
-  // Every ordinary phase after AcceptedResult is backed by one and only one
-  // integration responsibility. The late-Restart evidence phase is excluded
-  // explicitly instead of being smuggled into the ordinary queue predicate.
   val ordinaryAcceptedAdmissionRecordsOneResponsibility: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
@@ -427,25 +390,20 @@ module acceptedResultIntegration {
         or state.results.get(id).acceptedEvidencePreserved
     )
 
-  // This invariant deliberately restates the late-admission exclusion rather
-  // than sharing queueAcceptedResult's guard. Removing the guard makes it red.
+  // This repeats the late-admission requirement independently of the guard.
   val lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
-      not(
-        result.restartChoiceCommittedBeforeTerminal
-          and result.acceptedEvidencePreserved
-      ) or and {
-        result.phase == LateAcceptedEvidence,
-        result.restartChoiceCommittedBeforeTerminal,
-        result.acceptedEvidencePreserved,
-        not(result.integrationResponsibilityRecorded),
-        result.integrationResponsibilityCount == 0,
-        result.queuePosition == 0,
-        not(result.preIntegrationCancellation),
-        not(result.targetHeld),
-        result.integrationSession == 0,
-      }
+      not(result.restartChoiceCommittedBeforeTerminal and result.acceptedEvidencePreserved)
+        or and {
+          result.phase == LateAcceptedEvidence,
+          result.integrationResponsibilityCount == 0,
+          not(result.integrationResponsibilityRecorded),
+          result.queuePosition == 0,
+          not(result.preIntegrationCancellation),
+          not(result.targetHeld),
+          result.integrationSession == 0,
+        }
     })
 
   val queuePositionsAreUnique: bool =
@@ -463,15 +421,14 @@ module acceptedResultIntegration {
       state.results.get(id).targetHeld implies
         Set(
           Started,
-          CandidatePending,
-          CorrectionRequired,
+          IntegratorSessionFixed,
+          IntegratorInFlight,
+          IntegratorResponseLost,
+          IntegratorResultRecorded,
+          CandidateGitReadIntent,
+          CandidateGitReadPending,
           CandidateReady,
-          CorrelationContradiction,
-          VerificationIntent,
-          VerificationInvoked,
-          VerificationResponseLost,
-          VerificationReconciling,
-          VerificationPassedPendingSeal,
+          PromotionPremise,
           PromotionIntent,
           PromotionAttemptIntended,
           PromotionInFlight,
@@ -480,89 +437,12 @@ module acceptedResultIntegration {
         ).contains(state.results.get(id).phase)
     )
 
-  val candidateReadyHasExactOrderedParents: bool =
-    RESULT_IDS.forall(id => {
-      val result = state.results.get(id)
-      not(Set(
-        CandidateReady,
-        VerificationIntent,
-        VerificationInvoked,
-        VerificationResponseLost,
-        VerificationReconciling,
-        VerificationPassedPendingSeal,
-        VerificationPassed,
-        VerificationFailed,
-        VerificationKilled,
-        VerificationTimedOut,
-        VerificationPartial,
-        VerificationCorrelationContradiction,
-        VerificationEvidenceFailure,
-        PromotionPremise,
-        PromotionIntent,
-        PromotionAttemptIntended,
-        PromotionInFlight,
-        PromotionResponseLost,
-        PromotionReconciliation,
-        PromotionRetryReady,
-        PromotionReadPending,
-        PromotionSucceeded,
-        PromotionStale,
-        PromotionExhausted,
-      ).contains(result.phase))
-        or and {
-          result.submittedCandidate != 0,
-          result.observedFirstParent == result.expectedTargetHead,
-          result.observedSecondParent == result.acceptedResultCommit,
-        }
-    })
-
-  val sessionIdentityFixedAfterStart: bool =
-    RESULT_IDS.forall(id =>
-      Set(
-        Started,
-        CandidatePending,
-        CorrectionRequired,
-        CandidateReady,
-        CorrectionLimitReached,
-        ContinuationLimitReached,
-        CorrelationContradiction,
-        CorrelationContradictionReleased,
-        VerificationIntent,
-        VerificationInvoked,
-        VerificationResponseLost,
-        VerificationReconciling,
-        VerificationPassedPendingSeal,
-        VerificationPassed,
-        VerificationFailed,
-        VerificationKilled,
-        VerificationTimedOut,
-        VerificationPartial,
-        VerificationCorrelationContradiction,
-        VerificationEvidenceFailure,
-        PromotionPremise,
-        PromotionIntent,
-        PromotionAttemptIntended,
-        PromotionInFlight,
-        PromotionResponseLost,
-        PromotionReconciliation,
-        PromotionRetryReady,
-        PromotionReadPending,
-        PromotionSucceeded,
-        PromotionStale,
-        PromotionExhausted,
-      ).contains(state.results.get(id).phase)
-        implies state.results.get(id).integrationSession == id
-    )
-
   val atMostOneTargetHolder: bool =
     RESULT_IDS.forall(left =>
       RESULT_IDS.forall(right =>
         left == right
           or state.results.get(left).integrationTarget != state.results.get(right).integrationTarget
-          or not(
-            state.results.get(left).targetHeld
-              and state.results.get(right).targetHeld
-          )
+          or not(state.results.get(left).targetHeld and state.results.get(right).targetHeld)
       )
     )
 
@@ -588,207 +468,146 @@ module acceptedResultIntegration {
       )
     )
 
-  // The request keeps every identity fixed from the candidate occurrence
-  // through wrapper invocation, reconciliation, and terminal evidence.
-  val verificationRequestIdentityIsStable: bool =
+  val sessionIdentityFixedAfterStart: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
-      Set(
-        VerificationIntent,
-        VerificationInvoked,
-        VerificationResponseLost,
-        VerificationReconciling,
-        VerificationPassedPendingSeal,
-          VerificationPassed,
-          VerificationFailed,
-          VerificationKilled,
-          VerificationTimedOut,
-          VerificationPartial,
-          VerificationCorrelationContradiction,
-          VerificationEvidenceFailure,
-          PromotionPremise,
-          PromotionIntent,
-          PromotionAttemptIntended,
-          PromotionInFlight,
-          PromotionResponseLost,
-          PromotionReconciliation,
-          PromotionRetryReady,
-          PromotionReadPending,
-          PromotionSucceeded,
-          PromotionStale,
-          PromotionExhausted,
-      ).contains(result.phase) implies and {
-        result.verificationIntentRecorded,
-        result.verificationRequest.requestId == id * 1000 + result.submittedCandidate,
-        result.verificationRequest.acceptedResult == result.acceptedResultCommit,
-        result.verificationRequest.candidate == result.submittedCandidate,
-        result.verificationRequest.candidatePosition == result.candidateJournalPosition,
-        result.verificationRequest.integrationSession == result.integrationSession,
-        result.verificationRequest.target == result.integrationTarget,
-        result.verificationRequest.plan == VERIFICATION_PLAN + id,
+      result.phase != NoAcceptedResult
+        and result.phase != AcceptedResult
+        and result.phase != LateAcceptedEvidence
+        and result.phase != Queued
+        implies result.integrationSession == id
+    })
+
+  val integratorSessionIsFixedBeforeResult: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.integratorOutcome != NoIntegratorOutcome implies and {
+        result.sessionFixed,
+        result.integratorResultRecorded,
+        result.integrationSession == id,
       }
     })
 
-  // A wrapper call is possible only after the durable intent, and one lost
-  // response is reconciled against that same request rather than invoked as a
-  // replacement.
-  val verificationIntentPrecedesWrapper: bool =
+  val integratorResourceIsExactlyBound: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
-      Set(
-        VerificationInvoked,
-        VerificationResponseLost,
-        VerificationReconciling,
-        VerificationPassedPendingSeal,
-        VerificationPassed,
-        VerificationFailed,
-        VerificationKilled,
-        VerificationTimedOut,
-        VerificationPartial,
-        VerificationCorrelationContradiction,
-        VerificationEvidenceFailure,
-        PromotionPremise,
-        PromotionIntent,
-        PromotionAttemptIntended,
-        PromotionInFlight,
-        PromotionResponseLost,
-        PromotionReconciliation,
-        PromotionRetryReady,
-        PromotionReadPending,
-        PromotionSucceeded,
-        PromotionStale,
-        PromotionExhausted,
-      ).contains(result.phase) implies and {
-        result.verificationIntentRecorded,
-        result.wrapperInvocationCount == 1,
+      not(result.sessionFixed) or and {
+        result.candidateResource == id + 100,
+        result.resourceBoundTarget == result.integrationTarget,
+        result.resourceBoundHead == result.expectedTargetHead,
+        result.resourceBoundCommit == result.acceptedResultCommit,
       }
     })
 
-  val verificationInvocationAndReconciliationAreBounded: bool =
+  val integratorIntentPrecedesCall: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
       and {
-        result.wrapperInvocationCount >= 0,
-        result.wrapperInvocationCount <= 1,
-        result.reconciliationCount >= 0,
-        result.reconciliationCount <= RECONCILIATION_LIMIT,
+        result.integratorInvocationCount >= 0,
+        result.integratorInvocationCount <= 1,
+        result.integratorResumeCount >= 0,
+        result.integratorResumeCount <= RECONCILIATION_LIMIT,
+        result.integratorInvocationCount > 0 implies and {
+          result.sessionFixed,
+        },
       }
     })
 
-  // Restart clears the process-local position, so an active logical phase may
-  // be temporarily unheld only after recovery. Before recovery, every active
-  // verification phase retains the position it needs for the wrapper call.
-  val activeVerificationRetainsTargetUnlessRestarted: bool =
+  val integratorCallResultIsPersistent: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
-      state.targetReacquisitionRequired
-        or not(Set(
-          VerificationIntent,
-          VerificationInvoked,
-          VerificationResponseLost,
-          VerificationReconciling,
-          VerificationPassedPendingSeal,
-        ).contains(result.phase))
-        or result.targetHeld
-    })
-
-  val terminalVerificationReleasesTarget: bool =
-    RESULT_IDS.forall(id => {
-      val result = state.results.get(id)
-      not(Set(
-        VerificationPassed,
-        VerificationFailed,
-        VerificationKilled,
-        VerificationTimedOut,
-        VerificationPartial,
-        VerificationCorrelationContradiction,
-        VerificationEvidenceFailure,
-        PromotionPremise,
-      ).contains(result.phase)) or not(result.targetHeld)
-    })
-
-  val verificationOutcomeMatchesPhase: bool =
-    RESULT_IDS.forall(id => match state.results.get(id).phase {
-      | VerificationPassedPendingSeal => state.results.get(id).verificationOutcome == Passed
-      | VerificationPassed => state.results.get(id).verificationOutcome == Passed
-      | VerificationFailed => state.results.get(id).verificationOutcome == Failed
-      | VerificationKilled => state.results.get(id).verificationOutcome == Killed
-      | VerificationTimedOut => state.results.get(id).verificationOutcome == TimedOut
-      | VerificationPartial => state.results.get(id).verificationOutcome == Partial
-      | _ => true
-    })
-
-  // A passing wrapper response becomes promotion evidence only after all
-  // referenced objects and manifest bytes have been reread and sealed.
-  val onlySealedPassedAuthorizesPromotion: bool =
-    RESULT_IDS.forall(id => {
-      val result = state.results.get(id)
-      not(result.promotionAuthorized) or and {
-        result.verificationOutcome == Passed,
-        result.verificationEvidenceReread,
-        result.verificationManifestSealed,
-        Set(
-          VerificationPassed,
-          PromotionPremise,
-          PromotionIntent,
-          PromotionAttemptIntended,
-          PromotionInFlight,
-          PromotionResponseLost,
-          PromotionReconciliation,
-          PromotionRetryReady,
-          PromotionReadPending,
-          PromotionSucceeded,
-          PromotionStale,
-          PromotionExhausted,
-        ).contains(result.phase),
+      result.integratorResultRecorded implies and {
+        result.integratorInvocationCount == 1,
+        result.integratorOutcome != NoIntegratorOutcome,
+        result.phase == IntegratorNotPrepared
+          or candidateResultPhase(result.phase)
+          or candidateQualificationPhase(result.phase),
       }
     })
 
-  val promotionPremiseRequiresSealedPassedEvidence: bool =
+  val integratorRecoveryReusesSameSession: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
-      result.phase != PromotionPremise or and {
-        result.verificationOutcome == Passed,
-        result.verificationEvidenceReread,
-        result.verificationManifestSealed,
-        result.promotionAuthorized,
+      result.integratorResumeCount > 0 implies and {
+        result.sessionFixed,
+        result.integrationSession == id,
+        result.integratorInvocationCount <= 1,
       }
     })
 
-  val diagnosticOutcomesNeverAuthorizePromotion: bool =
+  val conclusiveNotPreparedHasNoCandidate: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
-      not(Set(
-        VerificationFailed,
-        VerificationKilled,
-        VerificationTimedOut,
-        VerificationPartial,
-      ).contains(result.phase)) or and {
-        result.verificationOutcome != Passed,
+      result.phase != IntegratorNotPrepared or and {
+        result.integratorOutcome == NotPrepared,
+        result.integratorResultRecorded,
+        result.submittedCandidate == 0,
+        not(result.candidateGitReadIntentRecorded),
+        result.candidateGitObservation == NoCandidateGitObservation,
+        not(result.candidateQualificationProven),
         not(result.promotionAuthorized),
-        not(result.phase == PromotionPremise),
-      }
-    })
-
-  val contradictoryVerificationNeverAuthorizesPromotion: bool =
-    RESULT_IDS.forall(id => {
-      val result = state.results.get(id)
-      not(Set(
-        VerificationCorrelationContradiction,
-        VerificationEvidenceFailure,
-      ).contains(result.phase)) or and {
-        result.verificationOutcome == NoVerificationOutcome,
-        not(result.verificationEvidenceReread),
-        not(result.verificationManifestSealed),
-        not(result.promotionAuthorized),
-        not(result.phase == PromotionPremise),
         not(result.targetHeld),
       }
     })
 
-  // Every earlier same-target started responsibility, including one whose
-  // process-local lease was released, leaves a later queue position Queued.
-  // This restates the full blocker set independently of `canStart`.
+  val candidateReportIsExplicit: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(candidateResultPhase(result.phase) or candidateQualificationPhase(result.phase))
+        or and {
+          result.integratorOutcome == PreparedCandidate,
+          result.integratorResultRecorded,
+          result.candidateReported,
+          result.submittedCandidate != 0,
+        }
+    })
+
+  val candidateGitIntentPrecedesObservation: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.candidateGitObservation != NoCandidateGitObservation implies and {
+        result.integratorOutcome == PreparedCandidate,
+        result.submittedCandidate != 0,
+        result.candidateGitReadIntentRecorded,
+        result.candidateGitReadCount > 0,
+      }
+    })
+
+  val candidateQualificationRequiresExactParents: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(candidateQualificationPhase(result.phase)) or and {
+        result.submittedCandidate != 0,
+        result.candidateGitObservation == CandidateExactParents,
+        result.observedFirstParent == result.expectedTargetHead,
+        result.observedSecondParent == result.acceptedResultCommit,
+        result.candidateQualificationProven,
+      }
+    })
+
+  val invalidCandidateNeverAuthorizesPromotion: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(Set(CandidateRejected, IntegratorNotPrepared).contains(result.phase)) or and {
+        not(result.candidateQualificationProven),
+        not(result.promotionAuthorized),
+        not(promotionProtocolPhase(result.phase)),
+      }
+    })
+
+  val noForbiddenEvidenceAuthorizesPromotion: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.promotionAuthorized) or and {
+        result.candidateQualificationProven,
+        result.integratorOutcome == PreparedCandidate,
+        result.submittedCandidate != 0,
+        result.resourceHeadCandidate == 0,
+        not(result.processSuccessObserved),
+        not(result.legacyVerificationEvidence),
+      }
+    })
+
   val logicalIntegrationResponsibilityBlocksLaterQueue: bool =
     RESULT_IDS.forall(blocker =>
       RESULT_IDS.forall(later =>
@@ -796,47 +615,21 @@ module acceptedResultIntegration {
           or not(
             state.results.get(blocker).integrationTarget
               == state.results.get(later).integrationTarget
-              and Set(
-                Started,
-                DependencyWait,
-                CandidatePending,
-                CorrectionRequired,
-                CandidateReady,
-                CorrectionLimitReached,
-                ContinuationLimitReached,
-                CorrelationContradiction,
-                CorrelationContradictionReleased,
-                VerificationIntent,
-                VerificationInvoked,
-                VerificationResponseLost,
-                VerificationReconciling,
-                VerificationPassedPendingSeal,
-                VerificationPassed,
-                VerificationFailed,
-                VerificationKilled,
-                VerificationTimedOut,
-                VerificationPartial,
-                VerificationCorrelationContradiction,
-                VerificationEvidenceFailure,
-                PromotionPremise,
-                PromotionIntent,
-                PromotionAttemptIntended,
-                PromotionInFlight,
-                PromotionResponseLost,
-                PromotionReconciliation,
-                PromotionRetryReady,
-                PromotionReadPending,
-                PromotionSucceeded,
-                PromotionStale,
-                PromotionExhausted,
-              ).contains(state.results.get(blocker).phase)
-            and state.results.get(later).queuePosition > state.results.get(blocker).queuePosition)
+              and logicalIntegrationBlockerPhase(state.results.get(blocker).phase)
+            and state.results.get(later).queuePosition > state.results.get(blocker).queuePosition
+          )
           or state.results.get(later).phase == Queued
       )
     )
 
-  val noAutomaticVerificationReplacement: bool =
-    RESULT_IDS.forall(id => state.results.get(id).verificationReplacementCount == 0)
+  val noAutomaticIntegratorSuccessor: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      and {
+        result.integratorInvocationCount <= 1,
+        result.integrationSession == 0 or result.integrationSession == id,
+      }
+    })
 
   val restartCountBounded: bool =
     state.restartCount >= 0 and state.restartCount <= RESTART_LIMIT
@@ -844,28 +637,20 @@ module acceptedResultIntegration {
   val staleTargetProofIsNeverCurrent: bool =
     state.targetFactsCurrent or state.targetHeadProof == 0
 
-  val reacquiredVerificationUsesFreshExpectedHead: bool =
+  val mutableTargetWorkReacquisitionUsesFreshExpectedHead: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
       not(
         state.targetReacquisitionRequired
           and result.targetHeld
-          and Set(
-            CandidateReady,
-            VerificationIntent,
-            VerificationInvoked,
-            VerificationResponseLost,
-            VerificationReconciling,
-            VerificationPassedPendingSeal,
-          ).contains(result.phase)
+          and targetReacquisitionPhase(result.phase)
+          and not(fixedIntegratorSessionPhase(result.phase))
       ) or and {
         state.targetFactsCurrent,
         state.targetHeadProof == result.expectedTargetHead,
       }
     })
 
-  // Promotion attempt intents are durable before possibly ambiguous Git
-  // requests; one verified candidate can consume at most three ordinals.
   val promotionAttemptsAreBounded: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
@@ -878,10 +663,6 @@ module acceptedResultIntegration {
       }
     })
 
-  // After an ambiguous response, a later request is permitted only after a
-  // complete fresh observation proves the exact expected H. A current M,
-  // M-containing head, stale head, or unreadable result never authorizes a
-  // retry.
   val ambiguousPromotionRequiresFreshObservation: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
@@ -899,19 +680,16 @@ module acceptedResultIntegration {
       }
     })
 
-  // The exact candidate occurrence, ordered parents, and sealed passing
-  // manifest remain bound to every promotion boundary and result.
-  val promotionUsesExactSealedCandidate: bool =
+  val promotionUsesExactIntegratorCandidate: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
       not(promotionProtocolPhase(result.phase)) or and {
         result.submittedCandidate != 0,
+        result.candidateGitObservation == CandidateExactParents,
         result.observedFirstParent == result.expectedTargetHead,
         result.observedSecondParent == result.acceptedResultCommit,
-        result.verificationOutcome == Passed,
-        result.verificationEvidenceReread,
-        result.verificationManifestSealed,
-        result.promotionAuthorized,
+        result.candidateQualificationProven,
+        result.integratorOutcome == PreparedCandidate,
       }
     })
 
@@ -921,32 +699,23 @@ module acceptedResultIntegration {
       not(result.promotionCompareAndSetRequested) or and {
         result.promotionAttemptCount <= PROMOTION_ATTEMPT_LIMIT,
         result.promotionExpectedHeadVerified,
-        result.phase != PromotionInFlight
-          or result.promotionTargetFactsCurrent,
+        result.phase != PromotionInFlight or result.promotionTargetFactsCurrent,
         result.submittedCandidate != 0,
         result.observedFirstParent == result.expectedTargetHead,
         result.observedSecondParent == result.acceptedResultCommit,
-        result.verificationEvidenceReread,
-        result.verificationManifestSealed,
         not(result.promotionForceRequested),
         not(result.promotionEquivalentContentAccepted),
       }
     })
 
-  val promotionSuccessRequiresExactAncestryAndEvidence: bool =
+  val promotionSuccessRequiresExactAncestry: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
       result.phase != PromotionSucceeded or and {
         result.promotionResultRecorded,
         result.promotionCandidateAncestryProven,
-        result.verificationOutcome == Passed,
-        result.verificationEvidenceReread,
-        result.verificationManifestSealed,
-        result.promotionAuthorized,
-        Set(
-          PromotionCandidateCurrent,
-          PromotionCandidateAncestor,
-        ).contains(result.promotionGitObservation),
+        result.candidateQualificationProven,
+        Set(PromotionCandidateCurrent, PromotionCandidateAncestor).contains(result.promotionGitObservation),
         result.promotionObservedTargetHead == result.submittedCandidate
           or result.promotionGitObservation == PromotionCandidateAncestor,
         not(result.promotionForceRequested),
@@ -964,16 +733,12 @@ module acceptedResultIntegration {
         result.promotionObservedTargetHead != result.submittedCandidate,
         not(result.promotionCandidateAncestryProven),
         result.submittedCandidate != 0,
-        result.verificationEvidenceReread,
-        result.verificationManifestSealed,
         not(result.promotionForceRequested),
         not(result.promotionEquivalentContentAccepted),
         not(result.targetHeld),
       }
     })
 
-  // A missing or unreadable Git response leaves the durable intent pending;
-  // it cannot be interpreted as either absence of M or a stale target.
   val unreadablePromotionStaysPending: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
@@ -983,32 +748,20 @@ module acceptedResultIntegration {
         not(result.promotionResultRecorded),
         not(result.promotionCandidateAncestryProven),
         result.submittedCandidate != 0,
-        result.verificationEvidenceReread,
-        result.verificationManifestSealed,
-        not(result.promotionForceRequested),
-        not(result.promotionEquivalentContentAccepted),
         not(result.targetHeld),
       }
     })
 
-  val promotionExhaustionPreservesVerifiedCandidate: bool =
+  val promotionExhaustionPreservesCandidate: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
       result.phase != PromotionExhausted or and {
         result.promotionAttemptCount == PROMOTION_ATTEMPT_LIMIT,
         result.promotionIntentRecorded,
         result.submittedCandidate != 0,
-        result.observedFirstParent == result.expectedTargetHead,
-        result.observedSecondParent == result.acceptedResultCommit,
-        result.verificationOutcome == Passed,
-        result.verificationEvidenceReread,
-        result.verificationManifestSealed,
-        result.promotionAuthorized,
-        Set(
-          NoPromotionGitObservation,
-          PromotionExactExpectedHead,
-          PromotionUnreadableHead,
-        ).contains(result.promotionGitObservation),
+        result.candidateQualificationProven,
+        Set(NoPromotionGitObservation, PromotionExactExpectedHead, PromotionUnreadableHead)
+          .contains(result.promotionGitObservation),
         not(result.promotionResultRecorded),
         not(result.promotionCandidateAncestryProven),
         not(result.promotionForceRequested),
@@ -1020,12 +773,8 @@ module acceptedResultIntegration {
   val promotionTerminalReleasesTarget: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
-      not(Set(
-        PromotionSucceeded,
-        PromotionStale,
-        PromotionReadPending,
-        PromotionExhausted,
-      ).contains(result.phase)) or not(result.targetHeld)
+      not(Set(PromotionSucceeded, PromotionStale, PromotionReadPending, PromotionExhausted)
+        .contains(result.phase)) or not(result.targetHeld)
     })
 
   val promotionFreshObservationIsExactExpectedHead: bool =
@@ -1046,9 +795,6 @@ module acceptedResultIntegration {
       }
     })
 
-  // Attempts one, two, and three need one, two, and three fresh H reads. The
-  // relation is historical through durable counters, so it survives restart
-  // even when the current phase is no longer the read that authorized it.
   val promotionRetryOrdinalsHaveFreshHeadReads: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
@@ -1068,31 +814,34 @@ module acceptedResultIntegration {
         preIntegrationCancellation: false,
         targetHeld: false,
         integrationSession: 0,
-        submittedCandidate: 0,
-        candidateJournalPosition: 0,
+        candidateResource: 0,
+        resourceBoundTarget: 0,
+        resourceBoundHead: 0,
+        resourceBoundCommit: 0,
+        plannedTargetHead: id + 10,
         expectedTargetHead: 0,
         acceptedResultCommit: id + 20,
+        lineageCompatible: true,
+        sessionFixed: false,
+        integratorInvocationCount: 0,
+        integratorResumeCount: 0,
+        integratorOutcome: NoIntegratorOutcome,
+        integratorResultRecorded: false,
+        candidateReported: false,
+        integratorResponseAmbiguous: false,
+        submittedCandidate: 0,
+        candidateJournalPosition: 0,
+        candidateGitReadIntentRecorded: false,
+        candidateGitReadCount: 0,
+        candidateGitResponseAmbiguous: false,
+        candidateGitObservation: NoCandidateGitObservation,
+        candidateQualificationProven: false,
         observedFirstParent: 0,
         observedSecondParent: 0,
-        correctionCount: 0,
-        continuationCount: 0,
-        verificationRequest: {
-          requestId: 0,
-          acceptedResult: 0,
-          candidate: 0,
-          candidatePosition: 0,
-          integrationSession: 0,
-          target: 0,
-          plan: 0,
-        },
-        verificationOutcome: NoVerificationOutcome,
-        verificationIntentRecorded: false,
-        wrapperInvocationCount: 0,
-        reconciliationCount: 0,
-        verificationEvidenceReread: false,
-        verificationManifestSealed: false,
+        resourceHeadCandidate: 0,
+        processSuccessObserved: false,
+        legacyVerificationEvidence: false,
         promotionAuthorized: false,
-        verificationReplacementCount: 0,
         promotionIntentRecorded: false,
         promotionAttemptCount: 0,
         promotionLastAttempt: 0,
@@ -1120,8 +869,7 @@ module acceptedResultIntegration {
   }
 
   // taskFactReconciliation owns choice identity and replacement. This action
-  // carries only the exact chronological fact needed by issue #56 admission:
-  // result one has an applied Restart before its terminal report arrives.
+  // carries only issue #56's late Accepted chronology.
   action observeAppliedRestartBeforeAccepted(id: int): bool = {
     val result = state.results.get(id)
     all {
@@ -1147,11 +895,7 @@ module acceptedResultIntegration {
         ...state,
         results: state.results.put(id, {
           ...result,
-          phase:
-            if (result.restartChoiceCommittedBeforeTerminal)
-              LateAcceptedEvidence
-            else
-              AcceptedResult,
+          phase: if (result.restartChoiceCommittedBeforeTerminal) LateAcceptedEvidence else AcceptedResult,
           acceptedEvidencePreserved: true,
         }),
       },
@@ -1195,109 +939,301 @@ module acceptedResultIntegration {
           preIntegrationCancellation: false,
           targetHeld: true,
           integrationSession: id,
-          expectedTargetHead: id + 10,
+          expectedTargetHead: result.plannedTargetHead,
         }),
-        targetHeadProof: id + 10,
+        targetHeadProof: result.plannedTargetHead,
         targetReacquisitionRequired:
           RESULT_IDS.exists(other =>
             other != id
               and not(state.results.get(other).targetHeld)
-              and Set(
-                Started,
-                CandidatePending,
-                CorrectionRequired,
-                CandidateReady,
-                VerificationIntent,
-                VerificationInvoked,
-                VerificationResponseLost,
-                VerificationReconciling,
-                VerificationPassedPendingSeal,
-                PromotionIntent,
-              ).contains(state.results.get(other).phase)
+              and targetReacquisitionPhase(state.results.get(other).phase)
           ),
       },
     }
   }
 
-  action submitCandidate(id: int, candidate: int): bool = {
+  action waitOnDependency(id: int): bool = {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
-      Set(Started, CorrectionRequired).contains(result.phase),
+      result.phase == Started,
       result.targetHeld,
+      state.trackerFactsCurrent,
+      state' = {
+        ...state,
+        results: state.results.put(id, { ...result, phase: DependencyWait, targetHeld: false }),
+      },
+    }
+  }
+
+  // Session identity is fixed exactly once after the started responsibility
+  // and compatible target lineage exist.
+  action fixIntegratorSession(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      Set(Started, DependencyWait).contains(result.phase),
+      result.targetHeld,
+      result.lineageCompatible,
+      result.expectedTargetHead != 0,
+      not(result.sessionFixed),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: IntegratorSessionFixed,
+          sessionFixed: true,
+          candidateResource: id + 100,
+          resourceBoundTarget: result.integrationTarget,
+          resourceBoundHead: result.expectedTargetHead,
+          resourceBoundCommit: result.acceptedResultCommit,
+        }),
+      },
+    }
+  }
+
+  action invokeIntegrator(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == IntegratorSessionFixed,
+      result.targetHeld,
+      result.sessionFixed,
+      result.integratorInvocationCount == 0,
+      not(state.targetReacquisitionRequired),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: IntegratorInFlight,
+          integratorInvocationCount: 1,
+          integratorResponseAmbiguous: false,
+        }),
+      },
+    }
+  }
+
+  // A lost response is unfinished work, not NotPrepared. Release is only
+  // process-local; the same session is returned after current tracker facts.
+  action loseIntegratorResponse(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == IntegratorInFlight,
+      result.targetHeld,
+      result.integratorInvocationCount == 1,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: IntegratorResponseLost,
+          targetHeld: false,
+          integratorResponseAmbiguous: true,
+        }),
+        trackerFactsCurrent: false,
+        targetFactsCurrent: false,
+        targetHeadProof: 0,
+        targetReacquisitionRequired: true,
+      },
+    }
+  }
+
+  // Reconnects to S. It cannot allocate another session or count a provider
+  // retry as a new Integrator run.
+  action resumeIntegrator(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == IntegratorResponseLost,
+      result.targetHeld,
+      result.sessionFixed,
+      result.integratorInvocationCount <= 1,
+      not(state.targetReacquisitionRequired),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: IntegratorInFlight,
+          integratorInvocationCount:
+            if (result.integratorInvocationCount == 0) 1 else result.integratorInvocationCount,
+          integratorResumeCount:
+            if (result.phase == IntegratorResponseLost)
+              result.integratorResumeCount + 1
+            else result.integratorResumeCount,
+          integratorResponseAmbiguous: false,
+        }),
+        targetReacquisitionRequired: false,
+      },
+    }
+  }
+
+  action reportIntegratorNotPrepared(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == IntegratorInFlight,
+      result.targetHeld,
+      result.sessionFixed,
+      result.integratorInvocationCount == 1,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: IntegratorNotPrepared,
+          targetHeld: false,
+          integratorOutcome: NotPrepared,
+          integratorResultRecorded: true,
+          candidateReported: false,
+          integratorResponseAmbiguous: false,
+          promotionAuthorized: false,
+        }),
+      },
+    }
+  }
+
+  action reportIntegratorCandidate(id: int, candidate: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == IntegratorInFlight,
+      result.targetHeld,
+      result.sessionFixed,
+      result.integratorInvocationCount == 1,
       candidate != 0,
       state' = {
         ...state,
         results: state.results.put(id, {
           ...result,
-          phase: CandidatePending,
+          phase: IntegratorResultRecorded,
+          integratorOutcome: PreparedCandidate,
+          integratorResultRecorded: true,
+          candidateReported: true,
+          integratorResponseAmbiguous: false,
           submittedCandidate: candidate,
+          candidateGitObservation: NoCandidateGitObservation,
+          candidateQualificationProven: false,
+          candidateGitReadIntentRecorded: false,
+          candidateGitReadCount: 0,
           candidateJournalPosition: 0,
           observedFirstParent: 0,
           observedSecondParent: 0,
+          promotionAuthorized: false,
         }),
       },
     }
   }
 
-  // Conflict, working, and exited-without-candidate reports may continue the
-  // same session only up to its durable automatic-continuation limit.
-  action reportWithoutCandidate(id: int): bool = {
+  action recordCandidateGitReadIntent(id: int): bool = {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
-      Set(Started, CorrectionRequired).contains(result.phase),
+      result.phase == IntegratorResultRecorded,
       result.targetHeld,
-      state' = {
-        ...state,
-        results: state.results.put(id,
-          if (result.continuationCount + 1 >= CONTINUATION_LIMIT) {
-            ...result,
-            phase: ContinuationLimitReached,
-            targetHeld: false,
-            continuationCount: result.continuationCount + 1,
-          } else {
-            ...result,
-            continuationCount: result.continuationCount + 1,
-          }
-        ),
-      },
-    }
-  }
-
-  // A report for another session stops this operation before any Git read. The
-  // exact external correlation is exercised by the TypeScript protocol and
-  // cassette adapter; this model retains the fixed session and existing work.
-  action reportForeignCorrelation(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      RESULT_IDS.contains(id),
-      Set(Started, CorrectionRequired).contains(result.phase),
-      result.targetHeld,
+      result.integratorOutcome == PreparedCandidate,
+      result.integratorResultRecorded,
+      result.submittedCandidate != 0,
+      not(result.candidateGitReadIntentRecorded),
+      not(state.targetReacquisitionRequired),
       state' = {
         ...state,
         results: state.results.put(id, {
           ...result,
-          phase: CorrelationContradiction,
-          targetHeld: true,
+          phase: CandidateGitReadIntent,
+          candidateGitReadIntentRecorded: true,
+          candidateGitResponseAmbiguous: false,
         }),
       },
     }
   }
 
-  action releaseForeignCorrelationTarget(id: int): bool = {
+  action readCandidateGit(id: int): bool = {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
-      result.phase == CorrelationContradiction,
+      result.phase == CandidateGitReadIntent,
+      result.targetHeld,
+      result.candidateGitReadIntentRecorded,
+      result.candidateGitReadCount >= 0,
       state' = {
         ...state,
         results: state.results.put(id, {
           ...result,
-          phase: CorrelationContradictionReleased,
+          phase: CandidateGitReadPending,
+          candidateGitReadCount: result.candidateGitReadCount + 1,
+          candidateGitResponseAmbiguous: false,
+        }),
+      },
+    }
+  }
+
+  action loseCandidateGitResponse(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == CandidateGitReadPending,
+      result.targetHeld,
+      result.candidateGitReadCount > 0,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
           targetHeld: false,
+          candidateGitResponseAmbiguous: true,
         }),
+        trackerFactsCurrent: false,
+        targetFactsCurrent: false,
+        targetHeadProof: 0,
+        targetReacquisitionRequired: true,
       },
+    }
+  }
+
+  action reconcileCandidateGit(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == CandidateGitReadPending,
+      not(result.targetHeld),
+      result.candidateGitReadIntentRecorded,
+      result.candidateGitReadCount > 0,
+      state.trackerFactsCurrent,
+      state.targetReacquisitionRequired,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: CandidateGitReadIntent,
+          targetHeld: true,
+          candidateGitResponseAmbiguous: false,
+        }),
+        targetReacquisitionRequired: false,
+      },
+    }
+  }
+
+  pure def recordCandidateObservation(
+    s: State,
+    id: int,
+    observation: CandidateGitObservation,
+    firstParent: int,
+    secondParent: int,
+    qualifies: bool,
+  ): State = {
+    val result = s.results.get(id)
+    {
+      ...s,
+      results: s.results.put(id, {
+        ...result,
+        phase: if (qualifies) CandidateReady else CandidateRejected,
+        targetHeld: false,
+        candidateGitObservation: observation,
+        candidateJournalPosition: s.nextJournalPosition,
+        observedFirstParent: firstParent,
+        observedSecondParent: secondParent,
+        candidateQualificationProven: qualifies,
+        promotionAuthorized: qualifies,
+      }),
+      nextJournalPosition: s.nextJournalPosition + 1,
     }
   }
 
@@ -1305,289 +1241,82 @@ module acceptedResultIntegration {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
-      result.phase == CandidatePending,
+      result.phase == CandidateGitReadPending,
       result.targetHeld,
-      state' = {
-        ...state,
-        results: state.results.put(id, {
-          ...result,
-          phase: CandidateReady,
-          observedFirstParent: result.expectedTargetHead,
-          observedSecondParent: result.acceptedResultCommit,
-          candidateJournalPosition: state.nextJournalPosition,
-        }),
-        nextJournalPosition: state.nextJournalPosition + 1,
-      },
-    }
-  }
-
-  // The request identity is derived once from the exact candidate occurrence.
-  // Its request number and opaque plan are deterministic, so a retry can only
-  // reuse this request rather than silently selecting a new verification.
-  action recordVerificationIntent(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      result.phase == CandidateReady,
-      result.targetHeld,
+      result.candidateGitReadIntentRecorded,
       result.submittedCandidate != 0,
-      result.candidateJournalPosition != 0,
-      state' = {
-        ...state,
-        results: state.results.put(id, {
-          ...result,
-          phase: VerificationIntent,
-          verificationRequest: {
-            requestId: id * 1000 + result.submittedCandidate,
-            acceptedResult: result.acceptedResultCommit,
-            candidate: result.submittedCandidate,
-            candidatePosition: result.candidateJournalPosition,
-            integrationSession: result.integrationSession,
-            target: result.integrationTarget,
-            plan: VERIFICATION_PLAN + id,
-          },
-          verificationOutcome: NoVerificationOutcome,
-          verificationIntentRecorded: true,
-          wrapperInvocationCount: 0,
-          reconciliationCount: 0,
-          verificationEvidenceReread: false,
-          verificationManifestSealed: false,
-          promotionAuthorized: false,
-        }),
-      },
-    }
-  }
-
-  // One public wrapper invocation owns waiting for and releasing its heavy
-  // verification lock. Dalph models only this boundary call, never that lock.
-  action invokeVerification(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      result.phase == VerificationIntent,
-      result.targetHeld,
-      result.verificationIntentRecorded,
-      result.wrapperInvocationCount == 0,
-      state' = {
-        ...state,
-        results: state.results.put(id, {
-          ...result,
-          phase: VerificationInvoked,
-          wrapperInvocationCount: 1,
-        }),
-      },
-    }
-  }
-
-  // The wrapper may complete while Dalph loses its response. This records an
-  // unresolved invocation; it does not allocate or invoke a replacement.
-  action loseVerificationResponse(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      result.phase == VerificationInvoked,
-      result.targetHeld,
-      result.wrapperInvocationCount == 1,
-      state' = {
-        ...state,
-        results: state.results.put(id, { ...result, phase: VerificationResponseLost }),
-      },
-    }
-  }
-
-  // Reconciliation asks the wrapper about the same request. Repeated bounded
-  // run-or-resume boundary calls remain reconciliation calls and do not create
-  // another underlying wrapper execution.
-  action reconcileVerification(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      Set(VerificationResponseLost, VerificationReconciling).contains(result.phase),
-      result.targetHeld,
-      result.verificationIntentRecorded,
-      result.wrapperInvocationCount == 1,
-      result.reconciliationCount < RECONCILIATION_LIMIT,
-      state' = {
-        ...state,
-        results: state.results.put(id, {
-          ...result,
-          phase: VerificationReconciling,
-          reconciliationCount: result.reconciliationCount + 1,
-        }),
-      },
-    }
-  }
-
-  action reportVerificationPassed(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      Set(VerificationInvoked, VerificationReconciling).contains(result.phase),
-      result.targetHeld,
-      result.verificationIntentRecorded,
-      result.wrapperInvocationCount == 1,
-      state' = {
-        ...state,
-        results: state.results.put(id, {
-          ...result,
-          phase: VerificationPassedPendingSeal,
-          verificationOutcome: Passed,
-          verificationEvidenceReread: false,
-          verificationManifestSealed: false,
-          promotionAuthorized: false,
-        }),
-      },
-    }
-  }
-
-  // A passing wrapper report is not promotion evidence until Dalph rereads
-  // every referenced object and the manifest bytes and seals those identities.
-  action rereadAndSealPassedVerification(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      result.phase == VerificationPassedPendingSeal,
-      result.targetHeld,
-      result.verificationOutcome == Passed,
-      state' = {
-        ...state,
-        results: state.results.put(id, {
-          ...result,
-          phase: VerificationPassed,
-          verificationEvidenceReread: true,
-          verificationManifestSealed: true,
-          promotionAuthorized: true,
-          targetHeld: false,
-        }),
-      },
-    }
-  }
-
-  pure def recordDiagnosticOutcome(
-    s: State,
-    id: int,
-    phase: Phase,
-    outcome: VerificationOutcome,
-  ): State = {
-    val result = s.results.get(id)
-    {
-      ...s,
-      results: s.results.put(id, {
-        ...result,
-        phase: phase,
-        verificationOutcome: outcome,
-        verificationEvidenceReread: true,
-        verificationManifestSealed: true,
-        promotionAuthorized: false,
-        targetHeld: false,
-      }),
-    }
-  }
-
-  action reportVerificationFailed(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      Set(VerificationInvoked, VerificationReconciling).contains(result.phase),
-      result.targetHeld,
-      state' = recordDiagnosticOutcome(state, id, VerificationFailed, Failed),
-    }
-  }
-
-  action reportVerificationKilled(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      Set(VerificationInvoked, VerificationReconciling).contains(result.phase),
-      result.targetHeld,
-      state' = recordDiagnosticOutcome(state, id, VerificationKilled, Killed),
-    }
-  }
-
-  action reportVerificationTimedOut(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      Set(VerificationInvoked, VerificationReconciling).contains(result.phase),
-      result.targetHeld,
-      state' = recordDiagnosticOutcome(state, id, VerificationTimedOut, TimedOut),
-    }
-  }
-
-  action reportVerificationPartial(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      Set(VerificationInvoked, VerificationReconciling).contains(result.phase),
-      result.targetHeld,
-      state' = recordDiagnosticOutcome(state, id, VerificationPartial, Partial),
-    }
-  }
-
-  pure def recordVerificationBoundaryFailure(
-    s: State,
-    id: int,
-    phase: Phase,
-  ): State = {
-    val result = s.results.get(id)
-    {
-      ...s,
-      results: s.results.put(id, {
-        ...result,
-        phase: phase,
-        verificationOutcome: NoVerificationOutcome,
-        verificationEvidenceReread: false,
-        verificationManifestSealed: false,
-        promotionAuthorized: false,
-        targetHeld: false,
-      }),
-    }
-  }
-
-  // A foreign request/candidate correlation is rejected before any evidence
-  // can authorize promotion; the exact request and candidate history remain.
-  action reportVerificationCorrelationContradiction(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == VERIFICATION_RESULT_ID,
-      Set(VerificationInvoked, VerificationReconciling).contains(result.phase),
-      result.targetHeld,
-      state' = recordVerificationBoundaryFailure(
+      state' = recordCandidateObservation(
         state,
         id,
-        VerificationCorrelationContradiction,
+        CandidateExactParents,
+        result.expectedTargetHead,
+        result.acceptedResultCommit,
+        true,
       ),
     }
   }
 
-  // Missing, corrupt, or foreign manifest/object bytes are a typed evidence
-  // failure, not a success-shaped result and not a replacement request.
-  action reportVerificationEvidenceFailure(id: int): bool = {
+  action observeMissingCandidate(id: int): bool = {
     val result = state.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
-      Set(VerificationInvoked, VerificationReconciling).contains(result.phase),
+      RESULT_IDS.contains(id),
+      result.phase == CandidateGitReadPending,
       result.targetHeld,
-      state' = recordVerificationBoundaryFailure(
+      result.candidateGitReadIntentRecorded,
+      result.submittedCandidate != 0,
+      state' = recordCandidateObservation(state, id, CandidateMissing, 0, 0, false),
+    }
+  }
+
+  action observeNonCommitCandidate(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == CandidateGitReadPending,
+      result.targetHeld,
+      result.candidateGitReadIntentRecorded,
+      result.submittedCandidate != 0,
+      state' = recordCandidateObservation(state, id, CandidateNonCommit, 0, 0, false),
+    }
+  }
+
+  action observeWrongParentCandidate(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == CandidateGitReadPending,
+      result.targetHeld,
+      result.candidateGitReadIntentRecorded,
+      result.submittedCandidate != 0,
+      // The tempting reversed [C,H] order is still invalid; the exact order
+      // is [H,C], not merely the same two commit identities.
+      state' = recordCandidateObservation(
         state,
         id,
-        VerificationEvidenceFailure,
+        CandidateWrongParents,
+        result.acceptedResultCommit,
+        result.expectedTargetHead,
+        false,
       ),
     }
   }
 
-  // #59 stops after the exact verification result. This action is only the
-  // later premise consumed by #60; it does not mutate a target ref.
+  // Git qualification is the direct premise for promotion. There is no
+  // target-verification plan, manifest, wrapper, or separate Dalph phase.
   action offerPromotionPremise(id: int): bool = {
     val result = state.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
-      result.phase == VerificationPassed,
-      result.verificationOutcome == Passed,
-      result.verificationEvidenceReread,
-      result.verificationManifestSealed,
-      result.promotionAuthorized,
+      id == 1,
+      result.phase == CandidateReady,
+      result.candidateQualificationProven,
+      result.integratorOutcome == PreparedCandidate,
+      result.submittedCandidate != 0,
+      result.candidateGitObservation == CandidateExactParents,
       not(result.targetHeld),
+      state.trackerFactsCurrent,
+      state.targetFactsCurrent,
+      state.targetHeadProof == result.expectedTargetHead,
+      not(state.targetReacquisitionRequired),
       state' = {
         ...state,
         results: state.results.put(id, { ...result, phase: PromotionPremise }),
@@ -1595,22 +1324,21 @@ module acceptedResultIntegration {
     }
   }
 
-  // The exact candidate, expected H, target, and sealed manifest are recorded
-  // before any compare-and-set boundary call. Reusing this intent is the only
-  // way to issue a later numbered request.
   action recordPromotionIntent(id: int): bool = {
     val result = state.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
+      id == 1,
       result.phase == PromotionPremise,
       not(result.targetHeld),
       result.promotionAuthorized,
-      result.verificationOutcome == Passed,
-      result.verificationEvidenceReread,
-      result.verificationManifestSealed,
+      result.candidateQualificationProven,
       result.submittedCandidate != 0,
       result.observedFirstParent == result.expectedTargetHead,
       result.observedSecondParent == result.acceptedResultCommit,
+      state.trackerFactsCurrent,
+      state.targetFactsCurrent,
+      state.targetHeadProof == result.expectedTargetHead,
+      not(state.targetReacquisitionRequired),
       state' = {
         ...state,
         results: state.results.put(id, {
@@ -1623,7 +1351,7 @@ module acceptedResultIntegration {
           promotionFreshExactHeadReads: 0,
           promotionFreshExactHeadObservation: false,
           promotionTargetFactsCurrent: false,
-          promotionExpectedHeadVerified: true,
+          promotionExpectedHeadVerified: false,
           promotionGitObservation: NoPromotionGitObservation,
           promotionObservedTargetHead: 0,
           promotionCandidateAncestryProven: false,
@@ -1640,30 +1368,23 @@ module acceptedResultIntegration {
   pure def canRecordPromotionAttemptIntent(s: State, id: int): bool = {
     val result = s.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
+      id == 1,
       result.promotionIntentRecorded,
       result.promotionAuthorized,
-      result.verificationOutcome == Passed,
-      result.verificationEvidenceReread,
-      result.verificationManifestSealed,
+      result.candidateQualificationProven,
       result.submittedCandidate != 0,
       result.observedFirstParent == result.expectedTargetHead,
       result.observedSecondParent == result.acceptedResultCommit,
       result.targetHeld,
       result.promotionAttemptCount < PROMOTION_ATTEMPT_LIMIT,
-      and {
-        result.phase == PromotionRetryReady,
-        result.promotionFreshExactHeadObservation,
-        result.promotionGitObservation == PromotionExactExpectedHead,
-        result.promotionExpectedHeadVerified,
-        result.promotionFreshExactHeadReads == result.promotionAttemptCount + 1,
-      },
+      result.phase == PromotionRetryReady,
+      result.promotionFreshExactHeadObservation,
+      result.promotionGitObservation == PromotionExactExpectedHead,
+      result.promotionExpectedHeadVerified,
+      result.promotionFreshExactHeadReads == result.promotionAttemptCount + 1,
     }
   }
 
-  // The next attempt ordinal is durable before the Git boundary can be
-  // crossed. A crash after this action must reconcile instead of assuming the
-  // compare-and-set was never sent.
   action recordPromotionAttemptIntent(id: int): bool = {
     val result = state.results.get(id)
     all {
@@ -1690,7 +1411,7 @@ module acceptedResultIntegration {
   pure def canSendPromotionAttempt(s: State, id: int): bool = {
     val result = s.results.get(id)
     and {
-      id == VERIFICATION_RESULT_ID,
+      id == 1,
       result.phase == PromotionAttemptIntended,
       result.targetHeld,
       result.promotionIntentRecorded,
@@ -1702,8 +1423,6 @@ module acceptedResultIntegration {
     }
   }
 
-  // This boundary call is intentionally one exact H -> M compare-and-set. Its
-  // durable ordinal was already written by recordPromotionAttemptIntent.
   action sendPromotionAttempt(id: int): bool = {
     val result = state.results.get(id)
     all {
@@ -1719,13 +1438,10 @@ module acceptedResultIntegration {
     }
   }
 
-  // A lost compare-and-set response is ambiguous. The local target position is
-  // released, but the durable intent, candidate, evidence, and attempt count
-  // remain for a fresh Git read.
   action losePromotionResponse(id: int): bool = {
     val result = state.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
+      id == 1,
       result.phase == PromotionInFlight,
       result.targetHeld,
       result.promotionIntentRecorded,
@@ -1742,22 +1458,21 @@ module acceptedResultIntegration {
           promotionObservedTargetHead: 0,
           promotionResponseAmbiguous: true,
         }),
+        trackerFactsCurrent: false,
+        targetFactsCurrent: false,
+        targetHeadProof: 0,
+        targetReacquisitionRequired: true,
       },
     }
   }
 
-  // Reconciliation owns a fresh Git read. It can reacquire the target for the
-  // read after an ambiguous or unreadable result, and after restart of an
-  // intent that has not sent its first attempt.
   action reconcilePromotion(id: int): bool = {
     val result = state.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
+      id == 1,
       not(result.targetHeld),
       result.promotionIntentRecorded,
       result.promotionAuthorized,
-      result.verificationEvidenceReread,
-      result.verificationManifestSealed,
       state.trackerFactsCurrent,
       state.targetFactsCurrent,
       state.targetHeadProof == result.expectedTargetHead,
@@ -1779,33 +1494,15 @@ module acceptedResultIntegration {
           promotionGitObservation: NoPromotionGitObservation,
           promotionObservedTargetHead: 0,
         }),
-        targetReacquisitionRequired:
-          RESULT_IDS.exists(other =>
-            other != id
-              and not(state.results.get(other).targetHeld)
-              and Set(
-                Started,
-                CandidatePending,
-                CorrectionRequired,
-                CandidateReady,
-                VerificationIntent,
-                VerificationInvoked,
-                VerificationResponseLost,
-                VerificationReconciling,
-                VerificationPassedPendingSeal,
-                PromotionIntent,
-              ).contains(state.results.get(other).phase)
-          ),
+        targetReacquisitionRequired: false,
       },
     }
   }
 
-  // Git proving M is current or an exact ancestor discovers the original
-  // promotion. No second compare-and-set is sent, even after a lost response.
   action observePromotionCandidateCurrent(id: int): bool = {
     val result = state.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
+      id == 1,
       Set(PromotionIntent, PromotionInFlight, PromotionReconciliation).contains(result.phase),
       result.targetHeld,
       state' = {
@@ -1827,7 +1524,7 @@ module acceptedResultIntegration {
   action observePromotionCandidateAncestor(id: int): bool = {
     val result = state.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
+      id == 1,
       Set(PromotionIntent, PromotionReconciliation).contains(result.phase),
       result.targetHeld,
       state' = {
@@ -1846,13 +1543,12 @@ module acceptedResultIntegration {
     }
   }
 
-  // A fresh exact H proves that M is not currently promoted and is the only
-  // observation that can make a later numbered attempt eligible. At attempt
-  // three it settles as typed non-convergence instead of sending attempt four.
+  // A fresh exact H is the only observation that can authorize another
+  // numbered request. At three consumed intents this settles non-convergence.
   action observePromotionExactExpectedHead(id: int): bool = {
     val result = state.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
+      id == 1,
       Set(PromotionIntent, PromotionReconciliation).contains(result.phase),
       result.targetHeld,
       state' = {
@@ -1894,12 +1590,10 @@ module acceptedResultIntegration {
     }
   }
 
-  // Any other complete exact head is stale, including a head with equivalent
-  // file content. The candidate and sealed evidence remain untouched.
   action observePromotionOtherHead(id: int): bool = {
     val result = state.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
+      id == 1,
       Set(PromotionIntent, PromotionInFlight, PromotionReconciliation).contains(result.phase),
       result.targetHeld,
       state' = {
@@ -1918,11 +1612,10 @@ module acceptedResultIntegration {
     }
   }
 
-  // An incomplete Git head/ancestry read remains pending and sends no update.
   action observePromotionGitUnreadable(id: int): bool = {
     val result = state.results.get(id)
     all {
-      id == VERIFICATION_RESULT_ID,
+      id == 1,
       Set(PromotionIntent, PromotionReconciliation).contains(result.phase),
       result.targetHeld,
       state' = {
@@ -1945,8 +1638,6 @@ module acceptedResultIntegration {
     }
   }
 
-  // Choose the second responsibility's independent target before its durable
-  // queue record is written. A journaled responsibility never changes target.
   action assignResultTwoIndependentTarget: bool = {
     val result = state.results.get(2)
     all {
@@ -1954,63 +1645,39 @@ module acceptedResultIntegration {
       result.integrationTarget == 1,
       state' = {
         ...state,
-        results: state.results.put(2, {
-          ...result,
-          integrationTarget: 2,
-        }),
+        results: state.results.put(2, { ...result, integrationTarget: 2 }),
       },
     }
   }
 
-  action observeInvalidCandidate(id: int): bool = {
+  // Explicitly models a changed target head. It never creates a successor
+  // session; an existing S remains bound to its original H.
+  action observeChangedTargetHead(id: int): bool = {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
-      result.phase == CandidatePending,
-      result.targetHeld,
+      state.targetFactsCurrent,
+      result.phase != NoAcceptedResult,
+      result.phase != AcceptedResult,
+      result.phase != LateAcceptedEvidence,
       state' = {
         ...state,
-        results: state.results.put(id,
-          if (result.correctionCount >= CORRECTION_LIMIT) {
-            ...result,
-            phase: CorrectionLimitReached,
-            targetHeld: false,
-            observedFirstParent: 99,
-            observedSecondParent: 98,
-          } else {
-            ...result,
-            phase: CorrectionRequired,
-            correctionCount: result.correctionCount + 1,
-            observedFirstParent: 99,
-            observedSecondParent: 98,
-          }
-        ),
+        targetHeadProof: result.plannedTargetHead + 1,
+        targetFactsCurrent: true,
       },
     }
   }
 
-  // A failed Git read records no candidate fact, so restart rereads the same submission.
-  action gitReadFails(id: int): bool = all {
-    RESULT_IDS.contains(id),
-    state.results.get(id).phase == CandidatePending,
-    state.results.get(id).targetHeld,
-    state' = state,
-  }
-
-  action waitOnDependency(id: int): bool = {
+  // A lineage rewrite before session creation preserves the queued result and
+  // creates no session or Integrator call.
+  action observeIncompatibleTargetLineage(id: int): bool = {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
-      result.phase == Started,
-      result.targetHeld,
-      state.trackerFactsCurrent,
+      result.phase == Queued,
       state' = {
         ...state,
-        results: state.results.put(id, {
-          ...result,
-          phase: DependencyWait,
-          targetHeld: false,
-        }),
+        results: state.results.put(id, { ...result, lineageCompatible: false }),
       },
     }
   }
@@ -2024,56 +1691,39 @@ module acceptedResultIntegration {
         {
           ...result,
           phase:
-          if (result.phase == CorrelationContradictionReleased)
-            CorrelationContradiction
-          else if (
-            Set(
-              PromotionInFlight,
-              PromotionAttemptIntended,
-              PromotionReconciliation,
-              PromotionRetryReady,
-            ).contains(result.phase)
-          )
-            PromotionResponseLost
-          else if (result.phase == PromotionReadPending)
-            if (result.promotionAttemptCount == 0)
-              PromotionIntent
-            else
+            if (result.phase == IntegratorInFlight)
+              IntegratorResponseLost
+            else if (
+              Set(PromotionInFlight, PromotionAttemptIntended, PromotionReconciliation, PromotionRetryReady)
+                .contains(result.phase)
+            )
               PromotionResponseLost
-          else
-            result.phase,
+            else if (result.phase == PromotionReadPending)
+              if (result.promotionAttemptCount == 0) PromotionIntent else PromotionResponseLost
+            else
+              result.phase,
+          integratorResponseAmbiguous:
+            if (result.phase == IntegratorInFlight) true else result.integratorResponseAmbiguous,
           promotionTargetFactsCurrent:
-            if (promotionProtocolPhase(result.phase)) false
-            else result.promotionTargetFactsCurrent,
+            if (promotionProtocolPhase(result.phase)) false else result.promotionTargetFactsCurrent,
           promotionFreshExactHeadObservation:
-            if (promotionProtocolPhase(result.phase)) false
-            else result.promotionFreshExactHeadObservation,
+            if (promotionProtocolPhase(result.phase)) false else result.promotionFreshExactHeadObservation,
           promotionGitObservation:
-            if (
-              promotionProtocolPhase(result.phase)
-                and not(promotionTerminalPhase(result.phase))
-            ) NoPromotionGitObservation
+            if (promotionProtocolPhase(result.phase) and not(promotionTerminalPhase(result.phase)))
+              NoPromotionGitObservation
             else result.promotionGitObservation,
           promotionObservedTargetHead:
-            if (
-              promotionProtocolPhase(result.phase)
-                and not(promotionTerminalPhase(result.phase))
-            ) 0
+            if (promotionProtocolPhase(result.phase) and not(promotionTerminalPhase(result.phase)))
+              0
             else result.promotionObservedTargetHead,
           targetHeld: false,
         }
       }),
       recovered: true,
       restartCount: state.restartCount + 1,
-      trackerFactsCurrent:
-        if (restartRequiresFreshAuthorityFacts(state)) false
-        else state.trackerFactsCurrent,
-      targetFactsCurrent:
-        if (restartRequiresFreshAuthorityFacts(state)) false
-        else state.targetFactsCurrent,
-      targetHeadProof:
-        if (restartRequiresFreshAuthorityFacts(state)) 0
-        else state.targetHeadProof,
+      trackerFactsCurrent: if (restartRequiresFreshAuthorityFacts(state)) false else state.trackerFactsCurrent,
+      targetFactsCurrent: if (restartRequiresFreshAuthorityFacts(state)) false else state.targetFactsCurrent,
+      targetHeadProof: if (restartRequiresFreshAuthorityFacts(state)) 0 else state.targetHeadProof,
       targetReacquisitionRequired: restartRequiresFreshAuthorityFacts(state),
     },
   }
@@ -2083,9 +1733,7 @@ module acceptedResultIntegration {
     state' = { ...state, trackerFactsCurrent: true },
   }
 
-  // A restart also requires a fresh Git target-head proof. The proof is
-  // selected for the exact queued/active target and is not inferred from the
-  // old process-local lease or from tracker freshness.
+  // Fresh target facts are independent of the process-local lease.
   action observeTargetFacts(id: int): bool = {
     val result = state.results.get(id)
     all {
@@ -2097,12 +1745,11 @@ module acceptedResultIntegration {
         results: state.results.put(id, {
           ...result,
           promotionTargetFactsCurrent:
-            if (promotionProtocolPhase(result.phase)) true
-            else result.promotionTargetFactsCurrent,
+            if (promotionProtocolPhase(result.phase)) true else result.promotionTargetFactsCurrent,
         }),
         targetFactsCurrent: true,
         targetHeadProof:
-          if (result.expectedTargetHead == 0) id + 10 else result.expectedTargetHead,
+          if (result.expectedTargetHead == 0) result.plannedTargetHead else result.expectedTargetHead,
       },
     }
   }
@@ -2112,23 +1759,15 @@ module acceptedResultIntegration {
     and {
       RESULT_IDS.contains(id),
       s.trackerFactsCurrent,
-      s.targetFactsCurrent,
       s.targetReacquisitionRequired,
-      Set(
-        Started,
-        CandidatePending,
-        CorrectionRequired,
-        CandidateReady,
-        VerificationIntent,
-        VerificationInvoked,
-        VerificationResponseLost,
-        VerificationReconciling,
-        VerificationPassedPendingSeal,
-        PromotionIntent,
-      ).contains(result.phase),
+      targetReacquisitionPhase(result.phase),
       not(result.targetHeld),
       result.expectedTargetHead != 0,
-      s.targetHeadProof == result.expectedTargetHead,
+      fixedIntegratorSessionPhase(result.phase)
+        or and {
+          s.targetFactsCurrent,
+          s.targetHeadProof == result.expectedTargetHead,
+        },
       not(RESULT_IDS.exists(other => s.results.get(other).targetHeld)),
     }
   }
@@ -2139,32 +1778,28 @@ module acceptedResultIntegration {
       canReacquireTarget(state, id),
       state' = {
         ...state,
-        results: state.results.put(id, { ...result, targetHeld: true }),
+        results: state.results.put(id, {
+          ...result,
+          phase:
+            if (result.phase == CandidateGitReadPending and result.candidateGitResponseAmbiguous)
+              CandidateGitReadIntent
+            else result.phase,
+          targetHeld: true,
+          candidateGitResponseAmbiguous:
+            if (result.phase == CandidateGitReadPending) false else result.candidateGitResponseAmbiguous,
+        }),
         targetReacquisitionRequired:
           RESULT_IDS.exists(other =>
             other != id
               and not(state.results.get(other).targetHeld)
-              and Set(
-                Started,
-                CandidatePending,
-                CorrectionRequired,
-                CandidateReady,
-                VerificationIntent,
-                VerificationInvoked,
-                VerificationResponseLost,
-                VerificationReconciling,
-                VerificationPassedPendingSeal,
-                PromotionIntent,
-              ).contains(state.results.get(other).phase)
+              and targetReacquisitionPhase(state.results.get(other).phase)
           ),
       },
     }
   }
 
-  // Quint traces retain action names but not the arguments passed to action
-  // definitions. These concrete executable actions preserve the parameterized
-  // helpers above for exact tests while giving the TypeScript conformance
-  // adapter an unambiguous production operation for every trace step.
+  // Concrete wrappers keep parameterized helpers available to deterministic
+  // scenarios and make every normal protocol action reachable to Quint runs.
   action acceptResultOne: bool = acceptResult(1)
   action acceptResultTwo: bool = acceptResult(2)
   action observeAppliedRestartBeforeAcceptedOne: bool = observeAppliedRestartBeforeAccepted(1)
@@ -2173,114 +1808,72 @@ module acceptedResultIntegration {
   action startIntegrationOne: bool = startIntegration(1)
   action startIntegrationTwo: bool = startIntegration(2)
   action waitOnDependencyOne: bool = waitOnDependency(1)
-  action waitOnDependencyTwo: bool = waitOnDependency(2)
-  action submitCandidateOne31: bool = submitCandidate(1, 31)
-  action submitCandidateOne32: bool = submitCandidate(1, 32)
-  action submitCandidateTwo31: bool = submitCandidate(2, 31)
-  action submitCandidateTwo32: bool = submitCandidate(2, 32)
+  action fixIntegratorSessionOne: bool = fixIntegratorSession(1)
+  action fixIntegratorSessionTwo: bool = fixIntegratorSession(2)
+  action invokeIntegratorOne: bool = invokeIntegrator(1)
+  action loseIntegratorResponseOne: bool = loseIntegratorResponse(1)
+  action resumeIntegratorOne: bool = resumeIntegrator(1)
+  action reportIntegratorNotPreparedOne: bool = reportIntegratorNotPrepared(1)
+  action reportIntegratorCandidateOne31: bool = reportIntegratorCandidate(1, 31)
+  action reportIntegratorCandidateOne32: bool = reportIntegratorCandidate(1, 32)
+  action recordCandidateGitReadIntentOne: bool = recordCandidateGitReadIntent(1)
+  action readCandidateGitOne: bool = readCandidateGit(1)
+  action loseCandidateGitResponseOne: bool = loseCandidateGitResponse(1)
+  action reconcileCandidateGitOne: bool = reconcileCandidateGit(1)
   action observeExactCandidateOne: bool = observeExactCandidate(1)
-  action observeExactCandidateTwo: bool = observeExactCandidate(2)
-  action recordVerificationIntentOne: bool = recordVerificationIntent(1)
-  action invokeVerificationOne: bool = invokeVerification(1)
-  action loseVerificationResponseOne: bool = loseVerificationResponse(1)
-  action reconcileVerificationOne: bool = reconcileVerification(1)
-  action reportVerificationPassedOne: bool = reportVerificationPassed(1)
-  action rereadAndSealPassedVerificationOne: bool = rereadAndSealPassedVerification(1)
-  action reportVerificationFailedOne: bool = reportVerificationFailed(1)
-  action reportVerificationKilledOne: bool = reportVerificationKilled(1)
-  action reportVerificationTimedOutOne: bool = reportVerificationTimedOut(1)
-  action reportVerificationPartialOne: bool = reportVerificationPartial(1)
-  action reportVerificationCorrelationContradictionOne: bool = reportVerificationCorrelationContradiction(1)
-  action reportVerificationEvidenceFailureOne: bool = reportVerificationEvidenceFailure(1)
-  // The exhaustive step explores promotion with the second result absent;
-  // the collected two-target scenario below exercises the independent-target
-  // composition directly. This bound avoids a redundant Cartesian product of
-  // the complete second-result lifecycle with every promotion retry state.
-  action offerPromotionPremiseOne: bool = all {
-    state.results.get(2).phase == NoAcceptedResult,
-    offerPromotionPremise(1),
-  }
+  action observeMissingCandidateOne: bool = observeMissingCandidate(1)
+  action observeNonCommitCandidateOne: bool = observeNonCommitCandidate(1)
+  action observeWrongParentCandidateOne: bool = observeWrongParentCandidate(1)
+  action offerPromotionPremiseOne: bool = offerPromotionPremise(1)
   action recordPromotionIntentOne: bool = recordPromotionIntent(1)
   action recordPromotionAttemptIntentOne: bool = recordPromotionAttemptIntent(1)
   action sendPromotionAttemptOne: bool = sendPromotionAttempt(1)
   action losePromotionAttemptResponseOne: bool = losePromotionResponse(1)
   action reconcilePromotionOne: bool = reconcilePromotion(1)
   action observePromotionCandidateCurrentOne: bool = observePromotionCandidateCurrent(1)
-  action observePromotionCandidateAncestorOne: bool = all {
-    state.results.get(1).promotionAttemptCount <= 1,
-    observePromotionCandidateAncestor(1),
-  }
+  action observePromotionCandidateAncestorOne: bool = observePromotionCandidateAncestor(1)
   action observePromotionExactExpectedHeadOne: bool = observePromotionExactExpectedHead(1)
-  action observePromotionOtherHeadOne: bool = all {
-    or {
-      state.results.get(1).promotionAttemptCount == 0,
-      state.results.get(1).phase == PromotionInFlight,
-    },
-    observePromotionOtherHead(1),
-  }
-  action observePromotionGitUnreadableOne: bool = all {
-    or {
-      state.results.get(1).promotionAttemptCount == 0,
-      state.results.get(1).promotionAttemptCount >= PROMOTION_ATTEMPT_LIMIT,
-    },
-    observePromotionGitUnreadable(1),
-  }
+  action observePromotionOtherHeadOne: bool = observePromotionOtherHead(1)
+  action observePromotionGitUnreadableOne: bool = observePromotionGitUnreadable(1)
   action assignResultTwoIndependentTargetOne: bool = assignResultTwoIndependentTarget
-  action observeInvalidCandidateOne: bool = observeInvalidCandidate(1)
-  action observeInvalidCandidateTwo: bool = observeInvalidCandidate(2)
-  action gitReadFailsOne: bool = gitReadFails(1)
-  action gitReadFailsTwo: bool = gitReadFails(2)
-  action reportWithoutCandidateOne: bool = reportWithoutCandidate(1)
-  action reportWithoutCandidateTwo: bool = reportWithoutCandidate(2)
-  action reportForeignCorrelationOne: bool = reportForeignCorrelation(1)
-  action reportForeignCorrelationTwo: bool = reportForeignCorrelation(2)
-  action releaseForeignCorrelationTargetOne: bool = releaseForeignCorrelationTarget(1)
-  action releaseForeignCorrelationTargetTwo: bool = releaseForeignCorrelationTarget(2)
-  action reacquireIntegrationTargetOne: bool = reacquireIntegrationTarget(1)
-  action reacquireIntegrationTargetTwo: bool = reacquireIntegrationTarget(2)
+  action loseCandidateGitResponseTwo: bool = loseCandidateGitResponse(2)
+  action recoverCoordinatorStep: bool = recoverCoordinator
+  action observeTrackerFactsStep: bool = observeTrackerFacts
   action observeTargetFactsOne: bool = observeTargetFacts(1)
   action observeTargetFactsTwo: bool = observeTargetFacts(2)
+  action observeIncompatibleTargetLineageOne: bool = observeIncompatibleTargetLineage(1)
 
-  // Exhaustive promotion recovery covers the three ambiguity boundaries;
-  // collected scenarios exercise the remaining restart points directly.
-  action recoverCoordinatorStep: bool = all {
-    or {
-      not(promotionProtocolPhase(state.results.get(1).phase)),
-      Set(
-        PromotionAttemptIntended,
-        PromotionInFlight,
-        PromotionReadPending,
-      ).contains(state.results.get(1).phase),
-    },
-    recoverCoordinator,
-  }
+  // Changed-head observations are external Git controls exercised by the
+  // exact scenario tests; they stay outside the unconstrained scheduler step
+  // because one global finite target proof cannot represent an independent
+  // target's fact safely. Incompatible lineage is safe in the scheduler: it
+  // only leaves a queued result blocked before session creation.
 
   action step: bool = any {
-    // Exhaustive exploration keeps result two at the queue/order boundary.
-    // Collected two-result scenarios exercise its full independent-target
-    // lifecycle without multiplying every result-one protocol state by it.
     observeAppliedRestartBeforeAcceptedOne,
     acceptResultOne,
     acceptResultTwo,
     queueAcceptedResultOne,
     queueAcceptedResultTwo,
     startIntegrationOne,
+    startIntegrationTwo,
     waitOnDependencyOne,
-    submitCandidateOne31,
-    submitCandidateOne32,
+    fixIntegratorSessionOne,
+    fixIntegratorSessionTwo,
+    invokeIntegratorOne,
+    loseIntegratorResponseOne,
+    resumeIntegratorOne,
+    reportIntegratorNotPreparedOne,
+    reportIntegratorCandidateOne31,
+    reportIntegratorCandidateOne32,
+    recordCandidateGitReadIntentOne,
+    readCandidateGitOne,
+    loseCandidateGitResponseOne,
+    reconcileCandidateGitOne,
     observeExactCandidateOne,
-    recordVerificationIntentOne,
-    invokeVerificationOne,
-    loseVerificationResponseOne,
-    reconcileVerificationOne,
-    reportVerificationPassedOne,
-    rereadAndSealPassedVerificationOne,
-    reportVerificationFailedOne,
-    reportVerificationKilledOne,
-    reportVerificationTimedOutOne,
-    reportVerificationPartialOne,
-    reportVerificationCorrelationContradictionOne,
-    reportVerificationEvidenceFailureOne,
+    observeMissingCandidateOne,
+    observeNonCommitCandidateOne,
+    observeWrongParentCandidateOne,
     offerPromotionPremiseOne,
     recordPromotionIntentOne,
     recordPromotionAttemptIntentOne,
@@ -2293,14 +1886,9 @@ module acceptedResultIntegration {
     observePromotionOtherHeadOne,
     observePromotionGitUnreadableOne,
     assignResultTwoIndependentTargetOne,
-    observeInvalidCandidateOne,
-    gitReadFailsOne,
-    reportWithoutCandidateOne,
-    reportForeignCorrelationOne,
-    releaseForeignCorrelationTargetOne,
-    reacquireIntegrationTargetOne,
     recoverCoordinatorStep,
-    observeTrackerFacts,
+    observeTrackerFactsStep,
     observeTargetFactsOne,
+    observeIncompatibleTargetLineageOne,
   }
 }

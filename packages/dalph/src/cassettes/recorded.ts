@@ -753,8 +753,28 @@ const recordedAttemptStopEntryFor = (event: AttemptStopEvent): RecordedCassetteE
     })
   })
 
+type OuterIntegratorEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "IntegratorCandidateGitObserved"
+      | "IntegratorCandidateGitReadIntended"
+      | "IntegratorResultRecorded"
+      | "IntegratorSessionFixed"
+  }
+>
+
+const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterIntegratorEvent =>
+  event._tag === "IntegratorCandidateGitObserved" ||
+  event._tag === "IntegratorCandidateGitReadIntended" ||
+  event._tag === "IntegratorResultRecorded" ||
+  event._tag === "IntegratorSessionFixed"
+
 // eslint-disable-next-line complexity -- The closed journal vocabulary has one total projection into recorded cassette entries.
-const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
+const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry | undefined => {
+  // The corrected boundary has its own maintained, position-aware cassette.
+  // The legacy v10 inverse cannot safely erase its causal Journal positions.
+  if (isOuterIntegratorEvent(event)) return undefined
   if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
   if (isOperatorDirectionEvent(event)) return recordedOperatorDirectionEntryFor(event)
   if (isAttemptStopEvent(event)) return recordedAttemptStopEntryFor(event)
@@ -804,6 +824,11 @@ export class EmptyJournalCannotBeRecorded extends Schema.TaggedError<EmptyJourna
   {}
 ) {}
 
+export class OuterIntegratorJournalRequiresFocusedCassette extends Schema.TaggedError<OuterIntegratorJournalRequiresFocusedCassette>()(
+  "OuterIntegratorJournalRequiresFocusedCassette",
+  { eventTag: Schema.String }
+) {}
+
 /** A recorded inverse cannot invent a causal journal position for a missing predecessor. */
 export class RecordedCausalPositionMissing extends Schema.TaggedError<RecordedCausalPositionMissing>()(
   "RecordedCausalPositionMissing",
@@ -818,11 +843,13 @@ export const projectRecordedCassette = Effect.fn("ScenarioCassette.projectRecord
   if (runId === undefined) return yield* new EmptyJournalCannotBeRecorded({})
   const history = reduceWorkflowJournalHistory(runId, records)
   if (history._tag === "InvalidWorkflowJournalHistory") return yield* Effect.fail(history)
-  return RecordedCassette.make({
-    entries: records.map(({ event }) => recordedEntryFor(event)),
-    runId,
-    schemaVersion: recordedCassetteVersion
+  const entries = yield* Effect.forEach(records, ({ event }) => {
+    const entry = recordedEntryFor(event)
+    return entry === undefined
+      ? Effect.fail(new OuterIntegratorJournalRequiresFocusedCassette({ eventTag: event._tag }))
+      : Effect.succeed(entry)
   })
+  return RecordedCassette.make({ entries, runId, schemaVersion: recordedCassetteVersion })
 })
 
 const eventForTaskBoundaryEntry = (

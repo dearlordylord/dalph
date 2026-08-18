@@ -21,6 +21,7 @@ import {
 } from "./frontier.js"
 import { acceptedCandidateProgressAt } from "./integration-candidate-progress.js"
 import type { IntegrationFrontierRuntimeFacts } from "./integration-frontier.js"
+import { deriveIntegratorState } from "../../workflow/protocols/integrator/state.js"
 
 type ClaimSubject = { readonly plannedAttempt: { readonly attemptId: AttemptId; readonly taskId: TaskId } }
 
@@ -176,6 +177,7 @@ export const deriveStartedIntegrationFrontier = (
     const waiting = unsatisfiedPrerequisites(runState, responsibility).length > 0
     const held = runtimeFacts.heldResponsibilityPositions.has(responsibility.queuedAt)
     const existing = deriveIntegrationCandidateConstruction(runState.workflowHistory.records, responsibility)
+    const durableIntent = candidateIntentFor(responsibility)
     if (existing?._tag === "CandidateConstructed") {
       const candidate = constructedCandidateFor(responsibility)
       const verification = verificationFor(candidate)
@@ -197,6 +199,34 @@ export const deriveStartedIntegrationFrontier = (
       return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
     }
     if (!claimIsExactFor(responsibility)) return []
+    // The expand step resumes an outer Integrator session once one exists.
+    // Unmigrated histories continue through the legacy split until #223/#225.
+    const integratorState = deriveIntegratorState(runState.workflowHistory.records, responsibility)
+    if (integratorState._tag !== "Absent") {
+      if (waiting) {
+        return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+      }
+      if (
+        integratorState._tag === "Contradiction" ||
+        integratorState._tag === "NotPrepared" ||
+        integratorState._tag === "CandidateRejected" ||
+        integratorState._tag === "GitQualifiedPrepared"
+      ) {
+        return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+      }
+      if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+      return [
+        RunnableFrontierTransition.RunIntegrator({
+          lineage: {
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: integratorState.correlation.plannedAttempt.baseSha,
+            targetHeadSha: integratorState.correlation.expectedTargetHead
+          },
+          lineageObservedAt: integratorState.correlation.targetLineageObservedAt,
+          responsibility
+        })
+      ]
+    }
     if (existing?._tag === "CandidateConstructed") {
       const candidate = Option.getOrThrow(Option.fromUndefinedOr(constructedCandidateFor(responsibility)))
       const verification = deriveTargetVerificationState(runState.workflowHistory.records, candidate)
@@ -288,7 +318,6 @@ export const deriveStartedIntegrationFrontier = (
     if (waiting && held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
     if (!waiting && !held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
     if (waiting) return []
-    const durableIntent = candidateIntentFor(responsibility)
     if (hasPreIntentTargetRewrite(responsibility)) return []
     return Option.all({
       continuationLimit:

@@ -18,6 +18,7 @@ import {
   ApplicationExitRequestBoundary,
   CoordinatorOwnership,
   nodeGitCommandLayer,
+  nodeGitIntegratorCandidateLayer,
   nodeGitTargetLineageLayer,
   nodeGitWorktreeLayer,
   freshOperationIdAllocatorLayer,
@@ -75,6 +76,10 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     Layer.provide(nodeGitCommandLayer),
     Layer.provide(NodeServices.layer)
   )
+  const gitIntegratorCandidateLayer = nodeGitIntegratorCandidateLayer.pipe(
+    Layer.provide(nodeGitCommandLayer),
+    Layer.provide(NodeServices.layer)
+  )
   const journalLayer = productionJournalStoreLayer.pipe(Layer.provide(ownershipLayer))
   const baseInterpreterLayer = workflowInterpreterLayer.pipe(
     Layer.provide(trackerMutationLayer),
@@ -125,6 +130,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           acceptedResultEvidenceStore
         ).pipe(
           Layer.provide(interpreterLayer),
+          Layer.provide(gitIntegratorCandidateLayer),
           Layer.provide(operatorControlLayer),
           Layer.provide(freshOperationIdAllocatorLayer.pipe(Layer.provide(Layer.succeed(Crypto.Crypto, crypto)))),
           Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),

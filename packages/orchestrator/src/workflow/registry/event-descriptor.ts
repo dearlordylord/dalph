@@ -22,6 +22,10 @@ import {
   intentRecordKey,
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey,
+  integratorCandidateGitObservedRecordKey,
+  integratorCandidateGitReadIntendedRecordKey,
+  integratorResultRecordedRecordKey,
+  integratorSessionFixedRecordKey,
   integrationCandidateAgentReportRecordKey,
   integrationCandidateConstructedRecordKey,
   integrationCandidateConstructionIntentRecordKey,
@@ -344,6 +348,22 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       expectedKey: integrationStartedRecordKey(event.plannedAttempt.attemptId),
       responsibilityBeganAt: event.responsibilityBeganAt,
       runId: event.plannedAttempt.runId
+    }),
+    IntegratorSessionFixed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorSessionFixedRecordKey(event.correlation)
+    }),
+    IntegratorResultRecorded: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorResultRecordedRecordKey(event.result.correlation)
+    }),
+    IntegratorCandidateGitReadIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCandidateGitReadIntendedRecordKey(event.correlation, event.candidateText)
+    }),
+    IntegratorCandidateGitObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCandidateGitObservedRecordKey(event.correlation, event.candidateText)
     }),
     IntegrationCandidateConstructionIntended: (event) => ({
       _tag: "GenericEventDescriptor",

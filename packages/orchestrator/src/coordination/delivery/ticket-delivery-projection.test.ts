@@ -59,6 +59,12 @@ import {
   CandidateCorrectionLimit,
   IntegrationCandidateConstructionState
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import {
+  IntegratorCandidateResourceLocator,
+  IntegratorCorrelation,
+  IntegratorSessionId,
+  IntegratorState
+} from "../../workflow/protocols/integrator/events.js"
 import { TargetPromotionPendingRetry, TargetPromotionState } from "../../workflow/protocols/target-promotion/state.js"
 import {
   TargetPromotionNonConvergenceObservation,
@@ -535,6 +541,19 @@ describe("#181 ticket-delivery positive and negative space", () => {
       startedAt: JournalPosition.make(3)
     })
     const candidateCorrelation = fixture.promotionCorrelation.candidateCorrelation
+    const integratorState = IntegratorState.cases.SessionUnfinished.make({
+      correlation: IntegratorCorrelation.make({
+        acceptedResult: queued.acceptedResult,
+        candidateResource: IntegratorCandidateResourceLocator.make("resource:projection-integrator"),
+        expectedTargetHead: candidateCorrelation.expectedTargetHead,
+        integrationTarget: queued.integrationTarget,
+        plannedAttempt: queued.plannedAttempt,
+        queuedAt: queued.queuedAt,
+        sessionId: IntegratorSessionId.make("session:projection-integrator"),
+        startedAt: started.startedAt,
+        targetLineageObservedAt: JournalPosition.make(4)
+      })
+    })
     const candidateStates = [
       IntegrationCandidateConstructionState.cases.CandidateConstructed.make({
         acceptedResult: queued.acceptedResult,
@@ -626,6 +645,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
       },
       { _tag: "IntegrationFinalitySettlement", settlement },
       ...candidateStates.map((state) => ({ _tag: "IntegrationCandidate" as const, responsibility: started, state })),
+      { _tag: "IntegratorPreparation", responsibility: started, state: integratorState },
       ...verificationStates.map((state) => ({ _tag: "TargetVerification" as const, responsibility: started, state })),
       ...promotionStates.map((state) => ({ _tag: "TargetPromotion" as const, responsibility: started, state })),
       { _tag: "IntegrationWait", wait: { _tag: "IntegrationTargetWait", plannedAttempt: fixture.plannedAttempt } }
@@ -650,6 +670,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
         "StartedIntegration",
         "CandidateConstructedUnsettled",
         "CandidateWorkActive",
+        "IntegratorPreparation",
         "IntegrationNonConvergencePreserved",
         "TargetVerificationPending",
         "TargetVerificationPassed",

@@ -1,26 +1,9 @@
-// Negative controls for accepted-result admission and verification. Each
-// action performs one forbidden shortcut that a named invariant must reject.
+// Negative controls for issue #56 admission and issue #222's outer
+// Integrator/Git boundary. Each mutation is deliberately reachable, then
+// violates one invariant that must reject the shortcut.
 module acceptedResultIntegrationNegativeTest {
   import acceptedResultIntegration.* from "./acceptedResultIntegration"
 
-  action authorizePromotionWithoutSealedEvidence: bool = {
-    val result = state.results.get(1)
-    all {
-      result.phase == VerificationPassedPendingSeal,
-      state' = {
-        ...state,
-        results: state.results.put(1, {
-          ...result,
-          phase: PromotionPremise,
-          promotionAuthorized: true,
-        }),
-      },
-    }
-  }
-
-  // This is the mutation control for removing queueAcceptedResult's
-  // ordinary-admission guard. It turns late Accepted evidence into the issue
-  // #56 responsibility that the pre-terminal Restart chronology forbids.
   action queueLateAcceptedAfterRestart: bool = {
     val result = state.results.get(1)
     all {
@@ -63,18 +46,33 @@ module acceptedResultIntegrationNegativeTest {
       result.phase == LateAcceptedEvidence,
       state' = {
         ...state,
+        results: state.results.put(1, { ...result, acceptedEvidencePreserved: false }),
+      },
+    }
+  }
+
+  // A resource locator cannot remain "the same resource" while its binding
+  // silently substitutes another accepted-result commit.
+  action substituteIntegratorResourceCommit: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == IntegratorSessionFixed,
+      state' = {
+        ...state,
         results: state.results.put(1, {
           ...result,
-          acceptedEvidencePreserved: false,
+          resourceBoundCommit: result.acceptedResultCommit + 1,
         }),
       },
     }
   }
 
-  action startLaterQueueAfterNonPass: bool = {
+  // A queue successor is forbidden while an earlier same-target responsibility
+  // is still logically unfinished, including a rejected candidate.
+  action startLaterQueueAfterRejectedCandidate: bool = {
     val result = state.results.get(2)
     all {
-      state.results.get(1).phase == VerificationFailed,
+      state.results.get(1).phase == CandidateRejected,
       result.phase == Queued,
       state' = {
         ...state,
@@ -107,6 +105,8 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
+  // Forbidden shortcut: make a promotion-bound lease appear without the
+  // fresh Git facts required after recovery.
   action reacquireWithoutFreshTargetHead: bool = {
     val result = state.results.get(1)
     all {
@@ -121,30 +121,171 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
-  action allocateAutomaticReplacement: bool = {
+  // Each of these four actions makes the same invalid promotion claim from a
+  // different non-authoritative source. Git qualification must reject all of
+  // them: an explicit report plus exact [H,C] parents is still required.
+  action promoteUnreportedCandidate: bool = {
     val result = state.results.get(1)
     all {
-      result.phase == VerificationFailed,
+      result.phase == IntegratorInFlight,
+      result.targetHeld,
       state' = {
         ...state,
         results: state.results.put(1, {
           ...result,
-          verificationReplacementCount: result.verificationReplacementCount + 1,
+          phase: CandidateReady,
+          integratorOutcome: PreparedCandidate,
+          integratorResultRecorded: true,
+          candidateReported: false,
+          submittedCandidate: 31,
+          candidateGitReadIntentRecorded: true,
+          candidateGitReadCount: 1,
+          candidateGitObservation: CandidateExactParents,
+          candidateQualificationProven: true,
+          observedFirstParent: result.expectedTargetHead,
+          observedSecondParent: result.acceptedResultCommit,
+          promotionAuthorized: true,
+          targetHeld: false,
         }),
       },
     }
   }
 
-  // Forbidden control: once three compare-and-set requests have been used,
-  // this attempts to mint a fourth durable request. The bounded-attempt
-  // invariant must catch the mutation even though the action is syntactically
-  // well formed.
-  action sendFourthPromotionAttempt: bool = {
+  action promoteFromResourceHead: bool = {
     val result = state.results.get(1)
     all {
-      result.phase == PromotionExhausted,
-      result.promotionAttemptCount == PROMOTION_ATTEMPT_LIMIT,
-      not(result.targetHeld),
+      result.phase == CandidateGitReadPending,
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: CandidateReady,
+          integratorOutcome: PreparedCandidate,
+          integratorResultRecorded: true,
+          candidateReported: true,
+          submittedCandidate: 77,
+          candidateGitReadIntentRecorded: true,
+          candidateGitReadCount: 1,
+          candidateGitObservation: CandidateExactParents,
+          candidateQualificationProven: true,
+          observedFirstParent: result.expectedTargetHead,
+          observedSecondParent: result.acceptedResultCommit,
+          resourceHeadCandidate: 77,
+          promotionAuthorized: true,
+          targetHeld: false,
+        }),
+      },
+    }
+  }
+
+  action promoteFromProcessSuccess: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == CandidateGitReadPending,
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: CandidateReady,
+          integratorOutcome: PreparedCandidate,
+          integratorResultRecorded: true,
+          candidateReported: true,
+          submittedCandidate: 31,
+          candidateGitReadIntentRecorded: true,
+          candidateGitReadCount: 1,
+          candidateGitObservation: CandidateExactParents,
+          candidateQualificationProven: true,
+          observedFirstParent: result.expectedTargetHead,
+          observedSecondParent: result.acceptedResultCommit,
+          processSuccessObserved: true,
+          promotionAuthorized: true,
+          targetHeld: false,
+        }),
+      },
+    }
+  }
+
+  action promoteFromLegacyVerification: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == CandidateGitReadPending,
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: CandidateReady,
+          integratorOutcome: PreparedCandidate,
+          integratorResultRecorded: true,
+          candidateReported: true,
+          submittedCandidate: 31,
+          candidateGitReadIntentRecorded: true,
+          candidateGitReadCount: 1,
+          candidateGitObservation: CandidateExactParents,
+          candidateQualificationProven: true,
+          observedFirstParent: result.expectedTargetHead,
+          observedSecondParent: result.acceptedResultCommit,
+          legacyVerificationEvidence: true,
+          promotionAuthorized: true,
+          targetHeld: false,
+        }),
+      },
+    }
+  }
+
+  action promoteWithWrongParents: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == CandidateGitReadPending,
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: CandidateReady,
+          integratorOutcome: PreparedCandidate,
+          integratorResultRecorded: true,
+          candidateReported: true,
+          submittedCandidate: 31,
+          candidateGitReadIntentRecorded: true,
+          candidateGitReadCount: 1,
+          candidateGitObservation: CandidateWrongParents,
+          candidateQualificationProven: true,
+          observedFirstParent: 99,
+          observedSecondParent: 98,
+          promotionAuthorized: true,
+          targetHeld: false,
+        }),
+      },
+    }
+  }
+
+  // A crashed session cannot allocate S2 or count a resume as an invocation.
+  action allocateSuccessorAfterIntegratorCrash: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == IntegratorResponseLost,
+      result.integrationSession == 1,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: IntegratorInFlight,
+          integrationSession: 99,
+          integratorInvocationCount: 2,
+          targetHeld: true,
+        }),
+      },
+    }
+  }
+
+  action mintFourthPromotionAttempt: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == PromotionRetryReady,
+      result.promotionAttemptCount > 0,
       state' = {
         ...state,
         results: state.results.put(1, {
@@ -153,25 +294,10 @@ module acceptedResultIntegrationNegativeTest {
           targetHeld: true,
           promotionAttemptCount: PROMOTION_ATTEMPT_LIMIT + 1,
           promotionLastAttempt: PROMOTION_ATTEMPT_LIMIT + 1,
-          promotionExpectedHeadVerified: true,
           promotionCompareAndSetRequested: true,
         }),
       },
     }
-  }
-
-  run unsealedPassCannotAuthorizePromotionTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(authorizePromotionWithoutSealedEvidence)
-      .expect(not(onlySealedPassedAuthorizesPromotion))
   }
 
   run lateAcceptedAfterRestartCannotBeQueuedForIntegrationTest = {
@@ -201,46 +327,130 @@ module acceptedResultIntegrationNegativeTest {
       .expect(not(acceptedEvidenceIsNeverDiscarded))
   }
 
-  run nonPassCannotAdvanceLaterSameTargetQueueTest = {
+  run rejectedCandidateCannotAdvanceLaterSameTargetQueueTest = {
     init
       .then(acceptResult(1))
       .then(acceptResult(2))
       .then(queueAcceptedResult(1))
       .then(queueAcceptedResult(2))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationFailed(1))
-      .then(startLaterQueueAfterNonPass)
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeMissingCandidate(1))
+      .then(startLaterQueueAfterRejectedCandidate)
       .expect(not(logicalIntegrationResponsibilityBlocksLaterQueue))
   }
 
-  run staleTargetCannotAuthorizeVerificationReacquisitionTest = {
+  run staleTargetCannotAuthorizePromotionReacquisitionTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
       .then(recoverCoordinator)
+      .then(observeTrackerFacts)
       .then(reacquireWithoutFreshTargetHead)
-      .expect(not(reacquiredVerificationUsesFreshExpectedHead))
+      .expect(not(mutableTargetWorkReacquisitionUsesFreshExpectedHead))
   }
 
-  run completedNonPassCannotAllocateReplacementRequestTest = {
+  run unreportedCandidateCannotAuthorizePromotionTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationFailed(1))
-      .then(allocateAutomaticReplacement)
-      .expect(not(noAutomaticVerificationReplacement))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(promoteUnreportedCandidate)
+      .expect(not(candidateReportIsExplicit))
+  }
+
+  run resourceHeadCannotAuthorizePromotionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(promoteFromResourceHead)
+      .expect(not(noForbiddenEvidenceAuthorizesPromotion))
+  }
+
+  run processSuccessCannotAuthorizePromotionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(promoteFromProcessSuccess)
+      .expect(not(noForbiddenEvidenceAuthorizesPromotion))
+  }
+
+  run legacyVerificationCannotAuthorizePromotionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(promoteFromLegacyVerification)
+      .expect(not(noForbiddenEvidenceAuthorizesPromotion))
+  }
+
+  run wrongParentCandidateCannotAuthorizePromotionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(promoteWithWrongParents)
+      .expect(not(candidateQualificationRequiresExactParents))
+  }
+
+  run crashedIntegratorCannotAllocateSuccessorTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(loseIntegratorResponse(1))
+      .then(allocateSuccessorAfterIntegratorCrash)
+      .expect(and {
+        not(noAutomaticIntegratorSuccessor),
+        not(sessionIdentityFixedAfterStart),
+      })
+  }
+
+  run integratorResourceCannotSubstituteCommitTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(substituteIntegratorResourceCommit)
+      .expect(not(integratorResourceIsExactlyBound))
   }
 
   run promotionPremiseCannotAdvanceLaterSameTargetQueueTest = {
@@ -250,12 +460,12 @@ module acceptedResultIntegrationNegativeTest {
       .then(queueAcceptedResult(1))
       .then(queueAcceptedResult(2))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
       .then(offerPromotionPremise(1))
       .then(startLaterQueueAfterPromotionPremise)
       .expect(not(logicalIntegrationResponsibilityBlocksLaterQueue))
@@ -266,31 +476,24 @@ module acceptedResultIntegrationNegativeTest {
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
       .then(recordPromotionAttemptIntent(1))
       .then(sendPromotionAttempt(1))
       .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
       .then(reconcilePromotion(1))
       .then(observePromotionExactExpectedHead(1))
-      .then(recordPromotionAttemptIntent(1))
-      .then(sendPromotionAttempt(1))
-      .then(losePromotionResponse(1))
-      .then(reconcilePromotion(1))
-      .then(observePromotionExactExpectedHead(1))
-      .then(recordPromotionAttemptIntent(1))
-      .then(sendPromotionAttempt(1))
-      .then(losePromotionResponse(1))
-      .then(reconcilePromotion(1))
-      .then(observePromotionExactExpectedHead(1))
-      .then(sendFourthPromotionAttempt)
+      .then(mintFourthPromotionAttempt)
       .expect(not(promotionAttemptsAreBounded))
   }
 }

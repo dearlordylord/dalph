@@ -1,6 +1,8 @@
 module acceptedResultIntegrationTest {
   import acceptedResultIntegration.* from "./acceptedResultIntegration"
 
+  // The ordinary accepted result is journaled once, keeps its queue position,
+  // and starts only after recovery rereads tracker and Git target facts.
   run journalOrderSurvivesRestartTest = {
     init
       .then(acceptResult(1))
@@ -16,742 +18,393 @@ module acceptedResultIntegrationTest {
         state.results.get(1).phase == Started,
         state.results.get(2).phase == Queued,
         state.results.get(1).queuePosition < state.results.get(2).queuePosition,
+        state.results.get(1).integrationResponsibilityCount == 1,
       })
   }
 
-  run acceptedTerminalReconcilesAfterRestartTest = {
+  run lateAcceptedAfterRestartRemainsEvidenceOnlyTest = {
     init
+      .then(observeAppliedRestartBeforeAccepted(1))
       .then(acceptResult(1))
       .then(recoverCoordinator)
-      .then(queueAcceptedResult(1))
       .expect(and {
-        restartReached,
-        state.results.get(1).phase == Queued,
-        state.results.get(1).queuePosition == 1,
-        state.results.get(1).preIntegrationCancellation,
+        state.results.get(1).phase == LateAcceptedEvidence,
+        state.results.get(1).acceptedEvidencePreserved,
+        not(state.results.get(1).integrationResponsibilityRecorded),
+        state.results.get(1).integrationResponsibilityCount == 0,
+        lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility,
       })
   }
 
-  run ordinaryAcceptedStillRecordsOneIntegrationResponsibilityTest = {
+  run ordinaryAcceptedConsumesCancellationAndStartsOneResponsibilityTest = {
     init
       .then(acceptResult(1))
-      .expect(and {
-        state.results.get(1).phase == AcceptedResult,
-        state.results.get(1).acceptedEvidencePreserved,
-        not(state.results.get(1).restartChoiceCommittedBeforeTerminal),
-        not(state.results.get(1).integrationResponsibilityRecorded),
-        state.results.get(1).integrationResponsibilityCount == 0,
-      })
       .then(queueAcceptedResult(1))
       .expect(and {
         state.results.get(1).phase == Queued,
         state.results.get(1).integrationResponsibilityRecorded,
         state.results.get(1).integrationResponsibilityCount == 1,
-        state.results.get(1).queuePosition == 1,
         state.results.get(1).preIntegrationCancellation,
         ordinaryAcceptedAdmissionRecordsOneResponsibility,
         acceptedEvidenceIsNeverDiscarded,
       })
-  }
-
-  run lateAcceptedAfterRestartRemainsEvidenceWithoutIntegrationResponsibilityTest = {
-    init
-      .then(observeAppliedRestartBeforeAccepted(1))
-      .then(acceptResult(1))
-      .expect(and {
-        state.results.get(1).phase == LateAcceptedEvidence,
-        state.results.get(1).restartChoiceCommittedBeforeTerminal,
-        state.results.get(1).acceptedEvidencePreserved,
-        not(state.results.get(1).integrationResponsibilityRecorded),
-        state.results.get(1).integrationResponsibilityCount == 0,
-        state.results.get(1).queuePosition == 0,
-        not(state.results.get(1).preIntegrationCancellation),
-        not(state.results.get(1).targetHeld),
-        lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility,
-      })
-      .then(recoverCoordinator)
-      .expect(and {
-        state.results.get(1).phase == LateAcceptedEvidence,
-        state.results.get(1).acceptedEvidencePreserved,
-        state.results.get(1).integrationResponsibilityCount == 0,
-        not(state.targetReacquisitionRequired),
-        lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility,
-      })
-  }
-
-  run lateAcceptedEvidenceDoesNotChangeOrdinaryAcceptedAdmissionTest = {
-    init
-      .then(observeAppliedRestartBeforeAccepted(1))
-      .then(acceptResult(1))
-      .then(acceptResult(2))
-      .then(queueAcceptedResult(2))
-      .then(startIntegration(2))
-      .expect(and {
-        state.results.get(1).phase == LateAcceptedEvidence,
-        state.results.get(1).integrationResponsibilityCount == 0,
-        state.results.get(2).phase == Started,
-        state.results.get(2).integrationResponsibilityCount == 1,
-        state.results.get(2).targetHeld,
-        lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility,
-        ordinaryAcceptedAdmissionRecordsOneResponsibility,
-      })
-  }
-
-  run restartRequiresFreshTrackerFactsBeforeStartTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(recoverCoordinator)
-      .then(all {
-        assert(not(canStart(state, 1))),
-        observeTrackerFacts,
-      })
-      .then(observeTargetFacts(1))
       .then(startIntegration(1))
       .expect(and {
-        restartReached,
-        state.trackerFactsCurrent,
         state.results.get(1).phase == Started,
-      })
-  }
-
-  run startConsumesCancellationCapabilityTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .expect(and {
-        startedReached,
-        targetHeldOnlyForActiveIntegration,
-        cancellationExactlyQueued,
         not(state.results.get(1).preIntegrationCancellation),
+        state.results.get(1).targetHeld,
+        cancellationExactlyQueued,
       })
   }
 
-  run blockerReleasesTargetWithoutDiscardingResultTest = {
+  // A changed planned target head is a stop before S exists. It cannot be
+  // converted into an ordinary fresh Integrator session.
+  run changedTargetHeadStopsBeforeNewSessionTest = {
     init
       .then(acceptResult(1))
-      .then(acceptResult(2))
       .then(queueAcceptedResult(1))
-      .then(queueAcceptedResult(2))
-      .then(startIntegration(1))
-      .then(waitOnDependency(1))
+      .then(observeChangedTargetHead(1))
       .expect(and {
-        dependencyWaitReleasedTarget,
-        state.results.get(1).queuePosition == 1,
-        state.results.get(1).phase == DependencyWait,
-        state.results.get(2).phase == Queued,
-        not(state.results.get(2).targetHeld),
+        state.results.get(1).phase == Queued,
+        not(canStart(state, 1)),
+        state.results.get(1).integrationSession == 0,
+        state.results.get(1).integratorInvocationCount == 0,
+        noAutomaticIntegratorSuccessor,
       })
   }
 
-  run explicitExactCandidateFixesOrderedParentsTest = {
+  run incompatibleTargetLineageStopsBeforeIntegratorTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(observeIncompatibleTargetLineage(1))
+      .expect(and {
+        state.results.get(1).phase == Queued,
+        not(state.results.get(1).lineageCompatible),
+        not(canStart(state, 1)),
+        state.results.get(1).integrationSession == 0,
+        state.results.get(1).integratorInvocationCount == 0,
+      })
+  }
+
+  run changedHeadAfterSessionCannotStartSuccessorTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
+      .then(fixIntegratorSession(1))
+      .then(observeChangedTargetHead(1))
       .expect(and {
-        candidateReadyReached,
-        candidateReadyHasExactOrderedParents,
-        state.results.get(1).submittedCandidate == 31,
+        state.results.get(1).phase == IntegratorSessionFixed,
         state.results.get(1).integrationSession == 1,
+        state.results.get(1).expectedTargetHead == state.results.get(1).plannedTargetHead,
+        state.targetHeadProof != state.results.get(1).expectedTargetHead,
+        noAutomaticIntegratorSuccessor,
       })
   }
 
-  run unreadableGitPreservesExplicitSubmissionAcrossRestartTest = {
+  // The accepted result gets exactly one fixed outer session. The private
+  // Integrator stages are not represented as separate Dalph phases.
+  run outerIntegratorReportsOneExplicitCandidateTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(gitReadFails(1))
+      .then(fixIntegratorSession(1))
+      .expect(and {
+        state.results.get(1).phase == IntegratorSessionFixed,
+        state.results.get(1).sessionFixed,
+        state.results.get(1).candidateResource == 101,
+        integratorResourceIsExactlyBound,
+      })
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .expect(and {
+        state.results.get(1).phase == IntegratorResultRecorded,
+        state.results.get(1).integrationSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integratorResultRecorded,
+        state.results.get(1).candidateReported,
+        state.results.get(1).submittedCandidate == 31,
+        not(state.results.get(1).candidateGitReadIntentRecorded),
+        integratorSessionIsFixedBeforeResult,
+        integratorCallResultIsPersistent,
+        candidateReportIsExplicit,
+      })
+  }
+
+  run outerIntegratorNotPreparedIsConclusiveTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .expect(and {
+        state.results.get(1).phase == IntegratorNotPrepared,
+        state.results.get(1).integratorOutcome == NotPrepared,
+        state.results.get(1).integratorResultRecorded,
+        state.results.get(1).submittedCandidate == 0,
+        not(state.results.get(1).targetHeld),
+        not(state.results.get(1).promotionAuthorized),
+        conclusiveNotPreparedHasNoCandidate,
+      })
+  }
+
+  // Process loss after the call restores the same S. Resume is not a new
+  // Integrator invocation and cannot manufacture a successor S.
+  run unfinishedIntegratorRestoresSameSessionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(loseIntegratorResponse(1))
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(reacquireIntegrationTarget(1))
+      .then(resumeIntegrator(1))
+      .expect(and {
+        state.results.get(1).phase == IntegratorInFlight,
+        state.results.get(1).integrationSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integratorResumeCount == 1,
+        state.results.get(1).targetHeld,
+        integratorResourceIsExactlyBound,
+        integratorRecoveryReusesSameSession,
+        noAutomaticIntegratorSuccessor,
+      })
+  }
+
+  // Acquiring the process-local target position for S does not reread or
+  // substitute current Git target facts; S remains bound to its durable H.
+  run unfinishedIntegratorReacquiresWithoutTargetRereadTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(loseIntegratorResponse(1))
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(reacquireIntegrationTarget(1))
+      .expect(and {
+        state.results.get(1).phase == IntegratorResponseLost,
+        state.results.get(1).targetHeld,
+        not(state.targetFactsCurrent),
+        state.targetHeadProof == 0,
+        targetHeldOnlyForActiveIntegration,
+      })
+  }
+
+  // A durable Integrator result survives restart before Git qualification;
+  // only the Git read is resumed.
+  run reportedCandidateRestoresWithoutIntegratorRerunTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
       .then(recoverCoordinator)
       .then(observeTrackerFacts)
       .then(observeTargetFacts(1))
       .then(reacquireIntegrationTarget(1))
-      .then(observeExactCandidate(1))
+      .then(recordCandidateGitReadIntent(1))
       .expect(and {
-        restartReached,
-        candidateReadyReached,
+        state.results.get(1).phase == CandidateGitReadIntent,
         state.results.get(1).submittedCandidate == 31,
-        state.results.get(1).integrationSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).candidateGitReadIntentRecorded,
+        state.results.get(1).integratorResultRecorded,
       })
   }
 
-  run candidateReadyRestartReconstructsNoTargetLeaseTest = {
+  run exactGitParentsQualifyReportedCandidateTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
-      .then(recoverCoordinator)
-      .then(observeTrackerFacts)
-      .then(observeTargetFacts(1))
       .expect(and {
         state.results.get(1).phase == CandidateReady,
+        state.results.get(1).candidateGitObservation == CandidateExactParents,
+        state.results.get(1).observedFirstParent == state.results.get(1).expectedTargetHead,
+        state.results.get(1).observedSecondParent == state.results.get(1).acceptedResultCommit,
+        state.results.get(1).candidateQualificationProven,
+        state.results.get(1).promotionAuthorized,
         not(state.results.get(1).targetHeld),
-        canReacquireTarget(state, 1),
+        candidateGitIntentPrecedesObservation,
+        candidateQualificationRequiresExactParents,
+        candidateReportIsExplicit,
+        invalidCandidateNeverAuthorizesPromotion,
       })
   }
 
-  run reacquisitionWaitsForFreshMatchingTargetHeadTest = {
+  run missingCandidateIsRejectedWithoutPromotionTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeMissingCandidate(1))
+      .expect(and {
+        state.results.get(1).phase == CandidateRejected,
+        state.results.get(1).candidateGitObservation == CandidateMissing,
+        not(state.results.get(1).candidateQualificationProven),
+        not(state.results.get(1).promotionAuthorized),
+        invalidCandidateNeverAuthorizesPromotion,
+      })
+  }
+
+  run nonCommitCandidateIsRejectedWithoutPromotionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeNonCommitCandidate(1))
+      .expect(and {
+        state.results.get(1).phase == CandidateRejected,
+        state.results.get(1).candidateGitObservation == CandidateNonCommit,
+        not(state.results.get(1).promotionAuthorized),
+        invalidCandidateNeverAuthorizesPromotion,
+      })
+  }
+
+  run wrongParentCandidateIsRejectedWithoutPromotionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeWrongParentCandidate(1))
+      .expect(and {
+        state.results.get(1).phase == CandidateRejected,
+        state.results.get(1).candidateGitObservation == CandidateWrongParents,
+        state.results.get(1).observedFirstParent != state.results.get(1).expectedTargetHead,
+        state.results.get(1).observedSecondParent != state.results.get(1).acceptedResultCommit,
+        not(state.results.get(1).candidateQualificationProven),
+        not(state.results.get(1).promotionAuthorized),
+        invalidCandidateNeverAuthorizesPromotion,
+      })
+  }
+
+  run ambiguousCandidateGitReadReconcilesSameCandidateTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(loseCandidateGitResponse(1))
       .then(recoverCoordinator)
       .then(observeTrackerFacts)
+      .then(reacquireIntegrationTarget(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
       .expect(and {
+        state.results.get(1).phase == CandidateReady,
+        state.results.get(1).submittedCandidate == 31,
+        state.results.get(1).candidateGitReadCount == 2,
+        state.results.get(1).candidateGitObservation == CandidateExactParents,
+        state.results.get(1).integratorInvocationCount == 1,
         not(state.targetFactsCurrent),
-        not(canReacquireTarget(state, 1)),
-        not(state.results.get(1).targetHeld),
-      })
-      .then(observeTargetFacts(1))
-      .expect(and {
-        state.targetFactsCurrent,
-        targetHeadProofReached,
-        state.targetHeadProof == state.results.get(1).expectedTargetHead,
-        canReacquireTarget(state, 1),
-      })
-      .then(reacquireIntegrationTarget(1))
-      .expect(and {
-        state.results.get(1).targetHeld,
-        not(state.targetReacquisitionRequired),
+        candidateQualificationRequiresExactParents,
       })
   }
 
-  run correlationContradictionRestartReconstructsNoTargetLeaseTest = {
+  // Promotion starts from the candidate Git proof itself. No Dalph
+  // verification manifest or process/resource shortcut is present.
+  run exactCandidatePromotesWithDirectCompareAndSetTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(reportForeignCorrelation(1))
-      .then(recoverCoordinator)
-      .then(observeTrackerFacts)
-      .expect(and {
-        state.results.get(1).phase == CorrelationContradiction,
-        not(state.results.get(1).targetHeld),
-        not(canReacquireTarget(state, 1)),
-      })
-  }
-
-  run correctionReusesSessionAndAcceptsFirstCorrectedSubmissionTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeInvalidCandidate(1))
-      .then(submitCandidate(1, 32))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
-      .expect(and {
-        candidateReadyReached,
-        state.results.get(1).integrationSession == 1,
-        state.results.get(1).submittedCandidate == 32,
-        state.results.get(1).correctionCount == 1,
-      })
-  }
-
-  run correctionExhaustionPreservesWorkAndReleasesTargetTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeInvalidCandidate(1))
-      .then(submitCandidate(1, 32))
-      .then(observeInvalidCandidate(1))
-      .expect(and {
-        correctionLimitReached,
-        state.results.get(1).submittedCandidate == 32,
-        state.results.get(1).integrationSession == 1,
-        not(state.results.get(1).targetHeld),
-      })
-  }
-
-  run automaticContinuationExhaustionPreservesWorkAndReleasesTargetTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(reportWithoutCandidate(1))
-      .then(reportWithoutCandidate(1))
-      .expect(and {
-        continuationLimitReached,
-        state.results.get(1).continuationCount == CONTINUATION_LIMIT,
-        state.results.get(1).integrationSession == 1,
-        not(state.results.get(1).targetHeld),
-      })
-  }
-
-  run foreignCorrelationStopsBeforeGitAndKeepsSessionTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(reportForeignCorrelation(1))
-      .expect(and {
-        correlationContradictionReached,
-        state.results.get(1).phase == CorrelationContradiction,
-        state.results.get(1).integrationSession == 1,
-        state.results.get(1).submittedCandidate == 0,
-        state.results.get(1).observedFirstParent == 0,
-        state.results.get(1).observedSecondParent == 0,
-        state.results.get(1).targetHeld,
-      })
-      .then(releaseForeignCorrelationTarget(1))
-      .expect(and {
-        correlationContradictionReleasedReached,
-        state.results.get(1).phase == CorrelationContradictionReleased,
-        state.results.get(1).integrationSession == 1,
-        not(state.results.get(1).targetHeld),
-      })
-  }
-
-  run selectedWrapperSealsPassedEvidenceForExactCandidateTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationIntent,
-        state.results.get(1).verificationRequest.requestId == 1031,
-        state.results.get(1).verificationRequest.plan == VERIFICATION_PLAN + 1,
-        state.results.get(1).verificationRequest.candidate == 31,
-        state.results.get(1).verificationRequest.acceptedResult == 21,
-        state.results.get(1).wrapperInvocationCount == 0,
-        state.results.get(1).targetHeld,
-      })
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationPassedPendingSeal,
-        state.results.get(1).verificationOutcome == Passed,
-        not(state.results.get(1).verificationEvidenceReread),
-        not(state.results.get(1).verificationManifestSealed),
-        not(state.results.get(1).promotionAuthorized),
-        state.results.get(1).targetHeld,
-      })
-      .then(rereadAndSealPassedVerification(1))
-      .then(offerPromotionPremise(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionPremise,
-        state.results.get(1).verificationOutcome == Passed,
-        state.results.get(1).verificationEvidenceReread,
-        state.results.get(1).verificationManifestSealed,
-        state.results.get(1).promotionAuthorized,
-        not(state.results.get(1).targetHeld),
-      })
-  }
-
-  run lostVerificationResponseReconcilesSameRequestAfterRestartTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(loseVerificationResponse(1))
-      .then(recoverCoordinator)
-      .expect(and {
-        state.results.get(1).phase == VerificationResponseLost,
-        not(state.results.get(1).targetHeld),
-        state.results.get(1).verificationRequest.requestId == 1031,
-        state.results.get(1).wrapperInvocationCount == 1,
-        noAutomaticVerificationReplacement,
-      })
-      .then(observeTrackerFacts)
-      .then(observeTargetFacts(1))
-      .then(reacquireIntegrationTarget(1))
-      .then(reconcileVerification(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationReconciling,
-        state.results.get(1).verificationRequest.requestId == 1031,
-        state.results.get(1).verificationRequest.plan == VERIFICATION_PLAN + 1,
-        state.results.get(1).wrapperInvocationCount == 1,
-        state.results.get(1).reconciliationCount == 1,
-        state.results.get(1).targetHeld,
-      })
-      .then(reconcileVerification(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationReconciling,
-        state.results.get(1).verificationRequest.requestId == 1031,
-        state.results.get(1).wrapperInvocationCount == 1,
-        state.results.get(1).reconciliationCount == 2,
-        state.results.get(1).targetHeld,
-      })
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationPassed,
-        state.results.get(1).verificationRequest.requestId == 1031,
-        state.results.get(1).wrapperInvocationCount == 1,
-        state.results.get(1).reconciliationCount == 2,
-        state.results.get(1).promotionAuthorized,
-        not(state.results.get(1).targetHeld),
-      })
-  }
-
-  run failedVerificationStopsBeforePromotionAndBlocksLaterQueueTest = {
-    init
-      .then(acceptResult(1))
-      .then(acceptResult(2))
-      .then(queueAcceptedResult(1))
-      .then(queueAcceptedResult(2))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationFailed(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationFailed,
-        state.results.get(1).verificationOutcome == Failed,
-        state.results.get(1).verificationEvidenceReread,
-        state.results.get(1).verificationManifestSealed,
-        not(state.results.get(1).promotionAuthorized),
-        not(state.results.get(1).targetHeld),
-        state.results.get(2).phase == Queued,
-        not(canStart(state, 2)),
-        logicalIntegrationResponsibilityBlocksLaterQueue,
-      })
-  }
-
-  run killedVerificationSealsDiagnosticsWithoutPromotionTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationKilled(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationKilled,
-        state.results.get(1).verificationOutcome == Killed,
-        state.results.get(1).verificationEvidenceReread,
-        state.results.get(1).verificationManifestSealed,
-        not(state.results.get(1).promotionAuthorized),
-        not(state.results.get(1).targetHeld),
-      })
-  }
-
-  run timedOutVerificationSealsDiagnosticsWithoutPromotionTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationTimedOut(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationTimedOut,
-        state.results.get(1).verificationOutcome == TimedOut,
-        state.results.get(1).verificationEvidenceReread,
-        state.results.get(1).verificationManifestSealed,
-        not(state.results.get(1).promotionAuthorized),
-        not(state.results.get(1).targetHeld),
-      })
-  }
-
-  run partialVerificationSealsDiagnosticsWithoutPromotionTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPartial(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationPartial,
-        state.results.get(1).verificationOutcome == Partial,
-        state.results.get(1).verificationEvidenceReread,
-        state.results.get(1).verificationManifestSealed,
-        not(state.results.get(1).promotionAuthorized),
-        not(state.results.get(1).targetHeld),
-      })
-  }
-
-  run foreignVerificationCorrelationFailsClosedTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationCorrelationContradiction(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationCorrelationContradiction,
-        state.results.get(1).verificationRequest.requestId == 1031,
-        state.results.get(1).verificationOutcome == NoVerificationOutcome,
-        not(state.results.get(1).verificationEvidenceReread),
-        not(state.results.get(1).verificationManifestSealed),
-        not(state.results.get(1).promotionAuthorized),
-        not(state.results.get(1).targetHeld),
-        noAutomaticVerificationReplacement,
-      })
-  }
-
-  run incompleteVerificationEvidenceFailsClosedTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationEvidenceFailure(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationEvidenceFailure,
-        state.results.get(1).verificationRequest.requestId == 1031,
-        state.results.get(1).verificationOutcome == NoVerificationOutcome,
-        not(state.results.get(1).verificationEvidenceReread),
-        not(state.results.get(1).verificationManifestSealed),
-        not(state.results.get(1).promotionAuthorized),
-        not(state.results.get(1).targetHeld),
-        noAutomaticVerificationReplacement,
-      })
-  }
-
-  run releasedCorrectionLimitStillBlocksLaterSameTargetQueueTest = {
-    init
-      .then(acceptResult(1))
-      .then(acceptResult(2))
-      .then(queueAcceptedResult(1))
-      .then(queueAcceptedResult(2))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeInvalidCandidate(1))
-      .then(submitCandidate(1, 32))
-      .then(observeInvalidCandidate(1))
-      .expect(and {
-        state.results.get(1).phase == CorrectionLimitReached,
-        not(state.results.get(1).targetHeld),
-        state.results.get(2).phase == Queued,
-        not(canStart(state, 2)),
-        logicalIntegrationResponsibilityBlocksLaterQueue,
-      })
-  }
-
-  run releasedContinuationLimitStillBlocksLaterSameTargetQueueTest = {
-    init
-      .then(acceptResult(1))
-      .then(acceptResult(2))
-      .then(queueAcceptedResult(1))
-      .then(queueAcceptedResult(2))
-      .then(startIntegration(1))
-      .then(reportWithoutCandidate(1))
-      .then(reportWithoutCandidate(1))
-      .expect(and {
-        state.results.get(1).phase == ContinuationLimitReached,
-        not(state.results.get(1).targetHeld),
-        state.results.get(2).phase == Queued,
-        not(canStart(state, 2)),
-        logicalIntegrationResponsibilityBlocksLaterQueue,
-      })
-  }
-
-  run releasedCorrelationContradictionStillBlocksLaterSameTargetQueueTest = {
-    init
-      .then(acceptResult(1))
-      .then(acceptResult(2))
-      .then(queueAcceptedResult(1))
-      .then(queueAcceptedResult(2))
-      .then(startIntegration(1))
-      .then(reportForeignCorrelation(1))
-      .then(releaseForeignCorrelationTarget(1))
-      .expect(and {
-        state.results.get(1).phase == CorrelationContradictionReleased,
-        not(state.results.get(1).targetHeld),
-        state.results.get(2).phase == Queued,
-        not(canStart(state, 2)),
-        logicalIntegrationResponsibilityBlocksLaterQueue,
-      })
-  }
-
-  run sealedVerificationStillBlocksLaterSameTargetQueueTest = {
-    init
-      .then(acceptResult(1))
-      .then(acceptResult(2))
-      .then(queueAcceptedResult(1))
-      .then(queueAcceptedResult(2))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationPassedPendingSeal,
-        state.results.get(1).targetHeld,
-        not(canStart(state, 2)),
-        logicalIntegrationResponsibilityBlocksLaterQueue,
-      })
-      .then(rereadAndSealPassedVerification(1))
-      .expect(and {
-        state.results.get(1).phase == VerificationPassed,
-        not(state.results.get(1).targetHeld),
-        state.results.get(2).phase == Queued,
-        not(canStart(state, 2)),
-        logicalIntegrationResponsibilityBlocksLaterQueue,
-      })
-      .then(offerPromotionPremise(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionPremise,
-        not(state.results.get(1).targetHeld),
-        state.results.get(2).phase == Queued,
-        not(canStart(state, 2)),
-        logicalIntegrationResponsibilityBlocksLaterQueue,
-      })
-  }
-
-  run exactCompareAndSetPromotionRecordsSealedEvidenceTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionIntent,
-        state.results.get(1).promotionIntentRecorded,
-        state.results.get(1).promotionAttemptCount == 0,
-        not(state.results.get(1).promotionFreshExactHeadObservation),
-        state.results.get(1).verificationManifestSealed,
-        state.results.get(1).targetHeld,
-      })
       .then(observePromotionExactExpectedHead(1))
       .then(recordPromotionAttemptIntent(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionAttemptIntended,
-        state.results.get(1).promotionAttemptCount == 1,
-        state.results.get(1).promotionLastAttempt == 1,
-        not(state.results.get(1).promotionCompareAndSetRequested),
-      })
       .then(sendPromotionAttempt(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionInFlight,
-        state.results.get(1).promotionAttemptCount == 1,
-        state.results.get(1).promotionLastAttempt == 1,
-        state.results.get(1).promotionCompareAndSetRequested,
-        state.results.get(1).promotionExpectedHeadVerified,
-      })
       .then(observePromotionCandidateCurrent(1))
       .expect(and {
         state.results.get(1).phase == PromotionSucceeded,
-        state.results.get(1).promotionGitObservation == PromotionCandidateCurrent,
-        state.results.get(1).promotionObservedTargetHead
-          == state.results.get(1).submittedCandidate,
-        state.results.get(1).promotionCandidateAncestryProven,
         state.results.get(1).promotionResultRecorded,
-        state.results.get(1).verificationEvidenceReread,
-        state.results.get(1).verificationManifestSealed,
-        state.results.get(1).observedFirstParent
-          == state.results.get(1).expectedTargetHead,
-        state.results.get(1).observedSecondParent
-          == state.results.get(1).acceptedResultCommit,
-        not(state.results.get(1).promotionForceRequested),
-        not(state.results.get(1).promotionEquivalentContentAccepted),
-        not(state.results.get(1).targetHeld),
-      })
-      .then(recoverCoordinator)
-      .expect(and {
-        state.results.get(1).phase == PromotionSucceeded,
         state.results.get(1).promotionGitObservation == PromotionCandidateCurrent,
-        state.results.get(1).promotionObservedTargetHead
-          == state.results.get(1).submittedCandidate,
         state.results.get(1).promotionCandidateAncestryProven,
-        state.results.get(1).promotionResultRecorded,
-        not(state.results.get(1).targetHeld),
+        state.results.get(1).promotionAttemptCount == 1,
+        state.results.get(1).submittedCandidate == 31,
+        promotionUsesExactIntegratorCandidate,
+        promotionSuccessRequiresExactAncestry,
+        promotionNoForceOrEquivalentShortcut,
       })
   }
 
-  run staleTargetSelectsCandidateReconciliationTest = {
+  run changedHeadMakesPromotionStaleAndPreservesCandidateTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionOtherHead(1))
       .expect(and {
         state.results.get(1).phase == PromotionStale,
+        state.results.get(1).promotionResultRecorded,
         state.results.get(1).promotionGitObservation == PromotionOtherHead,
-        state.results.get(1).promotionObservedTargetHead
-          != state.results.get(1).submittedCandidate,
-        state.results.get(1).promotionResultRecorded,
         state.results.get(1).submittedCandidate == 31,
-        state.results.get(1).verificationManifestSealed,
         not(state.results.get(1).promotionCandidateAncestryProven),
-        not(state.results.get(1).promotionForceRequested),
-        not(state.results.get(1).promotionEquivalentContentAccepted),
-        not(state.results.get(1).targetHeld),
+        stalePromotionPreservesCandidateAndNeverOverwrites,
       })
   }
 
-  run initialReadDiscoversCandidateAncestorBeforeCompareAndSetTest = {
+  run ambiguousPromotionRequiresFreshGitBeforeRetryTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
-      .then(offerPromotionPremise(1))
-      .then(recordPromotionIntent(1))
-      .then(observePromotionCandidateAncestor(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionSucceeded,
-        state.results.get(1).promotionAttemptCount == 0,
-        not(state.results.get(1).promotionCompareAndSetRequested),
-        state.results.get(1).promotionCandidateAncestryProven,
-      })
-  }
-
-  run lostResponseDiscoversExactPromotedAncestryTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -760,107 +413,42 @@ module acceptedResultIntegrationTest {
       .then(losePromotionResponse(1))
       .expect(and {
         state.results.get(1).phase == PromotionResponseLost,
-        state.results.get(1).promotionResponseAmbiguous,
         state.results.get(1).promotionAttemptCount == 1,
-        not(state.results.get(1).targetHeld),
-      })
-      .then(reconcilePromotion(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionReconciliation,
-        state.results.get(1).targetHeld,
-        state.results.get(1).promotionAttemptCount == 1,
-      })
-      .then(observePromotionCandidateAncestor(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionSucceeded,
-        state.results.get(1).promotionGitObservation == PromotionCandidateAncestor,
-        state.results.get(1).promotionCandidateAncestryProven,
-        state.results.get(1).promotionResultRecorded,
-        state.results.get(1).promotionObservedTargetHead != state.results.get(1).submittedCandidate,
-        state.results.get(1).verificationManifestSealed,
-        not(state.results.get(1).targetHeld),
-      })
-  }
-
-  run ambiguousPromotionNeverRetriesBeforeFreshGitTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
-      .then(offerPromotionPremise(1))
-      .then(recordPromotionIntent(1))
-      .then(observePromotionExactExpectedHead(1))
-      .then(recordPromotionAttemptIntent(1))
-      .then(sendPromotionAttempt(1))
-      .then(losePromotionResponse(1))
-      .expect(and {
-        not(canSendPromotionAttempt(state, 1)),
-        state.results.get(1).promotionAttemptCount == 1,
-        not(state.results.get(1).promotionFreshExactHeadObservation),
-      })
-      .then(reconcilePromotion(1))
-      .then(observePromotionExactExpectedHead(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionRetryReady,
-        state.results.get(1).promotionFreshExactHeadObservation,
-        state.results.get(1).promotionGitObservation == PromotionExactExpectedHead,
-        state.results.get(1).promotionFreshExactHeadReads == 2,
-        state.results.get(1).promotionAttemptCount == 1,
-      })
-      .then(recordPromotionAttemptIntent(1))
-      .then(sendPromotionAttempt(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionInFlight,
-        state.results.get(1).promotionAttemptCount == 2,
-        state.results.get(1).promotionLastAttempt == 2,
-      })
-  }
-
-  run unreadablePromotionReadStaysPendingBeforeLimitTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
-      .then(offerPromotionPremise(1))
-      .then(recordPromotionIntent(1))
-      .then(observePromotionExactExpectedHead(1))
-      .then(recordPromotionAttemptIntent(1))
-      .then(sendPromotionAttempt(1))
-      .then(losePromotionResponse(1))
-      .then(reconcilePromotion(1))
-      .then(observePromotionGitUnreadable(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionReadPending,
-        state.results.get(1).promotionGitObservation == PromotionUnreadableHead,
-        state.results.get(1).promotionAttemptCount == 1,
-        state.results.get(1).promotionIntentRecorded,
-        state.results.get(1).verificationManifestSealed,
         not(state.results.get(1).promotionResultRecorded),
-        not(state.results.get(1).targetHeld),
-        not(canSendPromotionAttempt(state, 1)),
       })
       .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
       .expect(and {
-        state.results.get(1).phase == PromotionResponseLost,
+        state.results.get(1).phase == PromotionRetryReady,
         state.results.get(1).promotionAttemptCount == 1,
-        state.results.get(1).promotionIntentRecorded,
-        not(state.trackerFactsCurrent),
-        not(state.targetFactsCurrent),
-        state.targetReacquisitionRequired,
-        not(state.results.get(1).targetHeld),
+        state.results.get(1).promotionFreshExactHeadReads == 2,
+        ambiguousPromotionRequiresFreshObservation,
       })
+  }
+
+  run unreadablePromotionReadRemainsPendingUntilFreshFactsTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionGitUnreadable(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionReadPending,
+        not(state.results.get(1).promotionResultRecorded),
+        unreadablePromotionStaysPending,
+      })
+      .then(recoverCoordinator)
       .then(observeTrackerFacts)
       .then(observeTargetFacts(1))
       .then(reconcilePromotion(1))
@@ -868,192 +456,70 @@ module acceptedResultIntegrationTest {
       .expect(and {
         state.results.get(1).phase == PromotionRetryReady,
         state.results.get(1).promotionFreshExactHeadObservation,
-        state.results.get(1).promotionFreshExactHeadReads == 2,
-      })
-      .then(recordPromotionAttemptIntent(1))
-      .then(sendPromotionAttempt(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionInFlight,
-        state.results.get(1).promotionAttemptCount == 2,
+        promotionFreshObservationIsExactExpectedHead,
       })
   }
 
-  run preFirstUnreadablePromotionRestartsBeforeAttemptOneTest = {
+  run promotionExhaustionPreservesQualifiedCandidateTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
-      .then(observePromotionGitUnreadable(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionReadPending,
-        state.results.get(1).promotionAttemptCount == 0,
-        not(state.results.get(1).targetHeld),
-      })
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
       .then(recoverCoordinator)
-      .expect(and {
-        state.results.get(1).phase == PromotionIntent,
-        state.results.get(1).promotionAttemptCount == 0,
-        state.results.get(1).promotionLastAttempt == 0,
-        not(state.results.get(1).promotionFreshExactHeadObservation),
-        not(state.trackerFactsCurrent),
-        not(state.targetFactsCurrent),
-        state.targetReacquisitionRequired,
-        not(state.results.get(1).targetHeld),
-      })
       .then(observeTrackerFacts)
       .then(observeTargetFacts(1))
       .then(reconcilePromotion(1))
       .then(observePromotionExactExpectedHead(1))
       .then(recordPromotionAttemptIntent(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionAttemptIntended,
-        state.results.get(1).promotionAttemptCount == 1,
-        not(state.results.get(1).promotionCompareAndSetRequested),
-      })
-  }
-
-  run promotionAmbiguityExhaustionPreservesVerifiedCandidateTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
-      .then(offerPromotionPremise(1))
-      .then(recordPromotionIntent(1))
-      .then(observePromotionExactExpectedHead(1))
-      .then(recordPromotionAttemptIntent(1))
       .then(sendPromotionAttempt(1))
       .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
       .then(reconcilePromotion(1))
       .then(observePromotionExactExpectedHead(1))
       .then(recordPromotionAttemptIntent(1))
       .then(sendPromotionAttempt(1))
       .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
       .then(reconcilePromotion(1))
       .then(observePromotionExactExpectedHead(1))
-      .then(recordPromotionAttemptIntent(1))
-      .then(sendPromotionAttempt(1))
-      .then(losePromotionResponse(1))
-      .then(reconcilePromotion(1))
-      .then(observePromotionGitUnreadable(1))
       .expect(and {
         state.results.get(1).phase == PromotionExhausted,
         state.results.get(1).promotionAttemptCount == PROMOTION_ATTEMPT_LIMIT,
-        state.results.get(1).promotionLastAttempt == PROMOTION_ATTEMPT_LIMIT,
-        state.results.get(1).promotionGitObservation == PromotionUnreadableHead,
-        state.results.get(1).promotionIntentRecorded,
-        state.results.get(1).promotionResultRecorded == false,
         state.results.get(1).submittedCandidate == 31,
-        state.results.get(1).observedFirstParent
-          == state.results.get(1).expectedTargetHead,
-        state.results.get(1).observedSecondParent
-          == state.results.get(1).acceptedResultCommit,
-        state.results.get(1).verificationEvidenceReread,
-        state.results.get(1).verificationManifestSealed,
-        not(state.results.get(1).promotionCandidateAncestryProven),
         not(state.results.get(1).targetHeld),
-        not(canSendPromotionAttempt(state, 1)),
+        promotionExhaustionPreservesCandidate,
+        promotionTerminalReleasesTarget,
       })
   }
 
-  run promotionAttemptCountSurvivesRestartTest = {
-    init
-      .then(acceptResult(1))
-      .then(queueAcceptedResult(1))
-      .then(startIntegration(1))
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
-      .then(offerPromotionPremise(1))
-      .then(recordPromotionIntent(1))
-      .then(observePromotionExactExpectedHead(1))
-      .then(recordPromotionAttemptIntent(1))
-      .then(recoverCoordinator)
-      .expect(and {
-        state.results.get(1).phase == PromotionResponseLost,
-        state.results.get(1).promotionAttemptCount == 1,
-        state.results.get(1).promotionLastAttempt == 1,
-        not(state.results.get(1).promotionCompareAndSetRequested),
-        not(state.results.get(1).targetHeld),
-      })
-      .then(observeTrackerFacts)
-      .then(observeTargetFacts(1))
-      .then(reconcilePromotion(1))
-      .then(observePromotionExactExpectedHead(1))
-      .then(recordPromotionAttemptIntent(1))
-      .then(sendPromotionAttempt(1))
-      .then(losePromotionResponse(1))
-      .then(recoverCoordinator)
-      .expect(and {
-        state.results.get(1).phase == PromotionResponseLost,
-        state.results.get(1).promotionAttemptCount == 2,
-        state.results.get(1).promotionLastAttempt == 2,
-        state.results.get(1).promotionFreshExactHeadReads == 2,
-      })
-      .then(observeTrackerFacts)
-      .then(observeTargetFacts(1))
-      .then(reconcilePromotion(1))
-      .then(observePromotionExactExpectedHead(1))
-      .then(recordPromotionAttemptIntent(1))
-      .then(sendPromotionAttempt(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionInFlight,
-        state.results.get(1).promotionAttemptCount == 3,
-        state.results.get(1).promotionLastAttempt == 3,
-        state.results.get(1).promotionFreshExactHeadReads == 3,
-        not(canSendPromotionAttempt(state, 1)),
-      })
-  }
-
-  run unrelatedTargetRemainsIndependentWhileSameTargetBlocksTest = {
+  run unrelatedResultKeepsIndependentAdmissionFactsTest = {
     init
       .then(acceptResult(1))
       .then(acceptResult(2))
       .then(assignResultTwoIndependentTarget)
       .then(queueAcceptedResult(1))
       .then(queueAcceptedResult(2))
-      .then(startIntegration(1))
-      .then(startIntegration(2))
       .expect(and {
-        state.results.get(1).phase == Started,
-        state.results.get(2).phase == Started,
-        state.results.get(1).integrationTarget != state.results.get(2).integrationTarget,
-        state.results.get(1).targetHeld,
-        state.results.get(2).targetHeld,
-        atMostOneTargetHolder,
-      })
-      .then(submitCandidate(1, 31))
-      .then(observeExactCandidate(1))
-      .then(recordVerificationIntent(1))
-      .then(invokeVerification(1))
-      .then(reportVerificationPassed(1))
-      .then(rereadAndSealPassedVerification(1))
-      .then(offerPromotionPremise(1))
-      .then(recordPromotionIntent(1))
-      .then(observePromotionGitUnreadable(1))
-      .expect(and {
-        state.results.get(1).phase == PromotionReadPending,
-        not(state.results.get(1).targetHeld),
-        state.results.get(2).phase == Started,
-        state.results.get(2).targetHeld,
-        state.results.get(1).integrationTarget != state.results.get(2).integrationTarget,
-        atMostOneTargetHolder,
+        state.results.get(1).integrationTarget == 1,
+        state.results.get(2).integrationTarget == 2,
+        queuePositionsAreUnique,
+        acceptedEvidenceIsNeverDiscarded,
       })
   }
 }

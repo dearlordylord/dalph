@@ -52,6 +52,7 @@ import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-bo
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
+import { executeIntegratorAction } from "./integrator-delivery-action.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -375,6 +376,7 @@ const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvanc
   if (transition._tag === "DeleteCompletedTaskCompletionClaim") {
     return yield* deleteCompletedTaskCompletionClaim(action, transition, lease)
   }
+  if (transition._tag === "RunIntegrator") return yield* executeIntegratorAction(action, transition, lease)
   return yield* continueIntegrationCandidate(action, transition, lease)
 })
 

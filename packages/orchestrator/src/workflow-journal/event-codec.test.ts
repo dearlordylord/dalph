@@ -18,6 +18,15 @@ import { OperationId } from "../workflow/identity.js"
 import { decodeJournalEvent, encodeJournalEvent } from "./event-codec.js"
 import { TargetLineageObservedEvent, taskTrackerReadIntent } from "../workflow/registry/event.js"
 import { makeTrackerGraphObservationOperation } from "../workflow/registry/operation.js"
+import { integrationFinalityFixture } from "../workflow/protocols/integration-finality/fixtures.js"
+import {
+  IntegratorCandidateResourceLocator,
+  IntegratorCorrelation,
+  IntegratorSessionFixedEvent,
+  IntegratorSessionId
+} from "../workflow/protocols/integrator/events.js"
+import { acceptedResultFixture } from "../../test/support/evidence.js"
+import { JournalPosition } from "./identity.js"
 
 it.effect("round-trips the current generic journal vocabulary", () =>
   Effect.gen(function* () {
@@ -27,6 +36,28 @@ it.effect("round-trips the current generic journal vocabulary", () =>
     const decoded = yield* decodeJournalEvent(encodeJournalEvent(event))
     expect(decoded).toEqual(event)
     expect(decoded._tag).toBe("TaskTrackerReadIntentRecorded")
+  })
+)
+
+it.effect("round-trips the outer Integrator session with its exact causal identities", () =>
+  Effect.gen(function* () {
+    const fixture = integrationFinalityFixture
+    const event = IntegratorSessionFixedEvent.make({
+      correlation: IntegratorCorrelation.make({
+        acceptedResult: acceptedResultFixture(fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit),
+        candidateResource: IntegratorCandidateResourceLocator.make("resource:event-codec-integrator"),
+        expectedTargetHead: fixture.promotionCorrelation.expectedTargetHead,
+        integrationTarget: fixture.integrationTarget,
+        plannedAttempt: fixture.plannedAttempt,
+        queuedAt: JournalPosition.make(7),
+        sessionId: IntegratorSessionId.make("session:event-codec-integrator"),
+        startedAt: JournalPosition.make(8),
+        targetLineageObservedAt: JournalPosition.make(6)
+      }),
+      version: workflowJournalEventVersion
+    })
+
+    expect(yield* decodeJournalEvent(encodeJournalEvent(event))).toEqual(event)
   })
 )
 

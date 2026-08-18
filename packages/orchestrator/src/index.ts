@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- The package barrel intentionally lists the complete public API in one place. */
+export { IntegratorBoundaryUnavailable } from "./coordination/delivery/integrator-boundary.js"
 export {
   AttemptChoice,
   AttemptChoiceAppliedEvent,
@@ -159,8 +160,10 @@ export {
   TestGitTargetLineage
 } from "./authorities/git/target-lineage.js"
 export { nodeGitIntegrationCandidateLayer } from "./authorities/git/integration-candidate.js"
+export { nodeGitIntegratorCandidateLayer } from "./authorities/git/integrator-candidate.js"
 export { nodeGitTargetPromotionLayer } from "./authorities/git/target-promotion.js"
 export { runIntegrationCandidateConstruction } from "./coordination/run/integration-candidate-runtime.js"
+export * from "./workflow/protocols/integrator/protocol.js"
 export {
   CompetingWorktreeRegistrations,
   ConflictingWorktreeRegistration,

@@ -54,6 +54,7 @@ import {
 import {
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey,
+  integratorSessionFixedRecordKey,
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
@@ -95,6 +96,8 @@ import { TaskLifecycle, TrackerRevision } from "../../../authorities/task-tracke
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
+import { IntegratorSessionFixedEvent } from "../integrator/events.js"
+import { integratorCorrelationFor } from "../integrator/session.js"
 import {
   CandidateContinuationLimit,
   CandidateCorrectionLimit,
@@ -1774,6 +1777,65 @@ it.effect("releases terminal candidate construction and resumes an unconstructed
         ])
       }).transitions
     ).toEqual([])
+
+    const lineageRead = makeTargetLineageObservationOperation({
+      integrationTarget,
+      operationId: OperationId.make("fixed-integrator-session-lineage"),
+      plannedAttempt: attempt,
+      predecessorOperationIds: []
+    })
+    yield* journal.append(
+      runId,
+      intentRecordKey(lineageRead.operationId),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: lineageRead,
+        version: workflowJournalEventVersion
+      })
+    )
+    const durableLineage = TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: attempt.baseSha,
+      targetHeadSha: GitCommitSha.make("f".repeat(40))
+    })
+    const lineageRecord = yield* journal.append(
+      runId,
+      outcomeRecordKey(lineageRead.operationId),
+      TargetLineageObservedEvent.make({
+        observation: durableLineage,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: lineageRead.operationId,
+        plannedAttempt: attempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const correlation = integratorCorrelationFor({
+      responsibility: started,
+      targetLineage: durableLineage,
+      targetLineageObservedAt: lineageRecord.position
+    })
+    yield* journal.append(
+      runId,
+      integratorSessionFixedRecordKey(correlation),
+      IntegratorSessionFixedEvent.make({ correlation, version: workflowJournalEventVersion })
+    )
+    const resumed = reconstructRunState(runId, yield* journal.read(runId))
+    if (resumed._tag !== "ValidReconstructedRun") return yield* Effect.die("expected fixed Integrator session")
+    expect(
+      deriveIntegrationFrontier(resumed.state, {
+        ...common,
+        heldResponsibilityPositions: new Set([started.queuedAt]),
+        targetLineageByAttemptId: new Map()
+      }).transitions
+    ).toContainEqual(
+      expect.objectContaining({
+        _tag: "RunIntegrator",
+        lineage: durableLineage,
+        lineageObservedAt: lineageRecord.position,
+        responsibility: started
+      })
+    )
   }).pipe(Effect.provide(protocolTestLayer))
 )
 

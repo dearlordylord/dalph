@@ -28,8 +28,9 @@ import {
 } from "./target-promotion-history.js"
 import { addSetValue, candidateKey, setMapValue } from "./integration-history-run-binding.js"
 import { invalidCandidateSessionSupersession } from "./integration-history-session-supersession.js"
+import { type IntegratorHistoryIndexes, validateIntegratorHistoryEvent } from "./integrator-history.js"
 
-export interface IntegrationHistoryIndexes {
+export interface IntegrationHistoryIndexes extends IntegratorHistoryIndexes {
   readonly acceptedExecutorResults: Map<AttemptId, AcceptedResult>
   readonly acceptedExecutorResultPositions: Map<AttemptId, JournalPosition>
   readonly executorResponsibilitiesBegan: ReadonlyMap<
@@ -368,6 +369,8 @@ export const invalidIntegrationHistoryEvent = (
   record: JournalRecord,
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
+  const integrator = validateIntegratorHistoryEvent(record, indexes)
+  if (integrator.handled) return integrator.issue
   const event = record.event
   if (event._tag === "IntegrationResponsibilityBegan") {
     setMapValue(indexes.integrationResponsibilitiesBegan, record.position, event)

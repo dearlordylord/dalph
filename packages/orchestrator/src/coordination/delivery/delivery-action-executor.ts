@@ -37,6 +37,7 @@ import type {
   startQueuedIntegration
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { runIntegrationCandidateConstruction } from "../run/integration-candidate-runtime.js"
+import type { prepareIntegrationCandidate } from "../../workflow/protocols/integrator/protocol.js"
 import type { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-reacquisition/execute.js"
 import type {
   recoverTaskClaimOperation,
@@ -44,6 +45,7 @@ import type {
   recoverTaskWorktreeOperation
 } from "../frontier/recovery.js"
 import type { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
+import type { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { runTargetVerification } from "../../workflow/protocols/target-verification/protocol.js"
 import type { TargetVerificationRuntimeUnavailable } from "./target-verification-boundary.js"
@@ -214,6 +216,7 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof recoverTaskClaimReleaseOperation>
   | EffectFunctionFailure<typeof recoverTaskWorktreeOperation>
   | EffectFunctionFailure<typeof runIntegrationCandidateConstruction>
+  | EffectFunctionFailure<typeof prepareIntegrationCandidate>
   | EffectFunctionFailure<typeof runTaskClaimReacquisition>
   | EffectFunctionFailure<typeof runTargetVerification>
   | EffectFunctionFailure<typeof runTargetPromotion>
@@ -221,6 +224,7 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof runCompletionClaimDeletionProtocol>
   | EffectFunctionFailure<typeof startQueuedIntegration>
   | IntegrationCandidateBoundaryUnavailable
+  | IntegratorBoundaryUnavailable
   | TargetVerificationRuntimeUnavailable
   | TargetPromotionRuntimeUnavailable
   | IntegrationFinalityRuntimeUnavailable

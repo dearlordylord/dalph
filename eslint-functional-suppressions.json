@@ -52,11 +52,8 @@
     }
   },
   "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts": {
-    "functional/no-throw-statements": {
-      "count": 1
-    },
     "functional/prefer-tacit": {
-      "count": 3
+      "count": 1
     }
   },
   "packages/dalph/test/conformance/application-exit.mbt.test.ts": {

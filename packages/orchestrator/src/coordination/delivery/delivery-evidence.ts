@@ -10,6 +10,7 @@ import {
   deriveConstructedIntegrationCandidateOccurrence,
   deriveIntegrationCandidateConstruction
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import { deriveIntegratorState } from "../../workflow/protocols/integrator/state.js"
 import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
 import { deriveIntegrationFinalityStateFor } from "../../workflow/protocols/integration-finality/state.js"
@@ -71,11 +72,18 @@ const integrationEvidenceOf = (
       : ({ _tag: "StartedIntegration", responsibility } as const)
   if (responsibility._tag !== "StartedIntegrationResponsibility") return [initial]
   const state = deriveIntegrationCandidateConstruction(records, responsibility)
-  const candidateEvidence =
-    state === undefined ? [] : [{ _tag: "IntegrationCandidate" as const, responsibility, state }]
+  const candidateEvidence: ReadonlyArray<ExactTicketDeliveryEvidence> =
+    state === undefined ? [] : [{ _tag: "IntegrationCandidate", responsibility, state }]
+  const integratorEvidence: ReadonlyArray<ExactTicketDeliveryEvidence> = (() => {
+    if (state !== undefined) return []
+    const integratorState = deriveIntegratorState(records, responsibility)
+    return integratorState._tag === "Absent"
+      ? []
+      : [{ _tag: "IntegratorPreparation", responsibility, state: integratorState }]
+  })()
   const verificationEvidence =
     state?._tag === "CandidateConstructed" ? targetVerificationEvidenceOf(records, responsibility) : []
-  return [initial, ...candidateEvidence, ...verificationEvidence]
+  return [initial, ...candidateEvidence, ...integratorEvidence, ...verificationEvidence]
 }
 
 /** Every operation identity whose journal fact is available to delivery proposal derivation. */

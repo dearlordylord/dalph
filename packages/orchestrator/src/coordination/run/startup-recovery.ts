@@ -23,6 +23,7 @@ import {
   IntegrationCandidateAgent,
   IntegrationCandidateGit
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import { Integrator, IntegratorGit } from "../../workflow/protocols/integrator/protocol.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import {
   DuplicateUnfinishedTaskAttemptIssue,
@@ -145,6 +146,8 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   const ambient = yield* Effect.context<never>()
   const candidateAgent = Context.getOption(ambient, IntegrationCandidateAgent)
   const candidateGit = Context.getOption(ambient, IntegrationCandidateGit)
+  const integrator = Context.getOption(ambient, Integrator)
+  const integratorGit = Context.getOption(ambient, IntegratorGit)
   const ambientRuntimeCapabilities = Context.getOption(ambient, DeliveryRuntimeResourceCapabilityPair)
   /* v8 ignore start -- @preserve Production bootstrap always supplies the process-owned capability pair; the fallback only keeps isolated validated-activation adapters self-contained, while the pair factory and close behavior have focused tests. */
   const runtimeCapabilityOwnership = Option.isSome(ambientRuntimeCapabilities)
@@ -189,6 +192,8 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     Context.add(DeliveryRuntimeObservationPublication, observationPublication),
     Context.addOrOmit(IntegrationCandidateAgent, candidateAgent),
     Context.addOrOmit(IntegrationCandidateGit, candidateGit),
+    Context.addOrOmit(Integrator, integrator),
+    Context.addOrOmit(IntegratorGit, integratorGit),
     Context.addOrOmit(
       TargetVerificationRuntime,
       Option.fromUndefinedOr(targetVerification).pipe(Option.map(TargetVerificationRuntime.of))

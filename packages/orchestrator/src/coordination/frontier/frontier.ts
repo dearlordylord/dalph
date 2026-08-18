@@ -168,6 +168,12 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly lineage: TargetLineageObservation
     readonly responsibility: StartedIntegrationResponsibility
   }
+  /** Runs or resumes the one outer Integrator session bound to this exact durable lineage observation. */
+  RunIntegrator: {
+    readonly lineage: TargetLineageObservation
+    readonly lineageObservedAt: JournalPosition
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   RunTargetVerification: {
     readonly candidate: TargetVerificationCandidate
     readonly plan: TargetVerificationPlan
@@ -254,6 +260,7 @@ const transitionTrackerGraphRequirements = {
   ContinuePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
   ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
   ContinueStartedIntegrationCandidate: "CurrentTrackerGraphRequired",
+  RunIntegrator: "CurrentTrackerGraphRequired",
   RunTargetVerification: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",
   ReplacePromotedTaskClaim: "CurrentTrackerGraphRequired",

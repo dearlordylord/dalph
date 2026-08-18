@@ -2078,6 +2078,10 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           !targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) &&
           !integration.transitions.some(
             (transition) =>
+              transition._tag === "RunIntegrator" && transition.responsibility.queuedAt === responsibility.queuedAt
+          ) &&
+          !integration.transitions.some(
+            (transition) =>
               transition._tag === "ReleaseStartedIntegrationTarget" &&
               transition.responsibility.queuedAt === responsibility.queuedAt
           )

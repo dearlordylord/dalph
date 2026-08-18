@@ -1,7 +1,8 @@
 # Outer Integrator boundary migration
 
-Status: accepted architecture correction on 2026-08-14; runtime migration has
-not started.
+Status: accepted architecture correction on 2026-08-14. Issue #222 implements
+the expand step beside the legacy pipeline; issues #223, #68, #224, and #225
+own the remaining runtime migration and legacy removal.
 
 ## The corrected user story
 

@@ -20,6 +20,7 @@ import type {
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import type { IntegratorState } from "../../workflow/protocols/integrator/events.js"
 import type { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import type { TargetPromotionState } from "../../workflow/protocols/target-promotion/protocol.js"
 import type { IntegrationFinalitySettledEvent } from "../../workflow/protocols/integration-finality/events.js"
@@ -222,6 +223,7 @@ export type TicketDeliveryStanding =
   | { readonly _tag: "QueuedIntegration"; readonly responsibility: QueuedIntegrationResponsibility }
   | { readonly _tag: "StartedIntegration"; readonly responsibility: StartedIntegrationResponsibility }
   | { readonly _tag: "CandidateWorkActive"; readonly state: IntegrationCandidateConstructionState }
+  | { readonly _tag: "IntegratorPreparation"; readonly state: IntegratorState }
   | {
       readonly _tag: "CandidateConstructedUnsettled"
       readonly state: Extract<IntegrationCandidateConstructionState, { readonly _tag: "CandidateConstructed" }>
@@ -285,6 +287,11 @@ export type ExactTicketDeliveryEvidence =
       readonly _tag: "IntegrationCandidate"
       readonly responsibility: StartedIntegrationResponsibility
       readonly state: IntegrationCandidateConstructionState
+    }
+  | {
+      readonly _tag: "IntegratorPreparation"
+      readonly responsibility: StartedIntegrationResponsibility
+      readonly state: IntegratorState
     }
   | {
       readonly _tag: "TargetVerification"

@@ -35,6 +35,24 @@ import {
   type ConstructedIntegrationCandidateOccurrence
 } from "../../workflow/protocols/integration-candidate-construction/events.js"
 import { IntegrationStartedEvent } from "../../workflow/protocols/integration-admission/events.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import { OperationId } from "../../workflow/identity.js"
+import { WorkflowActor } from "../../workflow/registry/actor.js"
+import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../workflow/registry/event.js"
+import { WorkflowOperation } from "../../workflow/registry/operation.js"
+import {
+  IntegratorCandidateGitObservedEvent,
+  IntegratorCandidateGitReadIntendedEvent,
+  IntegratorCandidateResourceLocator,
+  IntegratorCandidateText,
+  IntegratorCorrelation,
+  IntegratorGitObservation,
+  IntegratorNotPreparedDetail,
+  IntegratorResult,
+  IntegratorResultRecordedEvent,
+  IntegratorSessionFixedEvent,
+  IntegratorSessionId
+} from "../../workflow/protocols/integrator/events.js"
 import { EvidenceDigest, EvidenceReference } from "../../workflow/protocols/target-verification/evidence-store.js"
 import {
   TargetVerificationEvidenceSealedEvent,
@@ -114,6 +132,15 @@ const indexes = (): IntegrationHistoryIndexes => ({
   integrationCandidatesConstructed: new Map([[candidate.constructedAt, constructed]]),
   integrationResponsibilitiesBegan: new Map(),
   integrationStarted: new Map(),
+  targetLineageReadIntents: new Map(),
+  targetLineageObservations: new Map(),
+  integratorSessionFixed: new Map(),
+  integratorSessionsByStartedAt: new Map(),
+  integratorSessionsBySessionId: new Map(),
+  integratorSessionsByCandidateResource: new Map(),
+  integratorResultsByStartedAt: new Map(),
+  integratorCandidateGitReadIntents: new Map(),
+  integratorCandidateGitObservations: new Map(),
   firstRestartChoiceAppliedAt: new Map(),
   targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
   targetVerificationIntents: new Map(),
@@ -575,5 +602,322 @@ describe("target promotion history", () => {
 
     expect(result.semanticIssues).toHaveLength(2)
     expect(result.semanticIssues.every((issue) => issue.includes("no exact latest unresolved attempt"))).toBe(true)
+  })
+
+  describe("outer Integrator history", () => {
+    const integratorAcceptedResult = acceptedResultFixture(candidate.correlation.acceptedResultCommit)
+    const integratorPlannedAttempt = PlannedTaskAttempt.make({
+      attemptId: candidate.correlation.attemptId,
+      baseSha: GitCommitSha.make("1".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/integrator-history-attempt"),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId: TaskId.make("integrator-history-task"),
+      taskRevision: TaskRevision.make("integrator-history-revision"),
+      worktree: WorktreeLocator.make("/worktrees/integrator-history-attempt")
+    })
+    const integratorResponsibilityBeganAt = JournalPosition.make(8)
+    const integratorLineageAt = JournalPosition.make(7)
+    const integratorStartedAt = JournalPosition.make(9)
+    const integratorSessionAt = JournalPosition.make(10)
+    const integratorResultAt = JournalPosition.make(11)
+    const integratorGitIntentAt = JournalPosition.make(12)
+    const integratorGitObservationAt = JournalPosition.make(13)
+    const integratorCandidateText = IntegratorCandidateText.make("refs/heads/dalph/integrator-candidate")
+    const integratorLineageOperationId = OperationId.make("integrator-history-lineage-read")
+    const integratorLineageOperation = WorkflowOperation.cases.ReadTargetLineage.make({
+      integrationTarget: candidate.correlation.integrationTarget,
+      operationId: integratorLineageOperationId,
+      plannedAttempt: integratorPlannedAttempt,
+      predecessorOperationIds: []
+    })
+    const integratorLineageIntent = GitReadIntentRecordedEvent.make({
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      operation: integratorLineageOperation,
+      version: workflowJournalEventVersion
+    })
+    const integratorCorrelation = IntegratorCorrelation.make({
+      acceptedResult: integratorAcceptedResult,
+      candidateResource: IntegratorCandidateResourceLocator.make("resource:integrator-history"),
+      expectedTargetHead: candidate.correlation.expectedTargetHead,
+      integrationTarget: candidate.correlation.integrationTarget,
+      plannedAttempt: integratorPlannedAttempt,
+      queuedAt: integratorResponsibilityBeganAt,
+      sessionId: IntegratorSessionId.make("session:integrator-history"),
+      startedAt: integratorStartedAt,
+      targetLineageObservedAt: integratorLineageAt
+    })
+    const integratorStarted = IntegrationStartedEvent.make({
+      acceptedResult: integratorAcceptedResult,
+      integrationTarget: candidate.correlation.integrationTarget,
+      plannedAttempt: integratorPlannedAttempt,
+      responsibilityBeganAt: integratorResponsibilityBeganAt,
+      version: workflowJournalEventVersion
+    })
+    const integratorLineage = TargetLineageObservedEvent.make({
+      observation: TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: integratorPlannedAttempt.baseSha,
+        targetHeadSha: integratorCorrelation.expectedTargetHead
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: integratorLineageOperationId,
+      plannedAttempt: integratorPlannedAttempt,
+      version: workflowJournalEventVersion
+    })
+    const integratorSession = IntegratorSessionFixedEvent.make({
+      correlation: integratorCorrelation,
+      version: workflowJournalEventVersion
+    })
+    const integratorResult = IntegratorResultRecordedEvent.make({
+      result: IntegratorResult.cases.PreparedCandidate.make({
+        candidateText: integratorCandidateText,
+        correlation: integratorCorrelation
+      }),
+      version: workflowJournalEventVersion
+    })
+    const integratorGitIntent = IntegratorCandidateGitReadIntendedEvent.make({
+      candidateText: integratorCandidateText,
+      correlation: integratorCorrelation,
+      version: workflowJournalEventVersion
+    })
+
+    const historyRecords = (observation: typeof IntegratorGitObservation.Type): ReadonlyArray<JournalRecord> => [
+      record(JournalPosition.make(6), integratorLineageIntent),
+      record(integratorLineageAt, integratorLineage),
+      record(integratorSessionAt, integratorSession),
+      record(integratorResultAt, integratorResult),
+      record(integratorGitIntentAt, integratorGitIntent),
+      record(
+        integratorGitObservationAt,
+        IntegratorCandidateGitObservedEvent.make({
+          candidateText: integratorCandidateText,
+          correlation: integratorCorrelation,
+          observation,
+          version: workflowJournalEventVersion
+        })
+      )
+    ]
+
+    const seedStarted = (historyIndexes: IntegrationHistoryIndexes): void => {
+      historyIndexes.integrationStarted.set(integratorStartedAt, integratorStarted)
+    }
+
+    it("accepts an exact session, result, Git intent, and any durable Git observation", () => {
+      for (const observation of [
+        IntegratorGitObservation.cases.Missing.make({ candidateText: integratorCandidateText }),
+        IntegratorGitObservation.cases.NonCommit.make({ candidateText: integratorCandidateText, objectType: "tree" }),
+        IntegratorGitObservation.cases.Commit.make({
+          candidateText: integratorCandidateText,
+          commit: GitCommitSha.make("5".repeat(40)),
+          directParents: [GitCommitSha.make("6".repeat(40))]
+        })
+      ]) {
+        const historyIndexes = indexes()
+        seedStarted(historyIndexes)
+        const result = validate(historyIndexes, historyRecords(observation))
+        expect(result).toEqual({ identityIssues: [], semanticIssues: [] })
+      }
+    })
+
+    it("indexes the exact earlier target lineage and rejects a session with missing lineage", () => {
+      const historyIndexes = indexes()
+      seedStarted(historyIndexes)
+      const result = validate(historyIndexes, [record(integratorSessionAt, integratorSession)])
+
+      expect(result.semanticIssues).toEqual([
+        expect.stringContaining(`TargetLineageObserved at ${integratorLineageAt}`)
+      ])
+    })
+
+    it("rejects a session when its predecessor facts or session position are not exact", () => {
+      const changedBaseAttempt = PlannedTaskAttempt.make({
+        ...integratorPlannedAttempt,
+        baseSha: GitCommitSha.make("7".repeat(40))
+      })
+      const cases = [
+        {
+          expected: "IntegrationStarted",
+          event: IntegratorSessionFixedEvent.make({
+            correlation: IntegratorCorrelation.make({ ...integratorCorrelation, plannedAttempt: changedBaseAttempt }),
+            version: workflowJournalEventVersion
+          })
+        },
+        {
+          expected: "TargetLineageObserved",
+          event: IntegratorSessionFixedEvent.make({
+            correlation: IntegratorCorrelation.make({
+              ...integratorCorrelation,
+              expectedTargetHead: GitCommitSha.make("8".repeat(40))
+            }),
+            version: workflowJournalEventVersion
+          })
+        },
+        {
+          expected: "TargetLineageObserved",
+          event: IntegratorSessionFixedEvent.make({
+            correlation: integratorCorrelation,
+            version: workflowJournalEventVersion
+          }),
+          lineage: TargetLineageObservedEvent.make({
+            ...integratorLineage,
+            observation: TargetLineageObservation.make({
+              plannedBaseIsAncestorOfTargetHead: false,
+              plannedBaseSha: integratorPlannedAttempt.baseSha,
+              targetHeadSha: integratorCorrelation.expectedTargetHead
+            })
+          })
+        },
+        {
+          expected: "TargetLineageObserved",
+          event: IntegratorSessionFixedEvent.make({
+            correlation: IntegratorCorrelation.make({
+              ...integratorCorrelation,
+              targetLineageObservedAt: integratorSessionAt
+            }),
+            version: workflowJournalEventVersion
+          }),
+          lineage: integratorLineage,
+          lineageAt: integratorSessionAt,
+          sessionAt: integratorSessionAt
+        }
+      ]
+
+      for (const item of cases) {
+        const historyIndexes = indexes()
+        seedStarted(historyIndexes)
+        const lineage = item.lineage ?? integratorLineage
+        const lineageAt = item.lineageAt ?? integratorLineageAt
+        const sessionAt = item.sessionAt ?? integratorSessionAt
+        const result = validate(historyIndexes, [record(lineageAt, lineage), record(sessionAt, item.event)])
+        expect(result.semanticIssues).toEqual([expect.stringContaining(item.expected)])
+      }
+    })
+
+    it("rejects a session when the earlier lineage read intent names a foreign target", () => {
+      const foreignOperation = WorkflowOperation.cases.ReadTargetLineage.make({
+        integrationTarget: IntegrationTarget.make({
+          ref: candidate.correlation.integrationTarget.ref,
+          repository: GitRepositoryLocator.make("/repositories/foreign-integrator-history.git")
+        }),
+        operationId: integratorLineageOperationId,
+        plannedAttempt: integratorPlannedAttempt,
+        predecessorOperationIds: []
+      })
+      const historyIndexes = indexes()
+      seedStarted(historyIndexes)
+      const result = validate(historyIndexes, [
+        record(
+          JournalPosition.make(6),
+          GitReadIntentRecordedEvent.make({
+            initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+            occurrenceClassification: "InitiatedAction",
+            operation: foreignOperation,
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(integratorLineageAt, integratorLineage),
+        record(integratorSessionAt, integratorSession)
+      ])
+
+      expect(result.semanticIssues).toEqual([
+        expect.stringContaining(`TargetLineageObserved at ${integratorLineageAt}`)
+      ])
+    })
+
+    it("rejects session identity reuse and one responsibility starting two sessions", () => {
+      const historyIndexes = indexes()
+      seedStarted(historyIndexes)
+      const first = validate(historyIndexes, [
+        record(JournalPosition.make(6), integratorLineageIntent),
+        record(integratorLineageAt, integratorLineage),
+        record(integratorSessionAt, integratorSession)
+      ])
+      const second = validate(historyIndexes, [
+        record(
+          JournalPosition.make(14),
+          IntegratorSessionFixedEvent.make({
+            correlation: IntegratorCorrelation.make({
+              ...integratorCorrelation,
+              candidateResource: IntegratorCandidateResourceLocator.make("resource:other"),
+              sessionId: IntegratorSessionId.make("session:other")
+            }),
+            version: workflowJournalEventVersion
+          })
+        )
+      ])
+
+      expect(first).toEqual({ identityIssues: [], semanticIssues: [] })
+      expect(second.semanticIssues).toEqual([expect.stringContaining("reuses a responsibility")])
+    })
+
+    it("rejects a result without its exact earlier session and a second result", () => {
+      const historyIndexes = indexes()
+      seedStarted(historyIndexes)
+      const missingSession = validate(historyIndexes, [record(integratorResultAt, integratorResult)])
+      expect(missingSession.semanticIssues).toEqual([expect.stringContaining("no exact earlier fixed session")])
+
+      const validIndexes = indexes()
+      seedStarted(validIndexes)
+      const first = validate(validIndexes, [
+        record(JournalPosition.make(6), integratorLineageIntent),
+        record(integratorLineageAt, integratorLineage),
+        record(integratorSessionAt, integratorSession),
+        record(integratorResultAt, integratorResult)
+      ])
+      const second = validate(validIndexes, [record(JournalPosition.make(14), integratorResult)])
+      expect(first).toEqual({ identityIssues: [], semanticIssues: [] })
+      expect(second.semanticIssues).toEqual([expect.stringContaining("repeats the exact session")])
+    })
+
+    it("requires a PreparedCandidate result and exact candidate text before a Git-read intent", () => {
+      const historyIndexes = indexes()
+      seedStarted(historyIndexes)
+      const result = validate(historyIndexes, [
+        record(JournalPosition.make(6), integratorLineageIntent),
+        record(integratorLineageAt, integratorLineage),
+        record(integratorSessionAt, integratorSession),
+        record(
+          integratorResultAt,
+          IntegratorResultRecordedEvent.make({
+            result: IntegratorResult.cases.NotPrepared.make({
+              correlation: integratorCorrelation,
+              detail: IntegratorNotPreparedDetail.make("not ready")
+            }),
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(integratorGitIntentAt, integratorGitIntent)
+      ])
+
+      expect(result.semanticIssues).toEqual([expect.stringContaining("no exact earlier PreparedCandidate result")])
+    })
+
+    it("requires an exact earlier Git-read intent and matching observation text", () => {
+      const historyIndexes = indexes()
+      seedStarted(historyIndexes)
+      const result = validate(historyIndexes, [
+        record(JournalPosition.make(6), integratorLineageIntent),
+        record(integratorLineageAt, integratorLineage),
+        record(integratorSessionAt, integratorSession),
+        record(integratorResultAt, integratorResult),
+        record(
+          integratorGitObservationAt,
+          IntegratorCandidateGitObservedEvent.make({
+            candidateText: integratorCandidateText,
+            correlation: integratorCorrelation,
+            observation: IntegratorGitObservation.cases.Missing.make({
+              candidateText: IntegratorCandidateText.make("refs/heads/other")
+            }),
+            version: workflowJournalEventVersion
+          })
+        )
+      ])
+
+      expect(result.semanticIssues).toEqual([
+        expect.stringContaining("no exact earlier intent, result, and candidate text")
+      ])
+    })
   })
 })

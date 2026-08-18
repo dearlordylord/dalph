@@ -797,6 +797,7 @@ const proposalActionLabels = {
   ReleaseStoppedAttemptClaim: "Ask the tracker to release the stopped attempt's exact claim",
   ReplacePromotedTaskClaim: "Ask the tracker to replace the promoted task claim with its completion claim",
   RetryStoppedAttemptClaimRelease: "Retry the exact stopped-attempt claim release",
+  RunIntegrator: "Ask the outer Integrator to prepare or resume the exact integration session",
   RunTargetPromotion: "Compare and set the integration target to the verified candidate commit",
   RunTargetVerification: "Run the configured checks for the exact candidate commit",
   StartPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
