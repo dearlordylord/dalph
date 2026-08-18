@@ -437,27 +437,7 @@ const codeMarkup = (code: string): string => {
 
 const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${scenario().frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i></span><code>${codeMarkup(stage.code)}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>position + capacity · fixed slots · incident-edge selection</span></div></section>`
 
-const nodePositions: Record<TaskKey, readonly [number, number]> = {
-  A: [5, 43], B: [21, 17], C: [21, 69], D: [39, 43], E: [55, 17], F: [55, 69], H: [71, 17], I: [71, 69], X: [39, 84], G: [88, 43]
-}
 const edges: ReadonlyArray<readonly [TaskKey, TaskKey]> = [["A", "B"], ["A", "C"], ["B", "D"], ["C", "D"], ["D", "E"], ["D", "F"], ["E", "H"], ["F", "I"], ["H", "G"], ["I", "G"], ["A", "X"], ["X", "G"]]
-const svgEdge = ([from, to]: readonly [TaskKey, TaskKey], item: Frame): string => {
-  if (!visibleTasks(item).includes(from) || !visibleTasks(item).includes(to)) return ""
-  const [x1, y1] = nodePositions[from]
-  const [x2, y2] = nodePositions[to]
-  const active = activeTasks(item)
-  const related = active.includes(from) || active.includes(to)
-  const selection = active.length === 0 ? "" : related ? "selection-related" : "selection-muted"
-  return `<line class="${selection}" x1="${x1 + 5}" y1="${y1 + 4}" x2="${x2}" y2="${y2 + 4}" />`
-}
-const node = (task: TaskKey, item: Frame): string => {
-  const [left, top] = nodePositions[task]
-  const active = activeTasks(item)
-  const selection = active.length === 0 ? "" : active.includes(task) ? "selection-related" : "selection-muted"
-  const control = item.control.tasks.includes(task) ? "task-paused" : item.control.resumePending.includes(task) ? "resume-pending" : ""
-  const state = item.control.tasks.includes(task) ? "paused by user" : item.control.resumePending.includes(task) ? "fresh read required" : taskLabel[item.tasks[task]]
-  return `<button data-task="${task}" style="--left:${left}%;--top:${top}%" class="task-node state-${item.tasks[task]} ${selectionMode === "task" && selectedTask === task ? "selected" : ""} ${selection} ${control}"><i>${task}</i><span><b>Task ${task}</b><small>${state}</small></span></button>`
-}
 const chip = (task: TaskKey, item: Frame): string => {
   const active = activeTasks(item)
   const selection = active.length === 0 ? "" : active.includes(task) ? "selection-related" : "selection-muted"
@@ -465,15 +445,13 @@ const chip = (task: TaskKey, item: Frame): string => {
   return `<button data-task="${task}" class="flow-chip state-${item.tasks[task]} ${selection}"><b>${task}</b><span>${state}</span></button>`
 }
 
-const originalGraph = (item: Frame): string => `<div class="graph-canvas original-graph ${item.app === "down" ? "frozen" : ""}"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.map((edge) => svgEdge(edge, item)).join("")}</svg>${visibleTasks(item).map((task) => node(task, item)).join("")}${item.app === "down" ? '<div class="crash-shutter"><b>APPLICATION DOWN</b><span>Complete graph remains visible but frozen</span></div>' : ""}</div>`
-
 const mountedGraph = (item: Frame): string => `<div class="graph-canvas mounted-graph graph-${graphVariant} ${item.app === "down" ? "frozen" : ""}"><div data-graph-host class="graph-host"></div>${item.app === "down" ? '<div class="crash-shutter"><b>APPLICATION DOWN</b><span>Complete graph remains visible but frozen</span></div>' : ""}</div>`
 
 const flowModel = (item: Frame): string => `<div class="flow-model"><div class="flow-group frontier-group"><small>ORDERED FRONTIER · CURRENT MEMBERSHIP</small><div>${item.frontier.length === 0 ? '<span class="empty">empty</span>' : item.frontier.map((task) => chip(task, item)).join("")}</div><p>${item.frontier.filter((task) => !item.bounded.includes(task)).length} task(s) wait beyond the desired prefix.</p></div><span class="capacity-arrow">→<small>capacity ${capacity}</small></span><div class="flow-group capacity-group"><small>DESIRED TICKETS / ACTUAL HELD POSITIONS</small><div>${item.bounded.length === 0 ? '<span class="empty">no desired tickets</span>' : item.bounded.map((task) => chip(task, item)).join("")}</div><p>Held: ${item.held.length === 0 ? "none" : item.held.join(" + ")}</p></div></div>`
 
 const graphPanel = (item: Frame): string => {
   const definition = graphDefinition()
-  return `<section class="graph-panel instrument"><div class="panel-head"><div><span class="panel-kind">${definition.name.toUpperCase()} · ${definition.source.toUpperCase()}</span><h2>${item.graph.revision} · ${item.graph.taskCount} tasks · ${item.settled.length}/${item.graph.taskCount} integrated</h2></div><span class="freshness ${item.graph.age === "fresh" ? "fresh" : "stale"}">${item.settled.length === item.graph.taskCount ? "FULL INTEGRATION" : `${item.graph.age} · observed ${item.graph.observedAt}`}</span></div><div class="graph-observation"><b>COMPARE ${graphVariants.findIndex(({ key }) => key === graphVariant) + 1}/3</b><span>${definition.prompt}</span></div>${graphVariant === "original" ? originalGraph(item) : mountedGraph(item)}${flowModel(item)}</section>`
+  return `<section class="graph-panel instrument"><div class="panel-head"><div><span class="panel-kind">${definition.name.toUpperCase()} · ${definition.source.toUpperCase()}</span><h2>${item.graph.revision} · ${item.graph.taskCount} tasks · ${item.settled.length}/${item.graph.taskCount} integrated</h2></div><span class="freshness ${item.graph.age === "fresh" ? "fresh" : "stale"}">${item.settled.length === item.graph.taskCount ? "FULL INTEGRATION" : `${item.graph.age} · observed ${item.graph.observedAt}`}</span></div><div class="graph-observation"><b>COMPARE ${graphVariants.findIndex(({ key }) => key === graphVariant) + 1}/${graphVariants.length}</b><span>${definition.prompt}</span></div>${mountedGraph(item)}${flowModel(item)}</section>`
 }
 
 const graphSwitcher = (): string => {
@@ -503,7 +481,6 @@ const stepGraphVariant = (delta: number): void => {
 }
 
 const mountGraph = (item: Frame): void => {
-  if (graphVariant === "original") return
   const host = document.querySelector<HTMLElement>("[data-graph-host]")
   if (host === null) return
   graphCleanup = mountComparisonGraph({
@@ -567,7 +544,7 @@ addEventListener("keydown", (event) => {
     stepGraphVariant(event.key === "ArrowLeft" ? -1 : 1)
     return
   }
-  if (/^[1-3]$/.test(event.key)) {
+  if (/^[1-4]$/.test(event.key)) {
     setGraphVariant(graphVariants[Number(event.key) - 1]!.key)
     return
   }

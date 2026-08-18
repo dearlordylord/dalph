@@ -25,6 +25,11 @@ interface CytoscapeTaskData {
   readonly missing: "false" | "true"
 }
 
+type DeliveryGraphPalette = "original" | "trace-fill" | "trace-soft" | "trace-outline"
+
+const deliveryGraphPalette = (value: string | undefined): DeliveryGraphPalette =>
+  value === "trace-fill" || value === "trace-soft" || value === "trace-outline" ? value : "original"
+
 const placeholderTask = (id: string): RenderedTask => ({
   id,
   lifecycle: "Missing endpoint",
@@ -82,12 +87,20 @@ const visualTaskLabel = (task: RenderedTask): string => [
 
 const graphElements = (
   projection: DeliveryGraphProjection,
-  selectedTaskId: string | null
+  selectedTaskId: string | null,
+  highlightedTaskIds: ReadonlyArray<string>,
+  palette: DeliveryGraphPalette
 ): ReadonlyArray<ElementDefinition> => {
+  const highlighted = new Set(highlightedTaskIds.length > 0
+    ? highlightedTaskIds
+    : selectedTaskId === null ? [] : [selectedTaskId])
   const nodes: ReadonlyArray<ElementDefinition> = renderedTasks(projection).map((task) => ({
     classes: [
       task.missing ? "missing-endpoint" : undefined,
       selectedTaskId === task.id ? deliveryGraphEncoding.selectedTask.className : undefined,
+      highlighted.size === 0 ? undefined : highlighted.has(task.id) ? "selection-related" : "selection-muted",
+      `palette-${palette}`,
+      task.display?.tone === undefined ? undefined : `tone-${task.display.tone}`,
       ...(task.display?.classes ?? []).map(safeClassToken)
     ].filter((value): value is string => value !== undefined).join(" "),
     data: {
@@ -99,7 +112,10 @@ const graphElements = (
     group: "nodes"
   }))
   const edges: ReadonlyArray<ElementDefinition> = projection.edges.map((edge, index) => ({
-    classes: edge.kind === "Prerequisite" ? "prerequisite-edge" : "grouping-edge",
+    classes: [
+      edge.kind === "Prerequisite" ? "prerequisite-edge" : "grouping-edge",
+      highlighted.size === 0 ? undefined : highlighted.has(edge.from) || highlighted.has(edge.to) ? "selection-related" : "selection-muted"
+    ].filter((value): value is string => value !== undefined).join(" "),
     data: {
       id: `${edge.kind}:${edge.from}->${edge.to}:${index}`,
       label: edge.kind === "Prerequisite" ? "blocks" : "contains",
@@ -251,6 +267,90 @@ const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
     style: { "background-color": "#f2e5be" }
   },
   {
+    selector: "node.palette-trace-fill.tone-blocked",
+    style: { "background-color": "#f3f4f2", "border-color": "#8d9691", opacity: 0.48 }
+  },
+  {
+    selector: "node.palette-trace-fill.tone-waiting",
+    style: { "background-color": "#fcf4e6", "border-color": "#a37a32", "border-style": "dashed" }
+  },
+  {
+    selector: "node.palette-trace-fill.tone-desired",
+    style: { "background-color": "#e5f1f8", "border-color": "#4b91b8" }
+  },
+  {
+    selector: "node.palette-trace-fill.tone-running",
+    style: { "background-color": "#e7f4ee", "border-color": "#3a9978" }
+  },
+  {
+    selector: "node.palette-trace-fill.tone-integrating",
+    style: { "background-color": "#e8f2f8", "border-color": "#477f9f" }
+  },
+  {
+    selector: "node.palette-trace-fill.tone-settled",
+    style: { "background-color": "#dff1e9", "border-color": "#3a9978" }
+  },
+  {
+    selector: "node.palette-trace-fill.tone-paused",
+    style: { "background-color": "#f5ecfa", "border-color": "#80639b" }
+  },
+  {
+    selector: "node.palette-trace-soft.tone-blocked",
+    style: { "background-color": "#eef0ed", "border-color": "#8b948f", opacity: 0.5 }
+  },
+  {
+    selector: "node.palette-trace-soft.tone-waiting",
+    style: { "background-color": "#f3dfbc", "border-color": "#987028", "border-style": "dashed" }
+  },
+  {
+    selector: "node.palette-trace-soft.tone-desired",
+    style: { "background-color": "#cfe7f4", "border-color": "#367fa7" }
+  },
+  {
+    selector: "node.palette-trace-soft.tone-running",
+    style: { "background-color": "#cce9dc", "border-color": "#278364" }
+  },
+  {
+    selector: "node.palette-trace-soft.tone-integrating",
+    style: { "background-color": "#d2e5f0", "border-color": "#3d7897" }
+  },
+  {
+    selector: "node.palette-trace-soft.tone-settled",
+    style: { "background-color": "#c5e4d5", "border-color": "#2f8669" }
+  },
+  {
+    selector: "node.palette-trace-soft.tone-paused",
+    style: { "background-color": "#eadcf2", "border-color": "#76518f" }
+  },
+  {
+    selector: "node.palette-trace-outline.tone-blocked",
+    style: { "background-color": "#ffffff", "border-color": "#8d9691", "border-style": "dashed", opacity: 0.45 }
+  },
+  {
+    selector: "node.palette-trace-outline.tone-waiting",
+    style: { "background-color": "#fffaf1", "border-color": "#a37a32", "border-style": "dashed" }
+  },
+  {
+    selector: "node.palette-trace-outline.tone-desired",
+    style: { "background-color": "#ffffff", "border-color": "#4b91b8" }
+  },
+  {
+    selector: "node.palette-trace-outline.tone-running",
+    style: { "background-color": "#ffffff", "border-color": "#3a9978" }
+  },
+  {
+    selector: "node.palette-trace-outline.tone-integrating",
+    style: { "background-color": "#ffffff", "border-color": "#477f9f" }
+  },
+  {
+    selector: "node.palette-trace-outline.tone-settled",
+    style: { "background-color": "#f7fbf9", "border-color": "#3a9978" }
+  },
+  {
+    selector: "node.palette-trace-outline.tone-paused",
+    style: { "background-color": "#ffffff", "border-color": "#80639b", "border-style": "dashed" }
+  },
+  {
     selector: "edge",
     style: {
       "curve-style": "bezier",
@@ -282,6 +382,22 @@ const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
       "target-arrow-color": "#211f1a",
       width: 4
     }
+  },
+  {
+    selector: "node.selection-related",
+    style: { "outline-color": "#2b92ca", "outline-offset": 10, "outline-opacity": 1, "outline-width": 4 }
+  },
+  {
+    selector: "node.selection-muted",
+    style: { opacity: 0.16 }
+  },
+  {
+    selector: "edge.selection-related",
+    style: { "line-color": "#2b92ca", "target-arrow-color": "#2b92ca", width: 4 }
+  },
+  {
+    selector: "edge.selection-muted",
+    style: { opacity: 0.1 }
   }
 ]
 
@@ -290,6 +406,7 @@ class DalphDeliveryGraphElement extends HTMLElement {
   #core: Core | null = null
   #empty: HTMLDivElement
   #emptyFooter: HTMLDivElement
+  #highlightedTaskIds: ReadonlyArray<string> = []
   #projection: DeliveryGraphProjection | null = null
   #panGesture: { readonly pointerId: number; readonly startX: number; readonly startY: number; readonly pan: cytoscape.Position } | null = null
   #preserveViewport = false
@@ -354,6 +471,15 @@ class DalphDeliveryGraphElement extends HTMLElement {
     return this.#projection
   }
 
+  set highlightedTaskIds(value: ReadonlyArray<string>) {
+    this.#highlightedTaskIds = value
+    this.#applyGraphSelection()
+  }
+
+  get highlightedTaskIds(): ReadonlyArray<string> {
+    return this.#highlightedTaskIds
+  }
+
   set selectedTaskId(value: string | null) {
     this.#selectedTaskId = value
     if (this.#core !== null) {
@@ -362,6 +488,7 @@ class DalphDeliveryGraphElement extends HTMLElement {
         this.#core.getElementById(value).addClass(deliveryGraphEncoding.selectedTask.className).select()
       }
     }
+    this.#applyGraphSelection()
     this.#updateSummarySelection()
   }
 
@@ -456,6 +583,22 @@ class DalphDeliveryGraphElement extends HTMLElement {
     }
   }
 
+  #applyGraphSelection(): void {
+    if (this.#core === null) return
+    const highlighted = new Set(this.#highlightedTaskIds.length > 0
+      ? this.#highlightedTaskIds
+      : this.#selectedTaskId === null ? [] : [this.#selectedTaskId])
+    for (const node of this.#core.nodes()) {
+      node.toggleClass("selection-related", highlighted.size > 0 && highlighted.has(node.id()))
+      node.toggleClass("selection-muted", highlighted.size > 0 && !highlighted.has(node.id()))
+    }
+    for (const edge of this.#core.edges()) {
+      const related = highlighted.has(edge.source().id()) || highlighted.has(edge.target().id())
+      edge.toggleClass("selection-related", highlighted.size > 0 && related)
+      edge.toggleClass("selection-muted", highlighted.size > 0 && !related)
+    }
+  }
+
   #render(): void {
     const previousViewport = this.#preserveViewport && this.#core !== null
       ? { pan: this.#core.pan(), zoom: this.#core.zoom() }
@@ -488,7 +631,7 @@ class DalphDeliveryGraphElement extends HTMLElement {
       autoungrabify: true,
       boxSelectionEnabled: false,
       container: this.#canvas,
-      elements: [...graphElements(projection, this.#selectedTaskId)],
+      elements: [...graphElements(projection, this.#selectedTaskId, this.#highlightedTaskIds, deliveryGraphPalette(this.dataset.palette))],
       layout: deliveryGraphLayout(),
       maxZoom: 2.4,
       minZoom: 0.28,

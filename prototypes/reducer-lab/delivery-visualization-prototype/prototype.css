@@ -137,49 +137,9 @@ button{color:inherit}
 .graph-observation span{color:#59675f;font-size:7px;line-height:1.35}
 .graph-canvas{height:390px;position:relative;background:radial-gradient(circle,#ced1ca 1px,transparent 1px) 0 0/19px 19px,#f7f7f2;overflow:hidden}
 .graph-host{position:absolute;inset:0}
-.graph-lab .graph-host{cursor:grab;overflow:hidden}
-.graph-lab .graph-host:active{cursor:grabbing}
-.graph-lab dalph-delivery-graph{width:111.12%;transform:scale(.9);transform-origin:top left}
-.graph-canvas>svg{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}
-.graph-canvas line{stroke:#89968f;stroke-width:.42;vector-effect:non-scaling-stroke;marker-end:url(#arrow)}
-.graph-canvas line.selection-related{stroke:#2b92ca;stroke-width:1.4}
-.graph-canvas line.selection-muted{opacity:.14}
-.graph-canvas marker path{fill:#89968f}
-.task-node{position:absolute;left:var(--left);top:var(--top);transform:translate(-5%,-10%);z-index:2;width:88px;min-height:43px;border:1px solid #acb5af;border-radius:8px;background:#fff;padding:5px;display:flex;align-items:center;gap:5px;text-align:left;cursor:pointer;box-shadow:0 4px 12px #23352c12}
-.task-node>i{flex:0 0 23px;width:23px;height:23px;display:grid;place-items:center;border-radius:6px;background:#e6ece8;color:#3d554a;font-weight:800;font-style:normal}
-.task-node b,.task-node small{display:block}
-.task-node b{font-size:7px}
-.task-node small{color:#75807a;font-size:5px;margin-top:2px;line-height:1.25}
-.task-node.selected{outline:2px solid #419bd1;outline-offset:2px}
-.task-node.selection-related{border-color:#419bd1;box-shadow:0 0 0 2px #419bd12b,0 7px 17px #276c9226}
-.task-node.selection-muted{opacity:.22}
-.task-node.state-running>i,.task-node.state-settled>i{background:#d8f1e7;color:#176a51}
-.task-node.state-waiting>i,.task-node.state-desired>i{background:#f4e5c9;color:#8d6420}
-.task-node.state-blocked{opacity:.54}
-.task-node.state-blocked.selection-related{opacity:1}
-.task-node.state-integrating>i{background:#d9ebf7;color:#286887}
-.task-node.task-paused,.task-node.resume-pending{border-color:#82609a;background:#f8f1fc}
-.task-node.task-paused>i,.task-node.resume-pending>i{background:#e8d9f1;color:#65417d}
-.graph-trace .react-flow{background:#f7f7f2}
-.graph-trace .react-flow__node{width:132px;min-height:66px;border:2px solid #a5b0aa;border-radius:8px;background:#fff;color:#203028;padding:8px;display:grid;place-items:center;text-align:center;box-shadow:0 4px 12px #23352c12;font:8px/1.35 DM Mono,monospace;white-space:normal}
-.graph-trace .react-flow__node b,.graph-trace .react-flow__node small{display:block}
-.graph-trace .react-flow__node small{margin-top:4px;color:#64736b;font-size:6px}
-.graph-trace .react-flow__node.state-blocked{opacity:.48}
-.graph-trace .react-flow__node.state-waiting{background:#fcf4e6;border-color:#a37a32;border-style:dashed}
-.graph-trace .react-flow__node.state-desired{background:#e5f1f8;border-color:#4b91b8}
-.graph-trace .react-flow__node.state-running{background:#e7f4ee;border:5px double #3a9978}
-.graph-trace .react-flow__node.state-integrating{background:#e8f2f8;border-color:#477f9f}
-.graph-trace .react-flow__node.state-settled{background:#dff1e9;border-color:#3a9978}
-.graph-trace .react-flow__node.task-paused,.graph-trace .react-flow__node.resume-pending{background:#f5ecfa;border-color:#80639b}
-.graph-trace .react-flow__node.selection-related{outline:3px solid #2b92ca;outline-offset:3px}
-.graph-trace .react-flow__node.selected{outline-width:4px}
-.graph-trace .react-flow__node.selection-muted,.graph-trace .react-flow__edge.selection-muted{opacity:.15}
-.graph-trace .react-flow__edge-path{stroke:#87958e;stroke-width:2}
-.graph-trace .react-flow__edge.selection-related .react-flow__edge-path{stroke:#2b92ca;stroke-width:4}
-.graph-trace .react-flow__edge-text{font:6px DM Mono,monospace;fill:#56665d}
-.graph-trace .react-flow__edge-textbg{fill:#f7f7f2}
-.graph-trace .react-flow__controls{box-shadow:0 2px 8px #22382d24}
-.graph-trace .react-flow__minimap{border:1px solid #aab4ae;border-radius:4px;background:#eef1ee}
+.mounted-graph .graph-host{cursor:grab;overflow:hidden}
+.mounted-graph .graph-host:active{cursor:grabbing}
+.mounted-graph dalph-delivery-graph{width:111.12%;transform:scale(.9);transform-origin:top left}
 .graph-canvas.frozen:after{content:"";position:absolute;inset:0;z-index:3;background:repeating-linear-gradient(-45deg,#702e2820,#702e2820 7px,transparent 7px,transparent 16px);pointer-events:none}
 .crash-shutter{position:absolute;z-index:4;right:12px;top:12px;border:1px solid #bd756b;border-radius:7px;background:#fff1ef;color:#873d34;padding:7px 9px;box-shadow:0 5px 16px #55211f25}
 .crash-shutter b,.crash-shutter span{display:block}

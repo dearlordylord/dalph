@@ -16,6 +16,9 @@ export const deliveryGraphEncoding = {
 export type DeliveryGraphDisplayClass =
   (typeof deliveryGraphEncoding)[keyof typeof deliveryGraphEncoding]["className"]
 
+/** A presentation-only task tone. It does not own or reconstruct task state. */
+export type DeliveryGraphTaskTone = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled" | "paused"
+
 export const deliveryGraphInterpretationNotes = [
   "Excluded tasks remain visible with their exact graph reason in task facts",
   "Settlement appears only from established settlement evidence, never from executor Terminal alone"
@@ -29,6 +32,7 @@ export const deliveryGraphInterpretationNotes = [
 export interface DeliveryGraphTaskDisplay {
   readonly classes?: ReadonlyArray<DeliveryGraphDisplayClass>
   readonly labels?: ReadonlyArray<string>
+  readonly tone?: DeliveryGraphTaskTone
 }
 
 /** One task in a production-observed or controlled-input task graph. */
@@ -65,6 +69,7 @@ export interface DeliveryGraphTaskSelectedDetail {
 export const deliveryGraphTag = "dalph-delivery-graph"
 
 export interface DeliveryGraphElement extends HTMLElement {
+  highlightedTaskIds: ReadonlyArray<string>
   projection: DeliveryGraphProjection | null
   resetView: () => void
   selectedTaskId: string | null
