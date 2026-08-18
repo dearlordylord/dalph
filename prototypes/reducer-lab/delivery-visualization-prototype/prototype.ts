@@ -1,15 +1,15 @@
 import "./prototype.css"
 
 // THROWAWAY PROTOTYPE
-// Question: Which epistemic treatment makes complete, stale, frozen, and
-// fresh-read-gated facts understandable without suggesting a partial graph?
+// Question: Which selection scope makes the synchronized relationship between
+// source, rectangles, graph nodes, and dependency edges easiest to inspect?
 
 type TaskKey = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "X"
 type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" | "settlements" | "reflection"
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
-const viewKeys = ["original", "observation-envelope", "fresh-read-gates", "authority-map"] as const
+const viewKeys = ["original", "exact-task", "one-hop", "prerequisite-cone"] as const
 type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
@@ -255,10 +255,10 @@ const story: Scenario = {
 }
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
-  { key: "original", name: "Original · fixed capacity slots", description: "The accepted Position + capacity grammar always renders both task-work positions and the complete waiting remainder." },
-  { key: "observation-envelope", name: "Observation envelope", description: "Each source stage receives one explicit rectangle for complete graph revision, observation age, and factual basis." },
-  { key: "fresh-read-gates", name: "Fresh-read gates", description: "Each source stage states whether its facts are fresh, stale-but-complete, frozen, durable, paused, or awaiting a required read." },
-  { key: "authority-map", name: "Authority map", description: "Every live-data rectangle names the system or derivation that supports its current fact." }
+  { key: "original", name: "Original · incident edges", description: "A task selection links its source rows and rectangles to the selected graph node and its incident dependency edges." },
+  { key: "exact-task", name: "Exact task only", description: "A task selection links only rectangles and the matching graph node; all dependency edges stay muted." },
+  { key: "one-hop", name: "One-hop neighborhood", description: "A task selection includes its direct prerequisites and dependents across rectangles, nodes, and connecting edges." },
+  { key: "prerequisite-cone", name: "Prerequisite cone", description: "A task selection includes every visible prerequisite and dependency edge needed to reach that task." }
 ]
 
 let frameIndex = 0
@@ -355,11 +355,37 @@ const tasksForStage = (stage: StageKey, item: Frame): ReadonlyArray<TaskKey> => 
     case "settlements": return [...new Set([...item.integrations, ...item.settled])]
   }
 }
-const activeTasks = (item: Frame): ReadonlyArray<TaskKey> => selectionMode === "none" ? [] : selectionMode === "task" ? [selectedTask] : tasksForStage(selectedStage, item)
+const oneHopTasks = (task: TaskKey, item: Frame): ReadonlyArray<TaskKey> => [...new Set([
+  task,
+  ...edges.flatMap(([from, to]) => from === task ? [to] : to === task ? [from] : [])
+])].filter((candidate) => visibleTasks(item).includes(candidate))
+
+const prerequisiteTasks = (task: TaskKey, item: Frame): ReadonlyArray<TaskKey> => {
+  const result = new Set<TaskKey>([task])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const [from, to] of edges) {
+      if (result.has(to) && !result.has(from) && visibleTasks(item).includes(from)) {
+        result.add(from)
+        changed = true
+      }
+    }
+  }
+  return [...result].filter((candidate) => visibleTasks(item).includes(candidate))
+}
+
+const activeTasks = (item: Frame): ReadonlyArray<TaskKey> => {
+  if (selectionMode === "none") return []
+  if (selectionMode === "stage") return tasksForStage(selectedStage, item)
+  if (view() === "one-hop") return oneHopTasks(selectedTask, item)
+  if (view() === "prerequisite-cone") return prerequisiteTasks(selectedTask, item)
+  return [selectedTask]
+}
 const stageSelectionClass = (stage: StageKey, item: Frame): string => {
   if (selectionMode === "none") return ""
   if (selectionMode === "stage") return selectedStage === stage ? "selected selection-related" : "selection-muted"
-  return tasksForStage(stage, item).includes(selectedTask) ? "selection-related" : "selection-muted"
+  return tasksForStage(stage, item).some((task) => activeTasks(item).includes(task)) ? "selection-related" : "selection-muted"
 }
 
 const stateFor = (cell: Cell, item: Frame): string => {
@@ -400,57 +426,19 @@ const fixedSlotCells = (item: Frame): ReadonlyArray<Cell> => {
   ]
 }
 
-const stageAuthority: Record<StageKey, string> = {
-  read: "tracker read",
-  graph: "complete tracker graph",
-  frontier: "derived from complete graph",
-  tickets: "capacity rule",
-  responsibilities: "journal + executor",
-  settlements: "Git + journal",
-  reflection: "delivery signal"
-}
-
-const observationEnvelope = (stage: StageKey, item: Frame): string => `<span class="epistemic-extra observation-envelope"><small>OBSERVATION ENVELOPE</small><b>${item.graph.kind} ${item.graph.revision}</b><em>${item.graph.age} · ${stageAuthority[stage]}</em></span>`
-
-const readGate = (stage: StageKey, item: Frame): readonly [string, string] => {
-  if (stage === "responsibilities" && (item.app === "down" || item.app === "restarting")) return ["DURABLE", `${item.held.length}/${capacity} exact positions survive`]
-  if (item.app === "down") return ["FROZEN", "last complete publication; no new observation"]
-  if (item.app === "restarting" && (["read", "graph", "frontier", "tickets"] as ReadonlyArray<StageKey>).includes(stage)) return ["FRESH READ REQUIRED", "recovery completes before new work"]
-  if (item.control.run === "paused") return ["RUN PAUSED", "no new selection; held work remains"]
-  if (item.event.includes("unpauses the Run") && stage !== "responsibilities" && stage !== "settlements") return ["FRESH READ REQUIRED", "pre-pause facts cannot start new work"]
-  if (item.control.tasks.length > 0 && (stage === "frontier" || stage === "tickets")) return ["TASK PAUSED", `${item.control.tasks.join(" + ")} cannot receive a ticket`]
-  if (item.control.resumePending.length > 0 && (stage === "frontier" || stage === "tickets")) return ["TASK READ REQUIRED", `${item.control.resumePending.join(" + ")} cannot use pre-pause facts`]
-  if (item.graph.age === "fresh") return ["FRESH COMPLETE", `${item.graph.revision} accepted at ${item.graph.observedAt}`]
-  return ["STALE COMPLETE", `${item.graph.revision} remains the whole accepted graph`]
-}
-
-const freshReadGate = (stage: StageKey, item: Frame): string => {
-  const [status, detail] = readGate(stage, item)
-  return `<span class="epistemic-extra read-gate"><small>FACT STATUS</small><b>${status}</b><em>${detail}</em></span>`
-}
-
-const epistemicExtra = (stage: StageKey, item: Frame): string => {
-  if (view() === "observation-envelope") return observationEnvelope(stage, item)
-  if (view() === "fresh-read-gates") return freshReadGate(stage, item)
-  return ""
-}
-
 const rectangleContent = (stage: StageKey, cell: Cell, item: Frame): string => {
   const entity = cell.task === undefined ? cell.title : `TASK ${cell.task}`
   const state = stateFor(cell, item)
   const position = positionFor(stage, cell, item)
-  const base = `<small>${entity}</small><b>${position}</b><em>${state}</em>`
-  if (view() !== "authority-map") return base
-  return `${base}<span class="authority-line"><i>BASIS</i>${stageAuthority[stage]}</span>`
+  return `<small>${entity}</small><b>${position}</b><em>${state}</em>`
 }
 
 const rectangles = (stage: StageKey, cells: ReadonlyArray<Cell>, item: Frame): string => {
   const displayCells = stage === "tickets" ? fixedSlotCells(item) : cells
-  const extra = epistemicExtra(stage, item)
-  if (displayCells.length === 0) return `<span class="rectangles">${extra}<span class="no-delta">empty</span></span>`
+  if (displayCells.length === 0) return '<span class="rectangles"><span class="no-delta">empty</span></span>'
   const active = activeTasks(item)
-  return `<span class="rectangles">${extra}${displayCells.map((cell) => {
-    const related = selectionMode === "stage" ? stage === selectedStage : selectionMode === "task" && cell.task === selectedTask
+  return `<span class="rectangles">${displayCells.map((cell) => {
+    const related = selectionMode === "stage" ? stage === selectedStage : selectionMode === "task" && cell.task !== undefined && active.includes(cell.task)
     const selection = related ? "selection-related" : active.length > 0 ? "selection-muted" : ""
     return `<span class="data-rectangle tone-${cell.tone ?? "fact"} ${selection}" ${cell.task === undefined ? "" : `data-cell-task="${cell.task}"`}>${rectangleContent(stage, cell, item)}</span>`
   }).join("")}</span>`
@@ -477,7 +465,14 @@ const svgEdge = ([from, to]: readonly [TaskKey, TaskKey], item: Frame): string =
   const [x1, y1] = nodePositions[from]
   const [x2, y2] = nodePositions[to]
   const active = activeTasks(item)
-  const selection = active.length === 0 ? "" : active.includes(from) || active.includes(to) ? "selection-related" : "selection-muted"
+  const related = selectionMode === "stage"
+    ? active.includes(from) || active.includes(to)
+    : selectionMode === "task" && view() === "exact-task"
+      ? false
+      : selectionMode === "task" && view() === "prerequisite-cone"
+        ? active.includes(from) && active.includes(to)
+        : from === selectedTask || to === selectedTask
+  const selection = active.length === 0 ? "" : related ? "selection-related" : "selection-muted"
   return `<line class="${selection}" x1="${x1 + 5}" y1="${y1 + 4}" x2="${x2}" y2="${y2 + 4}" />`
 }
 const node = (task: TaskKey, item: Frame): string => {
@@ -500,7 +495,7 @@ const graphPanel = (item: Frame): string => `<section class="graph-panel instrum
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
 const switcher = (): string => {
   const index = views.findIndex(({ key }) => key === view())
-  return `<nav class="switcher" aria-label="Epistemic treatment prototype"><button data-cycle="-1" aria-label="Previous epistemic treatment">←</button><label><small>EPISTEMIC TREATMENT ${index + 1} / ${views.length}</small><select data-view-select aria-label="Epistemic treatment">${views.map(({ key, name }) => `<option value="${key}" ${key === view() ? "selected" : ""}>${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next epistemic treatment">→</button></nav>`
+  return `<nav class="switcher" aria-label="Mapping scope prototype"><button data-cycle="-1" aria-label="Previous mapping scope">←</button><label><small>MAPPING SCOPE ${index + 1} / ${views.length} · KEYS 1–${views.length}</small><select data-view-select aria-label="Mapping scope">${views.map(({ key, name }, optionIndex) => `<option value="${key}" ${key === view() ? "selected" : ""}>${optionIndex + 1} · ${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next mapping scope">→</button></nav>`
 }
 
 const selectView = (next: ViewKey): void => {
@@ -554,6 +549,10 @@ const bind = (): void => {
 
 addEventListener("keydown", (event) => {
   if ((event.target as HTMLElement | null)?.matches("input,textarea,select,[contenteditable]")) return
+  if (!event.altKey && !event.ctrlKey && !event.metaKey && /^[1-9]$/.test(event.key)) {
+    const selectedView = views[Number(event.key) - 1]
+    if (selectedView !== undefined) selectView(selectedView.key)
+  }
   if (event.key === "[") { frameIndex = Math.max(0, frameIndex - 1); render() }
   if (event.key === "]") { frameIndex = Math.min(story.frames.length - 1, frameIndex + 1); render() }
   if (event.key === "ArrowLeft") cycleView(-1)

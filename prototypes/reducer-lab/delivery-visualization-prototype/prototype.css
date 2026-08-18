@@ -107,18 +107,6 @@ button{color:inherit}
 .data-rectangle b{color:var(--cell-fg);font:7px/1.2 DM Mono,monospace}
 .data-rectangle em{color:var(--cell-label);font:6px/1.35 DM Mono,monospace;font-style:normal;margin-top:5px}
 .data-rectangle{min-height:70px}
-.epistemic-extra{flex:0 1 126px;min-width:104px;min-height:70px;border:1px solid #517a68;border-radius:4px;background:#17352a;padding:6px;display:flex;flex-direction:column;justify-content:space-between}
-.epistemic-extra small{color:#76a28f;font:6px DM Mono,monospace;letter-spacing:.07em}
-.epistemic-extra b{color:#d7e9e1;font:7px/1.35 DM Mono,monospace}
-.epistemic-extra em{color:#89a99a;font:6px/1.3 DM Mono,monospace;font-style:normal}
-.read-gate{border-color:#647d72;background:#192a23}
-.app-down .read-gate{border-color:#a95c52;background:#492823}
-.app-down .read-gate b{color:#f2bbb4}
-.app-restarting .read-gate{border-color:#557f9b;background:#1f3441}
-.authority-line{display:grid;grid-template-columns:28px minmax(0,1fr);gap:4px;margin-top:6px;color:#a9c8ba;font:5.5px/1.3 DM Mono,monospace}
-.authority-line i{color:#65b695;font-style:normal}
-.view-authority-map .data-rectangle{min-height:92px}
-.view-authority-map .stage-graph,.view-authority-map .stage-settlements{min-height:300px}
 .tone-fresh,.tone-running,.tone-settled,.tone-output{border-color:var(--success);background:color-mix(in srgb,var(--success) 20%,var(--cell-bg))}
 .tone-stale,.tone-waiting{border-color:var(--warning);background:color-mix(in srgb,var(--warning) 20%,var(--cell-bg))}
 .tone-waiting{border-style:dashed}

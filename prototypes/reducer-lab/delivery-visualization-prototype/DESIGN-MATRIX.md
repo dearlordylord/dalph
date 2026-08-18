@@ -11,7 +11,7 @@ The prototype changes no Dalph runtime behavior.
 | 1 | Rectangle semantics | What must one rectangle say for its stage to be understood without explanatory prose? | Every later direction depends on a stable information grammar. | Accepted: Position + capacity becomes the new original. | A user can identify the entity, current fact, and relevant position without consulting the graph legend. |
 | 2 | Temporal behavior | What changed between adjacent accepted landmarks? | Static content must be correct before motion or transition marks explain its change. | Rejected: step navigation already exposes the state change; added temporal labels duplicate it. | A user can narrate two adjacent frames and identify the changed rectangle. |
 | 3 | Frontier and capacity | Which tasks are ordered in the frontier, inside the desired prefix, holding positions, or waiting beyond capacity? | This is the central scheduling relationship and uses the rectangle grammar plus temporal changes. | Accepted: fixed capacity slots become the new original. | A user predicts which task can advance next and why another task waits. |
-| 4 | Epistemic state | Which facts are complete, fresh, stale, or awaiting a required read? | Crash, pause, and restart are misleading unless observation status is explicit. | Distinguish complete graph publication, observation age, frozen state, and fresh-read gates. Never show a partial graph. | A user distinguishes stale-but-complete facts from current tracker facts. |
+| 4 | Epistemic state | Which facts are complete, fresh, stale, or awaiting a required read? | Crash, pause, and restart are misleading unless observation status is explicit. | Rejected: no epistemic treatment survived review. | A user distinguishes stale-but-complete facts from current tracker facts. |
 | 5 | Code–data–graph mapping | Which exact source stage, rectangles, graph nodes, and dependency edges describe the same fact? | Exact synchronization needs stable rectangle meaning and freshness. | Refine selection from incident-edge highlighting to the smallest correct dependency path. | Selecting any surface produces the same bounded set of related facts. |
 | 6 | Crash and recovery causality | What survives a crash, what freezes, and what is reconstructed before new work? | Recovery comprehension depends on epistemic state and exact mapping. | Place crash events only where durable responsibility and visible recovery facts change the outcome. | A user identifies why B and C remain held and why X cannot displace them. |
 | 7 | Scale and aggregation | Does the model remain legible with large frontiers and settlement histories? | Aggregation is safe only after individual rectangle semantics are stable. | Test 20–100 tasks, multiple capacities, large settlement totals, and explicit remainder summaries. | No task disappears; every slice has a visible remainder summary. |
@@ -52,11 +52,15 @@ Change receipts, Before → now rectangles, and Stability age duplicated differe
 
 Fixed capacity slots is the new original. The tickets row always shows both task-work positions, including empty positions, plus the complete remainder after the bound.
 
-## Active experiment: Priority 4 — epistemic state
+## Rejected direction: Priority 4 — epistemic state
 
-The scenario, graph, accepted rectangle grammar, fixed slots, and eventual full integration remain fixed. Four treatments test what supports the visible facts:
+Observation envelope, Fresh-read gates, and Authority map did not survive review. No epistemic overlay remains.
 
-1. Original — fixed capacity slots remain the baseline.
-2. Observation envelope — each source stage receives the complete graph revision, observation age, and factual basis.
-3. Fresh-read gates — each source stage distinguishes fresh, stale-but-complete, frozen, durable, paused, and read-required facts.
-4. Authority map — each current rectangle names the system or derivation that supports it.
+## Active experiment: Priority 5 — code–data–graph mapping
+
+The scenario, graph, accepted rectangle grammar, fixed slots, second-click clearing, number-key option selection, and eventual full integration remain fixed. Four treatments test the scope of one task selection:
+
+1. Original — matching source rows and rectangles, the selected node, and its incident edges.
+2. Exact task only — matching source rows and rectangles plus the selected node; dependency edges remain muted.
+3. One-hop neighborhood — the selected task, direct prerequisites, direct dependents, and connecting edges.
+4. Prerequisite cone — the selected task and every visible prerequisite and dependency edge needed to reach it.
