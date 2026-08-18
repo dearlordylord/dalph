@@ -1926,7 +1926,9 @@ module acceptedResultIntegration {
         ...state,
         results: state.results.put(id, { ...result, successorHeadFreshlyObserved: true }),
         targetFactsCurrent: true,
-        targetHeadProof: result.expectedTargetHead + 100,
+        // Freshness is the observation's causal position, not SHA inequality.
+        // The target may have moved away and back to the predecessor head.
+        targetHeadProof: result.expectedTargetHead,
         targetReacquisitionRequired: false,
       },
     }

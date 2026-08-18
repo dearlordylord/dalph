@@ -663,7 +663,7 @@ module acceptedResultIntegrationTest {
         state.results.get(1).phase == SuccessorSessionFixed,
         state.results.get(1).successorSession == 1001,
         state.results.get(1).successorResource == 1101,
-        state.results.get(1).successorTargetHead == 111,
+        state.results.get(1).successorTargetHead == 11,
         state.results.get(1).successorRunOrdinal == 1,
         state.results.get(1).predecessorPreserved,
         state.results.get(1).queuePosition == 1,
