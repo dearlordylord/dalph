@@ -10,16 +10,15 @@ type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" |
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
 const viewKeys = [
-  "original", "large-code", "small-code", "source-wide", "data-wide",
-  "gutter-badges", "row-lines", "floating-panels", "transparent-panels",
-  "value-first", "centered-values", "source-block", "quiet-labels"
+  "original", "data-wide", "floating-panels", "transparent-panels",
+  "value-first", "centered-values", "quiet-labels"
 ] as const
 type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
 
 interface Cell { readonly title: string; readonly value: string; readonly task?: TaskKey; readonly tone?: Tone }
-interface Stage { readonly key: StageKey; readonly line: number; readonly code: string }
+interface Stage { readonly key: StageKey; readonly code: string }
 interface GraphState {
   readonly kind: "Complete"
   readonly revision: string
@@ -72,13 +71,13 @@ const taskLabel: Record<TaskState, string> = {
 }
 
 const stages: ReadonlyArray<Stage> = [
-  { key: "read", line: 24, code: "const trackerGraph = yield* TrackerGraphRelation" },
-  { key: "graph", line: 26, code: "const graph = trackerGraph.signal" },
-  { key: "frontier", line: 27, code: "const frontier = mapCurrentSignal(graph, frontierOf)" },
-  { key: "tickets", line: 28, code: "const tickets = yield* boundedParallelTickets(frontier)" },
-  { key: "responsibilities", line: 29, code: "const responsibilities = yield* executorResponsibilities(tickets)" },
-  { key: "settlements", line: 30, code: "const settlements = yield* deliverySettlements(responsibilities)" },
-  { key: "reflection", line: 32, code: "return yield* reflectDeliverySettlements(settlements)" }
+  { key: "read", code: "const trackerGraph = yield* TrackerGraphRelation" },
+  { key: "graph", code: "const graph = trackerGraph.signal" },
+  { key: "frontier", code: "const frontier = mapCurrentSignal(graph, frontierOf)" },
+  { key: "tickets", code: "const tickets = yield* boundedParallelTickets(frontier)" },
+  { key: "responsibilities", code: "const responsibilities = yield* executorResponsibilities(tickets)" },
+  { key: "settlements", code: "const settlements = yield* deliverySettlements(responsibilities)" },
+  { key: "reflection", code: "return yield* reflectDeliverySettlements(settlements)" }
 ]
 
 const taskStates = (overrides: Partial<Record<TaskKey, TaskState>>): Record<TaskKey, TaskState> => ({
@@ -260,17 +259,11 @@ const story: Scenario = {
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
   { key: "original", name: "State top rules · leading", description: "The retained original identifies each live-data rectangle with a strong state-colored top rule." },
-  { key: "large-code", name: "Large source type", description: "Production expressions grow while rectangle density remains unchanged." },
-  { key: "small-code", name: "Small source type", description: "Production expressions become quieter and denser beside unchanged state panels." },
-  { key: "source-wide", name: "Wide source field", description: "More row width is assigned to code while every rectangle remains visible." },
   { key: "data-wide", name: "Wide data field", description: "More row width is assigned to live rectangles while source remains readable." },
-  { key: "gutter-badges", name: "Gutter badges", description: "Line numbers become circular markers that give each source stage a stronger anchor." },
-  { key: "row-lines", name: "Stage separators", description: "Horizontal rules make each code-and-data stage read as a distinct band." },
   { key: "floating-panels", name: "Floating state panels", description: "Top-rule rectangles gain depth while their state colors stay unchanged." },
   { key: "transparent-panels", name: "Transparent state panels", description: "Rectangle fills disappear so state top rules and values carry the hierarchy." },
   { key: "value-first", name: "Value before label", description: "Dynamic values move above their descriptive labels inside every rectangle." },
   { key: "centered-values", name: "Centered values", description: "Rectangle contents use centered alignment to test faster shape scanning." },
-  { key: "source-block", name: "Solid source block", description: "Each production expression receives a quiet solid field without changing row geometry." },
   { key: "quiet-labels", name: "Quiet rectangle labels", description: "Labels recede so dynamic values and state top rules dominate each rectangle." }
 ]
 
@@ -394,7 +387,7 @@ const codeMarkup = (code: string): string => {
   }).join("")
 }
 
-const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${story.frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i><small>${stage.line}</small></span><code>${codeMarkup(stage.code)}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>${views.find(({ key }) => key === view())!.description}</span></div></section>`
+const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${story.frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i></span><code>${codeMarkup(stage.code)}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>${views.find(({ key }) => key === view())!.description}</span></div></section>`
 
 const nodePositions: Record<TaskKey, readonly [number, number]> = {
   A: [5, 43], B: [21, 17], C: [21, 69], D: [39, 43], E: [55, 17], F: [55, 69], H: [71, 17], I: [71, 69], X: [39, 84], G: [88, 43]
