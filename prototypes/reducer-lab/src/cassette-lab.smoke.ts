@@ -110,6 +110,27 @@ await scenario("marks only source outputs changed by adjacent Delivery publicati
   )
 })
 
+await scenario("keeps selected waiting and excluded ticket cells visibly distinct", () => {
+  const match = everyResult.flatMap((result) => {
+    if (result._tag !== "Completed" || result.observationMoments === null) return []
+    const index = result.observationMoments.findIndex((moment) =>
+      moment.deliveryFrame?.tickets.some(({ placement }) => placement.kind === "Selected") === true
+      && moment.deliveryFrame.tickets.some(({ placement }) => placement.kind === "EligibleOutsideBound")
+      && moment.deliveryFrame.tickets.some(({ placement }) => placement.kind === "GraphExcluded")
+    )
+    return index < 0 ? [] : [{ index, moments: result.observationMoments }]
+  })[0]
+  if (match === undefined) throw new Error("A bounded frontier with selected, waiting, and excluded tickets is missing")
+  const explanation = deliverySourceExplanationAt(match.moments, match.index)
+  if (explanation._tag !== "DeliverySourceAvailable") throw new Error("The source explanation is unavailable")
+  const tickets = explanation.rows.find(({ id }) => id === "tickets")?.cells ?? []
+  const frontier = explanation.rows.find(({ id }) => id === "frontier")?.cells ?? []
+  assert(tickets.some(({ detail, tone }) => detail === "Selected" && tone === "desired"), "Selected tickets must use desired cells")
+  assert(tickets.some(({ detail, tone }) => detail === "EligibleOutsideBound" && tone === "waiting"), "Outside-bound tickets must remain visibly waiting")
+  assert(tickets.some(({ detail, tone }) => detail === "GraphExcluded" && tone === "blocked"), "Graph-excluded tickets must remain visibly excluded")
+  assert(frontier.some(({ detail, tone }) => detail === "EligibleOutsideBound" && tone === "waiting"), "An eligible frontier task beyond capacity must not be called desired")
+})
+
 await scenario("keeps an integration owner live while a newer graph publication changes source stages", () => {
   const match = everyResult.flatMap((result) => {
     if (result._tag !== "Completed" || result.observationMoments === null) return []
@@ -472,6 +493,11 @@ const chooseOption = (select: HTMLSelectElement, value: string): void => {
   select.dispatchEvent(new Event("change"))
 }
 
+const chooseCassette = (search: HTMLInputElement, value: string): void => {
+  search.value = value
+  search.dispatchEvent(new Event("input"))
+}
+
 await scenario("shows only information that selects, explains, or diagnoses a maintained cassette", () => {
   const { document, root } = installDom()
   mountCassetteLab({ revision: "acceptance-revision+dirty", root, rows: maintainedCassetteRows, runCassette: cannedRunner })
@@ -487,7 +513,7 @@ await scenario("shows only information that selects, explains, or diagnoses a ma
   )
   assert(document.querySelectorAll("[data-role='selected-cassette-surface']").length === 1, "The Lab must expose one shared cassette surface")
   assert(document.querySelectorAll("article").length === 1, "Only the selected cassette may render a complete UI")
-  assert(document.querySelectorAll("[data-role='cassette-selector'] option").length === expectedCatalogSize, "The selector must retain every catalog choice")
+  assert(document.querySelectorAll("[data-role='cassette-options'] option").length === expectedCatalogSize, "Search suggestions must retain every catalog choice")
   const first = document.querySelector("article")
   assert(first?.querySelector("h2")?.textContent === maintainedCassetteRows[0]?.storyName, "The human story name must be primary")
   assert(first?.querySelector("h2")?.textContent?.includes("authored:") === false, "The prefixed key must not duplicate category in the heading")
@@ -497,32 +523,32 @@ await scenario("shows only information that selects, explains, or diagnoses a ma
   assert(first?.querySelector("[data-role='declared-chronology']")?.textContent?.includes("not observed execution evidence") === true, "Declared input must be labelled separately from observed output")
   assert(document.querySelectorAll("[data-role='exact-declared-input'] pre").length === 1, "Only the selected cassette's exact input may be visible")
   assert(document.querySelector("[data-role='completion-legend']")?.textContent?.includes("matched the declared end") === true, "Completion must not imply that the modeled operation succeeded")
-  assert(document.querySelector("input") === null && document.querySelectorAll("select").length === 1, "The cassette dropdown must be the only selection mechanism")
+  assert(document.querySelectorAll("input[data-role='cassette-selector']").length === 1, "One searchable cassette control must own catalog selection")
 })
 
 await scenario("uses one shared cassette surface and replaces it when selection changes", async () => {
   const { document, root, settled } = installDom()
   mountCassetteLab({ revision: "acceptance-revision", root, rows: maintainedCassetteRows, runCassette: cannedRunner })
-  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLSelectElement | null
+  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
   const first = maintainedCassetteRows[0]
   const direct = maintainedCassetteRows.find(({ category }) => category === "TargetPromotion")
   if (selector === null || first === undefined || direct === undefined) throw new Error("The replacement fixture is incomplete")
   assert(document.querySelector("article")?.dataset.catalogKey === first.catalogKey, "The first admitted choice must own the shared surface")
   assert(document.querySelectorAll("[data-role='delivery-workbench']").length === 1, "An authored selection may own one graph workbench")
-  chooseOption(selector, direct.catalogKey)
+  chooseCassette(selector, direct.catalogKey)
   assert(document.querySelectorAll("article").length === 1, "Changing selection must not append a second cassette UI")
   assert(document.querySelector("article")?.dataset.catalogKey === direct.catalogKey, "The new choice must replace the old cassette identity")
   assert(document.querySelector("article")?.textContent?.includes(first.storyName) === false, "No prior cassette content may remain visible")
   assert(document.querySelectorAll("[data-role='declared-chronology']").length === 1, "The shared surface must retain only the new chronology")
   assert(document.querySelector("[data-role='delivery-workbench']") === null, "A direct protocol choice must replace the authored graph workbench")
   assert(document.querySelectorAll("article .selected-cassette-controls button").length === 1, "The shared surface must expose one selected-cassette action")
-  chooseOption(selector, first.catalogKey)
+  chooseCassette(selector, first.catalogKey)
   const completed = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await completed
   assert(document.querySelector("article")?.dataset.state === "Completed", "The selected cassette must expose its retained terminal state")
-  chooseOption(selector, direct.catalogKey)
-  chooseOption(selector, first.catalogKey)
+  chooseCassette(selector, direct.catalogKey)
+  chooseCassette(selector, first.catalogKey)
   assert(document.querySelector("article")?.dataset.state === "Completed", "Returning to a completed choice must restore its retained result")
   assert(document.querySelectorAll("[data-role='execution-evidence']").length === 1, "Restored evidence must remain confined to the shared surface")
 })
@@ -532,29 +558,25 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
   if (row === undefined) throw new Error("The delivery-navigation fixture is missing")
   mountCassetteLab({ revision: "acceptance-revision", root, rows: maintainedCassetteRows, runCassette: cannedRunner })
-  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLSelectElement | null
+  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
   const selectorLabel = selector?.closest("label")
   if (selector === null) throw new Error("The cassette selector is missing")
-  assert(selectorLabel?.textContent?.includes(`Choose cassette(${expectedCatalogSize} available)`) === true, "The ordinary selector must clearly state its action and available choice count")
-  assert(selector.querySelectorAll("optgroup").length === 5, "The ordinary selector must group choices under every maintained catalog")
-  const groupLabels = [...selector.querySelectorAll<HTMLOptGroupElement>("optgroup")].map(({ label }) => label).join("|")
-  assert(
-    groupLabels === "Authored coordinator stories|Application Exit lifecycle|Concrete Codex executor|Target promotion protocol|Integration finality protocol",
-    `The selector groups must name every maintained catalog: ${groupLabels}`
-  )
-  const malformedOptions = [...selector.options].filter((option) => {
+  assert(selectorLabel?.textContent?.includes(`Find cassette by ID or title(${expectedCatalogSize} available)`) === true, "The search control must clearly state its matching fields and available choice count")
+  const cassetteOptions = [...document.querySelectorAll<HTMLOptionElement>("[data-role='cassette-options'] option")]
+  const malformedOptions = cassetteOptions.filter((option) => {
     const choice = maintainedCassetteRows.find(({ catalogKey }) => option.value === catalogKey)
     return choice === undefined
-      || !(option.textContent?.startsWith(choice.storyName) === true
+      || !(option.label.startsWith(choice.storyName)
+        && option.label.includes(choice.categoryLabel)
         && option.value === choice.catalogKey)
   })
-  assert(malformedOptions.length === 0, `Every ordinary selector option must expose a concise story label under its catalog and retain its exact key as the value: ${malformedOptions[0]?.outerHTML ?? "unknown"}`)
-  const visibleOptionLabels = [...selector.options].map(({ textContent }) => textContent)
+  assert(malformedOptions.length === 0, `Every search suggestion must expose title, owning catalog, status, and exact ID: ${malformedOptions[0]?.outerHTML ?? "unknown"}`)
+  const visibleOptionLabels = cassetteOptions.map(({ label }) => label)
   assert(
     new Set(visibleOptionLabels).size === visibleOptionLabels.length,
     "Every collapsed cassette option label must identify one unique maintained scenario"
   )
-  chooseOption(selector, row.catalogKey)
+  chooseCassette(selector, row.catalogKey)
   assert(
     document.querySelector("[data-role='delivery-workbench'] > .selected-cassette-controls button") !== null,
     "An authored cassette Run/Rerun action must live inside its delivery workbench"
@@ -600,8 +622,8 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
   assert(workbench.querySelector("[data-role='selected-task-facts']")?.textContent?.startsWith("Selected task A") === true, "The selected task must be retained with the frame playback state")
   next?.click()
   assert(status?.textContent?.startsWith(`${total} / `) === true, "Next frame must navigate forward without replacing the workbench")
-  chooseOption(selector, maintainedCassetteRows.find(({ category }) => category === "TargetPromotion")!.catalogKey)
-  chooseOption(selector, row.catalogKey)
+  chooseCassette(selector, maintainedCassetteRows.find(({ category }) => category === "TargetPromotion")!.catalogKey)
+  chooseCassette(selector, row.catalogKey)
   const restored = document.querySelector<HTMLElement>("[data-role='delivery-workbench']")
   assert(restored !== workbench, "Selecting another cassette must replace the old cassette surface")
   assert(restored?.querySelector(".delivery-timeline-controls output")?.textContent?.startsWith(`${total} / `) === true, "Returning to a cassette must restore its retained frame selection")
@@ -865,6 +887,40 @@ await scenario("does not fabricate delivery visualization for direct protocol ca
   mountCassetteLab({ revision: "acceptance-revision", root, rows: protocolRows, runCassette: cannedRunner })
   assert(document.querySelector("[data-role='delivery-workbench']") === null, "Direct protocol runners must not display invented graph-level delivery state")
   assert(document.querySelector(".group-facts")?.textContent?.includes("does not publish the graph-level delivery relation") === true, "The direct protocol group must explain why no graph workbench applies")
+})
+
+await scenario("renders the prototype source instrument beside its synchronized graph", async () => {
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
+  if (row === undefined) throw new Error("The prototype cassette is missing from the maintained catalog")
+  if (result?._tag !== "Completed" || result.observationMoments === null) throw new Error("The prototype cassette observations are missing")
+  const { document, root, settled } = installDom()
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+
+  const instrument = document.querySelector(".delivery-instrument-layout")
+  const codeWindow = instrument?.querySelector(".delivery-code-window")
+  const graphCanvas = instrument?.querySelector(".delivery-graph-canvas")
+  assert(instrument !== null, "The source and graph must share the prototype instrument layout")
+  assert(codeWindow?.textContent?.includes("export const delivery = Effect.gen(function* () {") === true, "The source panel must show the prototype production-shaped opening")
+  assert(codeWindow?.textContent?.includes("const trackerGraph = yield* TrackerGraphRelation") === true, "The source panel must show relation acquisition as one literal setup line")
+  assert(codeWindow?.textContent?.includes("const responsibilities = yield* executorResponsibilities(tickets)") === true, "The source panel must retain the prototype responsibility composition")
+  assert(codeWindow?.textContent?.includes("return yield* reflectDeliverySettlements(settlements)") === true, "The source panel must show the production-shaped reflection boundary")
+  assert(codeWindow?.querySelector(".delivery-syntax-keyword") !== null && codeWindow?.querySelector(".delivery-syntax-call") !== null, "The copied code window must retain source-token treatment")
+  assert(codeWindow?.querySelectorAll("[data-source-stage] .delivery-code-gutter").length === 7, "Every prototype source stage must retain its gutter/change marker")
+  assert(codeWindow?.querySelectorAll("[data-source-stage] .delivery-data-rectangle").length !== 0, "Typed live data rectangles must remain visible beside source lines")
+  assert(graphCanvas?.querySelector("dalph-delivery-graph") !== null, "The synchronized Delivery graph must live inside the prototype dotted canvas")
+  assert(instrument?.querySelectorAll(":scope > .delivery-instrument").length === 2, "The source and graph must be peer instrument panels")
+  const timeline = document.querySelector<HTMLSelectElement>(".delivery-timeline-controls select")
+  if (timeline === null) throw new Error("The prototype cassette timeline is missing")
+  const publicationIndex = result.observationMoments.findIndex(({ _tag }) => _tag === "DeliveryPublicationMoment")
+  const retainedIndex = result.observationMoments.findIndex((moment) => moment._tag !== "DeliveryPublicationMoment" && moment.deliveryFrame !== null)
+  chooseOption(timeline, String(publicationIndex))
+  assert(document.querySelector(".delivery-graph-freshness")?.classList.contains("stale") === false, "A coherent publication must retain the prototype fresh treatment")
+  chooseOption(timeline, String(retainedIndex))
+  assert(document.querySelector(".delivery-graph-freshness")?.classList.contains("stale") === true, "A retained frame at a story/runtime moment must use the prototype stale treatment")
 })
 
 await scenario("updates an observed runtime task tone without fabricating a delivery publication", async () => {
@@ -1506,7 +1562,7 @@ await scenario("shows grouping relationships exact obligations and settlement st
   assert(workbench?.textContent?.includes("Settlement") === true, "Every task must expose its current delivery-settlement state")
 })
 
-await scenario("uses the cassette dropdown as the only selection mechanism", async () => {
+await scenario("finds and auto-selects cassettes by catalog ID or human title", async () => {
   const { document, root, settled } = installDom()
   const calls: Array<string> = []
   mountCassetteLab({
@@ -1518,12 +1574,43 @@ await scenario("uses the cassette dropdown as the only selection mechanism", asy
       return cannedRunner(key)
     }
   })
-  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLSelectElement | null
-  if (selector === null) throw new Error("The cassette selector is missing")
-  assert(selector.options.length === expectedCatalogSize, "The simple selector must retain the complete catalog")
-  assert(document.querySelectorAll("select").length === 1, "No catalog or status filter may compete with the cassette selector")
-  assert(document.querySelector("input") === null, "No search box may compete with the cassette selector")
-  assert([...document.querySelectorAll("button")].every(({ textContent }) => !textContent?.startsWith("Run shown")), "The simple Lab must not expose a filtered run command")
+  const search = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
+  const options = document.querySelector("datalist[data-role='cassette-options']")
+  const searchStatus = document.querySelector("[data-role='cassette-search-status']")
+  if (search === null || options === null) throw new Error("The searchable cassette selector is missing")
+  assert(search.type === "search", "The cassette selector must be a native search input")
+  assert(search.getAttribute("aria-label") === "Find cassette by ID or title", "The search purpose must be explicit")
+  assert(options.querySelectorAll("option").length === expectedCatalogSize, "Search suggestions must retain the complete catalog")
+  const invariantOption = options.querySelector<HTMLOptionElement>(
+    'option[value="authored:deliveryInvariantStory"]'
+  )
+  assert(
+    invariantOption?.label.includes("staggered double diamond") === true,
+    "Every suggestion must pair its exact catalog ID with the human title"
+  )
+  search.value = "deliveryInvariantStory"
+  search.dispatchEvent(new Event("input"))
+  assert(
+    document.querySelector("article")?.dataset.catalogKey === "authored:deliveryInvariantStory",
+    "A unique catalog-ID suffix must auto-select the matching cassette"
+  )
+  const titleTarget = maintainedCassetteRows.find(({ catalogKey }) =>
+    catalogKey === "authored:productionShapedFiveTaskDiamond"
+  )
+  if (titleTarget === undefined) throw new Error("The title-search fixture is missing")
+  search.value = titleTarget.storyName
+  search.dispatchEvent(new Event("input"))
+  assert(
+    document.querySelector("article")?.dataset.catalogKey === titleTarget.catalogKey,
+    "An exact human title must auto-select the matching cassette"
+  )
+  search.value = "definitely-not-a-maintained-cassette"
+  search.dispatchEvent(new Event("input"))
+  assert(
+    document.querySelector("article")?.dataset.catalogKey === titleTarget.catalogKey,
+    "No-match text must retain the last valid cassette selection"
+  )
+  assert(searchStatus?.textContent?.includes("No maintained cassette matches") === true, "No-match text must be explained")
   const allSettled = settled(everyCassetteSettledEvent)
   const runAll = [...document.querySelectorAll("button")].find(({ textContent }) => textContent?.startsWith("Run all "))
   runAll?.click()
@@ -1607,20 +1694,20 @@ await scenario("replaces stale evidence with live cassette progress and settles 
       else resolveSecond = resolve
     })
   })
-  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLSelectElement | null
+  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
   if (selector === null) throw new Error("The cassette selector is missing")
   const runAll = [...document.querySelectorAll("button")].find(({ textContent }) => textContent?.startsWith("Run all "))
   runAll?.click()
   assert(document.querySelectorAll("article").length === 1, "Batch execution must retain one shared cassette surface")
   assert(document.querySelector("article")?.dataset.state === "Running", "The selected affected cassette must become running immediately")
-  assert(selector.options.length === 2, "Batch execution must retain both cassette choices")
+  assert(document.querySelectorAll("[data-role='cassette-options'] option").length === 2, "Batch execution must retain both cassette choices")
   assert(document.querySelector("[data-role='execution-evidence']") === null, "Previous evidence must be absent while rerunning")
   const firstSettled = settled(cassetteSettledEvent)
   resolveFirst?.(firstResult)
   await firstSettled
   assert(document.querySelector("article")?.dataset.state === "Completed", "The selected cassette must show its result as soon as it settles")
   if (rows[1] === undefined) throw new Error("The second batch cassette is missing")
-  chooseOption(selector, rows[1].catalogKey)
+  chooseCassette(selector, rows[1].catalogKey)
   assert(document.querySelector("article")?.dataset.state === "Running", "The selector must expose the other cassette while it is still running")
   const everySettled = settled(everyCassetteSettledEvent)
   resolveSecond?.(secondResult)
@@ -1742,9 +1829,10 @@ await scenario("the real browser entry runs every maintained cassette and retain
   assert(document.querySelectorAll("article").length === 1, "The real entry must retain one shared cassette UI after Run all")
   assert(document.querySelector("article")?.dataset.state === "Completed", "The selected maintained cassette must project its retained terminal result")
   assert(document.querySelectorAll("[data-role='execution-evidence']").length === 1, "Only the selected cassette's retained evidence may be projected")
-  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLSelectElement | null
-  assert(selector?.options.length === expectedCatalogSize, "Run all must retain every completed cassette as a selectable result")
-  const incompleteOption = [...selector?.options ?? []].find(({ textContent }) => !textContent?.includes("completed"))
+  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
+  const completedOptions = [...document.querySelectorAll<HTMLOptionElement>("[data-role='cassette-options'] option")]
+  assert(completedOptions.length === expectedCatalogSize, "Run all must retain every completed cassette as a searchable result")
+  const incompleteOption = completedOptions.find(({ label }) => !label.includes("completed"))
   assert(incompleteOption === undefined, `Every selector choice must expose its retained terminal status: ${incompleteOption?.outerHTML ?? "unknown"}`)
   assert(document.querySelectorAll("section[data-role='delivery-workbench']").length === 1, "Run all must retain one permanent workbench for the selected cassette")
   assert(document.querySelector("[data-role='delivery-workbench'] dalph-delivery-graph") !== null, "The selected cassette's permanent workbench must retain its current graph")
@@ -1753,7 +1841,7 @@ await scenario("the real browser entry runs every maintained cassette and retain
   assert(root.querySelector("[data-role='catalog-summary']")?.textContent?.startsWith(`${expectedCatalogSize} completed`) === true, "The real entry must show the complete catalog summary")
   const replacement = maintainedCassetteRows.find(({ category }) => category === "IntegrationFinality")
   if (selector === null || replacement === undefined) throw new Error("A completed replacement cassette is required")
-  chooseOption(selector, replacement.catalogKey)
+  chooseCassette(selector, replacement.catalogKey)
   assert(document.querySelector("article")?.dataset.catalogKey === replacement.catalogKey, "Selecting another completed result must replace the projected cassette")
   assert(document.querySelectorAll("[data-role='execution-evidence']").length === 1, "The replacement must not append a second evidence tree")
 })

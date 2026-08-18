@@ -10,6 +10,12 @@ const framedCassette = "authored:dependentTasksCompleteInOneRun"
 const acceptedIntegrationCassette = "authored:acceptedResultRestartsIntoIntegration"
 const linkedDeliveryStoryCassette = "authored:deliveryInvariantStory"
 
+const selectCassette = async (page, catalogKey) => {
+  const search = page.locator('[data-role="cassette-selector"]')
+  await search.fill(catalogKey)
+  await search.dispatchEvent("change")
+}
+
 const browser = await chromium.launch({ headless: true })
 try {
   const page = await browser.newPage()
@@ -21,19 +27,35 @@ try {
 
   await page.goto(labUrl, { waitUntil: "networkidle" })
   const selector = page.locator('[data-role="cassette-selector"]')
-  const maintainedCassetteCount = await selector.locator("option").count()
+  const cassetteOptions = page.locator('[data-role="cassette-options"] option')
+  const maintainedCassetteCount = await cassetteOptions.count()
   assert.ok(maintainedCassetteCount > 0)
-  assert.equal(await selector.locator("optgroup").count(), 5)
-  assert.deepEqual(await selector.locator("optgroup").evaluateAll((groups) => groups.map(({ label }) => label)), [
+  assert.equal(await selector.getAttribute("type"), "search")
+  assert.equal(await selector.getAttribute("aria-label"), "Find cassette by ID or title")
+  assert.equal(await page.locator('input[type="search"]').count(), 1)
+  const optionLabels = await cassetteOptions.evaluateAll((options) => options.map(({ label }) => label))
+  for (const category of [
     "Authored coordinator stories",
     "Application Exit lifecycle",
     "Concrete Codex executor",
     "Target promotion protocol",
     "Integration finality protocol"
-  ])
-  assert.equal(await page.locator('input[type="search"]').count(), 0)
+  ]) assert.ok(optionLabels.some((label) => label.includes(category)))
+  const prototypeTitle = await page
+    .locator(`[data-role="cassette-options"] option[value="${linkedDeliveryStoryCassette}"]`)
+    .getAttribute("label")
+  const humanPrototypeTitle = prototypeTitle?.split(" · ")[0]
+  if (humanPrototypeTitle === undefined) throw new Error("The prototype cassette title is missing")
+  await selector.fill("deliveryInvariantStory")
+  assert.equal(await page.locator("#selected-cassette").getAttribute("data-catalog-key"), linkedDeliveryStoryCassette)
+  await selector.fill(humanPrototypeTitle)
+  assert.equal(await page.locator("#selected-cassette").getAttribute("data-catalog-key"), linkedDeliveryStoryCassette)
+  await selector.fill("no cassette has this title or id")
+  assert.equal(await page.locator("#selected-cassette").getAttribute("data-catalog-key"), linkedDeliveryStoryCassette)
+  assert.match(await page.locator('[data-role="cassette-search-status"]').textContent() ?? "", /No maintained cassette matches/u)
+  console.log("✓ searches cassette IDs, suffixes, and human titles without losing the last valid selection")
 
-  await selector.selectOption(insecureOriginCassette)
+  await selectCassette(page, insecureOriginCassette)
   await page.getByRole("button", { name: /Run selected cassette:/u }).click()
   await page.waitForFunction(
     (catalogKey) => {
@@ -51,7 +73,7 @@ try {
     [codexExecutorCassette, ["private behind the generic executor boundary", "Generic executor reports"]]
   ]) {
     await page.reload({ waitUntil: "networkidle" })
-    await selector.selectOption(catalogKey)
+    await selectCassette(page, catalogKey)
     await page.getByRole("button", { name: /Run selected cassette:/u }).click()
     await page.waitForFunction(
       (selectedKey) => document.querySelector("#selected-cassette")?.getAttribute("data-catalog-key") === selectedKey
@@ -64,7 +86,7 @@ try {
   }
 
   await page.reload({ waitUntil: "networkidle" })
-  await selector.selectOption(framedCassette)
+  await selectCassette(page, framedCassette)
   assert.equal(
     await page.locator('[data-role="delivery-workbench"] .delivery-capacity-note').textContent(),
     "Desired tickets are not held capacity."
@@ -139,6 +161,27 @@ try {
     await workbench.locator(".delivery-playback-shortcuts").textContent(),
     "Moment = one captured story, Delivery, or runtime observation · Jump = graph, responsibility, integration, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/]."
   )
+  const prototypeInstrument = await workbench.locator(".delivery-instrument-layout").evaluate((layout) => {
+    const source = layout.querySelector(".delivery-source-explanation")
+    const graph = layout.querySelector(".delivery-graph-instrument")
+    const sourceBounds = source?.getBoundingClientRect()
+    const graphBounds = graph?.getBoundingClientRect()
+    return {
+      cells: source?.querySelectorAll("[data-source-stage] .delivery-data-rectangle").length ?? 0,
+      graphInCanvas: graph?.querySelector(".delivery-graph-canvas > dalph-delivery-graph") !== null,
+      peerPanels: layout.querySelectorAll(":scope > .delivery-instrument").length,
+      sideBySide: sourceBounds !== undefined && graphBounds !== undefined && Math.abs(sourceBounds.top - graphBounds.top) <= 2,
+      sourceText: source?.textContent ?? ""
+    }
+  })
+  assert.equal(prototypeInstrument.peerPanels, 2)
+  assert.equal(prototypeInstrument.graphInCanvas, true)
+  assert.equal(prototypeInstrument.sideBySide, true)
+  assert.ok(prototypeInstrument.cells > 0)
+  assert.match(prototypeInstrument.sourceText, /export const delivery = Effect\.gen\(function\* \(\) \{/u)
+  assert.match(prototypeInstrument.sourceText, /const trackerGraph = yield\* TrackerGraphRelation/u)
+  assert.match(prototypeInstrument.sourceText, /return yield\* reflectDeliverySettlements\(settlements\)/u)
+  console.log("✓ renders the prototype code and graph instrument from captured Delivery facts")
   const primaryBeforeGuide = await workbench.evaluate((element) => {
     const controls = element.querySelector(".delivery-timeline-controls")
     const graph = element.querySelector("dalph-delivery-graph")
@@ -294,7 +337,7 @@ try {
       if (!(stageButton instanceof HTMLButtonElement)) continue
       stageButton.click()
       const stageHighlightsTask = graph.highlightedTaskIds?.includes(taskId) === true
-      const dataTask = sourceStage.querySelector(".delivery-source-task-buttons button")
+      const dataTask = sourceStage.querySelector(".delivery-data-rectangle[data-cell-task]")
       if (!(dataTask instanceof HTMLButtonElement)) continue
       dataTask.click()
       return {
@@ -420,7 +463,7 @@ try {
   console.log("✓ keeps exactly one keyboard playback handler after rerun")
 
   await page.reload({ waitUntil: "networkidle" })
-  await selector.selectOption(acceptedIntegrationCassette)
+  await selectCassette(page, acceptedIntegrationCassette)
   await page.getByRole("button", { name: /Run selected cassette:/u }).click()
   await page.waitForFunction(
     (catalogKey) => document.querySelector("#selected-cassette")?.getAttribute("data-catalog-key") === catalogKey
@@ -457,11 +500,27 @@ try {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.waitForFunction(() => document.documentElement.scrollWidth <= globalThis.innerWidth)
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= globalThis.innerWidth))
+  const narrowInstrument = await page.locator(".delivery-instrument-layout").evaluate((layout) => {
+    const source = layout.querySelector(".delivery-source-explanation")
+    const graph = layout.querySelector(".delivery-graph-instrument")
+    const sourceBounds = source?.getBoundingClientRect()
+    const graphBounds = graph?.getBoundingClientRect()
+    return {
+      cells: source?.querySelectorAll(".delivery-data-rectangle").length ?? 0,
+      graphVisible: graphBounds !== undefined && graphBounds.height > 0,
+      sourceVisible: sourceBounds !== undefined && sourceBounds.height > 0,
+      stacked: sourceBounds !== undefined && graphBounds !== undefined && graphBounds.top >= sourceBounds.bottom - 2
+    }
+  })
+  assert.equal(narrowInstrument.graphVisible, true)
+  assert.equal(narrowInstrument.sourceVisible, true)
+  assert.equal(narrowInstrument.stacked, true)
+  assert.ok(narrowInstrument.cells > 0)
   await page.setViewportSize({ width: 1440, height: 900 })
   console.log("✓ shows the accepted result enter and start its journal-derived integration order")
 
   await page.reload({ waitUntil: "networkidle" })
-  await selector.selectOption(linkedDeliveryStoryCassette)
+  await selectCassette(page, linkedDeliveryStoryCassette)
   assert.match(
     await page.locator("#selected-cassette .delivery-story-scope").textContent() ?? "",
     /rejected candidate, verification, and integration split.*historical regression evidence.*one outer Integrator session/u
@@ -650,7 +709,7 @@ try {
     maintainedCassetteCount,
     { timeout: terminalTimeoutMs }
   )
-  assert.equal(await page.locator('[data-role="cassette-selector"] option').count(), maintainedCassetteCount)
+  assert.equal(await page.locator('[data-role="cassette-options"] option').count(), maintainedCassetteCount)
   assert.equal(await page.locator('[data-role="problem-links"]:not([hidden])').count(), 0)
 
   await page.setViewportSize({ width: 390, height: 844 })

@@ -6,6 +6,7 @@ import {
   AuthoredRunActivationOrdinal,
   type AuthoredRunActivationOrdinal as AuthoredRunActivationOrdinalType
 } from "../../../packages/dalph/src/cassettes/authored-domain.ts"
+import type { TaskWorkCapacity } from "@dalph/orchestrator"
 
 /**
  * Stable renderer contract for every playback control. A new FoldKit, React,
@@ -46,7 +47,7 @@ export type DeliveryLandmark = typeof DeliveryLandmark.Type
 /** Framework-neutral facts needed to derive playback stops from production frames. */
 export interface DeliveryPlaybackFrameInput {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
-  readonly capacity: number
+  readonly capacity: TaskWorkCapacity | null
   readonly eligibleTaskIds: ReadonlyArray<TaskIdType>
   readonly heldTaskIds: ReadonlyArray<TaskIdType>
   readonly integrationOwnerTaskIds?: ReadonlyArray<TaskIdType>
@@ -100,7 +101,7 @@ export const deliveryPlaybackFramesFrom = (
     }
     const heldChanged = previous !== undefined
       && JSON.stringify(previous.heldTaskIds.toSorted()) !== JSON.stringify(input.heldTaskIds.toSorted())
-    const fullCapacityReached = input.capacity > 0 && input.heldTaskIds.length === input.capacity
+    const fullCapacityReached = input.capacity !== null && input.heldTaskIds.length === input.capacity
     const oneHolderRemainsAfterRelease = previous !== undefined
       && input.heldTaskIds.length > 0
       && input.heldTaskIds.length < previous.heldTaskIds.length

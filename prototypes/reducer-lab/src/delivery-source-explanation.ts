@@ -4,6 +4,7 @@ import type {
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 
 export type DeliverySourceStageId =
+  | "read"
   | "graph"
   | "frontier"
   | "tickets"
@@ -11,8 +12,19 @@ export type DeliverySourceStageId =
   | "settlements"
   | "trackerReflection"
 
+export type DeliverySourceCellTone = "blocked" | "desired" | "fresh" | "output" | "rule" | "running" | "settled" | "waiting"
+
+export interface DeliverySourceCell {
+  readonly detail: string
+  readonly label: string
+  readonly taskId: string | null
+  readonly tone: DeliverySourceCellTone
+  readonly value: string
+}
+
 export interface DeliverySourceStageRow {
   readonly changed: boolean
+  readonly cells: ReadonlyArray<DeliverySourceCell>
   readonly id: DeliverySourceStageId
   readonly label: string
   readonly taskIds: ReadonlyArray<string>
@@ -33,48 +45,123 @@ export type DeliverySourceExplanation =
     }
 
 interface StageValue {
+  readonly cells: ReadonlyArray<DeliverySourceCell>
+  readonly changeTracked: boolean
   readonly id: DeliverySourceStageId
   readonly label: string
   readonly taskIds: ReadonlyArray<string>
   readonly value: unknown
 }
 
+const cell = (
+  label: string,
+  value: string,
+  detail: string,
+  tone: DeliverySourceCellTone,
+  taskId: string | null = null
+): DeliverySourceCell => ({ detail, label, taskId, tone, value })
+
+const graphCells = (frame: AuthoredDeliveryFrame): ReadonlyArray<DeliverySourceCell> => {
+  if (frame.graph._tag !== "Established") {
+    return [cell("GRAPH", "not established", "no coherent tracker graph", "blocked")]
+  }
+  const taskCount = frame.graph.tasks.length
+  return frame.graph.tasks.map((task, index) =>
+    cell("GRAPH TASK", task.id, `${task.lifecycle} · ${index + 1}/${taskCount}`, "fresh", task.id)
+  )
+}
+
+const ticketCells = (frame: AuthoredDeliveryFrame): ReadonlyArray<DeliverySourceCell> => {
+  const represented = frame.tickets.map(({ placement, taskId }) => {
+    if (placement.kind === "Selected") {
+      const ticket = frame.tickets.find((candidate) => candidate.taskId === taskId)
+      return cell(`SLOT ${(ticket?.rank ?? 0) + 1}`, taskId, placement.kind, "desired", taskId)
+    }
+    if (placement.kind === "EligibleOutsideBound") {
+      return cell(`WAIT ${(frame.tickets.find((candidate) => candidate.taskId === taskId)?.rank ?? 0) + 1}`, taskId, placement.kind, "waiting", taskId)
+    }
+    return cell("EXCLUDED", taskId, placement.kind, "blocked", taskId)
+  })
+  const selectedCount = frame.tickets.filter(({ placement }) => placement.kind === "Selected").length
+  const emptySlots = Array.from({ length: Math.max(0, Number(frame.capacity) - selectedCount) }, (_, index) =>
+    cell(`SLOT ${selectedCount + index + 1}`, "empty", `capacity ${frame.capacity}`, "waiting")
+  )
+  return [...represented, ...emptySlots]
+}
+
 const valuesOf = (frame: AuthoredDeliveryFrame): ReadonlyArray<StageValue> => [
   {
-    id: "graph",
-    label: "graph = trackerGraph.signal",
+    id: "read",
+    label: "const trackerGraph = yield* TrackerGraphRelation",
     taskIds: frame.graph._tag === "Established" ? frame.graph.tasks.map(({ id }) => id) : [],
-    value: frame.graph
+    value: "TrackerGraphRelation",
+    changeTracked: false,
+    cells: [cell("RELATION", "TrackerGraphRelation", "acquired once for this composition", "rule")]
+  },
+  {
+    id: "graph",
+    label: "const graph = trackerGraph.signal",
+    taskIds: frame.graph._tag === "Established" ? frame.graph.tasks.map(({ id }) => id) : [],
+    value: frame.graph,
+    changeTracked: true,
+    cells: graphCells(frame)
   },
   {
     id: "frontier",
-    label: "frontier = mapCurrentSignal(graph, frontierOf)",
+    label: "const frontier = mapCurrentSignal(graph, frontierOf)",
     taskIds: frame.frontier.map(({ taskId }) => taskId),
-    value: frame.frontier
+    value: frame.frontier,
+    changeTracked: true,
+    cells: frame.frontier.map(({ reasons, standing, taskId }) => {
+      const ticket = frame.tickets.find((candidate) => candidate.taskId === taskId)
+      return cell(
+        "FRONTIER",
+        taskId,
+        standing === "Eligible" ? ticket?.placement.kind ?? "eligible" : reasons.map(({ kind }) => kind).join(" · ") || "excluded",
+        standing === "Eligible" && ticket?.placement.kind === "Selected"
+          ? "desired"
+          : standing === "Eligible" ? "waiting" : "blocked",
+        taskId
+      )
+    })
   },
   {
     id: "tickets",
-    label: "tickets = boundedParallelTickets(frontier)",
+    label: "const tickets = yield* boundedParallelTickets(frontier)",
     taskIds: frame.tickets.map(({ taskId }) => taskId),
-    value: frame.tickets
+    value: frame.tickets,
+    changeTracked: true,
+    cells: ticketCells(frame)
   },
   {
     id: "deliveries",
-    label: "responsibilities = executorResponsibilities(tickets)",
+    label: "const responsibilities = yield* executorResponsibilities(tickets)",
     taskIds: frame.deliveries.map(({ taskId }) => taskId),
-    value: frame.deliveries
+    value: frame.deliveries,
+    changeTracked: true,
+    cells: frame.deliveries.map(({ obligations, placement, taskId }) => cell(
+      "RESPONSIBILITY",
+      taskId,
+      `${placement.kind} · ${obligations.length} obligations`,
+      frame.heldPositions.some((held) => held.taskId === taskId) ? "running" : "output",
+      taskId
+    ))
   },
   {
     id: "settlements",
-    label: "settlements = deliverySettlements(responsibilities)",
+    label: "const settlements = yield* deliverySettlements(responsibilities)",
     taskIds: frame.settlements.map(({ taskId }) => taskId),
-    value: frame.settlements
+    value: frame.settlements,
+    changeTracked: true,
+    cells: frame.settlements.map(({ attemptId, taskId }) => cell("SETTLEMENT", taskId, `attempt ${attemptId}`, "settled", taskId))
   },
   {
     id: "trackerReflection",
-    label: "return reflectDeliverySettlements(settlements)",
+    label: "return yield* reflectDeliverySettlements(settlements)",
     taskIds: frame.settlements.map(({ taskId }) => taskId),
-    value: frame.trackerReflection
+    value: frame.trackerReflection,
+    changeTracked: true,
+    cells: [cell("REFLECTION", `${frame.trackerReflection.settlementCount} settlements`, "descriptive Delivery reflection", "output")]
   }
 ]
 
@@ -111,8 +198,9 @@ export const deliverySourceExplanationAt = (
     publicationObservedAtMoment,
     relationSetup: "Acquire the current tracker-graph relation once as composition setup.",
     rows: valuesOf(moment.deliveryFrame).map((row) => ({
-      changed: publicationObservedAtMoment && previousValues !== undefined
+      changed: row.changeTracked && publicationObservedAtMoment && previousValues !== undefined
         && JSON.stringify(previousById.get(row.id)?.value) !== JSON.stringify(row.value),
+      cells: row.cells,
       id: row.id,
       label: row.label,
       taskIds: [...new Set(row.taskIds)].toSorted(),

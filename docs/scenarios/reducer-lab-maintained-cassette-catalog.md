@@ -124,7 +124,7 @@ in-memory adapters; recovery inside a cassette occurs only at an authored
   and requires the recovered runner to return that failure rather than wait
   forever for an event it can no longer record.
 - `shows only information that selects, explains, or diagnoses a maintained cassette`
-  checks that the browser selector contains every catalog choice while one
+  checks that the browser search contains every catalog choice while one
   shared surface exposes the safety boundary, declared input, production
   ownership, and completion meaning for its current selection.
 
@@ -159,7 +159,7 @@ discards all displayed results.
   checks the browser update path and the exact completed/failed summary.
 - `browser-smoke drives the real Orb application through every maintained cassette`
   runs through the package's `browser-smoke` command against `REDUCER_LAB_URL`,
-  requires the selector's exact five production-catalog groups, completes the
+  requires the search suggestions' exact five production-catalog labels, completes the
   insecure-origin verification, application-Exit, and concrete Codex-executor
   checkpoints, then discovers the current maintained choice count and requires
   every choice to settle with no failure or Lab defect while exercising
@@ -176,16 +176,28 @@ A Dalph maintainer opens the Lab against one exact source revision. Forty or
 more maintained cassettes may be present across authored coordinator,
 application-Exit, concrete Codex executor, target-promotion, and
 integration-finality catalogs. No cassette is running.
-The maintainer may not already know a catalog key or which production runner
-owns the behavior they need to inspect.
+The maintainer may know an exact catalog ID such as
+`authored:deliveryInvariantStory`, an ID suffix such as
+`deliveryInvariantStory`, words from the human title, or only which production
+runner owns the behavior they need to inspect.
 
 ### Ordered behavior and visible result
 
 The Lab first states that this is a local deterministic harness, identifies the
 source revision, and says that no GitHub issue, Git repository, executor
-process, or durable journal will be changed. It groups selectable choices by
-the production runner that owns them in one ordinary cassette selector. There
-is no second search or filter selection mechanism competing with that control.
+process, or durable journal will be changed. It exposes one native searchable
+cassette combobox labelled **Find cassette by ID or title**. Its suggestions
+show the exact catalog ID, human title, owning catalog, and retained status.
+Typing is case-insensitive and matches either the complete ID, its suffix, or
+words in the title. An exact match or the only remaining match immediately
+selects that cassette in the shared preview. Choosing a native suggestion does
+the same. Selection performs no production call; **Run selected cassette** is
+still the only trigger that starts the controlled runner.
+
+If the text is empty or matches no maintained cassette, the last valid
+selection remains visible and the search status says that no cassette was
+selected from that text. The Lab does not silently run the first fuzzy match,
+invent aliases, or hide the exact ID behind a title-only option.
 
 The selected surface makes the human story name primary and retains the exact
 catalog key, production runner, and controlled boundaries. A collapsed declared input
@@ -204,7 +216,7 @@ previous result, says that production code is running with controlled
 boundaries, and disables overlapping commands. When the maintainer runs the
 whole catalog, every retained cassette state immediately becomes running and
 each receives its terminal result as soon as its own production runner settles;
-the selector exposes those live states while the shared surface projects the
+the search suggestions expose those live states while the shared surface projects the
 current choice. The Lab does not keep old green evidence visible and does not
 wait for the slowest cassette before retaining faster results. The catalog
 summary distinguishes not-run,
@@ -269,13 +281,16 @@ The Lab must not create one article, workbench, chronology, Run button, or
 evidence tree per catalog entry. A new selection must replace the old selected
 surface rather than append to it.
 
-The cassette control is an ordinary browser select containing every maintained
-choice. Its label says **Choose cassette** and states the number of available
-choices. Three standard option groups name the catalogs; each concise option
-names the human story and current status while its value retains the exact key.
-Opening the select must not run a cassette or replace the selected surface;
-choosing an option is the only selection trigger. No search box, catalog
-filter, status filter, or **Run shown** command appears.
+The cassette control is one native search input with a datalist containing
+every maintained choice. Its label says **Find cassette by ID or title** and
+states the number of available choices. Each option value is the exact catalog
+ID; its visible label names the human story, owning catalog, and current status.
+The current valid selection remains retained while the maintainer edits or
+clears the search text.
+Opening the suggestions must not run a cassette or replace the selected
+surface. Typing an exact or uniquely matching ID/title, or choosing a native
+suggestion, changes only the selected preview. No separate catalog filter,
+status filter, or **Run shown** command appears.
 
 An authored cassette's Delivery workbench is a permanent section of the one
 selected cassette surface, not a disclosure. Before execution it shows the
@@ -428,11 +443,11 @@ production frame replaced another.
 
 ### Starting situation and trigger
 
-A maintainer selects a maintained authored cassette and chooses **Run selected
-cassette**. The controlled runner has a fresh in-memory tracker, Git boundary,
-executor, Journal, and delivery runtime. The graph is the primary workbench;
-the source explanation is a permanently visible secondary section. Nothing
-from an earlier browser run is retained, and no live provider is contacted.
+A maintainer selects a maintained authored cassette, including the prototype's
+`authored:deliveryInvariantStory`, and chooses **Run selected cassette**. The
+controlled runner has a fresh in-memory tracker, Git boundary, executor,
+Journal, and delivery runtime. Nothing from an earlier browser run is retained,
+and no live provider is contacted.
 
 ### Ordered observations and visible result
 
@@ -458,6 +473,16 @@ Acquiring the tracker-graph relation is shown once as composition setup, not as
 a tracker read repeated by each row, and no row is described as a current
 instruction pointer.
 
+On a wide screen the Lab presents the prototype's synchronized instrument: a
+dark production-shaped code window on the left and the Delivery graph in its
+dotted canvas on the right. The code window shows the literal composition from
+acquiring `TrackerGraphRelation` through reflecting settlements. Every line
+keeps its current typed data rectangles visible beside it; exact diagnostic
+JSON may remain under a secondary disclosure but is not the primary source
+explanation. The graph panel uses the same trace-fill palette, fitted layout,
+freshness treatment, and pan/zoom controls as the prototype. On a narrow screen
+the two panels stack without losing either surface.
+
 The graph derives one dominant presentation-only fill tone in this order:
 established settlement, observed live integration owner, held task-work
 position, selected desired ticket, eligible work waiting beyond the bound,
@@ -467,6 +492,11 @@ outlines, labels, and settlement facts remain independent overlays. Selecting
 a source stage or typed data item highlights its graph tasks and incident
 edges; selecting a graph task highlights every source row that contains it.
 Unrelated nodes and edges dim without disappearing.
+
+The Lab must not replace the prototype code window with prose labels and a raw
+JSON list, draw a graph whose surrounding canvas no longer resembles the
+prototype, fabricate Pause/Unpause frames that were never captured by the
+chosen cassette, or let source and graph show different observed moments.
 
 ### Process loss, rerun, and direct protocols
 
@@ -501,6 +531,11 @@ the removed throwaway visualization as a second runnable surface.
 - `updates an observed runtime task tone without fabricating a delivery
   publication` proves graph tone authority and synchronized source/graph task
   selection.
+- `renders the prototype source instrument beside its synchronized graph`
+  proves the maintained prototype cassette renders the seven literal source
+  lines, visible typed data rectangles, and graph canvas as peer panels.
+- `browser-smoke` proves the same source/graph geometry and visible data-cell
+  interaction in the real served application at desktop and narrow widths.
 - `does not fabricate delivery visualization for direct protocol cassettes` proves
   the intentional absence of graph, source, and runtime chronology.
 - The focused Reducer Lab typecheck, smoke run, browser smoke, and build prove

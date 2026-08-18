@@ -59,6 +59,27 @@ const appendText = <K extends keyof HTMLElementTagNameMap>(
   return element
 }
 
+const appendSourceMarkup = (parent: HTMLElement, source: string): void => {
+  const calls = new Set([
+    "Effect.gen",
+    "TrackerGraphRelation",
+    "boundedParallelTickets",
+    "deliverySettlements",
+    "executorResponsibilities",
+    "frontierOf",
+    "mapCurrentSignal",
+    "reflectDeliverySettlements"
+  ])
+  for (const token of source.split(/(\bconst\b|\breturn\b|yield\*|Effect\.gen|TrackerGraphRelation|boundedParallelTickets|deliverySettlements|executorResponsibilities|frontierOf|mapCurrentSignal|reflectDeliverySettlements)/u)) {
+    if (token.length === 0) continue
+    const span = document.createElement("span")
+    if (token === "const" || token === "return" || token === "yield*") span.className = "delivery-syntax-keyword"
+    else if (calls.has(token)) span.className = "delivery-syntax-call"
+    span.textContent = token
+    parent.append(span)
+  }
+}
+
 const proposalSummary = (fact: { readonly summary: string }): string => fact.summary
 
 const graphEdges = (
@@ -912,8 +933,24 @@ const renderTimeline = (
   const momentEvidence = document.createElement("section")
   momentEvidence.className = "delivery-moment-evidence"
   const sourceExplanation = document.createElement("section")
-  sourceExplanation.className = "delivery-source-explanation"
+  sourceExplanation.className = "delivery-source-explanation delivery-instrument"
   sourceExplanation.dataset.role = "delivery-source-explanation"
+  const graphInstrument = document.createElement("section")
+  graphInstrument.className = "delivery-graph-instrument delivery-instrument"
+  const graphHead = document.createElement("div")
+  graphHead.className = "delivery-instrument-head"
+  const graphTitle = document.createElement("div")
+  appendText(graphTitle, "span", "PRODUCTION OBSERVATION · TRACE FILL", "delivery-instrument-kind")
+  appendText(graphTitle, "h5", "Delivery graph")
+  const graphFreshness = appendText(graphHead, "span", "captured production frame", "delivery-graph-freshness")
+  graphHead.prepend(graphTitle)
+  const graphCanvas = document.createElement("div")
+  graphCanvas.className = "delivery-graph-canvas"
+  graphCanvas.append(graph)
+  graphInstrument.append(graphHead, graphViewControls, graphCanvas)
+  const instrumentLayout = document.createElement("div")
+  instrumentLayout.className = "delivery-instrument-layout"
+  instrumentLayout.append(sourceExplanation, graphInstrument)
   const capacityPositions = document.createElement("section")
   capacityPositions.className = "delivery-capacity-positions"
   const integrationOrder = document.createElement("section")
@@ -932,11 +969,9 @@ const renderTimeline = (
   const taskFactsHost = document.createElement("div")
   taskFactsDisclosure.append(taskFactsHost)
   frameHost.prepend(
-    graphViewControls,
     capacityPositions,
-    graph,
     momentEvidence,
-    sourceExplanation,
+    instrumentLayout,
     integrationOrder,
     offGraphResponsibilities,
     settlementCoverage
@@ -1007,34 +1042,80 @@ const renderTimeline = (
 
   const renderSourceExplanation = (moment: AuthoredObservationMoment, index: number): void => {
     sourceExplanation.replaceChildren()
-    appendText(sourceExplanation, "h5", "Production Delivery source explanation")
     const explanation = deliverySourceExplanationAt(moments, index)
-    appendText(sourceExplanation, "p", explanation.status, "delivery-source-status")
-    if (explanation._tag === "DeliverySourceUnavailable") return
-    appendText(
-      sourceExplanation,
-      "p",
-      `${explanation.relationSetup} This is composition setup, not a tracker read repeated for every publication. No row is a current instruction pointer.`,
-      "delivery-source-setup"
-    )
-    const rows = document.createElement("ol")
+    const head = document.createElement("div")
+    head.className = "delivery-instrument-head"
+    const title = document.createElement("div")
+    appendText(title, "span", "PRODUCTION SHAPE · FRONTIER MEMBERSHIP", "delivery-instrument-kind")
+    appendText(title, "h5", "delivery.ts")
+    appendText(head, "span", `moment ${index + 1} / ${moments.length}`)
+    head.prepend(title)
+    sourceExplanation.append(head)
+    if (explanation._tag === "DeliverySourceUnavailable") {
+      appendText(sourceExplanation, "p", explanation.status, "delivery-source-status")
+      return
+    }
+    const window = document.createElement("div")
+    window.className = "delivery-code-window"
+    const columns = document.createElement("div")
+    columns.className = "delivery-code-columns"
+    appendText(columns, "span", "")
+    appendText(columns, "b", "PRODUCTION SOURCE")
+    appendText(columns, "b", "LIVE DATA")
+    window.append(columns)
+    const opening = document.createElement("div")
+    opening.className = "delivery-code-line delivery-code-brace"
+    appendText(opening, "span", "")
+    const openingCode = document.createElement("code")
+    appendSourceMarkup(openingCode, "export const delivery = Effect.gen(function* () {")
+    opening.append(openingCode)
+    window.append(opening)
+    const rows = document.createElement("div")
     rows.className = "delivery-source-stage-rows"
     for (const rowValue of explanation.rows) {
-      const item = document.createElement("li")
+      const item = document.createElement("div")
       item.dataset.sourceStage = rowValue.id
       item.dataset.taskIds = rowValue.taskIds.join(",")
+      item.className = "delivery-code-line"
       item.classList.toggle("source-output-changed", rowValue.changed)
-      const selectStage = appendText(item, "button", rowValue.label)
+      const gutter = document.createElement("span")
+      gutter.className = "delivery-code-gutter"
+      gutter.append(document.createElement("i"))
+      item.append(gutter)
+      const selectStage = document.createElement("button")
       selectStage.type = "button"
+      selectStage.className = "delivery-source-code-select"
+      appendSourceMarkup(selectStage, rowValue.label)
+      item.append(selectStage)
       selectStage.setAttribute("aria-pressed", String(selectedSourceStageId === rowValue.id))
       selectStage.addEventListener("click", () => {
         selectedSourceStageId = rowValue.id
         graph.highlightedTaskIds = rowValue.taskIds
         applyTaskSelection()
       })
-      appendText(item, "span", rowValue.changed ? "changed in this Delivery publication" : "unchanged at this moment")
+      const cells = document.createElement("div")
+      cells.className = "delivery-source-rectangles"
+      for (const cellValue of rowValue.cells) {
+        const rectangle = document.createElement(cellValue.taskId === null ? "div" : "button")
+        rectangle.className = `delivery-data-rectangle tone-${cellValue.tone}`
+        if (rectangle.tagName === "BUTTON") (rectangle as HTMLButtonElement).type = "button"
+        if (cellValue.taskId !== null) {
+          rectangle.dataset.cellTask = cellValue.taskId
+          rectangle.addEventListener("click", () => {
+            selectedSourceStageId = undefined
+            dispatchPlayback(TaskSelectedRequested({ taskId: TaskId.make(cellValue.taskId!) }))
+            applyTaskSelection()
+          })
+        }
+        appendText(rectangle, "small", cellValue.label)
+        appendText(rectangle, "b", cellValue.value)
+        appendText(rectangle, "em", cellValue.detail)
+        cells.append(rectangle)
+      }
+      if (rowValue.cells.length === 0) appendText(cells, "span", "no values at this moment", "delivery-no-data")
+      item.append(cells)
       const data = document.createElement("details")
-      appendText(data, "summary", `${rowValue.taskIds.length} related graph tasks · current typed output`)
+      appendText(data, "summary", `${rowValue.changed ? "changed" : "stable"} · exact typed diagnostic`)
       const taskButtons = document.createElement("div")
       taskButtons.className = "delivery-source-task-buttons"
       for (const taskId of rowValue.taskIds) {
@@ -1048,10 +1129,24 @@ const renderTimeline = (
       }
       data.append(taskButtons)
       appendText(data, "pre", rowValue.value)
+      data.className = "delivery-source-exact"
       item.append(data)
       rows.append(item)
     }
-    sourceExplanation.append(rows)
+    window.append(rows)
+    const closing = document.createElement("div")
+    closing.className = "delivery-code-line delivery-code-brace"
+    appendText(closing, "span", "")
+    appendText(closing, "code", "})")
+    window.append(closing)
+    sourceExplanation.append(window)
+    const key = document.createElement("div")
+    key.className = "delivery-code-key"
+    appendText(key, "span", "changed at this Delivery publication")
+    appendText(key, "span", "selection links source · data · graph")
+    sourceExplanation.append(key)
+    appendText(sourceExplanation, "p", explanation.status, "delivery-source-status")
+    appendText(sourceExplanation, "p", `${explanation.relationSetup} No row is a current instruction pointer.`, "delivery-source-setup")
   }
 
   const refreshSettlementCoverage = (): void => {
@@ -1080,7 +1175,7 @@ const renderTimeline = (
         const frame = moment.deliveryFrame
         return {
           activationOrdinal: moment.activationOrdinal,
-          capacity: frame?.capacity ?? 0,
+          capacity: frame?.capacity ?? null,
           eligibleTaskIds: frame?.graph._tag === "Established"
             ? frame.graph.tasks
               .filter(({ id }) => taskFacts(frame, id).frontierFact?.standing === "Eligible")
@@ -1131,21 +1226,32 @@ const renderTimeline = (
     }
     for (const sourceRow of sourceExplanation.querySelectorAll<HTMLElement>("[data-source-stage]")) {
       const taskIds = (sourceRow.dataset.taskIds ?? "").split(",").filter((taskId) => taskId.length > 0)
-      sourceRow.classList.toggle(
-        "source-selection-related",
-        sourceRow.dataset.sourceStage === selectedSourceStageId
-          || (selectedTaskId !== null && taskIds.includes(selectedTaskId))
-      )
+      const related = sourceRow.dataset.sourceStage === selectedSourceStageId
+        || (selectedTaskId !== null && taskIds.includes(selectedTaskId))
+      const selectionActive = selectedSourceStageId !== undefined || selectedTaskId !== null
+      sourceRow.classList.toggle("source-selection-related", related)
+      sourceRow.classList.toggle("source-selection-muted", selectionActive && !related)
       sourceRow.querySelector("button")?.setAttribute(
         "aria-pressed",
         String(sourceRow.dataset.sourceStage === selectedSourceStageId)
       )
+      for (const rectangle of sourceRow.querySelectorAll<HTMLElement>("[data-cell-task]")) {
+        const cellRelated = selectedTaskId !== null && rectangle.dataset.cellTask === selectedTaskId
+        rectangle.classList.toggle("source-selection-related", cellRelated)
+        rectangle.classList.toggle("source-selection-muted", selectedTaskId !== null && !cellRelated)
+      }
     }
   }
 
   const show = (index: number): void => {
     const moment = moments[index]
     if (moment === undefined) return
+    graphFreshness.textContent = moment.deliveryFrame === null
+      ? "declared cassette input"
+      : moment._tag === "DeliveryPublicationMoment"
+        ? "coherent Delivery publication"
+        : "retained Delivery facts"
+    graphFreshness.classList.toggle("stale", moment._tag !== "DeliveryPublicationMoment")
     renderMomentEvidence(moment)
     renderSourceExplanation(moment, index)
     const frame = moment.deliveryFrame

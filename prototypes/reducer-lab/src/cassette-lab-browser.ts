@@ -1,5 +1,4 @@
 import {
-  type CassetteCategory,
   type CassetteLabResult,
   type CassetteRunObserver,
   type maintainedCassetteRows,
@@ -40,13 +39,6 @@ export interface CassetteLabBrowserInput {
   ) => Promise<CassetteLabResult>
 }
 
-const categoryOrder: ReadonlyArray<CassetteCategory> = [
-  "Authored",
-  "ApplicationExit",
-  "CodexExecutor",
-  "TargetPromotion",
-  "IntegrationFinality"
-]
 const browserBatchConcurrency = 1
 
 const appendTextElement = <K extends keyof HTMLElementTagNameMap>(
@@ -251,26 +243,12 @@ const renderDefectEvidence = (host: HTMLElement, row: CassetteRow, detail: strin
 
 const defectDetail = (error: unknown): string => error instanceof Error ? error.stack ?? error.message : String(error)
 
-const selectOption = (select: HTMLSelectElement, value: string): void => {
-  for (const option of select.options) {
-    if (option.value === value) option.setAttribute("selected", "")
-    else option.removeAttribute("selected")
-  }
-}
-
 /** Mounts one shared maintainer workbench over the production-owned cassette catalogs. */
 export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const { revision, root, rows, runCassette } = input
   const reloadLab = input.reloadLab ?? (() => globalThis.location.reload())
   document.title = "Dalph reducer lab"
   const rowByKey = new Map(rows.map((row) => [row.catalogKey, row]))
-  const storyNameCounts = new Map<string, number>()
-  const categoryStoryNameCounts = new Map<string, number>()
-  for (const { storyName } of rows) storyNameCounts.set(storyName, (storyNameCounts.get(storyName) ?? 0) + 1)
-  for (const { category, storyName } of rows) {
-    const identity = `${category}:${storyName}`
-    categoryStoryNameCounts.set(identity, (categoryStoryNameCounts.get(identity) ?? 0) + 1)
-  }
   const states = new Map<MaintainedCassetteKey, CassetteState>(
     rows.map(({ catalogKey }) => [catalogKey, { _tag: "NotRun" }])
   )
@@ -306,12 +284,24 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const controls = document.createElement("section")
   controls.className = "catalog-controls"
   controls.setAttribute("aria-label", "Cassette selection, catalog commands, and live results")
-  const selectionLabel = appendTextElement(controls, "label", "Choose cassette")
+  const selectionLabel = appendTextElement(controls, "label", "Find cassette by ID or title")
   selectionLabel.className = "cassette-selection"
   const selectionText = appendTextElement(selectionLabel, "span", `(${rows.length} available)`)
-  const cassetteSelector = document.createElement("select")
-  cassetteSelector.dataset.role = "cassette-selector"
-  selectionLabel.append(cassetteSelector)
+  const cassetteSearch = document.createElement("input")
+  cassetteSearch.type = "search"
+  cassetteSearch.dataset.role = "cassette-selector"
+  cassetteSearch.setAttribute("aria-label", "Find cassette by ID or title")
+  cassetteSearch.setAttribute("autocomplete", "off")
+  const cassetteOptions = document.createElement("datalist")
+  cassetteOptions.id = "maintained-cassette-options"
+  cassetteOptions.dataset.role = "cassette-options"
+  cassetteSearch.setAttribute("list", cassetteOptions.id)
+  const cassetteSearchStatus = document.createElement("output")
+  cassetteSearchStatus.className = "cassette-search-status"
+  cassetteSearchStatus.dataset.role = "cassette-search-status"
+  cassetteSearchStatus.setAttribute("aria-live", "polite")
+  selectionLabel.append(cassetteSearch)
+  controls.append(cassetteOptions, cassetteSearchStatus)
 
   const runAllButton = appendTextElement(controls, "button", `Run all ${rows.length} cassettes`)
   runAllButton.type = "button"
@@ -374,7 +364,8 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       link.addEventListener("click", (event) => {
         event.preventDefault()
         selectedKey = row.catalogKey
-        selectOption(cassetteSelector, row.catalogKey)
+        cassetteSearch.value = row.catalogKey
+        updateSearchStatus()
         evidenceOpen = true
         renderSelected()
         const evidence = sharedSurface.querySelector<HTMLDetailsElement>("details[data-role='execution-evidence']")
@@ -594,46 +585,64 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     if (!single) runAnnouncement.textContent = `Batch finished. ${catalogSummaryText(currentStates())}`
   }
 
+  const matchingRows = (searchText: string): ReadonlyArray<CassetteRow> => {
+    const query = searchText.trim().toLocaleLowerCase()
+    if (query.length === 0) return []
+    return rows.filter(({ catalogKey, storyName }) =>
+      catalogKey.toLocaleLowerCase().includes(query) || storyName.toLocaleLowerCase().includes(query)
+    )
+  }
+
+  const exactSearchRow = (searchText: string): CassetteRow | undefined => {
+    const query = searchText.trim().toLocaleLowerCase()
+    return rows.find(({ catalogKey, storyName }) => {
+      const separator = catalogKey.indexOf(":")
+      const suffix = separator < 0 ? catalogKey : catalogKey.slice(separator + 1)
+      return catalogKey.toLocaleLowerCase() === query
+        || suffix.toLocaleLowerCase() === query
+        || storyName.toLocaleLowerCase() === query
+    })
+  }
+
+  function updateSearchStatus(): void {
+    const matches = matchingRows(cassetteSearch.value)
+    if (cassetteSearch.value.trim().length === 0) {
+      cassetteSearchStatus.textContent = "Search text is empty; the last valid cassette remains selected."
+    } else if (matches.length === 0) {
+      cassetteSearchStatus.textContent = `No maintained cassette matches “${cassetteSearch.value}”; the last valid cassette remains selected.`
+    } else {
+      cassetteSearchStatus.textContent = `${matches.length} ${matches.length === 1 ? "cassette matches" : "cassettes match"}; exact IDs and human titles are available in the suggestions.`
+    }
+  }
+
+  const applyCassetteSearch = (): void => {
+    const matches = matchingRows(cassetteSearch.value)
+    const next = exactSearchRow(cassetteSearch.value) ?? (matches.length === 1 ? matches[0] : undefined)
+    updateSearchStatus()
+    if (next === undefined || next.catalogKey === selectedKey) return
+    selectedKey = next.catalogKey
+    evidenceOpen = false
+    renderSelected()
+  }
+
   refreshSelector = (): void => {
     const keys = rows.map(({ catalogKey }) => catalogKey)
     if (selectedKey === undefined || !keys.includes(selectedKey)) selectedKey = keys[0]
-    cassetteSelector.replaceChildren()
-    for (const categoryName of categoryOrder) {
-      const categoryKeys = keys.filter((key) => rowByKey.get(key)?.category === categoryName)
-      const firstKey = categoryKeys[0]
-      if (firstKey === undefined) continue
-      const group = document.createElement("optgroup")
-      group.label = rowByKey.get(firstKey)?.categoryLabel ?? categoryName
-      for (const key of categoryKeys) {
-        const row = rowByKey.get(key)
-        if (row === undefined) continue
-        const state = states.get(key) ?? { _tag: "NotRun" }
-        const duplicateQualifier = storyNameCounts.get(row.storyName) === 1
-          ? ""
-          : categoryStoryNameCounts.get(`${row.category}:${row.storyName}`) === 1
-            ? ` · ${row.categoryLabel}`
-            : ` · ${row.catalogKey.slice(row.catalogKey.indexOf(":") + 1)}`
-        const option = appendTextElement(
-          group,
-          "option",
-          `${row.storyName}${duplicateQualifier} · ${cassetteStateStatusText(state)}`
-        )
-        option.value = key
-        option.selected = key === selectedKey
-      }
-      cassetteSelector.append(group)
+    cassetteOptions.replaceChildren()
+    for (const row of rows) {
+      const option = document.createElement("option")
+      const state = states.get(row.catalogKey) ?? { _tag: "NotRun" }
+      option.value = row.catalogKey
+      option.label = `${row.storyName} · ${row.categoryLabel} · ${cassetteStateStatusText(state)}`
+      cassetteOptions.append(option)
     }
-    cassetteSelector.disabled = keys.length === 0
+    cassetteSearch.disabled = keys.length === 0
     selectionText.textContent = `(${keys.length} available)`
+    updateSearchStatus()
   }
 
-  cassetteSelector.addEventListener("change", () => {
-    const next = cassetteSelector.value as MaintainedCassetteKey
-    if (!rowByKey.has(next)) return
-    selectedKey = next
-    evidenceOpen = false
-    renderSelected()
-  })
+  cassetteSearch.addEventListener("input", applyCassetteSearch)
+  cassetteSearch.addEventListener("change", applyCassetteSearch)
   runAllButton.addEventListener("click", () => {
     void runKeys(rows.map(({ catalogKey }) => catalogKey), false).then(() =>
       root.dispatchEvent(new Event(everyCassetteSettledEvent))
@@ -651,6 +660,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   reloadButton.addEventListener("click", reloadLab)
 
   root.replaceChildren(header, controls, sharedSurface)
+  cassetteSearch.value = selectedKey ?? ""
   refreshSelector()
   renderSelected()
   updateAggregate()
