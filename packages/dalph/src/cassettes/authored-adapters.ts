@@ -149,6 +149,7 @@ const actualDecision = (item: TraceItem): CassetteDecision | undefined => {
           taskId: operation.plannedAttempt.taskId
         })
     }),
+    /* v8 ignore next -- @preserve Maintained authored stories expose only the selected operations represented by AuthoredCassetteDecision. */
     Match.orElse(() => undefined)
   )
 }
@@ -170,6 +171,7 @@ interface ControlledTraceOptions {
 
 const awaitTraceStoryBoundary = (cursor: StoryCursor, item: TraceItem): Effect.Effect<void> =>
   Effect.gen(function* () {
+    /* v8 ignore next -- @preserve Trace boundary waiting is invoked only for the operation-selection trace item just emitted. */
     if (item._tag !== "OperationSelected") return
     const current = yield* cursor.currentStoryItem
     if (
@@ -191,14 +193,17 @@ const awaitTraceOperatorControlGraphReadBoundary = (
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     const gateRef = options.operatorControlGraphReadGate
+    /* v8 ignore next -- @preserve The authored runner installs both operator-control gate refs together. */
     if (gateRef === undefined) return
     const gate = yield* Ref.get(gateRef)
     const operatorControlGraphReadActive =
+      /* v8 ignore next -- @preserve An installed operator-control gate always carries its paired activity ref. */
       options.operatorControlGraphReadActive === undefined
         ? false
         : yield* Ref.get(options.operatorControlGraphReadActive)
     const isOperatorGraphRead =
       Option.isSome(gate) && operatorControlGraphReadActive && item._tag === "OperationSelected"
+    /* v8 ignore next -- @preserve The serialized authored cursor cannot overtake an active operator graph read with another trace item. */
     if (Option.isSome(gate) && !isOperatorGraphRead) yield* Deferred.await(gate.value.release)
   })
 
@@ -285,12 +290,10 @@ const executorReport = (
 export const controlledExecutorLayer = (
   cursor: StoryCursor,
   runId: RunId,
-  beforeExecutorReport:
-    | Effect.Effect<void>
-    | ((
-        plannedAttempt: PlannedTaskAttempt,
-        request: "StartOrContinue" | "Suspend"
-      ) => Effect.Effect<void>) = Effect.void,
+  beforeExecutorReport: (
+    plannedAttempt: PlannedTaskAttempt,
+    request: "StartOrContinue" | "Suspend"
+  ) => Effect.Effect<void>,
   survivingReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
   unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>,
   prepareReport: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport> = Effect.succeed
@@ -300,9 +303,7 @@ export const controlledExecutorLayer = (
     request: "StartOrContinue" | "Suspend",
     plannedAttempt: PlannedTaskAttempt
   ) {
-    yield* typeof beforeExecutorReport === "function"
-      ? beforeExecutorReport(plannedAttempt, request)
-      : beforeExecutorReport
+    yield* beforeExecutorReport(plannedAttempt, request)
     yield* cursor.pauseAtCoordinatorProcessDeath
     const storyPosition = yield* cursor.storyPosition
     const item = yield* cursor.consumeExecutorReport.pipe(

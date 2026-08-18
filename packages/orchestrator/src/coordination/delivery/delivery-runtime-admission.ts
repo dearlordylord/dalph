@@ -307,6 +307,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
             })
           )
         )
+        /* v8 ignore next -- @preserve ApplicationExitAdmission exposes only AtomicBoundary or InterruptibleBoundary forward owners. */
         if (registeredOwner.kind !== "AtomicBoundary" && registeredOwner.kind !== "InterruptibleBoundary") {
           return yield* Effect.die(`delivery admission registered unsupported owner ${registeredOwner.kind}`)
         }

@@ -183,6 +183,10 @@ type RestartQuiescence =
   | Exclude<EstablishedRestartQuiescence, { readonly _tag: "Pending" }>
   | { readonly _tag: "Pending"; readonly reason: AttemptRestartPendingReason }
 
+const executorContradictory = () =>
+  Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorContradictory" as const })
+const executorUnavailable = () => Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const })
+
 const preparedRestartFrom = (quiescence: RestartQuiescence, application: RestartApplicationRecord) => {
   const { requestId, subject } = application.event
   return Match.valueTags(quiescence, {
@@ -190,6 +194,7 @@ const preparedRestartFrom = (quiescence: RestartQuiescence, application: Restart
     Proof: ({ evidence }) =>
       Effect.succeed({ _tag: "RestartPrepared" as const, application, quiescenceEvidence: evidence }),
     Rejected: ({ reason }) => Effect.succeed({ _tag: "AttemptRestartRejected" as const, reason }),
+    /* v8 ignore next -- @preserve The closed quiescence interpreter returns Pending, Proof, or Rejected for every accepted executor report. */
     Unproved: () =>
       Effect.fail(
         new AttemptRestartAuthorityContradiction({
@@ -216,28 +221,21 @@ const prepareAttemptRestart = Effect.fn("AttemptRestart.prepare")(function* (
     return { _tag: "PlannedAttemptReplacementRecorded" as const, replacement: existing.replacement }
   }
   const application = exactAppliedRestart(records, requestId, subject)
+  /* v8 ignore next -- @preserve The protocol controller exposes Restart only from its exact durable application record. */
   if (application === undefined) return yield* new AttemptRestartChoiceContradiction({ requestId, subject })
   if (restartChoiceWasInvalidatedByLaterSpecification(records, application.position, subject)) {
     return { _tag: "AttemptRestartRejected" as const, reason: "NewFingerprintChoiceRequired" as const }
   }
   const quiescence = yield* terminalOrSafeRestartQuiescence(records, application, subject, permit).pipe(
     Effect.catchTags({
-      PlannedAttemptExecutorCorrelationMismatch: () =>
-        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorContradictory" as const }),
-      PlannedAttemptExecutorProjectionCorrelationMismatch: () =>
-        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorContradictory" as const }),
-      PlannedAttemptExecutorProjectionNoCurrentReport: () =>
-        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const }),
-      PlannedAttemptExecutorProjectionTemporarilyUnavailable: () =>
-        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const }),
-      PlannedAttemptExecutorProjectionUnreadable: () =>
-        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const }),
-      PlannedAttemptExecutorStateNoCurrentReport: () =>
-        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const }),
-      PlannedAttemptExecutorStateTemporarilyUnavailable: () =>
-        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const }),
-      PlannedAttemptExecutorStateUnreadable: () =>
-        Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const })
+      PlannedAttemptExecutorCorrelationMismatch: executorContradictory,
+      PlannedAttemptExecutorProjectionCorrelationMismatch: executorContradictory,
+      PlannedAttemptExecutorProjectionNoCurrentReport: executorUnavailable,
+      PlannedAttemptExecutorProjectionTemporarilyUnavailable: executorUnavailable,
+      PlannedAttemptExecutorProjectionUnreadable: executorUnavailable,
+      PlannedAttemptExecutorStateNoCurrentReport: executorUnavailable,
+      PlannedAttemptExecutorStateTemporarilyUnavailable: executorUnavailable,
+      PlannedAttemptExecutorStateUnreadable: executorUnavailable
     })
   )
   return yield* preparedRestartFrom(quiescence, application)
@@ -257,6 +255,7 @@ const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (prepar
       records,
       requestId,
       "graph",
+      /* v8 ignore next -- @preserve The applied Restart record is already present in this non-empty journal. */
       records.at(lastRecordOffset)?.position ?? prepared.application.position
     ),
     began.event.target,
@@ -280,6 +279,7 @@ const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (prepar
         unreadableTaskFacts(graphOperation.operationId, failure._tag, failure.detail, graphOperation.target, prepared),
       "TrackerGraphReader.TrackerReadError": (failure) =>
         unreadableTaskFacts(graphOperation.operationId, failure._tag, failure.detail, graphOperation.target, prepared),
+      /* v8 ignore next -- @preserve This live read has just journaled its outcome, so reconstruction cannot lack that outcome. */
       TaskTrackerKnowledgeUnavailable: (failure) =>
         Effect.fail(
           new AttemptRestartAuthorityContradiction({
@@ -310,6 +310,7 @@ const readRestartTaskFacts = Effect.fn("AttemptRestart.readTaskFacts")(function*
       records,
       requestId,
       "specification",
+      /* v8 ignore next -- @preserve The applied Restart and graph-read records make this journal non-empty. */
       records.at(lastRecordOffset)?.position ?? facts.application.position
     ),
     facts.graphOperation.target,
@@ -343,6 +344,7 @@ const readRestartTaskFacts = Effect.fn("AttemptRestart.readTaskFacts")(function*
           specificationOperation.target,
           facts
         ),
+      /* v8 ignore next -- @preserve This live read has just journaled its outcome, so reconstruction cannot lack that outcome. */
       TaskTrackerKnowledgeUnavailable: (failure) =>
         Effect.fail(
           new AttemptRestartAuthorityContradiction({
@@ -373,6 +375,7 @@ const readRestartClaim = Effect.fn("AttemptRestart.readClaim")(function* (facts:
       records,
       requestId,
       "claim",
+      /* v8 ignore next -- @preserve The prior Restart authority reads make this journal non-empty. */
       records.at(lastRecordOffset)?.position ?? facts.application.position
     ),
     facts.graphOperation.target,
@@ -387,6 +390,7 @@ const readRestartClaim = Effect.fn("AttemptRestart.readClaim")(function* (facts:
     yield* journal.read(subject.plannedAttempt.runId),
     facts.application
   )?.claim
+  /* v8 ignore next -- @preserve An accepted Restart application is validated against its exact P1 claim authority. */
   if (expectedClaim === undefined) {
     return yield* new AttemptRestartAuthorityContradiction({
       detail: "P1 claim authority is missing",
@@ -413,6 +417,7 @@ const readRestartWorktree = Effect.fn("AttemptRestart.readWorktree")(function* (
       records,
       requestId,
       "worktree",
+      /* v8 ignore next -- @preserve The prior Restart authority reads make this journal non-empty. */
       records.at(lastRecordOffset)?.position ?? facts.application.position
     ),
     plannedAttempt: subject.plannedAttempt,
@@ -463,9 +468,11 @@ const replacementDispositionBeforeAllocation = Effect.fn("AttemptRestart.disposi
 ) {
   const { requestId, subject } = restartRequestFor(facts)
   const recorded = exactRecordedReplacement(records, requestId, subject)
+  /* v8 ignore next -- @preserve Valid reconstructed history cannot contain contradictory exact replacement records. */
   if (recorded._tag === "Contradictory") {
     return yield* new AttemptRestartChoiceContradiction({ requestId, subject })
   }
+  /* v8 ignore next -- @preserve The caller reconciles an already-recorded replacement before entering allocation. */
   if (recorded._tag === "Exact") {
     return { _tag: "PlannedAttemptReplacementRecorded" as const, replacement: recorded.replacement }
   }
@@ -488,6 +495,7 @@ const recordAttemptReplacement = Effect.fn("AttemptRestart.recordReplacement")(f
       records,
       requestId,
       "target-lineage",
+      /* v8 ignore next -- @preserve The prior Restart authority reads make this journal non-empty. */
       records.at(lastRecordOffset)?.position ?? facts.application.position
     ),
     plannedAttempt: subject.plannedAttempt,

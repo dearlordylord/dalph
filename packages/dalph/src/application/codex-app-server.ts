@@ -1,11 +1,6 @@
 /* eslint-disable import/no-nodejs-modules -- the process adapter is the one explicit execution-substrate boundary. */
 /* eslint-disable max-lines -- The protocol transport and ownership gate form one audited application boundary. */
-import nodeProcess from "node:process"
 import { randomUUID } from "node:crypto"
-import nodeFsPromises from "node:fs/promises"
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
-import { setTimeout as nodeSetTimeout } from "node:timers"
 import nodePath from "node:path"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpawner"
@@ -31,6 +26,11 @@ import {
   type CodexAttemptStoreService,
   type CodexServerLaunchRecord
 } from "./codex-attempt-store.js"
+import {
+  CodexProcessNative,
+  nodeCodexProcessNativeService,
+  type CodexProcessNativeService
+} from "./codex-process-native.js"
 
 /** The process-owned status projection returned by one Codex thread read. */
 type CodexThreadStatus = "active" | "idle" | "notLoaded" | "systemError"
@@ -249,19 +249,57 @@ const operationFailure = (
   detail: unknown
 ): CodexAppServerFailure => new CodexAppServerFailure({ operation, kind, detail: String(detail) })
 
+const initializeOwnershipFailure = (error: unknown): CodexAppServerFailure =>
+  operationFailure("initialize", "Ownership", error)
+const initializeProtocolFailure = (error: unknown): CodexAppServerFailure =>
+  operationFailure("initialize", "Protocol", error)
+const initializeUnavailableFailure = (error: unknown): CodexAppServerFailure =>
+  operationFailure("initialize", "Unavailable", error)
+const closeOwnershipFailure = (error: unknown): CodexAppServerFailure => operationFailure("close", "Ownership", error)
+const processSignalFailure = (cause: unknown): CodexProcessSignalFailure => new CodexProcessSignalFailure({ cause })
+export const ignoreEffectFailure = (): Effect.Effect<void> => Effect.void
+export const preserveAppServerFailure =
+  (operation: CodexAppServerOperation, kind: CodexAppServerFailureKind) =>
+  (error: unknown): CodexAppServerFailure =>
+    error instanceof CodexAppServerFailure ? error : operationFailure(operation, kind, error)
+
+export const failAfterInitializationCleanup = (
+  cleanup: Effect.Effect<void, unknown>,
+  subject: string,
+  error: CodexAppServerFailure | CodexAttemptStoreFailure
+): Effect.Effect<never, CodexAppServerFailure | CodexAttemptStoreFailure> =>
+  cleanup.pipe(
+    Effect.matchEffect({
+      onFailure: (cleanupError) =>
+        Effect.fail(
+          operationFailure(
+            "initialize",
+            "Ownership",
+            `${error.detail}; ${subject} cleanup failed: ${String(cleanupError)}`
+          )
+        ),
+      onSuccess: () => Effect.fail(error)
+    })
+  )
+
+export const failAfterClose = (
+  close: Effect.Effect<void, CodexAppServerFailure>,
+  error: CodexAttemptStoreFailure
+): Effect.Effect<never, CodexAppServerFailure | CodexAttemptStoreFailure> =>
+  close.pipe(Effect.andThen(Effect.fail(error)))
+
 const ownershipStopPollAttempts = 50
 const ownershipStopPollDelayMilliseconds = 20 // eslint-disable-line no-magic-numbers -- bounded process-stop polling interval
-const waitForOwnershipPoll = Effect.promise(
-  () => new Promise<void>((resolve) => nodeSetTimeout(resolve, ownershipStopPollDelayMilliseconds))
-)
+const waitForOwnershipPoll = (native: CodexProcessNativeService): Effect.Effect<void> =>
+  native.wait(ownershipStopPollDelayMilliseconds)
 
-const processErrorCode = (error: unknown): string => {
+export const processErrorCode = (error: unknown): string => {
   if (typeof error !== "object" || error === null) return ""
   if ("code" in error) return String(error.code)
   return "cause" in error ? processErrorCode(error.cause) : ""
 }
 
-const processWasAbsent = (error: unknown): boolean => {
+export const processWasAbsent = (error: unknown): boolean => {
   const code = processErrorCode(error)
   return code === "ENOENT" || code === "ESRCH" || /\b(?:ENOENT|ESRCH)\b/.test(String(error))
 }
@@ -270,12 +308,14 @@ const processIdentitySeparator = "|"
 const codexServerIncarnationEnvironment = "DALPH_CODEX_SERVER_INCARNATION"
 const processStatAfterCommandOffset = 2
 const linuxProcessStatStartTimeFieldIndex = 19
-const execFileAsync = promisify(execFile)
 
 /** Reads the host's process-start identity, which distinguishes PID reuse. */
-const readProcessStartIdentity = async (pid: number): Promise<string | undefined> => {
-  if (nodeProcess.platform === "linux") {
-    const stat = await nodeFsPromises.readFile(`/proc/${pid}/stat`, "utf8")
+const readProcessStartIdentity = async (
+  pid: number,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Promise<string | undefined> => {
+  if (native.platform === "linux") {
+    const stat = await native.readFile(`/proc/${pid}/stat`)
     const commandEnd = stat.lastIndexOf(")")
     const fields =
       commandEnd < 0
@@ -287,34 +327,36 @@ const readProcessStartIdentity = async (pid: number): Promise<string | undefined
     const startTime = fields[linuxProcessStatStartTimeFieldIndex]
     return startTime === undefined || startTime.length === 0 ? undefined : `linux:${startTime}`
   }
-  if (nodeProcess.platform === "win32") {
-    const { stdout: startTime } = await execFileAsync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`],
-      { encoding: "utf8" }
-    )
-    return startTime.trim().length === 0 ? undefined : `windows:${startTime.trim()}`
+  if (native.platform === "win32") {
+    const { stdout: startTime } = await native.execFile("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`
+    ])
+    return windowsProcessIdentity(startTime)
   }
   return undefined
 }
 
-const incarnationWithProcessIdentity = async (
+export const incarnationWithProcessIdentity = async (
   base: CodexServerIncarnation,
-  pid: number
+  pid: number,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Promise<CodexServerIncarnation | undefined> => {
-  const identity = await readProcessStartIdentity(pid)
+  const identity = await readProcessStartIdentity(pid, native)
   return identity === undefined
     ? undefined
     : CodexServerIncarnation.make(`${base}${processIdentitySeparator}${encodeURIComponent(identity)}`)
 }
 
 /** Returns the durable token written before spawn, excluding the later PID identity suffix. */
-const durableIncarnationToken = (incarnation: CodexServerIncarnation): CodexServerIncarnation => {
+export const durableIncarnationToken = (incarnation: CodexServerIncarnation): CodexServerIncarnation => {
   const separator = incarnation.indexOf(processIdentitySeparator)
   return CodexServerIncarnation.make(separator < 0 ? incarnation : incarnation.slice(0, separator))
 }
 
-const processIdentityFromIncarnation = (incarnation: CodexServerIncarnation): string | undefined => {
+export const processIdentityFromIncarnation = (incarnation: CodexServerIncarnation): string | undefined => {
   const separator = incarnation.lastIndexOf(processIdentitySeparator)
   if (separator <= 0 || separator === incarnation.length - 1) return undefined
   try {
@@ -324,14 +366,22 @@ const processIdentityFromIncarnation = (incarnation: CodexServerIncarnation): st
   }
 }
 
+export const windowsProcessIdentity = (startTime: string): CodexProcessStartIdentity | undefined => {
+  const normalized = startTime.trim()
+  return normalized.length === 0 ? undefined : CodexProcessStartIdentity.make(`windows:${normalized}`)
+}
+
 /** Observes the current process owner identity for crash-recoverable lease reconciliation. */
-const observeLeaseOwner = async (owner: CodexServerLeaseRecord): Promise<CodexServerOwnershipProjection> => {
-  if (nodeProcess.platform !== "linux" && nodeProcess.platform !== "win32") {
+const observeLeaseOwner = async (
+  owner: CodexServerLeaseRecord,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Promise<CodexServerOwnershipProjection> => {
+  if (native.platform !== "linux" && native.platform !== "win32") {
     return { _tag: "Unreadable", detail: "process-start identity is unsupported on this platform" }
   }
   try {
-    nodeProcess.kill(owner.pid, 0)
-    const observedProcessIdentity = await readProcessStartIdentity(owner.pid)
+    native.kill(owner.pid, 0)
+    const observedProcessIdentity = await readProcessStartIdentity(owner.pid, native)
     if (observedProcessIdentity === undefined) {
       return { _tag: "Unreadable", detail: "observed lease owner has no process-start identity" }
     }
@@ -345,7 +395,7 @@ const observeLeaseOwner = async (owner: CodexServerLeaseRecord): Promise<CodexSe
   }
 }
 
-interface LinuxProcessStat {
+export interface LinuxProcessStat {
   readonly pid: number
   readonly parentPid: number
   readonly processGroupId: number
@@ -357,8 +407,11 @@ type LinuxProcessStatObservation =
   | { readonly _tag: "Read"; readonly stat: LinuxProcessStat }
   | { readonly _tag: "Unreadable"; readonly detail: string }
 
-const readLinuxProcessStat = async (pid: number): Promise<LinuxProcessStat | undefined> => {
-  const stat = await nodeFsPromises.readFile(`/proc/${pid}/stat`, "utf8")
+const readLinuxProcessStat = async (
+  pid: number,
+  native: CodexProcessNativeService
+): Promise<LinuxProcessStat | undefined> => {
+  const stat = await native.readFile(`/proc/${pid}/stat`)
   const commandEnd = stat.lastIndexOf(")")
   if (commandEnd < 0) return undefined
   const fields = stat
@@ -381,9 +434,12 @@ const readLinuxProcessStat = async (pid: number): Promise<LinuxProcessStat | und
   return { pid, parentPid, processGroupId, startIdentity: CodexProcessStartIdentity.make(`linux:${startTime}`) }
 }
 
-const readLinuxProcessStatObservation = async (pid: number): Promise<LinuxProcessStatObservation> => {
+const readLinuxProcessStatObservation = async (
+  pid: number,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Promise<LinuxProcessStatObservation> => {
   try {
-    const stat = await readLinuxProcessStat(pid)
+    const stat = await readLinuxProcessStat(pid, native)
     return stat === undefined
       ? { _tag: "Unreadable", detail: `process ${pid} stat is malformed` }
       : { _tag: "Read", stat }
@@ -400,14 +456,17 @@ type OwnedActivityProcessProjection =
   | { readonly _tag: "Unreadable"; readonly detail: string }
   | { readonly _tag: "Contradictory"; readonly detail: string }
 
-const readNumericLinuxProcessStat = (entry: string): ReadonlyArray<Promise<LinuxProcessStatObservation>> => {
+const readNumericLinuxProcessStat = (
+  entry: string,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): ReadonlyArray<Promise<LinuxProcessStatObservation>> => {
   if (!/^[0-9]+$/.test(entry)) return []
   const pid = Number(entry)
   if (!Number.isSafeInteger(pid) || pid <= 0) return []
-  return [readLinuxProcessStatObservation(pid)]
+  return [readLinuxProcessStatObservation(pid, native)]
 }
 
-const isLinuxProcessDescendant = (
+export const isLinuxProcessDescendant = (
   rootPid: number,
   byPid: ReadonlyMap<number, LinuxProcessStat>,
   candidate: LinuxProcessStat
@@ -467,9 +526,12 @@ const collectOwnedActivityMembers = (
  * The app-server launch process is never an input to this capability and is
  * therefore never silently folded into an attempt census.
  */
-const observeOwnedActivityProcesses = async (roots: ReadonlyArray<number>): Promise<OwnedActivityProcessProjection> => {
+const observeOwnedActivityProcesses = async (
+  roots: ReadonlyArray<number>,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Promise<OwnedActivityProcessProjection> => {
   if (roots.length === 0) return { _tag: "Absent" }
-  if (nodeProcess.platform !== "linux") {
+  if (native.platform !== "linux") {
     // #75 owns qualification of non-Linux attempt-child adapters. Until that
     // execution-substrate boundary supplies exact descendants and start
     // identities, this census is typed Unreadable rather than inferred from
@@ -477,9 +539,9 @@ const observeOwnedActivityProcesses = async (roots: ReadonlyArray<number>): Prom
     return { _tag: "Unreadable", detail: "owned attempt process census is not qualified on this host" }
   }
   const uniqueRoots = [...new Set(roots)]
-  const entries = await nodeFsPromises.readdir("/proc")
+  const entries = await native.readdir("/proc")
   const stats: ReadonlyArray<LinuxProcessStatObservation> = await Promise.all(
-    entries.flatMap(readNumericLinuxProcessStat)
+    entries.flatMap((entry) => readNumericLinuxProcessStat(entry, native))
   )
   const unreadable = stats.find((result) => result._tag === "Unreadable")
   if (unreadable !== undefined) return unreadable
@@ -490,9 +552,10 @@ const observeOwnedActivityProcesses = async (roots: ReadonlyArray<number>): Prom
 }
 
 const terminateExactOwnedActivityMember = async (
-  member: CodexOwnedProcessIdentity
+  member: CodexOwnedProcessIdentity,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Promise<CodexAppServerFailure | undefined> => {
-  const observed = await readLinuxProcessStatObservation(member.pid)
+  const observed = await readLinuxProcessStatObservation(member.pid, native)
   if (observed._tag === "Absent") return
   if (observed._tag === "Unreadable") {
     return operationFailure("thread/ownedActivity/terminate", "Ownership", observed.detail)
@@ -505,7 +568,7 @@ const terminateExactOwnedActivityMember = async (
     )
   }
   try {
-    nodeProcess.kill(member.pid, "SIGTERM")
+    native.kill(member.pid, "SIGTERM")
   } catch (error) {
     if (!processWasAbsent(error)) return operationFailure("thread/ownedActivity/terminate", "Ownership", error)
   }
@@ -513,10 +576,11 @@ const terminateExactOwnedActivityMember = async (
 
 /** Signals only a freshly revalidated attempt descendant identity. */
 const terminateExactOwnedActivityProcesses = async (
-  members: ReadonlyArray<CodexOwnedProcessIdentity>
+  members: ReadonlyArray<CodexOwnedProcessIdentity>,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Promise<CodexAppServerFailure | undefined> => {
   if (members.length === 0) return
-  if (nodeProcess.platform !== "linux") {
+  if (native.platform !== "linux") {
     return operationFailure(
       "thread/ownedActivity/terminate",
       "Ownership",
@@ -524,13 +588,15 @@ const terminateExactOwnedActivityProcesses = async (
     )
   }
   for (const member of members) {
-    const failure = await terminateExactOwnedActivityMember(member)
+    const failure = await terminateExactOwnedActivityMember(member, native)
     if (failure !== undefined) return failure
   }
 }
 
 /** Node attempt-activity authority; server launch ownership remains separate. */
-const nodeCodexOwnedActivityCensusService: CodexOwnedActivityCensusService = {
+export const makeNodeCodexOwnedActivityCensusService = (
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): CodexOwnedActivityCensusService => ({
   observe: (thread, backgroundTerminals) =>
     Effect.tryPromise({
       try: async (): Promise<CodexOwnedActivityCensusProjection> => {
@@ -544,7 +610,8 @@ const nodeCodexOwnedActivityCensusService: CodexOwnedActivityCensusService = {
         const processProjection = await observeOwnedActivityProcesses(
           backgroundTerminals.flatMap((terminal) =>
             terminal.osPid === null || terminal.osPid === undefined ? [] : [terminal.osPid]
-          )
+          ),
+          native
         )
         if (processProjection._tag === "Unreadable" || processProjection._tag === "Contradictory") {
           return processProjection
@@ -558,20 +625,16 @@ const nodeCodexOwnedActivityCensusService: CodexOwnedActivityCensusService = {
         ]
         return activities.length === 0 ? { _tag: "Absent" } : { _tag: "ExactLive", activities }
       },
-      catch: (error) =>
-        error instanceof CodexAppServerFailure
-          ? error
-          : operationFailure("thread/ownedActivity/census", "Ownership", error)
+      catch: preserveAppServerFailure("thread/ownedActivity/census", "Ownership")
     }),
   terminateDescendants: (descendants) =>
     Effect.tryPromise({
-      try: () => terminateExactOwnedActivityProcesses(descendants),
-      catch: (error) =>
-        error instanceof CodexAppServerFailure
-          ? error
-          : operationFailure("thread/ownedActivity/terminate", "Ownership", error)
+      try: () => terminateExactOwnedActivityProcesses(descendants, native),
+      catch: preserveAppServerFailure("thread/ownedActivity/terminate", "Ownership")
     }).pipe(Effect.flatMap((failure) => (failure === undefined ? Effect.void : Effect.fail(failure))))
-}
+})
+
+const nodeCodexOwnedActivityCensusService: CodexOwnedActivityCensusService = makeNodeCodexOwnedActivityCensusService()
 
 const stringValue = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined
@@ -675,11 +738,7 @@ const normalizeOwnedTurnToken = (
   if (value === undefined || value === null) return undefined
   const token = stringValue(value)
   if (token === undefined) return operationFailure(operation, "Malformed", "owned turn token is invalid")
-  try {
-    return CodexOwnedTurnToken.make(token)
-  } catch (error) {
-    return operationFailure(operation, "Malformed", `owned turn token is invalid: ${String(error)}`)
-  }
+  return CodexOwnedTurnToken.make(token)
 }
 
 const hasDuplicateOwnedTurnMarkers = (
@@ -721,6 +780,7 @@ const normalizeOwnedTurnTokenFromTurnSource = (
   const markerToken = distinctMarkerValues[0]
   if (markerToken === undefined) return directToken
   const normalizedToken = normalizeOwnedTurnToken(markerToken, operation)
+  /* v8 ignore next -- @preserve Marker extraction returns only a non-empty branded-token candidate. */
   if (normalizedToken instanceof CodexAppServerFailure) return normalizedToken
   if (directToken !== undefined && directToken !== normalizedToken) {
     return operationFailure(operation, "Malformed", "owned turn token metadata contradicts its input marker")
@@ -805,6 +865,11 @@ const normalizeThread = (
     ...(correlation === undefined ? {} : { correlation })
   }
 }
+
+const normalizedThreadEffect = (
+  thread: CodexThreadSnapshot | CodexAppServerFailure
+): Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure> =>
+  thread instanceof CodexAppServerFailure ? Effect.fail(thread) : Effect.succeed(thread)
 
 type NormalizedBackgroundTerminal = {
   readonly processId: string
@@ -900,7 +965,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
           const parsed: unknown = JSON.parse(line)
           return parsed
         },
-        catch: (error) => operationFailure("initialize", "Protocol", error)
+        catch: initializeProtocolFailure
       }).pipe(
         Effect.flatMap((parsed) =>
           isJsonObject(parsed)
@@ -935,6 +1000,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
         }),
         Effect.catch((error) =>
           failPending(
+            /* v8 ignore next -- @preserve Reader parsing and protocol validation normalize every failure into CodexAppServerFailure before this catch. */
             error instanceof CodexAppServerFailure ? error : operationFailure("initialize", "Protocol", error)
           )
         )
@@ -947,16 +1013,12 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   )
   // A noisy child must not block on stderr while the JSON-RPC reader waits on
   // stdout. Stderr is diagnostic-only and never participates in protocol state.
-  yield* handle.stderr.pipe(
-    Stream.runDrain,
-    Effect.catch(() => Effect.void),
-    Effect.forkScoped
-  )
+  yield* handle.stderr.pipe(Stream.runDrain, Effect.catch(ignoreEffectFailure), Effect.forkScoped)
 
   const write = (message: Record<string, unknown>) =>
     writes.withPermit(
       Stream.run(Stream.succeed(encoder.encode(`${JSON.stringify(message)}\n`)), handle.stdin).pipe(
-        Effect.mapError((error) => operationFailure("initialize", "Unavailable", error))
+        Effect.mapError(initializeUnavailableFailure)
       )
     )
   const notify: JsonRpcClient["notify"] = Effect.fn("CodexAppServer.notify")(function* (
@@ -964,7 +1026,9 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     params?: unknown
   ) {
     const isClosed = yield* Ref.get(closed)
+    /* v8 ignore next -- @preserve The initialized notification is emitted only during scoped startup before close is published. */
     if (isClosed) return yield* Effect.fail(operationFailure("close", "Unavailable", "app-server is closed"))
+    /* v8 ignore next -- @preserve The sole initialized notification always supplies its initialization parameters. */
     yield* write({ jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) })
   })
   const request: JsonRpcClient["request"] = Effect.fn("CodexAppServer.request")(function* (
@@ -977,6 +1041,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     const id = yield* Ref.modify(nextId, (current) => [current, current + 1] as const)
     const deferred = yield* Deferred.make<unknown, CodexAppServerFailure>()
     yield* Ref.update(pending, (current) => new Map([...current, [id, deferred] as const]))
+    /* v8 ignore next -- @preserve Every Codex request method in this adapter supplies its protocol parameter object. */
     yield* write({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) }).pipe(
       Effect.catch((error) =>
         Ref.update(pending, (current) => {
@@ -992,12 +1057,14 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     )
     return yield* Deferred.await(deferred).pipe(
       Effect.mapError((error) =>
+        /* v8 ignore next -- @preserve Pending request failures originate in the shared reader and therefore carry initialize until remapped here. */
         error.operation === "initialize" ? operationFailure(operation, error.kind, error.detail) : error
       )
     )
   })
   const close = Effect.gen(function* () {
     const shouldClose = yield* Ref.modify(closed, (current) => [!current, true] as const)
+    /* v8 ignore next -- @preserve The outer scoped close latch invokes the private RPC close exactly once. */
     if (!shouldClose) return
     yield* failPending(operationFailure("close", "Unavailable", `app-server ${incarnation} closed`))
   })
@@ -1020,7 +1087,10 @@ const CodexInitializeResponse = Schema.Struct({
   platformOs: Schema.Literals(["linux", "macos", "windows"])
 })
 
-const normalizeInitializeResponse = (value: unknown): CodexAppServerFailure | true => {
+export const normalizeInitializeResponse = (
+  value: unknown,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): CodexAppServerFailure | true => {
   try {
     const response = Schema.decodeUnknownSync(CodexInitializeResponse)(value)
     const familyMatches =
@@ -1033,7 +1103,7 @@ const normalizeInitializeResponse = (value: unknown): CodexAppServerFailure | tr
       )
     }
     const expectedPlatformOs =
-      nodeProcess.platform === "win32" ? "windows" : nodeProcess.platform === "darwin" ? "macos" : "linux"
+      native.platform === "win32" ? "windows" : native.platform === "darwin" ? "macos" : "linux"
     if (response.platformOs !== expectedPlatformOs) {
       return operationFailure(
         "initialize",
@@ -1090,7 +1160,8 @@ const awaitOwnedProcessAbsent = (
   ownership: CodexProcessOwnershipService,
   launch: CodexServerLaunchRecord,
   remaining: number = ownershipStopPollAttempts,
-  operation: CodexAppServerOperation = "initialize"
+  operation: CodexAppServerOperation = "initialize",
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Effect.Effect<void, CodexAppServerFailure> =>
   Effect.suspend(() =>
     ownership.observe(launch).pipe(
@@ -1105,17 +1176,18 @@ const awaitOwnedProcessAbsent = (
         if (remaining <= 0) {
           return Effect.fail(operationFailure(operation, "Ownership", "previous app-server did not become absent"))
         }
-        return waitForOwnershipPoll.pipe(
-          Effect.andThen(awaitOwnedProcessAbsent(ownership, launch, remaining - 1, operation))
+        return waitForOwnershipPoll(native).pipe(
+          Effect.andThen(awaitOwnedProcessAbsent(ownership, launch, remaining - 1, operation, native))
         )
       })
     )
   )
 
-const awaitOwnedGroupAbsent = (
+export const awaitOwnedGroupAbsent = (
   census: CodexProcessGroupCensusService,
   launch: CodexServerLaunchRecord,
-  remaining: number = ownershipStopPollAttempts
+  remaining: number = ownershipStopPollAttempts,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Effect.Effect<void, CodexAppServerFailure> =>
   Effect.suspend(() =>
     census.observe(launch).pipe(
@@ -1127,12 +1199,14 @@ const awaitOwnedGroupAbsent = (
         if (remaining <= 0) {
           return Effect.fail(operationFailure("close", "Ownership", "owned app-server group did not become absent"))
         }
-        return waitForOwnershipPoll.pipe(Effect.andThen(awaitOwnedGroupAbsent(census, launch, remaining - 1)))
+        return waitForOwnershipPoll(native).pipe(
+          Effect.andThen(awaitOwnedGroupAbsent(census, launch, remaining - 1, native))
+        )
       })
     )
   )
 
-const processGroupLeaderFailure = (
+export const processGroupLeaderFailure = (
   leader: LinuxProcessStat | undefined,
   launchPid: number,
   expectedIdentity: string
@@ -1143,7 +1217,7 @@ const processGroupLeaderFailure = (
   return undefined
 }
 
-const collectOwnedProcessGroupMembers = (
+export const collectOwnedProcessGroupMembers = (
   launchPid: number,
   expectedIdentity: string,
   byPid: ReadonlyMap<number, LinuxProcessStat>
@@ -1165,11 +1239,13 @@ const collectOwnedProcessGroupMembers = (
   return { _tag: "ExactLive", members }
 }
 
-const nodeCodexProcessGroupCensusService: CodexProcessGroupCensusService = {
+export const makeNodeCodexProcessGroupCensusService = (
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): CodexProcessGroupCensusService => ({
   observe: (launch) =>
     Effect.tryPromise({
       try: async () => {
-        if (nodeProcess.platform !== "linux") {
+        if (native.platform !== "linux") {
           // #75 owns real macOS/host qualification. Until that boundary
           // supplies a start-identity/group census, remain Unreadable rather
           // than inferring ownership from an inexact `lstart`-style listing.
@@ -1180,9 +1256,9 @@ const nodeCodexProcessGroupCensusService: CodexProcessGroupCensusService = {
         if (expectedIdentity === undefined) {
           return { _tag: "Unreadable" as const, detail: "launch has no process-start identity" }
         }
-        const entries = await nodeFsPromises.readdir("/proc")
+        const entries = await native.readdir("/proc")
         const stats: ReadonlyArray<LinuxProcessStatObservation> = await Promise.all(
-          entries.flatMap(readNumericLinuxProcessStat)
+          entries.flatMap((entry) => readNumericLinuxProcessStat(entry, native))
         )
         const unreadable = stats.find((result) => result._tag === "Unreadable")
         if (unreadable !== undefined) return unreadable
@@ -1191,9 +1267,9 @@ const nodeCodexProcessGroupCensusService: CodexProcessGroupCensusService = {
         )
         return collectOwnedProcessGroupMembers(launch.pid, expectedIdentity, byPid)
       },
-      catch: (error) => operationFailure("close", "Ownership", error)
+      catch: closeOwnershipFailure
     })
-}
+})
 
 type ExactMembersProjection =
   | { readonly _tag: "Absent" }
@@ -1202,11 +1278,12 @@ type ExactMembersProjection =
   | { readonly _tag: "Contradictory"; readonly detail: string }
 
 const observeExactMembers = async (
-  members: ReadonlyArray<CodexOwnedProcessIdentity>
+  members: ReadonlyArray<CodexOwnedProcessIdentity>,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Promise<ExactMembersProjection> => {
   const observations = await Promise.all(
     members.map(async (member): Promise<ExactMembersProjection> => {
-      const observed = await readLinuxProcessStatObservation(member.pid)
+      const observed = await readLinuxProcessStatObservation(member.pid, native)
       if (observed._tag === "Absent") return observed
       if (observed._tag === "Unreadable") return observed
       return observed.stat.startIdentity === member.startIdentity
@@ -1222,15 +1299,13 @@ const observeExactMembers = async (
   return observations.some((observed) => observed._tag === "ExactLive") ? { _tag: "ExactLive" } : { _tag: "Absent" }
 }
 
-const awaitExactMembersAbsent = (
+export const awaitExactMembersAbsent = (
   members: ReadonlyArray<CodexOwnedProcessIdentity>,
-  remaining: number = ownershipStopPollAttempts
+  remaining: number = ownershipStopPollAttempts,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Effect.Effect<void, CodexAppServerFailure> =>
   Effect.suspend(() =>
-    Effect.tryPromise({
-      try: () => observeExactMembers(members),
-      catch: (error) => operationFailure("close", "Ownership", error)
-    }).pipe(
+    Effect.tryPromise({ try: () => observeExactMembers(members, native), catch: closeOwnershipFailure }).pipe(
       Effect.flatMap((observed) => {
         if (observed._tag === "Absent") return Effect.void
         if (observed._tag === "Unreadable" || observed._tag === "Contradictory") {
@@ -1239,17 +1314,20 @@ const awaitExactMembersAbsent = (
         if (remaining <= 0) {
           return Effect.fail(operationFailure("close", "Ownership", "owned descendant did not become absent"))
         }
-        return waitForOwnershipPoll.pipe(Effect.andThen(awaitExactMembersAbsent(members, remaining - 1)))
+        return waitForOwnershipPoll(native).pipe(
+          Effect.andThen(awaitExactMembersAbsent(members, remaining - 1, native))
+        )
       })
     )
   )
 
 /** Signal descendants that escaped the detached process group only after a fresh start-identity reread. */
-const signalExactDetachedDescendants = (
+export const signalExactDetachedDescendants = (
   launch: CodexServerLaunchRecord,
-  group: Extract<CodexProcessGroupProjection, { readonly _tag: "ExactLive" }>
+  group: Extract<CodexProcessGroupProjection, { readonly _tag: "ExactLive" }>,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Effect.Effect<void, CodexAppServerFailure> => {
-  if (nodeProcess.platform !== "linux") return Effect.void
+  if (native.platform !== "linux") return Effect.void
   const pid = launch.pid
   if (pid === null) return Effect.void
   const escapedMembers = group.members.filter((member) => member.pid !== pid && member.processGroupId !== pid)
@@ -1258,7 +1336,7 @@ const signalExactDetachedDescendants = (
       try: async (): Promise<CodexAppServerFailure | undefined> => {
         let observed: LinuxProcessStat | undefined
         try {
-          observed = await readLinuxProcessStat(member.pid)
+          observed = await readLinuxProcessStat(member.pid, native)
         } catch (error) {
           if (processWasAbsent(error)) return
           return operationFailure("close", "Ownership", error)
@@ -1270,25 +1348,25 @@ const signalExactDetachedDescendants = (
           return operationFailure("close", "Ownership", `owned descendant ${member.pid} incarnation changed`)
         }
         try {
-          nodeProcess.kill(member.pid, "SIGTERM")
+          native.kill(member.pid, "SIGTERM")
         } catch (error) {
           if (!processWasAbsent(error)) return operationFailure("close", "Ownership", error)
         }
         return undefined
       },
-      catch: (error) => operationFailure("close", "Ownership", error)
+      catch: closeOwnershipFailure
     }).pipe(Effect.flatMap((failure) => (failure === undefined ? Effect.void : Effect.fail(failure))))
-  ).pipe(Effect.asVoid, Effect.andThen(awaitExactMembersAbsent(escapedMembers)))
+  ).pipe(Effect.asVoid, Effect.andThen(awaitExactMembersAbsent(escapedMembers, ownershipStopPollAttempts, native)))
 }
 
 /** The app-server layer is process scoped; its close is registered once with the shared application shell. */
-const registerApplicationServerDrain = (
-  shell: ApplicationExitShellService,
+export const applicationServerCloseAfterExecutorDrains = (
+  awaitExecutorDrains: ApplicationExitShellService["awaitExecutorDrains"],
   close: Effect.Effect<void, CodexAppServerFailure>
 ) => {
   const closeDiagnostic = (error: CodexAppServerFailure) =>
     ApplicationExitDiagnostic.make(`Codex app-server cleanup failed: ${error.detail}`)
-  const closeAfterExecutorDrains = shell.awaitExecutorDrains.pipe(
+  return awaitExecutorDrains.pipe(
     Effect.matchEffect({
       onFailure: (executorFailure) =>
         close.pipe(
@@ -1310,20 +1388,29 @@ const registerApplicationServerDrain = (
         )
     })
   )
-  return shell.registerProcessLocalDrain({ closeProcessLocalResources: closeAfterExecutorDrains })
 }
 
-const makeApplicationLeaseOwner = (): Effect.Effect<CodexServerLeaseRecord, CodexAppServerFailure> =>
+const registerApplicationServerDrain = (
+  shell: ApplicationExitShellService,
+  close: Effect.Effect<void, CodexAppServerFailure>
+) =>
+  shell.registerProcessLocalDrain({
+    closeProcessLocalResources: applicationServerCloseAfterExecutorDrains(shell.awaitExecutorDrains, close)
+  })
+
+const makeApplicationLeaseOwner = (
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Effect.Effect<CodexServerLeaseRecord, CodexAppServerFailure> =>
   Effect.tryPromise({
-    try: () => readProcessStartIdentity(nodeProcess.pid),
-    catch: (error) => operationFailure("initialize", "Ownership", error)
+    try: () => readProcessStartIdentity(native.pid, native),
+    catch: initializeOwnershipFailure
   }).pipe(
     Effect.flatMap((processIdentity) =>
       processIdentity === undefined
         ? Effect.fail(operationFailure("initialize", "Ownership", "current process-start identity is unreadable"))
         : Effect.succeed(
             CodexServerLeaseRecord.make({
-              pid: nodeProcess.pid,
+              pid: native.pid,
               processIdentity: CodexProcessIdentity.make(processIdentity),
               incarnation: CodexServerLeaseIncarnation.make(randomUUID())
             })
@@ -1396,9 +1483,10 @@ const ownershipGate = Effect.fn("CodexAppServer.ownershipGate")(function* (
   store: CodexAttemptStoreService,
   ownership: CodexProcessOwnershipService,
   incarnation: CodexServerIncarnation,
-  command: ReadonlyArray<string>
+  command: ReadonlyArray<string>,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ) {
-  const leaseOwner = yield* makeApplicationLeaseOwner()
+  const leaseOwner = yield* makeApplicationLeaseOwner(native)
   const observeLease = (
     owner: CodexServerLeaseRecord
   ): Effect.Effect<CodexServerLeaseOwnerProjection, CodexAttemptStoreFailure> =>
@@ -1423,23 +1511,30 @@ const ownershipGate = Effect.fn("CodexAppServer.ownershipGate")(function* (
 
 type LaunchCommandFacts = { readonly expectedExecutable: string; readonly expectedMode: string }
 
-const launchCommandFacts = (launch: CodexServerLaunchRecord): LaunchCommandFacts | CodexServerOwnershipProjection => {
+export const launchCommandFacts = (
+  launch: CodexServerLaunchRecord,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): LaunchCommandFacts | CodexServerOwnershipProjection => {
   const expectedExecutable = launch.command[0]
   const expectedMode = launch.command[1]
   if (expectedExecutable === undefined || expectedMode !== "app-server") {
     return { _tag: "Unreadable", detail: "server launch command is incomplete" }
   }
-  if (nodeProcess.platform !== "linux" && nodeProcess.platform !== "win32") {
+  if (native.platform !== "linux" && native.platform !== "win32") {
     return { _tag: "Unreadable", detail: "process command identity is unsupported on this platform" }
   }
   return { expectedExecutable, expectedMode }
 }
 
-const readLaunchCommandLine = async (pid: number): Promise<ReadonlyArray<string>> =>
-  nodeProcess.platform === "linux"
-    ? (await nodeFsPromises.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\u0000").filter(Boolean)
+/* v8 ignore next -- @preserve The Windows PowerShell branch requires a Windows host and is paired with platform-policy tests. */
+const readLaunchCommandLine = async (
+  pid: number,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Promise<ReadonlyArray<string>> =>
+  native.platform === "linux"
+    ? (await native.readFile(`/proc/${pid}/cmdline`)).split("\u0000").filter(Boolean)
     : (
-        await execFileAsync("powershell.exe", [
+        await native.execFile("powershell.exe", [
           "-NoProfile",
           "-NonInteractive",
           "-Command",
@@ -1449,7 +1544,7 @@ const readLaunchCommandLine = async (pid: number): Promise<ReadonlyArray<string>
         .trim()
         .split(/\s+/)
 
-const launchExecutableMatches = (expectedExecutable: string, commandLine: ReadonlyArray<string>): boolean => {
+export const launchExecutableMatches = (expectedExecutable: string, commandLine: ReadonlyArray<string>): boolean => {
   const executableName = nodePath.basename(expectedExecutable)
   const executableHasPath = nodePath.isAbsolute(expectedExecutable) || expectedExecutable.includes(nodePath.sep)
   return commandLine.some((argument) =>
@@ -1459,16 +1554,17 @@ const launchExecutableMatches = (expectedExecutable: string, commandLine: Readon
   )
 }
 
-const processLaunchObservationFailure = (error: unknown, pid: number): CodexServerOwnershipProjection =>
+export const processLaunchObservationFailure = (error: unknown, pid: number): CodexServerOwnershipProjection =>
   processErrorCode(error) === "ESRCH"
     ? { _tag: "Absent" }
     : { _tag: "Unreadable", detail: `cannot observe app-server pid ${pid}: ${String(error)}` }
 
-const validateLaunchedProcessObservation = async (
+export const validateLaunchedProcessObservation = async (
   launch: CodexServerLaunchRecord,
   pid: number,
   facts: LaunchCommandFacts,
-  commandLine: ReadonlyArray<string>
+  commandLine: ReadonlyArray<string>,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Promise<CodexServerOwnershipProjection> => {
   if (!launchExecutableMatches(facts.expectedExecutable, commandLine)) {
     return { _tag: "Contradictory", detail: `pid ${pid} is not the recorded Codex executable` }
@@ -1480,7 +1576,7 @@ const validateLaunchedProcessObservation = async (
   if (expectedProcessIdentity === undefined) {
     return { _tag: "Unreadable", detail: "server launch incarnation has no process-start identity" }
   }
-  const observedProcessIdentity = await readProcessStartIdentity(pid)
+  const observedProcessIdentity = await readProcessStartIdentity(pid, native)
   if (observedProcessIdentity === undefined) {
     return { _tag: "Unreadable", detail: "observed process has no process-start identity" }
   }
@@ -1490,14 +1586,17 @@ const validateLaunchedProcessObservation = async (
   return { _tag: "ExactLive", pid }
 }
 
-const observeLaunchedProcess = async (launch: CodexServerLaunchRecord): Promise<CodexServerOwnershipProjection> => {
+const observeLaunchedProcess = async (
+  launch: CodexServerLaunchRecord,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Promise<CodexServerOwnershipProjection> => {
   if (launch.pid === null) return { _tag: "Unreadable", detail: "launch intent has no process identity" }
   try {
-    nodeProcess.kill(launch.pid, 0)
-    const facts = launchCommandFacts(launch)
+    native.kill(launch.pid, 0)
+    const facts = launchCommandFacts(launch, native)
     if (!("expectedExecutable" in facts)) return facts
-    const commandLine = await readLaunchCommandLine(launch.pid)
-    return validateLaunchedProcessObservation(launch, launch.pid, facts, commandLine)
+    const commandLine = await readLaunchCommandLine(launch.pid, native)
+    return validateLaunchedProcessObservation(launch, launch.pid, facts, commandLine, native)
   } catch (error) {
     return processLaunchObservationFailure(error, launch.pid)
   }
@@ -1509,7 +1608,7 @@ type DiscoveredProcessCandidate =
   | { readonly _tag: "Foreign"; readonly detail: string }
   | { readonly _tag: "Unreadable"; readonly detail: string }
 
-const numericProcessId = (entry: string): number | undefined => {
+export const numericProcessId = (entry: string): number | undefined => {
   if (!/^[0-9]+$/.test(entry)) return undefined
   const pid = Number(entry)
   return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
@@ -1520,9 +1619,14 @@ type ProcessTextObservation =
   | { readonly _tag: "Skip" }
   | { readonly _tag: "Unreadable"; readonly detail: string }
 
-const readProcessText = async (pid: number, file: string, description: string): Promise<ProcessTextObservation> => {
+const readProcessText = async (
+  pid: number,
+  file: string,
+  description: string,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Promise<ProcessTextObservation> => {
   try {
-    return { _tag: "Read", text: await nodeFsPromises.readFile(`/proc/${pid}/${file}`, "utf8") }
+    return { _tag: "Read", text: await native.readFile(`/proc/${pid}/${file}`) }
   } catch (error) {
     if (processWasAbsent(error)) return { _tag: "Skip" }
     return { _tag: "Unreadable", detail: `cannot read process ${pid} ${description}: ${String(error)}` }
@@ -1531,13 +1635,14 @@ const readProcessText = async (pid: number, file: string, description: string): 
 
 const discoverProcessCandidate = async (
   pid: number,
-  expectedToken: CodexServerIncarnation
+  expectedToken: CodexServerIncarnation,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Promise<DiscoveredProcessCandidate> => {
-  const commandObservation = await readProcessText(pid, "cmdline", "command identity")
+  const commandObservation = await readProcessText(pid, "cmdline", "command identity", native)
   if (commandObservation._tag !== "Read") return commandObservation
   const commandLine = commandObservation.text.split("\u0000").filter(Boolean)
   if (!commandLine.includes("app-server")) return { _tag: "Skip" }
-  const environmentObservation = await readProcessText(pid, "environ", "launch token")
+  const environmentObservation = await readProcessText(pid, "environ", "launch token", native)
   if (environmentObservation._tag !== "Read") return environmentObservation
   const environment = environmentObservation.text
   const tokenEntry = environment
@@ -1545,7 +1650,7 @@ const discoverProcessCandidate = async (
     .find((value) => value.startsWith(`${codexServerIncarnationEnvironment}=`))
   if (tokenEntry === undefined) return { _tag: "Skip" }
   const token = tokenEntry.slice(codexServerIncarnationEnvironment.length + 1)
-  const processIdentity = await readProcessStartIdentity(pid)
+  const processIdentity = await readProcessStartIdentity(pid, native)
   if (processIdentity === undefined) {
     return { _tag: "Unreadable", detail: `process ${pid} launch token has no start identity` }
   }
@@ -1556,7 +1661,7 @@ const discoverProcessCandidate = async (
 
 type ExactDiscoveredProcess = { readonly pid: number; readonly processIdentity: CodexProcessStartIdentity }
 
-const appendDiscoveredProcessCandidate = (
+export const appendDiscoveredProcessCandidate = (
   candidate: DiscoveredProcessCandidate,
   exact: Array<ExactDiscoveredProcess>,
   foreign: Array<string>
@@ -1572,7 +1677,7 @@ const appendDiscoveredProcessCandidate = (
   }
 }
 
-const projectDiscoveredProcesses = (
+export const projectDiscoveredProcesses = (
   exact: ReadonlyArray<ExactDiscoveredProcess>,
   foreign: ReadonlyArray<string>
 ): CodexServerDiscoveryProjection => {
@@ -1586,38 +1691,39 @@ const projectDiscoveredProcesses = (
   return foreign.length > 0 ? { _tag: "Contradictory", detail: foreign.join("; ") } : { _tag: "ExactLive", ...only }
 }
 
-const discoverAppServerProcesses = async (
-  incarnation: CodexServerIncarnation
+export const discoverAppServerProcesses = async (
+  incarnation: CodexServerIncarnation,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Promise<CodexServerDiscoveryProjection> => {
-  if (nodeProcess.platform !== "linux") {
+  if (native.platform !== "linux") {
     return { _tag: "Unreadable", detail: "launch-token process discovery is not qualified on this host" }
   }
   const expectedToken = durableIncarnationToken(incarnation)
-  const entries = await nodeFsPromises.readdir("/proc")
+  const entries = await native.readdir("/proc")
   const exact: Array<ExactDiscoveredProcess> = []
   const foreign: Array<string> = []
   for (const entry of entries) {
     const pid = numericProcessId(entry)
     if (pid === undefined) continue
-    const candidate = await discoverProcessCandidate(pid, expectedToken)
+    const candidate = await discoverProcessCandidate(pid, expectedToken, native)
     if (candidate._tag === "Unreadable") return candidate
     appendDiscoveredProcessCandidate(candidate, exact, foreign)
   }
   return projectDiscoveredProcesses(exact, foreign)
 }
 
-const signalOwnedProcessGroup = (pid: number): Effect.Effect<void, CodexAppServerFailure> =>
+export const signalOwnedProcessGroup = (
+  pid: number,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Effect.Effect<void, CodexAppServerFailure> =>
   Effect.suspend(() => {
     const groupSignal =
-      nodeProcess.platform === "win32"
+      native.platform === "win32"
         ? Effect.tryPromise({
-            try: () => execFileAsync("taskkill", ["/PID", String(pid), "/T", "/F"]),
-            catch: (cause) => new CodexProcessSignalFailure({ cause })
+            try: () => native.execFile("taskkill", ["/PID", String(pid), "/T", "/F"]),
+            catch: processSignalFailure
           }).pipe(Effect.asVoid)
-        : Effect.try({
-            try: () => nodeProcess.kill(-pid, "SIGTERM"),
-            catch: (cause) => new CodexProcessSignalFailure({ cause })
-          }).pipe(Effect.asVoid)
+        : Effect.try({ try: () => native.kill(-pid, "SIGTERM"), catch: processSignalFailure }).pipe(Effect.asVoid)
     return groupSignal.pipe(
       // A failed group signal never falls back to an unverified PID: that
       // PID may already identify a different process incarnation.
@@ -1637,10 +1743,11 @@ const isUnusableProcessGroup = (
 ): group is Extract<CodexProcessGroupProjection, { readonly _tag: "Unreadable" | "Contradictory" }> =>
   group._tag === "Unreadable" || group._tag === "Contradictory"
 
-const stopOwnedAppServer = (
+export const stopOwnedAppServer = (
   service: CodexProcessOwnershipService,
   groupCensus: CodexProcessGroupCensusService,
-  launch: CodexServerLaunchRecord
+  launch: CodexServerLaunchRecord,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Effect.Effect<void, CodexAppServerFailure> =>
   Effect.gen(function* () {
     if (launch.pid === null) return
@@ -1655,10 +1762,17 @@ const stopOwnedAppServer = (
     if (isUnusableProcessGroup(group)) {
       return yield* Effect.fail(operationFailure("close", "Ownership", group.detail))
     }
-    if (group._tag === "ExactLive") yield* signalExactDetachedDescendants(launch, group)
-    yield* signalOwnedProcessGroup(pid)
-    if (group._tag === "ExactLive") yield* awaitExactMembersAbsent(group.members)
+    if (group._tag === "ExactLive") yield* signalExactDetachedDescendants(launch, group, native)
+    yield* signalOwnedProcessGroup(pid, native)
+    if (group._tag === "ExactLive") yield* awaitExactMembersAbsent(group.members, ownershipStopPollAttempts, native)
   })
+
+export const closeHandleFailure = (error: unknown): CodexAppServerFailure =>
+  error instanceof CodexAppServerFailure
+    ? error
+    : error instanceof CodexAttemptStoreFailure
+      ? operationFailure("close", "Ownership", error)
+      : operationFailure("close", "Unavailable", error)
 
 /**
  * Real application-scoped app-server layer. It deliberately sends no model,
@@ -1670,7 +1784,7 @@ export const codexAppServerLayer = (
 ): Layer.Layer<
   CodexAppServer,
   CodexAppServerFailure | CodexAttemptStoreFailure,
-  CodexAttemptStore | CodexProcessOwnership | ChildProcessSpawner.ChildProcessSpawner
+  CodexAttemptStore | CodexProcessNative | CodexProcessOwnership | ChildProcessSpawner.ChildProcessSpawner
 > =>
   Layer.effect(
     CodexAppServer,
@@ -1678,12 +1792,13 @@ export const codexAppServerLayer = (
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const store = yield* CodexAttemptStore
       const ownership = yield* CodexProcessOwnership
+      const native = yield* CodexProcessNative
       const applicationExit = yield* Effect.serviceOption(ApplicationExitShell)
       const processGroupCensus = yield* Effect.serviceOption(CodexProcessGroupCensus)
       const selected = { ...defaultConfig, ...config }
       const command = [selected.executable, "app-server"] as const
       const incarnation = newIncarnation()
-      const leaseOwner = yield* ownershipGate(store, ownership, incarnation, command)
+      const leaseOwner = yield* ownershipGate(store, ownership, incarnation, command, native)
       const handle = yield* spawner
         .spawn(
           ChildProcess.make(selected.executable, ["app-server"], {
@@ -1695,33 +1810,24 @@ export const codexAppServerLayer = (
             extendEnv: true
           })
         )
-        .pipe(Effect.mapError((error) => operationFailure("initialize", "Unavailable", error)))
+        .pipe(Effect.mapError(initializeUnavailableFailure))
       const childPid = Number(handle.pid)
       const liveIncarnation = yield* Effect.tryPromise({
-        try: () => incarnationWithProcessIdentity(incarnation, childPid),
-        catch: (error) => operationFailure("initialize", "Ownership", error)
+        try: () => incarnationWithProcessIdentity(incarnation, childPid, native),
+        catch: initializeOwnershipFailure
       }).pipe(
         Effect.flatMap((observed) =>
+          /* v8 ignore next -- @preserve Production launch proceeds only after the platform helper has returned an exact process-start identity. */
           observed === undefined
             ? Effect.fail(operationFailure("initialize", "Ownership", "process-start identity is missing"))
             : Effect.succeed(observed)
         ),
-        Effect.catch((error) =>
-          handle
-            .kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) })
-            .pipe(
-              Effect.matchEffect({
-                onFailure: (cleanupError) =>
-                  Effect.fail(
-                    operationFailure(
-                      "initialize",
-                      "Ownership",
-                      `${error.detail}; process identity cleanup failed: ${String(cleanupError)}`
-                    )
-                  ),
-                onSuccess: () => Effect.fail(error)
-              })
-            )
+        Effect.catch(
+          failAfterInitializationCleanup.bind(
+            undefined,
+            handle.kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) }),
+            "process identity"
+          )
         )
       )
       // The detached handoff is not durable until the child has an exact
@@ -1736,22 +1842,12 @@ export const codexAppServerLayer = (
       yield* store
         .writeServerLaunch(spawnedLaunch)
         .pipe(
-          Effect.catch((error) =>
-            handle
-              .kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) })
-              .pipe(
-                Effect.matchEffect({
-                  onFailure: (cleanupError) =>
-                    Effect.fail(
-                      operationFailure(
-                        "initialize",
-                        "Ownership",
-                        `${error.detail}; spawned process cleanup failed: ${String(cleanupError)}`
-                      )
-                    ),
-                  onSuccess: () => Effect.fail(error)
-                })
-              )
+          Effect.catch(
+            failAfterInitializationCleanup.bind(
+              undefined,
+              handle.kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) }),
+              "spawned process"
+            )
           )
         )
       const liveLaunch: CodexServerLaunchRecord = {
@@ -1765,21 +1861,12 @@ export const codexAppServerLayer = (
         // group. The census is optional only for controlled transport tests;
         // the Node production layer supplies it and proves descendants gone.
         yield* ownership.stop(liveLaunch)
-        if (Option.isSome(processGroupCensus)) yield* awaitOwnedGroupAbsent(processGroupCensus.value, liveLaunch)
-        yield* awaitOwnedProcessAbsent(ownership, liveLaunch, ownershipStopPollAttempts, "close")
+        if (Option.isSome(processGroupCensus))
+          yield* awaitOwnedGroupAbsent(processGroupCensus.value, liveLaunch, ownershipStopPollAttempts, native)
+        yield* awaitOwnedProcessAbsent(ownership, liveLaunch, ownershipStopPollAttempts, "close", native)
         yield* store.clearServerLaunch(liveIncarnation)
-      }).pipe(
-        Effect.mapError((error) =>
-          error instanceof CodexAppServerFailure
-            ? error
-            : error instanceof CodexAttemptStoreFailure
-              ? operationFailure("close", "Ownership", error)
-              : operationFailure("close", "Unavailable", error)
-        )
-      )
-      yield* store
-        .writeServerLaunch(liveLaunch)
-        .pipe(Effect.catch((error) => closeHandle.pipe(Effect.andThen(Effect.fail(error)))))
+      }).pipe(Effect.mapError(closeHandleFailure))
+      yield* store.writeServerLaunch(liveLaunch).pipe(Effect.catch(failAfterClose.bind(undefined, closeHandle)))
       const rpc = yield* makeJsonRpcClient(handle, liveIncarnation)
       const releaseLease = store
         .releaseServerLease(leaseOwner)
@@ -1793,7 +1880,7 @@ export const codexAppServerLayer = (
       const initializeResponse = yield* rpc.request("initialize", "initialize", {
         clientInfo: { name: selected.clientName, version: selected.clientVersion }
       })
-      const normalizedInitialize = normalizeInitializeResponse(initializeResponse)
+      const normalizedInitialize = normalizeInitializeResponse(initializeResponse, native)
       if (normalizedInitialize !== true) return yield* Effect.fail(normalizedInitialize)
       yield* rpc.notify("initialized")
       const startThread = Effect.fn("CodexAppServer.startThread")(function* (cwd: string) {
@@ -1802,8 +1889,7 @@ export const codexAppServerLayer = (
           "thread/start"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
-        const thread = normalizeThread(response["thread"], "thread/start")
-        return thread instanceof CodexAppServerFailure ? yield* Effect.fail(thread) : thread
+        return yield* normalizedThreadEffect(normalizeThread(response["thread"], "thread/start"))
       })
       const readThread = Effect.fn("CodexAppServer.readThread")(function* (threadId: CodexThreadId) {
         const response = responseObject(
@@ -1811,8 +1897,7 @@ export const codexAppServerLayer = (
           "thread/read"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
-        const thread = normalizeThread(response["thread"], "thread/read")
-        return thread instanceof CodexAppServerFailure ? yield* Effect.fail(thread) : thread
+        return yield* normalizedThreadEffect(normalizeThread(response["thread"], "thread/read"))
       })
       const resumeThread = Effect.fn("CodexAppServer.resumeThread")(function* (threadId: CodexThreadId, cwd: string) {
         const response = responseObject(
@@ -1820,8 +1905,7 @@ export const codexAppServerLayer = (
           "thread/resume"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
-        const thread = normalizeThread(response["thread"], "thread/resume")
-        return thread instanceof CodexAppServerFailure ? yield* Effect.fail(thread) : thread
+        return yield* normalizedThreadEffect(normalizeThread(response["thread"], "thread/resume"))
       })
       const startTurn = Effect.fn("CodexAppServer.startTurn")(function* (
         threadId: CodexThreadId,
@@ -1906,34 +1990,26 @@ export const codexAppServerLayer = (
   )
 
 /** Node process ownership projection used by the default app-server layer. */
-const makeNodeCodexProcessOwnershipService = (
-  groupCensus: CodexProcessGroupCensusService
+export const makeNodeCodexProcessOwnershipService = (
+  groupCensus: CodexProcessGroupCensusService,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): CodexProcessOwnershipService => {
   const service: CodexProcessOwnershipService = {
     observe: (target) =>
       Effect.tryPromise({
-        try: () => ("processIdentity" in target ? observeLeaseOwner(target) : observeLaunchedProcess(target)),
-        catch: (error) => operationFailure("initialize", "Ownership", error)
+        try: () =>
+          "processIdentity" in target ? observeLeaseOwner(target, native) : observeLaunchedProcess(target, native),
+        catch: initializeOwnershipFailure
       }),
     discover: (incarnation) =>
       Effect.tryPromise({
-        try: () => discoverAppServerProcesses(incarnation),
-        catch: (error) => operationFailure("initialize", "Ownership", error)
+        try: () => discoverAppServerProcesses(incarnation, native),
+        catch: initializeOwnershipFailure
       }),
-    stop: (launch) => stopOwnedAppServer(service, groupCensus, launch)
+    stop: (launch) => stopOwnedAppServer(service, groupCensus, launch, native)
   }
   return service
 }
-
-const nodeCodexProcessOwnershipLayer: Layer.Layer<CodexProcessOwnership, never, CodexProcessGroupCensus> = Layer.effect(
-  CodexProcessOwnership,
-  Effect.map(CodexProcessGroupCensus, makeNodeCodexProcessOwnershipService)
-)
-
-const nodeCodexProcessGroupCensusLayer: Layer.Layer<CodexProcessGroupCensus> = Layer.succeed(
-  CodexProcessGroupCensus,
-  nodeCodexProcessGroupCensusService
-)
 
 /** Convenience composition for the attempt-owned activity census. */
 export const nodeCodexOwnedActivityCensusLayer: Layer.Layer<CodexOwnedActivityCensus> = Layer.succeed(
@@ -1943,13 +2019,20 @@ export const nodeCodexOwnedActivityCensusLayer: Layer.Layer<CodexOwnedActivityCe
 
 /** Convenience composition for the real app-server layer's process gate. */
 export const codexAppServerNodeLayer = (
-  config: CodexAppServerLayerConfig = {}
+  config: CodexAppServerLayerConfig = {},
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Layer.Layer<
   CodexAppServer,
   CodexAppServerFailure | CodexAttemptStoreFailure,
   CodexAttemptStore | ChildProcessSpawner.ChildProcessSpawner
 > =>
   codexAppServerLayer(config).pipe(
-    Layer.provide(nodeCodexProcessOwnershipLayer),
-    Layer.provide(nodeCodexProcessGroupCensusLayer)
+    Layer.provide(Layer.succeed(CodexProcessNative, native)),
+    Layer.provide(
+      Layer.effect(
+        CodexProcessOwnership,
+        Effect.map(CodexProcessGroupCensus, (groupCensus) => makeNodeCodexProcessOwnershipService(groupCensus, native))
+      )
+    ),
+    Layer.provide(Layer.succeed(CodexProcessGroupCensus, makeNodeCodexProcessGroupCensusService(native)))
   )

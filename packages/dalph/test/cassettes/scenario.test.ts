@@ -382,7 +382,10 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
     const missingProjectionExit = yield* Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
       return yield* executor.project(correlation)
-    }).pipe(Effect.provide(controlledExecutorLayer(emptyCursor, runId, Effect.void, reports, unresolved)), Effect.exit)
+    }).pipe(
+      Effect.provide(controlledExecutorLayer(emptyCursor, runId, () => Effect.void, reports, unresolved)),
+      Effect.exit
+    )
     expect(Exit.isFailure(missingProjectionExit)).toBe(true)
     if (Exit.isFailure(missingProjectionExit)) {
       expect(Cause.pretty(missingProjectionExit.cause)).toContain("requires an explicit return")
@@ -402,7 +405,7 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
         controlledExecutorLayer(
           contradictoryCursor,
           runId,
-          Effect.void,
+          () => Effect.void,
           yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()),
           yield* Ref.make<ReadonlySet<string>>(new Set())
         )
@@ -429,7 +432,7 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
         controlledExecutorLayer(
           foreignRunCursor,
           foreignRunId,
-          Effect.void,
+          () => Effect.void,
           yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()),
           yield* Ref.make<ReadonlySet<string>>(new Set())
         )

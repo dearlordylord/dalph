@@ -779,6 +779,9 @@ it.effect("rejects impossible private record and launch combinations before they
     expect(Schema.decodeUnknownSync(CodexAttemptRecord)(validTerminal)).toEqual(validTerminal)
     const invalidCorrelation = { ...associated, correlationAttemptId: AttemptId.make("attempt:issue-58-store:foreign") }
     expect(() => Schema.decodeUnknownSync(CodexAttemptRecord)(invalidCorrelation)).toThrow()
+    expect(
+      Schema.decodeUnknownSync(CodexAttemptRecord)({ ...associated, evidenceManifest: acceptedReference })
+    ).toEqual(associated)
     expect(() =>
       Schema.decodeUnknownSync(CodexAttemptRecord)({
         ...validTerminal,
@@ -807,6 +810,14 @@ it.effect("rejects impossible private record and launch combinations before they
     expect(() =>
       Schema.decodeUnknownSync(CodexServerLaunchRecord)({ ...launch, phase: "Spawned", pid: null })
     ).toThrow()
+    expect(() => Schema.decodeUnknownSync(CodexServerLaunchRecord)({ ...launch, phase: "Live", pid: null })).toThrow()
+    expect(
+      Schema.decodeUnknownSync(CodexServerLaunchRecord)({ ...launch, phase: "Launching", pid: null })
+    ).toMatchObject({ phase: "Launching", pid: null })
+    expect(Schema.decodeUnknownSync(CodexServerLaunchRecord)({ ...launch, phase: "Spawned", pid: 2 })).toMatchObject({
+      phase: "Spawned",
+      pid: 2
+    })
     yield* Effect.void
   })
 )

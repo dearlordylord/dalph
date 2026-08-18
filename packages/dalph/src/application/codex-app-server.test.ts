@@ -15,7 +15,7 @@ import {
   CodexAppServer,
   CodexAppServerFailure,
   CodexProcessStartIdentity,
-  codexAppServerLayer,
+  codexAppServerLayer as rawCodexAppServerLayer,
   codexAppServerNodeLayer,
   controlledCodexProcessOwnershipLayer
 } from "./codex-app-server.js"
@@ -30,6 +30,14 @@ import {
   type CodexAttemptStoreService,
   memoryCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
+import {
+  controlledCodexProcessNativeLayer,
+  nodeCodexProcessNativeLayer,
+  nodeCodexProcessNativeService
+} from "./codex-process-native.js"
+
+const codexAppServerLayer = (config?: Parameters<typeof rawCodexAppServerLayer>[0]) =>
+  rawCodexAppServerLayer(config).pipe(Layer.provide(nodeCodexProcessNativeLayer))
 
 const fakeServer = String.raw`#!/usr/bin/env node
 const fs = require("node:fs")
@@ -266,6 +274,8 @@ it.effect("speaks the normalized app-server protocol with exact per-call cwd", (
         expect(resumed.turns).toHaveLength(1)
         expect(resumed.turns[0]?.ownedTurnToken).toBe(ownedToken)
         expect((yield* app.listBackgroundTerminals(thread.id)).length).toBe(0)
+        yield* app.close
+        expect(Exit.isFailure(yield* Effect.exit(app.startThread("/closed/worktree")))).toBe(true)
         yield* app.close
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
       expect(result).toBeUndefined()
@@ -523,12 +533,11 @@ it.effect("fails initialization closed when the server identity contradicts the 
   )
 )
 
-it.effect("fails closed before starting an app-server on an unsupported host", () => {
-  const originalPlatform = nodeProcess.platform
-  Object.defineProperty(nodeProcess, "platform", { configurable: true, value: "darwin" })
-  return Effect.scoped(
+it.effect("fails closed before starting an app-server on an unsupported host", () =>
+  Effect.scoped(
     Effect.gen(function* () {
-      const appLayer = codexAppServerLayer().pipe(
+      const appLayer = rawCodexAppServerLayer().pipe(
+        Layer.provide(controlledCodexProcessNativeLayer({ ...nodeCodexProcessNativeService, platform: "darwin" })),
         Layer.provide(
           controlledCodexProcessOwnershipLayer({
             observe: () => Effect.succeed({ _tag: "Absent" as const }),
@@ -544,12 +553,8 @@ it.effect("fails closed before starting an app-server on an unsupported host", (
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
       expect(Exit.isSuccess(result)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
-  ).pipe(
-    Effect.ensuring(
-      Effect.sync(() => Object.defineProperty(nodeProcess, "platform", { configurable: true, value: originalPlatform }))
-    )
   )
-})
+)
 
 it.effect("fails closed when the recorded launch command cannot identify app-server", () =>
   Effect.forEach([["fixture-codex"] as const, ["fixture-codex", "not-app-server"] as const], (command) =>

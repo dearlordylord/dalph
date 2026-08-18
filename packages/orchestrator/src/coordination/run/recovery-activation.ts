@@ -566,6 +566,7 @@ const restartClaimDisposition = (
   if (claim.event.observation._tag === "FocusedTaskClaimFactsUnreadable") {
     return ResponsibilityDisposition.AttemptRestartWait({ reason: "ClaimUnreadable" })
   }
+  /* v8 ignore next -- @preserve latestRestartClaimObservation selects only focused readable or focused unreadable claim observations. */
   if (claim.event.observation._tag !== "FocusedTaskClaimFacts") return undefined
   const observation = claim.event.observation.observation
   if (observation._tag === "UnclaimedTask") {
@@ -645,7 +646,7 @@ const restartAuthorityReadFailureDisposition = (
   })
 }
 
-const restartReplacementDisposition = (
+export const restartReplacementDisposition = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
   activationBaselinePosition: Option.Option<JournalPosition>,
@@ -840,7 +841,7 @@ type WorkflowOperationResponsibility = Exclude<
 >
 
 /** Derives which journaled responsibilities are still unfinished. */
-const deriveJournalResponsibilityFacts = (
+export const deriveJournalResponsibilityFacts = (
   runState: ReconstructedRunState,
   activationBaselinePosition: Option.Option<JournalPosition> = Option.none(),
   integrationTarget: Option.Option<IntegrationTarget> = Option.none()
@@ -945,7 +946,6 @@ const deriveJournalResponsibilityFacts = (
      * A later Unpause cannot erase an executor request that may already have
      * crossed its boundary; only a correlated executor report settles it.
      */
-    /* v8 ignore start -- @preserve Maintained crash cassettes cover owed and settled suspension; these chronological guards exclude historical Pause cycles and already-safe attempts. */
     const runPauseSuspensionOwed = suspensionWasOwedAfterPause(
       records,
       responsibility.plannedAttempt,
@@ -958,7 +958,6 @@ const deriveJournalResponsibilityFacts = (
       responsibility.beganAt,
       Option.getOrUndefined(latestTaskGraph)
     )
-    /* v8 ignore stop -- @preserve */
     const changedSpecification = changedTaskSpecification(responsibility.plannedAttempt)
     const exactChangedSpecificationMayContinue = () =>
       Option.isSome(changedSpecification) &&
@@ -1358,7 +1357,7 @@ const continuationFreshnessBaselineForTask = (
 }
 
 /** A Continue choice refreshes only the exact immutable attempt named by that choice. */
-const continuationFreshnessBaselineForAttempt = (
+export const continuationFreshnessBaselineForAttempt = (
   runState: ReconstructedRunState,
   activationBaselinePosition: Option.Option<JournalPosition>,
   plannedAttempt: PlannedTaskAttempt,
@@ -1402,7 +1401,7 @@ const transitionTagsAllowedToFinishHeldIntegration = new Set<RunnableFrontierTra
 const transitionMayRunWhileRunPaused = (transition: RunnableFrontierTransition): boolean =>
   transitionTagsAllowedWhilePaused.has(transition._tag)
 
-const recordBeforePause = (
+export const recordBeforePause = (
   records: ReadonlyArray<JournalRecord>,
   pausePosition: JournalPosition,
   predicate: (record: JournalRecord) => boolean
@@ -1431,7 +1430,6 @@ const isPausedIntegrationReconciliation = (
 ): transition is PausedIntegrationReconciliation => pausedIntegrationReconciliationTags.has(transition._tag)
 
 /** A crashed candidate request may finish only when its exact intent predates the active Run Pause. */
-/* v8 ignore start -- @preserve Candidate protocol tests cover durable intent correlation; the authored cursor cannot yet crash inside this boundary. */
 const startedIntegrationIntentMayReconcileBeforePause = (
   transition: RunnableFrontierTransition,
   records: ReadonlyArray<JournalRecord>,
@@ -1494,7 +1492,7 @@ const activeTaskPausePosition = (
   )?.position
 }
 
-const filterFrontierForActivePauses = (
+export const filterFrontierForActivePauses = (
   frontier: RunnableFrontier,
   runState: ReconstructedRunState,
   currentTaskGraph: TaskDagSnapshot | undefined,
@@ -1533,8 +1531,6 @@ const filterFrontierForActivePauses = (
       : frontier.transitions.filter(transitionMayRunWhileTaskPaused)
   return { ...frontier, transitions }
 }
-/* v8 ignore stop -- @preserve */
-
 type CurrentGraphObservation = {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
   readonly position: JournalPosition
@@ -1748,6 +1744,7 @@ const decisionAfterCurrentSpecification = (
           }
         }
         /* v8 ignore stop -- @preserve */
+        /* v8 ignore next -- @preserve A valid applied Continue choice is authorized only by its exact safely-suspended executor evidence. */
         return currentExecutorEvidence.report._tag === "SafelySuspended"
           ? { transition: continuationWithCurrentFacts }
           : {}
@@ -1853,7 +1850,7 @@ const plannedAttemptPlanOperationId = (
   plannedAttempt: PlannedTaskAttempt
 ): OperationId | undefined => recordedTaskAttemptPlanFor(records, plannedAttempt)?.operationId
 
-const continuationDecisionFor = (
+export const continuationDecisionFor = (
   transition: RunnableFrontierTransition,
   records: ReadonlyArray<JournalRecord>,
   currentGraphObservation: CurrentGraphObservation | undefined,
@@ -1894,6 +1891,16 @@ const continuationDecisionFor = (
   }
   return decisionWithoutCurrentSpecification(plannedAttempt, planOperationId, currentGraphObservation)
 }
+
+export const gitReadIntentHasOutcome = (records: ReadonlyArray<JournalRecord>, operationId: OperationId): boolean =>
+  records.some(
+    ({ event }) =>
+      (event._tag === "PlannedAttemptWorktreeObserved" ||
+        event._tag === "TargetLineageObserved" ||
+        (event._tag === "AttemptRestartAuthorityReadFailed" &&
+          event.failure._tag !== "AttemptRestartTaskFactsReadFailure")) &&
+      event.operationId === operationId
+  )
 
 const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecoveredRunState")(function* (
   runState: ReconstructedRunState,
@@ -1936,14 +1943,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       } => {
         if (record.event._tag !== "GitReadIntentRecorded") return false
         const operationId = record.event.operation.operationId
-        return !runState.workflowHistory.records.some(
-          ({ event }) =>
-            (event._tag === "PlannedAttemptWorktreeObserved" ||
-              event._tag === "TargetLineageObserved" ||
-              (event._tag === "AttemptRestartAuthorityReadFailed" &&
-                event.failure._tag !== "AttemptRestartTaskFactsReadFailure")) &&
-            event.operationId === operationId
-        )
+        return !gitReadIntentHasOutcome(runState.workflowHistory.records, operationId)
       }
     )
     .filter(

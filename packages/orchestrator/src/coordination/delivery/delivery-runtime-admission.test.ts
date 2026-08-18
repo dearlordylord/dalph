@@ -13,7 +13,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
@@ -25,8 +25,10 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
-import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
-import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import {
+  PlannedAttemptProtocolController,
+  plannedAttemptProtocolControllerLayer
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 
 const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntimeAdmissionTest.make")(function* (
@@ -221,6 +223,48 @@ it.effect("Exit rolls back delivery reservations prepared before owner registrat
         preparingOwnerCount: 0,
         registeredOwnerCount: 0
       })
+
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const secondLifecycle = yield* makeApplicationExitLifecycle()
+      const secondAdmission = yield* makeAdmissionControllerWithLifecycle(
+        { capacity: TaskWorkCapacity.make(1), held: [] },
+        integrationTargets,
+        {
+          ...secondLifecycle.admission,
+          prepareForwardOwner: (kind) =>
+            secondLifecycle.admission
+              .prepareForwardOwner(kind)
+              .pipe(
+                Effect.map((preparation) => ({
+                  ...preparation,
+                  register: secondLifecycle.requestExit.pipe(Effect.andThen(preparation.register))
+                }))
+              )
+        }
+      )
+      const integrationTarget = IntegrationTarget.make({
+        repository: GitRepositoryLocator.make("/admission/exit-race.git"),
+        ref: IntegrationTargetRef.make("refs/heads/main")
+      })
+      const resourceProposal = {
+        ...proposal,
+        admission: {
+          integrationTarget: {
+            _tag: "IntegrationTargetResourceRequired" as const,
+            access: "Acquire" as const,
+            integrationTarget,
+            queuedAt: JournalPosition.make(2)
+          },
+          plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired" as const, correlation },
+          taskWorkPosition: { _tag: "NoTaskWorkPosition" as const }
+        },
+        id: DeliveryProposalId.make("exit-racing-all-non-task-resources")
+      }
+      expect((yield* secondAdmission.tryReserve(resourceProposal).pipe(Effect.flip))._tag).toBe("ApplicationExiting")
+      expect((yield* integrationTargets.snapshot).heldResponsibilityPositions).toEqual(new Set())
+      const releasedProtocol = yield* (yield* PlannedAttemptProtocolController).reserve(correlation)
+      expect(Option.isSome(releasedProtocol)).toBe(true)
+      if (Option.isSome(releasedProtocol)) yield* releasedProtocol.value.release
     })
   )
 )
@@ -367,7 +411,7 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
             integrationTarget,
             queuedAt: JournalPosition.make(11)
           },
-          plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+          plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired" as const, correlation },
           taskWorkPosition: {
             _tag: "TaskWorkPositionRequired" as const,
             mode: "ReserveOrReuse" as const,

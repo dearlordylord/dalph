@@ -223,6 +223,7 @@ export const deriveStartedIntegrationFrontier = (
           if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
           const durableIntent = candidateIntentFor(responsibility)
           const lineage = runtimeFacts.targetLineageByAttemptId.get(responsibility.plannedAttempt.attemptId)
+          /* v8 ignore next -- @preserve CandidateConstructed state and a held compatible rewrite both derive from this exact durable intent and lineage observation. */
           if (durableIntent?._tag !== "IntegrationCandidateConstructionIntended" || lineage === undefined) return []
           return [
             RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
@@ -241,6 +242,7 @@ export const deriveStartedIntegrationFrontier = (
           return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
         }
         if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+        /* v8 ignore next -- @preserve The preceding lineage-presence guard returns when this stable runtime map lacks the attempt, so this conjunction cannot be true in a valid transition evaluation. */
         if (
           promotion === undefined &&
           !runtimeFacts.targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId)
@@ -261,6 +263,7 @@ export const deriveStartedIntegrationFrontier = (
         if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
         const durableIntent = candidateIntentFor(responsibility)
         const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
+        /* v8 ignore next -- @preserve CandidateConstructed state and a held compatible rewrite both derive from this exact durable intent and lineage observation. */
         if (durableIntent?._tag !== "IntegrationCandidateConstructionIntended" || lineage === undefined) return []
         return [
           RunnableFrontierTransition.ContinueStartedIntegrationCandidate({

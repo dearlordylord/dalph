@@ -65,6 +65,21 @@ it("roundtrips every generated exact planned-attempt work request", () => {
   )
 })
 
+it("rejects a request whose specification names another task or fingerprint", () => {
+  const exact = fc.sample(exactRequestArbitrary, 1)[0]
+  if (exact === undefined) return expect.fail("expected generated request")
+  const otherTask = makeTaskWorkSpecification({ body: "other", taskId: TaskId.make("other-task"), title: "Other" })
+  const changed = makeTaskWorkSpecification({
+    body: `${exact.specification.body} changed`,
+    taskId: exact.plannedAttempt.taskId,
+    title: exact.specification.title
+  })
+  expect(() =>
+    Schema.decodeUnknownSync(PlannedAttemptExecutorRequest)({ ...exact, specification: otherTask })
+  ).toThrow()
+  expect(() => Schema.decodeUnknownSync(PlannedAttemptExecutorRequest)({ ...exact, specification: changed })).toThrow()
+})
+
 it("roundtrips all six normalized projection outcomes for arbitrary correlations", () => {
   fc.assert(
     fc.property(correlationArbitrary, correlatedReportArbitrary, (correlation, { report }) => {

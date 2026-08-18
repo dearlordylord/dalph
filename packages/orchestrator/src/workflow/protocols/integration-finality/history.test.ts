@@ -36,6 +36,7 @@ import {
   IntegrationFinalitySettledEvent
 } from "./events.js"
 import {
+  deletionReadPurposeMatches,
   invalidIntegrationFinalityHistory,
   invalidIntegrationFinalityRunBinding,
   makeIntegrationFinalityHistoryIndexes,
@@ -184,6 +185,17 @@ it("accepts only the exact next cleanup reread identity after deletion intent", 
     version: workflowJournalEventVersion
   })
   const read = record(11, observed, describeJournalEvent(observed).expectedKey)
+  expect(deletionReadPurposeMatches(observed, 0)).toBe(true)
+  expect(deletionReadPurposeMatches(observed, 1)).toBe(false)
+  const afterExhaustion = CompletionClaimDeletionReadObservedEvent.make({
+    ...observed,
+    purpose: CompletionClaimDeletionReadPurpose.cases.AfterDeletionAttemptsExhausted.make({
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(3),
+      readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+    })
+  })
+  expect(deletionReadPurposeMatches(afterExhaustion, 3)).toBe(true)
+  expect(deletionReadPurposeMatches(afterExhaustion, 2)).toBe(false)
   const identities: Array<string> = []
   const semantics: Array<string> = []
   validateIntegrationFinalityHistoryRecord(
@@ -617,6 +629,20 @@ it("reports exact run binding and semantic issues through the reconstruction cal
   )
   expect(invalidIntegrationFinalityRunBinding(intent.event, fixture.runId)).toBeUndefined()
   expect(invalidIntegrationFinalityRunBinding(fixture.graphRecordEvent, fixture.runId)).toBeUndefined()
+  const deletionRead = CompletionClaimDeletionReadObservedEvent.make({
+    observation: fixture.claim,
+    purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+      readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+    }),
+    replacementOperationId,
+    request: { claim: fixture.claim, operationId: deletionOperationId, successObservation },
+    version: workflowJournalEventVersion
+  })
+  expect(invalidIntegrationFinalityRunBinding(deletionRead, fixture.runId)).toBeUndefined()
+  expect(invalidIntegrationFinalityRunBinding(deletionRead, RunId.make("foreign-finality-run"))).toContain(
+    fixture.runId
+  )
   const identities: Array<string> = []
   const semantics: Array<string> = []
   validateIntegrationFinalityHistoryRecord(

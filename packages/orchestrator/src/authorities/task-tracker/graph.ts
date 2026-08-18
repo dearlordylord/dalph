@@ -1,5 +1,5 @@
 /* eslint-disable functional/immutable-data -- Local builder and traversal scratch never escapes the opaque snapshot. */
-import { HashMap, HashSet, Option, Order, Result, Schema } from "effect"
+import { Graph, HashMap, HashSet, Option, Order, Result, Schema } from "effect"
 import { encodeTaskRevisionFingerprint, TaskId, type TaskRevision } from "@dalph/contracts"
 import {
   isDependencySatisfied,
@@ -48,19 +48,30 @@ type ProjectionResult =
   | { readonly _tag: "Invalid"; readonly issues: ReadonlyArray<ProjectionIssue> }
   | { readonly _tag: "Valid"; readonly snapshot: TaskDagSnapshot }
 
-interface TaskProjection {
+/** A tracker task represented as one node in the normalized task graph. */
+interface TaskGraphNode {
+  readonly id: TaskId
   readonly lifecycle: TaskLifecycle
-  readonly parentTaskId: TaskId | null
-  readonly prerequisiteIds: HashSet.HashSet<TaskId>
 }
 
-const taskProjectionRevision = (taskId: TaskId, projection: TaskProjection): TaskRevision =>
+/**
+ * Distinguishes a prerequisite edge from a grouping edge in the one normalized
+ * task graph. Prerequisite edges point prerequisite → dependant; grouping edges
+ * point parent → child.
+ */
+const TaskGraphEdge = Schema.TaggedUnion({ Prerequisite: {}, Grouping: {} })
+type TaskGraphEdge = typeof TaskGraphEdge.Type
+
+const prerequisiteEdge = TaskGraphEdge.cases.Prerequisite.make({})
+const groupingEdge = TaskGraphEdge.cases.Grouping.make({})
+
+const taskProjectionRevision = (task: Task): TaskRevision =>
   encodeTaskRevisionFingerprint(
     JSON.stringify({
-      id: taskId,
-      lifecycle: projection.lifecycle._tag,
-      parentTaskId: projection.parentTaskId,
-      prerequisiteIds: sorted(projection.prerequisiteIds)
+      id: task.id,
+      lifecycle: task.lifecycle._tag,
+      parentTaskId: task.parentTaskId,
+      prerequisiteIds: sorted(HashSet.fromIterable(task.prerequisiteIds))
     })
   )
 
@@ -70,12 +81,7 @@ const taskProjectionRevision = (taskId: TaskId, projection: TaskProjection): Tas
  * lifecycle, parent grouping edge, and the order-independent prerequisite set.
  * Adding normalized task meaning requires adding it to this projection.
  */
-export const taskRevisionFor = (task: Task): TaskRevision =>
-  taskProjectionRevision(task.id, {
-    lifecycle: task.lifecycle,
-    parentTaskId: task.parentTaskId,
-    prerequisiteIds: HashSet.fromIterable(task.prerequisiteIds)
-  })
+export const taskRevisionFor = taskProjectionRevision
 
 const compareTaskIds: Order.Order<TaskId> = Order.String
 
@@ -92,71 +98,8 @@ const compareTrackerTasks = Order.mapInput(
     [record.lifecycle._tag, record.parentTaskId, [...record.prerequisiteIds].sort(compareTaskIds)] as const
 )
 
-const taskProjection = (
-  tasks: HashMap.HashMap<TaskId, TaskProjection>,
-  taskId: TaskId
-): Option.Option<TaskProjection> => HashMap.get(tasks, taskId)
-
-const getMapValueOrThrow = <Key, Value>(values: Map<Key, Value>, key: Key): Value =>
+const getMapValueOrThrow = <Key, Value>(values: ReadonlyMap<Key, Value>, key: Key): Value =>
   Option.getOrThrow(Option.fromUndefinedOr(values.get(key)))
-
-const stronglyConnectedComponents = (
-  tasks: HashMap.HashMap<TaskId, TaskProjection>,
-  adjacentTaskIds: (taskId: TaskId, projection: TaskProjection) => Iterable<TaskId>
-): ReadonlyArray<ReadonlyArray<TaskId>> => {
-  let nextIndex = 0
-  const indexes = new Map<TaskId, number>()
-  const lowLinks = new Map<TaskId, number>()
-  const stack: Array<TaskId> = []
-  const onStack = new Set<TaskId>()
-  const components: Array<ReadonlyArray<TaskId>> = []
-
-  const recordComponent = (rootTaskId: TaskId): void => {
-    const component: Array<TaskId> = []
-    while (stack.length > 0) {
-      const member = Option.getOrThrow(Option.fromUndefinedOr(stack.pop()))
-      onStack.delete(member)
-      component.push(member)
-      if (member === rootTaskId) break
-    }
-    if (component.length > 1) components.push(sorted(component))
-  }
-
-  const visit = (taskId: TaskId): void => {
-    const index = nextIndex++
-    indexes.set(taskId, index)
-    lowLinks.set(taskId, index)
-    stack.push(taskId)
-    onStack.add(taskId)
-
-    const projection = HashMap.getUnsafe(tasks, taskId)
-    for (const adjacentTaskId of sorted(adjacentTaskIds(taskId, projection))) {
-      if (!HashMap.has(tasks, adjacentTaskId)) continue
-      if (!indexes.has(adjacentTaskId)) {
-        visit(adjacentTaskId)
-        lowLinks.set(
-          taskId,
-          Math.min(getMapValueOrThrow(lowLinks, taskId), getMapValueOrThrow(lowLinks, adjacentTaskId))
-        )
-      } else if (onStack.has(adjacentTaskId)) {
-        lowLinks.set(
-          taskId,
-          Math.min(getMapValueOrThrow(lowLinks, taskId), getMapValueOrThrow(indexes, adjacentTaskId))
-        )
-      }
-    }
-
-    if (getMapValueOrThrow(lowLinks, taskId) !== getMapValueOrThrow(indexes, taskId)) return
-
-    recordComponent(taskId)
-  }
-
-  for (const taskId of sorted(HashMap.keys(tasks))) {
-    if (!indexes.has(taskId)) visit(taskId)
-  }
-
-  return components
-}
 
 const collectTaskRecords = (
   records: ReadonlyArray<TrackerTask>,
@@ -204,22 +147,135 @@ const validateParent = (
   }
 }
 
-const taskProjectionsFrom = (recordsById: ReadonlyMap<TaskId, TrackerTask>): HashMap.HashMap<TaskId, TaskProjection> =>
-  HashMap.fromIterable(
-    [...recordsById].map(([taskId, record]) => [
-      taskId,
-      {
-        lifecycle: record.lifecycle,
-        parentTaskId: record.parentTaskId,
-        prerequisiteIds: HashSet.fromIterable(record.prerequisiteIds)
+interface TaskGraphRepresentation {
+  readonly graph: Graph.DirectedGraph<TaskGraphNode, TaskGraphEdge>
+  readonly nodeIndexByTaskId: HashMap.HashMap<TaskId, Graph.NodeIndex>
+}
+
+const taskGraphRepresentationFrom = (recordsById: ReadonlyMap<TaskId, TrackerTask>): TaskGraphRepresentation => {
+  const indexesByTaskId = new Map<TaskId, Graph.NodeIndex>()
+  const taskIds = sorted(recordsById.keys())
+  const graph = Graph.directed<TaskGraphNode, TaskGraphEdge>((mutable) => {
+    for (const taskId of taskIds) {
+      const task = getMapValueOrThrow(recordsById, taskId)
+      indexesByTaskId.set(taskId, Graph.addNode(mutable, { id: taskId, lifecycle: task.lifecycle }))
+    }
+
+    for (const taskId of taskIds) {
+      const task = getMapValueOrThrow(recordsById, taskId)
+      const taskIndex = getMapValueOrThrow(indexesByTaskId, taskId)
+      for (const prerequisiteId of sorted(task.prerequisiteIds)) {
+        const prerequisiteIndex = indexesByTaskId.get(prerequisiteId)
+        if (prerequisiteIndex !== undefined) {
+          Graph.addEdge(mutable, prerequisiteIndex, taskIndex, prerequisiteEdge)
+        }
       }
-    ])
+      if (task.parentTaskId !== null) {
+        const parentIndex = indexesByTaskId.get(task.parentTaskId)
+        if (parentIndex !== undefined) Graph.addEdge(mutable, parentIndex, taskIndex, groupingEdge)
+      }
+    }
+  })
+  return { graph, nodeIndexByTaskId: HashMap.fromIterable(indexesByTaskId) }
+}
+
+const graphForRelation = (
+  graph: Graph.DirectedGraph<TaskGraphNode, TaskGraphEdge>,
+  relation: TaskGraphEdge["_tag"]
+): Graph.DirectedGraph<TaskGraphNode, TaskGraphEdge> =>
+  Graph.mutate(graph, (mutable) => {
+    Graph.filterEdges(mutable, (edge) => edge._tag === relation)
+    return undefined
+  })
+
+const taskNodeAt = (
+  graph: Graph.DirectedGraph<TaskGraphNode, TaskGraphEdge>,
+  nodeIndex: Graph.NodeIndex
+): TaskGraphNode => Option.getOrThrow(Graph.getNode(graph, nodeIndex))
+
+const taskIdsForRelation = (
+  graph: Graph.DirectedGraph<TaskGraphNode, TaskGraphEdge>,
+  relation: TaskGraphEdge["_tag"],
+  nodeIndex: Graph.NodeIndex,
+  direction: Graph.Direction
+): ReadonlyArray<TaskId> =>
+  sorted(
+    Array.from(Graph.values(Graph.edges(graph))).flatMap((edge) => {
+      if (edge.data._tag !== relation) return []
+      if (direction === "outgoing" && edge.source === nodeIndex) return [taskNodeAt(graph, edge.target).id]
+      if (direction === "incoming" && edge.target === nodeIndex) return [taskNodeAt(graph, edge.source).id]
+      return []
+    })
   )
+
+const cycleTaskIds = (
+  graph: Graph.DirectedGraph<TaskGraphNode, TaskGraphEdge>,
+  relation: TaskGraphEdge["_tag"]
+): ReadonlyArray<ReadonlyArray<TaskId>> => {
+  const nodeIndexByTaskId = HashMap.fromIterable(
+    Array.from(Graph.nodes(graph), ([nodeIndex, node]) => [node.id, nodeIndex] as const)
+  )
+  let nextIndex = 0
+  const indexes = new Map<TaskId, number>()
+  const lowLinks = new Map<TaskId, number>()
+  const stack: Array<TaskId> = []
+  const onStack = new Set<TaskId>()
+  const components: Array<ReadonlyArray<TaskId>> = []
+
+  const recordComponent = (rootTaskId: TaskId): void => {
+    const component: Array<TaskId> = []
+    while (stack.length > 0) {
+      const member = Option.getOrThrow(Option.fromUndefinedOr(stack.pop()))
+      onStack.delete(member)
+      component.push(member)
+      if (member === rootTaskId) break
+    }
+    if (component.length > 1) components.push(sorted(component))
+  }
+
+  const visit = (taskId: TaskId): void => {
+    const index = nextIndex++
+    indexes.set(taskId, index)
+    lowLinks.set(taskId, index)
+    stack.push(taskId)
+    onStack.add(taskId)
+
+    for (const adjacentTaskId of taskIdsForRelation(
+      graph,
+      relation,
+      HashMap.getUnsafe(nodeIndexByTaskId, taskId),
+      "incoming"
+    )) {
+      if (!indexes.has(adjacentTaskId)) {
+        visit(adjacentTaskId)
+        lowLinks.set(
+          taskId,
+          Math.min(getMapValueOrThrow(lowLinks, taskId), getMapValueOrThrow(lowLinks, adjacentTaskId))
+        )
+      } else if (onStack.has(adjacentTaskId)) {
+        lowLinks.set(
+          taskId,
+          Math.min(getMapValueOrThrow(lowLinks, taskId), getMapValueOrThrow(indexes, adjacentTaskId))
+        )
+      }
+    }
+
+    if (getMapValueOrThrow(lowLinks, taskId) === getMapValueOrThrow(indexes, taskId)) {
+      recordComponent(taskId)
+    }
+  }
+
+  for (const taskId of sorted(HashMap.keys(nodeIndexByTaskId))) {
+    if (!indexes.has(taskId)) visit(taskId)
+  }
+  return components
+}
 
 export class TaskDagSnapshot {
   private constructor(
     readonly revision: TrackerRevision,
-    private readonly tasks: HashMap.HashMap<TaskId, TaskProjection>
+    private readonly graph: Graph.DirectedGraph<TaskGraphNode, TaskGraphEdge>,
+    private readonly nodeIndexByTaskId: HashMap.HashMap<TaskId, Graph.NodeIndex>
   ) {}
 
   static project(decoded: TrackerSnapshot): ProjectionResult {
@@ -235,65 +291,78 @@ export class TaskDagSnapshot {
       validateParent(record, recordsById, issues)
     }
 
-    const tasks = taskProjectionsFrom(recordsById)
+    const representation = taskGraphRepresentationFrom(recordsById)
 
     issues.push(
-      ...stronglyConnectedComponents(tasks, (_taskId, projection) => projection.prerequisiteIds).map((taskIds) =>
+      ...cycleTaskIds(representation.graph, "Prerequisite").map((taskIds) =>
         ProjectionIssue.cases.Cycle.make({ taskIds })
       ),
-      ...stronglyConnectedComponents(tasks, (_taskId, projection) =>
-        projection.parentTaskId === null ? [] : [projection.parentTaskId]
-      ).map((taskIds) => ProjectionIssue.cases.ContainmentCycle.make({ taskIds }))
+      ...cycleTaskIds(representation.graph, "Grouping").map((taskIds) =>
+        ProjectionIssue.cases.ContainmentCycle.make({ taskIds })
+      )
     )
     return issues.length > 0
       ? { _tag: "Invalid", issues }
-      : { _tag: "Valid", snapshot: new TaskDagSnapshot(decoded.revision, tasks) }
+      : {
+          _tag: "Valid",
+          snapshot: new TaskDagSnapshot(decoded.revision, representation.graph, representation.nodeIndexByTaskId)
+        }
   }
 
   /** Returns normalized runnable task values, never provider-specific records. */
   eligibleTasks(): ReadonlyArray<Task> {
     return this.eligibleTaskIds().map((taskId) => {
-      const projection = HashMap.getUnsafe(this.tasks, taskId)
+      const node = taskNodeAt(this.graph, HashMap.getUnsafe(this.nodeIndexByTaskId, taskId))
       return {
         id: taskId,
-        lifecycle: projection.lifecycle,
-        parentTaskId: projection.parentTaskId,
-        prerequisiteIds: sorted(projection.prerequisiteIds)
+        lifecycle: node.lifecycle,
+        parentTaskId: Option.getOrNull(this.parentTaskIdOf(taskId)),
+        prerequisiteIds: this.prerequisitesOf(taskId)
       }
     })
   }
 
   taskIds(): ReadonlyArray<TaskId> {
-    return sorted(HashMap.keys(this.tasks))
+    return Array.from(Graph.values(Graph.nodes(this.graph)), (node) => node.id)
   }
 
   lifecycleOf(taskId: TaskId): Option.Option<TaskLifecycle> {
-    return Option.map(taskProjection(this.tasks, taskId), (projection) => projection.lifecycle)
+    return Option.flatMap(HashMap.get(this.nodeIndexByTaskId, taskId), (nodeIndex) =>
+      Option.map(Graph.getNode(this.graph, nodeIndex), (node) => node.lifecycle)
+    )
   }
 
   parentTaskIdOf(taskId: TaskId): Option.Option<TaskId | null> {
-    return Option.map(taskProjection(this.tasks, taskId), (projection) => projection.parentTaskId)
+    return Option.map(HashMap.get(this.nodeIndexByTaskId, taskId), (nodeIndex) =>
+      Option.getOrNull(Option.fromUndefinedOr(taskIdsForRelation(this.graph, "Grouping", nodeIndex, "incoming")[0]))
+    )
   }
 
   childrenOf(parentTaskId: TaskId): ReadonlyArray<TaskId> {
-    return this.taskIds().filter((taskId) => HashMap.getUnsafe(this.tasks, taskId).parentTaskId === parentTaskId)
+    const parentIndex = HashMap.get(this.nodeIndexByTaskId, parentTaskId)
+    return Option.isSome(parentIndex) ? taskIdsForRelation(this.graph, "Grouping", parentIndex.value, "outgoing") : []
   }
 
   /** The selected task and every current descendant reached only through tracker grouping edges. */
   groupingSubtreeOf(taskId: TaskId): ReadonlyArray<TaskId> {
-    if (!HashMap.has(this.tasks, taskId)) return []
-    const taskIds = [taskId]
-    for (const member of taskIds) taskIds.push(...this.childrenOf(member))
-    return taskIds
+    const start = HashMap.get(this.nodeIndexByTaskId, taskId)
+    if (Option.isNone(start)) return []
+    return Array.from(
+      Graph.values(Graph.bfs(graphForRelation(this.graph, "Grouping"), { start: [start.value] })),
+      (node) => node.id
+    )
   }
 
   prerequisitesOf(taskId: TaskId): ReadonlyArray<TaskId> {
-    const projection = taskProjection(this.tasks, taskId)
-    return Option.isSome(projection) ? sorted(projection.value.prerequisiteIds) : []
+    const taskIndex = HashMap.get(this.nodeIndexByTaskId, taskId)
+    return Option.isSome(taskIndex) ? taskIdsForRelation(this.graph, "Prerequisite", taskIndex.value, "incoming") : []
   }
 
   dependantsOf(prerequisite: TaskId): ReadonlyArray<TaskId> {
-    return this.taskIds().filter((taskId) => this.prerequisitesOf(taskId).includes(prerequisite))
+    const prerequisiteIndex = HashMap.get(this.nodeIndexByTaskId, prerequisite)
+    return Option.isSome(prerequisiteIndex)
+      ? taskIdsForRelation(this.graph, "Prerequisite", prerequisiteIndex.value, "outgoing")
+      : []
   }
 
   topologicalOrder(): ReadonlyArray<TaskId> {
@@ -338,12 +407,12 @@ export class TaskDagSnapshot {
       schemaVersion: taskDagSchemaVersion,
       revision: this.revision,
       tasks: this.taskIds().map((id) => {
-        const projection = HashMap.getUnsafe(this.tasks, id)
+        const node = taskNodeAt(this.graph, HashMap.getUnsafe(this.nodeIndexByTaskId, id))
         return {
           id,
-          lifecycle: projection.lifecycle,
-          parentTaskId: projection.parentTaskId,
-          prerequisiteIds: sorted(projection.prerequisiteIds)
+          lifecycle: node.lifecycle,
+          parentTaskId: Option.getOrNull(this.parentTaskIdOf(id)),
+          prerequisiteIds: this.prerequisitesOf(id)
         }
       })
     }

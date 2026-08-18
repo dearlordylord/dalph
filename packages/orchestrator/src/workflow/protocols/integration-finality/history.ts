@@ -385,7 +385,7 @@ const deletionIntentMatches = (intent: DeletionIntent, request: CompletionClaimD
   completionTaskClaimEquals(intent.claim, request.claim) &&
   completionSuccessObservationEquals(intent.successObservation, request.successObservation)
 
-const deletionReadPurposeMatches = (event: DeletionRead, priorAttempts: number): boolean =>
+export const deletionReadPurposeMatches = (event: DeletionRead, priorAttempts: number): boolean =>
   event.purpose._tag === "BeforeDeletionAttempt"
     ? Number(event.purpose.attemptOrdinal) === priorAttempts + 1
     : Number(event.purpose.attemptOrdinal) === completionClaimRequestLimit &&

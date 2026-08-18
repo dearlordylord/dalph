@@ -86,6 +86,7 @@ it("keeps grouping independent while traversing and deriving diamond eligibility
   expect(graph.childrenOf(TaskId.make("group"))).toEqual(["join", "left", "right"])
   expect(graph.prerequisitesOf(TaskId.make("group"))).toEqual([])
   expect(graph.prerequisitesOf(TaskId.make("join"))).toEqual(["left", "right"])
+  expect(graph.dependantsOf(TaskId.make("root"))).toEqual(["left", "right"])
   expect(Option.getOrNull(graph.parentTaskIdOf(TaskId.make("join")))).toBe("group")
   expect(graph.eligibleTaskIds()).toEqual(["group"])
   const satisfied = validSnapshot({
@@ -106,6 +107,76 @@ it("keeps grouping independent while traversing and deriving diamond eligibility
   expect(Option.isNone(graph.parentTaskIdOf(missing))).toBe(true)
   expect(graph.childrenOf(missing)).toEqual([])
   expect(graph.prerequisitesOf(missing)).toEqual([])
+  expect(graph.dependantsOf(missing)).toEqual([])
+})
+
+it("accepts A grouped under B while B waits for A because those relationships are independent", () => {
+  const result = projectTrackerSnapshot({
+    revision: "independent-relations-v1",
+    tasks: [
+      { id: "A", lifecycle: open, parentTaskId: "B", prerequisiteIds: [] },
+      { id: "B", lifecycle: open, parentTaskId: null, prerequisiteIds: ["A"] }
+    ]
+  })
+
+  expect(result._tag).toBe("Valid")
+  if (result._tag === "Invalid") return
+  expect(result.snapshot.groupingSubtreeOf(TaskId.make("B"))).toEqual(["B", "A"])
+  expect(result.snapshot.topologicalOrder()).toEqual(["A", "B"])
+})
+
+it("reports separate prerequisite cycles in the established traversal order", () => {
+  const result = projectTrackerSnapshot({
+    revision: "cycle-order-v1",
+    tasks: [
+      { id: "A", lifecycle: open, parentTaskId: null, prerequisiteIds: ["D"] },
+      { id: "B", lifecycle: open, parentTaskId: null, prerequisiteIds: ["C"] },
+      { id: "C", lifecycle: open, parentTaskId: null, prerequisiteIds: ["B"] },
+      { id: "D", lifecycle: open, parentTaskId: null, prerequisiteIds: ["A", "B"] }
+    ]
+  })
+
+  expect(result).toMatchObject({
+    _tag: "Invalid",
+    issues: [
+      { _tag: "Cycle", taskIds: ["B", "C"] },
+      { _tag: "Cycle", taskIds: ["A", "D"] }
+    ]
+  })
+})
+
+it("preserves cycle traversal order through an acyclic connector", () => {
+  const result = projectTrackerSnapshot({
+    revision: "connected-cycle-order-v1",
+    tasks: [
+      { id: "A", lifecycle: open, parentTaskId: null, prerequisiteIds: ["D"] },
+      { id: "B", lifecycle: open, parentTaskId: null, prerequisiteIds: ["C"] },
+      { id: "C", lifecycle: open, parentTaskId: null, prerequisiteIds: ["B"] },
+      { id: "D", lifecycle: open, parentTaskId: null, prerequisiteIds: ["A", "E"] },
+      { id: "E", lifecycle: open, parentTaskId: null, prerequisiteIds: ["B"] }
+    ]
+  })
+
+  expect(result).toMatchObject({
+    _tag: "Invalid",
+    issues: [
+      { _tag: "Cycle", taskIds: ["B", "C"] },
+      { _tag: "Cycle", taskIds: ["A", "D"] }
+    ]
+  })
+})
+
+it("places newly unblocked B before unrelated Z in the stable topological order", () => {
+  const graph = validSnapshot({
+    revision: "stable-topology-v1",
+    tasks: [
+      { id: "A", lifecycle: open, parentTaskId: null, prerequisiteIds: [] },
+      { id: "B", lifecycle: open, parentTaskId: null, prerequisiteIds: ["A"] },
+      { id: "Z", lifecycle: open, parentTaskId: null, prerequisiteIds: [] }
+    ]
+  })
+
+  expect(graph.topologicalOrder()).toEqual(["A", "B", "Z"])
 })
 
 it("derives only the selected task and its transitive grouping descendants", () => {

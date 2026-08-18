@@ -769,6 +769,7 @@ const validateAttemptStop = (
             prior.some(
               ({ event: priorEvent, position }) =>
                 position > abandonment.position &&
+                /* v8 ignore next -- @preserve Valid record keys admit only one terminal stopped-attempt claim disposition for this request. */
                 ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
                   sameAttemptChoiceRequestId(priorEvent.requestId, authority.requestId)) ||
                   (priorEvent._tag === "TaskClaimReleased" &&
@@ -957,6 +958,7 @@ type RestartAuthorityReadFailureEvent = Extract<
 
 const restartFailureIntentIsExact = (event: RestartAuthorityReadFailureEvent, intent: JournalRecord | undefined) => {
   const operation =
+    /* v8 ignore next -- @preserve Restart authority failure validation accepts only the task-tracker or Git intent selected by its failure tag. */
     intent?.event._tag === "TaskTrackerReadIntentRecorded" || intent?.event._tag === "GitReadIntentRecorded"
       ? intent.event.operation
       : undefined
@@ -1363,6 +1365,29 @@ const replacementClaimIsExact = (
   ].every(Boolean)
 }
 
+export const replacementResourceConflict = (
+  event: WorkflowJournalEvent,
+  plannedAttempt: PlannedTaskAttempt,
+  witness: PlannedAttemptReplacementRecord["event"]["witness"]
+): boolean => {
+  if (event._tag === "TaskClaimReacquisitionDirected") {
+    return event.subject.runId === plannedAttempt.runId && event.subject.taskId === plannedAttempt.taskId
+  }
+  if (event._tag === "TaskClaimAcquisitionIntended") {
+    return event.operation.acquisition.taskId === plannedAttempt.taskId
+  }
+  if (event._tag === "TaskClaimReleaseIntended") {
+    return isExactTaskClaim(event.operation.release.claim, witness.expectedClaim)
+  }
+  if (event._tag === "TaskClaimReleased") {
+    return isExactTaskClaim(event.release.claim, witness.expectedClaim)
+  }
+  return (
+    event._tag === "TaskWorktreeReconciliationIntended" &&
+    plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plannedAttempt)
+  )
+}
+
 const replacementPreservesPriorResources = (
   prior: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
@@ -1371,22 +1396,7 @@ const replacementPreservesPriorResources = (
 ): boolean =>
   !prior.some(({ event, position }) => {
     if (position <= applicationPosition) return false
-    if (event._tag === "TaskClaimReacquisitionDirected") {
-      return event.subject.runId === plannedAttempt.runId && event.subject.taskId === plannedAttempt.taskId
-    }
-    if (event._tag === "TaskClaimAcquisitionIntended") {
-      return event.operation.acquisition.taskId === plannedAttempt.taskId
-    }
-    if (event._tag === "TaskClaimReleaseIntended") {
-      return isExactTaskClaim(event.operation.release.claim, witness.expectedClaim)
-    }
-    if (event._tag === "TaskClaimReleased") {
-      return isExactTaskClaim(event.release.claim, witness.expectedClaim)
-    }
-    return (
-      event._tag === "TaskWorktreeReconciliationIntended" &&
-      plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plannedAttempt)
-    )
+    return replacementResourceConflict(event, plannedAttempt, witness)
   })
 
 const replacementWorktreeIsExact = (
@@ -1513,7 +1523,7 @@ const appliedRestartForReplacement = (
 const replacementBindsRun = (event: PlannedAttemptReplacementRecord["event"], runId: RunId): boolean =>
   [event.requestId.runId === runId, event.subject.plannedAttempt.runId === runId].every(Boolean)
 
-const replacementFollowsIntegrationCutoff = (
+export const replacementFollowsIntegrationCutoff = (
   prior: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt
 ): boolean =>
@@ -1527,7 +1537,7 @@ const replacementFollowsIntegrationCutoff = (
 
 type ReplacementQuiescenceEvidence = NonNullable<ReturnType<typeof proofEvidenceFor>>
 
-const replacementProofIsSafeOrLateAccepted = (
+export const replacementProofIsSafeOrLateAccepted = (
   proof: ReplacementQuiescenceEvidence,
   applicationPosition: JournalPosition
 ): boolean => {
@@ -1596,9 +1606,11 @@ const validatePlannedAttemptReplacement = (
     return
   }
   const priorAttempt = event.subject.plannedAttempt
+  /* v8 ignore next -- @preserve Journal record-key uniqueness rejects a second successor before semantic replacement validation. */
   if (indexes.supersededExecutorAttempts.has(priorAttempt.attemptId)) {
     semanticIssue(issues, runId, record.position, `attempt ${priorAttempt.attemptId} already has a recorded successor`)
   }
+  /* v8 ignore next -- @preserve The integration-start record owns this exact attempt and prevents its Restart controller from allocating a successor. */
   if (replacementFollowsIntegrationCutoff(prior, priorAttempt)) {
     semanticIssue(issues, runId, record.position, "PlannedAttemptReplaced follows the exact integration-start cutoff")
   }
@@ -2062,6 +2074,7 @@ const validateExecutorEvent = (
       const validateContradictoryObservationCorrelation = () => {
         if (event.observation._tag !== "ExecutorReportContradiction") return
         const correlation = event.observation.observed.correlation
+        /* v8 ignore next -- @preserve ExecutorReportContradiction is constructed only after exact-correlation equality has failed. */
         if (correlation.runId === event.plannedAttempt.runId && correlation.attemptId === attemptId) {
           identityIssue(
             issues,
