@@ -10,10 +10,9 @@ type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" |
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
 const viewKeys = [
-  "original", "midnight", "deep-ocean", "forest", "aubergine", "cobalt",
-  "graphite-lime", "espresso", "plum", "ink-gold", "arctic", "aurora",
-  "sunset", "ocean-gradient", "moss-gradient", "ultraviolet", "ember",
-  "diagonal-slate", "monochrome", "paper-dusk", "phosphor"
+  "original", "outline", "solid", "square", "soft", "compact", "roomy",
+  "top-rule", "left-rail", "code-underline", "code-plate", "alternating",
+  "label-band"
 ] as const
 type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
@@ -261,26 +260,18 @@ const story: Scenario = {
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
   { key: "original", name: "Syntax original · leading", description: "The retained shared row uses syntax color on the original dark neutral surface." },
-  { key: "midnight", name: "Midnight cyan", description: "Near-black navy with cold cyan code and restrained blue state surfaces." },
-  { key: "deep-ocean", name: "Deep ocean", description: "Layered marine blue with aqua syntax and submerged teal rectangles." },
-  { key: "forest", name: "Forest amber", description: "Deep forest surfaces pair warm amber syntax with moss state panels." },
-  { key: "aubergine", name: "Aubergine mint", description: "Purple-black depth uses mint calls and rose keywords." },
-  { key: "cobalt", name: "Cobalt coral", description: "Saturated cobalt supports coral keywords and pale blue calls." },
-  { key: "graphite-lime", name: "Graphite lime", description: "Neutral graphite puts sharp lime and ice accents around live data." },
-  { key: "espresso", name: "Espresso peach", description: "Warm brown-black surfaces use peach syntax and muted copper state panels." },
-  { key: "plum", name: "Plum sky", description: "Dark plum carries sky-blue calls and orchid keywords." },
-  { key: "ink-gold", name: "Ink gold", description: "Blue-black ink uses gold hierarchy with cool secondary syntax." },
-  { key: "arctic", name: "Arctic night", description: "Cold slate surfaces use icy foregrounds and glacier-blue accents." },
-  { key: "aurora", name: "Aurora gradient", description: "A green-to-violet field shifts behind stable shared-row data." },
-  { key: "sunset", name: "Sunset gradient", description: "Indigo moves through plum toward a restrained ember edge." },
-  { key: "ocean-gradient", name: "Ocean-depth gradient", description: "Deep navy descends through teal without changing state geometry." },
-  { key: "moss-gradient", name: "Moss gradient", description: "Charcoal transitions into forest and lichen surfaces." },
-  { key: "ultraviolet", name: "Ultraviolet gradient", description: "Violet and blue light cross a dark high-contrast field." },
-  { key: "ember", name: "Ember gradient", description: "Charcoal carries a low red-orange glow behind the code and data." },
-  { key: "diagonal-slate", name: "Diagonal slate", description: "A quiet diagonal graphite gradient adds direction without a hard division." },
-  { key: "monochrome", name: "Monochrome", description: "Grayscale contrast tests whether hue is necessary outside state meaning." },
-  { key: "paper-dusk", name: "Paper dusk", description: "A light warm surface tests dark syntax with softly tinted state rectangles." },
-  { key: "phosphor", name: "Phosphor terminal", description: "Black-green terminal surfaces use phosphor syntax and emerald state panels." }
+  { key: "outline", name: "Outline cells", description: "Transparent rectangles rely on state-colored outlines over the original surface." },
+  { key: "solid", name: "Solid tiles", description: "Borderless opaque rectangles make each live-data value a compact solid block." },
+  { key: "square", name: "Square technical", description: "Hard corners and exact edges give the shared row a technical-instrument treatment." },
+  { key: "soft", name: "Soft raised cards", description: "Rounded rectangles and restrained shadows lift live data from the source surface." },
+  { key: "compact", name: "Compact density", description: "Shorter rows and cells test higher information density without removing data." },
+  { key: "roomy", name: "Roomy density", description: "Larger gaps and cells test whether more breathing room improves scanning." },
+  { key: "top-rule", name: "State top rules", description: "Each rectangle becomes a flat panel identified by a strong state-colored top edge." },
+  { key: "left-rail", name: "State left rails", description: "A strong left rail carries state while the remaining rectangle edges disappear." },
+  { key: "code-underline", name: "Underlined source", description: "A quiet rule under each code expression separates source without enclosing it." },
+  { key: "code-plate", name: "Source plates", description: "Each production expression sits on a small solid plate beside unchanged rectangles." },
+  { key: "alternating", name: "Alternating rows", description: "Solid alternating row fills separate stages while keeping code and data together." },
+  { key: "label-band", name: "Rectangle label bands", description: "Rectangle labels use a separate solid band above each dynamic value." }
 ]
 
 let frameIndex = 0
@@ -437,7 +428,7 @@ const graphPanel = (item: Frame): string => `<section class="graph-panel instrum
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
 const switcher = (): string => {
   const index = views.findIndex(({ key }) => key === view())
-  return `<nav class="switcher"><button data-cycle="-1">←</button><label><small>CODE / DATA PALETTE ${index + 1} / ${views.length}</small><select data-view-select aria-label="Prototype palette">${views.map((item) => `<option value="${item.key}" ${item.key === view() ? "selected" : ""}>${item.name}</option>`).join("")}</select></label><button data-cycle="1">→</button></nav>`
+  return `<nav class="switcher"><button data-cycle="-1">←</button><label><small>CODE / DATA STYLING ${index + 1} / ${views.length}</small><select data-view-select aria-label="Prototype styling">${views.map((item) => `<option value="${item.key}" ${item.key === view() ? "selected" : ""}>${item.name}</option>`).join("")}</select></label><button data-cycle="1">→</button></nav>`
 }
 
 const render = (): void => {
