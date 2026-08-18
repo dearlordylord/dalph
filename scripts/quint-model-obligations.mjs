@@ -331,3 +331,37 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "successorResponseLostReached"
   ])
 })
+
+// The accepted-result quarantine proof projection owns exhaustive enumeration
+// of the issue #68 boundary while the canonical model retains the full
+// accepted-result vocabulary and sampled production chronology.
+export const acceptedResultIntegrationQuarantineProofObligations = Object.freeze({
+  invariants: Object.freeze([
+    "quarantineBeforeRelease",
+    "quarantinePhaseRequiresOccurrence",
+    "firstDirectionWins",
+    "conflictingDirectionDoesNoWork",
+    "retryRequiresSameSessionAndChoice",
+    "retryConclusiveRunRequiresFreshQ2",
+    "retryOrdinalAdvancesOnce",
+    "recoveryResumesSameOrdinal",
+    "fullRerunRequiresFreshObservation",
+    "successorStartsAtFreshOrdinalOne",
+    "freshObservationMayEqualFixedHead",
+    "proofStateIsBounded"
+  ]),
+  witnesses: Object.freeze([
+    "quarantinePendingReached",
+    "quarantinedReached",
+    "retrySelectedReached",
+    "retryInFlightReached",
+    "retryNotPreparedReached",
+    "retryQuarantineRecordedReached",
+    "responseLostReached",
+    "recoveredInitialReached",
+    "fullRerunSelectedReached",
+    "freshHeadObservedReached",
+    "successorSessionFixedReached",
+    "conflictRejectedReached"
+  ])
+})

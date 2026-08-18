@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks"
 import { applicationExitCheckRegistry } from "./application-exit-model-registry.mjs"
 import {
   acceptedResultIntegrationObligations,
+  acceptedResultIntegrationQuarantineProofObligations,
   plannedAttemptExecutorObligations,
   runActivationObligations,
   taskFactReconciliationObligations
@@ -711,6 +712,10 @@ await run("Git reconciliation exhaustive model", [
 
 const acceptedResultIntegrationInvariants = acceptedResultIntegrationObligations.invariants
 const acceptedResultIntegrationWitnesses = acceptedResultIntegrationObligations.witnesses
+const acceptedResultIntegrationQuarantineProofInvariants =
+  acceptedResultIntegrationQuarantineProofObligations.invariants
+const acceptedResultIntegrationQuarantineProofWitnesses =
+  acceptedResultIntegrationQuarantineProofObligations.witnesses
 
 await run("accepted-result integration model typecheck", ["typecheck", "specs/acceptedResultIntegration.qnt"])
 await run("accepted-result integration deterministic tests", [
@@ -739,15 +744,53 @@ await run("accepted-result integration sampled model", [
   "--verbosity",
   "1"
 ])
-// TLC checks the complete finite state graph. No --max-steps is used: future
-// growth shows up as a diameter change rather than silent truncation.
-await run("accepted-result integration exhaustive model", [
+// The canonical model retains the full accepted-result vocabulary, collected
+// scenarios, and sampled obligations. Its issue #68 quarantine product is
+// exhaustively enumerated by the subject-scoped projection below, as allowed
+// by ADR 0010.
+await run("accepted-result integration quarantine proof typecheck", [
+  "typecheck",
+  "specs/acceptedResultIntegration_proof.qnt"
+])
+await run("accepted-result integration quarantine proof deterministic tests", [
+  "test",
+  "specs/acceptedResultIntegration_proof_test.qnt",
+  "--main",
+  "acceptedResultIntegrationQuarantineProofTest"
+])
+await run("accepted-result integration quarantine proof negative mutation profile", [
+  "test",
+  "specs/acceptedResultIntegration_proof_negative_test.qnt",
+  "--main",
+  "acceptedResultIntegrationQuarantineProofNegativeTest"
+])
+await run("accepted-result integration quarantine proof sampled model", [
+  "run",
+  "specs/acceptedResultIntegration_proof.qnt",
+  "--invariants",
+  ...acceptedResultIntegrationQuarantineProofInvariants,
+  "--witnesses",
+  ...acceptedResultIntegrationQuarantineProofWitnesses,
+  "--max-steps",
+  "24",
+  "--max-samples",
+  "5000",
+  "--seed",
+  "6801",
+  "--verbosity",
+  "1"
+])
+// TLC checks the complete finite projection graph. No --max-steps is used:
+// future growth shows up as a diameter change rather than silent truncation.
+await run("accepted-result integration quarantine proof exhaustive model", [
   "verify",
-  "specs/acceptedResultIntegration.qnt",
+  "specs/acceptedResultIntegration_proof.qnt",
+  "--main",
+  "acceptedResultIntegrationQuarantineProof",
   "--backend",
   "tlc",
   "--invariants",
-  ...acceptedResultIntegrationInvariants,
+  ...acceptedResultIntegrationQuarantineProofInvariants,
   "--verbosity",
   "1"
 ])
