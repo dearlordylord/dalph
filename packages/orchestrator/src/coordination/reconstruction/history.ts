@@ -205,7 +205,6 @@ const copyIndexes = (source: FoldIndexes): FoldIndexes => ({
   targetPromotionHistory: {
     attempts: copyNestedMap(source.targetPromotionHistory.attempts),
     intents: copyMap(source.targetPromotionHistory.intents),
-    passedVerification: copyMap(source.targetPromotionHistory.passedVerification),
     terminals: copySet(source.targetPromotionHistory.terminals)
   },
   integrationFinalityHistory: {

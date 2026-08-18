@@ -66,12 +66,9 @@ import {
   IntegrationReviewManifest,
   IntegrationCandidateGitReadFailure,
   Integrator,
-  IntegratorCallFailure,
-  IntegratorCandidateText,
+  IntegratorCorrelation,
   IntegratorGit,
-  IntegratorGitObservation,
   IntegratorGitReadFailure,
-  IntegratorNotPreparedDetail,
   IntegratorResult,
   GitWorktree,
   GitWorktreeCreateFailure,
@@ -396,6 +393,20 @@ const authoredTargetPromotionRequestOf = (request: TargetPromotionRequest, runId
           }
         }
       }
+    }
+  })
+}
+
+/** Authored stories use the cassette run placeholder while preserving every other Integrator request fact exactly. */
+const authoredIntegratorCorrelationOf = (correlation: IntegratorCorrelation, runId: RunId): IntegratorCorrelation => {
+  const normalized = Schema.decodeUnknownSync(IntegratorCorrelation)(
+    JSON.parse(JSON.stringify(correlation).replaceAll(String(runId), "$authored-run"))
+  )
+  return Schema.decodeUnknownSync(IntegratorCorrelation)({
+    ...normalized,
+    acceptedResult: {
+      ...normalized.acceptedResult,
+      evidenceManifest: { ...normalized.acceptedResult.evidenceManifest, digest: authoredAcceptanceManifestDigest }
     }
   })
 }
@@ -1311,7 +1322,12 @@ const runAuthoredScenarioCassetteWith = (request: {
       const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
       const targetVerificationStory = cassette.story.some((item) => item._tag === "TargetVerificationReturned")
       const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
-      const candidateTerminalEventTag = targetVerificationStory
+      const hasAuthoredIntegratorRequest = cassette.story.some((item) => item._tag === "IntegratorRequestReceived")
+      const authoredIntegratorResult = cassette.story.find((item) => item._tag === "IntegratorResultReturned")
+      const hasAuthoredIntegratorGitObservation = cassette.story.some(
+        (item) => item._tag === "IntegratorGitObservationReturned"
+      )
+      const legacyCandidateTerminalEventTag = targetVerificationStory
         ? cassette.story.some(
             (item) => item._tag === "TargetVerificationReturned" && item.result._tag === "CorrelationContradiction"
           )
@@ -1338,6 +1354,15 @@ const runAuthoredScenarioCassetteWith = (request: {
                 : cassette.story.some((item) => item._tag === "IntegrationCandidateAgentReported")
                   ? "IntegrationCandidateAgentReported"
                   : undefined
+      const candidateTerminalEventTag = !hasAuthoredIntegratorRequest
+        ? legacyCandidateTerminalEventTag
+        : authoredIntegratorResult === undefined
+          ? "IntegratorSessionFixed"
+          : authoredIntegratorResult.result._tag === "NotPrepared"
+            ? "IntegratorResultRecorded"
+            : hasAuthoredIntegratorGitObservation
+              ? "IntegratorCandidateGitObserved"
+              : "IntegratorCandidateGitReadIntended"
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
@@ -1510,6 +1535,20 @@ const runAuthoredScenarioCassetteWith = (request: {
         event._tag === "PlannedAttemptExecutorWorkReported"
       const shouldPauseAfterTrackerFactsAppend = (event: AuthoredJournalAppendEvent): boolean =>
         event._tag === "TaskTrackerFactsObserved" && !event.operationId.startsWith("attempt-restart:")
+      const isIntegratorBoundaryAppend = (event: AuthoredJournalAppendEvent): boolean =>
+        event._tag === "IntegratorSessionFixed" ||
+        event._tag === "IntegratorResultRecorded" ||
+        event._tag === "IntegratorCandidateGitReadIntended" ||
+        event._tag === "IntegratorCandidateGitObserved"
+      const pauseAtAuthoredJournalBoundary = (event: AuthoredJournalAppendEvent): Effect.Effect<void> => {
+        // A tracker observation may be durable before the coordinator process
+        // dies. Authored Integrator boundaries and replacement appends use the
+        // same exact death seam.
+        if (shouldPauseAfterTrackerFactsAppend(event)) return cursor.pauseAtCoordinatorProcessDeath
+        if (event._tag === "PlannedAttemptReplaced") return cursor.pauseAtCoordinatorProcessDeath
+        if (isIntegratorBoundaryAppend(event)) return cursor.pauseAtCoordinatorProcessDeath
+        return Effect.void
+      }
       const pauseAfterJournalAppend = (
         key: AuthoredJournalAppendKey,
         event: AuthoredJournalAppendEvent
@@ -1518,13 +1557,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           if (candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag) {
             yield* Deferred.succeed(candidateOutcomeRecorded, undefined)
           }
-          // A tracker observation may be durable before the
-          // coordinator process dies.  Let an authored
-          // CoordinatorProcessDies boundary consume exactly here,
-          // so restart tests do not collapse this seam into an
-          // unrelated Unpause or pre-read failure.
-          if (shouldPauseAfterTrackerFactsAppend(event)) yield* cursor.pauseAtCoordinatorProcessDeath
-          if (event._tag === "PlannedAttemptReplaced") yield* cursor.pauseAtCoordinatorProcessDeath
+          yield* pauseAtAuthoredJournalBoundary(event)
           if (!isExecutorLifecycleAppend(event)) return
           const firstDurableAppend = yield* Ref.modify(observedExecutorLifecycleKeys, (observed) => {
             const encodedKey = String(key)
@@ -1916,75 +1949,25 @@ const runAuthoredScenarioCassetteWith = (request: {
           Integrator,
           Integrator.of({
             prepare: (request) =>
-              cursor.consumeIntegrationCandidateAgentReport(request.correlation.plannedAttempt.attemptId).pipe(
-                Effect.mapError(
-                  (failure) =>
-                    new IntegratorCallFailure({
-                      correlation: request.correlation,
-                      detail: `${failure._tag}: ${failure.storyPosition}`
-                    })
-                ),
-                Effect.flatMap((candidateReport) => {
-                  /* v8 ignore next -- @preserve Accepted authored stories declare every report; retain the candidate-boundary diagnostic for malformed runtime re-entry. */
-                  if (Option.isNone(candidateReport)) {
-                    return Effect.die(
-                      `candidate frontier invoked the agent without an authored report for ${JSON.stringify(request.correlation)}`
-                    )
-                  }
-                  const authored = candidateReport.value.report
-                  return Match.value(authored).pipe(
-                    Match.tagsExhaustive({
-                      Conflict: () =>
-                        Effect.succeed(
-                          IntegratorResult.cases.NotPrepared.make({
-                            correlation: request.correlation,
-                            detail: IntegratorNotPreparedDetail.make("outer Integrator reported Conflict")
-                          })
-                        ),
-                      CorrelationContradiction: () =>
-                        Effect.succeed(
-                          IntegratorResult.cases.NotPrepared.make({
-                            correlation: request.correlation,
-                            detail: IntegratorNotPreparedDetail.make(
-                              "outer Integrator reported CorrelationContradiction"
-                            )
-                          })
-                        ),
-                      ExitedWithoutCandidate: () =>
-                        Effect.succeed(
-                          IntegratorResult.cases.NotPrepared.make({
-                            correlation: request.correlation,
-                            detail: IntegratorNotPreparedDetail.make(
-                              "outer Integrator reported ExitedWithoutCandidate"
-                            )
-                          })
-                        ),
-                      Submitted: ({ candidateCommit }) =>
-                        Effect.succeed(
-                          IntegratorResult.cases.PreparedCandidate.make({
-                            candidateText: IntegratorCandidateText.make(String(candidateCommit)),
-                            correlation: request.correlation
-                          })
-                        ),
-                      Working: () =>
-                        Effect.succeed(
-                          IntegratorResult.cases.NotPrepared.make({
-                            correlation: request.correlation,
-                            detail: IntegratorNotPreparedDetail.make("outer Integrator reported Working")
-                          })
-                        )
-                    })
-                  )
+              Effect.gen(function* () {
+                const authoredCorrelation = authoredIntegratorCorrelationOf(request.correlation, runId)
+                yield* cursor.consumeIntegratorRequest(authoredCorrelation)
+                const authored = yield* cursor.consumeIntegratorResult
+                return Match.valueTags(authored.result, {
+                  NotPrepared: ({ detail }) =>
+                    IntegratorResult.cases.NotPrepared.make({ correlation: request.correlation, detail }),
+                  PreparedCandidate: ({ candidateText }) =>
+                    IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: request.correlation })
                 })
-              )
+              }).pipe(Effect.catchTag("AuthoredCassetteInteractionMismatch", Effect.die))
           })
         ),
         Layer.succeed(
           IntegratorGit,
           IntegratorGit.of({
-            readCandidate: (target, candidateText) => {
-              const candidateCommit = GitCommitSha.make(String(candidateText))
-              return cursor.consumeIntegrationCandidateGitValidation(target.repository, candidateCommit).pipe(
+            readCandidate: (target, candidateText) =>
+              cursor.consumeIntegratorGitObservation(candidateText).pipe(
+                Effect.catchTag("AuthoredCassetteInteractionMismatch", Effect.die),
                 Effect.mapError(
                   (failure) =>
                     new IntegratorGitReadFailure({
@@ -1993,24 +1976,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                       target
                     })
                 ),
-                Effect.map(({ observation }) => {
-                  if (observation._tag === "Missing") {
-                    return IntegratorGitObservation.cases.Missing.make({ candidateText })
-                  }
-                  if (observation._tag === "NonCommit") {
-                    return IntegratorGitObservation.cases.NonCommit.make({
-                      candidateText,
-                      objectType: observation.objectType
-                    })
-                  }
-                  return IntegratorGitObservation.cases.Commit.make({
-                    candidateText,
-                    commit: candidateCommit,
-                    directParents: observation.directParents
-                  })
-                })
+                Effect.map(({ observation }) => observation)
               )
-            }
           })
         )
       )
@@ -2041,7 +2008,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           verificationPlan === undefined
             ? undefined
             : { boundary: targetVerificationBoundary, evidenceStore, plan: verificationPlan },
-          targetPromotionStory ? { git: targetPromotionGit } : undefined,
+          command.targetPromotionConfigured === true || targetPromotionStory ? { git: targetPromotionGit } : undefined,
           completionFinalityConfigured ? completionClaimBoundary : undefined,
           completionTaskConfigured ? completionTaskBoundary : undefined,
           evidenceStore
@@ -2718,11 +2685,10 @@ const runAuthoredScenarioCassetteWith = (request: {
             const plannedAttempt = heldContinuationPlannedAttempt(action)
             if (plannedAttempt === undefined) return
             const key = `${plannedAttempt.taskId}:${plannedAttempt.attemptId}`
-            yield* cursor.storyItems.pipe(
-              Stream.filter((item) => item?._tag !== "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"),
-              Stream.take(1),
-              Stream.runDrain
-            )
+            const current = yield* cursor.currentStoryItem
+            if (current?._tag === "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary") {
+              yield* cursor.awaitCurrentStoryAdvance
+            }
             const gate = (yield* Ref.get(plannedContinuationExecutorBoundaryGate)).get(key)
             if (gate !== undefined) yield* Deferred.await(gate.release)
           })

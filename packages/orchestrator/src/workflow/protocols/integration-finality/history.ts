@@ -327,8 +327,7 @@ const isIntegrationFinalityEvent = (event: WorkflowJournalEvent): event is Integ
 const integrationFinalityEventBindsRun = (event: IntegrationFinalityEvent, runId: RunId): boolean =>
   [
     event.claim.plannedAttempt.runId === runId,
-    event.claim.promotionCorrelation.candidateCorrelation.runId === runId,
-    event.claim.promotionCorrelation.verificationCorrelation.candidateCorrelation.runId === runId
+    event.claim.promotionCorrelation.qualifiedCandidate.correlation.plannedAttempt.runId === runId
   ].every(Boolean)
 
 const invalidDeletionRead = (

@@ -66,11 +66,6 @@
       "count": 2
     }
   },
-  "packages/dalph/test/conformance/integration-finality.mbt.test.ts": {
-    "functional/no-throw-statements": {
-      "count": 28
-    }
-  },
   "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts": {
     "functional/prefer-tacit": {
       "count": 1
@@ -361,11 +356,6 @@
   },
   "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.ts": {
     "import-x/no-unused-modules": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/workflow/protocols/target-promotion/protocol.test.ts": {
-    "functional/no-throw-statements": {
       "count": 1
     }
   },

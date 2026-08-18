@@ -23,6 +23,8 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionId,
   IntegratorState,
+  IntegratorQualifiedCandidate,
+  integratorQualifiedCandidateFromState,
   integratorCandidateHasExactParents
 } from "./events.js"
 import {
@@ -68,6 +70,8 @@ export {
   IntegratorResult,
   IntegratorNotPreparedDetail,
   IntegratorState,
+  IntegratorQualifiedCandidate,
+  integratorQualifiedCandidateFromState,
   IntegratorSessionId,
   integratorCandidateHasExactParents
 }

@@ -25,7 +25,6 @@ import {
   IntegratorSessionFixedEvent,
   IntegratorSessionId
 } from "../workflow/protocols/integrator/events.js"
-import { acceptedResultFixture } from "../../test/support/evidence.js"
 import { JournalPosition } from "./identity.js"
 
 it.effect("round-trips the current generic journal vocabulary", () =>
@@ -44,9 +43,9 @@ it.effect("round-trips the outer Integrator session with its exact causal identi
     const fixture = integrationFinalityFixture
     const event = IntegratorSessionFixedEvent.make({
       correlation: IntegratorCorrelation.make({
-        acceptedResult: acceptedResultFixture(fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit),
+        acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
         candidateResource: IntegratorCandidateResourceLocator.make("resource:event-codec-integrator"),
-        expectedTargetHead: fixture.promotionCorrelation.expectedTargetHead,
+        expectedTargetHead: fixture.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead,
         integrationTarget: fixture.integrationTarget,
         plannedAttempt: fixture.plannedAttempt,
         queuedAt: JournalPosition.make(7),

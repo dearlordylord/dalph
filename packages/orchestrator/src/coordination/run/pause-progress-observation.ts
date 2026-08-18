@@ -30,7 +30,7 @@ import {
   type ControlDirectionSubject as ControlDirectionSubjectType
 } from "../../workflow/protocols/control-direction-application/events.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import type { TargetPromotionRequest } from "../../workflow/protocols/target-promotion/events.js"
+import type { TargetPromotionCorrelation } from "../../workflow/protocols/target-promotion/events.js"
 import type { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import { integrationResponsibilityEquivalence } from "../../workflow/protocols/integration-admission/responsibility.js"
 
@@ -143,7 +143,7 @@ export type PauseIntegrationResourceBlocker =
   | { readonly _tag: "ActiveIntegrationTarget"; readonly queuedAt: JournalPosition }
 
 export type PauseStartedIntegrationBlocker =
-  | { readonly _tag: "TargetPromotionResultRequired"; readonly request: TargetPromotionRequest }
+  | { readonly _tag: "TargetPromotionResultRequired"; readonly request: TargetPromotionCorrelation }
   | PauseIntegrationResourceBlocker
   | PauseDeliveryActionBlocker
 

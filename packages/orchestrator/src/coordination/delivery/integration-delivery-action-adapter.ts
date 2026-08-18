@@ -168,14 +168,14 @@ const completePromotedTask = Effect.fn("DeliveryAction.completePromotedTask")(fu
   const boundary = yield* completionTaskBoundary()
   const context = yield* Effect.context<never>()
   const promotionRuntime = Context.getOption(context, TargetPromotionRuntime)
-  const verificationRuntime = Context.getOption(context, TargetVerificationRuntime)
-  if (Option.isNone(promotionRuntime) || Option.isNone(verificationRuntime)) {
+  const evidenceStore = Context.getOption(context, EvidenceStore)
+  if (Option.isNone(promotionRuntime) || Option.isNone(evidenceStore)) {
     return deliveryActionDeferred(action.proposal.id, "CompletionTaskUnavailable")
   }
   return yield* runCompletionTaskProtocol(boundary, transition.request, target, (ordinal) =>
     authorizeCompletionTaskAttempt(boundary, transition.request, target, ordinal).pipe(
       Effect.provideService(TargetPromotionGit, promotionRuntime.value.git),
-      Effect.provideService(EvidenceStore, verificationRuntime.value.evidenceStore)
+      Effect.provideService(EvidenceStore, evidenceStore.value)
     )
   ).pipe(
     Effect.as(deliveryActionCompleted(action.proposal.id)),
@@ -302,7 +302,7 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
   yield* lease.integrationTargets
     .withPermit(
       transition.responsibility,
-      runTargetPromotion(transition.candidate, transition.verification).pipe(
+      runTargetPromotion(transition.candidate).pipe(
         Effect.provideService(
           TargetPromotionGit,
           coordinatorOwnedTargetPromotionGit(runtime.value.git, ownership.value)

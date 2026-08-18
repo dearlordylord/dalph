@@ -43,12 +43,9 @@ const completionClaimFor = (
   return originalClaim === undefined
     ? undefined
     : CompletionTaskClaim.make({
-        acceptanceManifest: promotion.correlation.acceptanceManifest,
-        integrationReviewManifest: promotion.correlation.reviewManifest,
         originalClaim,
         plannedAttempt: responsibility.plannedAttempt,
-        promotionCorrelation: promotion.correlation,
-        verificationManifest: promotion.correlation.verificationManifest
+        promotionCorrelation: promotion.correlation
       })
 }
 

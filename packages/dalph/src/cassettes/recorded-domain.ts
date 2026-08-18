@@ -52,6 +52,10 @@ import {
   IntegrationCandidateId,
   IntegrationCandidateResourceLocator,
   IntegrationSessionId,
+  IntegratorCandidateText,
+  IntegratorCorrelation,
+  IntegratorGitObservation,
+  IntegratorResult,
   EvidenceReference,
   TargetVerificationCorrelation,
   TargetVerificationOutcome,
@@ -154,6 +158,15 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     ...initiatedByCoordinator,
     integrationTarget: IntegrationTarget,
     plannedAttempt: PlannedTaskAttempt
+  },
+  /** Outer Integrator facts retain the exact correlation, including causal Journal positions. */
+  IntegratorSessionFixed: { correlation: IntegratorCorrelation },
+  IntegratorResultRecorded: { result: IntegratorResult },
+  IntegratorCandidateGitReadIntended: { candidateText: IntegratorCandidateText, correlation: IntegratorCorrelation },
+  IntegratorCandidateGitObserved: {
+    candidateText: IntegratorCandidateText,
+    correlation: IntegratorCorrelation,
+    observation: IntegratorGitObservation
   },
   IntegrationCandidateConstructionIntended: {
     correlation: IntegrationCandidateCorrelation,
@@ -435,7 +448,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Incrementing it does not promise
  * backward compatibility until the project owner removes this comment.
  */
-const currentRecordedCassetteVersion = 10
+const currentRecordedCassetteVersion = 11
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

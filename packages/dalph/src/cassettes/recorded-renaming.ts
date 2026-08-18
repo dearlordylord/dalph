@@ -47,8 +47,16 @@ import {
   type CandidateContinuationLimit,
   type IntegrationCandidateCorrelation,
   type IntegrationCandidateId,
-  type IntegrationCandidateResourceLocator,
-  type IntegrationSessionId,
+  IntegrationCandidateResourceLocator,
+  IntegratorCandidateResourceLocator,
+  type IntegratorCandidateText,
+  IntegrationSessionId,
+  type IntegratorCorrelation,
+  type IntegratorGitObservationType,
+  type IntegratorNotPreparedDetail,
+  type IntegratorResultType,
+  type IntegratorQualifiedCandidate,
+  IntegratorSessionId,
   type JournalPosition,
   type EvidenceReference,
   type EvidenceDigest,
@@ -147,6 +155,8 @@ type PreservedCassetteBrand =
   | JournalPosition
   | EvidenceReference
   | EvidenceDigest
+  | IntegratorCandidateText
+  | IntegratorNotPreparedDetail
   | TargetVerificationPlanId
   | TargetPromotionAttemptOrdinal
   | TargetPromotionAttemptLimit
@@ -310,30 +320,108 @@ const renameTargetVerificationCorrelation = (
   })
 }
 
+const renameIntegratorCandidateResource = (
+  resource: IntegratorCandidateResourceLocator,
+  maps: IdentityRenamingMaps
+): IntegratorCandidateResourceLocator =>
+  IntegratorCandidateResourceLocator.make(
+    String(
+      maps.integrationCandidateResourceLocators.get(IntegrationCandidateResourceLocator.make(String(resource))) ??
+        resource
+    )
+  )
+
+const renameIntegratorSession = (sessionId: IntegratorSessionId, maps: IdentityRenamingMaps): IntegratorSessionId =>
+  IntegratorSessionId.make(
+    String(maps.integrationSessionIds.get(IntegrationSessionId.make(String(sessionId))) ?? sessionId)
+  )
+
+const renameIntegratorCorrelation = (
+  correlation: IntegratorCorrelation,
+  maps: IdentityRenamingMaps
+): IntegratorCorrelation =>
+  completeFields<IntegratorCorrelation>({
+    acceptedResult: completeFields<typeof correlation.acceptedResult>({
+      commit: preserveCassetteValue(correlation.acceptedResult.commit),
+      evidenceManifest: completeFields<typeof correlation.acceptedResult.evidenceManifest>({
+        byteLength: correlation.acceptedResult.evidenceManifest.byteLength,
+        digest: preserveCassetteValue(correlation.acceptedResult.evidenceManifest.digest)
+      })
+    }),
+    candidateResource: renameIntegratorCandidateResource(correlation.candidateResource, maps),
+    expectedTargetHead: preserveCassetteValue(correlation.expectedTargetHead),
+    integrationTarget: completeFields<typeof correlation.integrationTarget>({
+      repository: preserveCassetteValue(correlation.integrationTarget.repository),
+      ref: preserveCassetteValue(correlation.integrationTarget.ref)
+    }),
+    plannedAttempt: renamePlannedAttempt(correlation.plannedAttempt, maps),
+    queuedAt: preserveCassetteValue(correlation.queuedAt),
+    sessionId: renameIntegratorSession(correlation.sessionId, maps),
+    startedAt: preserveCassetteValue(correlation.startedAt),
+    targetLineageObservedAt: preserveCassetteValue(correlation.targetLineageObservedAt)
+  })
+
+const renameIntegratorQualifiedCandidate = (
+  candidate: IntegratorQualifiedCandidate,
+  maps: IdentityRenamingMaps
+): IntegratorQualifiedCandidate =>
+  completeFields<IntegratorQualifiedCandidate>({
+    candidateCommit: preserveCassetteValue(candidate.candidateCommit),
+    candidateText: preserveCassetteValue(candidate.candidateText),
+    correlation: renameIntegratorCorrelation(candidate.correlation, maps),
+    directParents: preserveCassetteValue(candidate.directParents),
+    qualifiedAt: preserveCassetteValue(candidate.qualifiedAt)
+  })
+
+const renameIntegratorGitObservation = (observation: IntegratorGitObservationType): IntegratorGitObservationType =>
+  Match.valueTags(observation, {
+    Commit: (value) =>
+      completeFields<typeof value>({
+        _tag: "Commit",
+        candidateText: preserveCassetteValue(value.candidateText),
+        commit: preserveCassetteValue(value.commit),
+        directParents: preserveCassetteValue(value.directParents)
+      }),
+    Missing: (value) =>
+      completeFields<typeof value>({ _tag: "Missing", candidateText: preserveCassetteValue(value.candidateText) }),
+    NonCommit: (value) =>
+      completeFields<typeof value>({
+        _tag: "NonCommit",
+        candidateText: preserveCassetteValue(value.candidateText),
+        objectType: preserveCassetteValue(value.objectType)
+      })
+  })
+
+const renameIntegratorResult = (result: IntegratorResultType, maps: IdentityRenamingMaps): IntegratorResultType =>
+  Match.valueTags(result, {
+    NotPrepared: (value) =>
+      completeFields<typeof value>({
+        _tag: "NotPrepared",
+        correlation: renameIntegratorCorrelation(value.correlation, maps),
+        detail: preserveCassetteValue(value.detail)
+      }),
+    PreparedCandidate: (value) =>
+      completeFields<typeof value>({
+        _tag: "PreparedCandidate",
+        candidateText: preserveCassetteValue(value.candidateText),
+        correlation: renameIntegratorCorrelation(value.correlation, maps)
+      })
+  })
+
 const renameTargetPromotionCorrelation = (
   correlation: TargetPromotionCorrelation,
   maps: IdentityRenamingMaps
 ): TargetPromotionCorrelation => {
-  const candidateCorrelation = renameCandidateCorrelation(correlation.candidateCorrelation, maps)
+  const qualifiedCandidate = renameIntegratorQualifiedCandidate(correlation.qualifiedCandidate, maps)
   return completeFields<TargetPromotionCorrelation>({
-    acceptanceManifest: preserveCassetteValue(correlation.acceptanceManifest),
-    candidateCommit: preserveCassetteValue(correlation.candidateCommit),
-    candidateConstructedAt: preserveCassetteValue(correlation.candidateConstructedAt),
-    candidateCorrelation,
-    expectedTargetHead: preserveCassetteValue(correlation.expectedTargetHead),
-    integrationTarget: preserveCassetteValue(correlation.integrationTarget),
-    reviewManifest: preserveCassetteValue(correlation.reviewManifest),
-    requestId: targetPromotionRequestIdForCandidate(candidateCorrelation.candidateId),
-    verificationCorrelation: renameTargetVerificationCorrelation(correlation.verificationCorrelation, maps),
-    verificationManifest: preserveCassetteValue(correlation.verificationManifest)
+    qualifiedCandidate,
+    requestId: targetPromotionRequestIdForCandidate(qualifiedCandidate)
   })
 }
 
 const renameCompletionTaskClaim = (claim: CompletionTaskClaim, maps: IdentityRenamingMaps): CompletionTaskClaim =>
   completeFields<CompletionTaskClaim>({
     _tag: "CompletionTaskClaim",
-    acceptanceManifest: preserveCassetteValue(claim.acceptanceManifest),
-    integrationReviewManifest: preserveCassetteValue(claim.integrationReviewManifest),
     originalClaim: completeFields<typeof claim.originalClaim>({
       _tag: "ActiveTaskClaim",
       operationId: renamed(claim.originalClaim.operationId, maps.operationIds),
@@ -342,8 +430,7 @@ const renameCompletionTaskClaim = (claim: CompletionTaskClaim, maps: IdentityRen
       token: renamed(claim.originalClaim.token, maps.claimTokens)
     }),
     plannedAttempt: renamePlannedAttempt(claim.plannedAttempt, maps),
-    promotionCorrelation: renameTargetPromotionCorrelation(claim.promotionCorrelation, maps),
-    verificationManifest: preserveCassetteValue(claim.verificationManifest)
+    promotionCorrelation: renameTargetPromotionCorrelation(claim.promotionCorrelation, maps)
   })
 
 const renameCompletionTaskRequest = (
@@ -351,14 +438,10 @@ const renameCompletionTaskRequest = (
   maps: IdentityRenamingMaps
 ): CompletionTaskRequest =>
   completeFields<CompletionTaskRequest>({
-    acceptanceManifest: preserveCassetteValue(request.acceptanceManifest),
     claim: renameCompletionTaskClaim(request.claim, maps),
-    integrationReviewManifest: preserveCassetteValue(request.integrationReviewManifest),
     operationId: renamed(request.operationId, maps.operationIds),
-    promotionCorrelation: renameTargetPromotionCorrelation(request.promotionCorrelation, maps),
     taskId: preserveCassetteValue(request.taskId),
-    taskRevision: preserveCassetteValue(request.taskRevision),
-    verificationManifest: preserveCassetteValue(request.verificationManifest)
+    taskRevision: preserveCassetteValue(request.taskRevision)
   })
 
 const renameFocusedCompletedTaskObservation = (
@@ -662,6 +745,29 @@ const renameRecordedCassetteEntry = (
       renameRecordedIntegrationEntry(integrationEntry, (attempt) => renamePlannedAttempt(attempt, maps))
     ),
     Match.tags({
+      IntegratorSessionFixed: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorSessionFixed",
+          correlation: renameIntegratorCorrelation(entry.correlation, maps)
+        }),
+      IntegratorResultRecorded: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorResultRecorded",
+          result: renameIntegratorResult(entry.result, maps)
+        }),
+      IntegratorCandidateGitReadIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorCandidateGitReadIntended",
+          candidateText: preserveCassetteValue(entry.candidateText),
+          correlation: renameIntegratorCorrelation(entry.correlation, maps)
+        }),
+      IntegratorCandidateGitObserved: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorCandidateGitObserved",
+          candidateText: preserveCassetteValue(entry.candidateText),
+          correlation: renameIntegratorCorrelation(entry.correlation, maps),
+          observation: renameIntegratorGitObservation(entry.observation)
+        }),
       IntegrationCandidateConstructionIntended: (candidateEntry) => {
         const correlation = renameCandidateCorrelation(candidateEntry.correlation, maps)
         return completeFields<typeof candidateEntry>({

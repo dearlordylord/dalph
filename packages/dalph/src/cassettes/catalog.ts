@@ -2290,20 +2290,6 @@ const pipelineAcceptedReport = (attemptId: "attempt:A:0" | "attempt:B:0", commit
   request: "StartOrContinue" as const
 })
 
-const candidateGitValidationReturned = (repository: string, candidateCommit: string, observation: unknown) => ({
-  _tag: "IntegrationCandidateGitValidationReturned" as const,
-  candidateCommit,
-  observation,
-  repository
-})
-
-const candidateGitValidationFailed = (repository: string, candidateCommit: string, detail: string) => ({
-  _tag: "IntegrationCandidateGitValidationFailed" as const,
-  candidateCommit,
-  detail,
-  repository
-})
-
 const targetPromotionGitReadReturned = (repository: string, candidateCommit: string, observation: unknown) => ({
   _tag: "TargetPromotionGitReadReturned" as const,
   candidateCommit,
@@ -2311,58 +2297,94 @@ const targetPromotionGitReadReturned = (repository: string, candidateCommit: str
   repository
 })
 
+const pipelineIntegrationPositions = {
+  A: { queuedAt: 20, startedAt: 21, targetLineageObservedAt: 31 },
+  B: { queuedAt: 74, startedAt: 75, targetLineageObservedAt: 85 }
+} as const
+
 const pipelineIntegrationFinality = (
   taskId: "A" | "B",
   attemptId: "attempt:A:0" | "attempt:B:0",
   graph: typeof blockedPipelineGraph | typeof releasedPipelineGraph,
   acceptedResultCommit: string,
   candidateCommit: string
-) => [
-  ...pipelineGraphRead(graph),
-  { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
-  { _tag: "TaskClaimCurrentReadReturned" as const, taskId },
-  ...pipelineGraphRead(graph),
-  { _tag: "DalphSelects" as const, operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId } },
-  {
-    _tag: "IntegrationCandidateAgentReported" as const,
-    attemptId,
-    report: { _tag: "Submitted" as const, candidateCommit }
-  },
-  candidateGitValidationReturned("/dalph/cassettes/pipeline.git", candidateCommit, {
-    _tag: "Commit" as const,
-    directParents: ["2222222222222222222222222222222222222222", acceptedResultCommit]
-  }),
-  {
-    _tag: "TargetVerificationReturned" as const,
-    result: { _tag: "Passed" as const, artifacts: [{ name: "acceptance-verification", content: `verified ${taskId}` }] }
-  },
-  targetPromotionGitReadReturned("/dalph/cassettes/pipeline.git", candidateCommit, {
-    _tag: "CandidateNotInAncestry" as const,
-    currentHeadSha: "2222222222222222222222222222222222222222"
-  }),
-  { _tag: "TargetPromotionCompareAndSetReturned" as const, result: { _tag: "Applied" as const } },
-  { _tag: "CompletionClaimReadReturned" as const, claim: "Active" as const, taskId },
-  { _tag: "CompletionClaimReplacementApplied" as const, taskId },
-  {
-    _tag: "CompletionTaskFocusedReadReturned" as const,
-    lifecycle: "Open" as const,
-    taskId,
-    unfinishedPrerequisiteTaskIds: []
-  },
-  targetPromotionGitReadReturned("/dalph/cassettes/pipeline.git", candidateCommit, {
-    _tag: "CandidateCurrent" as const,
-    currentHeadSha: candidateCommit
-  }),
-  { _tag: "CompletionTaskRequestReturned" as const, outcome: "Acknowledged" as const, taskId },
-  {
-    _tag: "CompletionTaskFocusedReadReturned" as const,
-    lifecycle: "CompletedSuccessfully" as const,
-    taskId,
-    unfinishedPrerequisiteTaskIds: []
-  },
-  { _tag: "CompletionClaimReadReturned" as const, claim: "Completion" as const, taskId },
-  { _tag: "CompletionClaimDeletionApplied" as const, taskId }
-]
+): ReadonlyArray<unknown> => {
+  const { queuedAt, startedAt, targetLineageObservedAt } = pipelineIntegrationPositions[taskId]
+  const candidateText = `refs/heads/dalph/integrator-candidate-${taskId}`
+  const candidateResource = `integrator-resource:$authored-run:${attemptId}:${startedAt}:${targetLineageObservedAt}:2222222222222222222222222222222222222222:${acceptedResultCommit}:/dalph/cassettes/pipeline.git:refs/heads/master`
+  const correlation = {
+    acceptedResult: {
+      commit: acceptedResultCommit,
+      evidenceManifest: { byteLength: 285, digest: "1111111111111111111111111111111111111111111111111111111111111111" }
+    },
+    candidateResource,
+    expectedTargetHead: "2222222222222222222222222222222222222222",
+    integrationTarget: { repository: "/dalph/cassettes/pipeline.git", ref: "refs/heads/master" },
+    plannedAttempt: {
+      attemptId,
+      baseSha: "2222222222222222222222222222222222222222",
+      branch: `refs/heads/dalph/${attemptId.replaceAll(":", "-")}`,
+      executor: "executor:cassette",
+      runId: "$authored-run",
+      taskId,
+      taskRevision: makeTaskWorkSpecification({
+        body: taskId === "A" ? "Complete task A." : "Complete task B after A.",
+        taskId: TaskId.make(taskId),
+        title: taskId === "A" ? "Complete A" : "Complete B"
+      }).fingerprint,
+      worktree: `/dalph/cassettes/pipeline/${attemptId.replaceAll(":", "-")}`
+    },
+    queuedAt,
+    sessionId: candidateResource.replace("integrator-resource:", "integrator-session:"),
+    startedAt,
+    targetLineageObservedAt
+  }
+  return [
+    ...pipelineGraphRead(graph),
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId },
+    ...pipelineGraphRead(graph),
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId } },
+    { _tag: "IntegratorRequestReceived" as const, correlation },
+    { _tag: "IntegratorResultReturned" as const, result: { _tag: "PreparedCandidate" as const, candidateText } },
+    {
+      _tag: "IntegratorGitObservationReturned" as const,
+      candidateText,
+      observation: {
+        _tag: "Commit" as const,
+        candidateText,
+        commit: candidateCommit,
+        directParents: ["2222222222222222222222222222222222222222", acceptedResultCommit]
+      }
+    },
+    targetPromotionGitReadReturned("/dalph/cassettes/pipeline.git", candidateCommit, {
+      _tag: "CandidateNotInAncestry" as const,
+      currentHeadSha: "2222222222222222222222222222222222222222"
+    }),
+    { _tag: "TargetPromotionCompareAndSetReturned" as const, result: { _tag: "Applied" as const } },
+    { _tag: "CompletionClaimReadReturned" as const, claim: "Active" as const, taskId },
+    { _tag: "CompletionClaimReplacementApplied" as const, taskId },
+    {
+      _tag: "CompletionTaskFocusedReadReturned" as const,
+      lifecycle: "Open" as const,
+      taskId,
+      unfinishedPrerequisiteTaskIds: []
+    },
+    targetPromotionGitReadReturned("/dalph/cassettes/pipeline.git", candidateCommit, {
+      _tag: "CandidateCurrent" as const,
+      currentHeadSha: candidateCommit
+    }),
+    { _tag: "CompletionTaskRequestReturned" as const, outcome: "Acknowledged" as const, taskId },
+    {
+      _tag: "CompletionTaskFocusedReadReturned" as const,
+      lifecycle: "CompletedSuccessfully" as const,
+      taskId,
+      unfinishedPrerequisiteTaskIds: []
+    },
+    { _tag: "CompletionClaimReadReturned" as const, claim: "Completion" as const, taskId },
+    { _tag: "CompletionClaimDeletionApplied" as const, taskId }
+  ]
+}
 
 /** The maintained dependency story proving one Run consumes a later complete graph observation. */
 export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
@@ -2392,7 +2414,7 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/pipeline.git", ref: "refs/heads/master" },
       target: "pipeline-cassette-target",
-      verificationPlanId: "acceptance-verification",
+      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/pipeline"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
@@ -2742,142 +2764,169 @@ export const changedAttemptRestartPastIntegrationRejectedAuthoredCassette: Scena
   ]
 })
 
-type CandidateVerificationResult = {
-  readonly _tag: "CorrelationContradiction" | "Passed" | "Failed" | "Killed" | "Partial" | "TimedOut"
-  readonly artifacts?: ReadonlyArray<unknown>
-}
-
-const candidateScenarioRunCoordinatorFrom = (
-  item: Extract<AuthoredCassetteStoryItem, { readonly _tag: "RunCoordinator" }>,
-  verificationResult: CandidateVerificationResult | undefined
-): ReadonlyArray<unknown> => [
-  { ...item, verificationPlanId: verificationResult === undefined ? item.verificationPlanId : "public-checks-v1" }
-]
-
-const candidateConstructedEvidenceFrom = (constructedCommit: string | undefined): ReadonlyArray<unknown> =>
-  constructedCommit === undefined
-    ? []
-    : [
-        {
-          _tag: "IntegrationCandidateConstructed",
-          acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          attemptId: "attempt:A:0",
-          candidateCommit: constructedCommit,
-          expectedTargetHead: "1111111111111111111111111111111111111111",
-          taskId: "A"
-        }
-      ]
-
-const candidateVerificationStoryFrom = (verificationResult: CandidateVerificationResult | undefined) =>
-  verificationResult === undefined ? [] : [{ _tag: "TargetVerificationReturned", result: verificationResult }]
-
-const candidateVerificationEvidenceFrom = (
-  constructedCommit: string | undefined,
-  verificationResult: CandidateVerificationResult | undefined
-): ReadonlyArray<unknown> => {
-  if (verificationResult === undefined || verificationResult._tag === "CorrelationContradiction") return []
-  return [
-    verificationResult._tag === "Passed"
-      ? {
-          _tag: "TargetVerificationPassed" as const,
-          /* v8 ignore next -- @preserve A Passed verification cassette is constructed only after its candidate commit has been authored. */
-          candidateCommit: constructedCommit ?? "",
-          planId: "public-checks-v1",
-          taskId: "A"
-        }
-      : {
-          _tag: "TargetVerificationStopped" as const,
-          /* v8 ignore next -- @preserve A stopped verification cassette is constructed only after its candidate commit has been authored. */
-          candidateCommit: constructedCommit ?? "",
-          outcome: verificationResult._tag,
-          planId: "public-checks-v1",
-          taskId: "A"
-        }
-  ]
-}
-
 const candidateScenarioExpectedBehaviorFrom = (
   item: Extract<AuthoredCassetteStoryItem, { readonly _tag: "ExpectedBehavior" }>,
-  candidateStory: ReadonlyArray<unknown>,
-  constructedCommit: string | undefined,
-  verificationResult: CandidateVerificationResult | undefined
+  candidateStory: ReadonlyArray<unknown>
 ): ReadonlyArray<unknown> => [
   { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
   ...candidateStory,
-  ...candidateVerificationStoryFrom(verificationResult),
-  {
-    ...item,
-    /* v8 ignore next -- @preserve Maintained candidate cassettes all declare the orchestration assertion lens. */
-    orchestration:
-      /* v8 ignore next -- @preserve The issue-138 story extends an accepted ExpectedBehavior item with orchestration evidence. */
-      item.orchestration === null
-        ? null
-        : [
-            ...item.orchestration,
-            ...candidateConstructedEvidenceFrom(constructedCommit),
-            ...candidateVerificationEvidenceFrom(constructedCommit, verificationResult)
-          ]
-  }
+  item
 ]
 
 const candidateScenarioStoryItemsFrom = (
   item: AuthoredCassetteStoryItem,
-  candidateStory: ReadonlyArray<unknown>,
-  constructedCommit: string | undefined,
-  verificationResult: CandidateVerificationResult | undefined
+  candidateStory: ReadonlyArray<unknown>
 ): ReadonlyArray<unknown> => {
-  if (item._tag === "RunCoordinator") return candidateScenarioRunCoordinatorFrom(item, verificationResult)
   if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === acceptedResultBlockedGraph.revision) {
     return [{ ...item, graph: singletonGraph }]
   }
   if (item._tag !== "ExpectedBehavior") return [item]
-  return candidateScenarioExpectedBehaviorFrom(item, candidateStory, constructedCommit, verificationResult)
+  return candidateScenarioExpectedBehaviorFrom(item, candidateStory)
 }
 
-const candidateScenarioFrom = (
-  name: string,
-  candidateStory: ReadonlyArray<unknown>,
-  constructedCommit: string | undefined,
-  verificationResult?: CandidateVerificationResult
-) => {
+const candidateScenarioFrom = (name: string, candidateStory: ReadonlyArray<unknown>) => {
   const baseStory = acceptedResultRestartsIntoIntegrationAuthoredCassette.story
   return Schema.decodeUnknownSync(AuthoredScenarioCassette)({
     ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
     name,
-    story: baseStory.flatMap((item) =>
-      candidateScenarioStoryItemsFrom(item, candidateStory, constructedCommit, verificationResult)
-    )
+    story: baseStory.flatMap((item) => candidateScenarioStoryItemsFrom(item, candidateStory))
   })
 }
 
-const candidateReportForA = (report: unknown) => ({
-  _tag: "IntegrationCandidateAgentReported" as const,
-  attemptId: "attempt:A:0" as const,
-  report
+const outerCandidateExpectedHead = "1111111111111111111111111111111111111111"
+const outerCandidateAcceptedCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const outerCandidateText = "refs/heads/dalph/integrator-candidate-A"
+const outerCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
+const outerCandidateSessionSuffix =
+  `$authored-run:attempt:A:0:23:27:${outerCandidateExpectedHead}:${outerCandidateAcceptedCommit}` +
+  ":/dalph/cassettes/integration.git:refs/heads/master"
+const outerCandidateCorrelationA = {
+  acceptedResult: {
+    commit: outerCandidateAcceptedCommit,
+    evidenceManifest: { byteLength: 273, digest: "1111111111111111111111111111111111111111111111111111111111111111" }
+  },
+  candidateResource: `integrator-resource:${outerCandidateSessionSuffix}`,
+  expectedTargetHead: outerCandidateExpectedHead,
+  integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
+  plannedAttempt: {
+    attemptId: "attempt:A:0",
+    baseSha: outerCandidateExpectedHead,
+    branch: "refs/heads/dalph/attempt-A-0",
+    executor: "executor:cassette",
+    runId: "$authored-run",
+    taskId: "A",
+    taskRevision:
+      "tr1.eyJib2R5IjoiUHJvZHVjZSBhbiBhY2NlcHRlZCBjb21taXQuIiwidGl0bGUiOiJQcm9kdWNlIGFjY2VwdGVkIHJlc3VsdCJ9",
+    worktree: "/dalph/cassettes/integration/attempt-A-0"
+  },
+  queuedAt: 22,
+  sessionId: `integrator-session:${outerCandidateSessionSuffix}`,
+  startedAt: 23,
+  targetLineageObservedAt: 27
+} as const
+
+const outerIntegratorRequestForA = {
+  _tag: "IntegratorRequestReceived" as const,
+  correlation: outerCandidateCorrelationA
+}
+const outerIntegratorNotPreparedForA = (detail: string) => [
+  outerIntegratorRequestForA,
+  { _tag: "IntegratorResultReturned" as const, result: { _tag: "NotPrepared" as const, detail } }
+]
+const outerIntegratorPreparedForA = (candidateText = outerCandidateText) => [
+  outerIntegratorRequestForA,
+  { _tag: "IntegratorResultReturned" as const, result: { _tag: "PreparedCandidate" as const, candidateText } }
+]
+const outerIntegratorGitCommitForA = (
+  candidateText = outerCandidateText,
+  commit = outerCandidateCommit,
+  directParents: ReadonlyArray<string> = [outerCandidateExpectedHead, outerCandidateAcceptedCommit]
+) => ({
+  _tag: "IntegratorGitObservationReturned" as const,
+  candidateText,
+  observation: { _tag: "Commit" as const, candidateText, commit, directParents }
 })
 
-/** Conflict edits stay in one isolated candidate resource until an explicit exact submission. */
+/** A non-submitting outer Integrator report remains terminal without exposing private correction stages. */
 export const candidateConflictRecoveryAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "candidate conflict recovery stays in one isolated integration resource",
-  [
-    candidateReportForA({ _tag: "Conflict" }),
-    candidateReportForA({ _tag: "Submitted", candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }),
-    candidateGitValidationReturned("/dalph/cassettes/integration.git", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", {
-      _tag: "Commit",
-      directParents: ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-    })
-  ],
-  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  "outer Integrator returns NotPrepared without exposing private conflict handling",
+  outerIntegratorNotPreparedForA("outer Integrator completed without a prepared candidate")
 )
 
-/** A task paused after a recoverable candidate conflict finishes the held integration boundary without cleanup. */
+/** An unreadable Git qualification is retried after an explicit activation boundary without rerunning Integrator. */
+const candidateCorrectionAfterUnreadableGitBase = candidateScenarioFrom(
+  "outer Integrator rereads unreadable Git without rerunning the session",
+  [
+    ...outerIntegratorPreparedForA(),
+    {
+      _tag: "IntegratorGitObservationFailed",
+      candidateText: outerCandidateText,
+      detail: "repository temporarily unreadable"
+    },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    outerIntegratorGitCommitForA(),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    }
+  ]
+)
+export const candidateCorrectionAfterUnreadableGitAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...candidateCorrectionAfterUnreadableGitBase,
+  startingFacts: {
+    ...candidateCorrectionAfterUnreadableGitBase.startingFacts,
+    targetLineageObservations: [
+      {
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: outerCandidateExpectedHead,
+        targetHeadSha: outerCandidateExpectedHead
+      },
+      {
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: outerCandidateExpectedHead,
+        targetHeadSha: outerCandidateExpectedHead
+      }
+    ]
+  }
+})
+
+/** A non-submitting outer Integrator result is terminal and leaves Git uncalled. */
+export const candidateVerificationFailureAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
+  "outer Integrator returns NotPrepared without exposing private checks",
+  outerIntegratorNotPreparedForA("outer Integrator concluded that no candidate was prepared")
+)
+
+/** A non-submitting correlation contradiction is retained without exposing provider-private checks. */
+export const candidateVerificationContradictionAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
+  "outer Integrator NotPrepared result leaves Git uncalled",
+  outerIntegratorNotPreparedForA("outer Integrator returned a conclusive non-success")
+)
+
+/** One outer Integrator submission and exact Git parents authorize promotion. */
+const candidatePreparedAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
+  "outer Integrator reports one Git-qualified candidate",
+  [...outerIntegratorPreparedForA(), outerIntegratorGitCommitForA()]
+)
+
+/** A task paused after a Git-qualified candidate finishes the held integration boundary without cleanup. */
 export const taskPauseFinishesHeldIntegrationAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
-  ...candidateConflictRecoveryAuthoredCassette,
+  ...candidatePreparedAuthoredCassette,
   name: "Alice pauses task A after its integration target is held",
-  story: candidateConflictRecoveryAuthoredCassette.story.flatMap((item) =>
-    item._tag === "IntegrationCandidateAgentReported" && item.report._tag === "Conflict"
+  story: candidatePreparedAuthoredCassette.story.flatMap((item) =>
+    item._tag === "IntegratorGitObservationReturned"
       ? [
           item,
           {
@@ -2890,75 +2939,6 @@ export const taskPauseFinishesHeldIntegrationAuthoredCassette: ScenarioCassette 
       : [item]
   )
 })
-
-/** A definitive invalid submission is corrected, while unreadable Git causes a reread without another agent call. */
-export const candidateCorrectionAfterUnreadableGitAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "candidate correction rereads unreadable Git without charging the agent",
-  [
-    candidateReportForA({ _tag: "Submitted", candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }),
-    candidateGitValidationReturned("/dalph/cassettes/integration.git", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", {
-      _tag: "Missing"
-    }),
-    candidateReportForA({ _tag: "Submitted", candidateCommit: "cccccccccccccccccccccccccccccccccccccccc" }),
-    candidateGitValidationFailed(
-      "/dalph/cassettes/integration.git",
-      "cccccccccccccccccccccccccccccccccccccccc",
-      "repository temporarily unreadable"
-    ),
-    candidateGitValidationReturned("/dalph/cassettes/integration.git", "cccccccccccccccccccccccccccccccccccccccc", {
-      _tag: "Commit",
-      directParents: ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-    })
-  ],
-  "cccccccccccccccccccccccccccccccccccccccc",
-  { _tag: "Passed", artifacts: [{ name: "verification-report", content: "all selected checks passed" }] }
-)
-
-/** A selected public verification plan reports failure and leaves the exact candidate unpromoted. */
-export const candidateVerificationFailureAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "selected public verification fails without promotion",
-  [
-    candidateReportForA({ _tag: "Submitted", candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }),
-    candidateGitValidationReturned("/dalph/cassettes/integration.git", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", {
-      _tag: "Missing"
-    }),
-    candidateReportForA({ _tag: "Submitted", candidateCommit: "cccccccccccccccccccccccccccccccccccccccc" }),
-    candidateGitValidationFailed(
-      "/dalph/cassettes/integration.git",
-      "cccccccccccccccccccccccccccccccccccccccc",
-      "repository temporarily unreadable"
-    ),
-    candidateGitValidationReturned("/dalph/cassettes/integration.git", "cccccccccccccccccccccccccccccccccccccccc", {
-      _tag: "Commit",
-      directParents: ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-    })
-  ],
-  "cccccccccccccccccccccccccccccccccccccccc",
-  { _tag: "Failed", artifacts: [{ name: "verification-report", content: "one selected check failed" }] }
-)
-
-/** A foreign wrapper correlation is durably contradicted before any evidence can authorize M. */
-export const candidateVerificationContradictionAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "foreign public verification correlation fails closed",
-  [
-    candidateReportForA({ _tag: "Submitted", candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }),
-    candidateGitValidationReturned("/dalph/cassettes/integration.git", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", {
-      _tag: "Missing"
-    }),
-    candidateReportForA({ _tag: "Submitted", candidateCommit: "cccccccccccccccccccccccccccccccccccccccc" }),
-    candidateGitValidationFailed(
-      "/dalph/cassettes/integration.git",
-      "cccccccccccccccccccccccccccccccccccccccc",
-      "repository temporarily unreadable"
-    ),
-    candidateGitValidationReturned("/dalph/cassettes/integration.git", "cccccccccccccccccccccccccccccccccccccccc", {
-      _tag: "Commit",
-      directParents: ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-    })
-  ],
-  "cccccccccccccccccccccccccccccccccccccccc",
-  { _tag: "CorrelationContradiction" }
-)
 
 const promotionCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
 const promotionExpectedHead = "1111111111111111111111111111111111111111"
@@ -2979,47 +2959,43 @@ const pauseExecutorAndPromotionG0 = {
   tasks: [{ id: "D", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
 } as const
 
+const pauseExecutorAndPromotionAcceptedResult = {
+  commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  evidenceManifest: { byteLength: 273, digest: "1111111111111111111111111111111111111111111111111111111111111111" }
+} as const
+
+const pauseExecutorAndPromotionSessionSuffix =
+  `$authored-run:attempt:D:0:23:27:${promotionExpectedHead}:${pauseExecutorAndPromotionAcceptedResult.commit}` +
+  ":/dalph/cassettes/pause-boundaries.git:refs/heads/master"
+
 const pauseExecutorAndPromotionRequestD = {
-  acceptanceManifest: { byteLength: 273, digest: "1111111111111111111111111111111111111111111111111111111111111111" },
-  candidateCommit: promotionCandidateCommit,
-  candidateConstructedAt: 31,
-  candidateCorrelation: {
-    acceptanceManifest: { byteLength: 273, digest: "1111111111111111111111111111111111111111111111111111111111111111" },
-    acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    attemptId: "attempt:D:0",
-    candidateId: "integration-candidate:$authored-run:attempt:D:0:23",
-    candidateResource: "integration-candidate-resource:integration-candidate:$authored-run:attempt:D:0:23",
-    expectedTargetHead: promotionExpectedHead,
-    integrationSessionId: "integration-session:$authored-run:attempt:D:0:23",
-    integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
-    runId: "$authored-run"
-  },
-  expectedTargetHead: promotionExpectedHead,
-  integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
-  reviewManifest: { byteLength: 1250, digest: "2222222222222222222222222222222222222222222222222222222222222222" },
-  requestId: "target-promotion:integration-candidate:$authored-run:attempt:D:0:23",
-  verificationCorrelation: {
+  qualifiedCandidate: {
     candidateCommit: promotionCandidateCommit,
-    candidateCorrelation: {
-      acceptanceManifest: {
-        byteLength: 273,
-        digest: "1111111111111111111111111111111111111111111111111111111111111111"
-      },
-      acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      attemptId: "attempt:D:0",
-      candidateId: "integration-candidate:$authored-run:attempt:D:0:23",
-      candidateResource: "integration-candidate-resource:integration-candidate:$authored-run:attempt:D:0:23",
+    candidateText: "refs/heads/pause-boundaries-candidate",
+    correlation: {
+      acceptedResult: pauseExecutorAndPromotionAcceptedResult,
+      candidateResource: `integrator-resource:${pauseExecutorAndPromotionSessionSuffix}`,
       expectedTargetHead: promotionExpectedHead,
-      integrationSessionId: "integration-session:$authored-run:attempt:D:0:23",
       integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
-      runId: "$authored-run"
+      plannedAttempt: {
+        attemptId: "attempt:D:0",
+        baseSha: promotionExpectedHead,
+        branch: "refs/heads/dalph/attempt-D-0",
+        executor: "executor:cassette",
+        runId: "$authored-run",
+        taskId: "D",
+        taskRevision: "tr1.eyJib2R5IjoiUHJvZHVjZSBEJ3MgYWNjZXB0ZWQgY29tbWl0LiIsInRpdGxlIjoiSW50ZWdyYXRlIEQifQ",
+        worktree: "/dalph/cassettes/pause-boundaries/attempt-D-0"
+      },
+      queuedAt: 22,
+      sessionId: `integrator-session:${pauseExecutorAndPromotionSessionSuffix}`,
+      startedAt: 23,
+      targetLineageObservedAt: 27
     },
-    candidateConstructedAt: 31,
-    planId: "public-checks-v1",
-    requestId: "target-verification:integration-candidate:$authored-run:attempt:D:0:23",
-    reviewManifest: { byteLength: 1250, digest: "2222222222222222222222222222222222222222222222222222222222222222" }
+    directParents: [promotionExpectedHead, pauseExecutorAndPromotionAcceptedResult.commit],
+    qualifiedAt: 31
   },
-  verificationManifest: { byteLength: 1777, digest: "3333333333333333333333333333333333333333333333333333333333333333" }
+  requestId: `target-promotion:integrator-session:${pauseExecutorAndPromotionSessionSuffix}:${promotionCandidateCommit}`
 } as const
 
 const pauseExecutorAndPromotionSuspendA = {
@@ -3051,7 +3027,7 @@ const pauseExecutorAndPromotionRunD = {
 const pauseExecutorResponsibilityA = {
   _tag: "PlannedAttemptExecutorWork",
   attemptId: "attempt:A:0",
-  beganAt: 66,
+  beganAt: 64,
   coverage: { _tag: "ExactTaskPauseCoverage" },
   taskId: "A"
 } as const
@@ -3059,7 +3035,7 @@ const pauseExecutorResponsibilityA = {
 const pausePromotionResponsibilityD = {
   _tag: "StartedIntegration",
   attemptId: "attempt:D:0",
-  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 73, pausedTaskId: "A" },
+  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 71, pausedTaskId: "A" },
   queuedAt: 22,
   startedAt: 23,
   taskId: "D"
@@ -3126,18 +3102,20 @@ const pauseExecutorAtBoundaryAndPromotionWaiting = (promotionBlockers: ReadonlyA
 
 const targetPromotionSuccessTailForD = [
   { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:0", taskId: "D" } },
+  { _tag: "IntegratorRequestReceived", correlation: pauseExecutorAndPromotionRequestD.qualifiedCandidate.correlation },
   {
-    _tag: "IntegrationCandidateAgentReported",
-    attemptId: "attempt:D:0",
-    report: { _tag: "Submitted", candidateCommit: promotionCandidateCommit }
+    _tag: "IntegratorResultReturned",
+    result: { _tag: "PreparedCandidate", candidateText: "refs/heads/pause-boundaries-candidate" }
   },
-  candidateGitValidationReturned("/dalph/cassettes/pause-boundaries.git", promotionCandidateCommit, {
-    _tag: "Commit",
-    directParents: [promotionExpectedHead, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-  }),
   {
-    _tag: "TargetVerificationReturned",
-    result: { _tag: "Passed", artifacts: [{ name: "verification-report", content: "all selected checks passed" }] }
+    _tag: "IntegratorGitObservationReturned",
+    candidateText: "refs/heads/pause-boundaries-candidate",
+    observation: {
+      _tag: "Commit",
+      candidateText: "refs/heads/pause-boundaries-candidate",
+      commit: promotionCandidateCommit,
+      directParents: [promotionExpectedHead, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    }
   },
   targetPromotionGitReadReturned("/dalph/cassettes/pause-boundaries.git", promotionCandidateCommit, {
     _tag: "CandidateNotInAncestry",
@@ -3177,7 +3155,7 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
       target: "cassette-target",
-      verificationPlanId: "public-checks-v1",
+      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/pause-boundaries"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -3368,9 +3346,9 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
 
 const promotionScenarioFrom = (name: string, promotionStory: ReadonlyArray<unknown>, promotionEvidence: unknown) =>
   Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-    ...candidateCorrectionAfterUnreadableGitAuthoredCassette,
+    ...candidatePreparedAuthoredCassette,
     name,
-    story: candidateCorrectionAfterUnreadableGitAuthoredCassette.story.flatMap((item) =>
+    story: candidatePreparedAuthoredCassette.story.flatMap((item) =>
       item._tag !== "ExpectedBehavior"
         ? [item]
         : [
@@ -3386,7 +3364,7 @@ const promotionScenarioFrom = (name: string, promotionStory: ReadonlyArray<unkno
 
 /** Git accepts the one exact H -> M update after the verified candidate is sealed. */
 export const targetPromotionSuccessAuthoredCassette: ScenarioCassette = promotionScenarioFrom(
-  "promotes verified M by exact compare-and-set and records exact ancestry",
+  "promotes Git-qualified M by exact compare-and-set and records exact ancestry",
   [
     targetPromotionGitReadReturned("/dalph/cassettes/integration.git", promotionCandidateCommit, {
       _tag: "CandidateNotInAncestry",
@@ -3441,21 +3419,14 @@ const issue138PostPromotionBlockerGraph = {
   ]
 } as const
 
-/** A complete new blocker read preserves the verified candidate before promotion. */
+/** A complete new blocker read preserves the Git-qualified candidate before promotion. */
 export const prePromotionBlockerAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
   {
-    ...candidateCorrectionAfterUnreadableGitAuthoredCassette,
-    name: "a new prerequisite preserves the verified candidate before promotion",
-    story: candidateCorrectionAfterUnreadableGitAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
-      if (item._tag === "TargetVerificationReturned") {
-        return [
-          item,
-          {
-            _tag: "CoordinatorActivationReturned",
-            decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-          }
-        ]
-      }
+    ...candidatePreparedAuthoredCassette,
+    name: "a new prerequisite preserves the Git-qualified candidate before promotion",
+    story: candidatePreparedAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+      if (item._tag === "RunCoordinator") return [{ ...item, targetPromotionConfigured: true }]
+      if (item._tag === "IntegratorGitObservationReturned") return [item, { _tag: "CoordinatorProcessDies" }]
       return item._tag !== "ExpectedBehavior"
         ? [item]
         : [
@@ -3467,12 +3438,12 @@ export const prePromotionBlockerAuthoredCassette: ScenarioCassette = Schema.deco
   }
 )
 
-/** The blocker clears, H advances to H2, and one compatible successor is recorded before promotion. */
+/** The blocker clears, H advances to H2, and #223 waits for #68 without reusing M or creating S2. */
 export const prePromotionBlockerClearAndSupersessionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...prePromotionBlockerAuthoredCassette,
-  name: "clears a pre-promotion blocker and supersedes H with one compatible H2 candidate",
+  name: "clears a pre-promotion blocker and waits at changed H for issue 68 disposition",
   startingFacts: {
     ...prePromotionBlockerAuthoredCassette.startingFacts,
     targetLineageObservations: [
@@ -3503,48 +3474,13 @@ export const prePromotionBlockerClearAndSupersessionAuthoredCassette: ScenarioCa
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
       { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionClearedGraph },
       { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
-      {
-        _tag: "IntegrationCandidateAgentReported",
-        attemptId: "attempt:A:0",
-        report: { _tag: "Submitted", candidateCommit: "dddddddddddddddddddddddddddddddddddddddd" }
-      },
-      {
-        _tag: "IntegrationCandidateGitValidationReturned",
-        candidateCommit: "dddddddddddddddddddddddddddddddddddddddd",
-        observation: {
-          _tag: "Commit",
-          directParents: ["2222222222222222222222222222222222222222", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-        },
-        repository: "/dalph/cassettes/integration.git"
-      },
-      {
-        _tag: "TargetVerificationReturned",
-        result: { _tag: "Passed", artifacts: [{ name: "verification-report", content: "all selected checks passed" }] }
-      },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
       { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionClearedGraph },
-      item.orchestration === null
-        ? item
-        : {
-            ...item,
-            orchestration: [
-              ...item.orchestration,
-              {
-                _tag: "IntegrationCandidateConstructed",
-                acceptedResultCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                attemptId: "attempt:A:0",
-                candidateCommit: "dddddddddddddddddddddddddddddddddddddddd",
-                expectedTargetHead: "2222222222222222222222222222222222222222",
-                taskId: "A"
-              },
-              {
-                _tag: "TargetVerificationPassed",
-                candidateCommit: "dddddddddddddddddddddddddddddddddddddddd",
-                planId: "public-checks-v1",
-                taskId: "A"
-              }
-            ]
-          }
+      {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      item.orchestration === null ? item : { ...item, orchestration: [...item.orchestration] }
     ]
   })
 })
@@ -4030,6 +3966,24 @@ const completionConflictStory = (() => {
   let terminalConflictSeen = false
   // eslint-disable-next-line complexity -- This authored chronology keeps C's independent concurrent steps ordered around A's restart and conflict.
   return deliveryFinalitySpineAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (item._tag === "IntegratorRequestReceived") {
+      const correlation = item.correlation
+      const oldPositions = `:${correlation.startedAt}:${correlation.targetLineageObservedAt}:`
+      const newPositions = ":39:43:"
+      return [
+        {
+          ...item,
+          correlation: {
+            ...correlation,
+            candidateResource: correlation.candidateResource.replace(oldPositions, newPositions),
+            queuedAt: 36,
+            sessionId: correlation.sessionId.replace(oldPositions, newPositions),
+            startedAt: 39,
+            targetLineageObservedAt: 43
+          }
+        }
+      ]
+    }
     if (item._tag === "CoordinatorProcessDies") restartSeen = true
     if (restartSeen && item._tag === "TaskClaimCurrentReadReturned" && item.taskId === "A") {
       postRestartClaimObserved = true
@@ -4360,6 +4314,51 @@ const doubleDiamondAcceptedReport = (attempt: {
   request: "StartOrContinue" as const
 })
 
+type DoubleDiamondTaskId = (typeof doubleDiamondTaskIds)[number]
+type DoubleDiamondIntegrationPositions = {
+  readonly queuedAt: number
+  readonly startedAt: number
+  readonly targetLineageObservedAt: number
+}
+
+const defaultDiamondIntegrationPositions = {
+  queuedAt: 20,
+  startedAt: 21,
+  targetLineageObservedAt: 31
+} as const satisfies DoubleDiamondIntegrationPositions
+
+const fiveTaskDiamondIntegrationPositions = {
+  A: defaultDiamondIntegrationPositions,
+  B: { queuedAt: 101, startedAt: 108, targetLineageObservedAt: 123 },
+  C: { queuedAt: 105, startedAt: 148, targetLineageObservedAt: 150 },
+  D: { queuedAt: 220, startedAt: 221, targetLineageObservedAt: 231 },
+  E: { queuedAt: 109, startedAt: 175, targetLineageObservedAt: 177 },
+  F: defaultDiamondIntegrationPositions,
+  G: defaultDiamondIntegrationPositions,
+  H: defaultDiamondIntegrationPositions,
+  I: defaultDiamondIntegrationPositions,
+  X: defaultDiamondIntegrationPositions
+} as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
+
+const doubleDiamondIntegrationPositions = {
+  A: defaultDiamondIntegrationPositions,
+  B: { queuedAt: 122, startedAt: 124, targetLineageObservedAt: 109 },
+  C: { queuedAt: 123, startedAt: 149, targetLineageObservedAt: 118 },
+  D: { queuedAt: 208, startedAt: 210, targetLineageObservedAt: 220 },
+  E: { queuedAt: 306, startedAt: 308, targetLineageObservedAt: 320 },
+  F: { queuedAt: 307, startedAt: 345, targetLineageObservedAt: 347 },
+  G: { queuedAt: 490, startedAt: 491, targetLineageObservedAt: 501 },
+  H: { queuedAt: 406, startedAt: 408, targetLineageObservedAt: 420 },
+  I: { queuedAt: 407, startedAt: 445, targetLineageObservedAt: 447 },
+  X: { queuedAt: 209, startedAt: 245, targetLineageObservedAt: 247 }
+} as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
+
+const integrationPositionsForDiamondTask = (
+  taskId: DoubleDiamondTaskId,
+  fiveTaskDiamond: boolean
+): DoubleDiamondIntegrationPositions =>
+  fiveTaskDiamond ? fiveTaskDiamondIntegrationPositions[taskId] : doubleDiamondIntegrationPositions[taskId]
+
 /** Every accepted executor result crosses the ordinary integration and completion-finality boundaries. */
 const doubleDiamondIntegrationFinality = (
   attempt: { readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] },
@@ -4375,6 +4374,43 @@ const doubleDiamondIntegrationFinality = (
   const acceptedResultCommit = doubleDiamondAcceptedCommit(attempt.taskId)
   const candidateCommit = doubleDiamondCandidateCommit(attempt.taskId)
   const expectedTargetHead = "2222222222222222222222222222222222222222"
+  const candidateText = `refs/heads/dalph/integrator-candidate-${attempt.taskId}`
+  const attemptName = attempt.attemptId.replaceAll(":", "-")
+  const fiveTaskDiamond = repository === "/dalph/cassettes/five-task-diamond.git"
+  const worktreeRoot = fiveTaskDiamond ? "/dalph/cassettes/five-task-diamond" : "/dalph/cassettes/double-diamond"
+  const executor = fiveTaskDiamond ? "executor:five-task-diamond" : "executor:double-diamond"
+  const { queuedAt, startedAt, targetLineageObservedAt } = integrationPositionsForDiamondTask(
+    attempt.taskId,
+    fiveTaskDiamond
+  )
+  const candidateResource = `integrator-resource:$authored-run:${attempt.attemptId}:${startedAt}:${targetLineageObservedAt}:${expectedTargetHead}:${acceptedResultCommit}:${repository}:refs/heads/master`
+  const correlation = {
+    acceptedResult: {
+      commit: acceptedResultCommit,
+      evidenceManifest: { byteLength: 281, digest: "1111111111111111111111111111111111111111111111111111111111111111" }
+    },
+    candidateResource,
+    expectedTargetHead,
+    integrationTarget: { repository, ref: "refs/heads/master" },
+    plannedAttempt: {
+      attemptId: attempt.attemptId,
+      baseSha: expectedTargetHead,
+      branch: `refs/heads/dalph/${attemptName}`,
+      executor,
+      runId: "$authored-run",
+      taskId: attempt.taskId,
+      taskRevision: makeTaskWorkSpecification({
+        body: `Complete double-diamond task ${attempt.taskId}.`,
+        taskId: TaskId.make(attempt.taskId),
+        title: `Complete ${attempt.taskId}`
+      }).fingerprint,
+      worktree: `${worktreeRoot}/${attemptName}`
+    },
+    queuedAt,
+    sessionId: candidateResource.replace("integrator-resource:", "integrator-session:"),
+    startedAt,
+    targetLineageObservedAt
+  }
   return [
     ...(continueQueuedIntegration
       ? []
@@ -4390,20 +4426,16 @@ const doubleDiamondIntegrationFinality = (
             operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId }
           }))
         ]),
+    { _tag: "IntegratorRequestReceived" as const, correlation },
+    { _tag: "IntegratorResultReturned" as const, result: { _tag: "PreparedCandidate" as const, candidateText } },
     {
-      _tag: "IntegrationCandidateAgentReported" as const,
-      attemptId: attempt.attemptId,
-      report: { _tag: "Submitted" as const, candidateCommit }
-    },
-    candidateGitValidationReturned(repository, candidateCommit, {
-      _tag: "Commit" as const,
-      directParents: [expectedTargetHead, acceptedResultCommit]
-    }),
-    {
-      _tag: "TargetVerificationReturned" as const,
-      result: {
-        _tag: "Passed" as const,
-        artifacts: [{ name: "acceptance-verification", content: `verified ${attempt.taskId}` }]
+      _tag: "IntegratorGitObservationReturned" as const,
+      candidateText,
+      observation: {
+        _tag: "Commit" as const,
+        candidateText,
+        commit: candidateCommit,
+        directParents: [expectedTargetHead, acceptedResultCommit]
       }
     },
     targetPromotionGitReadReturned(repository, candidateCommit, {
@@ -4510,7 +4542,7 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       executor: "executor:double-diamond",
       integrationTarget: { repository: "/dalph/cassettes/double-diamond.git", ref: "refs/heads/master" },
       target: "double-diamond-target",
-      verificationPlanId: "acceptance-verification",
+      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/double-diamond"
     },
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.initialAEligible, [
@@ -4700,7 +4732,7 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
       executor: "executor:five-task-diamond",
       integrationTarget: { repository: "/dalph/cassettes/five-task-diamond.git", ref: "refs/heads/master" },
       target: "double-diamond-target",
-      verificationPlanId: "acceptance-verification",
+      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/five-task-diamond"
     },
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(fiveTaskDiamondGraphs.noneComplete, [
@@ -4896,26 +4928,21 @@ export const targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassett
 
 /** Two definitive invalid submissions exhaust the accepted one-correction cassette policy. */
 export const candidateCorrectionExhaustionAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "candidate correction exhaustion preserves non-convergent work",
+  "Git rejects an invalid candidate without a correction attempt",
   [
-    candidateReportForA({ _tag: "Submitted", candidateCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }),
-    candidateGitValidationReturned("/dalph/cassettes/integration.git", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", {
-      _tag: "Missing"
-    }),
-    candidateReportForA({ _tag: "Submitted", candidateCommit: "cccccccccccccccccccccccccccccccccccccccc" }),
-    candidateGitValidationReturned("/dalph/cassettes/integration.git", "cccccccccccccccccccccccccccccccccccccccc", {
-      _tag: "Commit",
-      directParents: []
-    })
-  ],
-  undefined
+    ...outerIntegratorPreparedForA("refs/heads/dalph/missing-integrator-candidate-A"),
+    {
+      _tag: "IntegratorGitObservationReturned",
+      candidateText: "refs/heads/dalph/missing-integrator-candidate-A",
+      observation: { _tag: "Missing", candidateText: "refs/heads/dalph/missing-integrator-candidate-A" }
+    }
+  ]
 )
 
 /** A misrouted response is preserved as a correlation contradiction and never reaches Git. */
 export const candidateCorrelationContradictionAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "candidate correlation contradiction fails closed before Git",
-  [candidateReportForA({ _tag: "CorrelationContradiction" })],
-  undefined
+  "outer Integrator conclusive non-success stops before Git",
+  outerIntegratorNotPreparedForA("outer Integrator returned no promotion candidate")
 )
 
 /** Public catalog consumed by acceptance tests, documentation, and Reducer Lab. */
@@ -5001,7 +5028,7 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     candidateCorrelationContradiction: candidateCorrelationContradictionAuthoredCassette,
     candidateVerificationFailure: candidateVerificationFailureAuthoredCassette,
     candidateVerificationContradiction: candidateVerificationContradictionAuthoredCassette,
-    candidateVerificationPassed: candidateCorrectionAfterUnreadableGitAuthoredCassette,
+    candidateVerificationPassed: candidatePreparedAuthoredCassette,
     prePromotionBlocker: prePromotionBlockerAuthoredCassette,
     prePromotionBlockerClearAndSupersession: prePromotionBlockerClearAndSupersessionAuthoredCassette,
     prePromotionBlockerRecovery: prePromotionBlockerRecoveryAuthoredCassette,

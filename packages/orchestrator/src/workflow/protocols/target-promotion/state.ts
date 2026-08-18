@@ -6,12 +6,12 @@ import {
   TargetPromotionAttemptOrdinal,
   type TargetPromotionIntendedEvent,
   TargetPromotionNonConvergenceObservation,
-  TargetPromotionRequest,
+  TargetPromotionCorrelation,
   TargetPromotionStaleObservation,
   TargetPromotionSuccessObservation,
   TargetPromotionTerminalBasis,
   type TargetPromotionJournalEvent,
-  type TargetPromotionRequest as TargetPromotionRequestType
+  targetPromotionCorrelationEquals
 } from "./events.js"
 
 /** The next bounded action is either the mandatory initial read or a read after an ambiguous write. */
@@ -23,21 +23,21 @@ export type TargetPromotionPendingRetry = typeof TargetPromotionPendingRetry.Typ
 
 /** Durable state reconstructed from exact promotion occurrences. */
 export const TargetPromotionState = Schema.TaggedUnion({
-  PromotionPending: { correlation: TargetPromotionRequest, retry: TargetPromotionPendingRetry },
+  PromotionPending: { correlation: TargetPromotionCorrelation, retry: TargetPromotionPendingRetry },
   PromotionSucceeded: {
     basis: TargetPromotionTerminalBasis,
-    correlation: TargetPromotionRequest,
+    correlation: TargetPromotionCorrelation,
     observation: TargetPromotionSuccessObservation
   },
   PromotionStale: {
     basis: TargetPromotionTerminalBasis,
-    correlation: TargetPromotionRequest,
+    correlation: TargetPromotionCorrelation,
     observation: TargetPromotionStaleObservation
   },
   PromotionNonConvergent: {
     attemptLimit: TargetPromotionAttemptLimit,
     attemptOrdinal: TargetPromotionAttemptOrdinal,
-    correlation: TargetPromotionRequest,
+    correlation: TargetPromotionCorrelation,
     lastObservation: TargetPromotionNonConvergenceObservation
   }
 })
@@ -56,14 +56,27 @@ const isPromotionOccurrence = (record: JournalOccurrence): record is PromotionOc
 
 const relevantPromotionOccurrences = (
   records: ReadonlyArray<JournalOccurrence>,
-  requestId: TargetPromotionRequest["requestId"]
+  request: TargetPromotionCorrelation
 ): ReadonlyArray<PromotionOccurrence> =>
   records
     .filter((record): record is PromotionOccurrence => {
       if (!isPromotionOccurrence(record)) return false
-      return record.event.correlation.requestId === requestId
+      return targetPromotionCorrelationEquals(record.event.correlation, request)
     })
     .toSorted((left, right) => left.position - right.position)
+
+/** Finds a journaled promotion correlation that reuses an outer request id for different exact P facts. */
+export const targetPromotionCorrelationConflictFor = (
+  records: ReadonlyArray<JournalOccurrence>,
+  request: TargetPromotionCorrelation
+): TargetPromotionCorrelation | undefined =>
+  records.find((record): record is PromotionOccurrence => {
+    if (!isPromotionOccurrence(record)) return false
+    return (
+      record.event.correlation.requestId === request.requestId &&
+      !targetPromotionCorrelationEquals(record.event.correlation, request)
+    )
+  })?.event.correlation
 
 const latest = <A>(values: ReadonlyArray<A>): A | undefined => values[values.length - 1]
 
@@ -75,7 +88,7 @@ const attemptRecords = (
       record.event._tag === "TargetPromotionAttemptIntended"
   )
 
-const correlationFromIntent = (records: ReadonlyArray<PromotionOccurrence>): TargetPromotionRequest | undefined => {
+const correlationFromIntent = (records: ReadonlyArray<PromotionOccurrence>): TargetPromotionCorrelation | undefined => {
   const intent = records.findLast(
     (record): record is PromotionOccurrence & { readonly event: TargetPromotionIntendedEvent } =>
       record.event._tag === "TargetPromotionIntended"
@@ -113,9 +126,10 @@ const stateFromTerminal = (event: TerminalPromotionEvent): TargetPromotionState 
 /** Reconstructs promotion state without treating a journal row as Git authority. */
 export const deriveTargetPromotionState = (
   records: ReadonlyArray<JournalOccurrence>,
-  request: TargetPromotionRequestType
+  request: TargetPromotionCorrelation
 ): TargetPromotionState | undefined => {
-  const relevant = relevantPromotionOccurrences(records, request.requestId)
+  if (targetPromotionCorrelationConflictFor(records, request) !== undefined) return undefined
+  const relevant = relevantPromotionOccurrences(records, request)
   const terminal = latest(relevant.filter(isTerminalPromotionOccurrence))
   if (terminal !== undefined) return stateFromTerminal(terminal.event)
   const intentCorrelation = correlationFromIntent(relevant)

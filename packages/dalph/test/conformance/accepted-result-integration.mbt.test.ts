@@ -283,6 +283,7 @@ const SpecResult = Schema.Struct({
   integratorResultRecorded: Schema.Boolean,
   integratorResumeCount: ITFBigInt,
   lineageCompatible: Schema.Boolean,
+  sessionFixed: Schema.Boolean,
   observedFirstParent: ITFBigInt,
   observedSecondParent: ITFBigInt,
   phase: Schema.Unknown,
@@ -981,7 +982,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       updateModelResult(id, (result) => ({
         ...result,
         phase: "CandidateGitReadPending",
-        candidateGitReadCount: 1n,
+        candidateGitReadCount: result.candidateGitReadCount + 1n,
         candidateGitResponseAmbiguous: false
       }))
 
@@ -994,7 +995,12 @@ const acceptedResultIntegrationDriver = defineDriver(
     }
 
     const modelReconcileGit = (id: bigint): void => {
-      updateModelResult(id, (result) => ({ ...result, targetHeld: true, candidateGitResponseAmbiguous: false }))
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "CandidateGitReadIntent",
+        targetHeld: true,
+        candidateGitResponseAmbiguous: false
+      }))
       targetReacquisitionRequired = false
     }
 
@@ -1552,6 +1558,7 @@ quintIt(
             expected.integratorResultRecorded === actual.integratorResultRecorded &&
             expected.integratorResumeCount === actual.integratorResumeCount &&
             expected.lineageCompatible === actual.lineageCompatible &&
+            expected.sessionFixed === actual.sessionFixed &&
             expected.observedFirstParent === actual.observedFirstParent &&
             expected.observedSecondParent === actual.observedSecondParent &&
             expected.phase === actual.phase &&

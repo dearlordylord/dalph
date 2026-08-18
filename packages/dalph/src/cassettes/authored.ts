@@ -7,6 +7,7 @@ export {
   AuthoredExpectedBehavior,
   AuthoredObservedBehavior,
   AuthoredOrchestrationEvidence,
+  AuthoredOuterIntegratorResult,
   AuthoredPlannedAttemptExecutorReport,
   AuthoredProtocolEvidence,
   AuthoredScenarioCassette,
@@ -15,7 +16,7 @@ export {
   AuthoredTaskWorkSpecification,
   AuthoredTrackerGraph
 } from "./authored-domain.js"
-export { AuthoredCassetteInteractionMismatch } from "./authored-cursor.js"
+export { AuthoredCassetteInteractionMismatch, AuthoredIntegratorGitObservationFailure } from "./authored-cursor.js"
 export { AuthoredCassetteBehaviorMismatch } from "./authored-outcomes.js"
 export { renderAuthoredCassetteLyrics } from "./authored-presentation.js"
 export {

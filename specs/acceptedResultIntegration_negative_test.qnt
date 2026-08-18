@@ -151,6 +151,122 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
+  // These source-only shortcuts begin directly at IntegratorInFlight. They
+  // deliberately carry no durable Integrator result and no explicit M report;
+  // process success, resource HEAD, legacy evidence, and equal content cannot
+  // manufacture the promotion premise.
+  action promoteFromProcessSuccessWithoutIntegratorResult: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == IntegratorInFlight,
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: CandidateReady,
+          integratorOutcome: NoIntegratorOutcome,
+          integratorResultRecorded: false,
+          candidateReported: false,
+          submittedCandidate: 31,
+          candidateGitReadIntentRecorded: true,
+          candidateGitReadCount: 1,
+          candidateGitObservation: CandidateExactParents,
+          candidateQualificationProven: true,
+          observedFirstParent: result.expectedTargetHead,
+          observedSecondParent: result.acceptedResultCommit,
+          processSuccessObserved: true,
+          promotionAuthorized: true,
+          targetHeld: false,
+        }),
+      },
+    }
+  }
+
+  action promoteFromResourceHeadWithoutIntegratorResult: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == IntegratorInFlight,
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: CandidateReady,
+          integratorOutcome: NoIntegratorOutcome,
+          integratorResultRecorded: false,
+          candidateReported: false,
+          submittedCandidate: 77,
+          candidateGitReadIntentRecorded: true,
+          candidateGitReadCount: 1,
+          candidateGitObservation: CandidateExactParents,
+          candidateQualificationProven: true,
+          observedFirstParent: result.expectedTargetHead,
+          observedSecondParent: result.acceptedResultCommit,
+          resourceHeadCandidate: 77,
+          promotionAuthorized: true,
+          targetHeld: false,
+        }),
+      },
+    }
+  }
+
+  action promoteFromLegacyVerificationWithoutIntegratorResult: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == IntegratorInFlight,
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: CandidateReady,
+          integratorOutcome: NoIntegratorOutcome,
+          integratorResultRecorded: false,
+          candidateReported: false,
+          submittedCandidate: 31,
+          candidateGitReadIntentRecorded: true,
+          candidateGitReadCount: 1,
+          candidateGitObservation: CandidateExactParents,
+          candidateQualificationProven: true,
+          observedFirstParent: result.expectedTargetHead,
+          observedSecondParent: result.acceptedResultCommit,
+          legacyVerificationEvidence: true,
+          promotionAuthorized: true,
+          targetHeld: false,
+        }),
+      },
+    }
+  }
+
+  action promoteEquivalentContentWithoutIntegratorResult: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == IntegratorInFlight,
+      result.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: CandidateReady,
+          integratorOutcome: NoIntegratorOutcome,
+          integratorResultRecorded: false,
+          candidateReported: false,
+          submittedCandidate: 88,
+          candidateGitReadIntentRecorded: true,
+          candidateGitReadCount: 1,
+          candidateGitObservation: CandidateExactParents,
+          candidateQualificationProven: true,
+          observedFirstParent: result.expectedTargetHead,
+          observedSecondParent: result.acceptedResultCommit,
+          promotionEquivalentContentAccepted: true,
+          promotionAuthorized: true,
+          targetHeld: false,
+        }),
+      },
+    }
+  }
+
   action promoteFromResourceHead: bool = {
     val result = state.results.get(1)
     all {
@@ -370,6 +486,67 @@ module acceptedResultIntegrationNegativeTest {
       .then(invokeIntegrator(1))
       .then(promoteUnreportedCandidate)
       .expect(not(candidateReportIsExplicit))
+  }
+
+  run processSuccessWithoutIntegratorResultCannotAuthorizePromotionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(promoteFromProcessSuccessWithoutIntegratorResult)
+      .expect(and {
+        not(candidateReportIsExplicit),
+        not(candidateQualificationRequiresExactParents),
+        not(noForbiddenEvidenceAuthorizesPromotion),
+      })
+  }
+
+  run resourceHeadWithoutIntegratorResultCannotAuthorizePromotionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(promoteFromResourceHeadWithoutIntegratorResult)
+      .expect(and {
+        not(candidateReportIsExplicit),
+        not(candidateQualificationRequiresExactParents),
+        not(noForbiddenEvidenceAuthorizesPromotion),
+      })
+  }
+
+  run legacyVerificationWithoutIntegratorResultCannotAuthorizePromotionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(promoteFromLegacyVerificationWithoutIntegratorResult)
+      .expect(and {
+        not(candidateReportIsExplicit),
+        not(candidateQualificationRequiresExactParents),
+        not(noForbiddenEvidenceAuthorizesPromotion),
+      })
+  }
+
+  run equivalentContentWithoutIntegratorResultCannotAuthorizePromotionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(promoteEquivalentContentWithoutIntegratorResult)
+      .expect(and {
+        not(candidateReportIsExplicit),
+        not(candidateQualificationRequiresExactParents),
+        not(noForbiddenEvidenceAuthorizesPromotion),
+        not(promotionNoForceOrEquivalentShortcut),
+      })
   }
 
   run resourceHeadCannotAuthorizePromotionTest = {

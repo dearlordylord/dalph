@@ -1,5 +1,6 @@
 import {
   AttemptId,
+  AcceptedResult,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
@@ -34,19 +35,18 @@ import {
 } from "../../registry/operation.js"
 import { taskTrackerReadIntent, TaskAttemptPlannedEvent, TaskClaimAcquiredEvent } from "../../registry/event.js"
 import {
-  IntegrationCandidateCorrelation,
-  IntegrationCandidateId,
-  IntegrationCandidateResourceLocator,
-  IntegrationSessionId
-} from "../integration-candidate-construction/events.js"
+  IntegratorCandidateResourceLocator,
+  IntegratorCandidateText,
+  IntegratorCorrelation,
+  IntegratorQualifiedCandidate,
+  IntegratorSessionId
+} from "../integrator/events.js"
 import {
-  TargetPromotionCorrelation,
   TargetPromotionAttemptOrdinal,
   TargetPromotionObservedSuccessEvent,
-  TargetPromotionRequestId,
-  TargetPromotionSuccessObservation
+  TargetPromotionSuccessObservation,
+  targetPromotionCorrelationFor
 } from "../target-promotion/events.js"
-import { TargetVerificationPlanId, TargetVerificationRequestId } from "../target-verification/events.js"
 import { EvidenceDigest, EvidenceReference } from "../target-verification/evidence-store.js"
 import {
   CompletionTaskClaim,
@@ -64,6 +64,9 @@ export const integrationFinalityFixture = (() => {
   const constructedPosition = 10
   const evidenceDigestLength = 64
   const focusedObservationPosition = 3
+  const integratorQueuedPosition = 5
+  const integratorStartedPosition = 8
+  const targetLineageObservedPosition = 9
   const runId = RunId.make("integration-finality-test-run")
   const taskId = TaskId.make("integration-finality-task")
   const target = FixtureTarget.make("integration-finality-target")
@@ -74,51 +77,12 @@ export const integrationFinalityFixture = (() => {
   const expectedTargetHead = GitCommitSha.make("1".repeat(gitShaLength))
   const acceptedResultCommit = GitCommitSha.make("2".repeat(gitShaLength))
   const candidateCommit = GitCommitSha.make("3".repeat(gitShaLength))
-  const acceptanceManifest = EvidenceReference.make({
+  const acceptedResultEvidence = EvidenceReference.make({
     byteLength: 17,
     digest: EvidenceDigest.make("b".repeat(evidenceDigestLength))
   })
-  const reviewManifest = EvidenceReference.make({
-    byteLength: 18,
-    digest: EvidenceDigest.make("c".repeat(evidenceDigestLength))
-  })
-  const verificationManifest = EvidenceReference.make({
-    byteLength: 19,
-    digest: EvidenceDigest.make("a".repeat(evidenceDigestLength))
-  })
-  const candidateCorrelation = IntegrationCandidateCorrelation.make({
-    acceptanceManifest,
-    acceptedResultCommit,
-    attemptId: AttemptId.make("integration-finality-attempt"),
-    candidateId: IntegrationCandidateId.make("integration-finality-candidate"),
-    candidateResource: IntegrationCandidateResourceLocator.make("/candidate/integration-finality"),
-    expectedTargetHead,
-    integrationSessionId: IntegrationSessionId.make("integration-finality-session"),
-    integrationTarget,
-    runId
-  })
-  const verificationCorrelation = {
-    candidateCommit,
-    candidateCorrelation,
-    candidateConstructedAt: JournalPosition.make(constructedPosition),
-    planId: TargetVerificationPlanId.make("integration-finality-plan"),
-    requestId: TargetVerificationRequestId.make("integration-finality-verification"),
-    reviewManifest
-  }
-  const promotionCorrelation = TargetPromotionCorrelation.make({
-    acceptanceManifest,
-    candidateCommit,
-    candidateConstructedAt: JournalPosition.make(constructedPosition),
-    candidateCorrelation,
-    expectedTargetHead,
-    integrationTarget,
-    reviewManifest,
-    requestId: TargetPromotionRequestId.make(`target-promotion:${candidateCorrelation.candidateId}`),
-    verificationCorrelation,
-    verificationManifest
-  })
   const plannedAttempt = PlannedTaskAttempt.make({
-    attemptId: candidateCorrelation.attemptId,
+    attemptId: AttemptId.make("integration-finality-attempt"),
     baseSha: expectedTargetHead,
     branch: TaskBranchRef.make("refs/heads/dalph/integration-finality"),
     executor: TaskExecutorLocator.make("executor:integration-finality"),
@@ -127,20 +91,33 @@ export const integrationFinalityFixture = (() => {
     taskRevision: TaskRevision.make("planned-task-revision"),
     worktree: WorktreeLocator.make("/worktrees/integration-finality")
   })
+  const acceptedResult = AcceptedResult.make({ commit: acceptedResultCommit, evidenceManifest: acceptedResultEvidence })
+  const integratorCorrelation = IntegratorCorrelation.make({
+    acceptedResult,
+    candidateResource: IntegratorCandidateResourceLocator.make("/candidate/integration-finality"),
+    expectedTargetHead,
+    integrationTarget,
+    plannedAttempt,
+    queuedAt: JournalPosition.make(integratorQueuedPosition),
+    sessionId: IntegratorSessionId.make("integration-finality-session"),
+    startedAt: JournalPosition.make(integratorStartedPosition),
+    targetLineageObservedAt: JournalPosition.make(targetLineageObservedPosition)
+  })
+  const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+    candidateCommit,
+    candidateText: IntegratorCandidateText.make("refs/heads/integration-finality-candidate"),
+    correlation: integratorCorrelation,
+    directParents: [expectedTargetHead, acceptedResultCommit],
+    qualifiedAt: JournalPosition.make(constructedPosition)
+  })
+  const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
   const activeClaim = ActiveTaskClaim.make({
     operationId: OperationId.make("integration-finality-active-claim"),
     owner: ClaimOwner.make("dalph:integration-finality"),
     taskId,
     token: ClaimToken.make("integration-finality-token")
   })
-  const claim = CompletionTaskClaim.make({
-    acceptanceManifest,
-    integrationReviewManifest: reviewManifest,
-    originalClaim: activeClaim,
-    plannedAttempt,
-    promotionCorrelation,
-    verificationManifest
-  })
+  const claim = CompletionTaskClaim.make({ originalClaim: activeClaim, plannedAttempt, promotionCorrelation })
   const promotionSuccess = TargetPromotionObservedSuccessEvent.make({
     basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
     correlation: promotionCorrelation,
@@ -239,7 +216,7 @@ export const integrationFinalityFixture = (() => {
     target,
     taskId,
     trackerRevision,
-    verificationCorrelation
+    qualifiedCandidate
   }
 })()
 

@@ -229,16 +229,18 @@ export const controlledTrace = (cursor: StoryCursor, options: ControlledTraceOpt
       const actual = actualDecision(item)
       if (actual === undefined) return
       yield* awaitTraceBoundaries(cursor, item, actual, options)
-      const expected = yield* cursor.consumeDalphSelection.pipe(
-        Effect.mapError(
-          (failure) =>
-            new TraceOutputError({
-              detail:
-                `${failure._tag} at story position ${failure.storyPosition}: ` +
-                `expected ${failure.expected}, received ${failure.actual} while emitting ${encodedDecision(actual)}`
-            })
+      const expected = yield* cursor
+        .consumeDalphSelectionFor(actual)
+        .pipe(
+          Effect.mapError(
+            (failure) =>
+              new TraceOutputError({
+                detail:
+                  `${failure._tag} at story position ${failure.storyPosition}: ` +
+                  `expected ${failure.expected}, received ${failure.actual} while emitting ${encodedDecision(actual)}`
+              })
+          )
         )
-      )
       if (encodedDecision(actual) !== encodedDecision(expected.operation)) {
         const storyPosition = (yield* cursor.storyPosition) - 1
         return yield* new TraceOutputError({
@@ -303,46 +305,51 @@ export const controlledExecutorLayer = (
     request: "StartOrContinue" | "Suspend",
     plannedAttempt: PlannedTaskAttempt
   ) {
-    yield* beforeExecutorReport(plannedAttempt, request)
-    yield* cursor.pauseAtCoordinatorProcessDeath
-    const storyPosition = yield* cursor.storyPosition
-    const item = yield* cursor.consumeExecutorReport.pipe(
-      Effect.mapError(
-        (failure) =>
-          new PlannedAttemptExecutorCommandFailure({
-            command: request,
-            correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
-            detail:
-              `${failure._tag} at story position ${failure.storyPosition}: ` +
-              `expected ${failure.expected}, received ${failure.actual} while handling ${request} for ` +
-              `${plannedAttempt.taskId}/${plannedAttempt.attemptId}`
-          })
-      )
-    )
-    const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-    if (item.request !== request || item.report.attemptId !== correlation.attemptId) {
-      return yield* new PlannedAttemptExecutorCommandFailure({
-        command: request,
-        correlation,
-        detail:
-          `at story position ${storyPosition}: authored executor expected ${item.request} for ${item.report.attemptId}, ` +
-          `received ${request} for ${correlation.attemptId}`
-      })
-    }
-    const report = yield* prepareReport(executorReport(item, runId))
-    yield* Ref.update(
-      reports,
-      (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
-    )
-    if (item._tag === "PlannedAttemptExecutorResponseLost") {
-      yield* Ref.update(unresolvedLostResponses, (current) =>
-        new Set(current).add(plannedAttemptExecutorCorrelationKey(correlation))
-      )
+    yield* cursor.beginExecutorReportRequest(request, plannedAttempt.attemptId)
+    return yield* Effect.gen(function* () {
+      yield* beforeExecutorReport(plannedAttempt, request)
       yield* cursor.pauseAtCoordinatorProcessDeath
-      /* v8 ignore next -- @preserve The death barrier interrupts this executor fiber and never resumes it. */
-      return yield* Effect.never
-    }
-    return report
+      const storyPosition = yield* cursor.storyPosition
+      const item = yield* cursor
+        .consumeExecutorReportFor(request, plannedAttempt.attemptId)
+        .pipe(
+          Effect.mapError(
+            (failure) =>
+              new PlannedAttemptExecutorCommandFailure({
+                command: request,
+                correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
+                detail:
+                  `${failure._tag} at story position ${failure.storyPosition}: ` +
+                  `expected ${failure.expected}, received ${failure.actual} while handling ${request} for ` +
+                  `${plannedAttempt.taskId}/${plannedAttempt.attemptId}`
+              })
+          )
+        )
+      const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+      if (item.request !== request || item.report.attemptId !== correlation.attemptId) {
+        return yield* new PlannedAttemptExecutorCommandFailure({
+          command: request,
+          correlation,
+          detail:
+            `at story position ${storyPosition}: authored executor expected ${item.request} for ${item.report.attemptId}, ` +
+            `received ${request} for ${correlation.attemptId}`
+        })
+      }
+      const report = yield* prepareReport(executorReport(item, runId))
+      yield* Ref.update(
+        reports,
+        (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
+      )
+      if (item._tag === "PlannedAttemptExecutorResponseLost") {
+        yield* Ref.update(unresolvedLostResponses, (current) =>
+          new Set(current).add(plannedAttemptExecutorCorrelationKey(correlation))
+        )
+        yield* cursor.pauseAtCoordinatorProcessDeath
+        /* v8 ignore next -- @preserve The death barrier interrupts this executor fiber and never resumes it. */
+        return yield* Effect.never
+      }
+      return report
+    }).pipe(Effect.ensuring(cursor.endExecutorReportRequest(request, plannedAttempt.attemptId)))
   })
   return Layer.succeed(
     PlannedAttemptExecutor,

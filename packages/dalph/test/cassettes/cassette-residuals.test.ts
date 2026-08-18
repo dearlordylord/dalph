@@ -1,7 +1,7 @@
 import { Cause, Effect, Exit, Fiber, Option, Schema } from "effect"
 import { NodeCrypto } from "@effect/platform-node"
 import { expect, it } from "vitest"
-import { AttemptId, GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
+import { GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
 import { TaskWorkCapacity } from "@dalph/orchestrator"
 import {
   AuthoredCassetteStoryItem,
@@ -119,31 +119,9 @@ it("consumes the authored cursor's optional and terminal public probes", async (
   )
 })
 
-it("keeps authored Git, control, and executor outcomes correlated at the cursor boundary", async () => {
+it("keeps authored promotion Git, control, and executor outcomes correlated at the cursor boundary", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
-      const candidateFailure = findStoryItemOf("IntegrationCandidateGitValidationFailed")
-      const candidateFailureCursor = yield* makeStoryCursor([candidateFailure])
-      const candidateError = yield* candidateFailureCursor
-        .consumeIntegrationCandidateGitValidation(candidateFailure.repository, candidateFailure.candidateCommit)
-        .pipe(Effect.flip)
-      expect(candidateError._tag).toBe("AuthoredIntegrationCandidateGitValidationFailure")
-
-      const candidateReturned = findStoryItemOf("IntegrationCandidateGitValidationReturned")
-      const candidateReturnedCursor = yield* makeStoryCursor([candidateReturned])
-      expect(
-        (yield* candidateReturnedCursor.consumeIntegrationCandidateGitValidation(
-          candidateReturned.repository,
-          candidateReturned.candidateCommit
-        ))._tag
-      ).toBe("IntegrationCandidateGitValidationReturned")
-
-      const candidateAgent = findStoryItemOf("IntegrationCandidateAgentReported")
-      const candidateAgentCursor = yield* makeStoryCursor([candidateAgent])
-      expect(
-        Option.isSome(yield* candidateAgentCursor.consumeIntegrationCandidateAgentReport(candidateAgent.attemptId))
-      ).toBe(true)
-
       const promotionFailure = AuthoredCassetteStoryItem.cases.TargetPromotionGitReadFailed.make({
         candidateCommit: GitCommitSha.make("c".repeat(40)),
         detail: "Git became unreadable",
@@ -174,8 +152,6 @@ it("keeps authored Git, control, and executor outcomes correlated at the cursor 
         "TargetPromotionCompareAndSetReturned"
       )
 
-      const verification = yield* makeStoryCursor([findStoryItem("TargetVerificationReturned")])
-      expect((yield* verification.consumeTargetVerificationReturned)._tag).toBe("TargetVerificationReturned")
       const initialPolicy = yield* makeStoryCursor([
         AuthoredCassetteStoryItem.cases.InitialControlPolicy.make({
           policy: { taskExecutionCapacity: TaskWorkCapacity.make(1) }
@@ -219,108 +195,160 @@ it("keeps authored Git, control, and executor outcomes correlated at the cursor 
   )
 })
 
-it("waits for delayed candidate reports and correlates concurrent Git validation requests", async () => {
+it("correlates concurrent operation selections before advancing the authored story", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
-      const authoredLineage = maintainedStoryItems.find(
-        (item) => item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
+      const concurrentSelections =
+        maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story.filter(
+          (item) =>
+            item._tag === "DalphSelects" &&
+            item.operation._tag === "ReadTaskWorkSpecification" &&
+            (item.operation.taskId === "A" || item.operation.taskId === "C")
+        )
+      const cSelection = concurrentSelections.find(
+        (item) =>
+          item._tag === "DalphSelects" &&
+          item.operation._tag === "ReadTaskWorkSpecification" &&
+          item.operation.taskId === "C"
       )
-      const authoredReport = findStoryItemOf("IntegrationCandidateAgentReported")
-      if (authoredLineage?._tag !== "DalphSelects") return yield* Effect.die("missing target-lineage selection")
+      const aSelection = concurrentSelections.find(
+        (item) =>
+          item._tag === "DalphSelects" &&
+          item.operation._tag === "ReadTaskWorkSpecification" &&
+          item.operation.taskId === "A"
+      )
+      if (cSelection?._tag !== "DalphSelects" || aSelection?._tag !== "DalphSelects") {
+        return yield* Effect.die("missing concurrent task-work specification selections")
+      }
+      const cursor = yield* makeStoryCursor([cSelection, aSelection])
+      const arrivedFirst = yield* cursor.consumeDalphSelectionFor(aSelection.operation).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
 
-      const requestedAttemptId = AttemptId.make("cursor-requested-attempt")
-      const foreignAttemptId = AttemptId.make("cursor-foreign-attempt")
-      const requestedReport = { ...authoredReport, attemptId: requestedAttemptId }
-      const foreignReport = { ...authoredReport, attemptId: foreignAttemptId }
-      const delayedCursor = yield* makeStoryCursor([authoredLineage, requestedReport])
-      const delayed = yield* delayedCursor
-        .consumeIntegrationCandidateAgentReport(requestedAttemptId)
-        .pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-      expect(yield* delayedCursor.consumeDalphSelection).toEqual(authoredLineage)
-      expect(yield* Fiber.join(delayed)).toEqual(Option.some(requestedReport))
-
-      const concurrentCursor = yield* makeStoryCursor([authoredLineage, foreignReport, requestedReport])
-      const requested = yield* concurrentCursor
-        .consumeIntegrationCandidateAgentReport(requestedAttemptId)
-        .pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-      const foreign = yield* concurrentCursor
-        .consumeIntegrationCandidateAgentReport(foreignAttemptId)
-        .pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-      expect(yield* concurrentCursor.consumeDalphSelection).toEqual(authoredLineage)
-      expect(yield* Fiber.join(requested)).toEqual(Option.some(requestedReport))
-      expect(yield* Fiber.join(foreign)).toEqual(Option.some(foreignReport))
-
-      const controlDirection = findStoryItemOf("OperatorAppliesControlDirectionBeforeDeliveryActionAdmission")
-      const requestedRepository = GitRepositoryLocator.make("/cursor/requested.git")
-      const requestedCommit = GitCommitSha.make("1".repeat(40))
-      const foreignRepository = GitRepositoryLocator.make("/cursor/foreign.git")
-      const foreignCommit = GitCommitSha.make("2".repeat(40))
-      const authoredGit = findStoryItemOf("IntegrationCandidateGitValidationReturned")
-      const requestedGit = { ...authoredGit, candidateCommit: requestedCommit, repository: requestedRepository }
-      const foreignGit = { ...authoredGit, candidateCommit: foreignCommit, repository: foreignRepository }
-      const mismatchedGitCursor = yield* makeStoryCursor([requestedGit])
-      const mismatchedGit = yield* mismatchedGitCursor
-        .consumeIntegrationCandidateGitValidation(foreignRepository, foreignCommit)
-        .pipe(Effect.flip)
-      expect(mismatchedGit).toMatchObject({ _tag: "AuthoredCassetteInteractionMismatch", storyPosition: 0 })
-      const gitCursor = yield* makeStoryCursor([controlDirection, foreignGit, requestedGit])
-      expect(yield* gitCursor.consumeControlDirection(controlDirection)).toEqual(Option.some(controlDirection))
-      const requestedGitFiber = yield* gitCursor
-        .consumeIntegrationCandidateGitValidation(requestedRepository, requestedCommit)
-        .pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-      const foreignGitFiber = yield* gitCursor
-        .consumeIntegrationCandidateGitValidation(foreignRepository, foreignCommit)
-        .pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-      yield* gitCursor.completeControlDirectionBeforeDeliveryActionAdmission
-      expect(yield* Fiber.join(requestedGitFiber)).toEqual(requestedGit)
-      expect(yield* Fiber.join(foreignGitFiber)).toEqual(foreignGit)
-
-      const emptyGitCursor = yield* makeStoryCursor([])
-      const emptyGit = yield* emptyGitCursor
-        .consumeIntegrationCandidateGitValidation(requestedRepository, requestedCommit)
-        .pipe(Effect.flip)
-      expect(emptyGit).toMatchObject({ _tag: "AuthoredCassetteInteractionMismatch", expected: "EndOfStory" })
-      const terminalGitCursor = yield* makeStoryCursor([findStoryItem("ExpectedBehavior")])
-      const terminalGit = yield* terminalGitCursor
-        .consumeIntegrationCandidateGitValidation(requestedRepository, requestedCommit)
-        .pipe(Effect.flip)
-      expect(terminalGit).toMatchObject({ _tag: "AuthoredCassetteInteractionMismatch", expected: "ExpectedBehavior" })
-      const terminalPromotionCursor = yield* makeStoryCursor([findStoryItem("ExpectedBehavior")])
-      const terminalPromotion = yield* terminalPromotionCursor
-        .consumeTargetPromotionGitRead(requestedRepository, requestedCommit)
-        .pipe(Effect.flip)
-      expect(terminalPromotion).toMatchObject({
-        _tag: "AuthoredCassetteInteractionMismatch",
-        expected: "ExpectedBehavior"
-      })
+      expect(yield* cursor.consumeDalphSelectionFor(cSelection.operation)).toEqual(cSelection)
+      expect(yield* Fiber.join(arrivedFirst)).toEqual(aSelection)
     })
   )
 })
 
-it("round-trips restart, release, worktree, Git, lost-response, and supersession histories", async () => {
+it("correlates concurrent executor reports when the later request arrives first", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const reports = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story.filter(
+        (item) => item._tag === "PlannedAttemptExecutorWorkReported"
+      )
+      const first = reports[0]
+      const second = reports.find((item) => first !== undefined && item.report.attemptId !== first.report.attemptId)
+      if (first === undefined || second === undefined) {
+        return yield* Effect.die("missing independently correlated executor reports")
+      }
+      const cursor = yield* makeStoryCursor([first, second])
+      const laterRequest = yield* cursor
+        .consumeExecutorReportFor(second.request, second.report.attemptId)
+        .pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+
+      expect(yield* cursor.consumeExecutorReportFor(first.request, first.report.attemptId)).toEqual(first)
+      expect(yield* Fiber.join(laterRequest)).toEqual(second)
+    })
+  )
+})
+
+it("fails closed when an exact selection has no permitted immediate predecessor owner", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const selections = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story.filter(
+        (item) =>
+          item._tag === "DalphSelects" &&
+          item.operation._tag === "ReadTaskWorkSpecification" &&
+          (item.operation.taskId === "A" || item.operation.taskId === "C")
+      )
+      const first = selections.find(
+        (item) =>
+          item._tag === "DalphSelects" &&
+          item.operation._tag === "ReadTaskWorkSpecification" &&
+          item.operation.taskId === "C"
+      )
+      const second = selections.find(
+        (item) =>
+          item._tag === "DalphSelects" &&
+          item.operation._tag === "ReadTaskWorkSpecification" &&
+          item.operation.taskId === "A"
+      )
+      if (first?._tag !== "DalphSelects" || second?._tag !== "DalphSelects") {
+        return yield* Effect.die("missing malformed selection fixtures")
+      }
+      const cursor = yield* makeStoryCursor([first, second])
+      const exit = yield* Effect.exit(cursor.consumeDalphSelectionFor(second.operation))
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("AuthoredCassetteInteractionMismatch")
+    })
+  )
+})
+
+it("fails closed when an exact executor report has no permitted immediate predecessor owner", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const reports = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story.filter(
+        (item) => item._tag === "PlannedAttemptExecutorWorkReported"
+      )
+      const first = reports[0]
+      const second = reports.find((item) => first !== undefined && item.report.attemptId !== first.report.attemptId)
+      if (first === undefined || second === undefined) return yield* Effect.die("missing malformed executor fixtures")
+      const cursor = yield* makeStoryCursor([first, second])
+      const exit = yield* Effect.exit(cursor.consumeExecutorReportFor(second.request, second.report.attemptId))
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("AuthoredCassetteInteractionMismatch")
+    })
+  )
+})
+
+it("lets an exact operation selection wait for an actively owned sibling executor outcome", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const report = maintainedStoryItems.find((item) => item._tag === "PlannedAttemptExecutorWorkReported")
+      const selection = maintainedStoryItems.find(
+        (item) => item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
+      )
+      if (report?._tag !== "PlannedAttemptExecutorWorkReported" || selection?._tag !== "DalphSelects") {
+        return yield* Effect.die("missing executor outcome and later worktree selection")
+      }
+      const cursor = yield* makeStoryCursor([report, selection])
+      yield* Effect.acquireUseRelease(
+        cursor.beginExecutorReportRequest(report.request, report.report.attemptId),
+        () =>
+          Effect.gen(function* () {
+            const operation = yield* cursor.consumeDalphSelectionFor(selection.operation).pipe(Effect.forkChild)
+            yield* Effect.yieldNow
+
+            expect(operation.pollUnsafe()).toBeUndefined()
+            expect(yield* cursor.consumeExecutorReportFor(report.request, report.report.attemptId)).toEqual(report)
+            expect(yield* Fiber.join(operation)).toEqual(selection)
+          }),
+        () => cursor.endExecutorReportRequest(report.request, report.report.attemptId)
+      )
+    })
+  )
+})
+
+it("round-trips restart, release, worktree, Git, and lost-response histories", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
       const cassettes = [
         maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly,
         maintainedAuthoredCassetteCatalog.changedAttemptStopReleaseResponseLost,
         maintainedAuthoredCassetteCatalog.lostPlannedWorktreeSafelySuspends,
-        maintainedAuthoredCassetteCatalog.candidateCorrectionAfterUnreadableGit,
         maintainedAuthoredCassetteCatalog.changedAttemptRestartRemainsUnproved,
-        maintainedAuthoredCassetteCatalog.prePromotionBlockerClearAndSupersession,
-        maintainedAuthoredCassetteCatalog.targetPromotionLostResponseDiscoversCurrentCandidate
+        maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration
       ]
 
-      let supersessionRecorded: RecordedCassetteType | undefined
+      let integrationRecorded: RecordedCassetteType | undefined
       for (const cassette of cassettes) {
         const run = yield* runAuthoredScenarioCassette(cassette)
         const recorded = yield* projectRecordedCassette(run.records)
-        if (cassette === maintainedAuthoredCassetteCatalog.prePromotionBlockerClearAndSupersession) {
-          supersessionRecorded = recorded
+        if (cassette === maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration) {
+          integrationRecorded = recorded
         }
         expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
         expect(
@@ -332,10 +360,10 @@ it("round-trips restart, release, worktree, Git, lost-response, and supersession
         expect(renderRecordedCassetteLyrics(recorded)).toContain("Dalph")
       }
 
-      if (supersessionRecorded === undefined) return yield* Effect.die("supersession cassette was not recorded")
+      if (integrationRecorded === undefined) return yield* Effect.die("accepted-result cassette was not recorded")
       const withoutIntegrationOrigin = RecordedCassette.make({
-        ...supersessionRecorded,
-        entries: supersessionRecorded.entries.filter(({ _tag }) => _tag !== "IntegrationResponsibilityBegan")
+        ...integrationRecorded,
+        entries: integrationRecorded.entries.filter(({ _tag }) => _tag !== "IntegrationResponsibilityBegan")
       })
       const missingCause = yield* Effect.exit(Effect.sync(() => foldRecordedCassette(withoutIntegrationOrigin)))
       expect(Exit.isFailure(missingCause)).toBe(true)

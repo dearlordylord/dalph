@@ -9,6 +9,7 @@ module integrationFinalityTest {
         state.promoted.completionClaimDerived
           and exactProofAndBinding
           and completionClaimRequiresExactPromotionProof
+          and completionProofCarriesAcceptedEvidenceAndNoReturnedRefs
           and state.promoted.replacementIntentRecorded
           and state.promoted.replacementRequests == 0
       )
@@ -112,7 +113,7 @@ module integrationFinalityTest {
       .then(deriveCompletionClaim)
       .expect(
         state.promoted.phase == ReplacementIntentPending
-          and state.promoted.completionClaim.promotionCorrelation == PROMOTION_CORRELATION_A
+          and state.promoted.completionClaim.integratorSession == INTEGRATOR_SESSION_A
           and state.reintegrationRequests == 0
       )
   }
@@ -127,7 +128,7 @@ module integrationFinalityTest {
       .expect(
         state.promoted.phase == CompletionClaimBlocked
           and state.promoted.claimState == CompletionClaim
-          and state.promoted.completionClaim.promotionCorrelation == PROMOTION_CORRELATION_A
+          and state.promoted.completionClaim.integratorSession == INTEGRATOR_SESSION_A
           and noReintegration
       )
       .then(observeFreshBlockerClear)

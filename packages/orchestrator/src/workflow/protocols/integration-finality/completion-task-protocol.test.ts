@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { AcceptedResultEvidenceManifest, EvidenceReference, TaskRevision } from "@dalph/contracts"
+import { AcceptedResult, AcceptedResultEvidenceManifest, GitCommitSha, TaskRevision } from "@dalph/contracts"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -15,18 +15,13 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import { makeCompletionTaskFactsObservationOperation } from "../../registry/operation.js"
 import { taskTrackerReadIntent } from "../../registry/event.js"
+import { IntegratorCorrelation, IntegratorQualifiedCandidate } from "../integrator/events.js"
 import {
-  IntegrationCandidateCorrelation,
-  IntegrationReviewManifest
-} from "../integration-candidate-construction/events.js"
-import {
-  TargetPromotionCorrelation,
   TargetPromotionGit,
-  TargetPromotionGitReadFailure
+  TargetPromotionGitReadFailure,
+  targetPromotionCorrelationFor
 } from "../target-promotion/events.js"
-import { TargetVerificationCorrelation } from "../target-verification/events.js"
 import { memoryEvidenceStoreLayer, EvidenceStore, EvidenceStoreFailure } from "../target-verification/evidence-store.js"
-import { TargetVerificationManifest } from "../target-verification/manifest.js"
 import {
   CompletionTaskAcknowledgement,
   CompletionTaskAuthorizationReadOrdinal,
@@ -50,7 +45,6 @@ import { integrationFinalityFixture as fixture } from "./fixtures.js"
 import {
   CompletionTaskAuthorization,
   CompletionTaskAttemptAuthorization,
-  CompletionTaskAuthorizationConflict,
   CompletionTaskDidNotConverge,
   CompletionTaskPreconditionConflict,
   authorizeCompletionTaskAttempt,
@@ -71,11 +65,11 @@ import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 const encode = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
 
 const completionEvidenceRequest = (
-  acceptedCommit = fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit
+  acceptedCommit = fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.commit
 ) =>
   Effect.gen(function* () {
     const store = yield* EvidenceStore
-    const acceptanceManifest = yield* store.put(
+    const evidenceManifest = yield* store.put(
       encode(
         AcceptedResultEvidenceManifest.make({
           commit: acceptedCommit,
@@ -86,231 +80,21 @@ const completionEvidenceRequest = (
         })
       )
     )
-    const candidateCorrelation = IntegrationCandidateCorrelation.make({
-      ...fixture.promotionCorrelation.candidateCorrelation,
-      acceptanceManifest
+    const acceptedResult = AcceptedResult.make({ commit: acceptedCommit, evidenceManifest })
+    const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+      ...fixture.qualifiedCandidate,
+      correlation: IntegratorCorrelation.make({ ...fixture.qualifiedCandidate.correlation, acceptedResult }),
+      directParents: [fixture.qualifiedCandidate.directParents[0], acceptedCommit]
     })
-    const integrationReviewManifest = yield* store.put(
-      encode(
-        IntegrationReviewManifest.make({
-          candidateCommit: fixture.promotionCorrelation.candidateCommit,
-          correlation: candidateCorrelation,
-          formatVersion: 1,
-          outcome: "Passed",
-          predecessor: acceptanceManifest
-        })
-      )
-    )
-    const verificationCorrelation = TargetVerificationCorrelation.make({
-      ...fixture.promotionCorrelation.verificationCorrelation,
-      candidateCorrelation,
-      reviewManifest: integrationReviewManifest
-    })
-    const verificationManifest = yield* store.put(
-      encode(
-        TargetVerificationManifest.make({
-          artifacts: [],
-          correlation: verificationCorrelation,
-          formatVersion: 1,
-          outcome: "Passed",
-          predecessor: integrationReviewManifest
-        })
-      )
-    )
-    const promotionCorrelation = TargetPromotionCorrelation.make({
-      ...fixture.promotionCorrelation,
-      acceptanceManifest,
-      candidateCorrelation,
-      reviewManifest: integrationReviewManifest,
-      verificationCorrelation,
-      verificationManifest
-    })
+    const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
     return completionTaskRequestFor(
       CompletionTaskClaim.make({
-        acceptanceManifest,
-        integrationReviewManifest,
         originalClaim: fixture.activeClaim,
         plannedAttempt: fixture.plannedAttempt,
-        promotionCorrelation,
-        verificationManifest
+        promotionCorrelation
       })
     )
   })
-
-it.effect("refuses completion when required sealed evidence is missing, malformed, or mismatched", () =>
-  Effect.gen(function* () {
-    const valid = yield* completionEvidenceRequest()
-    expect(yield* rereadCompletionEvidence(valid)).toEqual(valid)
-
-    const mismatched = yield* completionEvidenceRequest(fixture.promotionCorrelation.expectedTargetHead)
-    const mismatch = yield* rereadCompletionEvidence(mismatched).pipe(Effect.flip)
-    expect(mismatch).toBeInstanceOf(CompletionTaskAuthorizationConflict)
-    if (mismatch instanceof CompletionTaskAuthorizationConflict) {
-      expect(mismatch.detail).toContain("does not bind the promoted accepted result")
-    }
-
-    const malformedReference = yield* (yield* EvidenceStore).put(new TextEncoder().encode("not-json"))
-    const malformedCandidateCorrelation = IntegrationCandidateCorrelation.make({
-      ...valid.promotionCorrelation.candidateCorrelation,
-      acceptanceManifest: malformedReference
-    })
-    const malformedClaim = CompletionTaskClaim.make({
-      ...valid.claim,
-      acceptanceManifest: malformedReference,
-      promotionCorrelation: TargetPromotionCorrelation.make({
-        ...valid.promotionCorrelation,
-        acceptanceManifest: malformedReference,
-        candidateCorrelation: malformedCandidateCorrelation,
-        verificationCorrelation: TargetVerificationCorrelation.make({
-          ...valid.promotionCorrelation.verificationCorrelation,
-          candidateCorrelation: malformedCandidateCorrelation
-        })
-      })
-    })
-    const malformed = completionTaskRequestFor(malformedClaim)
-    expect(yield* rereadCompletionEvidence(malformed).pipe(Effect.flip)).toBeInstanceOf(
-      CompletionTaskAuthorizationConflict
-    )
-  }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
-)
-
-it.effect("rejects a reopened evidence chain whose review predecessor is foreign", () =>
-  Effect.gen(function* () {
-    const valid = yield* completionEvidenceRequest()
-    const store = yield* EvidenceStore
-    const unlinkedReview = yield* store.put(
-      encode(
-        IntegrationReviewManifest.make({
-          candidateCommit: valid.promotionCorrelation.candidateCommit,
-          correlation: valid.promotionCorrelation.candidateCorrelation,
-          formatVersion: 1,
-          outcome: "Passed",
-          predecessor: fixture.promotionCorrelation.reviewManifest
-        })
-      )
-    )
-    const verificationCorrelation = TargetVerificationCorrelation.make({
-      ...valid.promotionCorrelation.verificationCorrelation,
-      reviewManifest: unlinkedReview
-    })
-    const verification = yield* store.put(
-      encode(
-        TargetVerificationManifest.make({
-          artifacts: [],
-          correlation: verificationCorrelation,
-          formatVersion: 1,
-          outcome: "Passed",
-          predecessor: unlinkedReview
-        })
-      )
-    )
-    const promotionCorrelation = TargetPromotionCorrelation.make({
-      ...valid.promotionCorrelation,
-      reviewManifest: unlinkedReview,
-      verificationCorrelation,
-      verificationManifest: verification
-    })
-    const request = completionTaskRequestFor(
-      CompletionTaskClaim.make({
-        ...valid.claim,
-        integrationReviewManifest: unlinkedReview,
-        promotionCorrelation,
-        verificationManifest: verification
-      })
-    )
-    const failure = yield* rereadCompletionEvidence(request).pipe(Effect.flip)
-    expect(failure).toBeInstanceOf(CompletionTaskAuthorizationConflict)
-    if (failure instanceof CompletionTaskAuthorizationConflict) {
-      expect(failure.reason).toBe("SealedEvidenceChanged")
-      expect(failure.detail).toContain("predecessor chain")
-    }
-  }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
-)
-
-it.effect("reports unavailable and malformed bytes for each sealed evidence family", () =>
-  Effect.gen(function* () {
-    const request = yield* completionEvidenceRequest()
-    const store = yield* EvidenceStore
-    const references = [
-      request.acceptanceManifest,
-      request.integrationReviewManifest,
-      request.verificationManifest
-    ] as const
-
-    for (const unavailable of references) {
-      const boundary = EvidenceStore.of({
-        put: store.put,
-        read: (reference) =>
-          reference.digest === unavailable.digest
-            ? Effect.fail(
-                new EvidenceStoreFailure({ detail: "controlled missing evidence", operation: "EvidenceStore.read" })
-              )
-            : store.read(reference)
-      })
-      expect(
-        yield* rereadCompletionEvidence(request).pipe(Effect.provideService(EvidenceStore, boundary), Effect.flip)
-      ).toMatchObject({ reason: "SealedEvidenceUnavailable" })
-    }
-
-    for (const malformed of references.slice(1)) {
-      const boundary = EvidenceStore.of({
-        put: store.put,
-        read: (reference) =>
-          reference.digest === malformed.digest ? Effect.succeed(encode("not-json")) : store.read(reference)
-      })
-      expect(
-        yield* rereadCompletionEvidence(request).pipe(Effect.provideService(EvidenceStore, boundary), Effect.flip)
-      ).toMatchObject({ reason: "SealedEvidenceUnavailableOrInvalid" })
-    }
-  }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
-)
-
-it.effect("rejects sealed envelopes that no longer bind the promoted result", () =>
-  Effect.gen(function* () {
-    const request = yield* completionEvidenceRequest()
-    const store = yield* EvidenceStore
-    const substitutions = [
-      {
-        reference: request.acceptanceManifest,
-        transform: (value: Record<string, unknown>) => ({
-          ...value,
-          commit: fixture.promotionCorrelation.expectedTargetHead
-        })
-      },
-      {
-        reference: request.integrationReviewManifest,
-        transform: (value: Record<string, unknown>) => ({
-          ...value,
-          candidateCommit: fixture.promotionCorrelation.expectedTargetHead
-        })
-      },
-      {
-        reference: request.verificationManifest,
-        transform: (value: Record<string, unknown>) => ({
-          ...value,
-          correlation: {
-            ...(value["correlation"] as Record<string, unknown>),
-            requestId: "another-verification-request"
-          }
-        })
-      }
-    ] as const
-
-    for (const substitution of substitutions) {
-      const original = yield* store.read(substitution.reference)
-      const decoded = JSON.parse(new TextDecoder().decode(original)) as Record<string, unknown>
-      const replacement = encode(substitution.transform(decoded))
-      const boundary = EvidenceStore.of({
-        put: store.put,
-        read: (reference) =>
-          reference.digest === substitution.reference.digest ? Effect.succeed(replacement) : store.read(reference)
-      })
-      expect(
-        yield* rereadCompletionEvidence(request).pipe(Effect.provideService(EvidenceStore, boundary), Effect.flip)
-      ).toMatchObject({ reason: "SealedEvidenceChanged" })
-    }
-  }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
-)
 
 const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>, chronology: Ref.Ref<ReadonlyArray<string>>) =>
   Layer.succeed(
@@ -360,7 +144,6 @@ const journalLayerThatDiesBefore = (
   )
 
 const authorization = CompletionTaskAuthorization.make({
-  acceptanceManifest: fixture.claim.acceptanceManifest,
   candidateAncestry: "Current",
   focusedFacts: {
     currentClaim: fixture.claim,
@@ -374,10 +157,119 @@ const authorization = CompletionTaskAuthorization.make({
     unfinishedPrerequisiteTaskIds: []
   },
   gitReadOperationId: OperationId.make(String(fixture.claim.promotionCorrelation.requestId)),
-  integrationReviewManifest: fixture.claim.integrationReviewManifest,
-  target: fixture.target,
-  verificationManifest: fixture.claim.verificationManifest
+  target: fixture.target
 })
+
+it.effect("rereads accepted-result and Integrator-returned evidence before task completion", () =>
+  Effect.gen(function* () {
+    const request = yield* completionEvidenceRequest()
+    const store = yield* EvidenceStore
+    const reads = yield* Ref.make(0)
+    const countingStore = EvidenceStore.of({
+      put: store.put,
+      read: (reference) => Ref.update(reads, (count) => count + 1).pipe(Effect.andThen(store.read(reference)))
+    })
+
+    const evidence = yield* rereadCompletionEvidence(request).pipe(Effect.provideService(EvidenceStore, countingStore))
+
+    expect(evidence.commit).toBe(
+      request.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.commit
+    )
+    expect(yield* Ref.get(reads)).toBe(1)
+  }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
+)
+
+it.effect("malformed, missing, and foreign accepted-result evidence stop before tracker completion mutation", () =>
+  Effect.gen(function* () {
+    const valid = yield* completionEvidenceRequest()
+    const store = yield* EvidenceStore
+    const completionCalls = yield* Ref.make(0)
+    const boundary: CompletionTaskBoundaryService = {
+      completeTask: (request) =>
+        Ref.update(completionCalls, (count) => count + 1).pipe(
+          Effect.as(CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId: request.taskId }))
+        ),
+      readCompletionRequest: () => Effect.die("invalid evidence must stop before request lookup"),
+      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+        Effect.succeed({ ...authorization.focusedFacts, currentClaim: valid.claim, operationId })
+    }
+    const git = TargetPromotionGit.of({
+      compareAndSet: () => Effect.die("invalid evidence must stop before tracker completion, not Git mutation"),
+      read: () =>
+        Effect.succeed({
+          _tag: "CandidateCurrent",
+          currentHeadSha: valid.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
+        })
+    })
+    const cases = [
+      {
+        label: "malformed",
+        read: (
+          reference: typeof valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest
+        ) =>
+          reference.digest ===
+          valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest.digest
+            ? Effect.succeed(encode("not-json"))
+            : store.read(reference)
+      },
+      {
+        label: "missing",
+        read: (
+          reference: typeof valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest
+        ) =>
+          reference.digest ===
+          valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest.digest
+            ? Effect.fail(
+                new EvidenceStoreFailure({
+                  detail: "accepted-result evidence is missing",
+                  operation: "EvidenceStore.read"
+                })
+              )
+            : store.read(reference)
+      },
+      {
+        label: "foreign",
+        read: (
+          reference: typeof valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest
+        ) =>
+          reference.digest ===
+          valid.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.evidenceManifest.digest
+            ? Effect.succeed(
+                encode(
+                  AcceptedResultEvidenceManifest.make({
+                    commit: GitCommitSha.make("f".repeat(40)),
+                    correlation: {
+                      attemptId: valid.claim.plannedAttempt.attemptId,
+                      runId: valid.claim.plannedAttempt.runId
+                    },
+                    formatVersion: 1,
+                    outcome: "Accepted",
+                    predecessor: null
+                  })
+                )
+              )
+            : store.read(reference)
+      }
+    ] as const
+
+    for (const current of cases) {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const evidence = EvidenceStore.of({ put: store.put, read: current.read })
+      const failure = yield* runCompletionTaskProtocol(boundary, valid, fixture.target, (ordinal) =>
+        authorizeCompletionTaskAttempt(boundary, valid, fixture.target, ordinal).pipe(
+          Effect.provideService(TargetPromotionGit, git)
+        )
+      ).pipe(
+        Effect.provideService(EvidenceStore, evidence),
+        Effect.provide(journalLayer(records, chronology)),
+        Effect.flip
+      )
+      expect(failure).toMatchObject({ request: valid, reason: expect.any(String) })
+      expect(yield* Ref.get(completionCalls), current.label).toBe(0)
+    }
+  }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
+)
 
 it.effect("owns journal-read and focused-read authorization failures", () =>
   Effect.gen(function* () {
@@ -451,7 +343,10 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
       {
         event: CompletionTaskCandidateAncestryObservedEvent.make({
           attemptOrdinal: CompletionTaskRequestOrdinal.make(2),
-          observation: { _tag: "CandidateCurrent", currentHeadSha: request.promotionCorrelation.candidateCommit },
+          observation: {
+            _tag: "CandidateCurrent",
+            currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
+          },
           operationId: ancestryOperationId,
           request,
           version: workflowJournalEventVersion
@@ -552,33 +447,6 @@ it.effect("reuses unresolved focused-read intents after restart", () =>
     }).pipe(Effect.provide(journalLayer(records, chronology)))
   })
 )
-
-const changedByteLength = (reference: EvidenceReference): EvidenceReference =>
-  EvidenceReference.make({ byteLength: reference.byteLength + 1, digest: reference.digest })
-
-it("rejects completion authorization when any sealed evidence byte length differs", () => {
-  const request = completionTaskRequestFor(fixture.claim)
-  const substitutions = [
-    CompletionTaskAuthorization.make({
-      ...authorization,
-      acceptanceManifest: changedByteLength(authorization.acceptanceManifest)
-    }),
-    CompletionTaskAuthorization.make({
-      ...authorization,
-      integrationReviewManifest: changedByteLength(authorization.integrationReviewManifest)
-    }),
-    CompletionTaskAuthorization.make({
-      ...authorization,
-      verificationManifest: changedByteLength(authorization.verificationManifest)
-    })
-  ]
-
-  expect(substitutions.map((substitution) => completionTaskAuthorizationIssue(substitution, request))).toEqual([
-    expect.objectContaining({ reason: "SealedEvidenceChanged" }),
-    expect.objectContaining({ reason: "SealedEvidenceChanged" }),
-    expect.objectContaining({ reason: "SealedEvidenceChanged" })
-  ])
-})
 
 const protocolHarness = (
   outcomes: ReadonlyArray<"Applied" | "DefinitelyRejected" | "UnknownNotApplied">,
@@ -793,7 +661,10 @@ it.effect("records current tracker facts and Git ancestry before completing exac
             compareAndSet: () => Effect.die("completion authorization never mutates Git"),
             read: () =>
               Ref.update(chronology, (current) => [...current, "Git.read"]).pipe(
-                Effect.as({ _tag: "CandidateCurrent", currentHeadSha: request.promotionCorrelation.candidateCommit })
+                Effect.as({
+                  _tag: "CandidateCurrent",
+                  currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
+                })
               )
           })
         )
@@ -840,7 +711,10 @@ it.effect("restart records a newer current authorization cycle before the call i
       compareAndSet: () => Effect.die("completion authorization never mutates Git"),
       read: () =>
         Ref.update(gitCalls, (count) => count + 1).pipe(
-          Effect.as({ _tag: "CandidateCurrent", currentHeadSha: request.promotionCorrelation.candidateCommit })
+          Effect.as({
+            _tag: "CandidateCurrent",
+            currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
+          })
         )
     })
     const authorize = authorizeCompletionTaskAttempt(
@@ -888,7 +762,10 @@ it.effect("restart repeats both current authorization reads after only the focus
       compareAndSet: () => Effect.die("completion authorization never mutates Git"),
       read: () =>
         Ref.update(gitCalls, (count) => count + 1).pipe(
-          Effect.as({ _tag: "CandidateCurrent", currentHeadSha: request.promotionCorrelation.candidateCommit })
+          Effect.as({
+            _tag: "CandidateCurrent",
+            currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
+          })
         )
     })
     const journal = journalLayer(records, chronology)
@@ -939,7 +816,10 @@ it.effect("restart replays one exact focused or Git authorization outcome withou
       compareAndSet: () => Effect.die("authorization replay never mutates Git"),
       read: () =>
         Ref.update(gitCalls, (count) => count + 1).pipe(
-          Effect.as({ _tag: "CandidateCurrent", currentHeadSha: request.promotionCorrelation.candidateCommit })
+          Effect.as({
+            _tag: "CandidateCurrent",
+            currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
+          })
         )
     })
     const journal = journalLayer(records, chronology)
@@ -1004,7 +884,7 @@ it.effect("rejects current authorization when Git no longer contains the promote
       read: () =>
         Effect.succeed({
           _tag: "CandidateNotInAncestry",
-          currentHeadSha: request.promotionCorrelation.expectedTargetHead
+          currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead
         })
     })
 
@@ -1039,9 +919,9 @@ it.effect("waits when Git cannot read current candidate ancestry", () =>
       read: () =>
         Effect.fail(
           new TargetPromotionGitReadFailure({
-            candidateCommit: request.promotionCorrelation.candidateCommit,
+            candidateCommit: request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit,
             detail: "controlled Git read unavailable",
-            target: request.promotionCorrelation.integrationTarget
+            target: request.claim.promotionCorrelation.qualifiedCandidate.correlation.integrationTarget
           })
         )
     })
@@ -1613,10 +1493,7 @@ it("keeps every focused confirmation conflict distinct from an exact-open wait",
   const exact = { ...authorization.focusedFacts, currentClaim: request.claim, operationId }
   const foreignCompletionClaim = CompletionTaskClaim.make({
     ...request.claim,
-    plannedAttempt: {
-      ...request.claim.plannedAttempt,
-      taskRevision: TaskRevision.make("foreign-confirmation-revision")
-    }
+    originalClaim: { ...request.claim.originalClaim, operationId: OperationId.make("foreign-confirmation-claim") }
   })
   const examples = [
     {
@@ -1661,15 +1538,21 @@ it("keeps every focused confirmation conflict distinct from an exact-open wait",
 
 it("classifies both current and ancestor promoted candidates", () => {
   expect(
-    candidateAncestryFor({ _tag: "CandidateCurrent", currentHeadSha: fixture.promotionCorrelation.candidateCommit })
+    candidateAncestryFor({
+      _tag: "CandidateCurrent",
+      currentHeadSha: fixture.promotionCorrelation.qualifiedCandidate.candidateCommit
+    })
   ).toBe("Current")
   expect(
-    candidateAncestryFor({ _tag: "CandidateAncestor", currentHeadSha: fixture.promotionCorrelation.candidateCommit })
+    candidateAncestryFor({
+      _tag: "CandidateAncestor",
+      currentHeadSha: fixture.promotionCorrelation.qualifiedCandidate.candidateCommit
+    })
   ).toBe("Ancestor")
   expect(
     candidateAncestryFor({
       _tag: "CandidateNotInAncestry",
-      currentHeadSha: fixture.promotionCorrelation.expectedTargetHead
+      currentHeadSha: fixture.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead
     })
   ).toBeUndefined()
 })

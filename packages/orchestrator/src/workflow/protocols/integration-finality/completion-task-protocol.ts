@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- The bounded completion request and its recovery
  * chronology are kept together so every ambiguity crossing is auditable. */
-import { AcceptedResultEvidenceManifest, evidenceReferenceEquals } from "@dalph/contracts"
+import { AcceptedResultEvidenceManifest } from "@dalph/contracts"
 import { Effect, Match, Option, Schema } from "effect"
 import { TrackerTarget, taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import {
@@ -56,15 +56,12 @@ import {
   taskTrackerFactsObservedEvent,
   type FocusedTaskCompletionFactsObserved
 } from "../../task-tracker-facts/observation.js"
-import { EvidenceReference, EvidenceStore } from "../target-verification/evidence-store.js"
-import { EvidenceManifestChainLink, validateEvidenceManifestChain } from "../target-verification/evidence-chain.js"
-import { TargetPromotionGit, type TargetPromotionGitReadObservation } from "../target-promotion/events.js"
+import { EvidenceStore } from "../target-verification/evidence-store.js"
 import {
-  IntegrationReviewManifest,
-  integrationCandidateCorrelationEquals
-} from "../integration-candidate-construction/events.js"
-import { TargetVerificationManifest } from "../target-verification/manifest.js"
-import { targetVerificationCorrelationEquals } from "../target-verification/events.js"
+  TargetPromotionGit,
+  targetPromotionGitRequestFor,
+  type TargetPromotionGitReadObservation
+} from "../target-promotion/events.js"
 import {
   completionTaskCandidateAncestryReadOperationIdFor,
   completionTaskFocusedReadOperationIdFor,
@@ -73,13 +70,10 @@ import {
 
 /** The authorization facts consumed by one completion request attempt. */
 export const CompletionTaskAuthorization = Schema.Struct({
-  acceptanceManifest: EvidenceReference,
   candidateAncestry: Schema.Literals(["Current", "Ancestor"]),
   focusedFacts: FocusedTaskCompletionFacts,
   gitReadOperationId: OperationId,
-  integrationReviewManifest: EvidenceReference,
-  target: TrackerTarget,
-  verificationManifest: EvidenceReference
+  target: TrackerTarget
 })
 export type CompletionTaskAuthorization = typeof CompletionTaskAuthorization.Type
 
@@ -250,28 +244,13 @@ const completionClaimAuthorizationIssue = (
   return undefined
 }
 
-const sealedEvidenceAuthorizationIssue = (
-  authorization: CompletionTaskAuthorization,
-  request: CompletionTaskRequest
-): CompletionTaskAuthorizationIssue | undefined => {
-  if (
-    !evidenceReferenceEquals(authorization.acceptanceManifest, request.acceptanceManifest) ||
-    !evidenceReferenceEquals(authorization.integrationReviewManifest, request.integrationReviewManifest) ||
-    !evidenceReferenceEquals(authorization.verificationManifest, request.verificationManifest)
-  ) {
-    return { detail: "sealed completion evidence differs from the immutable request", reason: "SealedEvidenceChanged" }
-  }
-  return undefined
-}
-
 /** Returns the first exact-current-premise conflict that forbids a completion mutation. */
 export const completionTaskAuthorizationIssue = (
   authorization: CompletionTaskAuthorization,
   request: CompletionTaskRequest
 ): CompletionTaskAuthorizationIssue | undefined =>
   focusedTaskAuthorizationIssue(authorization.focusedFacts, authorization.target, request) ??
-  completionClaimAuthorizationIssue(authorization.focusedFacts, request) ??
-  sealedEvidenceAuthorizationIssue(authorization, request)
+  completionClaimAuthorizationIssue(authorization.focusedFacts, request)
 
 const appendIntentIfNeeded = Effect.fn("IntegrationFinality.appendCompletionTaskIntentIfNeeded")(function* (
   request: CompletionTaskRequest,
@@ -406,7 +385,7 @@ export const readCompletionCandidateAncestry = Effect.fn("IntegrationFinality.re
       return { observation: existing.event.observation, operationId } as const
     }
     const git = yield* TargetPromotionGit
-    const observation = yield* git.read(request.promotionCorrelation)
+    const observation = yield* git.read(targetPromotionGitRequestFor(request.claim.promotionCorrelation))
     yield* append(
       request,
       completionTaskCandidateAncestryObservedRecordKey(operationId),
@@ -523,13 +502,10 @@ export const authorizeCompletionTaskAttempt = Effect.fn("IntegrationFinality.aut
     yield* rereadCompletionEvidence(request)
     return CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({
       authorization: CompletionTaskAuthorization.make({
-        acceptanceManifest: request.acceptanceManifest,
         candidateAncestry,
         focusedFacts: focused.facts,
         gitReadOperationId: ancestry.operationId,
-        integrationReviewManifest: request.integrationReviewManifest,
-        target,
-        verificationManifest: request.verificationManifest
+        target
       })
     })
   }
@@ -1024,132 +1000,57 @@ export const runCompletionTaskProtocol = Effect.fn("IntegrationFinality.runCompl
   return yield* new CompletionTaskDidNotConverge({ attempts: completionTaskRequestLimit, request })
 })
 
-/** Rereads all three content-addressed manifests before request construction. */
+/** Rereads and schema-validates the exact accepted-result evidence before Q may mutate the tracker. */
 export const rereadCompletionEvidence = Effect.fn("IntegrationFinality.rereadCompletionEvidence")(function* (
   request: CompletionTaskRequest
 ) {
   const store = yield* EvidenceStore
-  const parseManifestJson = (label: string, bytes: Uint8Array) =>
+  const parseManifestJson = (bytes: Uint8Array) =>
     Effect.try({
       try: (): unknown => JSON.parse(new TextDecoder().decode(bytes)),
       catch: (cause) =>
         new CompletionTaskAuthorizationConflict({
-          detail: `${label} is not JSON: ${String(cause)}`,
+          detail: `accepted-result evidence is not JSON: ${String(cause)}`,
           reason: "SealedEvidenceUnavailableOrInvalid",
           request
         })
     })
-  const acceptance = yield* store.read(request.acceptanceManifest).pipe(
+  const acceptedResult = request.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult
+  const reference = acceptedResult.evidenceManifest
+  const decoded = yield* store.read(reference).pipe(
     Effect.mapError(
       (cause) =>
         new CompletionTaskAuthorizationWait({
-          detail: `acceptance manifest is unavailable: ${String(cause)}`,
+          detail: `accepted-result evidence is unavailable: ${String(cause)}`,
           reason: "SealedEvidenceUnavailable",
           request
         })
     ),
-    Effect.flatMap((bytes) => parseManifestJson("acceptance manifest", bytes)),
+    Effect.flatMap(parseManifestJson),
     Effect.flatMap(Schema.decodeUnknownEffect(AcceptedResultEvidenceManifest)),
     Effect.mapError((cause) =>
       /* v8 ignore next -- @preserve Earlier sealed-read/JSON failures are already owner-typed; only schema defects require the envelope wrapper. */
       cause instanceof CompletionTaskAuthorizationConflict || cause instanceof CompletionTaskAuthorizationWait
         ? cause
         : new CompletionTaskAuthorizationConflict({
-            detail: `acceptance manifest has an invalid envelope: ${String(cause)}`,
+            detail: `accepted-result evidence has an invalid envelope: ${String(cause)}`,
             reason: "SealedEvidenceUnavailableOrInvalid",
             request
           })
     )
   )
-  const review = yield* store.read(request.integrationReviewManifest).pipe(
-    Effect.mapError(
-      (cause) =>
-        new CompletionTaskAuthorizationWait({
-          detail: `integration review manifest is unavailable: ${String(cause)}`,
-          reason: "SealedEvidenceUnavailable",
-          request
-        })
-    ),
-    Effect.flatMap((bytes) => parseManifestJson("integration review manifest", bytes)),
-    Effect.flatMap(Schema.decodeUnknownEffect(IntegrationReviewManifest)),
-    Effect.mapError((cause) =>
-      cause instanceof CompletionTaskAuthorizationConflict || cause instanceof CompletionTaskAuthorizationWait
-        ? cause
-        : new CompletionTaskAuthorizationConflict({
-            detail: `integration review manifest has an invalid envelope: ${String(cause)}`,
-            reason: "SealedEvidenceUnavailableOrInvalid",
-            request
-          })
-    )
-  )
-  const verification = yield* store.read(request.verificationManifest).pipe(
-    Effect.mapError(
-      (cause) =>
-        new CompletionTaskAuthorizationWait({
-          detail: `verification manifest is unavailable: ${String(cause)}`,
-          reason: "SealedEvidenceUnavailable",
-          request
-        })
-    ),
-    Effect.flatMap((bytes) => parseManifestJson("verification manifest", bytes)),
-    Effect.flatMap(Schema.decodeUnknownEffect(TargetVerificationManifest)),
-    Effect.mapError((cause) =>
-      cause instanceof CompletionTaskAuthorizationConflict || cause instanceof CompletionTaskAuthorizationWait
-        ? cause
-        : new CompletionTaskAuthorizationConflict({
-            detail: `verification manifest has an invalid envelope: ${String(cause)}`,
-            reason: "SealedEvidenceUnavailableOrInvalid",
-            request
-          })
-    )
-  )
-  yield* validateEvidenceManifestChain([
-    EvidenceManifestChainLink.make({ predecessor: acceptance.predecessor, reference: request.acceptanceManifest }),
-    EvidenceManifestChainLink.make({ predecessor: review.predecessor, reference: request.integrationReviewManifest }),
-    EvidenceManifestChainLink.make({ predecessor: verification.predecessor, reference: request.verificationManifest })
-  ]).pipe(
-    Effect.mapError(
-      (failure) =>
-        new CompletionTaskAuthorizationConflict({
-          detail: `sealed evidence predecessor chain is invalid: ${failure.detail}`,
-          reason: "SealedEvidenceChanged",
-          request
-        })
-    )
-  )
-  const promotion = request.promotionCorrelation
   if (
-    acceptance.commit !== promotion.candidateCorrelation.acceptedResultCommit ||
-    acceptance.correlation.attemptId !== promotion.candidateCorrelation.attemptId ||
-    acceptance.correlation.runId !== promotion.candidateCorrelation.runId
+    decoded.commit !== acceptedResult.commit ||
+    decoded.correlation.attemptId !== request.claim.plannedAttempt.attemptId ||
+    decoded.correlation.runId !== request.claim.plannedAttempt.runId
   ) {
     return yield* new CompletionTaskAuthorizationConflict({
-      detail: "acceptance manifest does not bind the promoted accepted result",
+      detail: "accepted-result evidence does not bind the promoted commit, RunId, and AttemptId",
       reason: "SealedEvidenceChanged",
       request
     })
   }
-  if (
-    review.candidateCommit !== promotion.candidateCommit ||
-    !integrationCandidateCorrelationEquals(review.correlation, promotion.candidateCorrelation)
-  ) {
-    return yield* new CompletionTaskAuthorizationConflict({
-      detail: "integration review manifest does not bind the promoted candidate",
-      reason: "SealedEvidenceChanged",
-      request
-    })
-  }
-  if (
-    verification.outcome !== "Passed" ||
-    !targetVerificationCorrelationEquals(verification.correlation, promotion.verificationCorrelation)
-  ) {
-    return yield* new CompletionTaskAuthorizationConflict({
-      detail: "verification manifest is not the exact passing promotion evidence",
-      reason: "SealedEvidenceChanged",
-      request
-    })
-  }
-  return request
+  return decoded
 })
 
 export const candidateAncestryFor = (

@@ -67,6 +67,7 @@ today.
 | `issue-55-localize-task-conflicts.md` | 55 |
 | `issue-56-queue-accepted-integration.md` | 56 |
 | `issue-222-introduce-outer-integrator.md` | 222 |
+| `issue-223-migrate-promotion-and-finality.md` | 223 |
 | `issue-68-recover-or-quarantine-integration-session.md` | 68 |
 | `issue-138-reconcile-blockers-around-promotion.md` | 138 |
 | `issue-63-observe-pause-progress.md` | 63 |

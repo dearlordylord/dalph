@@ -105,6 +105,8 @@ const SPECS = [
     invariants: [
       "exactProofAndBinding",
       "completionClaimRequiresExactPromotionProof",
+      "completionProofCarriesAcceptedEvidenceAndNoReturnedRefs",
+      "noLegacyEvidenceAuthorizesFinality",
       "replacementIntentPrecedesRequest",
       "deletionIntentPrecedesRequest",
       "replacementRereadPrecedesRetry",
@@ -121,7 +123,7 @@ const SPECS = [
       "subjectSettlementIsLocal",
       "emptyFrontierDoesNotSettleRetainedResponsibility",
       "runTerminationRemainsOwnedByIssue102",
-      "issue61BoundariesRemainExternal"
+      "dependantReleaseBoundaryRemainsExternal"
     ],
     witnesses: [
       "promotedProofReached",

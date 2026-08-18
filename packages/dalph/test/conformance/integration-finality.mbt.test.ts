@@ -62,14 +62,15 @@ import {
   rereadCompletionEvidence
 } from "../../../orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
-import { IntegrationReviewManifest } from "../../../orchestrator/src/workflow/protocols/integration-candidate-construction/events.js"
+import { IntegratorQualifiedCandidate } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
 import {
   TargetPromotionGit,
   TargetPromotionGitReadFailure,
-  TargetPromotionGitReadObservation
+  TargetPromotionGitReadObservation,
+  targetPromotionCorrelationFor,
+  type TargetPromotionCorrelation
 } from "../../../orchestrator/src/workflow/protocols/target-promotion/events.js"
 import { EvidenceStore } from "../../../orchestrator/src/workflow/protocols/target-verification/evidence-store.js"
-import { TargetVerificationManifest } from "../../../orchestrator/src/workflow/protocols/target-verification/manifest.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   TaskTrackerFactsObservedEvent
@@ -93,15 +94,17 @@ const ORIGINAL_CLAIM_B = 102n
 const COMPLETION_CLAIM_A = 201n
 const CANDIDATE_A = 301n
 const EXPECTED_HEAD_A = 401n
+const ACCEPTED_RESULT_COMMIT_A = 302n
+const INTEGRATOR_SESSION_A = 601n
 const INTEGRATION_TARGET_A = 501n
-const PROMOTION_CORRELATION_A = 601n
-const ACCEPTANCE_MANIFEST_A = 701n
-const INTEGRATION_REVIEW_MANIFEST_A = 702n
-const VERIFICATION_MANIFEST_A = 703n
+const ACCEPTED_RESULT_EVIDENCE_A = 701n
+const LEGACY_EVIDENCE_A = 703n
 const TRACKER_COMPLETION_REQUEST_REVISION = 10n
 const STALE_TRACKER_REVISION = 10n
 const FRESH_TRACKER_REVISION = 11n
 const COMPLETION_CLAIM_REQUEST_LIMIT = 3n
+
+const failTest = (message: string): never => Effect.runSync(Effect.die(message))
 
 type Phase =
   | "PromotedProof"
@@ -150,13 +153,15 @@ type Proof = {
   taskId: bigint
   attemptId: bigint
   taskRevision: bigint
+  integratorSession: bigint
   candidateCommit: bigint
   expectedTargetHead: bigint
+  acceptedResultCommit: bigint
+  candidateFirstParent: bigint
+  candidateSecondParent: bigint
   integrationTarget: bigint
-  promotionCorrelation: bigint
-  acceptanceManifest: bigint
-  integrationReviewManifest: bigint
-  verificationManifest: bigint
+  acceptedResultEvidence: bigint
+  integratorReturnedEvidenceRefs: ReadonlySet<bigint>
 }
 
 type CompletionClaim = {
@@ -165,11 +170,15 @@ type CompletionClaim = {
   taskId: bigint
   attemptId: bigint
   taskRevision: bigint
+  integratorSession: bigint
   predecessorClaimId: bigint
-  promotionCorrelation: bigint
-  acceptanceManifest: bigint
-  integrationReviewManifest: bigint
-  verificationManifest: bigint
+  candidateCommit: bigint
+  expectedTargetHead: bigint
+  acceptedResultCommit: bigint
+  candidateFirstParent: bigint
+  candidateSecondParent: bigint
+  acceptedResultEvidence: bigint
+  integratorReturnedEvidenceRefs: ReadonlySet<bigint>
 }
 
 type Subject = {
@@ -184,6 +193,7 @@ type Subject = {
   proof: Proof
   completionClaimDerived: boolean
   completionClaim: CompletionClaim
+  legacyEvidenceForged: boolean
   replacementIntentRecorded: boolean
   replacementRequests: bigint
   replacementReads: bigint
@@ -245,13 +255,15 @@ const proofForA: Proof = {
   taskId: TASK_A,
   attemptId: ATTEMPT_A,
   taskRevision: TASK_REVISION_A,
+  integratorSession: INTEGRATOR_SESSION_A,
   candidateCommit: CANDIDATE_A,
   expectedTargetHead: EXPECTED_HEAD_A,
+  acceptedResultCommit: ACCEPTED_RESULT_COMMIT_A,
+  candidateFirstParent: EXPECTED_HEAD_A,
+  candidateSecondParent: ACCEPTED_RESULT_COMMIT_A,
   integrationTarget: INTEGRATION_TARGET_A,
-  promotionCorrelation: PROMOTION_CORRELATION_A,
-  acceptanceManifest: ACCEPTANCE_MANIFEST_A,
-  integrationReviewManifest: INTEGRATION_REVIEW_MANIFEST_A,
-  verificationManifest: VERIFICATION_MANIFEST_A
+  acceptedResultEvidence: ACCEPTED_RESULT_EVIDENCE_A,
+  integratorReturnedEvidenceRefs: new Set()
 }
 
 const emptyCompletionClaim: CompletionClaim = {
@@ -260,11 +272,15 @@ const emptyCompletionClaim: CompletionClaim = {
   taskId: 0n,
   attemptId: 0n,
   taskRevision: 0n,
+  integratorSession: 0n,
   predecessorClaimId: 0n,
-  promotionCorrelation: 0n,
-  acceptanceManifest: 0n,
-  integrationReviewManifest: 0n,
-  verificationManifest: 0n
+  candidateCommit: 0n,
+  expectedTargetHead: 0n,
+  acceptedResultCommit: 0n,
+  candidateFirstParent: 0n,
+  candidateSecondParent: 0n,
+  acceptedResultEvidence: 0n,
+  integratorReturnedEvidenceRefs: new Set()
 }
 
 const subjectA = (): Subject => ({
@@ -279,6 +295,7 @@ const subjectA = (): Subject => ({
   proof: proofForA,
   completionClaimDerived: false,
   completionClaim: emptyCompletionClaim,
+  legacyEvidenceForged: false,
   replacementIntentRecorded: false,
   replacementRequests: 0n,
   replacementReads: 0n,
@@ -339,16 +356,19 @@ const subjectB = (): Subject => ({
     taskId: TASK_B,
     attemptId: ATTEMPT_B,
     taskRevision: TASK_REVISION_B,
+    integratorSession: 0n,
     candidateCommit: 0n,
     expectedTargetHead: 0n,
+    acceptedResultCommit: 0n,
+    candidateFirstParent: 0n,
+    candidateSecondParent: 0n,
     integrationTarget: 0n,
-    promotionCorrelation: 0n,
-    acceptanceManifest: 0n,
-    integrationReviewManifest: 0n,
-    verificationManifest: 0n
+    acceptedResultEvidence: 0n,
+    integratorReturnedEvidenceRefs: new Set()
   },
   completionClaimDerived: false,
   completionClaim: emptyCompletionClaim,
+  legacyEvidenceForged: false,
   replacementIntentRecorded: false,
   replacementRequests: 0n,
   replacementReads: 0n,
@@ -412,6 +432,7 @@ const SpecSubject = Schema.Struct({
   completionClaim: Schema.Unknown,
   completionClaimDerived: Schema.Boolean,
   completionAncestry: Schema.Unknown,
+  legacyEvidenceForged: Schema.Boolean,
   completionAttemptIntents: ITFBigInt,
   completionOpenConfirmationRecorded: Schema.Boolean,
   completionConfirmationViolationLookups: ITFBigInt,
@@ -487,6 +508,20 @@ const quintInt = (value: unknown): bigint =>
     ? BigInt(String(value["#bigint"]))
     : BigInt(value as number)
 
+const quintEvidenceSet = (value: unknown): string => {
+  const entries =
+    typeof value === "object" && value !== null && "#set" in value
+      ? value["#set"]
+      : value instanceof Set
+        ? [...value]
+        : undefined
+  if (!Array.isArray(entries)) return String(value)
+  return `{${entries
+    .map(quintInt)
+    .toSorted((left, right) => (left < right ? -1 : 1))
+    .join("|")}}`
+}
+
 const normalizedProof = (value: unknown): string => {
   if (typeof value !== "object" || value === null) return String(value)
   const fields = [
@@ -494,15 +529,16 @@ const normalizedProof = (value: unknown): string => {
     "taskId",
     "attemptId",
     "taskRevision",
+    "integratorSession",
     "candidateCommit",
     "expectedTargetHead",
+    "acceptedResultCommit",
+    "candidateFirstParent",
+    "candidateSecondParent",
     "integrationTarget",
-    "promotionCorrelation",
-    "acceptanceManifest",
-    "integrationReviewManifest",
-    "verificationManifest"
+    "acceptedResultEvidence"
   ]
-  return fields.map((field) => `${field}=${quintInt(Reflect.get(value, field))}`).join(",")
+  return `${fields.map((field) => `${field}=${quintInt(Reflect.get(value, field))}`).join(",")},integratorReturnedEvidenceRefs=${quintEvidenceSet(Reflect.get(value, "integratorReturnedEvidenceRefs"))}`
 }
 
 const normalizedCompletionClaim = (value: unknown): string => {
@@ -513,13 +549,16 @@ const normalizedCompletionClaim = (value: unknown): string => {
     "taskId",
     "attemptId",
     "taskRevision",
+    "integratorSession",
     "predecessorClaimId",
-    "promotionCorrelation",
-    "acceptanceManifest",
-    "integrationReviewManifest",
-    "verificationManifest"
+    "candidateCommit",
+    "expectedTargetHead",
+    "acceptedResultCommit",
+    "candidateFirstParent",
+    "candidateSecondParent",
+    "acceptedResultEvidence"
   ]
-  return fields.map((field) => `${field}=${quintInt(Reflect.get(value, field))}`).join(",")
+  return `${fields.map((field) => `${field}=${quintInt(Reflect.get(value, field))}`).join(",")},integratorReturnedEvidenceRefs=${quintEvidenceSet(Reflect.get(value, "integratorReturnedEvidenceRefs"))}`
 }
 
 const normalizedSubject = (subject: Subject | Schema.Schema.Type<typeof SpecSubject>) => ({
@@ -529,6 +568,7 @@ const normalizedSubject = (subject: Subject | Schema.Schema.Type<typeof SpecSubj
   completionClaim: normalizedCompletionClaim(subject.completionClaim),
   completionClaimDerived: subject.completionClaimDerived,
   completionAncestry: variantTag(subject.completionAncestry),
+  legacyEvidenceForged: subject.legacyEvidenceForged,
   completionAttemptIntents: quintInt(subject.completionAttemptIntents),
   completionOpenConfirmationRecorded: subject.completionOpenConfirmationRecorded,
   completionConfirmationViolationLookups: quintInt(subject.completionConfirmationViolationLookups),
@@ -580,6 +620,13 @@ const normalizedSubject = (subject: Subject | Schema.Schema.Type<typeof SpecSubj
 
 const integrationAttempt = integrationFinalityFixture.plannedAttempt
 
+// Promotion and finality consume the outer Integrator's Git-qualified candidate
+// and its derived TargetPromotionCorrelation. The candidate resource/text are
+// retained only inside this correlation; finality rereads accepted-result bytes
+// rather than any target-verification-owned manifests.
+const productionQualifiedCandidate: IntegratorQualifiedCandidate = integrationFinalityFixture.qualifiedCandidate
+const productionPromotionCorrelation: TargetPromotionCorrelation = integrationFinalityFixture.promotionCorrelation
+
 const integrationResponsibility: WorkflowResponsibilityEntry = {
   _tag: "PlannedAttemptExecutorWorkResponsibility",
   beganAt: JournalPosition.make(1),
@@ -593,10 +640,12 @@ const encodeEvidence = (value: unknown): Uint8Array => new TextEncoder().encode(
 
 const productionEvidenceObjects = new Map([
   [
-    productionCompletionRequest.acceptanceManifest.digest,
+    productionCompletionRequest.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult
+      .evidenceManifest.digest,
     encodeEvidence(
       AcceptedResultEvidenceManifest.make({
-        commit: productionCompletionRequest.promotionCorrelation.candidateCorrelation.acceptedResultCommit,
+        commit:
+          productionCompletionRequest.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.commit,
         correlation: {
           attemptId: productionCompletionRequest.claim.plannedAttempt.attemptId,
           runId: productionCompletionRequest.claim.plannedAttempt.runId
@@ -604,30 +653,6 @@ const productionEvidenceObjects = new Map([
         formatVersion: 1,
         outcome: "Accepted",
         predecessor: null
-      })
-    )
-  ],
-  [
-    productionCompletionRequest.integrationReviewManifest.digest,
-    encodeEvidence(
-      IntegrationReviewManifest.make({
-        candidateCommit: productionCompletionRequest.promotionCorrelation.candidateCommit,
-        correlation: productionCompletionRequest.promotionCorrelation.candidateCorrelation,
-        formatVersion: 1,
-        outcome: "Passed",
-        predecessor: productionCompletionRequest.acceptanceManifest
-      })
-    )
-  ],
-  [
-    productionCompletionRequest.verificationManifest.digest,
-    encodeEvidence(
-      TargetVerificationManifest.make({
-        artifacts: [],
-        correlation: productionCompletionRequest.promotionCorrelation.verificationCorrelation,
-        formatVersion: 1,
-        outcome: "Passed",
-        predecessor: productionCompletionRequest.integrationReviewManifest
       })
     )
   ]
@@ -948,7 +973,7 @@ const makeProductionState = () => {
       priorFocusedEvent?._tag !== "TaskTrackerFactsObserved" ||
       priorFocusedEvent.observation._tag !== "FocusedTaskCompletionFacts"
     ) {
-      throw new Error("production conflict requires a durable focused task observation")
+      return failTest("production conflict requires a durable focused task observation")
     }
     const focusedFacts =
       kind === "ForeignTask"
@@ -972,25 +997,22 @@ const makeProductionState = () => {
               focusedEvent?._tag !== "TaskTrackerFactsObserved" ||
               focusedEvent.observation._tag !== "FocusedTaskCompletionFacts"
             ) {
-              throw new Error("production conflict requires a durable focused task observation")
+              return failTest("production conflict requires a durable focused task observation")
             }
             return focusedEvent.observation.facts
           })()
     const issue = completionTaskAuthorizationIssue(
       {
-        acceptanceManifest: productionCompletionRequest.acceptanceManifest,
         candidateAncestry: "Current",
         focusedFacts,
         gitReadOperationId: OperationId.make("integration-finality-conflict-git-read"),
-        integrationReviewManifest: productionCompletionRequest.integrationReviewManifest,
-        target: integrationFinalityFixture.target,
-        verificationManifest: productionCompletionRequest.verificationManifest
+        target: integrationFinalityFixture.target
       },
       productionCompletionRequest
     )
     const expectedReason = kind === "ReopenedTask" ? "TaskLifecycleConflict" : "TaskIdentityOrRevisionChanged"
     if (issue?.reason !== expectedReason) {
-      throw new Error(`production focused conflict ${kind} produced ${issue?.reason ?? "no conflict"}`)
+      failTest(`production focused conflict ${kind} produced ${issue?.reason ?? "no conflict"}`)
     }
     focusedTaskId = productionCompletionRequest.taskId
     focusedTaskRevision = productionCompletionRequest.taskRevision
@@ -1010,7 +1032,7 @@ const makeProductionState = () => {
       purpose.operation._tag !== "ReadCompletionTaskFacts" ||
       purpose.operation.purpose._tag !== "Authorization"
     ) {
-      throw new Error("production ancestry read requires the matching focused authorization cycle")
+      return failTest("production ancestry read requires the matching focused authorization cycle")
     }
     Effect.runSync(
       provideCompletionRuntime(readCompletionCandidateAncestry(productionCompletionRequest, purpose.operation.purpose))
@@ -1033,7 +1055,7 @@ const makeProductionState = () => {
       purpose.operation._tag !== "ReadCompletionTaskFacts" ||
       purpose.operation.purpose._tag !== "Authorization"
     ) {
-      throw new Error("production ancestry read requires the matching focused authorization cycle")
+      return failTest("production ancestry read requires the matching focused authorization cycle")
     }
     completionAncestryDisposition = disposition
     const exit = Effect.runSyncExit(
@@ -1041,11 +1063,11 @@ const makeProductionState = () => {
     )
     completionAncestryDisposition = "Current"
     if (disposition === "Unreadable") {
-      if (exit._tag !== "Failure") throw new Error("unreadable production ancestry unexpectedly succeeded")
+      if (exit._tag !== "Failure") failTest("unreadable production ancestry unexpectedly succeeded")
       return
     }
     if (exit._tag !== "Success" || exit.value.observation._tag !== "CandidateNotInAncestry") {
-      throw new Error("production ancestry did not preserve the candidate-not-ancestor result")
+      failTest("production ancestry did not preserve the candidate-not-ancestor result")
     }
   }
 
@@ -1092,7 +1114,7 @@ const makeProductionState = () => {
           event.observation.facts.lifecycle === "Open"
       )
     ) {
-      throw new Error(`production did not retain open completion confirmation ${ordinal}`)
+      failTest(`production did not retain open completion confirmation ${ordinal}`)
     }
   }
 
@@ -1237,7 +1259,7 @@ const makeProductionState = () => {
   const invokeDeletion = (disposition: ProductionMutationDisposition): void => {
     deletionDisposition = disposition
     if (successObservation === undefined) {
-      throw new Error("production deletion requires a focused task-completion observation")
+      return failTest("production deletion requires a focused task-completion observation")
     }
     Effect.runSync(
       runCompletionClaimDeletionProtocol(
@@ -1320,42 +1342,61 @@ type ProductionState = ReturnType<typeof makeProductionState>
 // Every model step is checked against production protocol history, then
 // against production Run finality with an unrelated responsibility held.
 const assertProductionFinality = (current: ModelState, productionState: ProductionState): void => {
+  if (
+    productionPromotionCorrelation.qualifiedCandidate.candidateCommit !==
+      productionQualifiedCandidate.candidateCommit ||
+    productionPromotionCorrelation.qualifiedCandidate.candidateText !== productionQualifiedCandidate.candidateText ||
+    productionPromotionCorrelation.qualifiedCandidate.qualifiedAt !== productionQualifiedCandidate.qualifiedAt ||
+    productionQualifiedCandidate.directParents[0] !== productionQualifiedCandidate.correlation.expectedTargetHead ||
+    productionQualifiedCandidate.directParents[1] !== productionQualifiedCandidate.correlation.acceptedResult.commit
+  ) {
+    failTest("production finality fixture lost the outer Integrator candidate qualification")
+  }
   if (completionClaimRequestLimit !== Number(COMPLETION_CLAIM_REQUEST_LIMIT)) {
-    throw new Error("model request bound diverges from production completion-claim request bound")
+    failTest("model request bound diverges from production completion-claim request bound")
   }
   if (completionTaskRequestLimit !== Number(COMPLETION_CLAIM_REQUEST_LIMIT)) {
-    throw new Error("model request bound diverges from production complete-task request bound")
+    failTest("model request bound diverges from production complete-task request bound")
   }
   if (!completionTaskClaimEquals(productionClaimIdentity, productionClaimIdentity)) {
-    throw new Error("production completion-claim equality rejected an identical exact claim")
+    failTest("production completion-claim equality rejected an identical exact claim")
   }
+  const changedPlannedAttempt = {
+    ...productionClaimIdentity.plannedAttempt,
+    taskRevision: TaskRevision.make("changed")
+  }
+  const changedCandidate = IntegratorQualifiedCandidate.make({
+    ...productionQualifiedCandidate,
+    correlation: { ...productionQualifiedCandidate.correlation, plannedAttempt: changedPlannedAttempt }
+  })
   const changedClaim = CompletionTaskClaim.make({
     ...productionClaimIdentity,
-    plannedAttempt: { ...productionClaimIdentity.plannedAttempt, taskRevision: TaskRevision.make("changed") }
+    plannedAttempt: changedPlannedAttempt,
+    promotionCorrelation: targetPromotionCorrelationFor(changedCandidate)
   })
   if (completionTaskClaimEquals(productionClaimIdentity, changedClaim)) {
-    throw new Error("production completion-claim equality accepted a changed task revision")
+    failTest("production completion-claim equality accepted a changed task revision")
   }
 
   const projected = productionState.readState()
   const projectedTag = projected?._tag
   if (projectedTag === "ReplacementPending" && current.promoted.replacementRequests === 0n) {
-    throw new Error("production replacement protocol recorded a request before the model requested one")
+    failTest("production replacement protocol recorded a request before the model requested one")
   }
   if (projectedTag === "CompletionClaimReplaced" && !current.promoted.replacementOutcomeRecorded) {
-    throw new Error("production replacement protocol settled before the model observed its response")
+    failTest("production replacement protocol settled before the model observed its response")
   }
   if (projectedTag === "DeletionPending" && !current.promoted.deleteIntentRecorded) {
-    throw new Error("production deletion protocol recorded intent before the model recorded it")
+    failTest("production deletion protocol recorded intent before the model recorded it")
   }
   if (
     (projectedTag === "CompletionClaimDeleted" || projectedTag === "IntegrationFinalitySettled") &&
     !current.promoted.deletionOutcomeRecorded
   ) {
-    throw new Error("production deletion protocol settled before the model observed deletion")
+    failTest("production deletion protocol settled before the model observed deletion")
   }
   if (current.promoted.settled && projectedTag !== "IntegrationFinalitySettled") {
-    throw new Error("model settlement did not reach production integration finality")
+    failTest("model settlement did not reach production integration finality")
   }
 
   const completionEvents = productionState.records.map(({ event }) => event._tag)
@@ -1363,19 +1404,19 @@ const assertProductionFinality = (current: ModelState, productionState: Producti
     ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskCompletionFacts"
   )
   if (current.promoted.focusedFactsRecorded && !focusedFactsRecorded) {
-    throw new Error("model focused facts did not cross the production focused-read journal seam")
+    failTest("model focused facts did not cross the production focused-read journal seam")
   }
   if (
     current.promoted.completionAncestry === "CandidateAncestor" &&
     !completionEvents.includes("CompletionTaskCandidateAncestryObserved")
   ) {
-    throw new Error("model ancestry did not cross the production Git-read journal seam")
+    failTest("model ancestry did not cross the production Git-read journal seam")
   }
-  if (current.promoted.completionEvidenceRecorded && productionState.completionEvidenceReads < 3) {
-    throw new Error("model evidence observation did not reread all three production manifests")
+  if (current.promoted.completionEvidenceRecorded && productionState.completionEvidenceReads < 1) {
+    failTest("model evidence observation did not reread the accepted-result evidence")
   }
   if (current.promoted.completionIntentRecorded && !completionEvents.includes("CompletionTaskIntended")) {
-    throw new Error("model Q intent was not durable in the production journal")
+    failTest("model Q intent was not durable in the production journal")
   }
   const modelCompletionCalls = Number(current.completeTaskRequests)
   const productionCompletionCalls = productionState.completionBoundaryCalls
@@ -1384,7 +1425,7 @@ const assertProductionFinality = (current: ModelState, productionState: Producti
     productionCompletionCalls !== modelCompletionCalls &&
     !(requestCrossingIsPending && productionCompletionCalls + 1 === modelCompletionCalls)
   ) {
-    throw new Error("model complete-task calls diverged from the production tracker boundary")
+    failTest("model complete-task calls diverged from the production tracker boundary")
   }
   if (current.promoted.focusedSuccessRecorded) {
     const focusedSuccessAt = productionState.records.findLastIndex(
@@ -1394,7 +1435,7 @@ const assertProductionFinality = (current: ModelState, productionState: Producti
         event.observation.facts.lifecycle === "CompletedSuccessfully"
     )
     if (focusedSuccessAt < 0) {
-      throw new Error("model focused success was not durable in the production journal")
+      failTest("model focused success was not durable in the production journal")
     }
     if (
       current.promoted.completeGraphObservation === "GraphBlocked" ||
@@ -1407,7 +1448,7 @@ const assertProductionFinality = (current: ModelState, productionState: Producti
           event.operationId !== integrationFinalityFixture.graphOperation.operationId
       )
       if (graphAt <= focusedSuccessAt) {
-        throw new Error("model dependant graph was not durably observed after focused success")
+        failTest("model dependant graph was not durably observed after focused success")
       }
     }
   }
@@ -1418,13 +1459,14 @@ const assertProductionFinality = (current: ModelState, productionState: Producti
     false
   )
   if (current.unrelated.responsibilityHeld && decision._tag !== "RunMustRemainActive") {
-    throw new Error("production Run finality seam terminated with an unrelated responsibility retained")
+    failTest("production Run finality seam terminated with an unrelated responsibility retained")
   }
 }
 
 const integrationFinalityDriver = defineDriver(
   {
     deriveCompletionClaim: {},
+    forgeLegacyEvidenceForFinality: {},
     init: {},
     observeCompletionEvidence: {},
     observeCompleteTaskAcknowledgement: {},
@@ -1488,6 +1530,36 @@ const integrationFinalityDriver = defineDriver(
           current = initialState()
           productionState.reset()
         }),
+      forgeLegacyEvidenceForFinality: () =>
+        Effect.sync(() =>
+          updatePromoted((subject) => ({
+            ...subject,
+            phase: "ReplacementIntentPending",
+            proof: {
+              ...subject.proof,
+              acceptedResultEvidence: 0n,
+              integratorReturnedEvidenceRefs: new Set([LEGACY_EVIDENCE_A])
+            },
+            completionClaimDerived: true,
+            completionClaim: {
+              claimId: COMPLETION_CLAIM_A,
+              runId: subject.proof.runId,
+              taskId: subject.proof.taskId,
+              attemptId: subject.proof.attemptId,
+              taskRevision: subject.proof.taskRevision,
+              integratorSession: subject.proof.integratorSession,
+              predecessorClaimId: subject.originalClaimId,
+              candidateCommit: subject.proof.candidateCommit,
+              expectedTargetHead: subject.proof.expectedTargetHead,
+              acceptedResultCommit: subject.proof.acceptedResultCommit,
+              candidateFirstParent: subject.proof.candidateFirstParent,
+              candidateSecondParent: subject.proof.candidateSecondParent,
+              acceptedResultEvidence: 0n,
+              integratorReturnedEvidenceRefs: new Set([LEGACY_EVIDENCE_A])
+            },
+            legacyEvidenceForged: true
+          }))
+        ),
       observePostPromotionBlocker: () =>
         Effect.sync(() =>
           updatePromoted((subject) => ({
@@ -1516,11 +1588,15 @@ const integrationFinalityDriver = defineDriver(
               taskId: subject.proof.taskId,
               attemptId: subject.proof.attemptId,
               taskRevision: subject.proof.taskRevision,
+              integratorSession: subject.proof.integratorSession,
               predecessorClaimId: subject.originalClaimId,
-              promotionCorrelation: subject.proof.promotionCorrelation,
-              acceptanceManifest: subject.proof.acceptanceManifest,
-              integrationReviewManifest: subject.proof.integrationReviewManifest,
-              verificationManifest: subject.proof.verificationManifest
+              candidateCommit: subject.proof.candidateCommit,
+              expectedTargetHead: subject.proof.expectedTargetHead,
+              acceptedResultCommit: subject.proof.acceptedResultCommit,
+              candidateFirstParent: subject.proof.candidateFirstParent,
+              candidateSecondParent: subject.proof.candidateSecondParent,
+              acceptedResultEvidence: subject.proof.acceptedResultEvidence,
+              integratorReturnedEvidenceRefs: subject.proof.integratorReturnedEvidenceRefs
             }
           }))
         ),
@@ -1867,14 +1943,13 @@ const integrationFinalityDriver = defineDriver(
       observeLaterCompleteGraphBlocked: () =>
         Effect.sync(() => {
           const dependantEligible = productionState.appendCompleteGraph("Blocked")
-          if (dependantEligible)
-            throw new Error("production graph projection released B while its blocker remained open")
+          if (dependantEligible) failTest("production graph projection released B while its blocker remained open")
           updatePromoted((subject) => ({ ...subject, completeGraphObservation: "GraphBlocked", dependantEligible }))
         }),
       observeLaterCompleteGraphReleased: () =>
         Effect.sync(() => {
           const dependantEligible = productionState.appendCompleteGraph("Released")
-          if (!dependantEligible) throw new Error("production graph projection kept B blocked after G1 released it")
+          if (!dependantEligible) failTest("production graph projection kept B blocked after G1 released it")
           updatePromoted((subject) => ({ ...subject, completeGraphObservation: "GraphReleased", dependantEligible }))
         }),
       observeLaterCompleteGraphUnreadable: () =>
@@ -2046,6 +2121,7 @@ quintIt(
         spec.promoted.completionClaim === implementation.promoted.completionClaim &&
         spec.promoted.completionClaimDerived === implementation.promoted.completionClaimDerived &&
         spec.promoted.completionAncestry === implementation.promoted.completionAncestry &&
+        spec.promoted.legacyEvidenceForged === implementation.promoted.legacyEvidenceForged &&
         spec.promoted.completionAttemptIntents === implementation.promoted.completionAttemptIntents &&
         spec.promoted.completionOpenConfirmationRecorded ===
           implementation.promoted.completionOpenConfirmationRecorded &&

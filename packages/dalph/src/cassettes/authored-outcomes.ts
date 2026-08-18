@@ -310,7 +310,7 @@ const targetPromotionEvidenceFor = (
   taskByAttempt: ReadonlyMap<AttemptId, TaskId>
 ): ReadonlyArray<OrchestrationEvidence> => {
   const taskId = Option.getOrThrow(
-    Option.fromUndefinedOr(taskByAttempt.get(event.correlation.candidateCorrelation.attemptId))
+    Option.fromUndefinedOr(taskByAttempt.get(event.correlation.qualifiedCandidate.correlation.plannedAttempt.attemptId))
   )
   return Match.value(event).pipe(
     Match.tagsExhaustive({
@@ -318,8 +318,8 @@ const targetPromotionEvidenceFor = (
         {
           _tag: "TargetPromotionSucceeded",
           basis: event.basis,
-          candidateCommit: event.correlation.candidateCommit,
-          expectedTargetHead: event.correlation.expectedTargetHead,
+          candidateCommit: event.correlation.qualifiedCandidate.candidateCommit,
+          expectedTargetHead: event.correlation.qualifiedCandidate.correlation.expectedTargetHead,
           observedTargetHead: event.observation.targetHeadSha,
           observation: event.observation._tag,
           taskId
@@ -329,7 +329,7 @@ const targetPromotionEvidenceFor = (
         {
           _tag: "TargetPromotionNonConvergent",
           attemptOrdinal: event.attemptOrdinal,
-          candidateCommit: event.correlation.candidateCommit,
+          candidateCommit: event.correlation.qualifiedCandidate.candidateCommit,
           lastObservation: event.lastObservation._tag,
           taskId
         }
@@ -338,8 +338,8 @@ const targetPromotionEvidenceFor = (
         {
           _tag: "TargetPromotionStale",
           basis: event.basis,
-          candidateCommit: event.correlation.candidateCommit,
-          expectedTargetHead: event.correlation.expectedTargetHead,
+          candidateCommit: event.correlation.qualifiedCandidate.candidateCommit,
+          expectedTargetHead: event.correlation.qualifiedCandidate.correlation.expectedTargetHead,
           observedTargetHead: event.observation.observedHeadSha,
           observation: event.observation._tag,
           taskId

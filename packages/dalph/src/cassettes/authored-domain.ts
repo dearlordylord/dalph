@@ -17,6 +17,10 @@ import {
   ControlDirection,
   InitialControlPolicy,
   IntegrationCandidateGitObservation,
+  IntegratorCandidateText,
+  IntegratorCorrelation,
+  IntegratorGitObservation,
+  IntegratorNotPreparedDetail,
   PlannedBranchReady,
   PlannedWorktreeAbsent,
   PlannedWorktreeReady,
@@ -112,6 +116,13 @@ export type AuthoredTaskWorkResult = typeof AuthoredTaskWorkResult.Type
 /** A terminal assertion that Dalph assumed no executor-work responsibility for the task. */
 export const AuthoredTaskWorkAbsence = Schema.TaggedStruct("NoPlannedWorkUndertakenForTask", { taskId: TaskId })
 export type AuthoredTaskWorkAbsence = typeof AuthoredTaskWorkAbsence.Type
+
+/** The authored public result returned by one exact outer Integrator request. */
+export const AuthoredOuterIntegratorResult = Schema.TaggedUnion({
+  NotPrepared: { detail: IntegratorNotPreparedDetail },
+  PreparedCandidate: { candidateText: IntegratorCandidateText }
+})
+export type AuthoredOuterIntegratorResult = typeof AuthoredOuterIntegratorResult.Type
 
 /** Optional exact-attempt evidence about how Dalph coordinated executor work. */
 export const AuthoredOrchestrationEvidence = Schema.TaggedUnion({
@@ -215,6 +226,7 @@ const RunCoordinatorFields = {
   claimTokenPrefix: Schema.NonEmptyString,
   executor: TaskExecutorLocator,
   integrationTarget: IntegrationTarget,
+  targetPromotionConfigured: Schema.optionalKey(Schema.Boolean),
   target: TrackerTarget,
   verificationPlanId: Schema.NullOr(TargetVerificationPlanId),
   worktreeRoot: WorktreeLocator
@@ -565,7 +577,7 @@ const promotionResultIssue = (
     )
   })
   return (responsibility._tag !== "QueuedIntegration" && responsibility._tag !== "StartedIntegration") ||
-    request.candidateCorrelation.attemptId !== responsibility.attemptId ||
+    request.qualifiedCandidate.correlation.plannedAttempt.attemptId !== responsibility.attemptId ||
     !exactPromotionActionExists
     ? "promotion-result blocker must equal its exact integration responsibility and promotion action"
     : undefined
@@ -731,6 +743,14 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   },
   /** Git applies the planned-worktree create, but Dalph loses the response before the ordinary reread. */
   GitPlannedWorktreeCreateResponseLost: { detail: Schema.String },
+  /** The fake outer Integrator receives this exact session/responsibility correlation. */
+  IntegratorRequestReceived: { correlation: IntegratorCorrelation },
+  /** The fake outer Integrator returns only its public prepared/not-prepared result. */
+  IntegratorResultReturned: { result: AuthoredOuterIntegratorResult },
+  /** Git returns object-kind and ordered-parent facts for the explicitly reported candidate text. */
+  IntegratorGitObservationReturned: { candidateText: IntegratorCandidateText, observation: IntegratorGitObservation },
+  /** Git cannot read the explicitly reported candidate text. */
+  IntegratorGitObservationFailed: { candidateText: IntegratorCandidateText, detail: Schema.String },
   IntegrationCandidateAgentReported: {
     attemptId: AttemptId,
     report: Schema.TaggedUnion({
@@ -933,6 +953,12 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   ],
   DalphOperationTrace: ["DalphSelects"],
   Git: ["GitPlannedWorktreeCreateResponseLost", "GitWorktreeObservationChanged"],
+  OuterIntegrator: [
+    "IntegratorRequestReceived",
+    "IntegratorResultReturned",
+    "IntegratorGitObservationReturned",
+    "IntegratorGitObservationFailed"
+  ],
   IntegrationCandidateConstruction: [
     "IntegrationCandidateAgentReported",
     "IntegrationCandidateGitValidationFailed",

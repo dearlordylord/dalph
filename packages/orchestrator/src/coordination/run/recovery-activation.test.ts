@@ -75,11 +75,16 @@ import {
   TargetVerificationPlanId,
   targetVerificationCorrelationFor
 } from "../../workflow/protocols/target-verification/events.js"
-import { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import {
   TargetPromotionIntendedEvent,
-  targetPromotionRequestFor
+  targetPromotionCorrelationFor
 } from "../../workflow/protocols/target-promotion/events.js"
+import {
+  IntegratorCandidateResourceLocator,
+  IntegratorCandidateText,
+  IntegratorQualifiedCandidate,
+  IntegratorSessionId as OuterIntegratorSessionId
+} from "../../workflow/protocols/integrator/events.js"
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import type { PlannedAttemptWorktreeObservation } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import {
@@ -361,14 +366,24 @@ const pausedIntegrationScenario = (suffix: string, startedAt: number): PausedInt
     target: integrationTarget
   })
   const verificationCorrelation = targetVerificationCorrelationFor(candidate, plan.planId)
-  const verification = TargetVerificationState.cases.VerificationPassed.make({
-    correlation: verificationCorrelation,
-    manifest: acceptedResult.evidenceManifest
+  const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+    candidateCommit: candidate.candidateCommit,
+    candidateText: IntegratorCandidateText.make(`refs/candidates/paused-integration-${suffix}`),
+    correlation: {
+      acceptedResult,
+      candidateResource: IntegratorCandidateResourceLocator.make(`resource:paused-integration-${suffix}`),
+      expectedTargetHead: coverageAttempt.baseSha,
+      integrationTarget,
+      plannedAttempt: coverageAttempt,
+      queuedAt: responsibility.queuedAt,
+      sessionId: OuterIntegratorSessionId.make(`session:paused-integration-${suffix}`),
+      startedAt: responsibility.startedAt,
+      targetLineageObservedAt: JournalPosition.make(6)
+    },
+    directParents: [coverageAttempt.baseSha, acceptedResult.commit],
+    qualifiedAt: JournalPosition.make(14)
   })
-  const promotion = targetPromotionRequestFor(candidate, {
-    correlation: verification.correlation,
-    manifest: verification.manifest
-  })
+  const promotion = targetPromotionCorrelationFor(qualifiedCandidate)
   const candidateIntent = IntegrationCandidateConstructionIntendedEvent.make({
     continuationLimit: CandidateContinuationLimit.make(1),
     correctionLimit: CandidateCorrectionLimit.make(1),
@@ -403,7 +418,7 @@ const pausedIntegrationScenario = (suffix: string, startedAt: number): PausedInt
         responsibility
       }),
       RunnableFrontierTransition.RunTargetVerification({ candidate, plan, responsibility }),
-      RunnableFrontierTransition.RunTargetPromotion({ candidate, responsibility, verification })
+      RunnableFrontierTransition.RunTargetPromotion({ candidate: qualifiedCandidate, responsibility })
     ],
     intents: [candidateIntent, verificationIntent, promotionIntent]
   }

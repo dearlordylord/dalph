@@ -20,7 +20,6 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { NodeServices } from "@effect/platform-node"
 import { Effect, Layer, Option, Ref, Stream } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
@@ -59,15 +58,6 @@ import {
   queueAcceptedResultIntegrationResponsibility,
   startQueuedIntegration
 } from "../../workflow/protocols/integration-admission/protocol.js"
-import {
-  TargetVerificationArtifactName,
-  TargetVerificationBoundary,
-  TargetVerificationPlan,
-  TargetVerificationPlanId,
-  TargetVerificationTerminal
-} from "../../workflow/protocols/target-verification/events.js"
-import { EvidenceStore, memoryEvidenceStoreLayer } from "../../workflow/protocols/target-verification/evidence-store.js"
-import { runTargetVerification } from "../../workflow/protocols/target-verification/protocol.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -293,7 +283,7 @@ it.effect("restart after terminal append advances settlement proposals without r
   )
 )
 
-it.effect("releases a held target when constructed M has no selected verification plan", () =>
+it.effect("legacy candidate construction cannot authorize an outer Integrator release", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* seedTerminalAccepted
@@ -339,13 +329,7 @@ it.effect("releases a held target when constructed M has no selected verificatio
       const evaluation = yield* recoveredDeliveryEvaluation(true)
       const proposals =
         evaluation.proposedActions._tag === "DeliveryProposalsAvailable" ? evaluation.proposedActions.proposals : []
-      expect(proposals).toContainEqual(
-        expect.objectContaining({
-          route: expect.objectContaining({
-            transition: expect.objectContaining({ _tag: "ReleaseStartedIntegrationTarget" })
-          })
-        })
-      )
+      expect(proposals).toEqual([])
     }).pipe(Effect.provide(settlementTestLayer))
   )
 )
@@ -417,7 +401,7 @@ it.effect(
     )
 )
 
-it.effect("restart rereads the exact target head before offering candidate verification", () =>
+it.effect("restart uses the outer Integrator at a fresh target head instead of legacy candidate verification", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* seedTerminalAccepted
@@ -470,35 +454,12 @@ it.effect("restart rereads the exact target head before offering candidate verif
         (candidate) => candidate._tag === "StartedIntegrationResponsibility"
       )
       if (responsibility?._tag !== "StartedIntegrationResponsibility") return yield* Effect.die("missing start")
-      const plan = TargetVerificationPlan.make({
-        planId: TargetVerificationPlanId.make("recovered-public-plan"),
-        target: integrationTarget
-      })
-      const boundary = TargetVerificationBoundary.of({
-        runOrResume: (request) =>
-          Effect.succeed(
-            TargetVerificationTerminal.cases.Passed.make({
-              artifacts: [
-                {
-                  bytes: new TextEncoder().encode("repository checks passed"),
-                  name: TargetVerificationArtifactName.make("verification.log")
-                }
-              ],
-              correlation: request
-            })
-          )
-      })
-      const evidenceStore = yield* EvidenceStore.pipe(
-        Effect.provide(memoryEvidenceStoreLayer),
-        Effect.provide(NodeServices.layer)
-      )
       const recovery = yield* makeRunRecoveryProjection(
         runId,
         integrationTarget,
         CandidateCorrectionLimit.make(1),
         CandidateContinuationLimit.make(2),
-        resources,
-        { boundary, evidenceStore, plan }
+        resources
       )
       yield* installFreshTrackerFacts(journalService)
       expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual(
@@ -628,71 +589,17 @@ it.effect("restart rereads the exact target head before offering candidate verif
           version: workflowJournalEventVersion
         })
       )
-      expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual(
-        expect.objectContaining({ _tag: "ContinueStartedIntegrationCandidate" })
-      )
-      yield* resources.release(responsibility)
-      expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual(
-        expect.objectContaining({ _tag: "AcquireStartedIntegrationTarget" })
-      )
-      const restoredLineageRead = makeTargetLineageObservationOperation({
-        integrationTarget,
-        operationId: OperationId.make("recovered-verification-restored-head"),
-        plannedAttempt,
-        predecessorOperationIds: []
-      })
-      yield* journalService.append(
-        runId,
-        intentRecordKey(restoredLineageRead.operationId),
-        GitReadIntentRecordedEvent.make({
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          operation: restoredLineageRead,
-          version: workflowJournalEventVersion
-        })
-      )
-      yield* journalService.append(
-        runId,
-        outcomeRecordKey(restoredLineageRead.operationId),
-        TargetLineageObservedEvent.make({
-          observation: TargetLineageObservation.make({
-            plannedBaseIsAncestorOfTargetHead: true,
-            plannedBaseSha: baseSha,
-            targetHeadSha: targetHead
-          }),
-          occurrenceClassification: "NonActionOccurrence",
-          operationId: restoredLineageRead.operationId,
-          plannedAttempt,
-          version: workflowJournalEventVersion
-        })
-      )
-      expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual(
-        expect.objectContaining({ _tag: "AcquireStartedIntegrationTarget" })
-      )
-      yield* resources.acquire(responsibility)
-      yield* resources.publishAcceptedOwnership(responsibility)
       const current = yield* recovery.readDeliveryProjection
       expect(current.frontier.transitions).toContainEqual(
         expect.objectContaining({
-          _tag: "RunTargetVerification",
-          candidate: expect.objectContaining({ candidateCommit, constructedAt: expect.any(Number) }),
-          plan
+          _tag: "RunIntegrator",
+          lineage: expect.objectContaining({ targetHeadSha: GitCommitSha.make("5".repeat(40)) })
         })
       )
-      const verification = current.frontier.transitions.find(
-        (transition) => transition._tag === "RunTargetVerification"
+      expect(current.frontier.transitions).not.toContainEqual(
+        expect.objectContaining({ _tag: "ContinueStartedIntegrationCandidate" })
       )
-      if (verification?._tag !== "RunTargetVerification") return yield* Effect.die("missing verification")
-      const sealed = yield* runTargetVerification(verification.candidate, verification.plan).pipe(
-        Effect.provideService(TargetVerificationBoundary, boundary),
-        Effect.provideService(EvidenceStore, evidenceStore)
-      )
-      expect(sealed._tag).toBe("VerificationPassed")
-      expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual(
-        expect.objectContaining({ _tag: "ReleaseStartedIntegrationTarget" })
-      )
-      yield* resources.release(responsibility)
-      expect((yield* recovery.readDeliveryProjection).frontier.transitions).not.toContainEqual(
+      expect(current.frontier.transitions).not.toContainEqual(
         expect.objectContaining({ _tag: "RunTargetVerification" })
       )
       expect(reduceWorkflowJournalHistory(runId, yield* journal.read(runId))._tag).toBe("ValidWorkflowJournalHistory")

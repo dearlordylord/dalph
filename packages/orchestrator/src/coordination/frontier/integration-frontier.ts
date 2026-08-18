@@ -32,6 +32,8 @@ export interface IntegrationFrontierRuntimeFacts {
   readonly candidateCorrectionLimit?: Option.Option<CandidateCorrectionLimit>
   readonly candidateContinuationLimit?: Option.Option<CandidateContinuationLimit>
   readonly targetLineageByAttemptId?: ReadonlyMap<AttemptId, TargetLineageObservation>
+  /** Attempts whose current graph authority is newer than their last Git target-lineage observation. */
+  readonly targetLineageRefreshRequiredAttemptIds?: ReadonlySet<AttemptId>
   readonly targetVerificationPlan?: Option.Option<TargetVerificationPlan>
   readonly targetPromotionConfigured?: boolean
   readonly taskClaimAuthorityByAttemptId: ReadonlyMap<AttemptId, CurrentTaskClaimAuthority>
@@ -48,6 +50,7 @@ const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {
   candidateCorrectionLimit: Option.none(),
   candidateContinuationLimit: Option.none(),
   targetLineageByAttemptId: new Map(),
+  targetLineageRefreshRequiredAttemptIds: new Set(),
   targetVerificationPlan: Option.none(),
   targetPromotionConfigured: false,
   taskClaimAuthorityByAttemptId: new Map()

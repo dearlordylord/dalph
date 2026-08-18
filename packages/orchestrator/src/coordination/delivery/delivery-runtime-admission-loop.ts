@@ -112,7 +112,9 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
         const proposal = proposedActions.proposals.find((candidate) =>
           proposalIsAvailable(candidate, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)
         )
-        if (proposal === undefined) return false
+        if (proposal === undefined) {
+          return false
+        }
         const reservation = yield* reserveAndStart(proposal)
         if (reservation._tag === "Deferred") {
           yield* emit({ _tag: "ProposalDeferred", proposalId: proposal.id, reason: reservation.reason })

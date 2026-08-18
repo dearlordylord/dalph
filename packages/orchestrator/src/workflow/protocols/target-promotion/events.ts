@@ -1,18 +1,10 @@
 import { Context, type Effect, Schema } from "effect"
-import { evidenceReferenceEquals, GitCommitSha, IntegrationTarget } from "@dalph/contracts"
+import { GitCommitSha, IntegrationTarget } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import {
-  type ConstructedIntegrationCandidateOccurrence,
-  IntegrationCandidateCorrelation,
-  integrationCandidateCorrelationEquals,
-  type IntegrationCandidateId
-} from "../integration-candidate-construction/events.js"
-import { EvidenceReference } from "../target-verification/evidence-store.js"
-import { TargetVerificationCorrelation, targetVerificationCorrelationEquals } from "../target-verification/events.js"
+import { IntegratorQualifiedCandidate } from "../integrator/events.js"
 
-/** Identifies one immutable compare-and-set request for one constructed candidate. */
+/** Identifies one immutable compare-and-set request for one qualified Integrator candidate. */
 export const TargetPromotionRequestId = Schema.NonEmptyString.pipe(Schema.brand("TargetPromotionRequestId"))
 export type TargetPromotionRequestId = typeof TargetPromotionRequestId.Type
 
@@ -22,55 +14,61 @@ export const TargetPromotionAttemptOrdinal = Schema.Int.check(Schema.isGreaterTh
 )
 export type TargetPromotionAttemptOrdinal = typeof TargetPromotionAttemptOrdinal.Type
 
-/** Runtime value of the fixed issue-60 automatic compare-and-set limit. */
+/** Runtime value of the bounded compare-and-set limit. */
 export const targetPromotionAttemptLimit = 3 as const // eslint-disable-line no-magic-numbers
 
-/** The accepted issue-60 automatic compare-and-set limit. */
+/** The accepted automatic compare-and-set limit. */
 export const TargetPromotionAttemptLimit = Schema.Literal(targetPromotionAttemptLimit)
 export type TargetPromotionAttemptLimit = typeof TargetPromotionAttemptLimit.Type
 
-/** The exact sealed passing verification identity carried into promotion. */
-export const TargetPromotionVerification = Schema.Struct({
-  correlation: TargetVerificationCorrelation,
-  manifest: EvidenceReference
-})
-export type TargetPromotionVerification = typeof TargetPromotionVerification.Type
+/** Stable identity for one Integrator-qualified candidate promotion. */
+export const targetPromotionRequestIdForCandidate = (
+  candidate: IntegratorQualifiedCandidate
+): TargetPromotionRequestId =>
+  TargetPromotionRequestId.make(`target-promotion:${candidate.correlation.sessionId}:${candidate.candidateCommit}`)
 
-/** Full immutable identity shared by every promotion request and outcome. */
+/**
+ * The exact outer promotion identity. The nested qualified candidate binds the
+ * Integrator session S, fixed target head H, accepted result C, reported text,
+ * canonical commit M, target, and ordered parents [H, C].
+ */
 export const TargetPromotionCorrelation = Schema.Struct({
-  acceptanceManifest: EvidenceReference,
-  candidateCommit: GitCommitSha,
-  candidateConstructedAt: JournalPosition,
-  candidateCorrelation: IntegrationCandidateCorrelation,
-  expectedTargetHead: GitCommitSha,
-  integrationTarget: IntegrationTarget,
-  reviewManifest: EvidenceReference,
-  requestId: TargetPromotionRequestId,
-  verificationCorrelation: TargetVerificationCorrelation,
-  verificationManifest: EvidenceReference
+  qualifiedCandidate: IntegratorQualifiedCandidate,
+  requestId: TargetPromotionRequestId
 }).check(
-  Schema.makeFilter((correlation) => {
-    const candidate = correlation.candidateCorrelation
-    const verification = correlation.verificationCorrelation
-    const isConsistent = [
-      correlation.candidateCommit === verification.candidateCommit,
-      correlation.candidateConstructedAt === verification.candidateConstructedAt,
-      correlation.expectedTargetHead === candidate.expectedTargetHead,
-      correlation.integrationTarget.repository === candidate.integrationTarget.repository,
-      correlation.integrationTarget.ref === candidate.integrationTarget.ref,
-      correlation.requestId === `target-promotion:${candidate.candidateId}`,
-      evidenceReferenceEquals(correlation.acceptanceManifest, candidate.acceptanceManifest),
-      evidenceReferenceEquals(correlation.reviewManifest, verification.reviewManifest),
-      integrationCandidateCorrelationEquals(candidate, verification.candidateCorrelation)
-    ].every(Boolean)
-    return isConsistent ? undefined : "promotion correlation must describe one exact candidate and verification"
-  })
+  Schema.makeFilter((correlation) =>
+    correlation.requestId === targetPromotionRequestIdForCandidate(correlation.qualifiedCandidate)
+      ? undefined
+      : "promotion request identity must derive from the Integrator session and canonical candidate"
+  )
 )
 export type TargetPromotionCorrelation = typeof TargetPromotionCorrelation.Type
 
-/** The one Git request derived from an exact constructed candidate and Passed manifest. */
+/** Constructs the exact outer promotion identity from a Git-qualified Integrator result. */
+export const targetPromotionCorrelationFor = (candidate: IntegratorQualifiedCandidate): TargetPromotionCorrelation =>
+  TargetPromotionCorrelation.make({
+    qualifiedCandidate: candidate,
+    requestId: targetPromotionRequestIdForCandidate(candidate)
+  })
+
+/** The full durable promotion request P; it is the exact correlation carried by every event. */
 export const TargetPromotionRequest = TargetPromotionCorrelation
 export type TargetPromotionRequest = TargetPromotionCorrelation
+
+/** Exact Git fields projected from the immutable outer request at the mutation boundary. */
+export const TargetPromotionGitRequest = Schema.Struct({
+  candidateCommit: GitCommitSha,
+  expectedTargetHead: GitCommitSha,
+  integrationTarget: IntegrationTarget
+})
+export type TargetPromotionGitRequest = typeof TargetPromotionGitRequest.Type
+
+export const targetPromotionGitRequestFor = (correlation: TargetPromotionCorrelation): TargetPromotionGitRequest =>
+  TargetPromotionGitRequest.make({
+    candidateCommit: correlation.qualifiedCandidate.candidateCommit,
+    expectedTargetHead: correlation.qualifiedCandidate.correlation.expectedTargetHead,
+    integrationTarget: correlation.qualifiedCandidate.correlation.integrationTarget
+  })
 
 /** A retry is either the first request or follows one recorded exact-H read. */
 export const TargetPromotionAttemptReason = Schema.TaggedUnion({
@@ -106,16 +104,16 @@ export class TargetPromotionCompareAndSetFailure extends Schema.TaggedError<Targ
   { candidateCommit: GitCommitSha, detail: Schema.String, expectedHead: GitCommitSha, target: IntegrationTarget }
 ) {}
 
-/** Provider-neutral target Git boundary used by the protocol. */
+/** Provider-neutral target Git boundary used by the bounded promotion protocol. */
 export interface TargetPromotionGitService {
   readonly compareAndSet: (
-    request: TargetPromotionRequest
+    request: TargetPromotionGitRequest
   ) => Effect.Effect<
     TargetPromotionCompareAndSetResult,
     TargetPromotionCompareAndSetFailure | CoordinatorOwnershipError
   >
   readonly read: (
-    request: TargetPromotionRequest
+    request: TargetPromotionGitRequest
   ) => Effect.Effect<TargetPromotionGitReadObservation, TargetPromotionGitReadFailure>
 }
 
@@ -196,7 +194,7 @@ export const TargetPromotionNonConvergenceEvent = Schema.TaggedStruct("TargetPro
 })
 export type TargetPromotionNonConvergenceEvent = typeof TargetPromotionNonConvergenceEvent.Type
 
-/** Closed target-promotion vocabulary added to the workflow journal registry by integration wiring. */
+/** Closed target-promotion vocabulary accepted by the workflow journal. */
 export const TargetPromotionJournalEvent = Schema.Union([
   TargetPromotionIntendedEvent,
   TargetPromotionAttemptIntendedEvent,
@@ -206,43 +204,22 @@ export const TargetPromotionJournalEvent = Schema.Union([
 ])
 export type TargetPromotionJournalEvent = typeof TargetPromotionJournalEvent.Type
 
-/** Compares all request identity, candidate, target, and sealed-evidence fields. */
+/** Compares the exact nested Integrator-qualified candidate and deterministic request identity. */
+const qualifiedCandidateEquivalence = Schema.toEquivalence(IntegratorQualifiedCandidate)
 export const targetPromotionCorrelationEquals = (
   left: TargetPromotionCorrelation,
   right: TargetPromotionCorrelation
 ): boolean =>
-  [
-    evidenceReferenceEquals(left.acceptanceManifest, right.acceptanceManifest),
-    left.requestId === right.requestId,
-    left.candidateCommit === right.candidateCommit,
-    left.candidateConstructedAt === right.candidateConstructedAt,
-    left.expectedTargetHead === right.expectedTargetHead,
-    left.integrationTarget.repository === right.integrationTarget.repository,
-    left.integrationTarget.ref === right.integrationTarget.ref,
-    evidenceReferenceEquals(left.reviewManifest, right.reviewManifest),
-    evidenceReferenceEquals(left.verificationManifest, right.verificationManifest),
-    integrationCandidateCorrelationEquals(left.candidateCorrelation, right.candidateCorrelation),
-    targetVerificationCorrelationEquals(left.verificationCorrelation, right.verificationCorrelation)
-  ].every(Boolean)
+  left.requestId === right.requestId && qualifiedCandidateEquivalence(left.qualifiedCandidate, right.qualifiedCandidate)
 
-/** Derives the one stable promotion identity from the candidate's identity. */
-export const targetPromotionRequestIdForCandidate = (candidateId: IntegrationCandidateId): TargetPromotionRequestId =>
-  TargetPromotionRequestId.make(`target-promotion:${candidateId}`)
+/** Returns the fixed H bound by one promotion correlation. */
+export const targetPromotionExpectedHeadOf = (correlation: TargetPromotionCorrelation): GitCommitSha =>
+  correlation.qualifiedCandidate.correlation.expectedTargetHead
 
-/** Constructs the complete immutable request binding from candidate and sealed verification facts. */
-export const targetPromotionRequestFor = (
-  candidate: ConstructedIntegrationCandidateOccurrence,
-  verification: TargetPromotionVerification
-): TargetPromotionRequest =>
-  TargetPromotionRequest.make({
-    acceptanceManifest: candidate.correlation.acceptanceManifest,
-    candidateCommit: candidate.candidateCommit,
-    candidateConstructedAt: candidate.constructedAt,
-    candidateCorrelation: candidate.correlation,
-    expectedTargetHead: candidate.correlation.expectedTargetHead,
-    integrationTarget: candidate.correlation.integrationTarget,
-    reviewManifest: candidate.reviewManifest,
-    requestId: targetPromotionRequestIdForCandidate(candidate.correlation.candidateId),
-    verificationCorrelation: verification.correlation,
-    verificationManifest: verification.manifest
-  })
+/** Returns the canonical M bound by one promotion correlation. */
+export const targetPromotionCandidateCommitOf = (correlation: TargetPromotionCorrelation): GitCommitSha =>
+  correlation.qualifiedCandidate.candidateCommit
+
+/** Returns the run owning one promotion correlation. */
+export const targetPromotionRunIdOf = (correlation: TargetPromotionCorrelation) =>
+  correlation.qualifiedCandidate.correlation.plannedAttempt.runId

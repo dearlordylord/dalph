@@ -1,6 +1,6 @@
 import { describe, expect } from "vitest"
 import { it } from "@effect/vitest"
-import { Effect, Ref } from "effect"
+import { Effect, Ref, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -35,6 +35,7 @@ import {
   IntegratorTargetLineageObservationChanged,
   IntegratorPreparationInput,
   deriveIntegratorState,
+  integratorQualifiedCandidateFromState,
   prepareIntegrationCandidate,
   type IntegratorRequest
 } from "./protocol.js"
@@ -48,6 +49,7 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorGitObservation,
+  IntegratorQualifiedCandidate,
   IntegratorNotPreparedDetail,
   type IntegratorProtocolResult,
   IntegratorResult
@@ -388,6 +390,18 @@ describe("outer Integrator protocol", () => {
       expect(calls).toHaveLength(1)
       expect(gitCalls).toBe(1)
       expect(state._tag).toBe("GitQualifiedPrepared")
+      if (state._tag !== "GitQualifiedPrepared") return yield* Effect.die("expected Git-qualified state")
+      const qualified = integratorQualifiedCandidateFromState(state)
+      const gitObservation = records.findLast(({ event }) => event._tag === "IntegratorCandidateGitObserved")
+      expect(qualified.candidateCommit).toBe(canonicalCandidateCommit)
+      expect(qualified.directParents).toEqual([targetHead, acceptedResultCommit])
+      expect(qualified.qualifiedAt).toBe(gitObservation?.position)
+      expect(
+        Schema.is(IntegratorQualifiedCandidate)({ ...qualified, directParents: [acceptedResultCommit, targetHead] })
+      ).toBe(false)
+      expect(Schema.is(IntegratorQualifiedCandidate)({ ...qualified, qualifiedAt: targetLineageObservedAt })).toBe(
+        false
+      )
       expect(calls[0]?.correlation.acceptedResult).toEqual(responsibility.acceptedResult)
       expect(calls[0]?.correlation.integrationTarget).toEqual(responsibility.integrationTarget)
       expect(calls[0]?.correlation.plannedAttempt).toEqual(responsibility.plannedAttempt)

@@ -25,7 +25,7 @@ import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutatio
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { OperationId } from "../../identity.js"
-import { EvidenceDigest, TaskId, TaskRevision } from "@dalph/contracts"
+import { TaskId, TaskRevision } from "@dalph/contracts"
 
 const useBoundary = <A, E>(
   initial: ReadonlyArray<
@@ -100,19 +100,7 @@ it("rejects a deletion proof bound to a different completion claim for the same 
   ).toBe(false)
 })
 
-it("rejects a completion claim whose evidence references differ from its promotion", () => {
-  const foreignManifest = { ...fixture.claim.acceptanceManifest, digest: EvidenceDigest.make("f".repeat(64)) }
-
-  expect(Schema.is(CompletionTaskClaim)({ ...fixture.claim, acceptanceManifest: foreignManifest })).toBe(false)
-  expect(Schema.is(CompletionTaskClaim)({ ...fixture.claim, integrationReviewManifest: foreignManifest })).toBe(false)
-  expect(Schema.is(CompletionTaskClaim)({ ...fixture.claim, verificationManifest: foreignManifest })).toBe(false)
-})
-
-it("rejects Q field substitution and compares every focused cleanup-proof identity", () => {
-  const foreignManifest = { ...fixture.claim.acceptanceManifest, digest: EvidenceDigest.make("e".repeat(64)) }
-  expect(Schema.is(CompletionTaskRequest)({ ...fixture.completionRequest, acceptanceManifest: foreignManifest })).toBe(
-    false
-  )
+it("rejects Q operation substitution and compares every focused cleanup-proof identity", () => {
   expect(
     Schema.is(CompletionTaskRequest)({
       ...fixture.completionRequest,
@@ -231,12 +219,9 @@ effectIt.effect("fails closed for absent or foreign claims and preserves exact b
     expect(foreignReplacement).toBeInstanceOf(CompletionClaimReplacementFailure)
 
     const foreignClaim = CompletionTaskClaim.make({
-      acceptanceManifest: fixture.claim.acceptanceManifest,
-      integrationReviewManifest: fixture.claim.integrationReviewManifest,
       originalClaim: foreignActive,
       plannedAttempt: fixture.plannedAttempt,
-      promotionCorrelation: fixture.promotionCorrelation,
-      verificationManifest: fixture.claim.verificationManifest
+      promotionCorrelation: fixture.promotionCorrelation
     })
     const deletion = completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation)
     const foreignDeletion = yield* Effect.flip(

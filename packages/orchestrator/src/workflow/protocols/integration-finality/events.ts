@@ -1,5 +1,5 @@
 import { Context, type Effect, Match, Schema } from "effect"
-import { evidenceReferenceEquals, TaskId, TaskRevision } from "@dalph/contracts"
+import { TaskId, TaskRevision } from "@dalph/contracts"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -8,12 +8,7 @@ import {
   isExactTaskClaim,
   type TaskClaimObservation
 } from "../../../authorities/task-tracker/claim-mutation.js"
-import {
-  TargetPromotionCorrelation,
-  TargetPromotionGitReadObservation,
-  targetPromotionCorrelationEquals
-} from "../target-promotion/events.js"
-import { EvidenceReference } from "../target-verification/evidence-store.js"
+import { TargetPromotionGitReadObservation } from "../target-promotion/events.js"
 import {
   CompletionClaimDeletionRequest,
   CompletionClaimObservation,
@@ -33,27 +28,17 @@ export const completionTaskOperationIdFor = (claim: CompletionTaskClaim): Operat
 
 /** The immutable completion request Q; retries retain this exact identity. */
 export const CompletionTaskRequest = Schema.Struct({
-  acceptanceManifest: EvidenceReference,
   claim: CompletionTaskClaim,
-  integrationReviewManifest: EvidenceReference,
   operationId: OperationId,
-  promotionCorrelation: TargetPromotionCorrelation,
   taskId: TaskId,
-  taskRevision: TaskRevision,
-  verificationManifest: EvidenceReference
+  taskRevision: TaskRevision
 }).check(
   Schema.makeFilter((request) => {
     const exactBinding =
       request.claim.plannedAttempt.taskId === request.taskId &&
       request.claim.plannedAttempt.taskRevision === request.taskRevision &&
-      request.operationId === completionTaskOperationIdFor(request.claim) &&
-      targetPromotionCorrelationEquals(request.claim.promotionCorrelation, request.promotionCorrelation) &&
-      evidenceReferenceEquals(request.claim.acceptanceManifest, request.acceptanceManifest) &&
-      evidenceReferenceEquals(request.claim.integrationReviewManifest, request.integrationReviewManifest) &&
-      evidenceReferenceEquals(request.claim.verificationManifest, request.verificationManifest)
-    return exactBinding
-      ? undefined
-      : "completion request must bind one exact task, revision, claim, promotion, and evidence"
+      request.operationId === completionTaskOperationIdFor(request.claim)
+    return exactBinding ? undefined : "completion request must bind one exact task, revision, and claim"
   })
 )
 export type CompletionTaskRequest = typeof CompletionTaskRequest.Type
@@ -63,11 +48,7 @@ export const completionTaskRequestEquals = (left: CompletionTaskRequest, right: 
   left.operationId === right.operationId &&
   left.taskId === right.taskId &&
   left.taskRevision === right.taskRevision &&
-  completionTaskClaimEquals(left.claim, right.claim) &&
-  targetPromotionCorrelationEquals(left.promotionCorrelation, right.promotionCorrelation) &&
-  evidenceReferenceEquals(left.acceptanceManifest, right.acceptanceManifest) &&
-  evidenceReferenceEquals(left.integrationReviewManifest, right.integrationReviewManifest) &&
-  evidenceReferenceEquals(left.verificationManifest, right.verificationManifest)
+  completionTaskClaimEquals(left.claim, right.claim)
 
 /**
  * Purely derives Q's immutable value from a promoted claim. This value carries
@@ -76,14 +57,10 @@ export const completionTaskRequestEquals = (left: CompletionTaskRequest, right: 
  */
 export const completionTaskRequestFor = (claim: CompletionTaskClaim): CompletionTaskRequest =>
   CompletionTaskRequest.make({
-    acceptanceManifest: claim.acceptanceManifest,
     claim,
-    integrationReviewManifest: claim.integrationReviewManifest,
     operationId: completionTaskOperationIdFor(claim),
-    promotionCorrelation: claim.promotionCorrelation,
     taskId: claim.plannedAttempt.taskId,
-    taskRevision: claim.plannedAttempt.taskRevision,
-    verificationManifest: claim.verificationManifest
+    taskRevision: claim.plannedAttempt.taskRevision
   })
 
 /** The tracker acknowledged one exact completion request; this is not success evidence. */

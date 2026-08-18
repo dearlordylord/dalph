@@ -21,11 +21,7 @@ import {
   targetVerificationRequestIdForCandidate,
   type TargetVerificationRequestId
 } from "../../workflow/protocols/target-verification/events.js"
-import {
-  invalidTargetPromotionHistory,
-  rememberPassedTargetVerification,
-  type TargetPromotionHistoryIndexes
-} from "./target-promotion-history.js"
+import { invalidTargetPromotionHistory, type TargetPromotionHistoryIndexes } from "./target-promotion-history.js"
 import { addSetValue, candidateKey, setMapValue } from "./integration-history-run-binding.js"
 import { invalidCandidateSessionSupersession } from "./integration-history-session-supersession.js"
 import { type IntegratorHistoryIndexes, validateIntegratorHistoryEvent } from "./integrator-history.js"
@@ -262,7 +258,6 @@ const isGenuineVerificationContradiction = (
   !targetVerificationCorrelationEquals(event.expected, event.received)
 
 const invalidTargetVerificationTerminal = (
-  record: JournalRecord,
   event: Extract<
     WorkflowJournalEvent,
     { readonly _tag: "TargetVerificationCorrelationContradicted" | "TargetVerificationEvidenceSealed" }
@@ -275,9 +270,6 @@ const invalidTargetVerificationTerminal = (
   addSetValue(indexes.targetVerificationTerminals, expected.requestId)
   const exactIntent = intent !== undefined && targetVerificationCorrelationEquals(intent.correlation, expected)
   const valid = exactIntent && !alreadyTerminal && isGenuineVerificationContradiction(event)
-  if (valid && event._tag === "TargetVerificationEvidenceSealed" && event.terminal === "Passed") {
-    rememberPassedTargetVerification(indexes.targetPromotionHistory, record, event)
-  }
   return valid
     ? undefined
     : `target verification terminal has no one exact earlier intent for request ${expected.requestId}`
@@ -338,8 +330,8 @@ const invalidTargetVerificationHistory = (
     return invalidTargetVerificationIntent(record, event, indexes)
   }
   return event._tag === "TargetVerificationEvidenceSealed" || event._tag === "TargetVerificationCorrelationContradicted"
-    ? invalidTargetVerificationTerminal(record, event, indexes)
-    : invalidTargetPromotionHistory(record, indexes.targetPromotionHistory, indexes.integrationCandidatesConstructed)
+    ? invalidTargetVerificationTerminal(event, indexes)
+    : invalidTargetPromotionHistory(record, indexes.targetPromotionHistory, indexes.integratorCandidateGitObservations)
 }
 
 const invalidCandidateHistory = (record: JournalRecord, indexes: IntegrationHistoryIndexes): string | undefined => {

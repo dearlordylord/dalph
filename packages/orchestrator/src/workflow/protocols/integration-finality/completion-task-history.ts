@@ -311,13 +311,10 @@ const attemptIssue = (
     return semantic(`completion call ${ordinal} follows a stale promoted-candidate ancestry result`)
   }
   const authorization = CompletionTaskAuthorization.make({
-    acceptanceManifest: event.request.acceptanceManifest,
     candidateAncestry,
     focusedFacts: focused.observation.facts,
     gitReadOperationId: ancestry.operationId,
-    integrationReviewManifest: event.request.integrationReviewManifest,
-    target: focused.observation.facts.target,
-    verificationManifest: event.request.verificationManifest
+    target: focused.observation.facts.target
   })
   const issue = completionTaskAuthorizationIssue(authorization, event.request)
   return issue === undefined ? undefined : semantic(`completion call ${ordinal} is unauthorized: ${issue.detail}`)

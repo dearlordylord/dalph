@@ -1,10 +1,11 @@
 /* eslint-disable functional/immutable-data -- Chronological validation owns one private per-fold causal index. */
-import { evidenceReferenceEquals } from "@dalph/contracts"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
-import { integrationCandidateCorrelationEquals } from "../../workflow/protocols/integration-candidate-construction/events.js"
-import { targetVerificationCorrelationEquals } from "../../workflow/protocols/target-verification/events.js"
+import { integratorCandidateRecordKeyPrefix } from "../../workflow-journal/record-key.js"
+import { integratorCandidateHasExactParents } from "../../workflow/protocols/integrator/events.js"
+import type { IntegratorQualifiedCandidate } from "../../workflow/protocols/integrator/events.js"
+import { integratorCorrelationsEqual } from "../../workflow/protocols/integrator/state.js"
 import {
   targetPromotionAttemptLimit,
   targetPromotionCorrelationEquals,
@@ -12,19 +13,17 @@ import {
   type TargetPromotionRequestId
 } from "../../workflow/protocols/target-promotion/events.js"
 
-type ConstructedCandidates = ReadonlyMap<
-  JournalPosition,
-  Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationCandidateConstructed" }>
+type IntegratorQualifiedObservation = ReadonlyMap<
+  string,
+  {
+    readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorCandidateGitObserved" }>
+    readonly position: JournalPosition
+  }
 >
 
+type QualifiedCandidateObservation = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorCandidateGitObserved" }>
+
 export interface TargetPromotionHistoryIndexes {
-  readonly passedVerification: Map<
-    string,
-    {
-      readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "TargetVerificationEvidenceSealed" }>
-      readonly position: JournalPosition
-    }
-  >
   readonly intents: Map<
     TargetPromotionRequestId,
     Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionIntended" }>
@@ -35,59 +34,63 @@ export interface TargetPromotionHistoryIndexes {
   >
   readonly terminals: Set<TargetPromotionRequestId>
 }
-
 /** Creates one explicit per-history causal index; it is never authority or persisted state. */
 export const makeTargetPromotionHistoryIndexes = (): TargetPromotionHistoryIndexes => ({
   attempts: new Map(),
   intents: new Map(),
-  passedVerification: new Map(),
   terminals: new Set()
 })
 
-/** Retains only a causally valid sealed Passed result as promotion authority. */
-export const rememberPassedTargetVerification = (
-  indexes: TargetPromotionHistoryIndexes,
+const exactQualifiedCandidatePrior = (
   record: JournalRecord,
-  event: Extract<WorkflowJournalEvent, { readonly _tag: "TargetVerificationEvidenceSealed" }>
-): void => {
-  indexes.passedVerification.set(event.correlation.requestId, { event, position: record.position })
+  candidate: IntegratorQualifiedCandidate,
+  observations: IntegratorQualifiedObservation
+): boolean => {
+  const key = integratorCandidateRecordKeyPrefix(candidate.correlation, candidate.candidateText)
+  const observed = observations.get(key)
+  if (observed === undefined) return false
+  if (observed.position !== candidate.qualifiedAt) return false
+  if (observed.position >= record.position) return false
+  return exactQualifiedCandidateObservationFor(candidate, observed.event)
 }
 
-// eslint-disable-next-line complexity -- Promotion intent binds candidate, verification, Git target, and deterministic request identity at once.
+const exactQualifiedCandidateObservationFor = (
+  candidate: IntegratorQualifiedCandidate,
+  event: QualifiedCandidateObservation
+): boolean => {
+  if (!integratorCorrelationsEqual(event.correlation, candidate.correlation)) return false
+  if (event.candidateText !== candidate.candidateText) return false
+  if (event.observation._tag !== "Commit") return false
+  return (
+    event.observation.commit === candidate.candidateCommit &&
+    integratorCandidateHasExactParents(
+      event.observation,
+      candidate.correlation.expectedTargetHead,
+      candidate.correlation.acceptedResult.commit
+    ) &&
+    event.observation.directParents[0] === candidate.directParents[0] &&
+    event.observation.directParents[1] === candidate.directParents[1]
+  )
+}
+
+// The intent binds only the durable Integrator Git qualification; no candidate-agent or verification event is an input.
 const invalidTargetPromotionIntent = (
   record: JournalRecord,
   event: Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionIntended" }>,
   indexes: TargetPromotionHistoryIndexes,
-  constructedCandidates: ConstructedCandidates
+  integratorObservations: IntegratorQualifiedObservation
 ): string | undefined => {
   const correlation = event.correlation
-  const constructed = constructedCandidates.get(correlation.candidateConstructedAt)
-  const verification = indexes.passedVerification.get(correlation.verificationCorrelation.requestId)
+  const candidate = correlation.qualifiedCandidate
   const duplicate = indexes.intents.has(correlation.requestId)
   indexes.intents.set(correlation.requestId, event)
   const exactCandidate =
-    constructed !== undefined &&
-    correlation.candidateConstructedAt < record.position &&
-    constructed.candidateCommit === correlation.candidateCommit &&
-    integrationCandidateCorrelationEquals(constructed.correlation, correlation.candidateCorrelation) &&
-    evidenceReferenceEquals(constructed.reviewManifest, correlation.reviewManifest) &&
-    correlation.expectedTargetHead === constructed.correlation.expectedTargetHead &&
-    JSON.stringify(correlation.integrationTarget) === JSON.stringify(constructed.correlation.integrationTarget) &&
-    correlation.requestId === targetPromotionRequestIdForCandidate(constructed.correlation.candidateId)
-  const exactPassedVerification =
-    verification !== undefined &&
-    verification.position < record.position &&
-    targetVerificationCorrelationEquals(verification.event.correlation, correlation.verificationCorrelation) &&
-    verification.event.correlation.candidateCommit === correlation.candidateCommit &&
-    verification.event.correlation.candidateConstructedAt === correlation.candidateConstructedAt &&
-    integrationCandidateCorrelationEquals(
-      verification.event.correlation.candidateCorrelation,
-      correlation.candidateCorrelation
-    ) &&
-    evidenceReferenceEquals(verification.event.manifest, correlation.verificationManifest)
-  return !duplicate && exactCandidate && exactPassedVerification
+    !duplicate &&
+    correlation.requestId === targetPromotionRequestIdForCandidate(candidate) &&
+    exactQualifiedCandidatePrior(record, candidate, integratorObservations)
+  return exactCandidate
     ? undefined
-    : `target promotion intent has no exact constructed candidate and earlier sealed Passed verification for request ${correlation.requestId}`
+    : `target promotion intent has no exact earlier Integrator Git qualification for request ${correlation.requestId}`
 }
 
 const promotionAttemptsFor = (
@@ -104,13 +107,14 @@ const promotionAttemptsFor = (
 type PromotionAttempt = Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionAttemptIntended" }>
 
 const exactPromotionAttemptReason = (event: PromotionAttempt, ordinal: number): boolean => {
+  const expectedHead = event.correlation.qualifiedCandidate.correlation.expectedTargetHead
   if (ordinal === 1) {
-    return event.reason._tag === "Initial" && event.reason.observedHeadSha === event.correlation.expectedTargetHead
+    return event.reason._tag === "Initial" && event.reason.observedHeadSha === expectedHead
   }
   return (
     event.reason._tag === "ReconciledExpectedHead" &&
     Number(event.reason.previousAttemptOrdinal) === ordinal - 1 &&
-    event.reason.observedHeadSha === event.correlation.expectedTargetHead
+    event.reason.observedHeadSha === expectedHead
   )
 }
 
@@ -152,29 +156,33 @@ type PromotionStale = Extract<WorkflowJournalEvent, { readonly _tag: "TargetProm
 type PromotionNonConvergence = Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionNonConvergence" }>
 type PromotionTerminal = PromotionSuccess | PromotionStale | PromotionNonConvergence
 
+const candidateCommitOf = (event: PromotionTerminal): string => event.correlation.qualifiedCandidate.candidateCommit
+const expectedHeadOf = (event: PromotionTerminal): string =>
+  event.correlation.qualifiedCandidate.correlation.expectedTargetHead
+
 const validPromotionSuccessObservation = (event: PromotionSuccess): boolean => {
   const exactObservation =
     event.observation._tag === "ReconciledCandidateAncestor"
       ? [
-          event.observation.targetHeadSha !== event.correlation.candidateCommit,
-          event.observation.targetHeadSha !== event.correlation.expectedTargetHead
+          event.observation.targetHeadSha !== candidateCommitOf(event),
+          event.observation.targetHeadSha !== expectedHeadOf(event)
         ].every(Boolean)
-      : event.observation.targetHeadSha === event.correlation.candidateCommit
+      : event.observation.targetHeadSha === candidateCommitOf(event)
   const causalBasis = event.basis._tag === "AfterAttempt" || event.observation._tag !== "CompareAndSetApplied"
   return exactObservation && causalBasis
 }
 
 const validPromotionStaleObservation = (event: PromotionStale): boolean =>
   [
-    event.observation.observedHeadSha !== event.correlation.expectedTargetHead,
-    event.observation.observedHeadSha !== event.correlation.candidateCommit,
+    event.observation.observedHeadSha !== expectedHeadOf(event),
+    event.observation.observedHeadSha !== candidateCommitOf(event),
     event.basis._tag === "AfterAttempt" || event.observation._tag === "ReconciledCandidateNotInAncestry"
   ].every(Boolean)
 
 const validPromotionNonConvergenceObservation = (event: PromotionNonConvergence): boolean =>
   Number(event.attemptOrdinal) === targetPromotionAttemptLimit &&
   (event.lastObservation._tag !== "ExpectedHeadStillObserved" ||
-    event.lastObservation.observedHeadSha === event.correlation.expectedTargetHead)
+    event.lastObservation.observedHeadSha === expectedHeadOf(event))
 
 const validTargetPromotionTerminalObservation = (event: PromotionTerminal): boolean => {
   if (event._tag === "TargetPromotionObservedSuccess") return validPromotionSuccessObservation(event)
@@ -226,15 +234,15 @@ const invalidTargetPromotionTerminal = (
   return valid ? undefined : `target promotion terminal has no exact latest unresolved attempt for request ${requestId}`
 }
 
-/** Validates one promotion event against exact candidate, verification, attempt, and terminal chronology. */
+/** Validates one promotion event against the earlier Integrator Git qualification and CAS chronology. */
 export const invalidTargetPromotionHistory = (
   record: JournalRecord,
   indexes: TargetPromotionHistoryIndexes,
-  constructedCandidates: ConstructedCandidates
+  integratorObservations: IntegratorQualifiedObservation
 ): string | undefined => {
   const event = record.event
   if (event._tag === "TargetPromotionIntended") {
-    return invalidTargetPromotionIntent(record, event, indexes, constructedCandidates)
+    return invalidTargetPromotionIntent(record, event, indexes, integratorObservations)
   }
   if (event._tag === "TargetPromotionAttemptIntended") return invalidTargetPromotionAttempt(event, indexes)
   if (

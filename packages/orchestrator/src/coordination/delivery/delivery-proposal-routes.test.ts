@@ -102,7 +102,9 @@ import { executeIntegrationAction } from "./integration-delivery-action-adapter.
 import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import {
   Integrator,
+  IntegratorCandidateText,
   IntegratorGit,
+  IntegratorGitReadFailure,
   IntegratorNotPreparedDetail,
   IntegratorResult
 } from "../../workflow/protocols/integrator/protocol.js"
@@ -139,16 +141,12 @@ import {
   TaskTrackerFactsObservedEvent,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
-import { IntegrationReviewManifest } from "../../workflow/protocols/integration-candidate-construction/events.js"
 import { TargetPromotionGitReadObservation } from "../../workflow/protocols/target-promotion/events.js"
 import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotion/runtime.js"
-import { type EvidenceStoreService } from "../../workflow/protocols/target-verification/evidence-store.js"
 import {
-  TargetVerificationPlan,
-  TargetVerificationPlanId
-} from "../../workflow/protocols/target-verification/events.js"
-import { TargetVerificationManifest } from "../../workflow/protocols/target-verification/manifest.js"
-import { TargetVerificationRuntime } from "../../workflow/protocols/target-verification/runtime.js"
+  EvidenceStore,
+  type EvidenceStoreService
+} from "../../workflow/protocols/target-verification/evidence-store.js"
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 
 const runId = RunId.make("route-matrix-run")
@@ -279,11 +277,16 @@ const encodedEvidence = (value: unknown): Uint8Array => new TextEncoder().encode
 const completionEvidenceStore: EvidenceStoreService = {
   put: () => Effect.die("completion adapter tests never publish evidence"),
   read: (reference) => {
-    if (reference.digest === integrationFinalityFixture.claim.acceptanceManifest.digest) {
+    if (
+      reference.digest ===
+      integrationFinalityFixture.claim.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult
+        .evidenceManifest.digest
+    ) {
       return Effect.succeed(
         encodedEvidence(
           AcceptedResultEvidenceManifest.make({
-            commit: integrationFinalityFixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit,
+            commit:
+              integrationFinalityFixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult.commit,
             correlation: {
               attemptId: integrationFinalityFixture.plannedAttempt.attemptId,
               runId: integrationFinalityFixture.runId
@@ -295,30 +298,7 @@ const completionEvidenceStore: EvidenceStoreService = {
         )
       )
     }
-    if (reference.digest === integrationFinalityFixture.claim.integrationReviewManifest.digest) {
-      return Effect.succeed(
-        encodedEvidence(
-          IntegrationReviewManifest.make({
-            candidateCommit: integrationFinalityFixture.promotionCorrelation.candidateCommit,
-            correlation: integrationFinalityFixture.promotionCorrelation.candidateCorrelation,
-            formatVersion: 1,
-            outcome: "Passed",
-            predecessor: integrationFinalityFixture.claim.acceptanceManifest
-          })
-        )
-      )
-    }
-    return Effect.succeed(
-      encodedEvidence(
-        TargetVerificationManifest.make({
-          artifacts: [],
-          correlation: integrationFinalityFixture.verificationCorrelation,
-          formatVersion: 1,
-          outcome: "Passed",
-          predecessor: integrationFinalityFixture.claim.integrationReviewManifest
-        })
-      )
-    )
+    return Effect.die(`unexpected evidence read: ${reference.digest}`)
   }
 }
 
@@ -328,19 +308,10 @@ const completionPromotionRuntime = TargetPromotionRuntime.of({
     read: () =>
       Effect.succeed(
         TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
-          currentHeadSha: integrationFinalityFixture.promotionCorrelation.candidateCommit
+          currentHeadSha: integrationFinalityFixture.promotionCorrelation.qualifiedCandidate.candidateCommit
         })
       )
   }
-})
-
-const completionVerificationRuntime = TargetVerificationRuntime.of({
-  boundary: { runOrResume: () => Effect.die("task completion only rereads sealed evidence") },
-  evidenceStore: completionEvidenceStore,
-  plan: TargetVerificationPlan.make({
-    planId: TargetVerificationPlanId.make("completion-adapter-plan"),
-    target: integrationFinalityFixture.integrationTarget
-  })
 })
 
 describe("delivery proposal route matrix", () => {
@@ -856,6 +827,50 @@ describe("delivery proposal route matrix", () => {
           }).pipe(Effect.flatten),
         read: () => Ref.get(integratorRecords)
       })
+      const unreadableRecords = yield* Ref.make(yield* Ref.get(integratorRecords))
+      const unreadableJournal = InRunJournal.of({
+        append: (requestedRunId, key, event) =>
+          Ref.modify(unreadableRecords, (records) => {
+            const existing = records.find((record) => record.key === key)
+            if (existing !== undefined) return [Effect.succeed(existing), records] as const
+            const position = JournalPosition.make(Math.max(...records.map((record) => record.position)) + 1)
+            const appended: JournalRecord = { event, key, position, runId: requestedRunId }
+            return [Effect.succeed(appended), [...records, appended]] as const
+          }).pipe(Effect.flatten),
+        read: () => Ref.get(unreadableRecords)
+      })
+      const candidateText = IntegratorCandidateText.make("refs/heads/unreadable-integrator-candidate")
+      const deferred = yield* executeIntegrationAction(integratorAction, runIntegrator, inertLease, target).pipe(
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Effect.succeed(
+                IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: request.correlation })
+              )
+          })
+        ),
+        Effect.provideService(
+          IntegratorGit,
+          IntegratorGit.of({
+            readCandidate: (integrationTarget) =>
+              Effect.fail(
+                new IntegratorGitReadFailure({
+                  candidateText,
+                  detail: "controlled unreadable Git qualification",
+                  target: integrationTarget
+                })
+              )
+          })
+        ),
+        Effect.provideService(InRunJournal, unreadableJournal)
+      )
+      expect(deferred).toMatchObject({
+        _tag: "ActionDeferred",
+        proposalId: integratorProposal.id,
+        reason: { _tag: "IntegratorGitReadFailure", candidateText }
+      })
+
       const completed = yield* executeIntegrationAction(integratorAction, runIntegrator, inertLease, target).pipe(
         Effect.provideService(
           Integrator,
@@ -1448,7 +1463,7 @@ describe("delivery proposal route matrix", () => {
         const result = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
           Effect.provideService(CompletionTaskBoundary, scenario.makeBoundary()),
           Effect.provideService(TargetPromotionRuntime, completionPromotionRuntime),
-          Effect.provideService(TargetVerificationRuntime, completionVerificationRuntime),
+          Effect.provideService(EvidenceStore, completionEvidenceStore),
           Effect.provideService(InRunJournal, appendableJournalFor(yield* Ref.make<ReadonlyArray<JournalRecord>>([])))
         )
         expect(result).toMatchObject({ _tag: "ActionDeferred", reason: scenario.expected })

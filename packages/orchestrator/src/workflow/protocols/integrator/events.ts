@@ -85,6 +85,27 @@ export const IntegratorProtocolResult = Schema.TaggedUnion({
 })
 export type IntegratorProtocolResult = typeof IntegratorProtocolResult.Type
 
+/**
+ * The exact candidate explicitly reported by one outer Integrator session and
+ * subsequently qualified by Git as the ordered merge commit [H, C].
+ */
+export const IntegratorQualifiedCandidate = Schema.Struct({
+  candidateCommit: GitCommitSha,
+  candidateText: IntegratorCandidateText,
+  correlation: IntegratorCorrelation,
+  directParents: Schema.Tuple([GitCommitSha, GitCommitSha]),
+  qualifiedAt: JournalPosition
+}).check(
+  Schema.makeFilter((candidate) =>
+    candidate.directParents[0] === candidate.correlation.expectedTargetHead &&
+    candidate.directParents[1] === candidate.correlation.acceptedResult.commit &&
+    candidate.qualifiedAt > candidate.correlation.targetLineageObservedAt
+      ? undefined
+      : "qualified Integrator candidate must bind the durable Git observation to exact ordered parents [H, C]"
+  )
+)
+export type IntegratorQualifiedCandidate = typeof IntegratorQualifiedCandidate.Type
+
 /** Closed reconstruction states for one responsibility's local Integrator history. */
 export const IntegratorState = Schema.TaggedUnion({
   Absent: { responsibility: IntegratorResponsibilityFacts },
@@ -98,13 +119,30 @@ export const IntegratorState = Schema.TaggedUnion({
     candidateCommit: GitCommitSha,
     candidateText: IntegratorCandidateText,
     correlation: IntegratorCorrelation,
-    observation: Schema.Struct({ directParents: Schema.Tuple([GitCommitSha, GitCommitSha]) })
+    observation: Schema.Struct({ directParents: Schema.Tuple([GitCommitSha, GitCommitSha]) }),
+    qualifiedAt: JournalPosition
   },
   NotPrepared: { correlation: IntegratorCorrelation, detail: IntegratorNotPreparedDetail },
   PreparedAwaitingGit: { candidateText: IntegratorCandidateText, correlation: IntegratorCorrelation },
   SessionUnfinished: { correlation: IntegratorCorrelation }
 })
 export type IntegratorState = typeof IntegratorState.Type
+
+/**
+ * Materializes the promotion-eligible value proved by reconstructed Integrator
+ * history. Its Journal position lets promotion validation prove that the Git
+ * qualification occurred before the promotion intent.
+ */
+export const integratorQualifiedCandidateFromState = (
+  state: Extract<IntegratorState, { readonly _tag: "GitQualifiedPrepared" }>
+): IntegratorQualifiedCandidate =>
+  IntegratorQualifiedCandidate.make({
+    candidateCommit: state.candidateCommit,
+    candidateText: state.candidateText,
+    correlation: state.correlation,
+    directParents: state.observation.directParents,
+    qualifiedAt: state.qualifiedAt
+  })
 
 /** Durable intent proving that one exact session/resource was fixed before any opaque call. */
 export const IntegratorSessionFixedEvent = Schema.TaggedStruct("IntegratorSessionFixed", {

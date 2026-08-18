@@ -10,6 +10,7 @@ import {
   describeJournalEvent,
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent,
+  IntegratorJournalEvent,
   IntegrationCandidateAgentReportedEvent,
   IntegrationCandidateConstructedEvent,
   IntegrationCandidateConstructionIntendedEvent,
@@ -770,11 +771,37 @@ const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterInte
   event._tag === "IntegratorResultRecorded" ||
   event._tag === "IntegratorSessionFixed"
 
+type RecordedOuterIntegratorEntry = Extract<RecordedCassetteEntry, { readonly _tag: OuterIntegratorEvent["_tag"] }>
+
+const isRecordedOuterIntegratorEntry = (entry: RecordedCassetteEntry): entry is RecordedOuterIntegratorEntry =>
+  entry._tag === "IntegratorCandidateGitObserved" ||
+  entry._tag === "IntegratorCandidateGitReadIntended" ||
+  entry._tag === "IntegratorResultRecorded" ||
+  entry._tag === "IntegratorSessionFixed"
+
+const recordOuterIntegratorEntry = (event: OuterIntegratorEvent): RecordedOuterIntegratorEntry =>
+  Match.valueTags(event, {
+    IntegratorSessionFixed: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      correlation: value.correlation
+    }),
+    IntegratorResultRecorded: (value): RecordedOuterIntegratorEntry => ({ _tag: value._tag, result: value.result }),
+    IntegratorCandidateGitReadIntended: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      candidateText: value.candidateText,
+      correlation: value.correlation
+    }),
+    IntegratorCandidateGitObserved: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      candidateText: value.candidateText,
+      correlation: value.correlation,
+      observation: value.observation
+    })
+  })
+
 // eslint-disable-next-line complexity -- The closed journal vocabulary has one total projection into recorded cassette entries.
-const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry | undefined => {
-  // The corrected boundary has its own maintained, position-aware cassette.
-  // The legacy v10 inverse cannot safely erase its causal Journal positions.
-  if (isOuterIntegratorEvent(event)) return undefined
+const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
+  if (isOuterIntegratorEvent(event)) return recordOuterIntegratorEntry(event)
   if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
   if (isOperatorDirectionEvent(event)) return recordedOperatorDirectionEntryFor(event)
   if (isAttemptStopEvent(event)) return recordedAttemptStopEntryFor(event)
@@ -824,11 +851,6 @@ export class EmptyJournalCannotBeRecorded extends Schema.TaggedError<EmptyJourna
   {}
 ) {}
 
-export class OuterIntegratorJournalRequiresFocusedCassette extends Schema.TaggedError<OuterIntegratorJournalRequiresFocusedCassette>()(
-  "OuterIntegratorJournalRequiresFocusedCassette",
-  { eventTag: Schema.String }
-) {}
-
 /** A recorded inverse cannot invent a causal journal position for a missing predecessor. */
 export class RecordedCausalPositionMissing extends Schema.TaggedError<RecordedCausalPositionMissing>()(
   "RecordedCausalPositionMissing",
@@ -843,12 +865,7 @@ export const projectRecordedCassette = Effect.fn("ScenarioCassette.projectRecord
   if (runId === undefined) return yield* new EmptyJournalCannotBeRecorded({})
   const history = reduceWorkflowJournalHistory(runId, records)
   if (history._tag === "InvalidWorkflowJournalHistory") return yield* Effect.fail(history)
-  const entries = yield* Effect.forEach(records, ({ event }) => {
-    const entry = recordedEntryFor(event)
-    return entry === undefined
-      ? Effect.fail(new OuterIntegratorJournalRequiresFocusedCassette({ eventTag: event._tag }))
-      : Effect.succeed(entry)
-  })
+  const entries = records.map(({ event }) => recordedEntryFor(event))
   return RecordedCassette.make({ entries, runId, schemaVersion: recordedCassetteVersion })
 })
 
@@ -978,6 +995,9 @@ const eventForTrackerEntry = (entry: RecordedTrackerEntry): WorkflowJournalEvent
   entry._tag === "TaskTrackerFactsObserved"
     ? taskTrackerFactsObservedEvent(entry.originatingActionOperationId, entry.evidence)
     : taskTrackerReadIntent(entry.operation)
+
+const eventForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): WorkflowJournalEvent =>
+  Schema.decodeUnknownSync(IntegratorJournalEvent)({ ...entry, version: workflowJournalEventVersion })
 
 const eventForIntegrationEntry = (
   entry: RecordedIntegrationEntry,
@@ -1452,6 +1472,7 @@ const eventForOtherRecordedEntry = (
   if (entry._tag === "AttemptRestartAuthorityReadFailed") {
     return AttemptRestartAuthorityReadFailedEvent.make({ ...entry, version: workflowJournalEventVersion })
   }
+  if (isRecordedOuterIntegratorEntry(entry)) return eventForOuterIntegratorEntry(entry)
   if (isRecordedIntegrationPreparationEntry(entry)) return eventForIntegrationPreparationEntry(entry, entries, index)
   if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return eventForExecutorEntry(entry)
@@ -1571,6 +1592,21 @@ const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
     ? `Dalph observed ${entry.evidence._tag} through tracker read ${entry.originatingActionOperationId}.`
     : `Dalph coordinator initiated ${entry.operation._tag} for the task tracker.`
 
+const lyricForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): string => {
+  if (entry._tag === "IntegratorSessionFixed") {
+    return `Dalph coordinator fixed Integrator session ${entry.correlation.sessionId} for target head ${entry.correlation.expectedTargetHead}.`
+  }
+  if (entry._tag === "IntegratorResultRecorded") {
+    return entry.result._tag === "PreparedCandidate"
+      ? `The Integrator reported candidate ${entry.result.candidateText} for session ${entry.result.correlation.sessionId}.`
+      : `The Integrator reported NotPrepared for session ${entry.result.correlation.sessionId}: ${entry.result.detail}.`
+  }
+  if (entry._tag === "IntegratorCandidateGitReadIntended") {
+    return `Dalph coordinator intended to ask Git about explicitly reported candidate ${entry.candidateText}.`
+  }
+  return `Git reported ${entry.observation._tag} for explicitly reported candidate ${entry.candidateText}.`
+}
+
 // eslint-disable-next-line complexity -- Every closed candidate occurrence receives one concrete actor-first lyric.
 const lyricForCandidateConstructionEntry = (entry: RecordedCandidateConstructionEntry): string =>
   Match.valueTags(entry, {
@@ -1607,15 +1643,15 @@ const lyricForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry)
 const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): string =>
   Match.valueTags(entry, {
     TargetPromotionIntended: (value) =>
-      `Dalph coordinator fixed exact promotion ${value.correlation.expectedTargetHead} -> ${value.correlation.candidateCommit}.`,
+      `Dalph coordinator fixed exact promotion ${value.correlation.qualifiedCandidate.correlation.expectedTargetHead} -> ${value.correlation.qualifiedCandidate.candidateCommit}.`,
     TargetPromotionAttemptIntended: (value) =>
-      `Dalph coordinator sent exact compare-and-set attempt ${value.attemptOrdinal} for candidate ${value.correlation.candidateCommit}.`,
+      `Dalph coordinator sent exact compare-and-set attempt ${value.attemptOrdinal} for candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`,
     TargetPromotionObservedSuccess: (value) =>
-      `Git established candidate ${value.correlation.candidateCommit} by ${value.observation._tag}.`,
+      `Git established candidate ${value.correlation.qualifiedCandidate.candidateCommit} by ${value.observation._tag}.`,
     TargetPromotionStale: (value) =>
-      `Git preserved a different target head while candidate ${value.correlation.candidateCommit} became stale.`,
+      `Git preserved a different target head while candidate ${value.correlation.qualifiedCandidate.candidateCommit} became stale.`,
     TargetPromotionNonConvergence: (value) =>
-      `Dalph stopped candidate ${value.correlation.candidateCommit} after ${value.attemptOrdinal} ambiguous compare-and-set attempts.`
+      `Dalph stopped candidate ${value.correlation.qualifiedCandidate.candidateCommit} after ${value.attemptOrdinal} ambiguous compare-and-set attempts.`
   })
 
 const lyricForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntry): string =>
@@ -1649,7 +1685,7 @@ const lyricForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntr
     CompletionTaskCandidateAncestryReadIntended: (value) =>
       `Dalph coordinator intended a current Git ancestry read before completion call ${value.attemptOrdinal} for task ${value.request.taskId}.`,
     CompletionTaskCandidateAncestryObserved: (value) =>
-      `Git reported ${value.observation._tag} for promoted candidate ${value.request.promotionCorrelation.candidateCommit}.`,
+      `Git reported ${value.observation._tag} for promoted candidate ${value.request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit}.`,
     CompletionTaskRequestLookupIntended: (value) =>
       `Dalph coordinator intended to look up exact completion request ${value.request.operationId} after call ${value.attemptOrdinal}.`,
     CompletionTaskRequestLookupObserved: (value) =>
@@ -1693,6 +1729,7 @@ const lyricForTaskBoundaryEntry = (
     | RecordedTargetVerificationEntry
     | RecordedTargetPromotionEntry
     | RecordedIntegrationFinalityEntry
+    | RecordedOuterIntegratorEntry
     | { readonly _tag: "PlannedAttemptContinuationAuthorized" }
     | { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
@@ -1734,17 +1771,29 @@ const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): stri
       `The task tracker proved that stopping attempt ${value.subject.plannedAttempt.attemptId} must not release the current claim.`
   })
 
-const lyricForOtherRecordedEntry = (
-  entry: Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>
-): string => {
-  if (isRecordedOperatorDirectionEntry(entry)) return lyricForRecordedOperatorDirectionEntry(entry)
-  if (isRecordedAttemptStopEntry(entry)) return lyricForRecordedAttemptStopEntry(entry)
-  if (isRecordedIntegrationPreparationEntry(entry)) return lyricForIntegrationPreparationEntry(entry)
+type RecordedOtherEntry = Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>
+type RecordedPresentationResidualEntry = Exclude<
+  RecordedOtherEntry,
+  | RecordedAttemptStopEntry
+  | RecordedIntegrationPreparationEntry
+  | RecordedOperatorDirectionEntry
+  | RecordedOuterIntegratorEntry
+>
+
+const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string => {
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)
   if (isRecordedTrackerEntry(entry)) return lyricForTrackerEntry(entry)
   if (isRecordedRunEntry(entry)) return lyricForRunEntry(entry)
   return lyricForTaskBoundaryEntry(entry)
+}
+
+const lyricForOtherRecordedEntry = (entry: RecordedOtherEntry): string => {
+  if (isRecordedOperatorDirectionEntry(entry)) return lyricForRecordedOperatorDirectionEntry(entry)
+  if (isRecordedAttemptStopEntry(entry)) return lyricForRecordedAttemptStopEntry(entry)
+  if (isRecordedOuterIntegratorEntry(entry)) return lyricForOuterIntegratorEntry(entry)
+  if (isRecordedIntegrationPreparationEntry(entry)) return lyricForIntegrationPreparationEntry(entry)
+  return lyricForRecordedPresentationResidual(entry)
 }
 
 const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string =>

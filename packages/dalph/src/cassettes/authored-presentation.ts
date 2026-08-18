@@ -50,6 +50,10 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       ExpectedBehavior: noLandmark,
       GitWorktreeObservationChanged: noLandmark,
       GitPlannedWorktreeCreateResponseLost: noLandmark,
+      IntegratorRequestReceived: noLandmark,
+      IntegratorResultReturned: noLandmark,
+      IntegratorGitObservationReturned: noLandmark,
+      IntegratorGitObservationFailed: noLandmark,
       InitialControlPolicy: noLandmark,
       IntegrationCandidateAgentReported: noLandmark,
       IntegrationCandidateGitValidationFailed: noLandmark,
@@ -459,6 +463,14 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       TaskWorkSpecificationReadReturned: (item) => `The task tracker returns "${item.title}" for task ${item.taskId}.`,
       GitPlannedWorktreeCreateResponseLost: (item) =>
         `Git creates the exact planned worktree, but Dalph loses the response: ${item.detail}`,
+      IntegratorRequestReceived: (item) =>
+        `The outer Integrator receives session ${item.correlation.sessionId} for target ${item.correlation.integrationTarget.ref} at head ${item.correlation.expectedTargetHead}.`,
+      IntegratorResultReturned: (item) =>
+        `The outer Integrator returns ${item.result._tag}${item.result._tag === "NotPrepared" ? `: ${item.result.detail}` : ` ${item.result.candidateText}`}.`,
+      IntegratorGitObservationReturned: (item) =>
+        `Git returns ${item.observation._tag} for reported candidate ${item.candidateText}.`,
+      IntegratorGitObservationFailed: (item) =>
+        `Git cannot observe reported candidate ${item.candidateText}: ${item.detail}`,
       PlannedAttemptExecutorWorkReported: (item) =>
         `The executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`,
       PlannedAttemptExecutorProjectionReturned: (item) =>

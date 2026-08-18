@@ -308,7 +308,10 @@ it("keeps every finality event accepted while excluding unrelated or malformed r
     }),
     CompletionTaskCandidateAncestryObservedEvent.make({
       attemptOrdinal: taskOrdinal,
-      observation: { _tag: "CandidateCurrent", currentHeadSha: fixture.promotionCorrelation.candidateCommit },
+      observation: {
+        _tag: "CandidateCurrent",
+        currentHeadSha: fixture.promotionCorrelation.qualifiedCandidate.candidateCommit
+      },
       operationId: candidateAncestryOperationId,
       request,
       version: workflowJournalEventVersion

@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- The cassette seam keeps the exact boundary script and production protocol together. */
 import { Effect, Match, Ref } from "effect"
 import {
+  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -43,10 +44,11 @@ import {
   FrontierExplanation,
   FixtureTarget,
   InRunJournal,
-  IntegrationCandidateCorrelation,
-  IntegrationCandidateId,
-  IntegrationCandidateResourceLocator,
-  IntegrationSessionId,
+  IntegratorCandidateResourceLocator,
+  IntegratorCandidateText,
+  IntegratorCorrelation,
+  IntegratorQualifiedCandidate,
+  IntegratorSessionId,
   JournalPosition,
   JournalRecord,
   makeTaskAttemptPlanOperation,
@@ -56,14 +58,10 @@ import {
   deriveRunFinalityDecision,
   runCompletionClaimDeletionProtocol,
   runCompletionClaimReplacementProtocol,
-  TargetPromotionCorrelation,
   TargetPromotionAttemptOrdinal,
   TargetPromotionObservedSuccessEvent,
-  TargetPromotionRequestId,
   TargetPromotionSuccessObservation,
-  TargetVerificationCorrelation,
-  TargetVerificationPlanId,
-  TargetVerificationRequestId,
+  targetPromotionCorrelationFor,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   type CompletionTaskBoundaryService,
@@ -89,6 +87,7 @@ type AppendableWorkflowJournalEvent = Exclude<
 const gitShaLength = 40
 const evidenceDigestLength = 64
 const candidateConstructedPosition = 3
+const integratorStartedPosition = 2
 const initialClaimPosition = 1
 const initialAttemptPosition = 2
 const initialPromotionPosition = 3
@@ -105,51 +104,15 @@ const makePreparedFinality = Effect.fn("IntegrationFinalityProtocolCassette.make
     })
     const expectedTargetHead = GitCommitSha.make("1".repeat(gitShaLength))
     const candidateCommit = GitCommitSha.make("3".repeat(gitShaLength))
-    const acceptanceManifest = EvidenceReference.make({
-      byteLength: 1,
-      digest: EvidenceDigest.make("a".repeat(evidenceDigestLength))
-    })
-    const reviewManifest = EvidenceReference.make({
-      byteLength: 1,
-      digest: EvidenceDigest.make("b".repeat(evidenceDigestLength))
-    })
-    const verificationManifest = EvidenceReference.make({
-      byteLength: 1,
-      digest: EvidenceDigest.make("d".repeat(evidenceDigestLength))
-    })
-    const candidateCorrelation = IntegrationCandidateCorrelation.make({
-      acceptanceManifest,
-      acceptedResultCommit: GitCommitSha.make("2".repeat(gitShaLength)),
-      attemptId: AttemptId.make("integration-finality-protocol-attempt"),
-      candidateId: IntegrationCandidateId.make("integration-finality-protocol-candidate"),
-      candidateResource: IntegrationCandidateResourceLocator.make("/candidate/integration-finality-protocol"),
-      expectedTargetHead,
-      integrationSessionId: IntegrationSessionId.make("integration-finality-protocol-session"),
-      integrationTarget,
-      runId
-    })
-    const verificationCorrelation = TargetVerificationCorrelation.make({
-      candidateCommit,
-      candidateCorrelation,
-      candidateConstructedAt: JournalPosition.make(candidateConstructedPosition),
-      planId: TargetVerificationPlanId.make("integration-finality-protocol-plan"),
-      requestId: TargetVerificationRequestId.make("integration-finality-protocol-verification"),
-      reviewManifest
-    })
-    const promotionCorrelation = TargetPromotionCorrelation.make({
-      acceptanceManifest,
-      candidateCommit,
-      candidateConstructedAt: JournalPosition.make(candidateConstructedPosition),
-      candidateCorrelation,
-      expectedTargetHead,
-      integrationTarget,
-      reviewManifest,
-      requestId: TargetPromotionRequestId.make(`target-promotion:${candidateCorrelation.candidateId}`),
-      verificationCorrelation,
-      verificationManifest
+    const acceptedResult = AcceptedResult.make({
+      commit: GitCommitSha.make("2".repeat(gitShaLength)),
+      evidenceManifest: EvidenceReference.make({
+        byteLength: 1,
+        digest: EvidenceDigest.make("a".repeat(evidenceDigestLength))
+      })
     })
     const plannedAttempt = PlannedTaskAttempt.make({
-      attemptId: candidateCorrelation.attemptId,
+      attemptId: AttemptId.make("integration-finality-protocol-attempt"),
       baseSha: expectedTargetHead,
       branch: TaskBranchRef.make("refs/heads/dalph/integration-finality-protocol"),
       executor: TaskExecutorLocator.make("executor:integration-finality-protocol"),
@@ -158,20 +121,32 @@ const makePreparedFinality = Effect.fn("IntegrationFinalityProtocolCassette.make
       taskRevision: TaskRevision.make("integration-finality-protocol-revision"),
       worktree: WorktreeLocator.make("/worktrees/integration-finality-protocol")
     })
+    const integratorCorrelation = IntegratorCorrelation.make({
+      acceptedResult,
+      candidateResource: IntegratorCandidateResourceLocator.make("/candidate/integration-finality-protocol"),
+      expectedTargetHead,
+      integrationTarget,
+      plannedAttempt,
+      queuedAt: JournalPosition.make(1),
+      sessionId: IntegratorSessionId.make("integration-finality-protocol-session"),
+      startedAt: JournalPosition.make(integratorStartedPosition),
+      targetLineageObservedAt: JournalPosition.make(integratorStartedPosition)
+    })
+    const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+      candidateCommit,
+      candidateText: IntegratorCandidateText.make("refs/heads/integration-finality-protocol-candidate"),
+      correlation: integratorCorrelation,
+      directParents: [expectedTargetHead, acceptedResult.commit],
+      qualifiedAt: JournalPosition.make(candidateConstructedPosition)
+    })
+    const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
     const activeClaim = ActiveTaskClaim.make({
       operationId: OperationId.make("integration-finality-protocol-active-claim"),
       owner: ClaimOwner.make("dalph:integration-finality-protocol"),
       taskId,
       token: ClaimToken.make("integration-finality-protocol-token")
     })
-    const claim = CompletionTaskClaim.make({
-      acceptanceManifest,
-      integrationReviewManifest: reviewManifest,
-      originalClaim: activeClaim,
-      plannedAttempt,
-      promotionCorrelation,
-      verificationManifest
-    })
+    const claim = CompletionTaskClaim.make({ originalClaim: activeClaim, plannedAttempt, promotionCorrelation })
     const planOperation = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("integration-finality-protocol-plan-attempt"),
       plannedAttempt,
@@ -233,7 +208,7 @@ const initialRecordsFor = (prepared: PreparedFinality) => {
 const promotedPlanFor = (records: ReadonlyArray<JournalRecord>) => {
   const promotion = records.findLast(({ event }) => event._tag === "TargetPromotionObservedSuccess")?.event
   if (promotion?._tag !== "TargetPromotionObservedSuccess") return undefined
-  const promotedAttempt = promotion.correlation.candidateCorrelation
+  const promotedAttempt = promotion.correlation.qualifiedCandidate.correlation.plannedAttempt
   const planned = records
     .flatMap(({ event }) =>
       event._tag === "TaskAttemptPlanned"
@@ -277,12 +252,9 @@ const preparedFinalityFromPromotedRecords = Effect.fn(
   }
   const target = graph.observation.target
   const claim = CompletionTaskClaim.make({
-    acceptanceManifest: promotion.correlation.acceptanceManifest,
-    integrationReviewManifest: promotion.correlation.reviewManifest,
     originalClaim: activeClaim,
     plannedAttempt,
-    promotionCorrelation: promotion.correlation,
-    verificationManifest: promotion.correlation.verificationManifest
+    promotionCorrelation: promotion.correlation
   })
   return {
     activeClaim,

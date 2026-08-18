@@ -55,6 +55,12 @@ import {
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import {
+  IntegrationCandidateCorrelation,
+  IntegrationCandidateId,
+  IntegrationCandidateResourceLocator,
+  IntegrationSessionId
+} from "../../workflow/protocols/integration-candidate-construction/events.js"
+import {
   CandidateContinuationLimit,
   CandidateCorrectionLimit,
   IntegrationCandidateConstructionState
@@ -71,9 +77,13 @@ import {
   TargetPromotionStaleObservation,
   TargetPromotionAttemptOrdinal
 } from "../../workflow/protocols/target-promotion/events.js"
+import {
+  TargetVerificationCandidate,
+  TargetVerificationPlanId,
+  targetVerificationCorrelationFor
+} from "../../workflow/protocols/target-verification/events.js"
 import { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import {
   CompletionTaskAuthorizationReadOrdinal,
   CompletionTaskAcknowledgedEvent,
@@ -236,7 +246,7 @@ describe("#181 graph and bounded projections", () => {
   it("releases B even while A's exact completion-claim cleanup remains recoverably pending", () => {
     const fixture = integrationFinalityFixture
     const responsibility = StartedIntegrationResponsibility.make({
-      acceptedResult: acceptedResultFixture(fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit),
+      acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
       integrationTarget: fixture.integrationTarget,
       plannedAttempt: fixture.plannedAttempt,
       queuedAt: JournalPosition.make(2),
@@ -277,7 +287,7 @@ describe("#181 graph and bounded projections", () => {
   it("releases B only when a graph reporting A successful is later than A's exact focused success", () => {
     const fixture = integrationFinalityFixture
     const responsibility = StartedIntegrationResponsibility.make({
-      acceptedResult: acceptedResultFixture(fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit),
+      acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
       integrationTarget: fixture.integrationTarget,
       plannedAttempt: fixture.plannedAttempt,
       queuedAt: JournalPosition.make(2),
@@ -523,7 +533,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
   it("retains every durable integration evidence family with its matching standing", () => {
     const fixture = integrationFinalityFixture
     const queued = QueuedIntegrationResponsibility.make({
-      acceptedResult: acceptedResultFixture(fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit),
+      acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
       integrationTarget: fixture.integrationTarget,
       plannedAttempt: fixture.plannedAttempt,
       preIntegrationCancellation: {
@@ -540,7 +550,18 @@ describe("#181 ticket-delivery positive and negative space", () => {
       queuedAt: queued.queuedAt,
       startedAt: JournalPosition.make(3)
     })
-    const candidateCorrelation = fixture.promotionCorrelation.candidateCorrelation
+    const expectedTargetHead = fixture.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead
+    const candidateCorrelation = IntegrationCandidateCorrelation.make({
+      acceptanceManifest: queued.acceptedResult.evidenceManifest,
+      acceptedResultCommit: queued.acceptedResult.commit,
+      attemptId: queued.plannedAttempt.attemptId,
+      candidateId: IntegrationCandidateId.make("projection-legacy-candidate"),
+      candidateResource: IntegrationCandidateResourceLocator.make("resource:projection-legacy-candidate"),
+      expectedTargetHead,
+      integrationSessionId: IntegrationSessionId.make("session:projection-legacy-candidate"),
+      integrationTarget: queued.integrationTarget,
+      runId: queued.plannedAttempt.runId
+    })
     const integratorState = IntegratorState.cases.SessionUnfinished.make({
       correlation: IntegratorCorrelation.make({
         acceptedResult: queued.acceptedResult,
@@ -560,7 +581,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
         candidateCommit: candidateCorrelation.acceptedResultCommit,
         correlation: candidateCorrelation,
         expectedTargetHead: candidateCorrelation.expectedTargetHead,
-        reviewManifest: fixture.verificationCorrelation.reviewManifest
+        reviewManifest: queued.acceptedResult.evidenceManifest
       }),
       IntegrationCandidateConstructionState.cases.CandidateConstructionInProgress.make({
         correlation: candidateCorrelation
@@ -576,16 +597,25 @@ describe("#181 ticket-delivery positive and negative space", () => {
         correlation: candidateCorrelation
       })
     ]
-    const verificationCorrelation = fixture.verificationCorrelation
+    const verificationCandidate = TargetVerificationCandidate.make({
+      candidateCommit: fixture.promotionCorrelation.qualifiedCandidate.candidateCommit,
+      constructedAt: JournalPosition.make(5),
+      correlation: candidateCorrelation,
+      reviewManifest: queued.acceptedResult.evidenceManifest
+    })
+    const verificationCorrelation = targetVerificationCorrelationFor(
+      verificationCandidate,
+      TargetVerificationPlanId.make("projection-legacy-verification")
+    )
     const verificationStates = [
       TargetVerificationState.cases.VerificationPending.make({ correlation: verificationCorrelation }),
       TargetVerificationState.cases.VerificationPassed.make({
         correlation: verificationCorrelation,
-        manifest: fixture.promotionCorrelation.verificationManifest
+        manifest: queued.acceptedResult.evidenceManifest
       }),
       TargetVerificationState.cases.VerificationStopped.make({
         correlation: verificationCorrelation,
-        manifest: fixture.promotionCorrelation.verificationManifest,
+        manifest: queued.acceptedResult.evidenceManifest,
         outcome: "Failed"
       }),
       TargetVerificationState.cases.VerificationContradicted.make({
@@ -607,7 +637,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
         basis: fixture.promotionSuccess.basis,
         correlation: fixture.promotionCorrelation,
         observation: TargetPromotionStaleObservation.cases.CompareAndSetRejected.make({
-          observedHeadSha: fixture.promotionCorrelation.expectedTargetHead
+          observedHeadSha: expectedTargetHead
         })
       }),
       TargetPromotionState.cases.PromotionNonConvergent.make({
@@ -615,7 +645,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
         attemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
         correlation: fixture.promotionCorrelation,
         lastObservation: TargetPromotionNonConvergenceObservation.cases.ExpectedHeadStillObserved.make({
-          observedHeadSha: fixture.promotionCorrelation.expectedTargetHead
+          observedHeadSha: expectedTargetHead
         })
       })
     ]

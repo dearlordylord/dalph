@@ -104,7 +104,10 @@ const chronology = (): ReadonlyArray<JournalRecord> => [
     5,
     CompletionTaskCandidateAncestryObservedEvent.make({
       attemptOrdinal: ordinal,
-      observation: { _tag: "CandidateCurrent", currentHeadSha: request.promotionCorrelation.candidateCommit },
+      observation: {
+        _tag: "CandidateCurrent",
+        currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
+      },
       operationId: gitReadOperationId,
       request,
       version: workflowJournalEventVersion
@@ -175,7 +178,10 @@ const authorizationRecords = (
       positions[3],
       CompletionTaskCandidateAncestryObservedEvent.make({
         attemptOrdinal: currentOrdinal,
-        observation: { _tag: "CandidateCurrent", currentHeadSha: request.promotionCorrelation.candidateCommit },
+        observation: {
+          _tag: "CandidateCurrent",
+          currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
+        },
         operationId: ancestryOperationId,
         request,
         version: workflowJournalEventVersion
@@ -436,7 +442,10 @@ it("rejects stale authorization, unnumbered outcomes, and mismatched acknowledge
     5,
     CompletionTaskCandidateAncestryObservedEvent.make({
       ...ancestry,
-      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: fixture.promotionCorrelation.expectedTargetHead }
+      observation: {
+        _tag: "CandidateNotInAncestry",
+        currentHeadSha: fixture.promotionCorrelation.qualifiedCandidate.correlation.expectedTargetHead
+      }
     })
   )
   expect(invalidCompletionTaskHistory(eventAt(stale, 7), stale, fixture.runId)?.detail).toContain("stale")

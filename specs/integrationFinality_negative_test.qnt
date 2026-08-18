@@ -14,6 +14,42 @@ module integrationFinalityNegativeTest {
     },
   }
 
+  // A legacy verification-shaped reference cannot replace the accepted-result
+  // evidence and empty Integrator-returned collection in a finality claim.
+  action forgeLegacyEvidenceForFinality: bool = all {
+    state.promoted.phase == PromotedProof,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: ReplacementIntentPending,
+        proof: {
+          ...state.promoted.proof,
+          acceptedResultEvidence: 0,
+          integratorReturnedEvidenceRefs: Set(703),
+        },
+        completionClaimDerived: true,
+        completionClaim: {
+          claimId: COMPLETION_CLAIM_A,
+          runId: state.promoted.proof.runId,
+          taskId: state.promoted.proof.taskId,
+          attemptId: state.promoted.proof.attemptId,
+          taskRevision: state.promoted.proof.taskRevision,
+          integratorSession: state.promoted.proof.integratorSession,
+          predecessorClaimId: state.promoted.originalClaimId,
+          candidateCommit: state.promoted.proof.candidateCommit,
+          expectedTargetHead: state.promoted.proof.expectedTargetHead,
+          acceptedResultCommit: state.promoted.proof.acceptedResultCommit,
+          candidateFirstParent: state.promoted.proof.candidateFirstParent,
+          candidateSecondParent: state.promoted.proof.candidateSecondParent,
+          acceptedResultEvidence: 0,
+          integratorReturnedEvidenceRefs: Set(703),
+        },
+        legacyEvidenceForged: true,
+      },
+    },
+  }
+
   // Models a mutation that drops the candidate-commit check from the
   // deriveCompletionClaim guard. The independently stated invariants must
   // reject the resulting derived claim even though the transition fires.
@@ -36,11 +72,15 @@ module integrationFinalityNegativeTest {
           taskId: state.promoted.proof.taskId,
           attemptId: state.promoted.proof.attemptId,
           taskRevision: state.promoted.proof.taskRevision,
+          integratorSession: state.promoted.proof.integratorSession,
           predecessorClaimId: state.promoted.originalClaimId,
-          promotionCorrelation: state.promoted.proof.promotionCorrelation,
-          acceptanceManifest: state.promoted.proof.acceptanceManifest,
-          integrationReviewManifest: state.promoted.proof.integrationReviewManifest,
-          verificationManifest: state.promoted.proof.verificationManifest,
+          candidateCommit: state.promoted.proof.candidateCommit,
+          expectedTargetHead: state.promoted.proof.expectedTargetHead,
+          acceptedResultCommit: state.promoted.proof.acceptedResultCommit,
+          candidateFirstParent: state.promoted.proof.candidateFirstParent,
+          candidateSecondParent: state.promoted.proof.candidateSecondParent,
+          acceptedResultEvidence: state.promoted.proof.acceptedResultEvidence,
+          integratorReturnedEvidenceRefs: state.promoted.proof.integratorReturnedEvidenceRefs,
         },
       },
     },
@@ -263,6 +303,16 @@ module integrationFinalityNegativeTest {
       .then(deriveCompletionClaim)
       .then(forgePromotionProof)
       .expect(not(exactProofAndBinding) and not(completionClaimRequiresExactPromotionProof))
+  }
+
+  run forgedLegacyEvidenceCannotAuthorizeFinalityTest = {
+    init
+      .then(forgeLegacyEvidenceForFinality)
+      .expect(and {
+        not(noLegacyEvidenceAuthorizesFinality),
+        not(completionProofCarriesAcceptedEvidenceAndNoReturnedRefs),
+        not(completionClaimRequiresExactPromotionProof),
+      })
   }
 
   run weakenedDerivationGuardIsDetectedTest = {

@@ -1,44 +1,31 @@
 import { Context, type Effect, Schema } from "effect"
-import {
-  evidenceReferenceEquals,
-  PlannedTaskAttempt,
-  plannedTaskAttemptEquivalence,
-  TaskId,
-  TaskRevision
-} from "@dalph/contracts"
+import { PlannedTaskAttempt, plannedTaskAttemptEquivalence, TaskId, TaskRevision } from "@dalph/contracts"
 import { ActiveTaskClaim, isExactTaskClaim, UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
 import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
 import { TargetPromotionCorrelation, targetPromotionCorrelationEquals } from "../target-promotion/events.js"
-import { EvidenceReference } from "../target-verification/evidence-store.js"
 
-/** A temporary tracker record that binds task completion to one promoted attempt. */
+/** A temporary tracker record that binds task completion to one promoted Integrator candidate. */
 export const CompletionTaskClaim = Schema.TaggedStruct("CompletionTaskClaim", {
-  /** The immutable accepted-result evidence sealed before integration. */
-  acceptanceManifest: EvidenceReference,
-  /** The immutable passing integration-review evidence sealed for the candidate. */
-  integrationReviewManifest: EvidenceReference,
   originalClaim: ActiveTaskClaim,
   plannedAttempt: PlannedTaskAttempt,
-  promotionCorrelation: TargetPromotionCorrelation,
-  /** The exact sealed target-verification evidence carried by promotion. */
-  verificationManifest: EvidenceReference
+  promotionCorrelation: TargetPromotionCorrelation
 }).check(
   Schema.makeFilter((claim) => {
-    const promotionAttempt = claim.promotionCorrelation.candidateCorrelation.attemptId
-    const promotionRun = claim.promotionCorrelation.candidateCorrelation.runId
-    const evidenceMatchesPromotion =
-      evidenceReferenceEquals(claim.acceptanceManifest, claim.promotionCorrelation.acceptanceManifest) &&
-      evidenceReferenceEquals(claim.integrationReviewManifest, claim.promotionCorrelation.reviewManifest) &&
-      evidenceReferenceEquals(claim.verificationManifest, claim.promotionCorrelation.verificationManifest)
+    const promotionAttempt = claim.promotionCorrelation.qualifiedCandidate.correlation.plannedAttempt.attemptId
+    const promotionRun = claim.promotionCorrelation.qualifiedCandidate.correlation.plannedAttempt.runId
+    const promotionAttemptMatches = plannedTaskAttemptEquivalence(
+      claim.promotionCorrelation.qualifiedCandidate.correlation.plannedAttempt,
+      claim.plannedAttempt
+    )
     return claim.originalClaim.taskId === claim.plannedAttempt.taskId &&
       promotionAttempt === claim.plannedAttempt.attemptId &&
       promotionRun === claim.plannedAttempt.runId &&
-      evidenceMatchesPromotion
+      promotionAttemptMatches
       ? undefined
-      : "completion claim must bind its original claim, planned attempt, promotion, and evidence to one task attempt"
+      : "completion claim must bind its original claim, planned attempt, and promotion to one task attempt"
   })
 )
 export type CompletionTaskClaim = typeof CompletionTaskClaim.Type
@@ -46,12 +33,9 @@ export type CompletionTaskClaim = typeof CompletionTaskClaim.Type
 /** Compares every field of one exact temporary completion claim. */
 export const completionTaskClaimEquals = (left: CompletionTaskClaim, right: CompletionTaskClaim): boolean =>
   [
-    evidenceReferenceEquals(left.acceptanceManifest, right.acceptanceManifest),
-    evidenceReferenceEquals(left.integrationReviewManifest, right.integrationReviewManifest),
     isExactTaskClaim(left.originalClaim, right.originalClaim),
     plannedTaskAttemptEquivalence(left.plannedAttempt, right.plannedAttempt),
-    targetPromotionCorrelationEquals(left.promotionCorrelation, right.promotionCorrelation),
-    evidenceReferenceEquals(left.verificationManifest, right.verificationManifest)
+    targetPromotionCorrelationEquals(left.promotionCorrelation, right.promotionCorrelation)
   ].every(Boolean)
 
 /** The exact provider-neutral replacement request, including the operation identity. */

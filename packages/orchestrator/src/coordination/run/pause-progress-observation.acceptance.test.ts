@@ -84,22 +84,14 @@ import {
   deterministicPlannedTaskAttemptLayer
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
-import {
-  IntegrationCandidateCorrelation,
-  IntegrationCandidateId,
-  IntegrationCandidateResourceLocator,
-  IntegrationSessionId
-} from "../../workflow/protocols/integration-candidate-construction/events.js"
-import {
-  TargetPromotionCorrelation,
-  TargetPromotionRequestId
-} from "../../workflow/protocols/target-promotion/events.js"
+import { targetPromotionCorrelationFor } from "../../workflow/protocols/target-promotion/events.js"
 import { TargetPromotionPendingRetry, TargetPromotionState } from "../../workflow/protocols/target-promotion/state.js"
 import {
-  TargetVerificationCorrelation,
-  TargetVerificationPlanId,
-  TargetVerificationRequestId
-} from "../../workflow/protocols/target-verification/events.js"
+  IntegratorCandidateResourceLocator,
+  IntegratorCandidateText,
+  IntegratorQualifiedCandidate,
+  IntegratorSessionId
+} from "../../workflow/protocols/integrator/events.js"
 import {
   taskTrackerReadIntent,
   TaskAttemptPlannedEvent,
@@ -684,39 +676,25 @@ it.effect("updates Alice's public task Pause view as accepted executor and Git f
         queuedAt: JournalPosition.make(40),
         startedAt: JournalPosition.make(41)
       })
-      const candidateId = IntegrationCandidateId.make("pause-public-D-candidate")
       const candidateCommit = GitCommitSha.make("4".repeat(40))
-      const candidateCorrelation = IntegrationCandidateCorrelation.make({
-        acceptanceManifest: integration.acceptedResult.evidenceManifest,
-        acceptedResultCommit: integration.acceptedResult.commit,
-        attemptId: dAttempt.attemptId,
-        candidateId,
-        candidateResource: IntegrationCandidateResourceLocator.make("/pause-public/candidate-D"),
-        expectedTargetHead: dAttempt.baseSha,
-        integrationSessionId: IntegrationSessionId.make("pause-public-D-session"),
-        integrationTarget: integration.integrationTarget,
-        runId
-      })
-      const verificationCorrelation = TargetVerificationCorrelation.make({
+      const qualifiedCandidate = IntegratorQualifiedCandidate.make({
         candidateCommit,
-        candidateConstructedAt: JournalPosition.make(42),
-        candidateCorrelation,
-        planId: TargetVerificationPlanId.make("pause-public-D-plan"),
-        requestId: TargetVerificationRequestId.make("pause-public-D-verification"),
-        reviewManifest: integration.acceptedResult.evidenceManifest
+        candidateText: IntegratorCandidateText.make("refs/candidates/pause-public-D"),
+        correlation: {
+          acceptedResult: integration.acceptedResult,
+          candidateResource: IntegratorCandidateResourceLocator.make("resource:pause-public-D"),
+          expectedTargetHead: dAttempt.baseSha,
+          integrationTarget: integration.integrationTarget,
+          plannedAttempt: dAttempt,
+          queuedAt: integration.queuedAt,
+          sessionId: IntegratorSessionId.make("session:pause-public-D"),
+          startedAt: integration.startedAt,
+          targetLineageObservedAt: JournalPosition.make(39)
+        },
+        directParents: [dAttempt.baseSha, integration.acceptedResult.commit],
+        qualifiedAt: JournalPosition.make(42)
       })
-      const promotionRequest = TargetPromotionCorrelation.make({
-        acceptanceManifest: integration.acceptedResult.evidenceManifest,
-        candidateCommit,
-        candidateConstructedAt: verificationCorrelation.candidateConstructedAt,
-        candidateCorrelation,
-        expectedTargetHead: dAttempt.baseSha,
-        integrationTarget: integration.integrationTarget,
-        requestId: TargetPromotionRequestId.make(`target-promotion:${candidateId}`),
-        reviewManifest: integration.acceptedResult.evidenceManifest,
-        verificationCorrelation,
-        verificationManifest: integration.acceptedResult.evidenceManifest
-      })
+      const promotionRequest = targetPromotionCorrelationFor(qualifiedCandidate)
       const promotion = TargetPromotionState.cases.PromotionPending.make({
         correlation: promotionRequest,
         retry: TargetPromotionPendingRetry.cases.NeedInitialReconciliationRead.make({})

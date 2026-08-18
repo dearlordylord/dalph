@@ -1,19 +1,28 @@
 import { Deferred, Effect, Match, Ref } from "effect"
 import {
+  AcceptedResult,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
-  RunId
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
 } from "@dalph/contracts"
 import {
   EvidenceDigest,
   EvidenceReference,
   InRunJournal,
-  IntegrationCandidateId,
-  IntegrationCandidateResourceLocator,
-  IntegrationSessionId,
+  IntegratorCandidateResourceLocator,
+  IntegratorCandidateText,
+  IntegratorCorrelation,
+  IntegratorQualifiedCandidate,
+  IntegratorSessionId,
   JournalPosition,
   JournalRecord,
   makeIntegrationTargetResourceController,
@@ -22,10 +31,6 @@ import {
   TargetPromotionGit,
   TargetPromotionGitReadFailure,
   TargetPromotionGitReadObservation,
-  TargetVerificationCandidate,
-  TargetVerificationPlanId,
-  TargetVerificationState,
-  targetVerificationCorrelationFor,
   type IntegrationTargetResourceController,
   type TargetPromotionGitService
 } from "@dalph/orchestrator"
@@ -47,6 +52,7 @@ export * from "./target-promotion-protocol-cassette-domain.js"
 const gitCommitShaLength = 40
 const evidenceDigestLength = 64
 const candidateConstructedPositionOffset = 2
+const targetLineagePositionOffset = 1
 const expectedHead = GitCommitSha.make("1".repeat(gitCommitShaLength))
 const candidateCommit = GitCommitSha.make("c".repeat(gitCommitShaLength))
 
@@ -60,41 +66,41 @@ const preparedPromotion = (participant: PromotionParticipant) => {
   const { owner, queuedAt } = participant
   const runId = RunId.make(`target-promotion-protocol-cassette-${owner}`)
   const target = targetFor(owner)
-  const candidate = TargetVerificationCandidate.make({
-    candidateCommit,
-    constructedAt: JournalPosition.make(queuedAt + candidateConstructedPositionOffset),
-    correlation: {
-      acceptanceManifest: EvidenceReference.make({
-        byteLength: 1,
-        digest: EvidenceDigest.make("a".repeat(evidenceDigestLength))
-      }),
-      acceptedResultCommit: GitCommitSha.make("a".repeat(gitCommitShaLength)),
-      attemptId: AttemptId.make(`target-promotion-protocol-${owner}`),
-      candidateId: IntegrationCandidateId.make(`target-promotion-protocol-candidate-${owner}`),
-      candidateResource: IntegrationCandidateResourceLocator.make(`/candidates/${owner}`),
-      expectedTargetHead: expectedHead,
-      integrationSessionId: IntegrationSessionId.make(`target-promotion-protocol-session-${owner}`),
-      integrationTarget: target,
-      runId
-    },
-    reviewManifest: EvidenceReference.make({
+  const acceptedResult = AcceptedResult.make({
+    commit: GitCommitSha.make("a".repeat(gitCommitShaLength)),
+    evidenceManifest: EvidenceReference.make({
       byteLength: 1,
-      digest: EvidenceDigest.make("b".repeat(evidenceDigestLength))
+      digest: EvidenceDigest.make("a".repeat(evidenceDigestLength))
     })
   })
-  const correlation = targetVerificationCorrelationFor(
-    candidate,
-    TargetVerificationPlanId.make(`target-promotion-protocol-plan-${owner}`)
-  )
-  return {
-    candidate,
-    responsibility: { integrationTarget: target, queuedAt },
+  const plannedAttempt = PlannedTaskAttempt.make({
+    attemptId: AttemptId.make(`target-promotion-protocol-${owner}`),
+    baseSha: expectedHead,
+    branch: TaskBranchRef.make(`refs/heads/dalph/target-promotion-protocol-${owner.toLowerCase()}`),
+    executor: TaskExecutorLocator.make(`executor:target-promotion-protocol-${owner}`),
     runId,
-    verification: TargetVerificationState.cases.VerificationPassed.make({
-      correlation,
-      manifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("d".repeat(evidenceDigestLength)) })
-    })
-  }
+    taskId: TaskId.make(`target-promotion-protocol-task-${owner}`),
+    taskRevision: TaskRevision.make(`target-promotion-protocol-revision-${owner}`),
+    worktree: WorktreeLocator.make(`/worktrees/target-promotion-protocol-${owner.toLowerCase()}`)
+  })
+  const candidate = IntegratorQualifiedCandidate.make({
+    candidateCommit,
+    candidateText: IntegratorCandidateText.make(`refs/heads/target-promotion-protocol-${owner.toLowerCase()}`),
+    correlation: IntegratorCorrelation.make({
+      acceptedResult,
+      candidateResource: IntegratorCandidateResourceLocator.make(`/candidates/${owner}`),
+      expectedTargetHead: expectedHead,
+      integrationTarget: target,
+      plannedAttempt,
+      queuedAt,
+      sessionId: IntegratorSessionId.make(`target-promotion-protocol-session-${owner}`),
+      startedAt: JournalPosition.make(queuedAt + targetLineagePositionOffset),
+      targetLineageObservedAt: JournalPosition.make(queuedAt + targetLineagePositionOffset)
+    }),
+    directParents: [expectedHead, acceptedResult.commit],
+    qualifiedAt: JournalPosition.make(queuedAt + candidateConstructedPositionOffset)
+  })
+  return { candidate, responsibility: { integrationTarget: target, queuedAt }, runId }
 }
 
 interface ExactTargetResponsibility {
@@ -232,7 +238,7 @@ const startPromotion = Effect.fn("TargetPromotionProtocolCassette.startPromotion
   runtime: ParticipantRuntime,
   calls: Ref.Ref<ReadonlyArray<BoundaryCall>>
 ) {
-  const action = runTargetPromotion(runtime.prepared.candidate, runtime.prepared.verification).pipe(
+  const action = runTargetPromotion(runtime.prepared.candidate).pipe(
     Effect.provideService(InRunJournal, runtime.journal.service),
     Effect.provideService(TargetPromotionGit, TargetPromotionGit.of(gitServiceFor(runtime, calls))),
     Effect.as(null),

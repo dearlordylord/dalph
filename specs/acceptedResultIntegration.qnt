@@ -87,6 +87,10 @@ module acceptedResultIntegration {
     plannedTargetHead: int,
     expectedTargetHead: int,
     acceptedResultCommit: int,
+    // The accepted executor result carries one immutable evidence reference.
+    // The corrected outer Integrator result carries no additional evidence.
+    acceptedResultEvidence: int,
+    integratorReturnedEvidenceRefs: Set[int],
     lineageCompatible: bool,
     sessionFixed: bool,
     integratorInvocationCount: int,
@@ -535,6 +539,20 @@ module acceptedResultIntegration {
       }
     })
 
+  // The corrected Integrator boundary returns only its durable result. The
+  // accepted-result evidence remains the sole evidence reference in scope.
+  val integratorResultCarriesOnlyAcceptedEvidence: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      and {
+        result.integratorReturnedEvidenceRefs == Set(),
+        not(result.integratorResultRecorded) or and {
+          result.acceptedEvidencePreserved,
+          result.acceptedResultEvidence != 0,
+        },
+      }
+    })
+
   val conclusiveNotPreparedHasNoCandidate: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
@@ -581,6 +599,8 @@ module acceptedResultIntegration {
         result.candidateGitObservation == CandidateExactParents,
         result.observedFirstParent == result.expectedTargetHead,
         result.observedSecondParent == result.acceptedResultCommit,
+        result.integratorResultRecorded,
+        result.candidateReported,
         result.candidateQualificationProven,
       }
     })
@@ -601,7 +621,12 @@ module acceptedResultIntegration {
       not(result.promotionAuthorized) or and {
         result.candidateQualificationProven,
         result.integratorOutcome == PreparedCandidate,
+        result.integratorResultRecorded,
+        result.candidateReported,
         result.submittedCandidate != 0,
+        result.acceptedEvidencePreserved,
+        result.acceptedResultEvidence != 0,
+        result.integratorReturnedEvidenceRefs == Set(),
         result.resourceHeadCandidate == 0,
         not(result.processSuccessObserved),
         not(result.legacyVerificationEvidence),
@@ -690,6 +715,8 @@ module acceptedResultIntegration {
         result.observedSecondParent == result.acceptedResultCommit,
         result.candidateQualificationProven,
         result.integratorOutcome == PreparedCandidate,
+        result.integratorResultRecorded,
+        result.candidateReported,
       }
     })
 
@@ -701,6 +728,8 @@ module acceptedResultIntegration {
         result.promotionExpectedHeadVerified,
         result.phase != PromotionInFlight or result.promotionTargetFactsCurrent,
         result.submittedCandidate != 0,
+        result.integratorResultRecorded,
+        result.candidateReported,
         result.observedFirstParent == result.expectedTargetHead,
         result.observedSecondParent == result.acceptedResultCommit,
         not(result.promotionForceRequested),
@@ -715,6 +744,8 @@ module acceptedResultIntegration {
         result.promotionResultRecorded,
         result.promotionCandidateAncestryProven,
         result.candidateQualificationProven,
+        result.integratorResultRecorded,
+        result.candidateReported,
         Set(PromotionCandidateCurrent, PromotionCandidateAncestor).contains(result.promotionGitObservation),
         result.promotionObservedTargetHead == result.submittedCandidate
           or result.promotionGitObservation == PromotionCandidateAncestor,
@@ -821,6 +852,8 @@ module acceptedResultIntegration {
         plannedTargetHead: id + 10,
         expectedTargetHead: 0,
         acceptedResultCommit: id + 20,
+        acceptedResultEvidence: id + 30,
+        integratorReturnedEvidenceRefs: Set(),
         lineageCompatible: true,
         sessionFixed: false,
         integratorInvocationCount: 0,
@@ -1048,6 +1081,7 @@ module acceptedResultIntegration {
       result.targetHeld,
       result.sessionFixed,
       result.integratorInvocationCount <= 1,
+      result.integratorResumeCount < RECONCILIATION_LIMIT,
       not(state.targetReacquisitionRequired),
       state' = {
         ...state,
@@ -1812,6 +1846,7 @@ module acceptedResultIntegration {
   action fixIntegratorSessionTwo: bool = fixIntegratorSession(2)
   action invokeIntegratorOne: bool = invokeIntegrator(1)
   action loseIntegratorResponseOne: bool = loseIntegratorResponse(1)
+  action reacquireIntegrationTargetOne: bool = reacquireIntegrationTarget(1)
   action resumeIntegratorOne: bool = resumeIntegrator(1)
   action reportIntegratorNotPreparedOne: bool = reportIntegratorNotPrepared(1)
   action reportIntegratorCandidateOne31: bool = reportIntegratorCandidate(1, 31)
@@ -1862,6 +1897,7 @@ module acceptedResultIntegration {
     fixIntegratorSessionTwo,
     invokeIntegratorOne,
     loseIntegratorResponseOne,
+    reacquireIntegrationTargetOne,
     resumeIntegratorOne,
     reportIntegratorNotPreparedOne,
     reportIntegratorCandidateOne31,

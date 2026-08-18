@@ -63,7 +63,6 @@ import { integrationFinalityFixture } from "../../workflow/protocols/integration
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import { TargetPromotionState } from "../../workflow/protocols/target-promotion/state.js"
 import { journaledIntegrationEvidenceOf } from "./delivery-evidence.js"
-import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import {
   CompletionTaskIntendedEvent,
   IntegrationFinalitySettledEvent
@@ -175,7 +174,7 @@ const exactAttemptEvidence = (taskId: TaskId) => ({
 const releaseChronologyEvidence = (focusedSuccessAt: number, settled = false) => {
   const fixture = integrationFinalityFixture
   const responsibility = StartedIntegrationResponsibility.make({
-    acceptedResult: acceptedResultFixture(fixture.promotionCorrelation.candidateCorrelation.acceptedResultCommit),
+    acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.correlation.acceptedResult,
     integrationTarget: fixture.integrationTarget,
     plannedAttempt: fixture.plannedAttempt,
     queuedAt: JournalPosition.make(2),

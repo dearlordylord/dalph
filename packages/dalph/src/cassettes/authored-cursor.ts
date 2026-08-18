@@ -1,7 +1,9 @@
 /* eslint-disable max-lines -- One cursor atomically owns every authored story interaction and optional boundary probe. */
 import { Deferred, Effect, Option, Ref, Schema, Stream, SubscriptionRef } from "effect"
 import type { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
+import { IntegratorCorrelation, type IntegratorCandidateText } from "@dalph/orchestrator"
 import {
+  type AuthoredCassetteDecision as CassetteDecision,
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
   AuthoredTrackerGraphReadResult
@@ -26,6 +28,11 @@ export class AuthoredIntegrationCandidateGitValidationFailure extends Schema.Tag
   { detail: Schema.String, storyPosition: Schema.Int }
 ) {}
 
+export class AuthoredIntegratorGitObservationFailure extends Schema.TaggedError<AuthoredIntegratorGitObservationFailure>()(
+  "AuthoredIntegratorGitObservationFailure",
+  { detail: Schema.String, storyPosition: Schema.Int }
+) {}
+
 export class AuthoredTargetPromotionCompareAndSetFailure extends Schema.TaggedError<AuthoredTargetPromotionCompareAndSetFailure>()(
   "AuthoredTargetPromotionCompareAndSetFailure",
   { detail: Schema.String, storyPosition: Schema.Int }
@@ -47,6 +54,11 @@ export class AuthoredCoordinatorProcessDies extends Schema.TaggedError<AuthoredC
 ) {}
 
 type CursorFailure = AuthoredCassetteInteractionMismatch
+type OuterIntegratorGitStoryItem =
+  | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationFailed.Type
+  | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned.Type
+type AuthoredExecutorRequest = "StartOrContinue" | "Suspend"
+type ActiveExecutorReportRequest = { readonly attemptId: AttemptId; readonly request: AuthoredExecutorRequest }
 type GitRequestCorrelation = { readonly candidateCommit: GitCommitSha; readonly repository: GitRepositoryLocator }
 type CandidateGitStoryItem =
   | typeof AuthoredCassetteStoryItem.cases.IntegrationCandidateGitValidationFailed.Type
@@ -87,17 +99,95 @@ const promotionGitStoryItemMatches = (
   return candidate !== null && gitRequestMatches(candidate, repository, candidateCommit)
 }
 
+const integratorCorrelationEquivalence = Schema.toEquivalence(IntegratorCorrelation)
+/** SubscriptionRef.changes replays the current position before later updates, so a completed advance cannot be lost between an ownership signal and this wait. */
 const awaitsLaterStoryItem = (position: SubscriptionRef.SubscriptionRef<number>, index: number) =>
   SubscriptionRef.changes(position).pipe(
-    Stream.filter((next) => next > index),
-    Stream.take(1),
-    Stream.runDrain
+    Stream.filter((current) => current > index),
+    Stream.runHead,
+    Effect.asVoid
   )
+
+// A reverse-arriving operation gets a deterministic scheduler window to register
+// its exact ownership. A malformed story without that owner fails closed after
+// the window instead of retaining a permanently pending cursor fiber.
+const authoredOwnershipRegistrationTurns = 8
 
 const terminalStoryExpectation = (item: StoryItem | undefined): string | null => {
   if (item === undefined) return "EndOfStory"
   return item._tag === "ExpectedBehavior" ? item._tag : null
 }
+
+const executorReportRequestMatches = (
+  active: ActiveExecutorReportRequest,
+  item: AuthoredPlannedAttemptExecutorOutcomeItem
+): boolean => active.request === item.request && active.attemptId === item.report.attemptId
+
+const authoredExecutorReportMatches = (
+  item: StoryItem | undefined,
+  request: AuthoredExecutorRequest,
+  attemptId: AttemptId
+): item is AuthoredPlannedAttemptExecutorOutcomeItem =>
+  isAuthoredPlannedAttemptExecutorOutcomeItem(item) && item.request === request && item.report.attemptId === attemptId
+
+const executorReportImmediatelyBefore = (
+  item: StoryItem | undefined,
+  next: StoryItem | undefined,
+  request: AuthoredExecutorRequest,
+  attemptId: AttemptId
+): AuthoredPlannedAttemptExecutorOutcomeItem | null =>
+  isAuthoredPlannedAttemptExecutorOutcomeItem(item) && authoredExecutorReportMatches(next, request, attemptId)
+    ? item
+    : null
+
+const authoredDalphSelectionMatches = (
+  item: StoryItem | undefined,
+  operation: CassetteDecision
+): item is typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type =>
+  item?._tag === "DalphSelects" && JSON.stringify(item.operation) === JSON.stringify(operation)
+
+const cassetteDecisionMatches = (left: CassetteDecision, right: CassetteDecision): boolean =>
+  JSON.stringify(left) === JSON.stringify(right)
+
+const isIntegratorRecoverySelection = (operation: CassetteDecision): boolean =>
+  operation._tag === "ReadTrackerGraph" || operation._tag === "ReadTaskClaim" || operation._tag === "ReadTargetLineage"
+
+const integratorGitStoryItemMatches = (item: StoryItem | undefined, candidateText: IntegratorCandidateText): boolean =>
+  (item?._tag === "IntegratorGitObservationReturned" || item?._tag === "IntegratorGitObservationFailed") &&
+  item.candidateText === candidateText
+
+type SelectionPredecessor =
+  | { readonly _tag: "ExecutorReport"; readonly item: AuthoredPlannedAttemptExecutorOutcomeItem }
+  | { readonly _tag: "IntegratorGit"; readonly candidateText: IntegratorCandidateText }
+  | { readonly _tag: "Selection"; readonly operation: CassetteDecision }
+
+const integratorGitSelectionPredecessor = (item: StoryItem | undefined): SelectionPredecessor | null =>
+  item?._tag === "IntegratorGitObservationReturned" || item?._tag === "IntegratorGitObservationFailed"
+    ? { _tag: "IntegratorGit", candidateText: item.candidateText }
+    : null
+
+const selectionPredecessorFor = (
+  item: StoryItem | undefined,
+  next: StoryItem | undefined,
+  requested: CassetteDecision
+): SelectionPredecessor | null => {
+  if (!authoredDalphSelectionMatches(next, requested)) return null
+  if (isAuthoredPlannedAttemptExecutorOutcomeItem(item)) return { _tag: "ExecutorReport", item }
+  const integratorGit = integratorGitSelectionPredecessor(item)
+  if (integratorGit !== null) return integratorGit
+  if (item?._tag === "DalphSelects") return { _tag: "Selection", operation: item.operation }
+  return null
+}
+
+const selectionCanWaitAfterClaim = (
+  item: StoryItem | undefined,
+  activeRequests: ReadonlyArray<ActiveExecutorReportRequest>,
+  activeIntegratorGitObservations: ReadonlyArray<IntegratorCandidateText>
+): boolean =>
+  item?._tag === "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary" ||
+  (isAuthoredPlannedAttemptExecutorOutcomeItem(item) &&
+    activeRequests.some((active) => executorReportRequestMatches(active, item))) ||
+  activeIntegratorGitObservations.some((candidateText) => integratorGitStoryItemMatches(item, candidateText))
 
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
@@ -192,7 +282,26 @@ export interface StoryCursor {
   >
   readonly consumeAttemptChoice: Effect.Effect<Option.Option<AttemptChoiceItem>>
   readonly consumeDalphSelection: Effect.Effect<typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type, CursorFailure>
+  /** Concurrent operations wait for their exact authored selection instead of consuming a sibling selection. */
+  readonly consumeDalphSelectionFor: (
+    operation: CassetteDecision
+  ) => Effect.Effect<typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type, CursorFailure>
   readonly consumeExecutorReport: Effect.Effect<AuthoredPlannedAttemptExecutorOutcomeItem, CursorFailure>
+  /** Concurrent executor requests wait for the exact authored attempt and command response. */
+  readonly consumeExecutorReportFor: (
+    request: "StartOrContinue" | "Suspend",
+    attemptId: AttemptId
+  ) => Effect.Effect<AuthoredPlannedAttemptExecutorOutcomeItem, CursorFailure>
+  /** Marks the exact executor command in flight before crash and response boundaries are inspected. */
+  readonly beginExecutorReportRequest: (
+    request: "StartOrContinue" | "Suspend",
+    attemptId: AttemptId
+  ) => Effect.Effect<void>
+  /** Releases one exact in-flight executor command marker after its controlled boundary settles. */
+  readonly endExecutorReportRequest: (
+    request: "StartOrContinue" | "Suspend",
+    attemptId: AttemptId
+  ) => Effect.Effect<void>
   readonly consumeExecutorProjection: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type>
   >
@@ -207,6 +316,22 @@ export interface StoryCursor {
   readonly consumeInitialPolicy: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.InitialControlPolicy.Type,
     CursorFailure
+  >
+  /** The authored outer Integrator request must equal the exact production correlation. */
+  readonly consumeIntegratorRequest: (
+    correlation: IntegratorCorrelation
+  ) => Effect.Effect<typeof AuthoredCassetteStoryItem.cases.IntegratorRequestReceived.Type, CursorFailure>
+  /** The authored outer Integrator returns only PreparedCandidate or NotPrepared. */
+  readonly consumeIntegratorResult: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.IntegratorResultReturned.Type,
+    CursorFailure
+  >
+  /** Git returns or fails while observing the exact candidate text reported by the Integrator. */
+  readonly consumeIntegratorGitObservation: (
+    candidateText: IntegratorCandidateText
+  ) => Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned.Type,
+    CursorFailure | AuthoredIntegratorGitObservationFailure
   >
   readonly consumeIntegrationCandidateAgentReport: (
     attemptId: AttemptId
@@ -322,6 +447,9 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
   )
   const terminalAssertionsReached = yield* Deferred.make<void>()
   const activeCandidateAgentRequests = yield* Ref.make<ReadonlySet<AttemptId>>(new Set())
+  const activeDalphSelections = yield* SubscriptionRef.make<ReadonlyArray<CassetteDecision>>([])
+  const activeExecutorReportRequests = yield* SubscriptionRef.make<ReadonlyArray<ActiveExecutorReportRequest>>([])
+  const activeIntegratorGitObservations = yield* SubscriptionRef.make<ReadonlyArray<IntegratorCandidateText>>([])
   const activeCandidateGitRequests = yield* Ref.make<
     ReadonlyArray<{ readonly candidateCommit: GitCommitSha; readonly repository: GitRepositoryLocator }>
   >([])
@@ -418,6 +546,107 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
   const consumeDalphSelection = consume("DalphSelects").pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.DalphSelects)(item).pipe(Effect.orDie)
+    )
+  )
+  const awaitOwnershipOrAdvance = Effect.fn("AuthoredCassette.awaitOwnershipOrAdvance")(function* (
+    ownership: Stream.Stream<unknown>,
+    index: number,
+    isOwned: Effect.Effect<boolean>
+  ): Effect.fn.Return<"Owned" | "Advanced" | "Unowned"> {
+    const signal = yield* Effect.raceFirst(
+      Stream.merge(
+        ownership.pipe(Stream.map(() => "Owned" as const)),
+        SubscriptionRef.changes(position).pipe(
+          Stream.filter((current) => current > index),
+          Stream.map(() => "Advanced" as const)
+        )
+      ).pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
+      Effect.forEach(Array.from({ length: authoredOwnershipRegistrationTurns }), () => Effect.yieldNow, {
+        discard: true
+      }).pipe(Effect.as("RegistrationClosed" as const))
+    )
+    if (signal !== "RegistrationClosed") return signal
+    if ((yield* SubscriptionRef.get(position)) > index) return "Advanced"
+    return (yield* isOwned) ? "Owned" : "Unowned"
+  })
+  const awaitOwnedIntegratorGitBeforeSelection = Effect.fn("AuthoredCassette.awaitOwnedIntegratorGitBeforeSelection")(
+    function* (candidateText: IntegratorCandidateText, index: number) {
+      const ownership = SubscriptionRef.changes(activeIntegratorGitObservations).pipe(
+        Stream.filter((active) => active.includes(candidateText))
+      )
+      const isOwned = SubscriptionRef.get(activeIntegratorGitObservations).pipe(
+        Effect.map((active) => active.includes(candidateText))
+      )
+      const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+      if (ownershipOrAdvance === "Unowned") return false
+      if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
+      return true
+    }
+  )
+  const awaitOwnedStoryItemImmediatelyBeforeSelection = Effect.fn(
+    "AuthoredCassette.awaitOwnedStoryItemImmediatelyBeforeSelection"
+  )(function* (item: StoryItem | undefined, index: number, operation: CassetteDecision) {
+    const predecessor = selectionPredecessorFor(item, story[index + 1], operation)
+    if (predecessor === null) return false
+    if (predecessor._tag === "IntegratorGit") {
+      return yield* awaitOwnedIntegratorGitBeforeSelection(predecessor.candidateText, index)
+    }
+    const ownership =
+      predecessor._tag === "ExecutorReport"
+        ? SubscriptionRef.changes(activeExecutorReportRequests).pipe(
+            Stream.filter((active) => active.some((request) => executorReportRequestMatches(request, predecessor.item)))
+          )
+        : SubscriptionRef.changes(activeDalphSelections).pipe(
+            Stream.filter((active) =>
+              active.some((selection) => cassetteDecisionMatches(selection, predecessor.operation))
+            )
+          )
+    const isOwned =
+      predecessor._tag === "ExecutorReport"
+        ? SubscriptionRef.get(activeExecutorReportRequests).pipe(
+            Effect.map((active) => active.some((request) => executorReportRequestMatches(request, predecessor.item)))
+          )
+        : SubscriptionRef.get(activeDalphSelections).pipe(
+            Effect.map((active) =>
+              active.some((selection) => cassetteDecisionMatches(selection, predecessor.operation))
+            )
+          )
+    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    if (ownershipOrAdvance === "Unowned") return false
+    if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
+    return true
+  })
+  const consumeDalphSelectionForLoop: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
+    "AuthoredCassette.consumeDalphSelectionForLoop"
+  )(function* (operation) {
+    const claimed = yield* claimNext((item) => authoredDalphSelectionMatches(item, operation))
+    if (claimed._tag === "Claimed") return claimed.item
+    const activeRequests = yield* SubscriptionRef.get(activeExecutorReportRequests)
+    const activeIntegratorRequests = yield* SubscriptionRef.get(activeIntegratorGitObservations)
+    if (selectionCanWaitAfterClaim(claimed.item, activeRequests, activeIntegratorRequests)) {
+      yield* awaitsLaterStoryItem(position, claimed.index)
+      return yield* consumeDalphSelectionForLoop(operation)
+    }
+    if (yield* awaitOwnedStoryItemImmediatelyBeforeSelection(claimed.item, claimed.index, operation)) {
+      return yield* consumeDalphSelectionForLoop(operation)
+    }
+    return yield* new AuthoredCassetteInteractionMismatch({
+      actual: JSON.stringify(operation),
+      expected: claimed.item?._tag === "ExpectedBehavior" ? claimed.item._tag : (claimed.item?._tag ?? "EndOfStory"),
+      storyPosition: claimed.index
+    })
+  })
+  const consumeDalphSelectionFor: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
+    "AuthoredCassette.consumeDalphSelectionFor"
+  )((operation) =>
+    Effect.acquireUseRelease(
+      SubscriptionRef.update(activeDalphSelections, (current) => [...current, operation]),
+      () => consumeDalphSelectionForLoop(operation),
+      () =>
+        SubscriptionRef.update(activeDalphSelections, (current) => {
+          const index = current.findIndex((selection) => cassetteDecisionMatches(selection, operation))
+          return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)]
+        })
     )
   )
   const consumeCoordinatorActivationReturned = consume("CoordinatorActivationReturned").pipe(
@@ -568,6 +797,66 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     }
     return yield* Schema.decodeUnknownEffect(AuthoredPlannedAttemptExecutorOutcomeItem)(claimed.item).pipe(Effect.orDie)
   })
+  const awaitOwnedExecutorReport = Effect.fn("AuthoredCassette.awaitOwnedExecutorReport")(function* (
+    currentReport: AuthoredPlannedAttemptExecutorOutcomeItem,
+    index: number
+  ) {
+    const ownership = SubscriptionRef.changes(activeExecutorReportRequests).pipe(
+      Stream.filter((active) => active.some((candidate) => executorReportRequestMatches(candidate, currentReport)))
+    )
+    const isOwned = SubscriptionRef.get(activeExecutorReportRequests).pipe(
+      Effect.map((active) => active.some((candidate) => executorReportRequestMatches(candidate, currentReport)))
+    )
+    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
+    return ownershipOrAdvance !== "Unowned"
+  })
+  const consumeExecutorReportForLoop: StoryCursor["consumeExecutorReportFor"] = Effect.fn(
+    "AuthoredCassette.consumeExecutorReportFor"
+  )(function* (request, attemptId) {
+    const claimed = yield* claimNext((item) => authoredExecutorReportMatches(item, request, attemptId))
+    if (claimed._tag === "Claimed") {
+      return yield* Schema.decodeUnknownEffect(AuthoredPlannedAttemptExecutorOutcomeItem)(claimed.item).pipe(
+        Effect.orDie
+      )
+    }
+    const currentReport = executorReportImmediatelyBefore(claimed.item, story[claimed.index + 1], request, attemptId)
+    if (currentReport !== null) {
+      if (!(yield* awaitOwnedExecutorReport(currentReport, claimed.index))) {
+        return yield* new AuthoredCassetteInteractionMismatch({
+          actual: `${request}/${attemptId}`,
+          expected: claimed.item?._tag ?? "EndOfStory",
+          storyPosition: claimed.index
+        })
+      }
+      return yield* consumeExecutorReportForLoop(request, attemptId)
+    }
+    return yield* new AuthoredCassetteInteractionMismatch({
+      actual: `${request}/${attemptId}`,
+      expected: claimed.item?._tag ?? "EndOfStory",
+      storyPosition: claimed.index
+    })
+  })
+  const consumeExecutorReportFor: StoryCursor["consumeExecutorReportFor"] = Effect.fn(
+    "AuthoredCassette.consumeExecutorReportFor"
+  )((request, attemptId) =>
+    Effect.acquireUseRelease(
+      SubscriptionRef.update(activeExecutorReportRequests, (current) => [...current, { attemptId, request }]),
+      () => consumeExecutorReportForLoop(request, attemptId),
+      () =>
+        SubscriptionRef.update(activeExecutorReportRequests, (current) => {
+          const index = current.findIndex((active) => active.request === request && active.attemptId === attemptId)
+          return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)]
+        })
+    )
+  )
+  const beginExecutorReportRequest: StoryCursor["beginExecutorReportRequest"] = (request, attemptId) =>
+    SubscriptionRef.update(activeExecutorReportRequests, (current) => [...current, { attemptId, request }])
+  const endExecutorReportRequest: StoryCursor["endExecutorReportRequest"] = (request, attemptId) =>
+    SubscriptionRef.update(activeExecutorReportRequests, (current) => {
+      const index = current.findIndex((active) => active.request === request && active.attemptId === attemptId)
+      return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)]
+    })
   const consumeExecutorProjection = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type =>
@@ -583,6 +872,98 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
   const consumeInitialPolicy = consume("InitialControlPolicy").pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.InitialControlPolicy)(item).pipe(Effect.orDie)
+    )
+  )
+  const consumeIntegratorRequest = Effect.fn("AuthoredCassette.consumeIntegratorRequest")(function* (
+    correlation: IntegratorCorrelation
+  ) {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.IntegratorRequestReceived.Type =>
+        item?._tag === "IntegratorRequestReceived"
+    )
+    if (claimed._tag === "Mismatch") {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: "IntegratorRequestReceived",
+        expected: claimed.item?._tag ?? "EndOfStory",
+        storyPosition: claimed.index
+      })
+    }
+    const decoded = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.IntegratorRequestReceived)(
+      claimed.item
+    ).pipe(Effect.orDie)
+    if (!integratorCorrelationEquivalence(decoded.correlation, correlation)) {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: JSON.stringify({ correlation }),
+        expected: JSON.stringify(decoded),
+        storyPosition: claimed.index
+      })
+    }
+    return decoded
+  })
+  const consumeIntegratorResult = consume("IntegratorResultReturned").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.IntegratorResultReturned)(item).pipe(Effect.orDie)
+    )
+  )
+  const awaitOwnedSelectionBeforeBoundary = Effect.fn("AuthoredCassette.awaitOwnedSelectionBeforeBoundary")(function* (
+    item: StoryItem | undefined,
+    index: number
+  ) {
+    if (item?._tag !== "DalphSelects" || !isIntegratorRecoverySelection(item.operation)) return false
+    const ownership = SubscriptionRef.changes(activeDalphSelections).pipe(
+      Stream.filter((active) => active.some((selection) => cassetteDecisionMatches(selection, item.operation)))
+    )
+    const isOwned = SubscriptionRef.get(activeDalphSelections).pipe(
+      Effect.map((active) => active.some((selection) => cassetteDecisionMatches(selection, item.operation)))
+    )
+    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    if (ownershipOrAdvance === "Unowned") return false
+    if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
+    return true
+  })
+  const consumeIntegratorGitObservationLoop: StoryCursor["consumeIntegratorGitObservation"] = Effect.fn(
+    "AuthoredCassette.consumeIntegratorGitObservationLoop"
+  )(function* (candidateText: IntegratorCandidateText) {
+    const claimed = yield* claimNext(
+      (item): item is OuterIntegratorGitStoryItem =>
+        (item?._tag === "IntegratorGitObservationReturned" || item?._tag === "IntegratorGitObservationFailed") &&
+        item.candidateText === candidateText &&
+        (item._tag === "IntegratorGitObservationFailed" || item.observation.candidateText === candidateText)
+    )
+    if (claimed._tag === "Mismatch") {
+      if (yield* awaitOwnedSelectionBeforeBoundary(claimed.item, claimed.index)) {
+        return yield* consumeIntegratorGitObservationLoop(candidateText)
+      }
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: `IntegratorGitObservation/${candidateText}`,
+        expected: claimed.item?._tag ?? "EndOfStory",
+        storyPosition: claimed.index
+      })
+    }
+    if (claimed.item._tag === "IntegratorGitObservationFailed") {
+      const decoded = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.IntegratorGitObservationFailed)(
+        claimed.item
+      ).pipe(Effect.orDie)
+      return yield* new AuthoredIntegratorGitObservationFailure({
+        detail: decoded.detail,
+        storyPosition: claimed.index
+      })
+    }
+    return yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned)(
+      claimed.item
+    ).pipe(Effect.orDie)
+  })
+  const consumeIntegratorGitObservation: StoryCursor["consumeIntegratorGitObservation"] = Effect.fn(
+    "AuthoredCassette.consumeIntegratorGitObservation"
+  )((candidateText) =>
+    Effect.acquireUseRelease(
+      SubscriptionRef.update(activeIntegratorGitObservations, (current) => [...current, candidateText]),
+      () => consumeIntegratorGitObservationLoop(candidateText),
+      () =>
+        SubscriptionRef.update(activeIntegratorGitObservations, (current) => {
+          const index = current.indexOf(candidateText)
+          return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)]
+        })
     )
   )
   const consumeIntegrationCandidateAgentReportLoop: (
@@ -1159,12 +1540,19 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
     consumeInFlightExecutorControlDirection,
     consumeClaimReacquisitionDirection,
     consumeDalphSelection,
+    consumeDalphSelectionFor,
+    beginExecutorReportRequest,
+    endExecutorReportRequest,
     consumeExecutorProjection,
     consumeExecutorRequestPublicationHold,
     consumeExecutorReport,
+    consumeExecutorReportFor,
     consumeGitWorktreeObservationChange,
     consumeGitPlannedWorktreeCreateResponseLost,
     consumeInitialPolicy,
+    consumeIntegratorRequest,
+    consumeIntegratorResult,
+    consumeIntegratorGitObservation,
     consumeIntegrationCandidateAgentReport,
     consumeIntegrationCandidateGitValidation,
     consumeTargetVerificationReturned,

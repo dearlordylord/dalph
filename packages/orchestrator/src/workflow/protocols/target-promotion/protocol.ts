@@ -15,6 +15,8 @@ import {
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
   TargetPromotionAttemptReason,
+  type TargetPromotionCorrelation,
+  TargetPromotionRequestId,
   TargetPromotionGit,
   TargetPromotionIntendedEvent,
   TargetPromotionNonConvergenceEvent,
@@ -25,40 +27,31 @@ import {
   TargetPromotionTerminalBasis,
   TargetPromotionSuccessObservation,
   targetPromotionAttemptLimit,
-  targetPromotionRequestFor,
+  targetPromotionCandidateCommitOf,
+  targetPromotionCorrelationEquals,
+  targetPromotionCorrelationFor,
+  targetPromotionExpectedHeadOf,
+  targetPromotionGitRequestFor,
+  targetPromotionRunIdOf,
   type TargetPromotionAttemptReason as TargetPromotionAttemptReasonType,
   type TargetPromotionCompareAndSetResult,
   type TargetPromotionGitReadObservation,
   TargetPromotionJournalEvent,
-  type TargetPromotionRequest as TargetPromotionRequestType
+  type TargetPromotionGitRequest
 } from "./events.js"
-import {
-  IntegrationCandidateId,
-  integrationCandidateCorrelationEquals
-} from "../integration-candidate-construction/events.js"
-import type { TargetVerificationState } from "../target-verification/protocol.js"
-import type { TargetVerificationCandidate } from "../target-verification/events.js"
+import type { IntegratorQualifiedCandidate } from "../integrator/events.js"
 import {
   deriveTargetPromotionState,
+  targetPromotionCorrelationConflictFor,
   TargetPromotionPendingRetry,
   TargetPromotionState,
   type JournalOccurrence
 } from "./state.js"
 import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 export { deriveTargetPromotionState, TargetPromotionPendingRetry, TargetPromotionState } from "./state.js"
+export { targetPromotionCorrelationConflictFor } from "./state.js"
 export type { JournalOccurrence } from "./state.js"
-
-/** The caller offered a candidate whose target or constructed occurrence differs from Passed evidence. */
-export class TargetPromotionPremiseContradiction extends Schema.TaggedError<TargetPromotionPremiseContradiction>()(
-  "TargetPromotionPremiseContradiction",
-  { candidateId: IntegrationCandidateId, detail: Schema.String }
-) {}
-
-/** Promotion requires the terminal Passed verification state and its exact sealed manifest. */
-export class TargetPromotionVerificationRequired extends Schema.TaggedError<TargetPromotionVerificationRequired>()(
-  "TargetPromotionVerificationRequired",
-  { candidateId: IntegrationCandidateId }
-) {}
+export { targetPromotionCorrelationFor, targetPromotionRequestIdForCandidate } from "./events.js"
 
 /** A provider returned a successful mutation for a commit other than the requested M. */
 export class TargetPromotionResultContradiction extends Schema.TaggedError<TargetPromotionResultContradiction>()(
@@ -66,42 +59,21 @@ export class TargetPromotionResultContradiction extends Schema.TaggedError<Targe
   { candidateCommit: GitCommitSha, detail: Schema.String }
 ) {}
 
+/** Fails closed when one request id is reused for a different exact promotion correlation. */
+export class TargetPromotionCorrelationContradiction extends Schema.TaggedError<TargetPromotionCorrelationContradiction>()(
+  "TargetPromotionCorrelationContradiction",
+  { detail: Schema.String, requestId: TargetPromotionRequestId }
+) {}
+
 const ordinalFor = (value: number): TargetPromotionAttemptOrdinal => TargetPromotionAttemptOrdinal.make(value)
 
 const appendPromotionEvent = Effect.fn("TargetPromotion.appendEvent")(function* (
-  runId: TargetPromotionRequestType["candidateCorrelation"]["runId"],
+  correlation: TargetPromotionCorrelation,
   key: Parameters<InRunJournal["Service"]["append"]>[1],
   event: TargetPromotionJournalEvent
 ) {
   const journal = yield* InRunJournal
-  return yield* journal.append(runId, key, event)
-})
-
-const targetMatchesRequest = (
-  candidate: TargetVerificationCandidate,
-  verification: Extract<TargetVerificationState, { readonly _tag: "VerificationPassed" }>
-): boolean =>
-  candidate.candidateCommit === verification.correlation.candidateCommit &&
-  candidate.constructedAt === verification.correlation.candidateConstructedAt &&
-  integrationCandidateCorrelationEquals(candidate.correlation, verification.correlation.candidateCorrelation)
-
-const makeRequest = Effect.fn("TargetPromotion.makeRequest")(function* (
-  candidate: TargetVerificationCandidate,
-  verification: TargetVerificationState
-) {
-  if (verification._tag !== "VerificationPassed") {
-    return yield* new TargetPromotionVerificationRequired({ candidateId: candidate.correlation.candidateId })
-  }
-  if (!targetMatchesRequest(candidate, verification)) {
-    return yield* new TargetPromotionPremiseContradiction({
-      candidateId: candidate.correlation.candidateId,
-      detail: "candidate construction and sealed verification correlation differ"
-    })
-  }
-  return targetPromotionRequestFor(candidate, {
-    correlation: verification.correlation,
-    manifest: verification.manifest
-  })
+  return yield* journal.append(targetPromotionRunIdOf(correlation), key, event)
 })
 
 const successObservationForCompareAndSet = (
@@ -131,7 +103,7 @@ const successObservationForRead = (
 }
 
 const readObservationContradiction = (
-  request: TargetPromotionRequestType,
+  request: TargetPromotionGitRequest,
   observation: TargetPromotionGitReadObservation
 ): string | undefined => {
   if (observation._tag === "CandidateCurrent" && observation.currentHeadSha !== request.candidateCommit)
@@ -144,49 +116,44 @@ const readObservationContradiction = (
 }
 
 const appendSuccess = Effect.fn("TargetPromotion.appendSuccess")(function* (
-  request: TargetPromotionRequestType,
+  correlation: TargetPromotionCorrelation,
   basis: TargetPromotionTerminalBasis,
   observation: TargetPromotionSuccessObservation
 ) {
   yield* appendPromotionEvent(
-    request.candidateCorrelation.runId,
-    targetPromotionObservedSuccessRecordKey(request.requestId),
-    TargetPromotionObservedSuccessEvent.make({
-      basis,
-      correlation: request,
-      observation,
-      version: workflowJournalEventVersion
-    })
+    correlation,
+    targetPromotionObservedSuccessRecordKey(correlation.requestId),
+    TargetPromotionObservedSuccessEvent.make({ basis, correlation, observation, version: workflowJournalEventVersion })
   )
-  return TargetPromotionState.cases.PromotionSucceeded.make({ basis, correlation: request, observation })
+  return TargetPromotionState.cases.PromotionSucceeded.make({ basis, correlation, observation })
 })
 
 const appendStale = Effect.fn("TargetPromotion.appendStale")(function* (
-  request: TargetPromotionRequestType,
+  correlation: TargetPromotionCorrelation,
   basis: TargetPromotionTerminalBasis,
   observation: TargetPromotionStaleObservation
 ) {
   yield* appendPromotionEvent(
-    request.candidateCorrelation.runId,
-    targetPromotionStaleRecordKey(request.requestId),
-    TargetPromotionStaleEvent.make({ basis, correlation: request, observation, version: workflowJournalEventVersion })
+    correlation,
+    targetPromotionStaleRecordKey(correlation.requestId),
+    TargetPromotionStaleEvent.make({ basis, correlation, observation, version: workflowJournalEventVersion })
   )
-  return TargetPromotionState.cases.PromotionStale.make({ basis, correlation: request, observation })
+  return TargetPromotionState.cases.PromotionStale.make({ basis, correlation, observation })
 })
 
 const appendNonConvergence = Effect.fn("TargetPromotion.appendNonConvergence")(function* (
-  request: TargetPromotionRequestType,
+  correlation: TargetPromotionCorrelation,
   attemptOrdinal: TargetPromotionAttemptOrdinal,
   lastObservation: TargetPromotionNonConvergenceObservation
 ) {
   const attemptLimit = TargetPromotionAttemptLimit.make(targetPromotionAttemptLimit)
   yield* appendPromotionEvent(
-    request.candidateCorrelation.runId,
-    targetPromotionNonConvergenceRecordKey(request.requestId),
+    correlation,
+    targetPromotionNonConvergenceRecordKey(correlation.requestId),
     TargetPromotionNonConvergenceEvent.make({
       attemptLimit,
       attemptOrdinal,
-      correlation: request,
+      correlation,
       lastObservation,
       version: workflowJournalEventVersion
     })
@@ -194,22 +161,22 @@ const appendNonConvergence = Effect.fn("TargetPromotion.appendNonConvergence")(f
   return TargetPromotionState.cases.PromotionNonConvergent.make({
     attemptLimit,
     attemptOrdinal,
-    correlation: request,
+    correlation,
     lastObservation
   })
 })
 
 const appendAttemptIntent = Effect.fn("TargetPromotion.appendAttemptIntent")(function* (
-  request: TargetPromotionRequestType,
+  correlation: TargetPromotionCorrelation,
   attemptOrdinal: TargetPromotionAttemptOrdinal,
   reason: TargetPromotionAttemptReasonType
 ) {
   yield* appendPromotionEvent(
-    request.candidateCorrelation.runId,
-    targetPromotionAttemptIntentRecordKey(request.requestId, attemptOrdinal),
+    correlation,
+    targetPromotionAttemptIntentRecordKey(correlation.requestId, attemptOrdinal),
     TargetPromotionAttemptIntendedEvent.make({
       attemptOrdinal,
-      correlation: request,
+      correlation,
       reason,
       version: workflowJournalEventVersion
     })
@@ -217,28 +184,28 @@ const appendAttemptIntent = Effect.fn("TargetPromotion.appendAttemptIntent")(fun
 })
 
 const pendingAfterAmbiguousAttempt = (
-  request: TargetPromotionRequestType,
+  correlation: TargetPromotionCorrelation,
   attemptOrdinal: TargetPromotionAttemptOrdinal
 ): TargetPromotionState =>
   TargetPromotionState.cases.PromotionPending.make({
-    correlation: request,
+    correlation,
     retry: TargetPromotionPendingRetry.cases.NeedReconciliationRead.make({ afterAttemptOrdinal: attemptOrdinal })
   })
 
 /** Records intent for one attempt, then performs at most one compare-and-set. */
 const performAttempt = Effect.fn("TargetPromotion.performAttempt")(function* (
-  request: TargetPromotionRequestType,
+  correlation: TargetPromotionCorrelation,
   attemptOrdinal: TargetPromotionAttemptOrdinal,
   reason: TargetPromotionAttemptReasonType
 ) {
-  yield* appendAttemptIntent(request, attemptOrdinal, reason)
+  yield* appendAttemptIntent(correlation, attemptOrdinal, reason)
   const git = yield* TargetPromotionGit
-  const result = yield* git.compareAndSet(request).pipe(Effect.result)
-  if (result._tag === "Failure") return pendingAfterAmbiguousAttempt(request, attemptOrdinal)
+  const result = yield* git.compareAndSet(targetPromotionGitRequestFor(correlation)).pipe(Effect.result)
+  if (result._tag === "Failure") return pendingAfterAmbiguousAttempt(correlation, attemptOrdinal)
   if (result.success._tag === "RejectedExpectedHead") {
-    if (result.success.observedHeadSha === request.candidateCommit) {
+    if (result.success.observedHeadSha === targetPromotionCandidateCommitOf(correlation)) {
       return yield* appendSuccess(
-        request,
+        correlation,
         TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
         TargetPromotionSuccessObservation.cases.ReconciledCandidateCurrent.make({
           candidateAncestry: "Current",
@@ -246,35 +213,36 @@ const performAttempt = Effect.fn("TargetPromotion.performAttempt")(function* (
         })
       )
     }
-    if (result.success.observedHeadSha === request.expectedTargetHead) {
+    if (result.success.observedHeadSha === targetPromotionExpectedHeadOf(correlation)) {
       return yield* new TargetPromotionResultContradiction({
-        candidateCommit: request.candidateCommit,
+        candidateCommit: targetPromotionCandidateCommitOf(correlation),
         detail: "Git rejected the compare-and-set while reporting the exact expected head"
       })
     }
     return yield* appendStale(
-      request,
+      correlation,
       TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
       TargetPromotionStaleObservation.cases.CompareAndSetRejected.make({
         observedHeadSha: result.success.observedHeadSha
       })
     )
   }
-  if (result.success.newHeadSha !== request.candidateCommit) {
+  if (result.success.newHeadSha !== targetPromotionCandidateCommitOf(correlation)) {
     return yield* new TargetPromotionResultContradiction({
-      candidateCommit: request.candidateCommit,
-      detail: `Git reported ${result.success.newHeadSha} after requesting ${request.candidateCommit}`
+      candidateCommit: targetPromotionCandidateCommitOf(correlation),
+      detail: `Git reported ${result.success.newHeadSha} after requesting ${targetPromotionCandidateCommitOf(correlation)}`
     })
   }
   return yield* appendSuccess(
-    request,
+    correlation,
     TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
     successObservationForCompareAndSet(result.success)
   )
 })
 
-const runInitialRead = Effect.fn("TargetPromotion.runInitialRead")(function* (request: TargetPromotionRequestType) {
+const runInitialRead = Effect.fn("TargetPromotion.runInitialRead")(function* (correlation: TargetPromotionCorrelation) {
   const git = yield* TargetPromotionGit
+  const request = targetPromotionGitRequestFor(correlation)
   const readResult = yield* git.read(request).pipe(Effect.result)
   if (readResult._tag === "Failure") return yield* readResult.failure
   const readContradiction = readObservationContradiction(request, readResult.success)
@@ -286,32 +254,33 @@ const runInitialRead = Effect.fn("TargetPromotion.runInitialRead")(function* (re
   }
   const success = successObservationForRead(readResult.success)
   if (success !== undefined)
-    return yield* appendSuccess(request, TargetPromotionTerminalBasis.cases.BeforeFirstAttempt.make({}), success)
+    return yield* appendSuccess(correlation, TargetPromotionTerminalBasis.cases.BeforeFirstAttempt.make({}), success)
   if (readResult.success.currentHeadSha !== request.expectedTargetHead)
     return yield* appendStale(
-      request,
+      correlation,
       TargetPromotionTerminalBasis.cases.BeforeFirstAttempt.make({}),
       TargetPromotionStaleObservation.cases.ReconciledCandidateNotInAncestry.make({
         observedHeadSha: readResult.success.currentHeadSha
       })
     )
   return yield* performAttempt(
-    request,
+    correlation,
     ordinalFor(1),
     TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: readResult.success.currentHeadSha })
   )
 })
 
 const runReconciliationRead = Effect.fn("TargetPromotion.runReconciliationRead")(function* (
-  request: TargetPromotionRequestType,
+  correlation: TargetPromotionCorrelation,
   previousAttemptOrdinal: TargetPromotionAttemptOrdinal
 ) {
   const git = yield* TargetPromotionGit
+  const request = targetPromotionGitRequestFor(correlation)
   const readResult = yield* git.read(request).pipe(Effect.result)
   if (readResult._tag === "Failure")
     return previousAttemptOrdinal === targetPromotionAttemptLimit
       ? yield* appendNonConvergence(
-          request,
+          correlation,
           previousAttemptOrdinal,
           TargetPromotionNonConvergenceObservation.cases.TargetReadFailed.make({ detail: readResult.failure.detail })
         )
@@ -326,13 +295,13 @@ const runReconciliationRead = Effect.fn("TargetPromotion.runReconciliationRead")
   const success = successObservationForRead(observation)
   if (success !== undefined)
     return yield* appendSuccess(
-      request,
+      correlation,
       TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal: previousAttemptOrdinal }),
       success
     )
   if (observation._tag === "CandidateNotInAncestry" && observation.currentHeadSha !== request.expectedTargetHead) {
     return yield* appendStale(
-      request,
+      correlation,
       TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal: previousAttemptOrdinal }),
       TargetPromotionStaleObservation.cases.ReconciledCandidateNotInAncestry.make({
         observedHeadSha: observation.currentHeadSha
@@ -341,7 +310,7 @@ const runReconciliationRead = Effect.fn("TargetPromotion.runReconciliationRead")
   }
   if (previousAttemptOrdinal === targetPromotionAttemptLimit) {
     return yield* appendNonConvergence(
-      request,
+      correlation,
       previousAttemptOrdinal,
       TargetPromotionNonConvergenceObservation.cases.ExpectedHeadStillObserved.make({
         observedHeadSha: observation.currentHeadSha
@@ -351,7 +320,7 @@ const runReconciliationRead = Effect.fn("TargetPromotion.runReconciliationRead")
 
   const nextAttemptOrdinal = ordinalFor(previousAttemptOrdinal + 1)
   return yield* performAttempt(
-    request,
+    correlation,
     nextAttemptOrdinal,
     TargetPromotionAttemptReason.cases.ReconciledExpectedHead.make({
       observedHeadSha: observation.currentHeadSha,
@@ -361,33 +330,33 @@ const runReconciliationRead = Effect.fn("TargetPromotion.runReconciliationRead")
 })
 
 const runPending = Effect.fn("TargetPromotion.runPending")(function* (
-  request: TargetPromotionRequestType,
+  correlation: TargetPromotionCorrelation,
   state: Extract<TargetPromotionState, { readonly _tag: "PromotionPending" }>
 ) {
   return state.retry._tag === "NeedInitialReconciliationRead"
-    ? yield* runInitialRead(request)
-    : yield* runReconciliationRead(request, state.retry.afterAttemptOrdinal)
+    ? yield* runInitialRead(correlation)
+    : yield* runReconciliationRead(correlation, state.retry.afterAttemptOrdinal)
 })
 
-/** Performs at most one compare-and-set and one reconciliation read for one invocation. */
-export const runTargetPromotion = Effect.fn("TargetPromotion.run")(function* (
-  candidate: TargetVerificationCandidate,
-  verification: TargetVerificationState
-) {
-  const request = yield* makeRequest(candidate, verification)
+/** Performs at most one compare-and-set and one reconciliation read for one Integrator-qualified candidate. */
+export const runTargetPromotion = Effect.fn("TargetPromotion.run")(function* (candidate: IntegratorQualifiedCandidate) {
+  const request = targetPromotionCorrelationFor(candidate)
   const journal = yield* InRunJournal
-  const records = yield* journal.read(request.candidateCorrelation.runId)
+  const records = yield* journal.read(targetPromotionRunIdOf(request))
+  const foreignCorrelation = targetPromotionCorrelationConflictFor(records, request)
+  if (foreignCorrelation !== undefined) {
+    return yield* new TargetPromotionCorrelationContradiction({
+      detail: "journal contains a different exact promotion correlation for this request id",
+      requestId: request.requestId
+    })
+  }
   const state = deriveTargetPromotionState(records, request)
-  if (
-    state?._tag === "PromotionSucceeded" ||
-    state?._tag === "PromotionStale" ||
-    state?._tag === "PromotionNonConvergent"
-  ) {
+  if (state !== undefined && state._tag !== "PromotionPending") {
     return state
   }
   if (state === undefined) {
     yield* appendPromotionEvent(
-      request.candidateCorrelation.runId,
+      request,
       targetPromotionIntentRecordKey(request.requestId),
       TargetPromotionIntendedEvent.make({ correlation: request, version: workflowJournalEventVersion })
     )
@@ -402,35 +371,30 @@ export const runTargetPromotion = Effect.fn("TargetPromotion.run")(function* (
   return yield* runPending(request, state)
 })
 
-/** Reconstructs state for an exact candidate and verification premise. */
-const promotionStateByPrefix = new WeakMap<
-  ReadonlyArray<JournalOccurrence>,
-  Map<string, TargetPromotionState | undefined>
->()
+/** Reconstructs state for one exact Integrator-qualified candidate. */
+type PromotionStateCacheEntry = readonly [TargetPromotionCorrelation, TargetPromotionState | undefined]
+
+const promotionStateByPrefix = new WeakMap<ReadonlyArray<JournalOccurrence>, Array<PromotionStateCacheEntry>>()
 
 export const deriveTargetPromotionStateFor = (
   records: ReadonlyArray<JournalOccurrence>,
-  candidate: TargetVerificationCandidate,
-  verification: Extract<TargetVerificationState, { readonly _tag: "VerificationPassed" }>
+  candidate: IntegratorQualifiedCandidate
 ): TargetPromotionState | undefined => {
-  const request = targetPromotionRequestFor(candidate, {
-    correlation: verification.correlation,
-    manifest: verification.manifest
-  })
-  const requestId = request.requestId
+  const request = targetPromotionCorrelationFor(candidate)
   const cachedByRequest = promotionStateByPrefix.get(records)
-  if (cachedByRequest?.has(requestId) === true) return cachedByRequest.get(requestId)
+  const cached = cachedByRequest?.find(([cachedRequest]) => targetPromotionCorrelationEquals(cachedRequest, request))
+  if (cached !== undefined) return cached[1]
   const predecessor = journalPrefixPredecessorOf(records)
   if (predecessor !== undefined && !Schema.is(TargetPromotionJournalEvent)(predecessor.appended.event)) {
-    const state = deriveTargetPromotionStateFor(predecessor.prior, candidate, verification)
-    const cache = cachedByRequest ?? new Map<string, TargetPromotionState | undefined>()
-    cache.set(requestId, state)
+    const state = deriveTargetPromotionStateFor(predecessor.prior, candidate)
+    const cache = cachedByRequest ?? []
+    cache.push([request, state])
     promotionStateByPrefix.set(records, cache)
     return state
   }
   const state = deriveTargetPromotionState(records, request)
-  const cache = cachedByRequest ?? new Map<string, TargetPromotionState | undefined>()
-  cache.set(requestId, state)
+  const cache = cachedByRequest ?? []
+  cache.push([request, state])
   promotionStateByPrefix.set(records, cache)
   return state
 }

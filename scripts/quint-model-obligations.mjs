@@ -247,6 +247,7 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "integratorIntentPrecedesCall",
     "integratorCallResultIsPersistent",
     "integratorRecoveryReusesSameSession",
+    "integratorResultCarriesOnlyAcceptedEvidence",
     "conclusiveNotPreparedHasNoCandidate",
     "candidateReportIsExplicit",
     "candidateGitIntentPrecedesObservation",

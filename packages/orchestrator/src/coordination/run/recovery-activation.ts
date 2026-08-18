@@ -1452,8 +1452,7 @@ const startedIntegrationIntentMayReconcileBeforePause = (
         pausePosition,
         ({ event }) =>
           event._tag === "TargetPromotionIntended" &&
-          event.correlation.requestId ===
-            targetPromotionRequestIdForCandidate(transition.candidate.correlation.candidateId)
+          event.correlation.requestId === targetPromotionRequestIdForCandidate(transition.candidate)
       ),
     AcquireStartedIntegrationTarget: (transition) =>
       recordBeforePause(
@@ -1953,6 +1952,11 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
         ) === index
     )
   const pendingAttemptIds = new Set(pendingGitReadIntents.map(({ event }) => event.operation.plannedAttempt.attemptId))
+  const pendingTargetLineageAttemptIds = new Set(
+    pendingGitReadIntents.flatMap(({ event }) =>
+      event.operation._tag === "ReadTargetLineage" ? [event.operation.plannedAttempt.attemptId] : []
+    )
+  )
   const pendingGitReadTransitions = pendingGitReadIntents.map(({ event }) =>
     event.operation._tag === "ReadTaskWorktree"
       ? RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
@@ -2013,18 +2017,6 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       : []
   })
   const integrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
-  const activationTargetLineage = runState.workflowHistory.records.flatMap(({ event, position }) => {
-    if (event._tag !== "TargetLineageObserved") return []
-    const taskBaseline = freshnessBaselineForTask(event.plannedAttempt.taskId)
-    return positionIsAfter(position, taskBaseline) ? [[event.plannedAttempt.attemptId, event.observation] as const] : []
-  })
-  const targetLineageByAttemptId = new Map(activationTargetLineage)
-  const activeClaimByAttemptId = new Map(
-    recordedTaskAttemptPlans(runState.workflowHistory.records).flatMap(({ plannedAttempt }) => {
-      const claim = authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim
-      return claim === undefined ? [] : [[plannedAttempt.attemptId, claim] as const]
-    })
-  )
   const latestClaimObservationPositionFor = (taskId: TaskId) =>
     runState.workflowHistory.records.findLast(
       ({ event, position }) =>
@@ -2034,6 +2026,33 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
         event.observation.coverage.taskId === taskId
     )?.position
+  const activationTargetLineage = runState.workflowHistory.records.flatMap(({ event, position }) => {
+    if (event._tag !== "TargetLineageObserved") return []
+    const taskBaseline = freshnessBaselineForTask(event.plannedAttempt.taskId)
+    return positionIsAfter(position, taskBaseline) ? [[event.plannedAttempt.attemptId, event.observation] as const] : []
+  })
+  const targetLineageByAttemptId = new Map(activationTargetLineage)
+  const targetLineageRefreshRequiredAttemptIds = new Set([
+    ...pendingTargetLineageAttemptIds,
+    ...recordedTaskAttemptPlans(runState.workflowHistory.records).flatMap(({ plannedAttempt }) => {
+      const graphObservedAt = currentGraphObservationForTask(plannedAttempt.taskId)?.position
+      const lineageObservedAt = runState.workflowHistory.records.findLast(
+        ({ event }) =>
+          event._tag === "TargetLineageObserved" &&
+          event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
+          event.plannedAttempt.runId === plannedAttempt.runId
+      )?.position
+      return graphObservedAt !== undefined && (lineageObservedAt === undefined || graphObservedAt > lineageObservedAt)
+        ? [plannedAttempt.attemptId]
+        : []
+    })
+  ])
+  const activeClaimByAttemptId = new Map(
+    recordedTaskAttemptPlans(runState.workflowHistory.records).flatMap(({ plannedAttempt }) => {
+      const claim = authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim
+      return claim === undefined ? [] : [[plannedAttempt.attemptId, claim] as const]
+    })
+  )
   const integration = deriveIntegrationFrontier(runState, {
     ...integrationResourceSnapshot,
     candidateCorrectionLimit,
@@ -2041,6 +2060,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     currentTrackerTaskIds,
     integrationTarget,
     targetLineageByAttemptId,
+    targetLineageRefreshRequiredAttemptIds,
     targetVerificationPlan,
     targetPromotionConfigured,
     activeClaimByAttemptId,
@@ -2073,9 +2093,11 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           taskGraphObservation !== undefined &&
           taskGraphObservation.position > claimObservedAt
         return integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt) &&
+          !integrationResourceSnapshot.activeResponsibilityPositions.has(responsibility.queuedAt) &&
           graphWasCheckedAfterClaim &&
           !pendingAttemptIds.has(responsibility.plannedAttempt.attemptId) &&
-          !targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) &&
+          (!targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) ||
+            targetLineageRefreshRequiredAttemptIds.has(responsibility.plannedAttempt.attemptId)) &&
           !integration.transitions.some(
             (transition) =>
               transition._tag === "RunIntegrator" && transition.responsibility.queuedAt === responsibility.queuedAt

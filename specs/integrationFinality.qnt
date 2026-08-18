@@ -49,19 +49,21 @@ module integrationFinality {
   type MutationTarget = NoMutation | OriginalClaimMutation | CompletionClaimMutation | CompleteTaskMutation | ForeignClaimMutation
 
   // Git owns this proof. The #141 protocol may consume it but may not
-  // reconstruct or weaken any of its bindings.
+  // reconstruct or weaken the R/T/S/H/C/M and ordered-parent bindings.
   type PromotionProof = {
     runId: int,
     taskId: int,
     attemptId: int,
     taskRevision: int,
+    integratorSession: int,
     candidateCommit: int,
     expectedTargetHead: int,
+    acceptedResultCommit: int,
+    candidateFirstParent: int,
+    candidateSecondParent: int,
     integrationTarget: int,
-    promotionCorrelation: int,
-    acceptanceManifest: int,
-    integrationReviewManifest: int,
-    verificationManifest: int,
+    acceptedResultEvidence: int,
+    integratorReturnedEvidenceRefs: Set[int],
   }
 
   // This is the one new tracker claim identity derived from the exact active
@@ -72,11 +74,15 @@ module integrationFinality {
     taskId: int,
     attemptId: int,
     taskRevision: int,
+    integratorSession: int,
     predecessorClaimId: int,
-    promotionCorrelation: int,
-    acceptanceManifest: int,
-    integrationReviewManifest: int,
-    verificationManifest: int,
+    candidateCommit: int,
+    expectedTargetHead: int,
+    acceptedResultCommit: int,
+    candidateFirstParent: int,
+    candidateSecondParent: int,
+    acceptedResultEvidence: int,
+    integratorReturnedEvidenceRefs: Set[int],
   }
 
   type SubjectState = {
@@ -114,6 +120,9 @@ module integrationFinality {
     focusedFactsNoBlocker: bool,
     completionAncestry: CandidateAncestry,
     completionEvidenceRecorded: bool,
+    // Legacy evidence is a forbidden source-only value. It never authorizes
+    // a completion claim or task request in the corrected contract.
+    legacyEvidenceForged: bool,
     completionRequestId: int,
     completionIntentRecorded: bool,
     completionAttemptIntents: int,
@@ -159,11 +168,10 @@ module integrationFinality {
   pure val COMPLETION_CLAIM_A = 201
   pure val CANDIDATE_A = 301
   pure val EXPECTED_HEAD_A = 401
+  pure val ACCEPTED_RESULT_COMMIT_A = 302
+  pure val INTEGRATOR_SESSION_A = 601
   pure val INTEGRATION_TARGET_A = 501
-  pure val PROMOTION_CORRELATION_A = 601
-  pure val ACCEPTANCE_MANIFEST_A = 701
-  pure val INTEGRATION_REVIEW_MANIFEST_A = 702
-  pure val VERIFICATION_MANIFEST_A = 703
+  pure val ACCEPTED_RESULT_EVIDENCE_A = 701
   pure val COMPLETION_REQUEST_A = 801
   pure val TRACKER_COMPLETION_REQUEST_REVISION = 10
   pure val STALE_TRACKER_REVISION = 10
@@ -181,13 +189,15 @@ module integrationFinality {
     subject.proof.taskId == TASK_A,
     subject.proof.attemptId == ATTEMPT_A,
     subject.proof.taskRevision == TASK_REVISION_A,
+    subject.proof.integratorSession == INTEGRATOR_SESSION_A,
     subject.proof.candidateCommit == CANDIDATE_A,
     subject.proof.expectedTargetHead == EXPECTED_HEAD_A,
+    subject.proof.acceptedResultCommit == ACCEPTED_RESULT_COMMIT_A,
+    subject.proof.candidateFirstParent == EXPECTED_HEAD_A,
+    subject.proof.candidateSecondParent == ACCEPTED_RESULT_COMMIT_A,
     subject.proof.integrationTarget == INTEGRATION_TARGET_A,
-    subject.proof.promotionCorrelation == PROMOTION_CORRELATION_A,
-    subject.proof.acceptanceManifest == ACCEPTANCE_MANIFEST_A,
-    subject.proof.integrationReviewManifest == INTEGRATION_REVIEW_MANIFEST_A,
-    subject.proof.verificationManifest == VERIFICATION_MANIFEST_A,
+    subject.proof.acceptedResultEvidence == ACCEPTED_RESULT_EVIDENCE_A,
+    subject.proof.integratorReturnedEvidenceRefs == Set(),
   }
 
   pure def completionClaimExact(subject: SubjectState): bool = and {
@@ -196,11 +206,17 @@ module integrationFinality {
     subject.completionClaim.taskId == subject.proof.taskId,
     subject.completionClaim.attemptId == subject.proof.attemptId,
     subject.completionClaim.taskRevision == subject.proof.taskRevision,
+    subject.completionClaim.integratorSession == subject.proof.integratorSession,
     subject.completionClaim.predecessorClaimId == subject.originalClaimId,
-    subject.completionClaim.promotionCorrelation == subject.proof.promotionCorrelation,
-    subject.completionClaim.acceptanceManifest == subject.proof.acceptanceManifest,
-    subject.completionClaim.integrationReviewManifest == subject.proof.integrationReviewManifest,
-    subject.completionClaim.verificationManifest == subject.proof.verificationManifest,
+    subject.completionClaim.candidateCommit == subject.proof.candidateCommit,
+    subject.completionClaim.expectedTargetHead == subject.proof.expectedTargetHead,
+    subject.completionClaim.acceptedResultCommit == subject.proof.acceptedResultCommit,
+    subject.completionClaim.candidateFirstParent == subject.proof.candidateFirstParent,
+    subject.completionClaim.candidateSecondParent == subject.proof.candidateSecondParent,
+    subject.completionClaim.acceptedResultEvidence == subject.proof.acceptedResultEvidence,
+    subject.completionClaim.integratorReturnedEvidenceRefs == subject.proof.integratorReturnedEvidenceRefs,
+    subject.completionClaim.candidateFirstParent == EXPECTED_HEAD_A,
+    subject.completionClaim.candidateSecondParent == ACCEPTED_RESULT_COMMIT_A,
   }
 
   // Independent call-time measurement. The request transition keeps its
@@ -312,13 +328,15 @@ module integrationFinality {
       state.promoted.proof.taskId == TASK_A,
       state.promoted.proof.attemptId == ATTEMPT_A,
       state.promoted.proof.taskRevision == TASK_REVISION_A,
+      state.promoted.proof.integratorSession == INTEGRATOR_SESSION_A,
       state.promoted.proof.candidateCommit == CANDIDATE_A,
       state.promoted.proof.expectedTargetHead == EXPECTED_HEAD_A,
+      state.promoted.proof.acceptedResultCommit == ACCEPTED_RESULT_COMMIT_A,
+      state.promoted.proof.candidateFirstParent == EXPECTED_HEAD_A,
+      state.promoted.proof.candidateSecondParent == ACCEPTED_RESULT_COMMIT_A,
       state.promoted.proof.integrationTarget == INTEGRATION_TARGET_A,
-      state.promoted.proof.promotionCorrelation == PROMOTION_CORRELATION_A,
-      state.promoted.proof.acceptanceManifest == ACCEPTANCE_MANIFEST_A,
-      state.promoted.proof.integrationReviewManifest == INTEGRATION_REVIEW_MANIFEST_A,
-      state.promoted.proof.verificationManifest == VERIFICATION_MANIFEST_A,
+      state.promoted.proof.acceptedResultEvidence == ACCEPTED_RESULT_EVIDENCE_A,
+      state.promoted.proof.integratorReturnedEvidenceRefs == Set(),
     },
     state.promoted.completionClaimDerived implies and {
       state.promoted.proofPresent,
@@ -326,23 +344,30 @@ module integrationFinality {
       state.promoted.proof.taskId == TASK_A,
       state.promoted.proof.attemptId == ATTEMPT_A,
       state.promoted.proof.taskRevision == TASK_REVISION_A,
+      state.promoted.proof.integratorSession == INTEGRATOR_SESSION_A,
       state.promoted.proof.candidateCommit == CANDIDATE_A,
       state.promoted.proof.expectedTargetHead == EXPECTED_HEAD_A,
+      state.promoted.proof.acceptedResultCommit == ACCEPTED_RESULT_COMMIT_A,
+      state.promoted.proof.candidateFirstParent == EXPECTED_HEAD_A,
+      state.promoted.proof.candidateSecondParent == ACCEPTED_RESULT_COMMIT_A,
       state.promoted.proof.integrationTarget == INTEGRATION_TARGET_A,
-      state.promoted.proof.promotionCorrelation == PROMOTION_CORRELATION_A,
-      state.promoted.proof.acceptanceManifest == ACCEPTANCE_MANIFEST_A,
-      state.promoted.proof.integrationReviewManifest == INTEGRATION_REVIEW_MANIFEST_A,
-      state.promoted.proof.verificationManifest == VERIFICATION_MANIFEST_A,
+      state.promoted.proof.acceptedResultEvidence == ACCEPTED_RESULT_EVIDENCE_A,
+      state.promoted.proof.integratorReturnedEvidenceRefs == Set(),
       state.promoted.completionClaim.claimId == COMPLETION_CLAIM_A,
       state.promoted.completionClaim.runId == state.promoted.proof.runId,
       state.promoted.completionClaim.taskId == state.promoted.proof.taskId,
       state.promoted.completionClaim.attemptId == state.promoted.proof.attemptId,
       state.promoted.completionClaim.taskRevision == state.promoted.proof.taskRevision,
+      state.promoted.completionClaim.integratorSession == state.promoted.proof.integratorSession,
       state.promoted.completionClaim.predecessorClaimId == state.promoted.originalClaimId,
-      state.promoted.completionClaim.promotionCorrelation == state.promoted.proof.promotionCorrelation,
-      state.promoted.completionClaim.acceptanceManifest == state.promoted.proof.acceptanceManifest,
-      state.promoted.completionClaim.integrationReviewManifest == state.promoted.proof.integrationReviewManifest,
-      state.promoted.completionClaim.verificationManifest == state.promoted.proof.verificationManifest,
+      state.promoted.completionClaim.candidateCommit == state.promoted.proof.candidateCommit,
+      state.promoted.completionClaim.expectedTargetHead == state.promoted.proof.expectedTargetHead,
+      state.promoted.completionClaim.acceptedResultCommit == state.promoted.proof.acceptedResultCommit,
+      state.promoted.completionClaim.candidateFirstParent == state.promoted.proof.candidateFirstParent,
+      state.promoted.completionClaim.candidateSecondParent == state.promoted.proof.candidateSecondParent,
+      state.promoted.completionClaim.acceptedResultEvidence == state.promoted.proof.acceptedResultEvidence,
+      state.promoted.completionClaim.integratorReturnedEvidenceRefs
+        == state.promoted.proof.integratorReturnedEvidenceRefs,
       state.promoted.completionClaim.claimId != state.promoted.originalClaimId,
     },
   }
@@ -355,38 +380,52 @@ module integrationFinality {
         state.promoted.proof.taskId == TASK_A,
         state.promoted.proof.attemptId == ATTEMPT_A,
         state.promoted.proof.taskRevision == TASK_REVISION_A,
+        state.promoted.proof.integratorSession == INTEGRATOR_SESSION_A,
         state.promoted.proof.candidateCommit == CANDIDATE_A,
         state.promoted.proof.expectedTargetHead == EXPECTED_HEAD_A,
+        state.promoted.proof.acceptedResultCommit == ACCEPTED_RESULT_COMMIT_A,
+        state.promoted.proof.candidateFirstParent == EXPECTED_HEAD_A,
+        state.promoted.proof.candidateSecondParent == ACCEPTED_RESULT_COMMIT_A,
         state.promoted.proof.integrationTarget == INTEGRATION_TARGET_A,
-        state.promoted.proof.promotionCorrelation == PROMOTION_CORRELATION_A,
-        state.promoted.proof.acceptanceManifest == ACCEPTANCE_MANIFEST_A,
-        state.promoted.proof.integrationReviewManifest == INTEGRATION_REVIEW_MANIFEST_A,
-        state.promoted.proof.verificationManifest == VERIFICATION_MANIFEST_A,
+        state.promoted.proof.acceptedResultEvidence == ACCEPTED_RESULT_EVIDENCE_A,
+        state.promoted.proof.integratorReturnedEvidenceRefs == Set(),
         state.promoted.completionClaim.claimId == COMPLETION_CLAIM_A,
         state.promoted.completionClaim.runId == state.promoted.proof.runId,
         state.promoted.completionClaim.taskId == state.promoted.proof.taskId,
         state.promoted.completionClaim.attemptId == state.promoted.proof.attemptId,
         state.promoted.completionClaim.taskRevision == state.promoted.proof.taskRevision,
+        state.promoted.completionClaim.integratorSession == state.promoted.proof.integratorSession,
         state.promoted.completionClaim.predecessorClaimId == state.promoted.originalClaimId,
-        state.promoted.completionClaim.promotionCorrelation == state.promoted.proof.promotionCorrelation,
-        state.promoted.completionClaim.acceptanceManifest == state.promoted.proof.acceptanceManifest,
-        state.promoted.completionClaim.integrationReviewManifest == state.promoted.proof.integrationReviewManifest,
-        state.promoted.completionClaim.verificationManifest == state.promoted.proof.verificationManifest,
+        state.promoted.completionClaim.candidateCommit == state.promoted.proof.candidateCommit,
+        state.promoted.completionClaim.expectedTargetHead == state.promoted.proof.expectedTargetHead,
+        state.promoted.completionClaim.acceptedResultCommit == state.promoted.proof.acceptedResultCommit,
+        state.promoted.completionClaim.candidateFirstParent == state.promoted.proof.candidateFirstParent,
+        state.promoted.completionClaim.candidateSecondParent == state.promoted.proof.candidateSecondParent,
+        state.promoted.completionClaim.acceptedResultEvidence == state.promoted.proof.acceptedResultEvidence,
+        state.promoted.completionClaim.integratorReturnedEvidenceRefs
+          == state.promoted.proof.integratorReturnedEvidenceRefs,
       }
 
-  val completionProofCarriesThreeSealedManifests: bool =
+  val completionProofCarriesAcceptedEvidenceAndNoReturnedRefs: bool =
     not(state.promoted.proofPresent)
       or and {
-        state.promoted.proof.acceptanceManifest == ACCEPTANCE_MANIFEST_A,
-        state.promoted.proof.integrationReviewManifest == INTEGRATION_REVIEW_MANIFEST_A,
-        state.promoted.proof.verificationManifest == VERIFICATION_MANIFEST_A,
+        state.promoted.proof.acceptedResultEvidence == ACCEPTED_RESULT_EVIDENCE_A,
+        state.promoted.proof.integratorReturnedEvidenceRefs == Set(),
         not(state.promoted.completionClaimDerived)
           or and {
-            state.promoted.completionClaim.acceptanceManifest == state.promoted.proof.acceptanceManifest,
-            state.promoted.completionClaim.integrationReviewManifest == state.promoted.proof.integrationReviewManifest,
-            state.promoted.completionClaim.verificationManifest == state.promoted.proof.verificationManifest,
+            state.promoted.completionClaim.acceptedResultEvidence
+              == state.promoted.proof.acceptedResultEvidence,
+            state.promoted.completionClaim.integratorReturnedEvidenceRefs == Set(),
           },
       }
+
+  val noLegacyEvidenceAuthorizesFinality: bool =
+    not(state.promoted.legacyEvidenceForged) or and {
+      not(state.promoted.completionClaimDerived),
+      not(state.promoted.completionEvidenceRecorded),
+      not(state.promoted.completionIntentRecorded),
+      state.promoted.completionRequests == 0,
+    }
 
   // A request is the ambiguity-crossing effect. Its exact intent must already
   // be in the durable model state.
@@ -570,13 +609,15 @@ module integrationFinality {
           taskId: TASK_A,
           attemptId: ATTEMPT_A,
           taskRevision: TASK_REVISION_A,
+          integratorSession: INTEGRATOR_SESSION_A,
           candidateCommit: CANDIDATE_A,
           expectedTargetHead: EXPECTED_HEAD_A,
+          acceptedResultCommit: ACCEPTED_RESULT_COMMIT_A,
+          candidateFirstParent: EXPECTED_HEAD_A,
+          candidateSecondParent: ACCEPTED_RESULT_COMMIT_A,
           integrationTarget: INTEGRATION_TARGET_A,
-          promotionCorrelation: PROMOTION_CORRELATION_A,
-          acceptanceManifest: ACCEPTANCE_MANIFEST_A,
-          integrationReviewManifest: INTEGRATION_REVIEW_MANIFEST_A,
-          verificationManifest: VERIFICATION_MANIFEST_A,
+          acceptedResultEvidence: ACCEPTED_RESULT_EVIDENCE_A,
+          integratorReturnedEvidenceRefs: Set(),
         },
         completionClaimDerived: false,
         completionClaim: {
@@ -585,11 +626,15 @@ module integrationFinality {
           taskId: 0,
           attemptId: 0,
           taskRevision: 0,
+          integratorSession: 0,
           predecessorClaimId: 0,
-          promotionCorrelation: 0,
-          acceptanceManifest: 0,
-          integrationReviewManifest: 0,
-          verificationManifest: 0,
+          candidateCommit: 0,
+          expectedTargetHead: 0,
+          acceptedResultCommit: 0,
+          candidateFirstParent: 0,
+          candidateSecondParent: 0,
+          acceptedResultEvidence: 0,
+          integratorReturnedEvidenceRefs: Set(),
         },
         replacementIntentRecorded: false,
         replacementRequests: 0,
@@ -614,6 +659,7 @@ module integrationFinality {
         focusedFactsNoBlocker: false,
         completionAncestry: NoCandidateAncestry,
         completionEvidenceRecorded: false,
+        legacyEvidenceForged: false,
         completionRequestId: 0,
         completionIntentRecorded: false,
         completionAttemptIntents: 0,
@@ -650,13 +696,15 @@ module integrationFinality {
           taskId: TASK_B,
           attemptId: ATTEMPT_B,
           taskRevision: TASK_REVISION_B,
+          integratorSession: 0,
           candidateCommit: 0,
           expectedTargetHead: 0,
+          acceptedResultCommit: 0,
+          candidateFirstParent: 0,
+          candidateSecondParent: 0,
           integrationTarget: 0,
-          promotionCorrelation: 0,
-          acceptanceManifest: 0,
-          integrationReviewManifest: 0,
-          verificationManifest: 0,
+          acceptedResultEvidence: 0,
+          integratorReturnedEvidenceRefs: Set(),
         },
         completionClaimDerived: false,
         completionClaim: {
@@ -665,11 +713,15 @@ module integrationFinality {
           taskId: 0,
           attemptId: 0,
           taskRevision: 0,
+          integratorSession: 0,
           predecessorClaimId: 0,
-          promotionCorrelation: 0,
-          acceptanceManifest: 0,
-          integrationReviewManifest: 0,
-          verificationManifest: 0,
+          candidateCommit: 0,
+          expectedTargetHead: 0,
+          acceptedResultCommit: 0,
+          candidateFirstParent: 0,
+          candidateSecondParent: 0,
+          acceptedResultEvidence: 0,
+          integratorReturnedEvidenceRefs: Set(),
         },
         replacementIntentRecorded: false,
         replacementRequests: 0,
@@ -694,6 +746,7 @@ module integrationFinality {
         focusedFactsNoBlocker: false,
         completionAncestry: NoCandidateAncestry,
         completionEvidenceRecorded: false,
+        legacyEvidenceForged: false,
         completionRequestId: 0,
         completionIntentRecorded: false,
         completionAttemptIntents: 0,
@@ -767,11 +820,15 @@ module integrationFinality {
           taskId: state.promoted.proof.taskId,
           attemptId: state.promoted.proof.attemptId,
           taskRevision: state.promoted.proof.taskRevision,
+          integratorSession: state.promoted.proof.integratorSession,
           predecessorClaimId: state.promoted.originalClaimId,
-          promotionCorrelation: state.promoted.proof.promotionCorrelation,
-          acceptanceManifest: state.promoted.proof.acceptanceManifest,
-          integrationReviewManifest: state.promoted.proof.integrationReviewManifest,
-          verificationManifest: state.promoted.proof.verificationManifest,
+          candidateCommit: state.promoted.proof.candidateCommit,
+          expectedTargetHead: state.promoted.proof.expectedTargetHead,
+          acceptedResultCommit: state.promoted.proof.acceptedResultCommit,
+          candidateFirstParent: state.promoted.proof.candidateFirstParent,
+          candidateSecondParent: state.promoted.proof.candidateSecondParent,
+          acceptedResultEvidence: state.promoted.proof.acceptedResultEvidence,
+          integratorReturnedEvidenceRefs: state.promoted.proof.integratorReturnedEvidenceRefs,
         },
       },
     },

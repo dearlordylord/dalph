@@ -3,12 +3,6 @@ import { plannedAttemptExecutorCorrelation, type AttemptId, type TaskId } from "
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import type { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
-import {
-  deriveConstructedIntegrationCandidateOccurrence,
-  deriveIntegrationCandidateConstruction
-} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
-import type { TargetVerificationCandidate } from "../../workflow/protocols/target-verification/events.js"
-import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
 import {
   integrationFinalityExplanationFor,
@@ -19,11 +13,18 @@ import {
   RunnableFrontierTransition,
   type RunnableFrontierTransition as RunnableFrontierTransitionType
 } from "./frontier.js"
-import { acceptedCandidateProgressAt } from "./integration-candidate-progress.js"
 import type { IntegrationFrontierRuntimeFacts } from "./integration-frontier.js"
 import { deriveIntegratorState } from "../../workflow/protocols/integrator/state.js"
+import {
+  integratorQualifiedCandidateFromState,
+  type IntegratorState
+} from "../../workflow/protocols/integrator/events.js"
+import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 
 type ClaimSubject = { readonly plannedAttempt: { readonly attemptId: AttemptId; readonly taskId: TaskId } }
+type PromotionState = ReturnType<typeof deriveTargetPromotionStateFor>
+type SucceededPromotion = Extract<PromotionState, { readonly _tag: "PromotionSucceeded" }>
 
 interface StartedResponsibilityAnalysis {
   readonly trackerFactsAreCurrentFor: (responsibility: {
@@ -56,6 +57,240 @@ const unsatisfiedPrerequisites = (
     .filter((taskId) => Option.getOrUndefined(graph.value.lifecycleOf(taskId))?._tag !== "CompletedSuccessfully")
 }
 
+interface DurableTargetLineage {
+  readonly observation: TargetLineageObservation
+  readonly observedAt: JournalPosition
+}
+
+const targetLineageEqual = (left: TargetLineageObservation, right: TargetLineageObservation): boolean =>
+  left.plannedBaseIsAncestorOfTargetHead === right.plannedBaseIsAncestorOfTargetHead &&
+  left.plannedBaseSha === right.plannedBaseSha &&
+  left.targetHeadSha === right.targetHeadSha
+
+const durableTargetLineageFor = (
+  runState: ReconstructedRunState,
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility
+): DurableTargetLineage | undefined => {
+  const current = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
+  if (current === undefined) return undefined
+  const record = runState.workflowHistory.records.findLast(
+    ({ event }) =>
+      event._tag === "TargetLineageObserved" &&
+      event.plannedAttempt.attemptId === responsibility.plannedAttempt.attemptId &&
+      event.plannedAttempt.runId === responsibility.plannedAttempt.runId &&
+      targetLineageEqual(event.observation, current)
+  )
+  return record?.event._tag === "TargetLineageObserved"
+    ? { observation: record.event.observation, observedAt: record.position }
+    : undefined
+}
+
+const fixedTargetLineageFor = (
+  state: Exclude<IntegratorState, { readonly _tag: "Absent" | "Contradiction" }>
+): DurableTargetLineage => ({
+  observation: {
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: state.correlation.plannedAttempt.baseSha,
+    targetHeadSha: state.correlation.expectedTargetHead
+  },
+  observedAt: state.correlation.targetLineageObservedAt
+})
+
+const targetLineageIsIncompatible = (
+  lineage: TargetLineageObservation,
+  responsibility: StartedIntegrationResponsibility
+): boolean =>
+  lineage.plannedBaseSha !== responsibility.plannedAttempt.baseSha || !lineage.plannedBaseIsAncestorOfTargetHead
+
+const fixedIntegratorSessionLineageChanged = (
+  state: IntegratorState,
+  lineage: TargetLineageObservation,
+  responsibility: StartedIntegrationResponsibility
+): boolean =>
+  state._tag !== "Absent" &&
+  state._tag !== "Contradiction" &&
+  (lineage.targetHeadSha !== state.correlation.expectedTargetHead ||
+    targetLineageIsIncompatible(lineage, responsibility))
+
+const releaseStartedIntegrationTargetFor = (
+  responsibility: StartedIntegrationResponsibility,
+  held: boolean
+): ReadonlyArray<RunnableFrontierTransitionType> =>
+  held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
+
+const explanationAfterPrerequisitesFor = (
+  runState: ReconstructedRunState,
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility,
+  integratorState: IntegratorState,
+  promotion: PromotionState
+): FrontierExplanation => {
+  if (promotion?._tag === "PromotionSucceeded") {
+    return integrationFinalityExplanationFor(runState.workflowHistory.records, responsibility, promotion, runtimeFacts)
+  }
+  if (integratorState._tag === "GitQualifiedPrepared" && runtimeFacts.targetPromotionConfigured !== true) {
+    return FrontierExplanation.TargetPromotionConfigurationWait({
+      plannedAttempt: responsibility.plannedAttempt,
+      wakeCondition: "TargetPromotionRuntimeConfigured"
+    })
+  }
+  const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
+  if (lineage === undefined)
+    return FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
+  if (targetLineageIsIncompatible(lineage, responsibility)) {
+    return FrontierExplanation.PlannedAttemptGitConstraint({
+      correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+      gitState: "TargetRewrite",
+      taskId: responsibility.plannedAttempt.taskId,
+      wakeCondition: "GitFactsObserved"
+    })
+  }
+  return FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
+}
+
+const promotionSucceededTransitionsFor = (
+  runState: ReconstructedRunState,
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility,
+  promotion: SucceededPromotion,
+  held: boolean,
+  waiting: boolean,
+  trackerFactsAreCurrent: boolean
+): ReadonlyArray<RunnableFrontierTransitionType> => {
+  /* v8 ignore next -- @preserve The promotion action releases its exact target in ensuring; this defends same-process retained ownership. */
+  if (held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
+  if (!trackerFactsAreCurrent || waiting) return []
+  return integrationFinalityTransitionsFor(runState.workflowHistory.records, responsibility, promotion, runtimeFacts)
+}
+
+const integratorStateBlocksProgress = (state: IntegratorState, promotion: PromotionState): boolean => {
+  if (state._tag === "Contradiction" || state._tag === "NotPrepared" || state._tag === "CandidateRejected") return true
+  return promotion?._tag === "PromotionStale" || promotion?._tag === "PromotionNonConvergent"
+}
+
+const targetPromotionConfigurationIsMissing = (
+  state: IntegratorState,
+  runtimeFacts: IntegrationFrontierRuntimeFacts
+): boolean => state._tag === "GitQualifiedPrepared" && runtimeFacts.targetPromotionConfigured !== true
+
+const fixedLineageRequiresRelease = (
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility,
+  state: IntegratorState
+): boolean => {
+  if (state._tag !== "GitQualifiedPrepared") return false
+  const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
+  return lineage !== undefined && fixedIntegratorSessionLineageChanged(state, lineage, responsibility)
+}
+
+const settledIntegrationMustReleaseTarget = (
+  waiting: boolean,
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility,
+  integratorState: IntegratorState,
+  promotion: PromotionState
+): boolean =>
+  waiting ||
+  integratorStateBlocksProgress(integratorState, promotion) ||
+  targetPromotionConfigurationIsMissing(integratorState, runtimeFacts) ||
+  fixedLineageRequiresRelease(runtimeFacts, responsibility, integratorState)
+
+const transitionsBeforeStartedIntegrationAdmission = (
+  runState: ReconstructedRunState,
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility,
+  waiting: boolean,
+  held: boolean,
+  integratorState: IntegratorState,
+  promotion: PromotionState,
+  trackerFactsAreCurrentFor: (responsibility: { readonly plannedAttempt: { readonly taskId: TaskId } }) => boolean,
+  claimIsExactFor: (responsibility: ClaimSubject) => boolean
+): ReadonlyArray<RunnableFrontierTransitionType> | undefined => {
+  if (promotion?._tag === "PromotionSucceeded") {
+    return promotionSucceededTransitionsFor(
+      runState,
+      runtimeFacts,
+      responsibility,
+      promotion,
+      held,
+      waiting,
+      trackerFactsAreCurrentFor(responsibility)
+    )
+  }
+  if (!trackerFactsAreCurrentFor(responsibility)) return releaseStartedIntegrationTargetFor(responsibility, held)
+  if (!claimIsExactFor(responsibility)) return []
+  if (settledIntegrationMustReleaseTarget(waiting, runtimeFacts, responsibility, integratorState, promotion)) {
+    return releaseStartedIntegrationTargetFor(responsibility, held)
+  }
+  return undefined
+}
+
+const absentIntegratorProgressTransitionsFor = (
+  runState: ReconstructedRunState,
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility,
+  held: boolean
+): ReadonlyArray<RunnableFrontierTransitionType> => {
+  if (runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true) {
+    return []
+  }
+  const lineage = durableTargetLineageFor(runState, runtimeFacts, responsibility)
+  if (lineage === undefined) return []
+  if (targetLineageIsIncompatible(lineage.observation, responsibility)) {
+    return releaseStartedIntegrationTargetFor(responsibility, held)
+  }
+  return [
+    RunnableFrontierTransition.RunIntegrator({
+      lineage: lineage.observation,
+      lineageObservedAt: lineage.observedAt,
+      responsibility
+    })
+  ]
+}
+
+const qualifiedIntegratorProgressTransitionsFor = (
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility,
+  state: Extract<IntegratorState, { readonly _tag: "GitQualifiedPrepared" }>
+): ReadonlyArray<RunnableFrontierTransitionType> =>
+  runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true
+    ? []
+    : [
+        RunnableFrontierTransition.RunTargetPromotion({
+          candidate: integratorQualifiedCandidateFromState(state),
+          responsibility
+        })
+      ]
+
+const startedIntegrationProgressTransitionFor = (
+  runState: ReconstructedRunState,
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility,
+  integratorState: IntegratorState,
+  held: boolean
+): ReadonlyArray<RunnableFrontierTransitionType> => {
+  // A fixed Integrator session or qualified candidate may outlive a released
+  // process-local target position. The unfinished outer boundary reuses S's
+  // durable H; only later promotion requires current target authority.
+  if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+  if (integratorState._tag === "GitQualifiedPrepared") {
+    return qualifiedIntegratorProgressTransitionsFor(runtimeFacts, responsibility, integratorState)
+  }
+  if (integratorState._tag === "Absent") {
+    return absentIntegratorProgressTransitionsFor(runState, runtimeFacts, responsibility, held)
+  }
+  if (integratorState._tag === "Contradiction") return []
+  const lineage = fixedTargetLineageFor(integratorState)
+  return [
+    RunnableFrontierTransition.RunIntegrator({
+      lineage: lineage.observation,
+      lineageObservedAt: lineage.observedAt,
+      responsibility
+    })
+  ]
+}
+
 /** Derives current started-responsibility authority, explanations, and transitions in precedence order. */
 export const deriveStartedIntegrationFrontier = (
   runState: ReconstructedRunState,
@@ -70,69 +305,16 @@ export const deriveStartedIntegrationFrontier = (
     const authority = claimAuthorityFor(runtimeFacts, responsibility)
     return authority._tag === "Exact" ? undefined : authority
   }
-  const candidateIntentFor = (responsibility: StartedIntegrationResponsibility) =>
-    runState.workflowHistory.records.findLast(
-      ({ event }) =>
-        event._tag === "IntegrationCandidateConstructionIntended" && event.startedAt === responsibility.startedAt
-    )?.event
-  const hasPreIntentTargetRewrite = (responsibility: StartedIntegrationResponsibility) =>
-    candidateIntentFor(responsibility) === undefined &&
-    runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
-      ?.plannedBaseIsAncestorOfTargetHead === false
-  const constructedCandidateFor = (
-    responsibility: StartedIntegrationResponsibility
-  ): TargetVerificationCandidate | undefined =>
-    deriveConstructedIntegrationCandidateOccurrence(runState.workflowHistory.records, responsibility)
-  const verificationTargetWasRewritten = (responsibility: StartedIntegrationResponsibility): boolean => {
-    const candidate = constructedCandidateFor(responsibility)
-    const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
-    return (
-      candidate !== undefined &&
-      lineage !== undefined &&
-      (lineage.plannedBaseIsAncestorOfTargetHead === false ||
-        lineage.targetHeadSha !== candidate.correlation.expectedTargetHead)
-    )
-  }
-  const targetLineageIsIncompatible = (responsibility: StartedIntegrationResponsibility): boolean => {
-    const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
-    return (
-      lineage !== undefined &&
-      (lineage.plannedBaseSha !== responsibility.plannedAttempt.baseSha || !lineage.plannedBaseIsAncestorOfTargetHead)
-    )
-  }
-  const verificationFor = (candidate: TargetVerificationCandidate | undefined) =>
-    candidate === undefined ? undefined : deriveTargetVerificationState(runState.workflowHistory.records, candidate)
-  const promotionFor = (
-    candidate: TargetVerificationCandidate | undefined,
-    verification: ReturnType<typeof verificationFor>
-  ) =>
-    candidate === undefined || verification?._tag !== "VerificationPassed"
-      ? undefined
-      : deriveTargetPromotionStateFor(runState.workflowHistory.records, candidate, verification)
+  const integratorStateFor = (responsibility: StartedIntegrationResponsibility) =>
+    deriveIntegratorState(runState.workflowHistory.records, responsibility)
+  const promotionFor = (state: IntegratorState) =>
+    state._tag === "GitQualifiedPrepared"
+      ? deriveTargetPromotionStateFor(runState.workflowHistory.records, integratorQualifiedCandidateFromState(state))
+      : undefined
   const succeededPromotionFor = (responsibility: StartedIntegrationResponsibility) => {
-    const candidate = constructedCandidateFor(responsibility)
-    const verification = verificationFor(candidate)
-    const promotion = promotionFor(candidate, verification)
+    const promotion = promotionFor(integratorStateFor(responsibility))
     return promotion?._tag === "PromotionSucceeded" ? promotion : undefined
   }
-  const candidateAwaitsVerificationPlan = (
-    candidate: TargetVerificationCandidate | undefined,
-    verification: ReturnType<typeof verificationFor>
-  ): boolean =>
-    candidate !== undefined &&
-    verification === undefined &&
-    Option.isNone(runtimeFacts.targetVerificationPlan ?? Option.none())
-  const promotionRuntimeIsMissing = (verification: ReturnType<typeof verificationFor>): boolean =>
-    verification?._tag === "VerificationPassed" && runtimeFacts.targetPromotionConfigured !== true
-  const progressOrRewriteExplanation = (responsibility: StartedIntegrationResponsibility) =>
-    hasPreIntentTargetRewrite(responsibility) || verificationTargetWasRewritten(responsibility)
-      ? FrontierExplanation.PlannedAttemptGitConstraint({
-          correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
-          gitState: "TargetRewrite",
-          taskId: responsibility.plannedAttempt.taskId,
-          wakeCondition: "GitFactsObserved"
-        })
-      : FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
   const explanationForStarted = (responsibility: StartedIntegrationResponsibility) => {
     const prerequisiteTaskIds = unsatisfiedPrerequisites(runState, responsibility)
     if (prerequisiteTaskIds.length > 0) {
@@ -142,213 +324,36 @@ export const deriveStartedIntegrationFrontier = (
         wakeCondition: "TaskTrackerFactsObserved"
       })
     }
-    const succeededPromotion = succeededPromotionFor(responsibility)
-    if (succeededPromotion !== undefined) {
-      return integrationFinalityExplanationFor(
-        runState.workflowHistory.records,
-        responsibility,
-        succeededPromotion,
-        runtimeFacts
-      )
-    }
-    const candidate = constructedCandidateFor(responsibility)
-    const verification = verificationFor(candidate)
-    if (candidateAwaitsVerificationPlan(candidate, verification)) {
-      return FrontierExplanation.TargetVerificationConfigurationWait({
-        plannedAttempt: responsibility.plannedAttempt,
-        wakeCondition: "TargetVerificationPlanConfigured"
-      })
-    }
-    if (promotionRuntimeIsMissing(verification)) {
-      return FrontierExplanation.TargetPromotionConfigurationWait({
-        plannedAttempt: responsibility.plannedAttempt,
-        wakeCondition: "TargetPromotionRuntimeConfigured"
-      })
-    }
-    if (promotionFor(candidate, verification)?._tag === "PromotionPending") {
-      return FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
-    }
-    return progressOrRewriteExplanation(responsibility)
+    const integratorState = integratorStateFor(responsibility)
+    return explanationAfterPrerequisitesFor(
+      runState,
+      runtimeFacts,
+      responsibility,
+      integratorState,
+      promotionFor(integratorState)
+    )
   }
-  // eslint-disable-next-line complexity -- One started responsibility has a closed precedence order for tracker, claim, blocker, target, and candidate facts.
   const transitions = started.flatMap<RunnableFrontierTransitionType>((responsibility) => {
-    /* v8 ignore next -- @preserve The serialized coordinator cannot select a responsibility while its scoped candidate effect is active. */
+    /* v8 ignore next -- @preserve The serialized coordinator cannot select a responsibility while its scoped Integrator effect is active. */
     if (runtimeFacts.activeResponsibilityPositions?.has(responsibility.queuedAt)) return []
     const waiting = unsatisfiedPrerequisites(runState, responsibility).length > 0
     const held = runtimeFacts.heldResponsibilityPositions.has(responsibility.queuedAt)
-    const existing = deriveIntegrationCandidateConstruction(runState.workflowHistory.records, responsibility)
-    const durableIntent = candidateIntentFor(responsibility)
-    if (existing?._tag === "CandidateConstructed") {
-      const candidate = constructedCandidateFor(responsibility)
-      const verification = verificationFor(candidate)
-      const promotion = promotionFor(candidate, verification)
-      if (promotion?._tag === "PromotionSucceeded") {
-        /* v8 ignore next -- @preserve The promotion action releases its exact target in ensuring; this release-only branch defends same-process compatibility state. */
-        if (held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
-        /* v8 ignore next -- @preserve The post-promotion blocker scenario and finality tracker-wait test exercise this same passive no-transition outcome. */
-        if (!trackerFactsAreCurrentFor(responsibility) || waiting) return []
-        return integrationFinalityTransitionsFor(
-          runState.workflowHistory.records,
-          responsibility,
-          promotion,
-          runtimeFacts
-        )
-      }
-    }
-    if (!trackerFactsAreCurrentFor(responsibility)) {
-      return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-    }
-    if (!claimIsExactFor(responsibility)) return []
-    // The expand step resumes an outer Integrator session once one exists.
-    // Unmigrated histories continue through the legacy split until #223/#225.
-    const integratorState = deriveIntegratorState(runState.workflowHistory.records, responsibility)
-    if (integratorState._tag !== "Absent") {
-      if (waiting) {
-        return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-      }
-      if (
-        integratorState._tag === "Contradiction" ||
-        integratorState._tag === "NotPrepared" ||
-        integratorState._tag === "CandidateRejected" ||
-        integratorState._tag === "GitQualifiedPrepared"
-      ) {
-        return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-      }
-      if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
-      return [
-        RunnableFrontierTransition.RunIntegrator({
-          lineage: {
-            plannedBaseIsAncestorOfTargetHead: true,
-            plannedBaseSha: integratorState.correlation.plannedAttempt.baseSha,
-            targetHeadSha: integratorState.correlation.expectedTargetHead
-          },
-          lineageObservedAt: integratorState.correlation.targetLineageObservedAt,
-          responsibility
-        })
-      ]
-    }
-    if (existing?._tag === "CandidateConstructed") {
-      const candidate = Option.getOrThrow(Option.fromUndefinedOr(constructedCandidateFor(responsibility)))
-      const verification = deriveTargetVerificationState(runState.workflowHistory.records, candidate)
-      if (verification?._tag === "VerificationStopped" || verification?._tag === "VerificationContradicted") {
-        return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-      }
-      if (verification?._tag === "VerificationPassed") {
-        const promotion = deriveTargetPromotionStateFor(runState.workflowHistory.records, candidate, verification)
-        if (
-          promotion?._tag === "PromotionSucceeded" ||
-          promotion?._tag === "PromotionStale" ||
-          promotion?._tag === "PromotionNonConvergent"
-        ) {
-          return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-        }
-        if (waiting) return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-        if (!runtimeFacts.targetLineageByAttemptId?.has(responsibility.plannedAttempt.attemptId)) {
-          return held ? [] : [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
-        }
-        if (promotion === undefined && verificationTargetWasRewritten(responsibility)) {
-          if (targetLineageIsIncompatible(responsibility)) {
-            return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-          }
-          if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
-          const durableIntent = candidateIntentFor(responsibility)
-          const lineage = runtimeFacts.targetLineageByAttemptId.get(responsibility.plannedAttempt.attemptId)
-          /* v8 ignore next -- @preserve CandidateConstructed state and a held compatible rewrite both derive from this exact durable intent and lineage observation. */
-          if (durableIntent?._tag !== "IntegrationCandidateConstructionIntended" || lineage === undefined) return []
-          return [
-            RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
-              acceptedCandidateProgressAt: acceptedCandidateProgressAt(
-                runState.workflowHistory.records,
-                responsibility
-              ),
-              correctionLimit: durableIntent.correctionLimit,
-              continuationLimit: durableIntent.continuationLimit,
-              lineage,
-              responsibility
-            })
-          ]
-        }
-        if (runtimeFacts.targetPromotionConfigured !== true) {
-          return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-        }
-        if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
-        /* v8 ignore next -- @preserve The preceding lineage-presence guard returns when this stable runtime map lacks the attempt, so this conjunction cannot be true in a valid transition evaluation. */
-        if (
-          promotion === undefined &&
-          !runtimeFacts.targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId)
-        ) {
-          return []
-        }
-        return [RunnableFrontierTransition.RunTargetPromotion({ candidate, responsibility, verification })]
-      }
-      if (waiting && held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
-      const plan = runtimeFacts.targetVerificationPlan ?? Option.none()
-      if (Option.isNone(plan))
-        return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-      if (waiting) return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-      if (verificationTargetWasRewritten(responsibility)) {
-        if (targetLineageIsIncompatible(responsibility)) {
-          return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-        }
-        if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
-        const durableIntent = candidateIntentFor(responsibility)
-        const lineage = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
-        /* v8 ignore next -- @preserve CandidateConstructed state and a held compatible rewrite both derive from this exact durable intent and lineage observation. */
-        if (durableIntent?._tag !== "IntegrationCandidateConstructionIntended" || lineage === undefined) return []
-        return [
-          RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
-            acceptedCandidateProgressAt: acceptedCandidateProgressAt(runState.workflowHistory.records, responsibility),
-            correctionLimit: durableIntent.correctionLimit,
-            continuationLimit: durableIntent.continuationLimit,
-            lineage,
-            responsibility
-          })
-        ]
-      }
-      if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
-      if (!runtimeFacts.targetLineageByAttemptId?.has(responsibility.plannedAttempt.attemptId)) return []
-      return [RunnableFrontierTransition.RunTargetVerification({ candidate, plan: plan.value, responsibility })]
-    }
-    if (
-      existing?._tag === "CandidateCorrelationContradiction" ||
-      existing?._tag === "CandidateCorrectionLimitReached" ||
-      existing?._tag === "CandidateContinuationLimitReached"
+    const integratorState = integratorStateFor(responsibility)
+    const promotion = promotionFor(integratorState)
+    const earlyTransition = transitionsBeforeStartedIntegrationAdmission(
+      runState,
+      runtimeFacts,
+      responsibility,
+      waiting,
+      held,
+      integratorState,
+      promotion,
+      trackerFactsAreCurrentFor,
+      claimIsExactFor
     )
-      return held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
-    if (waiting && held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
-    if (!waiting && !held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
-    if (waiting) return []
-    if (hasPreIntentTargetRewrite(responsibility)) return []
-    return Option.all({
-      continuationLimit:
-        durableIntent?._tag === "IntegrationCandidateConstructionIntended"
-          ? Option.some(durableIntent.continuationLimit)
-          : (runtimeFacts.candidateContinuationLimit ?? Option.none()),
-      correctionLimit:
-        durableIntent?._tag === "IntegrationCandidateConstructionIntended"
-          ? Option.some(durableIntent.correctionLimit)
-          : (runtimeFacts.candidateCorrectionLimit ?? Option.none()),
-      lineage:
-        durableIntent?._tag === "IntegrationCandidateConstructionIntended"
-          ? Option.some({
-              plannedBaseIsAncestorOfTargetHead: true as const,
-              plannedBaseSha: durableIntent.plannedAttempt.baseSha,
-              targetHeadSha: durableIntent.correlation.expectedTargetHead
-            })
-          : Option.fromUndefinedOr(runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId))
-    }).pipe(
-      Option.match({
-        onNone: () => [],
-        onSome: ({ continuationLimit, correctionLimit, lineage }) => [
-          RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
-            acceptedCandidateProgressAt: acceptedCandidateProgressAt(runState.workflowHistory.records, responsibility),
-            correctionLimit,
-            continuationLimit,
-            lineage,
-            responsibility
-          })
-        ]
-      })
+    return (
+      earlyTransition ??
+      startedIntegrationProgressTransitionFor(runState, runtimeFacts, responsibility, integratorState, held)
     )
   })
   return {

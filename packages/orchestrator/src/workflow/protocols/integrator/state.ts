@@ -147,7 +147,8 @@ const stateForPreparedCandidate = (
     candidateCommit: observation.commit,
     candidateText,
     correlation,
-    observation: { directParents: [observation.directParents[0], observation.directParents[1]] }
+    observation: { directParents: [observation.directParents[0], observation.directParents[1]] },
+    qualifiedAt: observed.position
   })
 }
 

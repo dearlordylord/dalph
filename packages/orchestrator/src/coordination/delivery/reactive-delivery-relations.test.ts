@@ -989,3 +989,48 @@ it.effect("publishes a typed failure when the journal signal closes with failure
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )
+
+it.effect("fails an accepted-fact waiter when the journal signal fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const journalState = yield* journal.state.get
+      const journalFailure = new JournalHistoryInvalid({
+        position: journalState.position,
+        detail: "journal signal failed with an accepted-fact waiter pending",
+        runId
+      })
+      const failJournalSignal = yield* Deferred.make<void>()
+      const failingJournal = {
+        ...journal,
+        state: {
+          ...journal.state,
+          changes: Stream.succeed(journalState).pipe(
+            Stream.concat(
+              Stream.fromEffect(Deferred.await(failJournalSignal).pipe(Effect.andThen(Effect.fail(journalFailure))))
+            )
+          )
+        }
+      }
+      const layer = yield* makeReactiveDeliveryRelationsLayer(
+        runId,
+        target,
+        failingJournal,
+        currentProjection(journal.state.get.pipe(Effect.orDie))
+      )
+      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      const trigger = makeTrackerGraphObservationOperation(OperationId.make("pending-waiter-failure-trigger"), target)
+      yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
+      const waiting = yield* publication.awaitCurrent.pipe(Effect.flip, Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(waiting.pollUnsafe()).toBeUndefined()
+
+      yield* Deferred.succeed(failJournalSignal, undefined)
+      const failure = yield* Fiber.join(waiting)
+
+      expect(failure).toBeInstanceOf(DeliveryRelationReconciliationError)
+      if (!(failure instanceof DeliveryRelationReconciliationError)) return expect.fail("expected waiter failure")
+      expect(Cause.squash(failure.cause)).toEqual(journalFailure)
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)

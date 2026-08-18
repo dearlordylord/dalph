@@ -45,10 +45,9 @@ type CandidateCorrelationRunBindingEvent = Extract<
 >
 
 const invalidTargetPromotionRunBinding = (event: TargetPromotionRunBindingEvent, runId: RunId): string | undefined =>
-  event.correlation.candidateCorrelation.runId === runId &&
-  event.correlation.verificationCorrelation.candidateCorrelation.runId === runId
+  event.correlation.qualifiedCandidate.correlation.plannedAttempt.runId === runId
     ? undefined
-    : `target promotion binds run ${event.correlation.candidateCorrelation.runId}`
+    : `target promotion binds run ${event.correlation.qualifiedCandidate.correlation.plannedAttempt.runId}`
 
 const invalidTargetVerificationRunBinding = (
   event: TargetVerificationRunBindingEvent,

@@ -7,13 +7,13 @@ import {
   TargetPromotionGit,
   TargetPromotionGitReadFailure,
   TargetPromotionGitReadObservation,
-  type TargetPromotionRequest
+  type TargetPromotionGitRequest
 } from "../../workflow/protocols/target-promotion/events.js"
 
 /** Resolves the configured target ref to one complete commit before any ancestry decision. */
 const readCurrentHead = Effect.fn("TargetPromotionGit.Node.readCurrentHead")(function* (
   commands: GitCommandService,
-  request: TargetPromotionRequest
+  request: TargetPromotionGitRequest
 ) {
   const result = yield* commands
     .run(request.integrationTarget.repository, [
@@ -51,7 +51,10 @@ const readCurrentHead = Effect.fn("TargetPromotionGit.Node.readCurrentHead")(fun
   )
 })
 
-const compareAndSetFailure = (request: TargetPromotionRequest, detail: string): TargetPromotionCompareAndSetFailure =>
+const compareAndSetFailure = (
+  request: TargetPromotionGitRequest,
+  detail: string
+): TargetPromotionCompareAndSetFailure =>
   new TargetPromotionCompareAndSetFailure({
     candidateCommit: request.candidateCommit,
     detail,
@@ -68,7 +71,7 @@ export const nodeGitTargetPromotionLayer = Layer.effect(
   Effect.gen(function* () {
     const commands = yield* GitCommand
 
-    const read = Effect.fn("TargetPromotionGit.Node.read")(function* (request: TargetPromotionRequest) {
+    const read = Effect.fn("TargetPromotionGit.Node.read")(function* (request: TargetPromotionGitRequest) {
       const currentHeadSha = yield* readCurrentHead(commands, request)
       if (currentHeadSha === request.candidateCommit) {
         return TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha })
@@ -103,7 +106,7 @@ export const nodeGitTargetPromotionLayer = Layer.effect(
     })
 
     const compareAndSet = Effect.fn("TargetPromotionGit.Node.compareAndSet")(function* (
-      request: TargetPromotionRequest
+      request: TargetPromotionGitRequest
     ) {
       const result = yield* commands
         .run(request.integrationTarget.repository, [

@@ -755,7 +755,8 @@ await run("accepted-result integration exhaustive model", [
 const integrationFinalityInvariants = [
   "exactProofAndBinding",
   "completionClaimRequiresExactPromotionProof",
-  "completionProofCarriesThreeSealedManifests",
+  "completionProofCarriesAcceptedEvidenceAndNoReturnedRefs",
+  "noLegacyEvidenceAuthorizesFinality",
   "replacementIntentPrecedesRequest",
   "deletionIntentPrecedesRequest",
   "replacementRereadPrecedesRetry",

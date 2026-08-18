@@ -6,37 +6,44 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { expect } from "vitest"
 import {
   AttemptId,
+  AcceptedResult,
+  EvidenceDigest,
+  EvidenceReference,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
-  RunId
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
 } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   IntegrationCandidateGit,
-  IntegrationCandidateGitReadFailure,
-  IntegrationCandidateId,
-  IntegrationCandidateResourceLocator,
-  IntegrationSessionId
+  IntegrationCandidateGitReadFailure
 } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import {
+  IntegratorCandidateResourceLocator,
+  IntegratorCandidateText,
+  IntegratorCorrelation,
+  IntegratorQualifiedCandidate,
+  IntegratorSessionId
+} from "../../workflow/protocols/integrator/events.js"
 import {
   TargetPromotionCompareAndSetFailure,
   TargetPromotionCompareAndSetResult,
   TargetPromotionGit,
   TargetPromotionGitReadFailure,
   type TargetPromotionGitService,
-  type TargetPromotionRequest,
-  TargetPromotionVerification,
   TargetPromotionGitReadObservation,
-  targetPromotionRequestFor
+  type TargetPromotionCorrelation,
+  targetPromotionCorrelationFor,
+  targetPromotionGitRequestFor
 } from "../../workflow/protocols/target-promotion/events.js"
-import {
-  TargetVerificationCandidate,
-  TargetVerificationPlanId,
-  targetVerificationCorrelationFor
-} from "../../workflow/protocols/target-verification/events.js"
-import { EvidenceDigest, EvidenceReference } from "../../workflow/protocols/target-verification/evidence-store.js"
 import { GitCommand, GitCommandInvocationFailure, GitCommandResult, nodeGitCommandLayer } from "./command.js"
 import { GitTargetLineage, GitTargetLineageReadFailure, nodeGitTargetLineageLayer } from "./target-lineage.js"
 import { nodeGitIntegrationCandidateLayer } from "./integration-candidate.js"
@@ -100,48 +107,54 @@ const nodeTargetPromotionLayer = nodeGitTargetPromotionLayer.pipe(
 
 const evidence = EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("a".repeat(64)) })
 
-const promotionRequestFor = (
+const promotionCorrelationFor = (
   target: IntegrationTarget,
   expectedHead: GitCommitSha,
-  acceptedResult: GitCommitSha,
+  acceptedResultCommit: GitCommitSha,
   candidateCommit: GitCommitSha
-): TargetPromotionRequest => {
-  const candidate = TargetVerificationCandidate.make({
-    candidateCommit,
-    constructedAt: JournalPosition.make(1),
-    correlation: {
-      acceptanceManifest: evidence,
-      acceptedResultCommit: acceptedResult,
-      attemptId: AttemptId.make("real-git-promotion-attempt"),
-      candidateId: IntegrationCandidateId.make("real-git-promotion-candidate"),
-      candidateResource: IntegrationCandidateResourceLocator.make("real-git-promotion-resource"),
-      expectedTargetHead: expectedHead,
-      integrationSessionId: IntegrationSessionId.make("real-git-promotion-session"),
-      integrationTarget: target,
-      runId: RunId.make("real-git-promotion-run")
-    },
-    reviewManifest: evidence
+): TargetPromotionCorrelation => {
+  const acceptedResult = AcceptedResult.make({ commit: acceptedResultCommit, evidenceManifest: evidence })
+  const plannedAttempt = PlannedTaskAttempt.make({
+    attemptId: AttemptId.make("real-git-promotion-attempt"),
+    baseSha: expectedHead,
+    branch: TaskBranchRef.make("refs/heads/dalph/real-git-promotion"),
+    executor: TaskExecutorLocator.make("executor:real-git-promotion"),
+    runId: RunId.make("real-git-promotion-run"),
+    taskId: TaskId.make("real-git-promotion-task"),
+    taskRevision: TaskRevision.make("real-git-promotion-revision"),
+    worktree: WorktreeLocator.make("/worktrees/real-git-promotion")
   })
-  const verificationCorrelation = targetVerificationCorrelationFor(
-    candidate,
-    TargetVerificationPlanId.make("real-git-promotion-plan")
-  )
-  return targetPromotionRequestFor(
-    candidate,
-    TargetPromotionVerification.make({ correlation: verificationCorrelation, manifest: evidence })
-  )
+  const qualifiedCandidate = IntegratorQualifiedCandidate.make({
+    candidateCommit,
+    candidateText: IntegratorCandidateText.make("real-git-promotion-candidate"),
+    correlation: IntegratorCorrelation.make({
+      acceptedResult,
+      candidateResource: IntegratorCandidateResourceLocator.make("real-git-promotion-resource"),
+      expectedTargetHead: expectedHead,
+      integrationTarget: target,
+      plannedAttempt,
+      queuedAt: JournalPosition.make(1),
+      sessionId: IntegratorSessionId.make("real-git-promotion-session"),
+      startedAt: JournalPosition.make(2),
+      targetLineageObservedAt: JournalPosition.make(3)
+    }),
+    directParents: [expectedHead, acceptedResultCommit],
+    qualifiedAt: JournalPosition.make(4)
+  })
+  return targetPromotionCorrelationFor(qualifiedCandidate)
 }
 
 const scriptedTarget = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/main"),
   repository: GitRepositoryLocator.make("/repositories/target-promotion.git")
 })
-const scriptedRequest = promotionRequestFor(
+const scriptedCorrelation = promotionCorrelationFor(
   scriptedTarget,
   GitCommitSha.make("1".repeat(40)),
   GitCommitSha.make("2".repeat(40)),
   GitCommitSha.make("3".repeat(40))
 )
+const scriptedRequest = targetPromotionGitRequestFor(scriptedCorrelation)
 
 const scriptedTargetPromotion = <A>(
   operation: (git: TargetPromotionGitService) => Effect.Effect<A, unknown>,
@@ -414,7 +427,8 @@ it.effect(
             ref: IntegrationTargetRef.make("refs/heads/main"),
             repository: gitDirectory
           })
-          const request = promotionRequestFor(target, targetHead, accepted, candidate)
+          const correlation = promotionCorrelationFor(target, targetHead, accepted, candidate)
+          const request = targetPromotionGitRequestFor(correlation)
           yield* Effect.gen(function* () {
             const git = yield* TargetPromotionGit
             expect(yield* git.read(request)).toEqual(
@@ -441,7 +455,9 @@ it.effect(
               repository: gitDirectory
             })
             const unreadable = yield* git
-              .read(promotionRequestFor(missingTarget, targetHead, accepted, candidate))
+              .read(
+                targetPromotionGitRequestFor(promotionCorrelationFor(missingTarget, targetHead, accepted, candidate))
+              )
               .pipe(Effect.flip)
             expect(unreadable).toBeInstanceOf(TargetPromotionGitReadFailure)
           }).pipe(Effect.provide(nodeTargetPromotionLayer))
