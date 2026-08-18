@@ -1487,10 +1487,10 @@ module acceptedResultIntegration {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
-      result.phase == IntegratorInFlight,
+      Set(IntegratorInFlight, RetryInFlight).contains(result.phase),
       result.targetHeld,
       result.sessionFixed,
-      result.integratorInvocationCount == 1,
+      result.integratorInvocationCount == if (result.phase == RetryInFlight) 2 else 1,
       state' = {
         ...state,
         results: state.results.put(id, {
@@ -1514,10 +1514,10 @@ module acceptedResultIntegration {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
-      result.phase == IntegratorInFlight,
+      Set(IntegratorInFlight, RetryInFlight).contains(result.phase),
       result.targetHeld,
       result.sessionFixed,
-      result.integratorInvocationCount == 1,
+      result.integratorInvocationCount == if (result.phase == RetryInFlight) 2 else 1,
       candidate != 0,
       state' = {
         ...state,
@@ -1666,7 +1666,7 @@ module acceptedResultIntegration {
       result.targetHeld,
       result.sessionFixed,
       result.integratorResultRecorded,
-      result.quarantineOccurrenceCount == 0,
+      result.quarantineOccurrenceCount <= 1,
       result.integrationResponsibilityRecorded,
       result.integrationResponsibilityCount == 1,
       result.acceptedEvidencePreserved,
@@ -1689,7 +1689,7 @@ module acceptedResultIntegration {
           phase: Quarantined,
           targetHeld: false,
           quarantineRecorded: true,
-          quarantineOccurrenceCount: 1,
+          quarantineOccurrenceCount: result.quarantineOccurrenceCount + 1,
           quarantinePosition: state.nextJournalPosition,
           quarantineCause:
             if (result.phase == IntegratorNotPrepared) NotPreparedQuarantine else CandidateRejectedQuarantine,
@@ -1839,6 +1839,7 @@ module acceptedResultIntegration {
           ...result,
           phase: RetryInFlight,
           targetHeld: true,
+          quarantineRecorded: false,
           retryRunCount: if (result.retryRunCount == 0) 1 else result.retryRunCount,
           // Retry is a second explicit outer Integrator run. A process-loss
           // resume leaves this count unchanged; only the winning Retry

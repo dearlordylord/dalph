@@ -607,6 +607,22 @@ module acceptedResultIntegrationTest {
         retryAdvancesSameSessionToOrdinalTwo,
         noAutomaticIntegratorSuccessor,
       })
+      .then(reportIntegratorNotPrepared(1))
+      .expect(and {
+        state.results.get(1).phase == IntegratorNotPrepared,
+        state.results.get(1).integratorRunOrdinal == 2,
+        state.results.get(1).integratorInvocationCount == 2,
+        not(state.results.get(1).quarantineRecorded),
+        conclusiveResultCannotReleaseBeforeQuarantine,
+      })
+      .then(recordQuarantine(1))
+      .expect(and {
+        state.results.get(1).phase == Quarantined,
+        state.results.get(1).quarantineOccurrenceCount == 2,
+        state.results.get(1).quarantineDirection == NoQuarantineDirection,
+        not(state.results.get(1).targetHeld),
+        quarantineDirectionIsExactAndFirst,
+      })
   }
 
   // Retry at a changed H is not a stale-session call. It records a new
