@@ -110,6 +110,7 @@ it("classifies primitive and native coded failures", () => {
 
 it("classifies every private directory and descriptor disposition", async () => {
   const uid = 1_000
+  const native = controlledNative({ processUid: () => uid })
   expect(privateDirectoryStatFailure(fakeStat({ symbolicLink: true }), "/state", true, uid)).toContain("symlink")
   expect(privateDirectoryStatFailure(fakeStat({ directory: false }), "/state", true, uid)).toContain("not a directory")
   expect(privateDirectoryStatFailure(fakeStat({ uid: uid + 1 }), "/state", true, uid)).toContain("foreign")
@@ -129,10 +130,10 @@ it("classifies every private directory and descriptor disposition", async () => 
     }
   ]
   for (const { file, tag } of cases) {
-    expect((await inspectPrivateDescriptor(file, "/state/private.json"))._tag).toBe(tag)
-    expect(Exit.isFailure(await Effect.runPromiseExit(validatePrivateDescriptor(file, "/state/private.json")))).toBe(
-      tag === "Failure"
-    )
+    expect((await inspectPrivateDescriptor(file, "/state/private.json", native))._tag).toBe(tag)
+    expect(
+      Exit.isFailure(await Effect.runPromiseExit(validatePrivateDescriptor(file, "/state/private.json", native)))
+    ).toBe(tag === "Failure")
   }
 })
 
