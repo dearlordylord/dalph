@@ -387,6 +387,7 @@ const exactGitReadForRestartFailure = (
   const actions = occurrences.filter(isExactEarlierGitReadForRestartFailure(occurrence))
   if (actions.length !== 1) return false
   const operation = actions[0]?.operation
+  /* v8 ignore next -- @preserve A schema-valid GitReadInitiated occurrence always has operation when the exact-one filter succeeds. */
   if (operation === undefined) return false
   return restartAuthorityReadOperationMatches(operation, occurrence.failure, occurrence.subject)
 }
@@ -548,6 +549,7 @@ const nonProjectedJournalEventKinds = {
   IntegratorRunStarted: true,
   IntegratorResultRecorded: true,
   IntegratorSessionFixed: true,
+  IntegratorSuccessorSessionFixed: true,
   TargetVerificationCorrelationContradicted: true,
   TargetVerificationEvidenceSealed: true,
   TargetVerificationIntended: true,

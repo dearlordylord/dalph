@@ -24,6 +24,7 @@ const gates = [
   { args: ["check:complexity"], name: "cyclomatic complexity", timeout: 60 * SECOND },
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:memory"], name: "project memory scenarios", timeout: 60 * SECOND },
+  { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: 3 * 60 * SECOND },
   ...(withoutQuint
     ? []
     : [{ args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 5 * 60 * SECOND }]),

@@ -43,6 +43,9 @@ import type {
   IntegratorRunQualifiedCandidate
 } from "../../workflow/protocols/integrator/events.js"
 import type { InitialConclusiveIntegrationQuarantineInput } from "../../workflow/protocols/integration-quarantine/initial-conclusive.js"
+import type { ProviderRunFailureQuarantineInput } from "../../workflow/protocols/integration-quarantine/provider-failure.js"
+import type { RetryConclusiveIntegrationQuarantineInput } from "../../workflow/protocols/integration-quarantine/retry-conclusive.js"
+import type { IntegratorSuccessorPreparationInput } from "../../workflow/protocols/integrator/session.js"
 import type {
   CompletionTaskClaim,
   CompletionClaimDeletionRequest,
@@ -191,6 +194,21 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly result: InitialConclusiveIntegrationQuarantineInput
     readonly responsibility: StartedIntegrationResponsibility
   }
+  /** Recovers Q after provider-owned activity absence was durable but its dependent append was interrupted. */
+  RecordProviderRunFailureIntegrationQuarantine: {
+    readonly input: ProviderRunFailureQuarantineInput
+    readonly responsibility: StartedIntegrationResponsibility
+  }
+  /** Records Q2 after an authorized Retry run 2 already ended conclusively. */
+  RecordRetryConclusiveIntegrationQuarantine: {
+    readonly responsibility: StartedIntegrationResponsibility
+    readonly result: RetryConclusiveIntegrationQuarantineInput
+  }
+  /** Fixes one deterministic FullRerun successor after the operator direction and fresh Git lineage are durable. */
+  FixIntegratorSuccessorSession: {
+    readonly input: IntegratorSuccessorPreparationInput
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   RunTargetVerification: {
     readonly candidate: TargetVerificationCandidate
     readonly plan: TargetVerificationPlan
@@ -278,6 +296,9 @@ const transitionTrackerGraphRequirements = {
   ContinueStartedIntegrationCandidate: "CurrentTrackerGraphRequired",
   RecordChangedHeadRetryQuarantine: "CurrentTrackerGraphRequired",
   RecordInitialConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
+  RecordProviderRunFailureIntegrationQuarantine: "AcceptedHistorySufficient",
+  RecordRetryConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
+  FixIntegratorSuccessorSession: "CurrentTrackerGraphRequired",
   RunIntegrator: "CurrentTrackerGraphRequired",
   RunTargetVerification: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",

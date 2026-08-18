@@ -827,6 +827,16 @@ const renameRecordedCassetteEntry = (
           _tag: "IntegratorSessionFixed",
           correlation: renameIntegratorCorrelation(entry.correlation, maps)
         }),
+      IntegratorSuccessorSessionFixed: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorSuccessorSessionFixed",
+          direction: preserveCassetteValue(entry.direction),
+          directionAppliedAt: preserveCassetteValue(entry.directionAppliedAt),
+          predecessor: renameIntegratorCorrelation(entry.predecessor, maps),
+          quarantineAt: preserveCassetteValue(entry.quarantineAt),
+          successor: renameIntegratorCorrelation(entry.successor, maps),
+          successorGeneration: preserveCassetteValue(entry.successorGeneration)
+        }),
       IntegratorResultRecorded: (entry) =>
         completeFields<typeof entry>({
           _tag: "IntegratorResultRecorded",
@@ -874,7 +884,8 @@ const renameRecordedCassetteEntry = (
           _tag: "IntegrationProviderRunActivityAbsent",
           correlation: renameIntegratorCorrelation(entry.correlation, maps),
           detail: preserveCassetteValue(entry.detail),
-          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          run: renameIntegratorRunCorrelation(entry.run, maps)
         }),
       IntegrationQuarantined: (entry) =>
         completeFields<typeof entry>({

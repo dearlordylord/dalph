@@ -83,6 +83,7 @@ const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): 
           ? undefined
           : `integration work for attempt ${candidate.plannedAttempt.attemptId} binds run ${candidate.plannedAttempt.runId}`,
       IntegrationCandidateSessionSuperseded: (candidate) =>
+        /* v8 ignore next -- @preserve The event schema rejects supersessions whose two correlations belong to different runs. */
         candidate.priorCorrelation.runId === runId && candidate.successorCorrelation.runId === runId
           ? undefined
           : "candidate session supersession binds a foreign run",
@@ -101,6 +102,11 @@ const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): 
         candidate.correlation.plannedAttempt.runId === runId
           ? undefined
           : `Integrator session binds run ${candidate.correlation.plannedAttempt.runId}`,
+      IntegratorSuccessorSessionFixed: (candidate) =>
+        /* v8 ignore next -- @preserve The event schema preserves one planned attempt, so both successor run bindings cannot be foreign independently. */
+        candidate.predecessor.plannedAttempt.runId === runId && candidate.successor.plannedAttempt.runId === runId
+          ? undefined
+          : "Integrator successor session binds a foreign run",
       IntegratorRunStarted: (candidate) =>
         candidate.run.session.plannedAttempt.runId === runId
           ? undefined
@@ -128,7 +134,18 @@ const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): 
       IntegratorRunCandidateGitObserved: (candidate) =>
         candidate.run.session.plannedAttempt.runId === runId
           ? undefined
-          : `Integrator run candidate Git observation binds run ${candidate.run.session.plannedAttempt.runId}`
+          : `Integrator run candidate Git observation binds run ${candidate.run.session.plannedAttempt.runId}`,
+      IntegrationQuarantineDirectionApplied: (candidate) =>
+        candidate.requestId.runId === runId
+          ? undefined
+          : `integration quarantine direction binds run ${candidate.requestId.runId}`,
+      IntegrationProviderRunActivityAbsent: (candidate) => {
+        const correlationRunId = candidate.correlation.plannedAttempt.runId
+        const exactRunId = candidate.run.session.plannedAttempt.runId
+        return correlationRunId === runId && exactRunId === runId
+          ? undefined
+          : `Integrator provider-activity absence binds run ${exactRunId}`
+      }
     }),
     Match.orElse(() => undefined)
   )

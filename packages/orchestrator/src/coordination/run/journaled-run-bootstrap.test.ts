@@ -6,6 +6,7 @@ import { expect } from "vitest"
 import { TestClock } from "effect/testing"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import {
   TrackerAdapterReadContext,
   TrackerAdapterReadError,
@@ -35,16 +36,17 @@ import {
 } from "../../workflow-journal/store.js"
 import { OperationId } from "../../workflow/identity.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
-import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import { TargetLineageObservedEvent, taskTrackerReadIntent } from "../../workflow/registry/event.js"
 import { projectWorkflowOccurrences } from "../../workflow/registry/occurrence-projection.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import {
   integrationQuarantinedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
+  integratorSessionFixedRecordKey,
   intentRecordKey
 } from "../../workflow-journal/record-key.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap } from "./run.js"
@@ -70,10 +72,13 @@ import {
 } from "../../workflow/protocols/integration-quarantine/events.js"
 import {
   IntegratorNotPreparedDetail,
+  IntegratorRunCorrelation,
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
-  IntegratorResult
+  IntegratorResult,
+  IntegratorSessionFixedEvent
 } from "../../workflow/protocols/integrator/events.js"
+import { integratorResponsibilityFactsFromCorrelation } from "../../workflow/protocols/integrator/state.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { deterministicOperationIdAllocatorLayer } from "../../workflow/protocols/task-attempt-planning/plan.js"
@@ -1085,7 +1090,31 @@ it.effect("keeps the Journal-backed quarantine direction route available after d
         Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
       )
 
-      const run = integrationFinalityFixture.qualifiedCandidate.run
+      const fixtureRun = integrationFinalityFixture.qualifiedCandidate.run
+      const lineage = yield* storage.append(
+        runId,
+        JournalRecordKey.make("journaled-bootstrap:quarantine-direction:lineage"),
+        TargetLineageObservedEvent.make({
+          observation: TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: fixtureRun.session.plannedAttempt.baseSha,
+            targetHeadSha: fixtureRun.session.expectedTargetHead
+          }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: OperationId.make("journaled-bootstrap:quarantine-direction:lineage"),
+          plannedAttempt: fixtureRun.session.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const run = IntegratorRunCorrelation.make({
+        ordinal: fixtureRun.ordinal,
+        session: { ...fixtureRun.session, targetLineageObservedAt: lineage.position }
+      })
+      yield* storage.append(
+        runId,
+        integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(run.session)),
+        IntegratorSessionFixedEvent.make({ correlation: run.session, version: workflowJournalEventVersion })
+      )
       yield* storage.append(
         runId,
         integratorRunStartedRecordKey(run),
@@ -1142,6 +1171,8 @@ it.effect("keeps the Journal-backed quarantine direction route available after d
       ).toMatchObject({ _tag: "JournaledRunIdentityMismatch", expectedRunId: runId })
       expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual([
         "WorkflowRunBegan",
+        "TargetLineageObserved",
+        "IntegratorSessionFixed",
         "IntegratorRunStarted",
         "IntegratorRunResultRecorded",
         "IntegrationQuarantined",

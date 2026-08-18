@@ -45,6 +45,12 @@ import {
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
   IntegrationQuarantineFailureDetail,
+  IntegratorCandidateResourceLocator,
+  IntegratorCorrelation,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorSessionId,
+  firstFullRerunSuccessorGeneration,
   deriveRunnableFrontier,
   describeJournalEvent,
   EvidenceDigest,
@@ -6539,6 +6545,7 @@ it.effect(
         IntegrationFinalitySettled: true,
         IntegrationCandidateSessionSuperseded: true,
         IntegratorSessionFixed: true,
+        IntegratorSuccessorSessionFixed: true,
         IntegratorResultRecorded: true,
         IntegratorCandidateGitReadIntended: true,
         IntegratorCandidateGitObserved: true,
@@ -6830,14 +6837,26 @@ it.effect(
         return yield* Effect.die("quarantine alpha-renaming fixture requires one fixed Integrator session")
       }
       const absenceDetail = IntegrationQuarantineFailureDetail.make("no provider-owned activity remains")
+      const absenceRun = IntegratorRunCorrelation.make({
+        ordinal: IntegratorRunOrdinal.make(1),
+        session: fixedSession.correlation
+      })
       const absenceAt = JournalPosition.make(1)
       const quarantineAt = JournalPosition.make(2)
+      const directionAppliedAt = JournalPosition.make(3)
+      const successor = IntegratorCorrelation.make({
+        ...fixedSession.correlation,
+        candidateResource: IntegratorCandidateResourceLocator.make("cassette:alpha-renaming:successor-resource"),
+        sessionId: IntegratorSessionId.make("cassette:alpha-renaming:successor-session"),
+        targetLineageObservedAt: JournalPosition.make(4)
+      })
       const quarantineEntries = [
         {
           _tag: "IntegrationProviderRunActivityAbsent" as const,
           correlation: fixedSession.correlation,
           detail: absenceDetail,
-          occurrenceClassification: "NonActionOccurrence" as const
+          occurrenceClassification: "NonActionOccurrence" as const,
+          run: absenceRun
         },
         {
           _tag: "IntegrationQuarantined" as const,
@@ -6861,6 +6880,15 @@ it.effect(
             nonce: "alpha-renaming-quarantine-direction",
             runId: completionRun.runId
           })
+        },
+        {
+          _tag: "IntegratorSuccessorSessionFixed" as const,
+          direction: "FullRerun" as const,
+          directionAppliedAt,
+          predecessor: fixedSession.correlation,
+          quarantineAt,
+          successor,
+          successorGeneration: firstFullRerunSuccessorGeneration
         }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
       expect(

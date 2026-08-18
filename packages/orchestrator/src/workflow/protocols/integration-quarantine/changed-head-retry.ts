@@ -117,13 +117,16 @@ export const appendChangedHeadRetryQuarantine = Effect.fn("IntegrationQuarantine
     })
     const key = integrationQuarantinedRecordKey(request.session.sessionId, basis)
     const existing = records.find((record) => record.key === key)
+    const issue = validateHistory(
+      existing === undefined ? records : records.filter((record) => record !== existing),
+      request
+    )
+    if (issue !== undefined) return yield* reject(request.session, issue)
     if (existing !== undefined) {
       return sameChangedHeadEvidence(existing, request.session, basis)
         ? existing
         : yield* reject(request.session, "Changed-head quarantine key contains a foreign or contradictory event")
     }
-    const issue = validateHistory(records, request)
-    if (issue !== undefined) return yield* reject(request.session, issue)
 
     const event = IntegrationQuarantinedEvent.make({
       basis,
@@ -133,10 +136,12 @@ export const appendChangedHeadRetryQuarantine = Effect.fn("IntegrationQuarantine
     })
 
     const duplicateEvidence = records.filter((record) => sameChangedHeadEvidence(record, request.session, basis))
+    /* v8 ignore next -- @preserve retryRelationFor rejects any same-session changed-head quarantine before this duplicate-history guard can be reached. */
     if (duplicateEvidence.length > 1) {
       return yield* reject(request.session, "Journal history contains duplicate changed-head quarantine evidence")
     }
     const duplicate = duplicateEvidence[0]
+    /* v8 ignore next -- @preserve retryRelationFor rejects an equivalent same-session quarantine before this malformed-key fallback can be reached. */
     if (duplicateEvidence.length === 1 && duplicate !== undefined) return duplicate
 
     const appended = yield* journal.append(runId, key, event).pipe(

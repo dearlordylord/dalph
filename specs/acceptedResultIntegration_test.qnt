@@ -217,6 +217,33 @@ module acceptedResultIntegrationTest {
       })
   }
 
+  // Losing target 1's response releases only target 1. Target 2 keeps its
+  // permit and its own fresh expected-head proof while target 1 waits for
+  // recovery reads.
+  run independentResponseLossPreservesHeldTargetProofTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(acceptResult(2))
+      .then(assignResultTwoIndependentTarget)
+      .then(queueAcceptedResult(2))
+      .then(startIntegration(2))
+      .then(loseIntegratorResponse(1))
+      .expect(and {
+        state.results.get(1).phase == IntegratorResponseLost,
+        not(state.results.get(1).targetHeld),
+        state.results.get(2).phase == Started,
+        state.results.get(2).targetHeld,
+        state.targetReacquisitionRequired,
+        state.targetFactsCurrent,
+        state.targetHeadProof == state.results.get(2).expectedTargetHead,
+        mutableTargetWorkReacquisitionUsesFreshExpectedHead,
+      })
+  }
+
   // A durable Integrator result survives restart before Git qualification;
   // only the Git read is resumed.
   run reportedCandidateRestoresWithoutIntegratorRerunTest = {
@@ -620,8 +647,107 @@ module acceptedResultIntegrationTest {
         state.results.get(1).phase == Quarantined,
         state.results.get(1).quarantineOccurrenceCount == 2,
         state.results.get(1).quarantineDirection == NoQuarantineDirection,
+        state.results.get(1).quarantineConflictCount == 0,
         not(state.results.get(1).targetHeld),
         quarantineDirectionIsExactAndFirst,
+        conflictingDirectionIsNoOp,
+      })
+  }
+
+  // Q2 may receive FullRerun after the only Retry run ends. That later
+  // direction cannot erase the exact Retry direction that authorized run two.
+  run fullRerunAfterRetryPreservesExplicitRetryAuthorizationTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryOne)
+      .then(startRetryOne)
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseFullRerun(1, state.results.get(1).quarantinePosition))
+      .expect(and {
+        state.results.get(1).phase == FullRerunSelected,
+        state.results.get(1).lastDirection == FullRerunDirection,
+        state.results.get(1).retryDirectionSession == state.results.get(1).integrationSession,
+        state.results.get(1).retryDirectionPosition > 0,
+        retryRequiresOneExplicitChoice,
+      })
+  }
+
+  // If run one reported a candidate that Git rejected, a conclusive run-two
+  // NotPrepared result becomes the current result for S. Run one's candidate
+  // remains Journal history but cannot leak into run two's projection.
+  run retryNotPreparedClearsRejectedRunOneCandidateProjectionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeNonCommitCandidate(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryOne)
+      .then(startRetryOne)
+      .then(reportIntegratorNotPrepared(1))
+      .expect(and {
+        state.results.get(1).phase == IntegratorNotPrepared,
+        state.results.get(1).integratorRunOrdinal == 2,
+        state.results.get(1).submittedCandidate == 0,
+        not(state.results.get(1).candidateReported),
+        not(state.results.get(1).candidateGitReadIntentRecorded),
+        state.results.get(1).candidateGitObservation == NoCandidateGitObservation,
+        not(state.results.get(1).candidateQualificationProven),
+        conclusiveNotPreparedHasNoCandidate,
+        candidateGitIntentPrecedesObservation,
+      })
+  }
+
+  // Process loss after run two starts preserves Q1 as the authorization for
+  // resuming the exact same (S, 2) boundary. It does not allocate run three or
+  // count another Integrator invocation.
+  run retryRecoveryPreservesQuarantineAndExactRunTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryOne)
+      .then(startRetryOne)
+      .then(recoverCoordinator)
+      .expect(and {
+        state.results.get(1).phase == RetrySelected,
+        state.results.get(1).quarantineRecorded,
+        state.results.get(1).quarantineOccurrenceCount == 1,
+        state.results.get(1).retryRunCount == 1,
+        state.results.get(1).integratorInvocationCount == 2,
+        state.results.get(1).integratorRunOrdinal == 2,
+        state.results.get(1).lastRecoveryRunOrdinal == 2,
+        quarantinePhaseRequiresRecordedOccurrence,
+        recoveryResumesSameRunOrdinal,
+      })
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(startRetryOne)
+      .expect(and {
+        state.results.get(1).phase == RetryInFlight,
+        state.results.get(1).quarantineRecorded,
+        state.results.get(1).retryRunCount == 1,
+        state.results.get(1).integratorInvocationCount == 2,
+        state.results.get(1).integratorRunOrdinal == 2,
+        quarantinePhaseRequiresRecordedOccurrence,
+        retryAdvancesSameSessionToOrdinalTwo,
+        recoveryResumesSameRunOrdinal,
       })
   }
 

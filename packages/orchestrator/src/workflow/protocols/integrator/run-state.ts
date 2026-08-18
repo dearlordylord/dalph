@@ -12,8 +12,7 @@ import type {
 import {
   integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
-  integratorRunResultRecordedRecordKey,
-  integratorSessionFixedRecordKey
+  integratorRunResultRecordedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../registry/event.js"
@@ -198,9 +197,23 @@ const runStateFromInitialLegacy = (state: IntegratorState, run: IntegratorRunCor
 }
 
 const runStateFromLegacy = (state: IntegratorState, run: IntegratorRunCorrelation): IntegratorRunState =>
+  /* v8 ignore next -- @preserve this compatibility helper is called only for the initial run ordinal. */
   run.ordinal !== 1
     ? runContradictionState("session-only Integrator history cannot represent run ordinal > 1")
     : runStateFromInitialLegacy(state, run)
+
+const exactSessionRecordForRun = (
+  records: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  dependencies: IntegratorRunStateDependencies
+): JournalRecord | undefined => {
+  const matches = records.filter(({ event }) =>
+    event._tag === "IntegratorSessionFixed"
+      ? dependencies.correlationsEqual(event.correlation, run.session)
+      : event._tag === "IntegratorSuccessorSessionFixed" && dependencies.correlationsEqual(event.successor, run.session)
+  )
+  return matches.length === 1 ? matches[0] : undefined
+}
 
 const runStateWithoutStarted = (
   records: ReadonlyArray<JournalRecord>,
@@ -209,6 +222,12 @@ const runStateWithoutStarted = (
   runRelated: ReadonlyArray<JournalRecord>,
   dependencies: IntegratorRunStateDependencies
 ): IntegratorRunState => {
+  const session = exactSessionRecordForRun(records, run, dependencies)
+  if (session?.event._tag === "IntegratorSuccessorSessionFixed") {
+    return runRelated.length === 0
+      ? IntegratorRunState.cases.RunUnfinished.make({ run })
+      : runContradictionState("run result or Git record exists without IntegratorRunStarted")
+  }
   const legacy = dependencies.deriveLegacyState(records, responsibility)
   if (runRelated.length !== 0)
     return runContradictionState("run result or Git record exists without IntegratorRunStarted")
@@ -220,8 +239,10 @@ const runStartHasExactSession = (
   run: IntegratorRunCorrelation,
   dependencies: IntegratorRunStateDependencies
 ): boolean =>
-  session?.event._tag === "IntegratorSessionFixed" &&
-  dependencies.correlationsEqual(session.event.correlation, run.session)
+  (session?.event._tag === "IntegratorSessionFixed" &&
+    dependencies.correlationsEqual(session.event.correlation, run.session)) ||
+  (session?.event._tag === "IntegratorSuccessorSessionFixed" &&
+    dependencies.correlationsEqual(session.event.successor, run.session))
 
 const runStartFollowsSession = (started: JournalRecord, session: JournalRecord | undefined): boolean =>
   session !== undefined && started.position > session.position
@@ -232,10 +253,7 @@ const runStartRelationIssue = (
   run: IntegratorRunCorrelation,
   dependencies: IntegratorRunStateDependencies
 ): string | undefined => {
-  const session = dependencies.findEventAtKey(
-    records,
-    integratorSessionFixedRecordKey(dependencies.responsibilityFactsFromCorrelation(run.session))
-  )
+  const session = exactSessionRecordForRun(records, run, dependencies)
   const lineageRecord = records.find(({ position }) => position === run.session.targetLineageObservedAt)
   const valid =
     runStartHasExactSession(session, run, dependencies) &&
@@ -250,15 +268,41 @@ const hasForeignRelatedSession = (
   dependencies: IntegratorRunStateDependencies
 ): boolean => {
   const requestedFacts = dependencies.responsibilityFactsFromCorrelation(run.session)
-  return records.some(({ event }) => {
-    if (event._tag !== "IntegratorSessionFixed") return false
-    return (
+  const successorRelations = records.filter(
+    ({ event }) =>
+      event._tag === "IntegratorSuccessorSessionFixed" &&
+      (dependencies.correlationsEqual(event.successor, run.session) ||
+        dependencies.correlationsEqual(event.predecessor, run.session))
+  )
+  const activeRelation = successorRelations.find(
+    ({ event }) =>
+      event._tag === "IntegratorSuccessorSessionFixed" && dependencies.correlationsEqual(event.successor, run.session)
+  )
+  const expectedBase =
+    activeRelation?.event._tag === "IntegratorSuccessorSessionFixed" ? activeRelation.event.predecessor : run.session
+  const baseSessions = records.filter(
+    ({ event }) =>
+      event._tag === "IntegratorSessionFixed" &&
       dependencies.responsibilityFactsEqual(
         dependencies.responsibilityFactsFromCorrelation(event.correlation),
         requestedFacts
-      ) && !dependencies.correlationsEqual(event.correlation, run.session)
+      )
+  )
+  return (
+    baseSessions.length !== 1 ||
+    baseSessions.some(
+      ({ event }) =>
+        event._tag !== "IntegratorSessionFixed" || !dependencies.correlationsEqual(event.correlation, expectedBase)
+    ) ||
+    successorRelations.some(
+      /* v8 ignore next -- @preserve an exact run start rejects a second successor relation for the requested successor session before this foreign-relation guard. */
+      ({ event }) =>
+        event._tag !== "IntegratorSuccessorSessionFixed" ||
+        (!dependencies.correlationsEqual(event.predecessor, expectedBase) &&
+          /* v8 ignore next -- @preserve an exact run start admits one successor relation for this session; a distinct predecessor would make that exact session ambiguous before this check. */
+          !dependencies.correlationsEqual(event.predecessor, run.session))
     )
-  })
+  )
 }
 
 const runHasGitFacts = (related: ReadonlyArray<JournalRecord>): boolean =>
@@ -338,6 +382,7 @@ export const deriveIntegratorRunStateFromHistory = (
   if (runStarted.length === 0) return runStateWithoutStarted(records, responsibility, run, runRelated, dependencies)
   if (runStarted.length !== 1) return runContradictionState("an exact Integrator run was started more than once")
   const started = runStarted[0]
+  /* v8 ignore next -- @preserve runStarted is filtered by the same event tag above; this guard protects malformed runtime data. */
   if (started === undefined || started.event._tag !== "IntegratorRunStarted") {
     return runContradictionState("the exact Integrator run-start record is malformed")
   }

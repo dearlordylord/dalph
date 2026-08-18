@@ -18,20 +18,27 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
+import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
+import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
+import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { acceptedResultFixture } from "../../../orchestrator/test/support/evidence.js"
 import { TargetLineageObservation } from "../../../orchestrator/src/authorities/git/target-lineage.js"
 import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
+import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import {
+  integrationResponsibilityBeganRecordKey,
+  integrationStartedRecordKey,
+  integratorRunCandidateGitReadIntendedRecordKey,
+  integratorRunResultRecordedRecordKey,
+  integratorRunStartedRecordKey,
+  integratorSessionFixedRecordKey
+} from "../../../orchestrator/src/workflow-journal/record-key.js"
 import {
   GitReadIntentRecordedEvent,
   TargetLineageObservedEvent
 } from "../../../orchestrator/src/workflow/registry/event.js"
 import { describeJournalEvent } from "../../../orchestrator/src/workflow/registry/event-descriptor.js"
 import { makeTargetLineageObservationOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
-import {
-  integratorRunCandidateGitReadIntendedRecordKey,
-  integratorRunResultRecordedRecordKey,
-  integratorSessionFixedRecordKey
-} from "../../../orchestrator/src/workflow-journal/record-key.js"
 import type { JournalRecordKey } from "../../../orchestrator/src/workflow-journal/identity.js"
 import { JournalPosition } from "../../../orchestrator/src/workflow-journal/identity.js"
 import {
@@ -40,7 +47,18 @@ import {
   type JournalRecord
 } from "../../../orchestrator/src/workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../../../orchestrator/src/workflow/protocols/integration-admission/events.js"
 import { StartedIntegrationResponsibility } from "../../../orchestrator/src/workflow/protocols/integration-admission/protocol.js"
+import {
+  ApplyIntegrationQuarantineDirectionRequest,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId
+} from "../../../orchestrator/src/workflow/protocols/integration-quarantine/events.js"
+import { makeIntegrationQuarantineDirectionControl } from "../../../orchestrator/src/workflow/protocols/integration-quarantine/control.js"
+import { appendChangedHeadRetryQuarantine } from "../../../orchestrator/src/workflow/protocols/integration-quarantine/changed-head-retry.js"
 import {
   Integrator,
   IntegratorCallFailure,
@@ -50,25 +68,35 @@ import {
   IntegratorRequest,
   deriveIntegratorRunState,
   integratorCorrelationFor,
-  integratorInitialRunCorrelationFor,
+  integratorRunCorrelationForSession,
+  prepareIntegrationCandidateRun,
   prepareIntegrationCandidate
 } from "../../../orchestrator/src/workflow/protocols/integrator/protocol.js"
+import {
+  appendIntegratorSuccessorSessionIfNeeded,
+  type IntegratorSuccessorSessionFixedRecord
+} from "../../../orchestrator/src/workflow/protocols/integrator/successor-session.js"
 import { deriveCurrentIntegratorState } from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
 import { appendInitialConclusiveIntegrationQuarantine } from "../../../orchestrator/src/workflow/protocols/integration-quarantine/initial-conclusive.js"
+import { appendRetryConclusiveIntegrationQuarantine } from "../../../orchestrator/src/workflow/protocols/integration-quarantine/retry-conclusive.js"
 import {
   IntegratorCandidateText,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   IntegratorResponsibilityFacts,
   IntegratorResult,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   IntegratorRunCandidateGitReadIntendedEvent,
   IntegratorRunResultRecordedEvent,
   IntegratorSessionFixedEvent,
   type IntegratorCorrelation,
   type IntegratorProtocolResult,
+  type IntegratorRunProtocolResult,
   type IntegratorRunState,
   type IntegratorState
 } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
+import { IntegratorSuccessorPreparationInput } from "../../../orchestrator/src/workflow/protocols/integrator/session.js"
 
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({
@@ -120,6 +148,13 @@ type Phase =
   | "IntegratorResponseLost"
   | "IntegratorNotPrepared"
   | "IntegratorResultRecorded"
+  | "RetrySelected"
+  | "RetryInFlight"
+  | "RetryNotApplicable"
+  | "FullRerunSelected"
+  | "SuccessorSessionFixed"
+  | "SuccessorInFlight"
+  | "SuccessorResponseLost"
   | "CandidateGitReadIntent"
   | "CandidateGitReadPending"
   | "CandidateReady"
@@ -138,6 +173,15 @@ type Phase =
   | "PromotionExhausted"
 
 type IntegratorOutcome = "NoIntegratorOutcome" | "NotPrepared" | "PreparedCandidate"
+
+type QuarantineDirection = "NoQuarantineDirection" | "RetryDirection" | "FullRerunDirection"
+
+type QuarantineCause =
+  | "NoQuarantineCause"
+  | "NotPreparedQuarantine"
+  | "CandidateRejectedQuarantine"
+  | "RetryHeadChangedQuarantine"
+  | "SuccessorNotPreparedQuarantine"
 
 type CandidateGitObservation =
   | "NoCandidateGitObservation"
@@ -208,6 +252,35 @@ type ModelResult = {
   readonly promotionCompareAndSetRequested: boolean
   readonly promotionForceRequested: boolean
   readonly promotionEquivalentContentAccepted: boolean
+  readonly quarantineRecorded: boolean
+  readonly quarantineOccurrenceCount: bigint
+  readonly quarantinePosition: bigint
+  readonly quarantineCause: QuarantineCause
+  readonly quarantineDirection: QuarantineDirection
+  readonly quarantineDirectionSession: bigint
+  readonly quarantineDirectionPosition: bigint
+  readonly quarantineDirectionCount: bigint
+  readonly quarantineRedeliveryCount: bigint
+  readonly quarantineConflictCount: bigint
+  readonly retryRunCount: bigint
+  readonly integratorRunOrdinal: bigint
+  readonly integratorRunSession: bigint
+  readonly lastRecoveryRunSession: bigint
+  readonly lastRecoveryRunOrdinal: bigint
+  readonly retryNotApplicableCount: bigint
+  readonly retryFreshQuarantineCount: bigint
+  readonly predecessorPreserved: boolean
+  readonly successorSession: bigint
+  readonly successorResource: bigint
+  readonly successorTargetHead: bigint
+  readonly successorFixed: boolean
+  readonly successorRunCount: bigint
+  readonly successorRunOrdinal: bigint
+  readonly successorHeadFreshlyObserved: boolean
+  readonly successorIntegratorInvocationCount: bigint
+  readonly lastDirection: QuarantineDirection
+  readonly lastDirectionSession: bigint
+  readonly lastDirectionPosition: bigint
 }
 
 const initialResult = (id: bigint): ModelResult => ({
@@ -263,7 +336,36 @@ const initialResult = (id: bigint): ModelResult => ({
   promotionResponseAmbiguous: false,
   promotionCompareAndSetRequested: false,
   promotionForceRequested: false,
-  promotionEquivalentContentAccepted: false
+  promotionEquivalentContentAccepted: false,
+  quarantineRecorded: false,
+  quarantineOccurrenceCount: 0n,
+  quarantinePosition: 0n,
+  quarantineCause: "NoQuarantineCause",
+  quarantineDirection: "NoQuarantineDirection",
+  quarantineDirectionSession: 0n,
+  quarantineDirectionPosition: 0n,
+  quarantineDirectionCount: 0n,
+  quarantineRedeliveryCount: 0n,
+  quarantineConflictCount: 0n,
+  retryRunCount: 0n,
+  integratorRunOrdinal: 0n,
+  integratorRunSession: 0n,
+  lastRecoveryRunSession: 0n,
+  lastRecoveryRunOrdinal: 0n,
+  retryNotApplicableCount: 0n,
+  retryFreshQuarantineCount: 0n,
+  predecessorPreserved: false,
+  successorSession: 0n,
+  successorResource: 0n,
+  successorTargetHead: 0n,
+  successorFixed: false,
+  successorRunCount: 0n,
+  successorRunOrdinal: 0n,
+  successorHeadFreshlyObserved: false,
+  successorIntegratorInvocationCount: 0n,
+  lastDirection: "NoQuarantineDirection",
+  lastDirectionSession: 0n,
+  lastDirectionPosition: 0n
 })
 
 const SpecResult = Schema.Struct({
@@ -311,15 +413,44 @@ const SpecResult = Schema.Struct({
   promotionResponseAmbiguous: Schema.Boolean,
   promotionResultRecorded: Schema.Boolean,
   promotionTargetFactsCurrent: Schema.Boolean,
+  predecessorPreserved: Schema.Boolean,
+  quarantineCause: Schema.Unknown,
+  quarantineConflictCount: ITFBigInt,
+  quarantineDirection: Schema.Unknown,
+  quarantineDirectionCount: ITFBigInt,
+  quarantineDirectionPosition: ITFBigInt,
+  quarantineDirectionSession: ITFBigInt,
+  quarantineOccurrenceCount: ITFBigInt,
+  quarantinePosition: ITFBigInt,
+  quarantineRecorded: Schema.Boolean,
+  quarantineRedeliveryCount: ITFBigInt,
   queuePosition: ITFBigInt,
   resourceBoundCommit: ITFBigInt,
   resourceBoundHead: ITFBigInt,
   resourceBoundTarget: ITFBigInt,
   restartChoiceCommittedBeforeTerminal: Schema.Boolean,
   resourceHeadCandidate: ITFBigInt,
+  retryFreshQuarantineCount: ITFBigInt,
+  retryNotApplicableCount: ITFBigInt,
+  retryRunCount: ITFBigInt,
   submittedCandidate: ITFBigInt,
+  successorFixed: Schema.Boolean,
+  successorHeadFreshlyObserved: Schema.Boolean,
+  successorIntegratorInvocationCount: ITFBigInt,
+  successorResource: ITFBigInt,
+  successorRunCount: ITFBigInt,
+  successorRunOrdinal: ITFBigInt,
+  successorSession: ITFBigInt,
+  successorTargetHead: ITFBigInt,
   targetHeld: Schema.Boolean,
-  legacyVerificationEvidence: Schema.Boolean
+  legacyVerificationEvidence: Schema.Boolean,
+  integratorRunOrdinal: ITFBigInt,
+  integratorRunSession: ITFBigInt,
+  lastDirection: Schema.Unknown,
+  lastDirectionPosition: ITFBigInt,
+  lastDirectionSession: ITFBigInt,
+  lastRecoveryRunOrdinal: ITFBigInt,
+  lastRecoveryRunSession: ITFBigInt
 })
 
 const SpecProjection = Schema.Struct({
@@ -344,6 +475,10 @@ type RuntimeState = {
   readonly journal: InRunJournal["Service"]
   readonly readRecords: () => ReadonlyArray<JournalRecord>
   readonly runProtocol: (id: bigint) => Effect.Effect<IntegratorProtocolResult, unknown>
+  readonly runProtocolFor: (
+    input: IntegratorPreparationInput,
+    run: IntegratorRunCorrelation
+  ) => Effect.Effect<IntegratorRunProtocolResult, unknown>
   readonly integrator: Integrator["Service"]
   readonly setGitMode: (mode: GitMode) => void
   readonly failNextGitRead: () => void
@@ -355,11 +490,11 @@ type RuntimeState = {
 
 const rejectImpossibleTransition = (detail: string): never => Effect.runSync(Effect.die(new Error(detail)))
 
-const targetLineagePositionFor = (id: bigint): JournalPosition => JournalPosition.make(id === 1n ? 2 : 4)
+const targetLineagePositionFor = (id: bigint): JournalPosition => JournalPosition.make(id === 1n ? 3 : 5)
 
-const queuedAtFor = (id: bigint): JournalPosition => JournalPosition.make(id === 1n ? 5 : 6)
+const queuedAtFor = (id: bigint): JournalPosition => JournalPosition.make(id === 1n ? 6 : 7)
 
-const startedAtFor = (id: bigint): JournalPosition => JournalPosition.make(id === 1n ? 7 : 8)
+const startedAtFor = (id: bigint): JournalPosition => JournalPosition.make(id === 1n ? 8 : 9)
 
 const attemptFor = (id: bigint): PlannedTaskAttempt => {
   const attempt = attempts.get(id)
@@ -370,8 +505,13 @@ const attemptFor = (id: bigint): PlannedTaskAttempt => {
 const targetFor = (id: bigint, modelResults: ReadonlyMap<bigint, ModelResult>): IntegrationTarget =>
   modelResults.get(id)?.integrationTarget === 2n ? independentTarget : target
 
-const makeTargetRecords = (): ReadonlyArray<JournalRecord> =>
-  [1n, 2n].flatMap((id) => {
+const makeTargetRecords = (): ReadonlyArray<JournalRecord> => [
+  makeWorkflowRunBeganRecord(
+    runId,
+    FixtureTarget.make("accepted-result-integration-model-target"),
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+  ),
+  ...[1n, 2n].flatMap((id) => {
     const attempt = attemptFor(id)
     const operationId = OperationId.make(`accepted-result-integration-target-lineage-${id}`)
     const operation = makeTargetLineageObservationOperation({
@@ -401,7 +541,7 @@ const makeTargetRecords = (): ReadonlyArray<JournalRecord> =>
       {
         event: intent,
         key: describeJournalEvent(intent).expectedKey,
-        position: JournalPosition.make(id === 1n ? 1 : 3),
+        position: JournalPosition.make(id === 1n ? 2 : 4),
         runId
       },
       {
@@ -412,21 +552,39 @@ const makeTargetRecords = (): ReadonlyArray<JournalRecord> =>
       }
     ]
   })
+]
 
 const makeResponsibility = (
   id: bigint,
-  modelResults: ReadonlyMap<bigint, ModelResult>
+  modelResults: ReadonlyMap<bigint, ModelResult>,
+  records: ReadonlyArray<JournalRecord> = []
 ): StartedIntegrationResponsibility =>
-  StartedIntegrationResponsibility.make({
-    acceptedResult: acceptedResultOf(id),
-    integrationTarget: targetFor(id, modelResults),
-    plannedAttempt: attemptFor(id),
-    queuedAt: queuedAtFor(id),
-    startedAt: startedAtFor(id)
-  })
+  (() => {
+    const attempt = attemptFor(id)
+    const queued = records.find(
+      (record) =>
+        record.event._tag === "IntegrationResponsibilityBegan" &&
+        record.event.plannedAttempt.attemptId === attempt.attemptId
+    )
+    const started = records.find(
+      (record) =>
+        record.event._tag === "IntegrationStarted" && record.event.plannedAttempt.attemptId === attempt.attemptId
+    )
+    return StartedIntegrationResponsibility.make({
+      acceptedResult: acceptedResultOf(id),
+      integrationTarget: targetFor(id, modelResults),
+      plannedAttempt: attempt,
+      queuedAt: queued?.position ?? queuedAtFor(id),
+      startedAt: started?.position ?? startedAtFor(id)
+    })
+  })()
 
-const makeInput = (id: bigint, modelResults: ReadonlyMap<bigint, ModelResult>): IntegratorPreparationInput => {
-  const responsibility = makeResponsibility(id, modelResults)
+const makeInput = (
+  id: bigint,
+  modelResults: ReadonlyMap<bigint, ModelResult>,
+  records: ReadonlyArray<JournalRecord> = []
+): IntegratorPreparationInput => {
+  const responsibility = makeResponsibility(id, modelResults, records)
   const result = modelResults.get(id)
   if (result === undefined) return rejectImpossibleTransition(`unknown model result ${id}`)
   return IntegratorPreparationInput.make({
@@ -460,13 +618,13 @@ const resultCorrelation = (
   records: ReadonlyArray<JournalRecord>,
   modelResults: ReadonlyMap<bigint, ModelResult>
 ): IntegratorCorrelation => {
-  const facts = IntegratorResponsibilityFacts.make(makeResponsibility(id, modelResults))
+  const facts = IntegratorResponsibilityFacts.make(makeResponsibility(id, modelResults, records))
   const key = integratorSessionFixedRecordKey(facts)
   const session = records.find(
     (record): record is JournalRecord & { readonly event: typeof IntegratorSessionFixedEvent.Type } =>
       record.key === key && record.event._tag === "IntegratorSessionFixed"
   )
-  return session?.event.correlation ?? integratorCorrelationFor(makeInput(id, modelResults))
+  return session?.event.correlation ?? integratorCorrelationFor(makeInput(id, modelResults, records))
 }
 
 type ReconstructedIntegratorState = IntegratorState | IntegratorRunState
@@ -534,6 +692,13 @@ const phaseNeedsResult = (phase: Phase): boolean =>
   new Set<Phase>([
     "IntegratorNotPrepared",
     "IntegratorResultRecorded",
+    "RetrySelected",
+    "RetryInFlight",
+    "RetryNotApplicable",
+    "FullRerunSelected",
+    "SuccessorSessionFixed",
+    "SuccessorInFlight",
+    "SuccessorResponseLost",
     "CandidateGitReadIntent",
     "CandidateGitReadPending",
     "CandidateReady",
@@ -649,7 +814,14 @@ const makeRuntime = (
   })
 
   const runProtocol = (id: bigint) =>
-    prepareIntegrationCandidate(makeInput(id, modelResultsRef())).pipe(
+    prepareIntegrationCandidate(makeInput(id, modelResultsRef(), records)).pipe(
+      Effect.provideService(InRunJournal, journal),
+      Effect.provideService(Integrator, integrator),
+      Effect.provideService(IntegratorGit, git)
+    )
+
+  const runProtocolFor = (input: IntegratorPreparationInput, run: IntegratorRunCorrelation) =>
+    prepareIntegrationCandidateRun({ preparation: input, run }).pipe(
       Effect.provideService(InRunJournal, journal),
       Effect.provideService(Integrator, integrator),
       Effect.provideService(IntegratorGit, git)
@@ -693,6 +865,7 @@ const makeRuntime = (
     journal,
     readRecords: () => records,
     runProtocol,
+    runProtocolFor,
     integrator,
     setGitMode: (mode) => {
       gitMode = mode
@@ -714,6 +887,8 @@ const acceptedResultIntegrationDriver = defineDriver(
     acceptResultOne: {},
     acceptResultTwo: {},
     assignResultTwoIndependentTargetOne: {},
+    chooseFullRerunOne: {},
+    chooseRetryOne: {},
     fixIntegratorSessionOne: {},
     fixIntegratorSessionTwo: {},
     init: {},
@@ -722,6 +897,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     loseCandidateGitResponseTwo: {},
     loseIntegratorResponseOne: {},
     losePromotionAttemptResponseOne: {},
+    loseSuccessorResponseOne: {},
     observeAppliedRestartBeforeAcceptedOne: {},
     observeExactCandidateOne: {},
     observeIncompatibleTargetLineageOne: {},
@@ -732,6 +908,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     observePromotionExactExpectedHeadOne: {},
     observePromotionGitUnreadableOne: {},
     observePromotionOtherHeadOne: {},
+    observeSuccessorTargetHeadOne: {},
     readCandidateGitOne: {},
     observeTargetFactsOne: {},
     observeTargetFactsTwo: {},
@@ -746,15 +923,22 @@ const acceptedResultIntegrationDriver = defineDriver(
     reportIntegratorCandidateOne31: {},
     reportIntegratorCandidateOne32: {},
     reportIntegratorNotPreparedOne: {},
+    redeliverFullRerunOne: {},
+    redeliverRetryOne: {},
+    rejectConflictingFullRerunOne: {},
     recordQuarantineOne: {},
+    recordRetryNotApplicableOne: {},
     recordPromotionAttemptIntentOne: {},
     recordPromotionIntentOne: {},
     reconcileCandidateGitOne: {},
     reconcilePromotionOne: {},
     resumeIntegratorOne: {},
     sendPromotionAttemptOne: {},
+    startFullRerunOne: {},
     startIntegrationOne: {},
     startIntegrationTwo: {},
+    startRetryOne: {},
+    startSuccessorIntegratorOne: {},
     waitOnDependencyOne: {}
   },
   () => {
@@ -792,10 +976,20 @@ const acceptedResultIntegrationDriver = defineDriver(
     const correlationFor = (id: bigint): IntegratorCorrelation =>
       resultCorrelation(id, runtime.readRecords(), modelResults)
 
+    const runFor = (id: bigint, ordinal?: bigint): IntegratorRunCorrelation => {
+      const session = correlationFor(id)
+      const runOrdinal =
+        ordinal ?? (modelResultFor(id).integratorRunOrdinal === 0n ? 1n : modelResultFor(id).integratorRunOrdinal)
+      return integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(Number(runOrdinal)))
+    }
+
+    const responsibilityFor = (id: bigint): StartedIntegrationResponsibility =>
+      makeResponsibility(id, modelResults, runtime.readRecords())
+
     const appendSession = (id: bigint) => {
-      const input = makeInput(id, modelResults)
+      const input = makeInput(id, modelResults, runtime.readRecords())
       const correlation = integratorCorrelationFor(input)
-      const facts = IntegratorResponsibilityFacts.make(makeResponsibility(id, modelResults))
+      const facts = IntegratorResponsibilityFacts.make(responsibilityFor(id))
       return appendEvent(
         integratorSessionFixedRecordKey(facts),
         IntegratorSessionFixedEvent.make({ correlation, version: workflowJournalEventVersion })
@@ -803,7 +997,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     }
 
     const appendIntegratorResult = (id: bigint, result: IntegratorResult) => {
-      const run = integratorInitialRunCorrelationFor(makeInput(id, modelResults))
+      const run = runFor(id)
       return appendEvent(
         integratorRunResultRecordedRecordKey(run),
         IntegratorRunResultRecordedEvent.make({ result, run, version: workflowJournalEventVersion })
@@ -811,12 +1005,171 @@ const acceptedResultIntegrationDriver = defineDriver(
     }
 
     const appendCandidateIntent = (id: bigint) => {
-      const run = integratorInitialRunCorrelationFor(makeInput(id, modelResults))
+      const run = runFor(id)
       const candidateText = candidateTextOf(modelResultFor(id).submittedCandidate)
       return appendEvent(
         integratorRunCandidateGitReadIntendedRecordKey(run, candidateText),
         IntegratorRunCandidateGitReadIntendedEvent.make({ candidateText, run, version: workflowJournalEventVersion })
       )
+    }
+
+    const appendResponsibility = (id: bigint) =>
+      appendEvent(
+        integrationResponsibilityBeganRecordKey(attemptFor(id).attemptId),
+        IntegrationResponsibilityBeganEvent.make({
+          acceptedResult: acceptedResultOf(id),
+          integrationTarget: targetFor(id, modelResults),
+          plannedAttempt: attemptFor(id),
+          version: workflowJournalEventVersion
+        })
+      )
+
+    const appendIntegrationStart = (id: bigint) => {
+      const responsibility = responsibilityFor(id)
+      return appendEvent(
+        integrationStartedRecordKey(attemptFor(id).attemptId),
+        IntegrationStartedEvent.make({
+          acceptedResult: responsibility.acceptedResult,
+          integrationTarget: responsibility.integrationTarget,
+          plannedAttempt: responsibility.plannedAttempt,
+          responsibilityBeganAt: responsibility.queuedAt,
+          version: workflowJournalEventVersion
+        })
+      )
+    }
+
+    const latestQuarantineRecord = (id: bigint): JournalRecord => {
+      const session = correlationFor(id).sessionId
+      const record = runtime
+        .readRecords()
+        .filter(
+          (candidate) =>
+            candidate.event._tag === "IntegrationQuarantined" && candidate.event.correlation.sessionId === session
+        )
+        .toSorted((left, right) => left.position - right.position)
+        .at(-1)
+      return record ?? rejectImpossibleTransition(`missing quarantine record for Integrator session ${session}`)
+    }
+
+    const directionRecordFor = (id: bigint, direction: "Retry" | "FullRerun"): JournalRecord => {
+      const quarantine = latestQuarantineRecord(id)
+      const record = runtime
+        .readRecords()
+        .find(
+          (candidate) =>
+            candidate.event._tag === "IntegrationQuarantineDirectionApplied" &&
+            candidate.event.fingerprint.direction === direction &&
+            candidate.event.fingerprint.quarantineAt === quarantine.position &&
+            candidate.event.fingerprint.sessionId === correlationFor(id).sessionId
+        )
+      return (
+        record ??
+        rejectImpossibleTransition(`missing ${direction} direction record for session ${correlationFor(id).sessionId}`)
+      )
+    }
+
+    const applyDirection = (id: bigint, direction: "Retry" | "FullRerun", nonce: string) => {
+      const quarantine = latestQuarantineRecord(id)
+      const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+        direction,
+        quarantineAt: quarantine.position,
+        sessionId: correlationFor(id).sessionId
+      })
+      const request = ApplyIntegrationQuarantineDirectionRequest.make({
+        fingerprint,
+        requestId: IntegrationQuarantineDirectionRequestId.make({ nonce, runId })
+      })
+      return Effect.gen(function* () {
+        const control = yield* makeIntegrationQuarantineDirectionControl(runtime.journal)
+        return yield* control.apply(request)
+      })
+    }
+
+    const redeliverDirection = (id: bigint, direction: "Retry" | "FullRerun") => {
+      const record = directionRecordFor(id, direction)
+      if (record.event._tag !== "IntegrationQuarantineDirectionApplied") {
+        return Effect.die(`direction record for ${direction} is malformed`)
+      }
+      const request = ApplyIntegrationQuarantineDirectionRequest.make({
+        fingerprint: record.event.fingerprint,
+        requestId: record.event.requestId
+      })
+      return Effect.gen(function* () {
+        const control = yield* makeIntegrationQuarantineDirectionControl(runtime.journal)
+        return yield* control.apply(request)
+      })
+    }
+
+    const appendFreshTargetLineage = (id: bigint, targetHead: bigint, purpose: "retry" | "successor") => {
+      const operationId = OperationId.make(`accepted-result-integration-${purpose}-target-lineage-${id}`)
+      const operation = makeTargetLineageObservationOperation({
+        integrationTarget: targetFor(id, modelResults),
+        operationId,
+        plannedAttempt: attemptFor(id),
+        predecessorOperationIds: []
+      })
+      const intent = GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation,
+        version: workflowJournalEventVersion
+      })
+      const observation = TargetLineageObservedEvent.make({
+        observation: TargetLineageObservation.make({
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: attemptFor(id).baseSha,
+          targetHeadSha: commitOf(targetHead)
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId,
+        plannedAttempt: attemptFor(id),
+        version: workflowJournalEventVersion
+      })
+      return Effect.gen(function* () {
+        yield* appendEvent(describeJournalEvent(intent).expectedKey, intent)
+        return yield* appendEvent(describeJournalEvent(observation).expectedKey, observation)
+      })
+    }
+
+    const assertLostRun = (run: IntegratorRunCorrelation, outcome: { readonly _tag: string }): void => {
+      if (outcome._tag !== "Failure") {
+        return rejectImpossibleTransition(
+          `Integrator run ${run.ordinal} unexpectedly completed instead of losing its response`
+        )
+      }
+      const started = runtime.readRecords().find((record) => record.key === integratorRunStartedRecordKey(run))
+      if (started === undefined || started.event._tag !== "IntegratorRunStarted") {
+        return rejectImpossibleTransition(`Integrator run ${run.ordinal} lost its response without a durable run-start`)
+      }
+      if (runtime.readRecords().some((record) => record.key === integratorRunResultRecordedRecordKey(run))) {
+        return rejectImpossibleTransition(`Integrator run ${run.ordinal} lost its response but recorded a result`)
+      }
+    }
+
+    const successorPreparationFor = (id: bigint): IntegratorSuccessorPreparationInput => {
+      const predecessor = correlationFor(id)
+      const quarantine = latestQuarantineRecord(id)
+      const direction = directionRecordFor(id, "FullRerun")
+      const lineage = runtime
+        .readRecords()
+        .filter(
+          (record) =>
+            record.event._tag === "TargetLineageObserved" &&
+            record.position > direction.position &&
+            record.event.plannedAttempt.attemptId === predecessor.plannedAttempt.attemptId
+        )
+        .toSorted((left, right) => left.position - right.position)
+        .at(-1)
+      if (lineage === undefined || lineage.event._tag !== "TargetLineageObserved") {
+        return rejectImpossibleTransition("FullRerun successor lacks its fresh target-lineage observation")
+      }
+      return IntegratorSuccessorPreparationInput.make({
+        directionAppliedAt: direction.position,
+        predecessor,
+        quarantineAt: quarantine.position,
+        targetLineage: lineage.event.observation,
+        targetLineageObservedAt: lineage.position
+      })
     }
 
     const modelObserveCandidate = (id: bigint, observation: CandidateGitObservation): void => {
@@ -837,7 +1190,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       updateModelResult(id, (current) => ({
         ...current,
         phase: exact ? "CandidateReady" : "CandidateRejected",
-        targetHeld: false,
+        targetHeld: exact ? false : true,
         candidateGitObservation: observation,
         candidateJournalPosition,
         observedFirstParent: firstParent,
@@ -959,9 +1312,123 @@ const acceptedResultIntegrationDriver = defineDriver(
         integratorResponseAmbiguous: false
       }))
 
-    const modelRecordQuarantine = (id: bigint): void => {
+    const modelChooseDirection = (id: bigint, direction: QuarantineDirection): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: direction === "RetryDirection" ? "RetrySelected" : "FullRerunSelected",
+        quarantineDirection: direction,
+        quarantineDirectionSession: result.integrationSession,
+        quarantineDirectionPosition: result.quarantinePosition,
+        quarantineDirectionCount: result.quarantineDirectionCount + 1n,
+        lastDirection: direction,
+        lastDirectionSession: result.integrationSession,
+        lastDirectionPosition: result.quarantinePosition
+      }))
+
+    const modelRedeliverDirection = (id: bigint): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        quarantineRedeliveryCount: result.quarantineRedeliveryCount + 1n
+      }))
+
+    const modelRejectConflictingDirection = (id: bigint): void =>
+      updateModelResult(id, (result) => ({ ...result, quarantineConflictCount: result.quarantineConflictCount + 1n }))
+
+    const modelStartRetry = (id: bigint): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "RetryInFlight",
+        targetHeld: true,
+        retryRunCount: result.retryRunCount === 0n ? 1n : result.retryRunCount,
+        integratorInvocationCount:
+          result.retryRunCount === 0n ? result.integratorInvocationCount + 1n : result.integratorInvocationCount,
+        integratorRunOrdinal:
+          result.retryRunCount === 0n ? result.integratorRunOrdinal + 1n : result.integratorRunOrdinal,
+        integratorRunSession: result.integrationSession,
+        lastRecoveryRunSession: result.retryRunCount === 0n ? 0n : result.lastRecoveryRunSession,
+        lastRecoveryRunOrdinal: result.retryRunCount === 0n ? 0n : result.lastRecoveryRunOrdinal
+      }))
+
+    const modelRetryNotApplicable = (id: bigint): void => {
+      const quarantinePosition = modelNextJournalPosition
       modelNextJournalPosition += 1n
-      updateModelResult(id, (result) => ({ ...result, phase: "Quarantined", targetHeld: false }))
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "RetryNotApplicable",
+        targetHeld: false,
+        quarantineRecorded: true,
+        quarantineOccurrenceCount: result.quarantineOccurrenceCount + 1n,
+        quarantinePosition,
+        quarantineCause: "RetryHeadChangedQuarantine",
+        quarantineDirection: "NoQuarantineDirection",
+        quarantineDirectionSession: 0n,
+        quarantineDirectionPosition: 0n,
+        quarantineConflictCount: 0n,
+        retryNotApplicableCount: result.retryNotApplicableCount + 1n,
+        retryFreshQuarantineCount: result.retryFreshQuarantineCount + 1n
+      }))
+    }
+
+    const modelObserveSuccessorTargetHead = (id: bigint): void => {
+      const result = modelResultFor(id)
+      updateModelResult(id, (current) => ({ ...current, successorHeadFreshlyObserved: true }))
+      targetFactsCurrent = true
+      targetHeadProof = result.expectedTargetHead
+      targetReacquisitionRequired = false
+    }
+
+    const modelStartFullRerun = (id: bigint): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "SuccessorSessionFixed",
+        targetHeld: true,
+        predecessorPreserved: true,
+        successorSession: id + 1000n,
+        successorResource: id + 1100n,
+        successorTargetHead: targetHeadProof,
+        successorFixed: true,
+        successorRunCount: 1n,
+        successorRunOrdinal: 1n,
+        lastRecoveryRunSession: 0n,
+        lastRecoveryRunOrdinal: 0n
+      }))
+
+    const modelStartSuccessor = (id: bigint): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "SuccessorInFlight",
+        successorIntegratorInvocationCount: 1n
+      }))
+
+    const modelLoseSuccessor = (id: bigint): void => {
+      updateModelResult(id, (result) => ({ ...result, phase: "SuccessorResponseLost", targetHeld: false }))
+      trackerFactsCurrent = false
+      targetFactsCurrent = false
+      targetHeadProof = 0n
+      targetReacquisitionRequired = true
+    }
+
+    const modelRecordQuarantine = (id: bigint): void => {
+      const result = modelResultFor(id)
+      const quarantineCause: QuarantineCause =
+        result.phase === "IntegratorNotPrepared" ? "NotPreparedQuarantine" : "CandidateRejectedQuarantine"
+      const quarantinePosition = modelNextJournalPosition
+      modelNextJournalPosition += 1n
+      updateModelResult(id, (current) => ({
+        ...current,
+        phase: "Quarantined",
+        targetHeld: false,
+        quarantineRecorded: true,
+        quarantineOccurrenceCount: current.quarantineOccurrenceCount + 1n,
+        quarantinePosition,
+        quarantineCause,
+        quarantineDirection: "NoQuarantineDirection",
+        quarantineDirectionSession: 0n,
+        quarantineDirectionPosition: 0n,
+        quarantineRedeliveryCount: 0n,
+        retryNotApplicableCount: 0n,
+        retryFreshQuarantineCount: 0n
+      }))
     }
 
     const modelCandidate = (id: bigint, candidate: bigint): void =>
@@ -1152,18 +1619,38 @@ const acceptedResultIntegrationDriver = defineDriver(
         phase:
           result.phase === "IntegratorInFlight"
             ? "IntegratorResponseLost"
-            : result.phase === "PromotionInFlight" ||
-                result.phase === "PromotionAttemptIntended" ||
-                result.phase === "PromotionReconciliation" ||
-                result.phase === "PromotionRetryReady"
-              ? "PromotionResponseLost"
-              : result.phase === "PromotionReadPending" && result.promotionAttemptCount === 0n
-                ? "PromotionIntent"
-                : result.phase === "PromotionReadPending"
+            : result.phase === "RetryInFlight"
+              ? "RetrySelected"
+              : result.phase === "SuccessorInFlight"
+                ? "SuccessorResponseLost"
+                : result.phase === "PromotionInFlight" ||
+                    result.phase === "PromotionAttemptIntended" ||
+                    result.phase === "PromotionReconciliation" ||
+                    result.phase === "PromotionRetryReady"
                   ? "PromotionResponseLost"
-                  : result.phase,
+                  : result.phase === "PromotionReadPending" && result.promotionAttemptCount === 0n
+                    ? "PromotionIntent"
+                    : result.phase === "PromotionReadPending"
+                      ? "PromotionResponseLost"
+                      : result.phase,
         integratorResponseAmbiguous: result.phase === "IntegratorInFlight" ? true : result.integratorResponseAmbiguous,
         targetHeld: false,
+        lastRecoveryRunSession:
+          result.integratorResponseAmbiguous ||
+          result.phase === "IntegratorInFlight" ||
+          result.phase === "RetryInFlight"
+            ? result.integratorRunSession
+            : result.phase === "SuccessorInFlight"
+              ? result.successorSession
+              : result.lastRecoveryRunSession,
+        lastRecoveryRunOrdinal:
+          result.integratorResponseAmbiguous ||
+          result.phase === "IntegratorInFlight" ||
+          result.phase === "RetryInFlight"
+            ? result.integratorRunOrdinal
+            : result.phase === "SuccessorInFlight"
+              ? result.successorRunOrdinal
+              : result.lastRecoveryRunOrdinal,
         promotionTargetFactsCurrent: result.phase.startsWith("Promotion") ? false : result.promotionTargetFactsCurrent,
         promotionFreshExactHeadObservation: result.phase.startsWith("Promotion")
           ? false
@@ -1207,10 +1694,24 @@ const acceptedResultIntegrationDriver = defineDriver(
 
     const modelStateFor = (id: bigint): ModelResult => {
       const model = modelResultFor(id)
-      const actual = deriveCurrentIntegratorState(runtime.readRecords(), makeResponsibility(id, modelResults))
+      const records = runtime.readRecords()
+      const responsibility = responsibilityFor(id)
+      const actual = deriveCurrentIntegratorState(records, responsibility)
       if (actual._tag === "Contradiction") {
         return rejectImpossibleTransition(`integrator adapter contradiction: ${actual.detail}`)
       }
+      const predecessor = deriveIntegratorRunState(records, responsibility, runFor(id, 1n))
+      if (predecessor._tag === "Contradiction") {
+        return rejectImpossibleTransition(`integrator adapter predecessor contradiction: ${predecessor.detail}`)
+      }
+      const resultState: ReconstructedIntegratorState = new Set<Phase>([
+        "RetryInFlight",
+        "SuccessorSessionFixed",
+        "SuccessorInFlight",
+        "SuccessorResponseLost"
+      ]).has(model.phase)
+        ? predecessor
+        : actual
 
       const expectedSession = phaseNeedsSession(model.phase)
       if (expectedSession && actual._tag === "Absent") {
@@ -1223,27 +1724,28 @@ const acceptedResultIntegrationDriver = defineDriver(
           `model phase ${model.phase} unexpectedly has an Integrator session for result ${id}`
         )
       }
-      if (phaseNeedsResult(model.phase) !== isIntegratorResultState(actual)) {
-        return rejectImpossibleTransition(`model/runtime outer-result mismatch at ${model.phase}: ${actual._tag}`)
+      if (phaseNeedsResult(model.phase) !== isIntegratorResultState(resultState)) {
+        return rejectImpossibleTransition(`model/runtime outer-result mismatch at ${model.phase}: ${resultState._tag}`)
       }
       if (phaseNeedsPreparedResult(model.phase)) {
         if (
           !(
-            actual._tag === "PreparedAwaitingGit" ||
-            actual._tag === "CandidateRejected" ||
-            actual._tag === "GitQualifiedPrepared"
+            resultState._tag === "PreparedAwaitingGit" ||
+            resultState._tag === "CandidateRejected" ||
+            resultState._tag === "GitQualifiedPrepared"
           )
         ) {
           return rejectImpossibleTransition(
-            `model phase ${model.phase} is not backed by a PreparedCandidate result: ${actual._tag}`
+            `model phase ${model.phase} is not backed by a PreparedCandidate result: ${resultState._tag}`
           )
         }
       }
 
       const correlation = actual._tag === "Absent" ? undefined : actual.run.session
       if (correlation !== undefined) {
-        const responsibility = makeResponsibility(id, modelResults)
-        const expectedCorrelation = integratorCorrelationFor(makeInput(id, modelResults))
+        const expectedResponsibility = responsibilityFor(id)
+        const expectedCorrelation = integratorCorrelationFor(makeInput(id, modelResults, runtime.readRecords()))
+        const isSuccessor = correlation.sessionId !== expectedCorrelation.sessionId
         const sessionRecord = runtime
           .readRecords()
           .find(
@@ -1254,54 +1756,54 @@ const acceptedResultIntegrationDriver = defineDriver(
         if (sessionRecord === undefined || sessionRecord.position <= correlation.targetLineageObservedAt) {
           return rejectImpossibleTransition("Integrator session was not durably appended after TargetLineageObserved")
         }
-        if (
-          correlation.expectedTargetHead !== commitOf(model.expectedTargetHead) ||
-          correlation.targetLineageObservedAt !== targetLineagePositionFor(id) ||
-          correlation.integrationTarget.repository !== responsibility.integrationTarget.repository ||
-          correlation.integrationTarget.ref !== responsibility.integrationTarget.ref ||
-          correlation.plannedAttempt.attemptId !== responsibility.plannedAttempt.attemptId ||
-          correlation.queuedAt !== responsibility.queuedAt ||
-          correlation.startedAt !== responsibility.startedAt ||
-          correlation.sessionId !== expectedCorrelation.sessionId ||
-          correlation.candidateResource !== expectedCorrelation.candidateResource ||
-          correlation.acceptedResult.commit !== responsibility.acceptedResult.commit ||
-          correlation.acceptedResult.evidenceManifest.digest !== responsibility.acceptedResult.evidenceManifest.digest
-        ) {
+        const responsibilityFactsMismatch =
+          correlation.integrationTarget.repository !== expectedResponsibility.integrationTarget.repository ||
+          correlation.integrationTarget.ref !== expectedResponsibility.integrationTarget.ref ||
+          correlation.plannedAttempt.attemptId !== expectedResponsibility.plannedAttempt.attemptId ||
+          correlation.queuedAt !== expectedResponsibility.queuedAt ||
+          correlation.startedAt !== expectedResponsibility.startedAt ||
+          correlation.acceptedResult.commit !== expectedResponsibility.acceptedResult.commit ||
+          correlation.acceptedResult.evidenceManifest.digest !==
+            expectedResponsibility.acceptedResult.evidenceManifest.digest
+        const identityMismatch = isSuccessor
+          ? correlation.expectedTargetHead !== commitOf(model.successorTargetHead) ||
+            correlation.sessionId === expectedCorrelation.sessionId ||
+            correlation.candidateResource === expectedCorrelation.candidateResource ||
+            correlation.targetLineageObservedAt <= directionRecordFor(id, "FullRerun").position
+          : correlation.expectedTargetHead !== commitOf(model.expectedTargetHead) ||
+            correlation.targetLineageObservedAt !== targetLineagePositionFor(id) ||
+            correlation.sessionId !== expectedCorrelation.sessionId ||
+            correlation.candidateResource !== expectedCorrelation.candidateResource
+        if (responsibilityFactsMismatch || identityMismatch) {
           return rejectImpossibleTransition(
             "Integrator correlation does not bind the exact responsibility, H, C, target, and lineage position"
           )
         }
       }
 
-      const actualText = candidateTextFromState(actual)
-      const actualObservation = candidateObservationFromState(actual)
+      const actualText = candidateTextFromState(resultState)
+      const actualObservation = candidateObservationFromState(resultState)
       const actualCandidate = candidateNumberFromText(actualText)
+      const resultRun = "run" in resultState ? resultState.run : undefined
       const actualCandidateObservation = candidateObservationTag(
         actualObservation,
         commitOf(model.expectedTargetHead),
         commitOf(model.acceptedResultCommit)
       )
       const candidateIntent =
-        correlation !== undefined &&
+        resultRun !== undefined &&
         actualText !== undefined &&
         runtime
           .readRecords()
-          .some(
-            (record) =>
-              record.key ===
-              integratorRunCandidateGitReadIntendedRecordKey(
-                integratorInitialRunCorrelationFor(makeInput(id, modelResults)),
-                actualText
-              )
-          )
+          .some((record) => record.key === integratorRunCandidateGitReadIntendedRecordKey(resultRun, actualText))
 
-      if (model.integratorResultRecorded !== isIntegratorResultState(actual)) {
+      if (model.integratorResultRecorded !== isIntegratorResultState(resultState)) {
         return rejectImpossibleTransition("model/runtime durable outer-result flag mismatch")
       }
-      if (model.integratorOutcome === "NotPrepared" && actual._tag !== "NotPrepared") {
+      if (model.integratorOutcome === "NotPrepared" && resultState._tag !== "NotPrepared") {
         return rejectImpossibleTransition("model/runtime NotPrepared outcome mismatch")
       }
-      if (model.integratorOutcome === "PreparedCandidate" && actual._tag === "NotPrepared") {
+      if (model.integratorOutcome === "PreparedCandidate" && resultState._tag === "NotPrepared") {
         return rejectImpossibleTransition("model/runtime PreparedCandidate outcome mismatch")
       }
       if (model.candidateReported !== (actualText !== undefined)) {
@@ -1313,7 +1815,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       if (model.candidateGitObservation !== actualCandidateObservation) {
         return rejectImpossibleTransition("model/runtime Git observation mismatch")
       }
-      if (model.candidateQualificationProven !== (actual._tag === "GitQualifiedPrepared")) {
+      if (model.candidateQualificationProven !== (resultState._tag === "GitQualifiedPrepared")) {
         return rejectImpossibleTransition("model/runtime Git qualification mismatch")
       }
       if (model.candidateReported && actualCandidate !== model.submittedCandidate) {
@@ -1325,7 +1827,7 @@ const acceptedResultIntegrationDriver = defineDriver(
           .find(
             (record) =>
               record.event._tag === "IntegratorRunCandidateGitObserved" &&
-              record.event.run.session.sessionId === correlation?.sessionId
+              record.event.run.session.sessionId === resultRun?.session.sessionId
           )
         if (observationRecord === undefined || observationRecord.position <= targetLineagePositionFor(id)) {
           return rejectImpossibleTransition("qualified candidate lacks a later durable Git observation")
@@ -1336,19 +1838,19 @@ const acceptedResultIntegrationDriver = defineDriver(
         ...model,
         sessionFixed: actual._tag !== "Absent",
         integratorOutcome:
-          actual._tag === "NotPrepared"
+          resultState._tag === "NotPrepared"
             ? "NotPrepared"
-            : actual._tag === "PreparedAwaitingGit" ||
-                actual._tag === "CandidateRejected" ||
-                actual._tag === "GitQualifiedPrepared"
+            : resultState._tag === "PreparedAwaitingGit" ||
+                resultState._tag === "CandidateRejected" ||
+                resultState._tag === "GitQualifiedPrepared"
               ? "PreparedCandidate"
               : "NoIntegratorOutcome",
-        integratorResultRecorded: isIntegratorResultState(actual),
+        integratorResultRecorded: isIntegratorResultState(resultState),
         candidateReported: actualText !== undefined,
         submittedCandidate: actualCandidate ?? 0n,
         candidateGitReadIntentRecorded: candidateIntent,
         candidateGitObservation: actualCandidateObservation,
-        candidateQualificationProven: actual._tag === "GitQualifiedPrepared",
+        candidateQualificationProven: resultState._tag === "GitQualifiedPrepared",
         observedFirstParent:
           actualObservation?._tag === "Commit" && actualObservation.directParents[0] !== undefined
             ? numericCommit(actualObservation.directParents[0])
@@ -1396,6 +1898,48 @@ const acceptedResultIntegrationDriver = defineDriver(
           updateModelResult(2n, (result) => ({ ...result, integrationTarget: 2n }))
           runtime.updateTargetLineageTarget(2n, independentTarget)
         }),
+      chooseRetryOne: () =>
+        Effect.gen(function* () {
+          yield* applyDirection(1n, "Retry", "accepted-result-integration-retry")
+          modelChooseDirection(1n, "RetryDirection")
+        }),
+      chooseFullRerunOne: () =>
+        Effect.gen(function* () {
+          yield* applyDirection(1n, "FullRerun", "accepted-result-integration-full-rerun")
+          modelChooseDirection(1n, "FullRerunDirection")
+        }),
+      redeliverRetryOne: () =>
+        Effect.gen(function* () {
+          yield* redeliverDirection(1n, "Retry")
+          modelRedeliverDirection(1n)
+        }),
+      redeliverFullRerunOne: () =>
+        Effect.gen(function* () {
+          yield* redeliverDirection(1n, "FullRerun")
+          modelRedeliverDirection(1n)
+        }),
+      rejectConflictingFullRerunOne: () =>
+        Effect.gen(function* () {
+          const quarantine = latestQuarantineRecord(1n)
+          const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+            direction: "FullRerun",
+            quarantineAt: quarantine.position,
+            sessionId: correlationFor(1n).sessionId
+          })
+          const request = ApplyIntegrationQuarantineDirectionRequest.make({
+            fingerprint,
+            requestId: IntegrationQuarantineDirectionRequestId.make({
+              nonce: "accepted-result-integration-conflicting-full-rerun",
+              runId
+            })
+          })
+          const control = yield* makeIntegrationQuarantineDirectionControl(runtime.journal)
+          const outcome = yield* Effect.exit(control.apply(request))
+          if (outcome._tag === "Success") {
+            return rejectImpossibleTransition("conflicting FullRerun direction unexpectedly won")
+          }
+          modelRejectConflictingDirection(1n)
+        }),
       fixIntegratorSessionOne: () =>
         Effect.gen(function* () {
           yield* appendSession(1n)
@@ -1414,7 +1958,9 @@ const acceptedResultIntegrationDriver = defineDriver(
             ...result,
             phase: "IntegratorInFlight",
             integratorInvocationCount: 1n,
-            integratorResponseAmbiguous: false
+            integratorResponseAmbiguous: false,
+            integratorRunOrdinal: 1n,
+            integratorRunSession: result.integrationSession
           }))
         }),
       loseCandidateGitResponseOne: () =>
@@ -1453,8 +1999,16 @@ const acceptedResultIntegrationDriver = defineDriver(
         }),
       observeWrongParentCandidateOne: () => observeCandidate(1n, "WrongParents", "CandidateWrongParents"),
       offerPromotionPremiseOne: () => Effect.sync(() => modelOfferPromotionPremise(1n)),
-      queueAcceptedResultOne: () => Effect.sync(() => modelQueue(1n)),
-      queueAcceptedResultTwo: () => Effect.sync(() => modelQueue(2n)),
+      queueAcceptedResultOne: () =>
+        Effect.gen(function* () {
+          yield* appendResponsibility(1n)
+          modelQueue(1n)
+        }),
+      queueAcceptedResultTwo: () =>
+        Effect.gen(function* () {
+          yield* appendResponsibility(2n)
+          modelQueue(2n)
+        }),
       reacquireIntegrationTargetOne: () => Effect.sync(() => modelReacquire(1n)),
       recoverCoordinatorStep: () => Effect.sync(modelRecover),
       recordCandidateGitReadIntentOne: () =>
@@ -1492,17 +2046,101 @@ const acceptedResultIntegrationDriver = defineDriver(
         }),
       recordQuarantineOne: () =>
         Effect.gen(function* () {
-          const responsibility = makeResponsibility(1n, modelResults)
-          const run = integratorInitialRunCorrelationFor(makeInput(1n, modelResults))
+          const responsibility = responsibilityFor(1n)
+          const run = runFor(1n)
           const result = deriveIntegratorRunState(runtime.readRecords(), responsibility, run)
           if (result._tag !== "NotPrepared" && result._tag !== "CandidateRejected") {
             return rejectImpossibleTransition(`cannot quarantine non-conclusive Integrator state ${result._tag}`)
           }
-          yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(
-            Effect.provideService(InRunJournal, runtime.journal)
-          )
+          if (run.ordinal === IntegratorRunOrdinal.make(1)) {
+            yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(
+              Effect.provideService(InRunJournal, runtime.journal)
+            )
+          } else {
+            yield* appendRetryConclusiveIntegrationQuarantine(result).pipe(
+              Effect.provideService(InRunJournal, runtime.journal)
+            )
+          }
           modelRecordQuarantine(1n)
         }),
+      startRetryOne: () =>
+        Effect.gen(function* () {
+          const lineage = yield* appendFreshTargetLineage(1n, modelResultFor(1n).expectedTargetHead, "retry")
+          if (lineage.event._tag !== "TargetLineageObserved") {
+            return rejectImpossibleTransition("Retry fresh lineage append returned a foreign event")
+          }
+          const input = IntegratorPreparationInput.make({
+            responsibility: responsibilityFor(1n),
+            targetLineage: lineage.event.observation,
+            targetLineageObservedAt: lineage.position
+          })
+          const run = runFor(1n, 2n)
+          runtime.failNextIntegratorCall()
+          const outcome = yield* Effect.exit(runtime.runProtocolFor(input, run))
+          assertLostRun(run, outcome)
+          modelStartRetry(1n)
+        }),
+      recordRetryNotApplicableOne: () =>
+        Effect.gen(function* () {
+          const lineage = yield* appendFreshTargetLineage(1n, targetHeadProof, "retry")
+          if (lineage.event._tag !== "TargetLineageObserved") {
+            return rejectImpossibleTransition("Retry fresh lineage append returned a foreign event")
+          }
+          const quarantine = latestQuarantineRecord(1n)
+          const direction = directionRecordFor(1n, "Retry")
+          yield* appendChangedHeadRetryQuarantine({
+            directionAppliedAt: direction.position,
+            priorQuarantineAt: quarantine.position,
+            session: correlationFor(1n),
+            targetLineage: lineage.event.observation,
+            targetLineageObservedAt: lineage.position
+          }).pipe(Effect.provideService(InRunJournal, runtime.journal))
+          modelRetryNotApplicable(1n)
+        }),
+      observeSuccessorTargetHeadOne: () =>
+        Effect.gen(function* () {
+          const lineage = yield* appendFreshTargetLineage(1n, modelResultFor(1n).expectedTargetHead, "successor")
+          if (lineage.event._tag !== "TargetLineageObserved") {
+            return rejectImpossibleTransition("FullRerun fresh lineage append returned a foreign event")
+          }
+          modelObserveSuccessorTargetHead(1n)
+        }),
+      startFullRerunOne: () =>
+        Effect.gen(function* () {
+          const input = successorPreparationFor(1n)
+          yield* appendIntegratorSuccessorSessionIfNeeded(runtime.journal, input, runtime.readRecords())
+          modelStartFullRerun(1n)
+        }),
+      startSuccessorIntegratorOne: () =>
+        Effect.gen(function* () {
+          const successorRecord = runtime
+            .readRecords()
+            .findLast(
+              (record): record is IntegratorSuccessorSessionFixedRecord =>
+                record.event._tag === "IntegratorSuccessorSessionFixed"
+            )
+          if (successorRecord === undefined) {
+            return rejectImpossibleTransition("FullRerun successor session was not durably fixed")
+          }
+          const successor = successorRecord.event.successor
+          const lineageRecord = runtime
+            .readRecords()
+            .find((record) => record.position === successor.targetLineageObservedAt)
+          if (lineageRecord === undefined || lineageRecord.event._tag !== "TargetLineageObserved") {
+            return rejectImpossibleTransition("FullRerun successor lacks its target-lineage record")
+          }
+          const input = IntegratorPreparationInput.make({
+            responsibility: responsibilityFor(1n),
+            targetLineage: lineageRecord.event.observation,
+            targetLineageObservedAt: lineageRecord.position
+          })
+          const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: successor })
+          runtime.failNextIntegratorCall()
+          const outcome = yield* Effect.exit(runtime.runProtocolFor(input, run))
+          assertLostRun(run, outcome)
+          modelStartSuccessor(1n)
+        }),
+      loseSuccessorResponseOne: () => Effect.sync(() => modelLoseSuccessor(1n)),
       recordPromotionAttemptIntentOne: () => Effect.sync(() => modelPromotionAttemptIntent(1n)),
       recordPromotionIntentOne: () => Effect.sync(() => modelPromotionIntent(1n)),
       readCandidateGitOne: () => Effect.sync(() => modelReadGit(1n)),
@@ -1515,8 +2153,16 @@ const acceptedResultIntegrationDriver = defineDriver(
           modelResume(1n)
         }),
       sendPromotionAttemptOne: () => Effect.sync(() => modelSendPromotion(1n)),
-      startIntegrationOne: () => Effect.sync(() => modelStart(1n)),
-      startIntegrationTwo: () => Effect.sync(() => modelStart(2n)),
+      startIntegrationOne: () =>
+        Effect.gen(function* () {
+          yield* appendIntegrationStart(1n)
+          modelStart(1n)
+        }),
+      startIntegrationTwo: () =>
+        Effect.gen(function* () {
+          yield* appendIntegrationStart(2n)
+          modelStart(2n)
+        }),
       waitOnDependencyOne: () => Effect.sync(() => modelWait(1n)),
       getState: () => Effect.sync(projection)
     }
@@ -1546,7 +2192,10 @@ quintIt(
                   phase: variantTag(result.phase),
                   integratorOutcome: variantTag(result.integratorOutcome),
                   candidateGitObservation: variantTag(result.candidateGitObservation),
-                  promotionGitObservation: variantTag(result.promotionGitObservation)
+                  promotionGitObservation: variantTag(result.promotionGitObservation),
+                  quarantineCause: variantTag(result.quarantineCause),
+                  quarantineDirection: variantTag(result.quarantineDirection),
+                  lastDirection: variantTag(result.lastDirection)
                 }
               ])
             )
@@ -1613,14 +2262,43 @@ quintIt(
             expected.promotionResponseAmbiguous === actual.promotionResponseAmbiguous &&
             expected.promotionResultRecorded === actual.promotionResultRecorded &&
             expected.promotionTargetFactsCurrent === actual.promotionTargetFactsCurrent &&
+            expected.predecessorPreserved === actual.predecessorPreserved &&
+            expected.quarantineCause === actual.quarantineCause &&
+            expected.quarantineConflictCount === actual.quarantineConflictCount &&
+            expected.quarantineDirection === actual.quarantineDirection &&
+            expected.quarantineDirectionCount === actual.quarantineDirectionCount &&
+            expected.quarantineDirectionPosition === actual.quarantineDirectionPosition &&
+            expected.quarantineDirectionSession === actual.quarantineDirectionSession &&
+            expected.quarantineOccurrenceCount === actual.quarantineOccurrenceCount &&
+            expected.quarantinePosition === actual.quarantinePosition &&
+            expected.quarantineRecorded === actual.quarantineRecorded &&
+            expected.quarantineRedeliveryCount === actual.quarantineRedeliveryCount &&
             expected.queuePosition === actual.queuePosition &&
             expected.resourceBoundCommit === actual.resourceBoundCommit &&
             expected.resourceBoundHead === actual.resourceBoundHead &&
             expected.resourceBoundTarget === actual.resourceBoundTarget &&
             expected.resourceHeadCandidate === actual.resourceHeadCandidate &&
+            expected.retryFreshQuarantineCount === actual.retryFreshQuarantineCount &&
+            expected.retryNotApplicableCount === actual.retryNotApplicableCount &&
+            expected.retryRunCount === actual.retryRunCount &&
             expected.submittedCandidate === actual.submittedCandidate &&
+            expected.successorFixed === actual.successorFixed &&
+            expected.successorHeadFreshlyObserved === actual.successorHeadFreshlyObserved &&
+            expected.successorIntegratorInvocationCount === actual.successorIntegratorInvocationCount &&
+            expected.successorResource === actual.successorResource &&
+            expected.successorRunCount === actual.successorRunCount &&
+            expected.successorRunOrdinal === actual.successorRunOrdinal &&
+            expected.successorSession === actual.successorSession &&
+            expected.successorTargetHead === actual.successorTargetHead &&
             expected.targetHeld === actual.targetHeld &&
-            expected.legacyVerificationEvidence === actual.legacyVerificationEvidence
+            expected.legacyVerificationEvidence === actual.legacyVerificationEvidence &&
+            expected.integratorRunOrdinal === actual.integratorRunOrdinal &&
+            expected.integratorRunSession === actual.integratorRunSession &&
+            expected.lastDirection === actual.lastDirection &&
+            expected.lastDirectionPosition === actual.lastDirectionPosition &&
+            expected.lastDirectionSession === actual.lastDirectionSession &&
+            expected.lastRecoveryRunOrdinal === actual.lastRecoveryRunOrdinal &&
+            expected.lastRecoveryRunSession === actual.lastRecoveryRunSession
           )
         })
       }

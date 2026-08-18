@@ -78,7 +78,8 @@ import {
   plannedAttemptReplacedRecordKey,
   integrationQuarantinedRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
-  integrationProviderRunActivityAbsentRecordKey
+  integrationProviderRunActivityAbsentRecordKey,
+  integratorSuccessorSessionFixedRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
 import { integrationQuarantineDirectionSubject } from "../protocols/integration-quarantine/events.js"
@@ -361,6 +362,14 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       _tag: "GenericEventDescriptor",
       expectedKey: integratorSessionFixedRecordKey(event.correlation)
     }),
+    IntegratorSuccessorSessionFixed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorSuccessorSessionFixedRecordKey(
+        event.predecessor,
+        event.quarantineAt,
+        event.directionAppliedAt
+      )
+    }),
     IntegratorRunStarted: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integratorRunStartedRecordKey(event.run)
@@ -495,7 +504,7 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     }),
     IntegrationProviderRunActivityAbsent: (event) => ({
       _tag: "GenericEventDescriptor",
-      expectedKey: integrationProviderRunActivityAbsentRecordKey(event.correlation)
+      expectedKey: integrationProviderRunActivityAbsentRecordKey(event.run)
     }),
     IntegrationQuarantineDirectionApplied: (event) => ({
       _tag: "GenericEventDescriptor",

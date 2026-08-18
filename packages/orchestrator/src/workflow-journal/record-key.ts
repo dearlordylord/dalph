@@ -170,6 +170,16 @@ export const integratorRunCandidateGitObservedRecordKey = (
 export const integratorSessionFixedRecordKey = (responsibility: IntegratorResponsibilityFacts): JournalRecordKey =>
   JournalRecordKey.make(`${integratorRecordKeyPrefix(responsibility)}:session-fixed`)
 
+/** Stable key for the one FullRerun successor allowed for one exact Q/D subject. */
+export const integratorSuccessorSessionFixedRecordKey = (
+  predecessor: IntegratorCorrelation,
+  quarantineAt: JournalPosition,
+  directionAppliedAt: JournalPosition
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `${integratorCorrelationRecordKeyPrefix(predecessor)}:successor:full-rerun:${quarantineAt}:${directionAppliedAt}:fixed`
+  )
+
 /** One conclusive outer result for the fixed session. */
 export const integratorResultRecordedRecordKey = (correlation: IntegratorCorrelation): JournalRecordKey =>
   JournalRecordKey.make(`${integratorCorrelationRecordKeyPrefix(correlation)}:result`)
@@ -341,8 +351,8 @@ export const integrationQuarantinedRecordKey = (
   JournalRecordKey.make(`integration-quarantine:${sessionId}:${integrationQuarantineBasisKey(basis)}:quarantined`)
 
 /** Stable key for exact proof that one provider run has no owned activity. */
-export const integrationProviderRunActivityAbsentRecordKey = (correlation: IntegratorCorrelation): JournalRecordKey =>
-  JournalRecordKey.make(`integration-quarantine:${correlation.sessionId}:provider-activity-absent`)
+export const integrationProviderRunActivityAbsentRecordKey = (run: IntegratorRunCorrelation): JournalRecordKey =>
+  JournalRecordKey.make(`integration-quarantine:${run.session.sessionId}:run:${run.ordinal}:provider-activity-absent`)
 
 /** Stable key for the one winning operator direction for an exact quarantine subject. */
 export const integrationQuarantineDirectionAppliedRecordKey = (

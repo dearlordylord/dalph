@@ -38,7 +38,7 @@
       "count": 2
     },
     "import-x/no-unused-modules": {
-      "count": 3
+      "count": 1
     }
   },
   "packages/dalph/src/cassettes/recorded-integration-renaming.ts": {
@@ -189,9 +189,6 @@
   },
   "packages/orchestrator/src/coordination/delivery/reactive-delivery-relations.ts": {
     "functional/prefer-tacit": {
-      "count": 1
-    },
-    "import-x/no-unused-modules": {
       "count": 1
     }
   },

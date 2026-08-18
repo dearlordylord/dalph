@@ -278,6 +278,7 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "quarantinePreservesSameTargetResponsibility",
     "quarantineDirectionIsExactAndFirst",
     "retryRequiresOneExplicitChoice",
+    "retryDirectionIsBounded",
     "integratorRunCorrelationIsExact",
     "retryAdvancesSameSessionToOrdinalTwo",
     "recoveryResumesSameRunOrdinal",

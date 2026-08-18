@@ -16,13 +16,16 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { rememberValidatedJournalPrefixSuccessor } from "../../../workflow-journal/prefix-lineage.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
+  IntegratorRunStartedEvent,
   IntegratorSessionId
 } from "../integrator/events.js"
 import {
@@ -30,6 +33,7 @@ import {
   TargetPromotionGitReadObservation,
   TargetPromotionCompareAndSetResult,
   TargetPromotionCompareAndSetFailure,
+  TargetPromotionGitReadFailure,
   targetPromotionCorrelationEquals,
   type TargetPromotionGitService,
   TargetPromotionCorrelation,
@@ -40,7 +44,8 @@ import {
   deriveTargetPromotionState,
   deriveTargetPromotionStateFor,
   runTargetPromotion,
-  TargetPromotionCorrelationContradiction
+  TargetPromotionCorrelationContradiction,
+  TargetPromotionResultContradiction
 } from "./protocol.js"
 
 const runId = RunId.make("outer-promotion-test-run")
@@ -51,6 +56,7 @@ const target = IntegrationTarget.make({
 const expectedHead = GitCommitSha.make("1".repeat(40))
 const acceptedCommit = GitCommitSha.make("2".repeat(40))
 const candidateCommit = GitCommitSha.make("3".repeat(40))
+const changedHead = GitCommitSha.make("4".repeat(40))
 const candidateText = IntegratorCandidateText.make("refs/candidates/outer-promotion")
 
 const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
@@ -145,6 +151,189 @@ it.effect("promotes exact M once and records its Integrator correlation and ance
       "TargetPromotionAttemptIntended",
       "TargetPromotionObservedSuccess"
     ])
+    expect((yield* run(service, records))._tag).toBe("PromotionSucceeded")
+    expect(yield* Ref.get(requests)).toEqual([targetPromotionGitRequestFor(request)])
+  })
+)
+
+it.effect("reconciles an already-current or ancestor candidate without compare-and-set", () =>
+  Effect.gen(function* () {
+    const observations = [
+      TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: candidateCommit }),
+      TargetPromotionGitReadObservation.cases.CandidateAncestor.make({ currentHeadSha: changedHead })
+    ] as const
+
+    for (const observation of observations) {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const compareAndSetCalls = yield* Ref.make(0)
+      const state = yield* run(
+        {
+          compareAndSet: () =>
+            Ref.update(compareAndSetCalls, (count) => count + 1).pipe(
+              Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
+            ),
+          read: () => Effect.succeed(observation)
+        },
+        records
+      )
+
+      expect(state._tag).toBe("PromotionSucceeded")
+      expect(yield* Ref.get(compareAndSetCalls)).toBe(0)
+    }
+  })
+)
+
+it.effect("reuses a validated non-promotion prefix and its exact-request cache", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const state = yield* run(
+      {
+        compareAndSet: () =>
+          Effect.succeed(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })),
+        read: () =>
+          Effect.succeed(
+            TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+          )
+      },
+      records
+    )
+    expect(state._tag).toBe("PromotionSucceeded")
+
+    const priorRecords = yield* Ref.get(records)
+    const appended: JournalRecord = {
+      event: IntegratorRunStartedEvent.make({ run: qualifiedCandidate.run, version: workflowJournalEventVersion }),
+      key: JournalRecordKey.make("outer-promotion:unrelated-integrator-run-start"),
+      position: JournalPosition.make(priorRecords.length + 1),
+      runId
+    }
+    const successorRecords = [...priorRecords, appended]
+    rememberValidatedJournalPrefixSuccessor(
+      { records: priorRecords, runId },
+      { records: successorRecords, runId },
+      appended
+    )
+
+    expect(deriveTargetPromotionStateFor(successorRecords, qualifiedCandidate)?._tag).toBe("PromotionSucceeded")
+    expect(deriveTargetPromotionStateFor(successorRecords, qualifiedCandidate)?._tag).toBe("PromotionSucceeded")
+  })
+)
+
+it.effect("records a stale promotion when the first complete read has moved beyond H without M", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const state = yield* run(
+      {
+        compareAndSet: () =>
+          Effect.succeed(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })),
+        read: () =>
+          Effect.succeed(
+            TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: changedHead })
+          )
+      },
+      records
+    )
+
+    expect(state._tag).toBe("PromotionStale")
+    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
+      "TargetPromotionIntended",
+      "TargetPromotionStale"
+    ])
+  })
+)
+
+it.effect("rejects contradictory complete Git read classifications", () =>
+  Effect.gen(function* () {
+    const observations = [
+      TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: changedHead }),
+      TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: candidateCommit }),
+      TargetPromotionGitReadObservation.cases.CandidateAncestor.make({ currentHeadSha: expectedHead })
+    ] as const
+
+    for (const observation of observations) {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const failure = yield* Effect.flip(
+        run(
+          {
+            compareAndSet: () =>
+              Effect.succeed(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })),
+            read: () => Effect.succeed(observation)
+          },
+          records
+        )
+      )
+
+      expect(failure).toBeInstanceOf(TargetPromotionResultContradiction)
+      expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+    }
+  })
+)
+
+it.effect("fails visibly when the first reconciliation read is unavailable", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const failure = new TargetPromotionGitReadFailure({
+      candidateCommit,
+      detail: "target ref could not be read",
+      target
+    })
+    const observed = yield* Effect.flip(
+      run(
+        {
+          compareAndSet: () =>
+            Effect.succeed(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })),
+          read: () => Effect.fail(failure)
+        },
+        records
+      )
+    )
+
+    expect(observed).toBe(failure)
+    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+  })
+)
+
+it.effect("classifies every complete compare-and-set rejection before retry", () =>
+  Effect.gen(function* () {
+    const cases = [
+      [candidateCommit, "PromotionSucceeded"],
+      [changedHead, "PromotionStale"]
+    ] as const
+
+    for (const [observedHeadSha, expectedTag] of cases) {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const state = yield* run(
+        {
+          compareAndSet: () =>
+            Effect.succeed(TargetPromotionCompareAndSetResult.cases.RejectedExpectedHead.make({ observedHeadSha })),
+          read: () =>
+            Effect.succeed(
+              TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+            )
+        },
+        records
+      )
+      expect(state._tag).toBe(expectedTag)
+    }
+
+    for (const result of [
+      TargetPromotionCompareAndSetResult.cases.RejectedExpectedHead.make({ observedHeadSha: expectedHead }),
+      TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: changedHead })
+    ]) {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const failure = yield* Effect.flip(
+        run(
+          {
+            compareAndSet: () => Effect.succeed(result),
+            read: () =>
+              Effect.succeed(
+                TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+              )
+          },
+          records
+        )
+      )
+      expect(failure).toBeInstanceOf(TargetPromotionResultContradiction)
+    }
   })
 )
 
@@ -190,6 +379,156 @@ it.effect("reads before retrying an ambiguous exact-head promotion and never sen
     expect(
       (yield* Ref.get(records)).filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
     ).toHaveLength(2)
+  })
+)
+
+it.effect("reconciles an ambiguous attempt from each complete Git ancestry result", () =>
+  Effect.gen(function* () {
+    const cases = [
+      [
+        TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: candidateCommit }),
+        "PromotionSucceeded"
+      ],
+      [
+        TargetPromotionGitReadObservation.cases.CandidateAncestor.make({ currentHeadSha: changedHead }),
+        "PromotionSucceeded"
+      ],
+      [
+        TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: changedHead }),
+        "PromotionStale"
+      ]
+    ] as const
+
+    for (const [reconciliationObservation, expectedTag] of cases) {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const readCount = yield* Ref.make(0)
+      const service: TargetPromotionGitService = {
+        compareAndSet: () =>
+          Effect.fail(
+            new TargetPromotionCompareAndSetFailure({
+              candidateCommit,
+              detail: "promotion response was lost",
+              expectedHead,
+              target
+            })
+          ),
+        read: () =>
+          Ref.getAndUpdate(readCount, (count) => count + 1).pipe(
+            Effect.map((count) =>
+              count === 0
+                ? TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+                : reconciliationObservation
+            )
+          )
+      }
+
+      expect((yield* run(service, records))._tag).toBe("PromotionPending")
+      expect((yield* run(service, records))._tag).toBe(expectedTag)
+    }
+  })
+)
+
+it.effect("rejects a contradictory Git classification after an ambiguous attempt", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const readCount = yield* Ref.make(0)
+    const service: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Effect.fail(
+          new TargetPromotionCompareAndSetFailure({
+            candidateCommit,
+            detail: "promotion response was lost",
+            expectedHead,
+            target
+          })
+        ),
+      read: () =>
+        Ref.getAndUpdate(readCount, (count) => count + 1).pipe(
+          Effect.map((count) =>
+            count === 0
+              ? TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+              : TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: changedHead })
+          )
+        )
+    }
+
+    expect((yield* run(service, records))._tag).toBe("PromotionPending")
+    expect(yield* Effect.flip(run(service, records))).toBeInstanceOf(TargetPromotionResultContradiction)
+  })
+)
+
+it.effect("propagates a reconciliation-read failure before the bounded attempt limit", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const readCount = yield* Ref.make(0)
+    const failure = new TargetPromotionGitReadFailure({
+      candidateCommit,
+      detail: "reconciliation read unavailable",
+      target
+    })
+    const service: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Effect.fail(
+          new TargetPromotionCompareAndSetFailure({
+            candidateCommit,
+            detail: "promotion response was lost",
+            expectedHead,
+            target
+          })
+        ),
+      read: () =>
+        Ref.getAndUpdate(readCount, (count) => count + 1).pipe(
+          Effect.flatMap((count) =>
+            count === 0
+              ? Effect.succeed(
+                  TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+                )
+              : Effect.fail(failure)
+          )
+        )
+    }
+
+    expect((yield* run(service, records))._tag).toBe("PromotionPending")
+    expect(yield* Effect.flip(run(service, records))).toBe(failure)
+  })
+)
+
+it.effect("records non-convergence when the final reconciliation read is unavailable", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const readCount = yield* Ref.make(0)
+    const service: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Effect.fail(
+          new TargetPromotionCompareAndSetFailure({
+            candidateCommit,
+            detail: "promotion response was lost",
+            expectedHead,
+            target
+          })
+        ),
+      read: () =>
+        Ref.getAndUpdate(readCount, (count) => count + 1).pipe(
+          Effect.flatMap((count) =>
+            count < 3
+              ? Effect.succeed(
+                  TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+                )
+              : Effect.fail(
+                  new TargetPromotionGitReadFailure({
+                    candidateCommit,
+                    detail: "final reconciliation read unavailable",
+                    target
+                  })
+                )
+          )
+        )
+    }
+
+    expect((yield* run(service, records))._tag).toBe("PromotionPending")
+    expect((yield* run(service, records))._tag).toBe("PromotionPending")
+    expect((yield* run(service, records))._tag).toBe("PromotionPending")
+    expect((yield* run(service, records))._tag).toBe("PromotionNonConvergent")
   })
 )
 

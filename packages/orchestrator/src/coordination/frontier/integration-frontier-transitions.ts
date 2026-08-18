@@ -24,9 +24,11 @@ import {
   integratorInitialRunCorrelationFor,
   integratorRunCorrelationForSession
 } from "../../workflow/protocols/integrator/session.js"
+import type { IntegratorSuccessorPreparationInput } from "../../workflow/protocols/integrator/session.js"
 import {
   IntegratorRunProtocolResult,
   integratorRetryRunOrdinal,
+  integratorRunCorrelationsEqual,
   type IntegratorRunCorrelation
 } from "../../workflow/protocols/integrator/events.js"
 import { integratorRunTwoAuthorizationIssue } from "../../workflow/protocols/integrator/retry-authorization.js"
@@ -34,8 +36,14 @@ import {
   deriveIntegrationQuarantineState,
   type IntegrationQuarantineState
 } from "../../workflow/protocols/integration-quarantine/state.js"
+import { IntegrationQuarantineBasis } from "../../workflow/protocols/integration-quarantine/events.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { integrationQuarantinedRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  validateProviderRunActivityAbsent,
+  type ProviderRunFailureQuarantineInput
+} from "../../workflow/protocols/integration-quarantine/provider-failure.js"
 
 type ClaimSubject = { readonly plannedAttempt: { readonly attemptId: AttemptId; readonly taskId: TaskId } }
 type PromotionState = ReturnType<typeof deriveTargetPromotionStateFor>
@@ -82,6 +90,7 @@ type RetryIntegratorProgress =
   | { readonly _tag: "NotApplicable" }
   | { readonly _tag: "Blocked" }
   | { readonly _tag: "AwaitingLineage" }
+  | { readonly _tag: "SuccessorReady"; readonly input: IntegratorSuccessorPreparationInput }
   | { readonly _tag: "Authorized"; readonly lineage: DurableTargetLineage; readonly run: IntegratorRunCorrelation }
   | {
       /** Fresh Git evidence proves Retry cannot use the session's fixed head. */
@@ -128,7 +137,7 @@ const runBoundIntegratorStateFor = (
 ): Extract<CurrentIntegratorState, { readonly run: IntegratorRunCorrelation }> | undefined =>
   "run" in state ? state : undefined
 
-const initialConclusiveQuarantineResultFor = (
+const conclusiveQuarantineResultFor = (
   state: CurrentIntegratorState
 ): Extract<IntegratorRunProtocolResult, { readonly _tag: "NotPrepared" | "CandidateRejected" }> | undefined => {
   if (state._tag === "NotPrepared") {
@@ -144,6 +153,36 @@ const initialConclusiveQuarantineResultFor = (
   return undefined
 }
 
+/** Finds exact provider-absence evidence whose dependent initial Q append was interrupted. */
+const providerRunFailureQuarantineFor = (
+  runState: ReconstructedRunState,
+  integratorState: CurrentIntegratorState
+): ProviderRunFailureQuarantineInput | undefined => {
+  if (
+    integratorState._tag !== "RunUnfinished" ||
+    (integratorState.run.ordinal !== 1 && integratorState.run.ordinal !== integratorRetryRunOrdinal)
+  ) {
+    return undefined
+  }
+  const { run } = integratorState
+  const records = runState.workflowHistory.records
+  const validAbsences = records.flatMap((record) => {
+    if (record.event._tag !== "IntegrationProviderRunActivityAbsent") return []
+    const validation = validateProviderRunActivityAbsent(records, record)
+    return validation._tag === "Valid" && integratorRunCorrelationsEqual(validation.run, run) ? [validation.record] : []
+  })
+  if (validAbsences.length !== 1) return undefined
+  const absence = validAbsences[0]
+  /* v8 ignore next -- @preserve A one-element array cannot lack its first element; this keeps indexed access fail-closed. */
+  if (absence === undefined) return undefined
+  const basis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+    detail: absence.event.detail,
+    ownedActivityProvenAbsentAt: absence.position
+  })
+  const quarantineKey = integrationQuarantinedRecordKey(run.session.sessionId, basis)
+  return records.some((record) => record.key === quarantineKey) ? undefined : { detail: absence.event.detail, run }
+}
+
 /** Finds a conclusive modern run-1 result whose Q append was interrupted or never dispatched. */
 const initialConclusiveQuarantineFor = (
   runState: ReconstructedRunState,
@@ -151,7 +190,7 @@ const initialConclusiveQuarantineFor = (
 ): Extract<IntegratorRunProtocolResult, { readonly _tag: "NotPrepared" | "CandidateRejected" }> | undefined => {
   const runBoundState = runBoundIntegratorStateFor(integratorState)
   if (runBoundState === undefined || runBoundState.run.ordinal !== 1) return undefined
-  const result = initialConclusiveQuarantineResultFor(integratorState)
+  const result = conclusiveQuarantineResultFor(integratorState)
   if (result === undefined) return undefined
   const quarantine = deriveIntegrationQuarantineState(
     runState.workflowHistory.records,
@@ -160,12 +199,31 @@ const initialConclusiveQuarantineFor = (
   return quarantine._tag === "NoQuarantine" ? result : undefined
 }
 
-const retryQuarantineStateFor = (
+/** Finds an authorized run-2 conclusive result whose fresh Q2 append is absent. */
+const retryConclusiveQuarantineFor = (
+  runState: ReconstructedRunState,
+  integratorState: CurrentIntegratorState
+): Extract<IntegratorRunProtocolResult, { readonly _tag: "NotPrepared" | "CandidateRejected" }> | undefined => {
+  const runBoundState = runBoundIntegratorStateFor(integratorState)
+  if (runBoundState === undefined || runBoundState.run.ordinal !== integratorRetryRunOrdinal) return undefined
+  const result = conclusiveQuarantineResultFor(integratorState)
+  if (result === undefined) return undefined
+  const quarantine = deriveIntegrationQuarantineState(
+    runState.workflowHistory.records,
+    runBoundState.run.session.sessionId
+  )
+  return quarantine._tag === "DirectionApplied" && quarantine.application.fingerprint.direction === "Retry"
+    ? result
+    : undefined
+}
+
+const currentQuarantineStateFor = (
   runState: ReconstructedRunState,
   integratorState: CurrentIntegratorState
 ): IntegrationQuarantineState | undefined => {
   const runBoundState = runBoundIntegratorStateFor(integratorState)
-  return runBoundState === undefined || runBoundState.run.ordinal !== 1
+  /* v8 ignore next -- @preserve retryIntegratorProgressFor returns before calling this helper when no run is bound. */
+  return runBoundState === undefined
     ? undefined
     : deriveIntegrationQuarantineState(runState.workflowHistory.records, runBoundState.run.session.sessionId)
 }
@@ -183,19 +241,15 @@ const retryIntegratorProgressFor = (
   integratorState: CurrentIntegratorState
 ): RetryIntegratorProgress => {
   const runBoundState = runBoundIntegratorStateFor(integratorState)
-  if (runBoundState === undefined || runBoundState.run.ordinal !== 1) {
+  if (runBoundState === undefined) {
     return { _tag: "NotApplicable" }
   }
 
-  const quarantine = retryQuarantineStateFor(runState, integratorState)
+  const quarantine = currentQuarantineStateFor(runState, integratorState)
   if (quarantine === undefined || quarantine._tag === "NoQuarantine") {
     return { _tag: "NotApplicable" }
   }
-  if (
-    quarantine._tag === "Contradiction" ||
-    quarantine._tag === "Quarantined" ||
-    quarantine.application.fingerprint.direction !== "Retry"
-  ) {
+  if (quarantine._tag === "Contradiction" || quarantine._tag === "Quarantined") {
     return { _tag: "Blocked" }
   }
   if (runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true) {
@@ -205,6 +259,32 @@ const retryIntegratorProgressFor = (
   const lineage = durableTargetLineageFor(runState, runtimeFacts, responsibility, quarantine.applicationAt)
   if (lineage === undefined) {
     return { _tag: "AwaitingLineage" }
+  }
+  if (quarantine.application.fingerprint.direction === "Retry" && runBoundState.run.ordinal !== 1) {
+    /* v8 ignore next -- @preserve Integrator history rejects ordinals above the single bounded Retry before frontier derivation. */
+    if (runBoundState.run.ordinal !== integratorRetryRunOrdinal) return { _tag: "Blocked" }
+    if (integratorState._tag === "GitQualifiedPrepared") return { _tag: "NotApplicable" }
+    const authorizationIssue = integratorRunTwoAuthorizationIssue(runState.workflowHistory.records, runBoundState.run, {
+      beforePosition: nextJournalPositionFor(runState),
+      requiredTargetLineageObservedAt: lineage.observedAt
+    })
+    return authorizationIssue === undefined
+      ? { _tag: "Authorized", lineage, run: runBoundState.run }
+      : { _tag: "Blocked" }
+  }
+  if (quarantine.application.fingerprint.direction === "FullRerun") {
+    return targetLineageIsIncompatible(lineage.observation, responsibility)
+      ? { _tag: "Blocked" }
+      : {
+          _tag: "SuccessorReady",
+          input: {
+            directionAppliedAt: quarantine.applicationAt,
+            predecessor: runBoundState.run.session,
+            quarantineAt: quarantine.quarantineAt,
+            targetLineage: lineage.observation,
+            targetLineageObservedAt: lineage.observedAt
+          }
+        }
   }
   if (lineage.observation.targetHeadSha !== runBoundState.run.session.expectedTargetHead) {
     return lineage.observation.plannedBaseSha === responsibility.plannedAttempt.baseSha
@@ -372,12 +452,31 @@ const transitionsBeforeStartedIntegrationAdmission = (
       })
     ]
   }
+  const providerRunFailure = providerRunFailureQuarantineFor(runState, integratorState)
+  if (providerRunFailure !== undefined) {
+    return [
+      RunnableFrontierTransition.RecordProviderRunFailureIntegrationQuarantine({
+        input: providerRunFailure,
+        responsibility
+      })
+    ]
+  }
+  const retryConclusiveResult = retryConclusiveQuarantineFor(runState, integratorState)
+  if (retryConclusiveResult !== undefined) {
+    return [
+      RunnableFrontierTransition.RecordRetryConclusiveIntegrationQuarantine({
+        responsibility,
+        result: retryConclusiveResult
+      })
+    ]
+  }
   if (!trackerFactsAreCurrentFor(responsibility)) return releaseStartedIntegrationTargetFor(responsibility, held)
   if (!claimIsExactFor(responsibility)) return []
   if (waiting) return releaseStartedIntegrationTargetFor(responsibility, held)
   if (retryProgress._tag === "Blocked") return releaseStartedIntegrationTargetFor(responsibility, held)
   if (
     retryProgress._tag === "AwaitingLineage" ||
+    retryProgress._tag === "SuccessorReady" ||
     retryProgress._tag === "Authorized" ||
     retryProgress._tag === "TargetHeadChanged"
   ) {
@@ -444,6 +543,9 @@ const startedIntegrationProgressTransitionFor = (
   // durable H; only later promotion requires current target authority.
   if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
   if (retryProgress._tag === "AwaitingLineage") return []
+  if (retryProgress._tag === "SuccessorReady") {
+    return [RunnableFrontierTransition.FixIntegratorSuccessorSession({ input: retryProgress.input, responsibility })]
+  }
   if (retryProgress._tag === "TargetHeadChanged") {
     return [
       RunnableFrontierTransition.RecordChangedHeadRetryQuarantine({
@@ -474,6 +576,7 @@ const startedIntegrationProgressTransitionFor = (
   if (integratorState._tag === "Absent") {
     return absentIntegratorProgressTransitionsFor(runState, runtimeFacts, responsibility, held)
   }
+  /* v8 ignore next -- @preserve Contradictory state is released by the ordered admission gate before progress derivation. */
   if (integratorState._tag === "Contradiction") return []
   const lineage = fixedTargetLineageFor(integratorState)
   return [

@@ -769,6 +769,7 @@ type OuterIntegratorEvent = Extract<
       | "IntegratorRunResultRecorded"
       | "IntegratorRunStarted"
       | "IntegratorSessionFixed"
+      | "IntegratorSuccessorSessionFixed"
   }
 >
 
@@ -795,7 +796,8 @@ const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterInte
   event._tag === "IntegratorRunCandidateGitReadIntended" ||
   event._tag === "IntegratorRunResultRecorded" ||
   event._tag === "IntegratorRunStarted" ||
-  event._tag === "IntegratorSessionFixed"
+  event._tag === "IntegratorSessionFixed" ||
+  event._tag === "IntegratorSuccessorSessionFixed"
 
 type RecordedOuterIntegratorEntry = Extract<RecordedCassetteEntry, { readonly _tag: OuterIntegratorEvent["_tag"] }>
 
@@ -807,13 +809,23 @@ const isRecordedOuterIntegratorEntry = (entry: RecordedCassetteEntry): entry is 
   entry._tag === "IntegratorRunCandidateGitReadIntended" ||
   entry._tag === "IntegratorRunResultRecorded" ||
   entry._tag === "IntegratorRunStarted" ||
-  entry._tag === "IntegratorSessionFixed"
+  entry._tag === "IntegratorSessionFixed" ||
+  entry._tag === "IntegratorSuccessorSessionFixed"
 
 const recordOuterIntegratorEntry = (event: OuterIntegratorEvent): RecordedOuterIntegratorEntry =>
   Match.valueTags(event, {
     IntegratorSessionFixed: (value): RecordedOuterIntegratorEntry => ({
       _tag: value._tag,
       correlation: value.correlation
+    }),
+    IntegratorSuccessorSessionFixed: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      direction: value.direction,
+      directionAppliedAt: value.directionAppliedAt,
+      predecessor: value.predecessor,
+      quarantineAt: value.quarantineAt,
+      successor: value.successor,
+      successorGeneration: value.successorGeneration
     }),
     IntegratorResultRecorded: (value): RecordedOuterIntegratorEntry => ({ _tag: value._tag, result: value.result }),
     IntegratorCandidateGitReadIntended: (value): RecordedOuterIntegratorEntry => ({
@@ -864,7 +876,8 @@ const recordIntegrationQuarantineEntry = (event: IntegrationQuarantineEvent): Re
       _tag: value._tag,
       correlation: value.correlation,
       detail: value.detail,
-      occurrenceClassification: value.occurrenceClassification
+      occurrenceClassification: value.occurrenceClassification,
+      run: value.run
     }),
     IntegrationQuarantineDirectionApplied: (value): RecordedIntegrationQuarantineEntry => ({
       _tag: value._tag,
@@ -1089,6 +1102,7 @@ const eventForIntegrationQuarantineEntry = (entry: RecordedIntegrationQuarantine
         correlation: value.correlation,
         detail: value.detail,
         occurrenceClassification: value.occurrenceClassification,
+        run: value.run,
         version: workflowJournalEventVersion
       }),
     IntegrationQuarantineDirectionApplied: (value) =>
@@ -1706,6 +1720,8 @@ const lyricForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): stri
   Match.valueTags(entry, {
     IntegratorSessionFixed: (value) =>
       `Dalph coordinator fixed Integrator session ${value.correlation.sessionId} for target head ${value.correlation.expectedTargetHead}.`,
+    IntegratorSuccessorSessionFixed: (value) =>
+      `Dalph coordinator fixed FullRerun successor session ${value.successor.sessionId} after quarantining predecessor ${value.predecessor.sessionId}.`,
     IntegratorResultRecorded: (value) =>
       value.result._tag === "PreparedCandidate"
         ? `The Integrator reported candidate ${value.result.candidateText} for session ${value.result.correlation.sessionId}.`

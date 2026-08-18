@@ -25,6 +25,8 @@ import { invalidTargetPromotionHistory, type TargetPromotionHistoryIndexes } fro
 import { addSetValue, candidateKey, setMapValue } from "./integration-history-run-binding.js"
 import { invalidCandidateSessionSupersession } from "./integration-history-session-supersession.js"
 import { type IntegratorHistoryIndexes, validateIntegratorHistoryEvent } from "./integrator-history.js"
+import { deriveIntegrationQuarantineState } from "../../workflow/protocols/integration-quarantine/state.js"
+import { validateProviderRunActivityAbsent } from "../../workflow/protocols/integration-quarantine/provider-failure.js"
 
 export interface IntegrationHistoryIndexes extends IntegratorHistoryIndexes {
   readonly acceptedExecutorResults: Map<AttemptId, AcceptedResult>
@@ -361,6 +363,39 @@ const invalidCandidateHistory = (record: JournalRecord, indexes: IntegrationHist
   return invalidTargetVerificationHistory(record, indexes)
 }
 
+const invalidIntegrationQuarantineHistory = (
+  record: JournalRecord,
+  records: ReadonlyArray<JournalRecord>
+): string | undefined => {
+  const event = record.event
+  if (
+    event._tag !== "IntegrationProviderRunActivityAbsent" &&
+    event._tag !== "IntegrationQuarantined" &&
+    event._tag !== "IntegrationQuarantineDirectionApplied"
+  ) {
+    return undefined
+  }
+  const prefix = records.filter(({ position }) => position <= record.position)
+  if (event._tag === "IntegrationProviderRunActivityAbsent") {
+    const validation = validateProviderRunActivityAbsent(prefix, record)
+    return validation._tag === "Valid"
+      ? undefined
+      : `Integration provider-activity absence is not justified by exact earlier history: ${validation.detail}`
+  }
+  const sessionId = event._tag === "IntegrationQuarantined" ? event.correlation.sessionId : event.fingerprint.sessionId
+  const state = deriveIntegrationQuarantineState(prefix, sessionId)
+  if (event._tag === "IntegrationQuarantined") {
+    return state._tag === "Quarantined" && state.quarantineAt === record.position
+      ? undefined
+      : `Integration quarantine is not justified by exact earlier history: ${state._tag}`
+  }
+  return state._tag === "DirectionApplied" &&
+    state.applicationAt === record.position &&
+    state.quarantineAt === event.fingerprint.quarantineAt
+    ? undefined
+    : `Integration quarantine direction is not the exact first direction for its subject: ${state._tag}`
+}
+
 export const invalidIntegrationHistoryEvent = (
   record: JournalRecord,
   indexes: IntegrationHistoryIndexes,
@@ -380,5 +415,7 @@ export const invalidIntegrationHistoryEvent = (
   if (event._tag === "IntegrationCandidateSessionSuperseded") {
     return invalidCandidateSessionSupersession(event, indexes)
   }
+  const quarantineIssue = invalidIntegrationQuarantineHistory(record, records)
+  if (quarantineIssue !== undefined) return quarantineIssue
   return invalidCandidateHistory(record, indexes)
 }

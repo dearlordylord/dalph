@@ -33,6 +33,7 @@ import {
   CompletionTaskRequestLookupIntendedEvent,
   CompletionTaskRequestLookupObservedEvent,
   CompletionTaskRequestOrdinal,
+  CompletionTaskRejectedEvent,
   CompletionTaskResponseLostEvent,
   completionClaimReplacementOperationIdFor,
   completionTaskRequestFor
@@ -246,6 +247,20 @@ const lostResponseReconciliationRecords = (
 it("accepts the exact completion authorization and lost-response reconciliation chronology", () => {
   const records = chronology()
   expect(records.flatMap((current) => invalidCompletionTaskHistory(current, records, fixture.runId) ?? [])).toEqual([])
+})
+
+it("dispatches a rejected numbered completion response through history validation", () => {
+  const exact = chronology()
+  const rejected = CompletionTaskRejectedEvent.make({
+    attemptOrdinal: ordinal,
+    detail: "controlled rejection",
+    request,
+    version: workflowJournalEventVersion
+  })
+  const records = [...exact.slice(0, 8), record(9, rejected)]
+  expect(invalidCompletionTaskHistory(eventAt(records, 9), records, fixture.runId)?.detail).toContain(
+    "mutually exclusive CompletionTaskResponseLost and CompletionTaskRejected outcomes"
+  )
 })
 
 it("reconstructs calls two and three only after the previous exact request was recorded NotApplied", () => {

@@ -28,12 +28,15 @@ import {
   IntegratorState,
   IntegratorQualifiedCandidate,
   integratorQualifiedCandidateFromState,
-  integratorCandidateHasExactParents
+  integratorCandidateHasExactParents,
+  IntegratorSuccessorGeneration,
+  firstFullRerunSuccessorGeneration
 } from "./events.js"
 import {
   IntegratorCallFailure,
   IntegratorGitReadFailure,
   IntegratorJournalContradiction,
+  IntegratorProviderActivityAbsent,
   IntegratorTargetHeadChanged,
   IntegratorTargetLineageIncompatible,
   IntegratorTargetLineageObservationChanged
@@ -52,6 +55,7 @@ import {
 } from "./session.js"
 import type { IntegratorRunPreparationInput } from "./session.js"
 import { integratorRetryAuthorizationIssue } from "./retry-authorization.js"
+import { readActiveIntegratorSession } from "./successor-session.js"
 import {
   appendRunGitReadIntentIfNeeded,
   readLegacyInitialResultForRun,
@@ -69,6 +73,7 @@ export {
   IntegratorCallFailure,
   IntegratorGitReadFailure,
   IntegratorJournalContradiction,
+  IntegratorProviderActivityAbsent,
   IntegratorTargetHeadChanged,
   IntegratorTargetLineageIncompatible,
   IntegratorTargetLineageObservationChanged
@@ -105,7 +110,9 @@ export {
   IntegratorQualifiedCandidate,
   integratorQualifiedCandidateFromState,
   IntegratorSessionId,
-  integratorCandidateHasExactParents
+  integratorCandidateHasExactParents,
+  IntegratorSuccessorGeneration,
+  firstFullRerunSuccessorGeneration
 }
 export type {
   IntegratorCorrelation as IntegratorCorrelationType,
@@ -119,7 +126,9 @@ export type { IntegratorResponsibilityFacts } from "./events.js"
 
 /** The generic outer service owns private process, turn, review, and provider retry state. */
 export interface IntegratorService {
-  readonly prepare: (request: IntegratorRequest) => Effect.Effect<IntegratorResult, IntegratorCallFailure>
+  readonly prepare: (
+    request: IntegratorRequest
+  ) => Effect.Effect<IntegratorResult, IntegratorCallFailure | IntegratorProviderActivityAbsent>
 }
 
 /** A single controlled call to the generic Integrator boundary. */
@@ -183,7 +192,7 @@ const correlationForPreparation = Effect.fn("IntegratorProtocol.correlationForPr
   records: ReadonlyArray<JournalRecord>
 ) {
   const runId = input.responsibility.plannedAttempt.runId
-  const recordedCorrelation = yield* readRecordedIntegratorSession(records, input.responsibility)
+  const recordedCorrelation = yield* readActiveIntegratorSession(records, input.responsibility)
   if (Option.isSome(recordedCorrelation)) {
     const recovered = recordedCorrelation.value
     if (recovered.targetLineageObservedAt !== input.targetLineageObservedAt) {
@@ -236,6 +245,7 @@ const qualifyOrNotPreparedForRun = Effect.fn("IntegratorProtocol.qualifyOrNotPre
   run: IntegratorRunCorrelation,
   result: IntegratorResult
 ) {
+  /* v8 ignore next -- @preserve every public result path validates its session correlation before this qualification helper. */
   if (!integratorCorrelationsEqual(result.correlation, run.session)) {
     return yield* new IntegratorJournalContradiction({
       detail: "Integrator result is not bound to the requested run session",
@@ -286,6 +296,7 @@ const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForR
   if (request.run.ordinal === 1) return yield* correlationForPreparation(journal, request.preparation, records)
   const runId = request.preparation.responsibility.plannedAttempt.runId
   if (request.run.ordinal !== integratorRetryRunOrdinal) {
+    /* v8 ignore next -- @preserve prepareIntegrationCandidateRun rejects ordinals above Retry before this helper is called. */
     return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
   }
   const recordedSession = yield* readRecordedIntegratorSession(records, request.preparation.responsibility)

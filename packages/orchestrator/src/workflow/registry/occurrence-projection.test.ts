@@ -24,13 +24,19 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../identity.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
-import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
+import {
+  InitialControlPolicy,
+  initialRunPolicyRevision,
+  RunControlPolicy,
+  RunPolicyRevision
+} from "../../control/policy.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { InRunJournal, type JournalRecord, JournalStore, RunLifecycleJournal } from "../../workflow-journal/store.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
+  TaskWorkCapacityChangedEvent,
   TargetLineageObservedEvent,
   taskTrackerReadIntent,
   WorkflowJournalEvent,
@@ -242,6 +248,36 @@ it.effect("projects journaled integration actions through the complete occurrenc
     expect(projection.occurrences.map(({ _tag }) => _tag)).toEqual([
       "IntegrationResponsibilityBegan",
       "IntegrationStarted"
+    ])
+  })
+)
+
+it.effect("projects an operator task-work capacity change as an applied policy occurrence", () =>
+  Effect.gen(function* () {
+    const projection = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        TaskWorkCapacityChangedEvent.make({
+          capacity: TaskWorkCapacity.make(2),
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          previousRevision: initialRunPolicyRevision,
+          revision: RunPolicyRevision.make(2),
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+
+    expect(projection.occurrences).toMatchObject([
+      {
+        _tag: "AppliedTaskWorkCapacity",
+        capacity: 2,
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        policyRevision: 2,
+        recordedAt: 1,
+        runId
+      }
     ])
   })
 )
@@ -607,6 +643,45 @@ it.effect("rejects each Git outcome without its distinct earlier same-run read i
 
     expect(worktreeFailure._tag).toBe("GitOutcomeWithoutReadIntent")
     expect(lineageFailure._tag).toBe("GitOutcomeWithoutReadIntent")
+  })
+)
+
+it.effect("rejects an already projected Git observation when its initiating action is removed", () =>
+  Effect.gen(function* () {
+    const gitRead = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("projected-worktree-without-action"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const valid = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: gitRead,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        2,
+        PlannedAttemptWorktreeObservedEvent.make({
+          observation: AttemptWorktreeLost.make({ plannedAttempt }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: gitRead.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+    const observation = valid.occurrences.find(({ _tag }) => _tag === "PlannedAttemptWorktreeObserved")
+    if (observation?._tag !== "PlannedAttemptWorktreeObserved")
+      return yield* Effect.die("expected worktree observation")
+
+    const failure = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
+      occurrences: [observation],
+      version: valid.version
+    }).pipe(Effect.flip)
+    expect(failure._tag).toBe("SchemaError")
   })
 )
 
@@ -1534,6 +1609,15 @@ it.effect("projects an atomic replacement occurrence while ignoring lifecycle ro
 
     expect(projection.occurrences.map(({ _tag }) => _tag)).toEqual(["AppliedAttemptChoice", "PlannedAttemptReplaced"])
     expect(projection.occurrences.at(1)).toMatchObject({ _tag: "PlannedAttemptReplaced", successorPlan, witness })
+    const replacementOccurrence = projection.occurrences.find(({ _tag }) => _tag === "PlannedAttemptReplaced")
+    if (replacementOccurrence?._tag !== "PlannedAttemptReplaced") {
+      return yield* Effect.die("expected replacement occurrence")
+    }
+    const missingChoice = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
+      occurrences: [replacementOccurrence],
+      version: projection.version
+    }).pipe(Effect.flip)
+    expect(missingChoice._tag).toBe("SchemaError")
   })
 )
 

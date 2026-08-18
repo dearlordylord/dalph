@@ -24,7 +24,7 @@ import {
 } from "../../../workflow-journal/record-key.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord, JournalStoreService } from "../../../workflow-journal/store.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { InRunJournal, JournalStore, JournalStoreContradiction } from "../../../workflow-journal/store.js"
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
@@ -174,11 +174,12 @@ const appendScenario = Effect.fn("ChangedHeadRetryTest.appendScenario")(function
     : yield* Effect.gen(function* () {
         const absence = yield* journal.append(
           scenarioRunId,
-          integrationProviderRunActivityAbsentRecordKey(session),
+          integrationProviderRunActivityAbsentRecordKey(run),
           IntegrationProviderRunActivityAbsentEvent.make({
             correlation: session,
             detail: absenceDetail,
             occurrenceClassification: "NonActionOccurrence",
+            run,
             version: workflowJournalEventVersion
           })
         )
@@ -261,6 +262,31 @@ it.effect("starts no retry when the session target head has changed", () =>
       _tag: "Rejected",
       detail: "Retry authorization was terminated by a changed-head quarantine"
     })
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects an idempotent replay whose complete lineage facts do not match L", () =>
+  Effect.gen(function* () {
+    const scenario = yield* appendScenario("invalid-replay")
+    const input = inputFor(scenario)
+    const first = yield* appendChangedHeadRetryQuarantine(input)
+
+    const foreignBase = yield* appendChangedHeadRetryQuarantine({
+      ...input,
+      targetLineage: { ...input.targetLineage, plannedBaseSha: GitCommitSha.make("5".repeat(40)) }
+    }).pipe(Effect.flip)
+    const foreignAncestry = yield* appendChangedHeadRetryQuarantine({
+      ...input,
+      targetLineage: { ...input.targetLineage, plannedBaseIsAncestorOfTargetHead: false }
+    }).pipe(Effect.flip)
+
+    expect(foreignBase).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
+    expect(foreignAncestry).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
+    expect(
+      (yield* scenario.journal.read(scenario.runId)).filter(
+        ({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "RetryTargetHeadChanged"
+      )
+    ).toEqual([first])
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
@@ -422,5 +448,96 @@ it.effect("rejects missing run-start and legacy session-only quarantine evidence
         )
       ).toHaveLength(0)
     }
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("reconciles ambiguous Q2 appends and rejects every foreign winner", () =>
+  Effect.gen(function* () {
+    const scenario = yield* appendScenario("ambiguous-append")
+    const records = yield* scenario.journal.read(scenario.runId)
+    const expected = yield* appendChangedHeadRetryQuarantine(inputFor(scenario))
+    const foreignExisting = {
+      ...scenario.fixedSession,
+      key: expected.key,
+      position: JournalPosition.make(records.length + 1)
+    }
+    const existingForeign = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("a foreign exact-key record must be rejected before append"),
+          read: () => Effect.succeed([...records, foreignExisting])
+        })
+      ),
+      Effect.flip
+    )
+    expect(existingForeign).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
+
+    let reconciledWinner: JournalRecord | undefined
+    const reconciledJournal: InRunJournal["Service"] = {
+      append: (requestedRunId, key, event) => {
+        reconciledWinner = { event, key, position: JournalPosition.make(records.length + 1), runId: requestedRunId }
+        return Effect.fail(
+          new JournalStoreContradiction({ existingPosition: reconciledWinner.position, key, runId: requestedRunId })
+        )
+      },
+      read: () =>
+        reconciledWinner === undefined ? Effect.succeed(records) : Effect.succeed([...records, reconciledWinner])
+    }
+    const reconciled = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
+      Effect.provideService(InRunJournal, reconciledJournal)
+    )
+    expect(reconciled.event._tag).toBe("IntegrationQuarantined")
+
+    const missingWinnerJournal: InRunJournal["Service"] = {
+      append: (requestedRunId, key) =>
+        Effect.fail(
+          new JournalStoreContradiction({
+            existingPosition: JournalPosition.make(records.length + 5),
+            key,
+            runId: requestedRunId
+          })
+        ),
+      read: () => Effect.succeed(records)
+    }
+    const missingWinner = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
+      Effect.provideService(InRunJournal, missingWinnerJournal),
+      Effect.flip
+    )
+    expect(missingWinner).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
+
+    const foreignWinner = {
+      ...scenario.fixedSession,
+      key: JournalRecordKey.make("changed-head-retry:foreign-winner"),
+      position: JournalPosition.make(records.length + 1)
+    }
+    const foreignWinnerJournal: InRunJournal["Service"] = {
+      append: (requestedRunId, key) =>
+        Effect.fail(
+          new JournalStoreContradiction({ existingPosition: foreignWinner.position, key, runId: requestedRunId })
+        ),
+      read: () => Effect.succeed([...records, foreignWinner])
+    }
+    const foreignWinnerFailure = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
+      Effect.provideService(InRunJournal, foreignWinnerJournal),
+      Effect.flip
+    )
+    expect(foreignWinnerFailure).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
+
+    const returnedForeignJournal: InRunJournal["Service"] = {
+      append: (requestedRunId, key) =>
+        Effect.succeed({
+          ...scenario.fixedSession,
+          key,
+          position: JournalPosition.make(records.length + 1),
+          runId: requestedRunId
+        }),
+      read: () => Effect.succeed(records)
+    }
+    const returnedForeign = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
+      Effect.provideService(InRunJournal, returnedForeignJournal),
+      Effect.flip
+    )
+    expect(returnedForeign).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )

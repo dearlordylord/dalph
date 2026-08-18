@@ -2,24 +2,16 @@ import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { coveragePolicy } from "./coverage-policy.mjs"
+import { coverageBracketForPath, coveragePolicy } from "./coverage-policy.mjs"
 
 const changedCoverageThreshold = coveragePolicy.changedProductionLinesThreshold
-const productionSourcePattern = /^(?:src|packages\/[^/]+\/src)\/.+\.(?:m?tsx?|m?jsx?)$/u
-const testSourcePattern = /(?:\.test|\.spec)\.[^.]+$/u
-const declarationSourcePattern = /\.d\.(?:cts|mts|ts)$/u
 
 const defaultGit = (args) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
 
 const normalizePath = (path) => path.replaceAll("\\", "/")
 
 export const coverageEligiblePath = (path) => {
-  const normalized = normalizePath(path)
-  return (
-    productionSourcePattern.test(normalized) &&
-    !testSourcePattern.test(normalized) &&
-    !declarationSourcePattern.test(normalized)
-  )
+  return coverageBracketForPath(path) !== undefined
 }
 
 const addChangedLine = (changed, path, line) => {
@@ -153,6 +145,41 @@ export const changedLineCoverage = (coverage, changedLines, repositoryRoot = pro
   }
 }
 
+const emptyChangedLineCoverage = () => ({
+  files: [],
+  executableLines: 0,
+  coveredLines: 0,
+  uncoveredLines: [],
+  percentage: 100
+})
+
+/** Measure changed executable lines independently for each configured bracket. */
+export const changedLineCoverageByBracket = (coverage, changedLines, repositoryRoot = process.cwd()) =>
+  Object.fromEntries(
+    Object.keys(coveragePolicy.brackets).map((bracketName) => {
+      const bracketLines = new Map([...changedLines].filter(([path]) => coverageBracketForPath(path) === bracketName))
+      return [
+        bracketName,
+        bracketLines.size === 0
+          ? emptyChangedLineCoverage()
+          : changedLineCoverage(coverage, bracketLines, repositoryRoot)
+      ]
+    })
+  )
+
+/** Return changed-line failures for each bracket, preserving independent floors. */
+export const coverageBracketLineFailures = (results) =>
+  Object.entries(results).flatMap(([bracketName, result]) => {
+    const threshold = coveragePolicy.brackets[bracketName].changedLinesThreshold
+    if (result.coveredLines * 100 >= result.executableLines * threshold) return []
+    return [
+      `changed ${bracketName} line coverage: expected at least ${threshold}%, observed ${formatPercentage(result.percentage)}`,
+      ...result.uncoveredLines.map(
+        ({ line, path, reason }) => `  ${path}:${line}${reason === undefined ? "" : ` (${reason})`}`
+      )
+    ]
+  })
+
 const formatPercentage = (percentage) => `${percentage.toFixed(2)}%`
 
 export const coverageLineFailures = (result, threshold = changedCoverageThreshold) => {
@@ -199,16 +226,18 @@ const main = async () => {
   const baseSha = resolveCoverageBase(explicitBase)
   const changedLines = changedProductionLinesFromGit({ baseSha, repositoryRoot })
   const coverage = JSON.parse(readFileSync(resolve(repositoryRoot, coveragePath), "utf8"))
-  const result = changedLineCoverage(coverage, changedLines, repositoryRoot)
-  const failures = coverageLineFailures(result)
+  const results = changedLineCoverageByBracket(coverage, changedLines, repositoryRoot)
+  const failures = coverageBracketLineFailures(results)
   if (failures.length > 0) {
-    process.stderr.write(`Changed production-line coverage failure (base ${baseSha}):\n${failures.join("\n")}\n`)
+    process.stderr.write(`Changed-line coverage failure (base ${baseSha}):\n${failures.join("\n")}\n`)
     process.exitCode = 1
     return
   }
-  process.stdout.write(
-    `Changed production-line coverage: ${formatPercentage(result.percentage)} (${result.coveredLines}/${result.executableLines}); base ${baseSha}\n`
+  const lines = Object.entries(results).map(
+    ([bracketName, result]) =>
+      `Changed ${bracketName} lines: ${formatPercentage(result.percentage)} (${result.coveredLines}/${result.executableLines})`
   )
+  process.stdout.write(`${lines.join("; ")}; base ${baseSha}\n`)
 }
 
 if (process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url) {

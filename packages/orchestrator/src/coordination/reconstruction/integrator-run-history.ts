@@ -2,8 +2,12 @@ import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import {
+  integratorRunCandidateGitObservedRecordKey,
+  integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunCandidateRecordKeyPrefix,
-  integratorRunRecordKeyPrefix
+  integratorRunRecordKeyPrefix,
+  integratorRunResultRecordedRecordKey,
+  integratorRunStartedRecordKey
 } from "../../workflow-journal/record-key.js"
 import {
   IntegratorRunCorrelation,
@@ -15,7 +19,10 @@ import { integratorCorrelationsEqual } from "../../workflow/protocols/integrator
 import { integratorRunTwoAuthorizationIssue } from "../../workflow/protocols/integrator/retry-authorization.js"
 import { setMapValue } from "./integration-history-run-binding.js"
 
-type IntegratorSessionFixed = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorSessionFixed" }>
+type IntegratorSessionFixed = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }
+>
 type IntegratorResultRecorded = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorResultRecorded" }>
 type IntegratorRunStarted = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunStarted" }>
 type IntegratorRunResultRecorded = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunResultRecorded" }>
@@ -46,6 +53,7 @@ export interface IntegratorRunHistoryIndexes {
 interface IntegratorRunHistoryValidationIndexes extends IntegratorRunHistoryIndexes {
   readonly integratorSessionFixed: Map<JournalPosition, IntegratorSessionFixed>
   readonly integratorSessionsByStartedAt: Map<JournalPosition, JournalPosition>
+  readonly integratorSessionsBySessionId: Map<string, JournalPosition>
   readonly integratorResultsByStartedAt: Map<JournalPosition, PositionedIntegratorEvent<IntegratorResultRecorded>>
 }
 
@@ -56,13 +64,20 @@ const exactSessionForCorrelation = (
   record: JournalRecord,
   indexes: IntegratorRunHistoryValidationIndexes
 ): boolean => {
-  const sessionPosition = indexes.integratorSessionsByStartedAt.get(correlation.startedAt)
+  const sessionPosition = indexes.integratorSessionsBySessionId.get(correlation.sessionId)
   const session = sessionPosition === undefined ? undefined : indexes.integratorSessionFixed.get(sessionPosition)
+  const sessionCorrelation =
+    session === undefined
+      ? undefined
+      : session._tag === "IntegratorSessionFixed"
+        ? session.correlation
+        : session.successor
   return (
     sessionPosition !== undefined &&
     session !== undefined &&
     sessionPosition < record.position &&
-    integratorCorrelationsEqual(session.correlation, correlation)
+    sessionCorrelation !== undefined &&
+    integratorCorrelationsEqual(sessionCorrelation, correlation)
   )
 }
 
@@ -134,13 +149,16 @@ const invalidIntegratorRunStarted = (
   setMapValue(indexes.integratorRunStarted, key, { event, position: record.position })
   return existing !== undefined
     ? `Integrator run repeats exact session ordinal ${event.run.ordinal}`
-    : !session
-      ? `Integrator run has no exact earlier fixed session at ${event.run.session.startedAt}`
-      : authorizationIssue !== undefined
-        ? authorizationIssue
-        : event.run.ordinal === 1 && !previousConclusive
-          ? `Integrator run ordinal ${event.run.ordinal} has no exact conclusive predecessor run`
-          : undefined
+    : record.key !== integratorRunStartedRecordKey(event.run)
+      ? `Integrator run start has a foreign key for session ordinal ${event.run.ordinal}`
+      : !session
+        ? `Integrator run has no exact earlier fixed session at ${event.run.session.startedAt}`
+        : authorizationIssue !== undefined
+          ? authorizationIssue
+          : /* v8 ignore next -- @preserve ordinal one has no previous run, so previousConclusive is always true on this arm. */
+            event.run.ordinal === 1 && !previousConclusive
+            ? `Integrator run ordinal ${event.run.ordinal} has no exact conclusive predecessor run`
+            : undefined
 }
 
 const exactIntegratorRunStart = (
@@ -168,9 +186,11 @@ const invalidIntegratorRunResult = (
   setMapValue(indexes.integratorRunResults, key, { event, position: record.position })
   return existing !== undefined
     ? `Integrator run result repeats exact session ordinal ${event.run.ordinal}`
-    : started === undefined || !matchingSession
-      ? `Integrator run result has no exact earlier run start and matching session`
-      : undefined
+    : record.key !== integratorRunResultRecordedRecordKey(event.run)
+      ? `Integrator run result has a foreign key for session ordinal ${event.run.ordinal}`
+      : started === undefined || !matchingSession
+        ? `Integrator run result has no exact earlier run start and matching session`
+        : undefined
 }
 
 const exactPreparedIntegratorRunResultFor = (
@@ -201,9 +221,11 @@ const invalidIntegratorRunCandidateGitReadIntent = (
   setMapValue(indexes.integratorRunCandidateGitReadIntents, key, { event, position: record.position })
   return existing !== undefined
     ? `Integrator run candidate Git-read intent repeats candidate text ${event.candidateText}`
-    : result === undefined
-      ? `Integrator run candidate Git-read intent has no exact earlier PreparedCandidate result`
-      : undefined
+    : record.key !== integratorRunCandidateGitReadIntendedRecordKey(event.run, event.candidateText)
+      ? `Integrator run candidate Git-read intent has a foreign key`
+      : result === undefined
+        ? `Integrator run candidate Git-read intent has no exact earlier PreparedCandidate result`
+        : undefined
 }
 
 const invalidIntegratorRunCandidateGitObservation = (
@@ -224,9 +246,11 @@ const invalidIntegratorRunCandidateGitObservation = (
   setMapValue(indexes.integratorRunCandidateGitObservations, key, { event, position: record.position })
   return existing !== undefined
     ? `Integrator run candidate Git observation repeats candidate text ${event.candidateText}`
-    : !exactEarlierIntent || result === undefined || !matchingCandidateText
-      ? `Integrator run candidate Git observation has no exact earlier intent, result, and candidate text`
-      : undefined
+    : record.key !== integratorRunCandidateGitObservedRecordKey(event.run, event.candidateText)
+      ? `Integrator run candidate Git observation has a foreign key`
+      : !exactEarlierIntent || result === undefined || !matchingCandidateText
+        ? `Integrator run candidate Git observation has no exact earlier intent, result, and candidate text`
+        : undefined
 }
 
 /** Validates and indexes the run-bound events owned by the outer Integrator protocol. */

@@ -23,18 +23,25 @@ import {
   IntegrationCandidateAgentReport,
   IntegrationCandidateAgentReportedEvent,
   IntegrationCandidateAgentReportOrdinal,
+  IntegrationCandidateContinuationLimitReachedEvent,
   IntegrationCandidateConstructionIntendedEvent,
   IntegrationCandidateConstructedEvent,
   IntegrationCandidateCorrelation,
+  IntegrationCandidateCorrectionLimitReachedEvent,
   IntegrationCandidateGitObservation,
   IntegrationCandidateGitObservedEvent,
+  IntegrationCandidateGitValidationAttemptOrdinal,
+  IntegrationCandidateGitValidationFailedEvent,
   IntegrationCandidateId,
   IntegrationCandidateResourceLocator,
   IntegrationCandidateSessionSupersededEvent,
   IntegrationSessionId,
   type ConstructedIntegrationCandidateOccurrence
 } from "../../workflow/protocols/integration-candidate-construction/events.js"
-import { IntegrationStartedEvent } from "../../workflow/protocols/integration-admission/events.js"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../../workflow/protocols/integration-admission/events.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowActor } from "../../workflow/registry/actor.js"
@@ -50,13 +57,41 @@ import {
   IntegratorNotPreparedDetail,
   IntegratorResult,
   IntegratorResultRecordedEvent,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorRunCandidateGitObservedEvent,
+  IntegratorRunCandidateGitReadIntendedEvent,
+  IntegratorRunQualifiedCandidate,
+  IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent,
   IntegratorSessionFixedEvent,
-  IntegratorSessionId
+  IntegratorSessionId,
+  IntegratorSuccessorSessionFixedEvent
 } from "../../workflow/protocols/integrator/events.js"
+import {
+  TargetVerificationCorrelation,
+  TargetVerificationCorrelationContradictedEvent,
+  TargetVerificationEvidenceSealedEvent,
+  TargetVerificationIntendedEvent,
+  TargetVerificationPlanId,
+  targetVerificationCorrelationFor
+} from "../../workflow/protocols/target-verification/events.js"
+import {
+  TargetPromotionIntendedEvent,
+  targetPromotionCorrelationFor
+} from "../../workflow/protocols/target-promotion/events.js"
+import {
+  IntegrationProviderRunActivityAbsentEvent,
+  IntegrationQuarantineDirectionAppliedEvent,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineFailureDetail
+} from "../../workflow/protocols/integration-quarantine/events.js"
 import { EvidenceReference } from "../../workflow/protocols/target-verification/evidence-store.js"
 import type { IntegrationHistoryIndexes } from "./integration-history.js"
 import { validateIntegrationHistoryRecord } from "./integration-history-validation.js"
 import { makeTargetPromotionHistoryIndexes } from "./target-promotion-history.js"
+import { invalidIntegrationRunBinding } from "./integration-history-run-binding.js"
 
 const runId = RunId.make("promotion-history-run")
 const candidate: ConstructedIntegrationCandidateOccurrence = {
@@ -107,6 +142,8 @@ const indexes = (): IntegrationHistoryIndexes => ({
   integratorSessionsByStartedAt: new Map(),
   integratorSessionsBySessionId: new Map(),
   integratorSessionsByCandidateResource: new Map(),
+  integratorSuccessorSessionFixed: new Map(),
+  integratorSuccessorSessionsByPredecessor: new Map(),
   integratorResultsByStartedAt: new Map(),
   integratorCandidateGitReadIntents: new Map(),
   integratorCandidateGitObservations: new Map(),
@@ -130,13 +167,14 @@ const record = (position: number, event: JournalRecord["event"]): JournalRecord 
 const validate = (historyIndexes: IntegrationHistoryIndexes, records: ReadonlyArray<JournalRecord>) => {
   const identityIssues: Array<string> = []
   const semanticIssues: Array<string> = []
-  for (const item of records) {
+  for (const [index, item] of records.entries()) {
     validateIntegrationHistoryRecord(
       item,
       runId,
       historyIndexes,
       (detail) => identityIssues.push(detail),
-      (detail) => semanticIssues.push(detail)
+      (detail) => semanticIssues.push(detail),
+      records.slice(0, index + 1)
     )
   }
   return { identityIssues, semanticIssues }
@@ -225,6 +263,49 @@ describe("integration evidence history", () => {
     ])
 
     expect(result).toEqual({ identityIssues: [], semanticIssues: [] })
+  })
+
+  it("accepts one exact target-verification intent and genuine terminal, rejecting missing or repeated terminals", () => {
+    const verification = targetVerificationCorrelationFor(candidate, TargetVerificationPlanId.make("history-boundary"))
+    const intended = TargetVerificationIntendedEvent.make({
+      correlation: verification,
+      version: workflowJournalEventVersion
+    })
+    const sealed = TargetVerificationEvidenceSealedEvent.make({
+      correlation: verification,
+      manifest: candidate.reviewManifest,
+      terminal: "Passed",
+      version: workflowJournalEventVersion
+    })
+    const contradicted = TargetVerificationCorrelationContradictedEvent.make({
+      expected: verification,
+      received: TargetVerificationCorrelation.make({
+        ...verification,
+        candidateCommit: GitCommitSha.make("9".repeat(40))
+      }),
+      version: workflowJournalEventVersion
+    })
+
+    const validSealed = validate(indexes(), [record(12, intended), record(13, sealed)])
+    expect(validSealed).toEqual({ identityIssues: [], semanticIssues: [] })
+
+    const validContradiction = validate(indexes(), [record(12, intended), record(13, contradicted)])
+    expect(validContradiction).toEqual({ identityIssues: [], semanticIssues: [] })
+
+    const duplicateIntent = validate(indexes(), [record(12, intended), record(13, intended)])
+    expect(duplicateIntent).toEqual({ identityIssues: [], semanticIssues: [] })
+
+    const missingIntent = validate(indexes(), [record(13, sealed)])
+    expect(missingIntent.semanticIssues).toEqual([expect.stringContaining("no one exact earlier intent")])
+
+    const repeatedTerminal = validate(indexes(), [record(12, intended), record(13, sealed), record(14, sealed)])
+    expect(repeatedTerminal.semanticIssues).toEqual([expect.stringContaining("no one exact earlier intent")])
+
+    const nonGenuineContradiction = validate(indexes(), [
+      record(12, intended),
+      record(13, { ...contradicted, received: verification })
+    ])
+    expect(nonGenuineContradiction.semanticIssues).toEqual([expect.stringContaining("no one exact earlier intent")])
   })
 
   it("rejects a candidate intent that substitutes the accepted evidence byte length", () => {
@@ -354,6 +435,138 @@ describe("integration evidence history", () => {
       supersession({ ...successor, acceptanceManifest: changedByteLength(successor.acceptanceManifest) })
     ).toThrow()
   })
+
+  it("accepts correction and continuation limits only when their causal counts reach the bound", () => {
+    const correctionIndexes = indexes()
+    seedIntegrationStart(correctionIndexes)
+    const correctionIntent = IntegrationCandidateConstructionIntendedEvent.make({
+      ...candidateIntent(candidate.correlation),
+      correctionLimit: CandidateCorrectionLimit.make(1)
+    })
+    const invalidObservation = (submissionAt: number) =>
+      IntegrationCandidateGitObservedEvent.make({
+        candidateCommit: candidate.candidateCommit,
+        correlation: candidate.correlation,
+        observation: IntegrationCandidateGitObservation.cases.Commit.make({
+          directParents: [GitCommitSha.make("8".repeat(40)), GitCommitSha.make("9".repeat(40))]
+        }),
+        submissionAt: JournalPosition.make(submissionAt),
+        version: workflowJournalEventVersion
+      })
+    const submitted = IntegrationCandidateAgentReportedEvent.make({
+      expectedCorrelation: candidate.correlation,
+      ordinal: IntegrationCandidateAgentReportOrdinal.make(1),
+      report: IntegrationCandidateAgentReport.cases.Submitted.make({
+        candidateCommit: candidate.candidateCommit,
+        correlation: candidate.correlation,
+        reviewManifest: candidate.reviewManifest
+      }),
+      version: workflowJournalEventVersion
+    })
+    const correction = IntegrationCandidateCorrectionLimitReachedEvent.make({
+      correctionCount: 1,
+      correctionLimit: CandidateCorrectionLimit.make(1),
+      correlation: candidate.correlation,
+      invalidObservationAt: JournalPosition.make(14),
+      version: workflowJournalEventVersion
+    })
+    const correctionResult = validate(correctionIndexes, [
+      record(10, correctionIntent),
+      record(11, submitted),
+      record(12, invalidObservation(11)),
+      record(13, submitted),
+      record(14, invalidObservation(13)),
+      record(15, correction)
+    ])
+    expect(correctionResult).toEqual({ identityIssues: [], semanticIssues: [] })
+
+    const continuationIndexes = indexes()
+    seedIntegrationStart(continuationIndexes)
+    const continuationIntent = IntegrationCandidateConstructionIntendedEvent.make({
+      ...candidateIntent(candidate.correlation),
+      continuationLimit: CandidateContinuationLimit.make(1)
+    })
+    const report = IntegrationCandidateAgentReportedEvent.make({
+      expectedCorrelation: candidate.correlation,
+      ordinal: IntegrationCandidateAgentReportOrdinal.make(1),
+      report: IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: candidate.correlation }),
+      version: workflowJournalEventVersion
+    })
+    const continuation = IntegrationCandidateContinuationLimitReachedEvent.make({
+      continuationCount: 1,
+      continuationLimit: CandidateContinuationLimit.make(1),
+      correlation: candidate.correlation,
+      lastReportAt: JournalPosition.make(11),
+      version: workflowJournalEventVersion
+    })
+    const continuationResult = validate(continuationIndexes, [
+      record(10, continuationIntent),
+      record(11, report),
+      record(12, continuation)
+    ])
+    expect(continuationResult).toEqual({ identityIssues: [], semanticIssues: [] })
+  })
+
+  it("binds terminal candidate and verification events to the exact executor run", () => {
+    const verification = targetVerificationCorrelationFor(candidate, TargetVerificationPlanId.make("plan-boundary"))
+    const sealed = TargetVerificationEvidenceSealedEvent.make({
+      correlation: verification,
+      manifest: candidate.reviewManifest,
+      terminal: "Passed",
+      version: workflowJournalEventVersion
+    })
+    const contradicted = TargetVerificationCorrelationContradictedEvent.make({
+      expected: verification,
+      received: TargetVerificationCorrelation.make({
+        ...verification,
+        candidateCommit: GitCommitSha.make("9".repeat(40))
+      }),
+      version: workflowJournalEventVersion
+    })
+    expect(invalidIntegrationRunBinding(sealed, runId)).toBeUndefined()
+    expect(invalidIntegrationRunBinding(contradicted, runId)).toBeUndefined()
+
+    const foreignRunId = RunId.make("promotion-history-foreign-run")
+    const foreignCandidateCorrelation = IntegrationCandidateCorrelation.make({
+      ...candidate.correlation,
+      runId: foreignRunId
+    })
+    const foreignVerification = TargetVerificationCorrelation.make({
+      ...verification,
+      candidateCorrelation: foreignCandidateCorrelation
+    })
+    const foreignSealed = TargetVerificationEvidenceSealedEvent.make({ ...sealed, correlation: foreignVerification })
+    expect(invalidIntegrationRunBinding(foreignSealed, runId)).toContain("target verification binds run")
+
+    const validationFailed = IntegrationCandidateGitValidationFailedEvent.make({
+      attemptOrdinal: IntegrationCandidateGitValidationAttemptOrdinal.make(1),
+      candidateCommit: candidate.candidateCommit,
+      correlation: candidate.correlation,
+      detail: "candidate object could not be read",
+      submissionAt: JournalPosition.make(12),
+      version: workflowJournalEventVersion
+    })
+    const correctionLimit = IntegrationCandidateCorrectionLimitReachedEvent.make({
+      correctionCount: 1,
+      correctionLimit: CandidateCorrectionLimit.make(1),
+      correlation: candidate.correlation,
+      invalidObservationAt: JournalPosition.make(12),
+      version: workflowJournalEventVersion
+    })
+    const continuationLimit = IntegrationCandidateContinuationLimitReachedEvent.make({
+      continuationCount: 1,
+      continuationLimit: CandidateContinuationLimit.make(1),
+      correlation: candidate.correlation,
+      lastReportAt: JournalPosition.make(12),
+      version: workflowJournalEventVersion
+    })
+    expect(invalidIntegrationRunBinding(validationFailed, runId)).toBeUndefined()
+    expect(invalidIntegrationRunBinding(correctionLimit, runId)).toBeUndefined()
+    expect(invalidIntegrationRunBinding(continuationLimit, runId)).toBeUndefined()
+    expect(
+      invalidIntegrationRunBinding({ ...validationFailed, correlation: foreignCandidateCorrelation }, runId)
+    ).toContain("candidate event binds run")
+  })
 })
 
 describe("outer Integrator history", () => {
@@ -451,6 +664,241 @@ describe("outer Integrator history", () => {
       })
     )
   ]
+
+  it("rejects foreign run bindings at every outer-integrator boundary", () => {
+    const foreignRunId = RunId.make("integrator-history-foreign-boundary-run")
+    const foreignAttempt = PlannedTaskAttempt.make({ ...integratorPlannedAttempt, runId: foreignRunId })
+    const foreignSession = IntegratorCorrelation.make({ ...integratorCorrelation, plannedAttempt: foreignAttempt })
+    const foreignRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: foreignSession })
+    const foreignCandidateCorrelation = IntegrationCandidateCorrelation.make({
+      ...candidate.correlation,
+      runId: foreignRunId
+    })
+    const verification = targetVerificationCorrelationFor(candidate, TargetVerificationPlanId.make("foreign-boundary"))
+    const foreignVerification = TargetVerificationCorrelation.make({
+      ...verification,
+      candidateCorrelation: foreignCandidateCorrelation
+    })
+    const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+      candidateCommit: GitCommitSha.make("9".repeat(40)),
+      candidateText: integratorCandidateText,
+      directParents: [foreignRun.session.expectedTargetHead, foreignRun.session.acceptedResult.commit],
+      qualifiedAt: JournalPosition.make(20),
+      run: foreignRun
+    })
+    const foreignObservation = IntegratorGitObservation.cases.Missing.make({ candidateText: integratorCandidateText })
+    const events: ReadonlyArray<JournalRecord["event"]> = [
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult: integratorAcceptedResult,
+        integrationTarget: integratorCorrelation.integrationTarget,
+        plannedAttempt: foreignAttempt,
+        version: workflowJournalEventVersion
+      }),
+      IntegrationStartedEvent.make({ ...integratorStarted, plannedAttempt: foreignAttempt }),
+      TargetPromotionIntendedEvent.make({
+        correlation: targetPromotionCorrelationFor(qualifiedCandidate),
+        version: workflowJournalEventVersion
+      }),
+      TargetVerificationIntendedEvent.make({ correlation: foreignVerification, version: workflowJournalEventVersion }),
+      TargetVerificationCorrelationContradictedEvent.make({
+        expected: foreignVerification,
+        received: verification,
+        version: workflowJournalEventVersion
+      }),
+      IntegrationCandidateConstructionIntendedEvent.make({
+        continuationLimit: CandidateContinuationLimit.make(2),
+        correctionLimit: CandidateCorrectionLimit.make(2),
+        correlation: candidate.correlation,
+        plannedAttempt: foreignAttempt,
+        responsibilityBeganAt: integratorResponsibilityBeganAt,
+        startedAt: integratorStartedAt,
+        version: workflowJournalEventVersion
+      }),
+      IntegrationCandidateAgentReportedEvent.make({
+        expectedCorrelation: foreignCandidateCorrelation,
+        ordinal: IntegrationCandidateAgentReportOrdinal.make(1),
+        report: IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: candidate.correlation }),
+        version: workflowJournalEventVersion
+      }),
+      IntegratorSessionFixedEvent.make({ correlation: foreignSession, version: workflowJournalEventVersion }),
+      IntegratorRunStartedEvent.make({ run: foreignRun, version: workflowJournalEventVersion }),
+      IntegratorResultRecordedEvent.make({
+        result: IntegratorResult.cases.PreparedCandidate.make({
+          candidateText: integratorCandidateText,
+          correlation: foreignSession
+        }),
+        version: workflowJournalEventVersion
+      }),
+      IntegratorRunResultRecordedEvent.make({
+        result: IntegratorResult.cases.PreparedCandidate.make({
+          candidateText: integratorCandidateText,
+          correlation: foreignSession
+        }),
+        run: foreignRun,
+        version: workflowJournalEventVersion
+      }),
+      IntegratorCandidateGitReadIntendedEvent.make({
+        candidateText: integratorCandidateText,
+        correlation: foreignSession,
+        version: workflowJournalEventVersion
+      }),
+      IntegratorRunCandidateGitReadIntendedEvent.make({
+        candidateText: integratorCandidateText,
+        run: foreignRun,
+        version: workflowJournalEventVersion
+      }),
+      IntegratorCandidateGitObservedEvent.make({
+        candidateText: integratorCandidateText,
+        correlation: foreignSession,
+        observation: foreignObservation,
+        version: workflowJournalEventVersion
+      }),
+      IntegratorRunCandidateGitObservedEvent.make({
+        candidateText: integratorCandidateText,
+        observation: foreignObservation,
+        run: foreignRun,
+        version: workflowJournalEventVersion
+      }),
+      IntegrationQuarantineDirectionAppliedEvent.make({
+        fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+          direction: "Retry",
+          quarantineAt: JournalPosition.make(30),
+          sessionId: foreignSession.sessionId
+        }),
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "foreign-run", runId: foreignRunId }),
+        version: workflowJournalEventVersion
+      })
+    ]
+
+    expect(events.map((event) => invalidIntegrationRunBinding(event, runId))).toEqual([
+      "integration work for attempt promotion-history-attempt binds run integrator-history-foreign-boundary-run",
+      "integration work for attempt promotion-history-attempt binds run integrator-history-foreign-boundary-run",
+      "target promotion binds run integrator-history-foreign-boundary-run",
+      "target verification binds run integrator-history-foreign-boundary-run",
+      "target verification contradiction expectation binds a foreign run",
+      "integration work for attempt promotion-history-attempt binds run integrator-history-foreign-boundary-run",
+      "candidate report expectation binds run integrator-history-foreign-boundary-run",
+      "Integrator session binds run integrator-history-foreign-boundary-run",
+      "Integrator run start binds run integrator-history-foreign-boundary-run",
+      "Integrator result binds run integrator-history-foreign-boundary-run",
+      "Integrator run result binds run integrator-history-foreign-boundary-run",
+      "Integrator candidate Git-read intent binds run integrator-history-foreign-boundary-run",
+      "Integrator run candidate Git-read intent binds run integrator-history-foreign-boundary-run",
+      "Integrator candidate Git observation binds run integrator-history-foreign-boundary-run",
+      "Integrator run candidate Git observation binds run integrator-history-foreign-boundary-run",
+      "integration quarantine direction binds run integrator-history-foreign-boundary-run"
+    ])
+
+    const validRun = IntegratorRunCorrelation.make({
+      ordinal: IntegratorRunOrdinal.make(1),
+      session: integratorCorrelation
+    })
+    const validQualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+      candidateCommit: GitCommitSha.make("9".repeat(40)),
+      candidateText: integratorCandidateText,
+      directParents: [validRun.session.expectedTargetHead, validRun.session.acceptedResult.commit],
+      qualifiedAt: JournalPosition.make(20),
+      run: validRun
+    })
+    const successorSession = IntegratorCorrelation.make({
+      ...integratorCorrelation,
+      candidateResource: IntegratorCandidateResourceLocator.make("resource:integrator-history-successor"),
+      sessionId: IntegratorSessionId.make("session:integrator-history-successor"),
+      targetLineageObservedAt: JournalPosition.make(16)
+    })
+    const successor = IntegratorSuccessorSessionFixedEvent.make({
+      direction: "FullRerun",
+      directionAppliedAt: JournalPosition.make(14),
+      predecessor: integratorCorrelation,
+      quarantineAt: JournalPosition.make(13),
+      successor: successorSession,
+      successorGeneration: 2,
+      version: workflowJournalEventVersion
+    })
+    const candidateSuccessorCorrelation = IntegrationCandidateCorrelation.make({
+      ...candidate.correlation,
+      candidateId: IntegrationCandidateId.make("promotion-history-successor"),
+      candidateResource: IntegrationCandidateResourceLocator.make("/candidate/promotion-history-successor"),
+      integrationSessionId: IntegrationSessionId.make("promotion-history-successor-session")
+    })
+    const validEvents: ReadonlyArray<JournalRecord["event"]> = [
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult: integratorAcceptedResult,
+        integrationTarget: integratorCorrelation.integrationTarget,
+        plannedAttempt: integratorPlannedAttempt,
+        version: workflowJournalEventVersion
+      }),
+      integratorStarted,
+      TargetPromotionIntendedEvent.make({
+        correlation: targetPromotionCorrelationFor(validQualifiedCandidate),
+        version: workflowJournalEventVersion
+      }),
+      TargetVerificationIntendedEvent.make({ correlation: verification, version: workflowJournalEventVersion }),
+      TargetVerificationCorrelationContradictedEvent.make({
+        expected: verification,
+        received: verification,
+        version: workflowJournalEventVersion
+      }),
+      IntegrationCandidateConstructionIntendedEvent.make({
+        continuationLimit: CandidateContinuationLimit.make(2),
+        correctionLimit: CandidateCorrectionLimit.make(2),
+        correlation: candidate.correlation,
+        plannedAttempt: integratorPlannedAttempt,
+        responsibilityBeganAt: integratorResponsibilityBeganAt,
+        startedAt: integratorStartedAt,
+        version: workflowJournalEventVersion
+      }),
+      IntegrationCandidateSessionSupersededEvent.make({
+        observedTargetHead: candidate.correlation.expectedTargetHead,
+        priorCandidateCommit: candidate.candidateCommit,
+        priorCorrelation: candidate.correlation,
+        responsibilityBeganAt: integratorResponsibilityBeganAt,
+        startedAt: integratorStartedAt,
+        successorCorrelation: candidateSuccessorCorrelation,
+        version: workflowJournalEventVersion
+      }),
+      IntegrationCandidateAgentReportedEvent.make({
+        expectedCorrelation: candidate.correlation,
+        ordinal: IntegrationCandidateAgentReportOrdinal.make(1),
+        report: IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: candidate.correlation }),
+        version: workflowJournalEventVersion
+      }),
+      IntegratorSessionFixedEvent.make({ correlation: integratorCorrelation, version: workflowJournalEventVersion }),
+      successor,
+      IntegratorRunStartedEvent.make({ run: validRun, version: workflowJournalEventVersion }),
+      IntegratorResultRecordedEvent.make({ result: integratorResult.result, version: workflowJournalEventVersion }),
+      IntegratorRunResultRecordedEvent.make({
+        result: integratorResult.result,
+        run: validRun,
+        version: workflowJournalEventVersion
+      }),
+      IntegratorCandidateGitReadIntendedEvent.make({
+        candidateText: integratorCandidateText,
+        correlation: integratorCorrelation,
+        version: workflowJournalEventVersion
+      }),
+      IntegratorRunCandidateGitReadIntendedEvent.make({
+        candidateText: integratorCandidateText,
+        run: validRun,
+        version: workflowJournalEventVersion
+      }),
+      IntegratorCandidateGitObservedEvent.make({
+        candidateText: integratorCandidateText,
+        correlation: integratorCorrelation,
+        observation: foreignObservation,
+        version: workflowJournalEventVersion
+      }),
+      IntegratorRunCandidateGitObservedEvent.make({
+        candidateText: integratorCandidateText,
+        observation: foreignObservation,
+        run: validRun,
+        version: workflowJournalEventVersion
+      })
+    ]
+    expect(validEvents.every((event) => invalidIntegrationRunBinding(event, runId) === undefined)).toBe(true)
+  })
 
   const seedStarted = (historyIndexes: IntegrationHistoryIndexes): void => {
     historyIndexes.integrationStarted.set(integratorStartedAt, integratorStarted)
@@ -666,5 +1114,49 @@ describe("outer Integrator history", () => {
     expect(result.semanticIssues).toEqual([
       expect.stringContaining("no exact earlier intent, result, and candidate text")
     ])
+  })
+
+  it("rejects standalone provider-activity absence without its exact run history", () => {
+    const providerRun = IntegratorRunCorrelation.make({
+      ordinal: IntegratorRunOrdinal.make(1),
+      session: integratorCorrelation
+    })
+    const result = validate(indexes(), [
+      record(
+        JournalPosition.make(20),
+        IntegrationProviderRunActivityAbsentEvent.make({
+          correlation: integratorCorrelation,
+          detail: IntegrationQuarantineFailureDetail.make("provider activity absent"),
+          occurrenceClassification: "NonActionOccurrence",
+          run: providerRun,
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+
+    expect(result.semanticIssues).toEqual([
+      expect.stringContaining("provider-activity absence is not justified by exact earlier history")
+    ])
+
+    const foreignSession = IntegratorCorrelation.make({
+      ...integratorCorrelation,
+      plannedAttempt: PlannedTaskAttempt.make({
+        ...integratorCorrelation.plannedAttempt,
+        runId: RunId.make("foreign-provider-absence-run")
+      })
+    })
+    const foreign = validate(indexes(), [
+      record(
+        JournalPosition.make(21),
+        IntegrationProviderRunActivityAbsentEvent.make({
+          correlation: foreignSession,
+          detail: IntegrationQuarantineFailureDetail.make("foreign provider activity absent"),
+          occurrenceClassification: "NonActionOccurrence",
+          run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: foreignSession }),
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+    expect(foreign.identityIssues).toEqual([expect.stringContaining("provider-activity absence binds run")])
   })
 })

@@ -2256,10 +2256,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           runState.workflowHistory.records,
           responsibility
         )
-        const quarantineDirection =
-          appliedQuarantineDirection?.direction.fingerprint.direction === "Retry"
-            ? appliedQuarantineDirection
-            : undefined
+        const quarantineDirection = appliedQuarantineDirection
         const claimObservedAt = latestClaimObservationPositionFor(responsibility.plannedAttempt.taskId)
         const taskGraphObservation = currentGraphObservationForTask(responsibility.plannedAttempt.taskId)
         const graphWasCheckedAfterClaim =

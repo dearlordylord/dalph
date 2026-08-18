@@ -4,7 +4,11 @@ import { expect, it } from "vitest"
 import {
   CompletionClaimBoundary,
   CompletionClaimDeletionFailure,
+  CompletionClaimDeletionReadObservedEvent,
+  CompletionClaimDeletionReadPurpose,
+  CompletionClaimCleanupReadOrdinal,
   CompletionClaimDeletionRequest,
+  CompletionClaimRequestOrdinal,
   CompletionClaimReplacementFailure,
   CompletionTaskClaim,
   CompletionTaskAuthorizationReadOrdinal,
@@ -21,10 +25,11 @@ import {
 } from "./events.js"
 import { controlledCompletionClaimBoundaryLayerFrom } from "./controlled-boundaries.js"
 import { integrationFinalityFixture as fixture } from "./fixtures.js"
-import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { ActiveTaskClaim, UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { OperationId } from "../../identity.js"
+import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { TaskId, TaskRevision } from "@dalph/contracts"
 
 const useBoundary = <A, E>(
@@ -96,6 +101,38 @@ it("rejects a deletion proof bound to a different completion claim for the same 
     Schema.is(CompletionClaimDeletionRequest)({
       ...completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation),
       successObservation: foreignSuccessObservation
+    })
+  ).toBe(false)
+})
+
+it("validates both cleanup-read observation variants and the final-attempt boundary", () => {
+  const request = completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation)
+  const purpose = CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+    attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+    readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+  })
+  const absent = UnclaimedTask.make({ taskId: fixture.taskId })
+  const observed = {
+    _tag: "CompletionClaimDeletionReadObserved" as const,
+    observation: absent,
+    purpose,
+    replacementOperationId: OperationId.make("events-cleanup-replacement"),
+    request,
+    version: workflowJournalEventVersion
+  }
+
+  expect(Schema.is(CompletionClaimDeletionReadObservedEvent)(observed)).toBe(true)
+  expect(
+    Schema.is(CompletionClaimDeletionReadObservedEvent)({
+      ...observed,
+      observation: UnclaimedTask.make({ taskId: TaskId.make("foreign-cleanup-read-task") })
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(CompletionClaimDeletionReadPurpose)({
+      _tag: "AfterDeletionAttemptsExhausted",
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+      readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
     })
   ).toBe(false)
 })

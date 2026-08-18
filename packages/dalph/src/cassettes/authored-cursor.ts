@@ -537,7 +537,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           : [{ _tag: "Mismatch" as const, index, item }, index]
       })
       if (claimed._tag === "Claimed") {
-        yield* (options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void)
+        yield* options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void
       }
       yield* announceTerminalAssertions
       const advanced = bypassControlBoundary ? false : yield* awaitBarrierAdvance(claimed)

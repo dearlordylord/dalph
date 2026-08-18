@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import { spawn } from "node:child_process"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { relative, join } from "node:path"
-import { expect } from "vitest"
+import { describe, expect } from "vitest"
 
 const repositoryRoot = process.cwd()
 const qualityLintRunner = join(repositoryRoot, "scripts", "run-quality-lint.mjs")
@@ -58,53 +58,55 @@ const copyFixture = (fixtureDirectory: string, fixtureName: string) =>
 
 const relativeToRepository = (path: string) => relative(repositoryRoot, path).split("\\").join("/")
 
-it.effect(
-  "repository lint rejects a native warning and keeps diagnostics bounded",
-  () =>
-    withFixtures((fixtureDirectory) =>
-      Effect.gen(function* () {
-        const warningFile = yield* copyFixture(fixtureDirectory, "warning")
-        const result = yield* run([relativeToRepository(warningFile)])
-        expect(result.exitCode).not.toBe(0)
-        expect(`${result.stdout}${result.stderr}`).toContain("no-debugger")
-        expect(`${result.stdout}${result.stderr}`.split("\n").length).toBeLessThan(30)
-      })
-    ),
-  30_000
-)
+describe.sequential("quality lint integration", () => {
+  it.effect(
+    "repository lint rejects a native warning and keeps diagnostics bounded",
+    () =>
+      withFixtures((fixtureDirectory) =>
+        Effect.gen(function* () {
+          const warningFile = yield* copyFixture(fixtureDirectory, "warning")
+          const result = yield* run([relativeToRepository(warningFile)])
+          expect(result.exitCode).not.toBe(0)
+          expect(`${result.stdout}${result.stderr}`).toContain("no-debugger")
+          expect(`${result.stdout}${result.stderr}`.split("\n").length).toBeLessThan(30)
+        })
+      ),
+    30_000
+  )
 
-it.effect(
-  "compatibility lint restores immutable-data and whole-project unused-export checks",
-  () =>
-    withFixtures((fixtureDirectory) =>
-      Effect.gen(function* () {
-        const functionalFile = yield* copyFixture(fixtureDirectory, "functional")
-        const unconsumedFile = yield* copyFixture(fixtureDirectory, "unconsumed")
-        const functionalResult = yield* run([relativeToRepository(functionalFile)])
-        const unconsumedResult = yield* run([relativeToRepository(unconsumedFile)])
-        const publicEntryResult = yield* run(["packages/dalph/src/index.ts"])
+  it.effect(
+    "compatibility lint restores immutable-data and whole-project unused-export checks",
+    () =>
+      withFixtures((fixtureDirectory) =>
+        Effect.gen(function* () {
+          const functionalFile = yield* copyFixture(fixtureDirectory, "functional")
+          const unconsumedFile = yield* copyFixture(fixtureDirectory, "unconsumed")
+          const functionalResult = yield* run([relativeToRepository(functionalFile)])
+          const unconsumedResult = yield* run([relativeToRepository(unconsumedFile)])
+          const publicEntryResult = yield* run(["packages/dalph/src/index.ts"])
 
-        expect(functionalResult.exitCode).not.toBe(0)
-        expect(functionalResult.stdout).toContain("functional/immutable-data")
-        expect(unconsumedResult.exitCode).not.toBe(0)
-        expect(unconsumedResult.stdout).toContain("import-x/no-unused-modules")
-        expect(publicEntryResult.exitCode).toBe(0)
-        expect(`${publicEntryResult.stdout}${publicEntryResult.stderr}`.split("\n").length).toBeLessThan(30)
-      })
-    ),
-  repositoryCompatibilityLintTimeout
-)
+          expect(functionalResult.exitCode).not.toBe(0)
+          expect(functionalResult.stdout).toContain("functional/immutable-data")
+          expect(unconsumedResult.exitCode).not.toBe(0)
+          expect(unconsumedResult.stdout).toContain("import-x/no-unused-modules")
+          expect(publicEntryResult.exitCode).toBe(0)
+          expect(`${publicEntryResult.stdout}${publicEntryResult.stderr}`.split("\n").length).toBeLessThan(30)
+        })
+      ),
+    repositoryCompatibilityLintTimeout
+  )
 
-it.effect(
-  "staged lint runs compatibility policy over the discovered project",
-  () =>
-    withFixtures((fixtureDirectory) =>
-      Effect.gen(function* () {
-        const functionalFile = yield* copyFixture(fixtureDirectory, "functional")
-        const result = yield* run(["--staged", relativeToRepository(functionalFile)])
-        expect(result.exitCode).not.toBe(0)
-        expect(result.stdout).toContain("functional/immutable-data")
-      })
-    ),
-  repositoryCompatibilityLintTimeout
-)
+  it.effect(
+    "staged lint runs compatibility policy over the discovered project",
+    () =>
+      withFixtures((fixtureDirectory) =>
+        Effect.gen(function* () {
+          const functionalFile = yield* copyFixture(fixtureDirectory, "functional")
+          const result = yield* run(["--staged", relativeToRepository(functionalFile)])
+          expect(result.exitCode).not.toBe(0)
+          expect(result.stdout).toContain("functional/immutable-data")
+        })
+      ),
+    repositoryCompatibilityLintTimeout
+  )
+})

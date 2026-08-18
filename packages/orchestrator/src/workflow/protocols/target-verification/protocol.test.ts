@@ -46,7 +46,7 @@ import {
   type TargetVerificationCandidate
 } from "./events.js"
 import { decodeTargetVerificationManifest } from "./manifest.js"
-import { runTargetVerification } from "./protocol.js"
+import { deriveTargetVerificationState, runTargetVerification } from "./protocol.js"
 import type { IntegrationHistoryIndexes } from "../../../coordination/reconstruction/integration-history.js"
 import { validateIntegrationHistoryRecord } from "../../../coordination/reconstruction/integration-history-validation.js"
 import { makeTargetPromotionHistoryIndexes } from "../../../coordination/reconstruction/target-promotion-history.js"
@@ -494,7 +494,10 @@ it.effect("records a contradiction and fails closed for a foreign wrapper result
       Effect.gen(function* () {
         const result = yield* runTargetVerification(candidate, plan)
         expect(result._tag).toBe("VerificationContradicted")
-        expect((yield* Ref.get(records)).at(-1)?.event._tag).toBe("TargetVerificationCorrelationContradicted")
+        const recorded = yield* Ref.get(records)
+        expect(recorded.at(-1)?.event._tag).toBe("TargetVerificationCorrelationContradicted")
+        expect(deriveTargetVerificationState(recorded, candidate)).toEqual(result)
+        expect(deriveTargetVerificationState(recorded, candidate)).toEqual(result)
       })
   )
 })
@@ -706,6 +709,8 @@ it("rejects duplicate verification intent, false contradiction, and foreign-run 
     integratorSessionsByStartedAt: new Map(),
     integratorSessionsBySessionId: new Map(),
     integratorSessionsByCandidateResource: new Map(),
+    integratorSuccessorSessionFixed: new Map(),
+    integratorSuccessorSessionsByPredecessor: new Map(),
     integratorResultsByStartedAt: new Map(),
     integratorCandidateGitReadIntents: new Map(),
     integratorCandidateGitObservations: new Map(),

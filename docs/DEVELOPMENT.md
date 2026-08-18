@@ -103,11 +103,15 @@ requires a setting that cannot correctly be shared.
   functions above cyclomatic complexity eight in each file.
 - `pnpm check:duplicates` enforces the configured TypeScript duplication budget.
 - `pnpm test` runs the deterministic Vitest suite.
-- `pnpm test:coverage` enforces 99% aggregate coverage for statements, branches,
-  functions, and lines, then verifies at
-  least 99% coverage of changed executable production lines from
-  `coverage/coverage-final.json`.
+- `pnpm test:coverage` independently enforces 99% production coverage and 90%
+  maintained-evaluation coverage for statements, branches, functions, and
+  lines. It applies the same brackets to changed executable lines from
+  `coverage/coverage-final.json`, so surplus in one bracket cannot hide debt in
+  the other.
 - `pnpm test:mbt` runs the Quint-connected executable conformance suites.
+- `pnpm check:lab` runs the Reducer Lab maintained evaluation: the Lab package's
+  typecheck, maintained-cassette smoke, and production build. It does not run
+  `browser-smoke`, which needs a hosted Lab and Chromium.
 - `pnpm check:quint` runs deterministic, sampled, and exhaustive formal model
   checks. Run it once after the final relevant changes and before integration;
   during development, use it when changing a Quint model, its conformance
@@ -116,20 +120,49 @@ requires a setting that cannot correctly be shared.
 - `pnpm check:ci` runs the hosted CI gate. During the single-executor v1
   proof-of-concept phase it excludes Quint-connected MBT.
 - `pnpm check:all` runs the bounded local implementation gate, including
-  Quint-connected MBT but not exhaustive formal model checking.
+  Quint-connected MBT and the Reducer Lab maintained evaluation, but not
+  exhaustive formal model checking.
 
-The 99% aggregate goals deliberately exceed the recorded prototype baseline and
-make its remaining coverage debt visible in the repository gate. After the
-retained public-seam and chronological scenario tests, the full suite measured
+The quality gate runs the Reducer Lab check with a bounded timeout in both
+`check:all` and `check:ci`; `check:ci` still omits only the Quint-connected MBT
+stage. The Lab package's `check` script intentionally orders its existing
+typecheck, maintained-cassette smoke, and build. The browser smoke remains a
+separate hosted check because it requires an HTTP host and Chromium.
+
+Maintained cassettes and the shared integration-finality fixture are evaluation
+evidence, not production implementation. Keep their maintained evaluation at
+90% or better as a separate ledger from the production 99% statements,
+branches, functions, and lines enforced by `test:coverage`. The Lab check
+exercises the maintained cassette assertions through typecheck, smoke, and
+build; it does not enter the production line coverage ledger until those
+assertions are instrumented. Disposable research prototypes remain excluded
+from the production quality gate; the Reducer Lab is the explicit
+maintained-evaluation exception.
+
+The 99% production goals deliberately exceed the recorded prototype baseline
+and make its remaining production coverage debt visible in the repository
+gate. Before the maintained-evaluation ledger was separated, the full suite
+measured
 16,261/16,575 statements (98.10%),
 9,128/9,472 branches (96.36%), 5,247/5,375 functions (97.61%), and
 15,076/15,300 lines (98.53%). The 344 uncovered branches are concentrated in
 platform/process ownership and invariant-heavy recovery code: 69 in the
 Codex app-server boundary, 42 in the planned-attempt executor, 40 in journal
 reconstruction history, 27 in the attempt store, and 26 in run recovery
-activation. The independent 99% changed-executable-line check compares every
-new production line with the explicit base commit, so these aggregate floors
-cannot silently admit new coverage debt.
+activation. The independent changed-executable-line check compares every new
+eligible line with the explicit base commit and applies its path's bracket, so
+neither production nor maintained-evaluation surplus can hide debt in the
+other bracket.
+
+Repository quality tooling under `scripts/` remains outside executable-source
+coverage. Its importable logic has focused tests, and `check:all` exercises the
+command wrappers as the gate that they implement. Quint specifications and
+their executable conformance adapters remain governed by `test:mbt` and
+`check:quint`; line coverage is not a substitute for those state-space checks.
+Pure fixtures or controlled adapters that still share a source file with
+production implementation remain in the 99% production bracket until their
+implementation has enough locality to move behind a dedicated evaluation
+seam.
 
 The quality harness counts stdout and stderr lines from successful stages and
 fails after a stage if their cumulative output exceeds 400 lines. A failed

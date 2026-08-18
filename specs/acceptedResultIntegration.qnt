@@ -2,7 +2,9 @@
 // the issue-60 exact-head promotion protocol. The Integrator owns merge
 // construction, repository checks, review, and private retries. Dalph models
 // only one fixed session, its durable result, an explicit candidate report,
-// and Git's ordered-parent qualification.
+// and Git's ordered-parent qualification. Provider-owned absence refines the
+// NotPrepared outcome here: runtime protocol tests own the distinct durable
+// absence-before-quarantine records and their crash boundary.
 module acceptedResultIntegration {
   type Phase =
     | NoAcceptedResult
@@ -171,6 +173,10 @@ module acceptedResultIntegration {
     quarantineRedeliveryCount: int,
     quarantineConflictCount: int,
     retryRunCount: int,
+    // The exact Retry direction that authorized run two remains durable when
+    // a later Q2 receives a FullRerun direction.
+    retryDirectionSession: int,
+    retryDirectionPosition: int,
     // The run ordinal belongs to one exact Integrator session. The initial
     // run is ordinal 1; an explicit Retry advances the same session to 2.
     integratorRunOrdinal: int,
@@ -368,6 +374,21 @@ module acceptedResultIntegration {
       SuccessorResponseLost,
       PromotionPremise,
     ).contains(phase)
+
+  // The finite model carries one current target-head proof. When one of two
+  // independent target responsibilities loses an ambiguous boundary response,
+  // preserve the proof owned by the responsibility that still holds its target
+  // permit. Only the released responsibility must reacquire authority facts.
+  pure def anotherTargetIsHeld(s: State, releasedId: int): bool =
+    RESULT_IDS.exists(other => other != releasedId and s.results.get(other).targetHeld)
+
+  pure def remainingHeldTargetHead(s: State, releasedId: int): int =
+    if (releasedId == 1 and s.results.get(2).targetHeld)
+      s.results.get(2).expectedTargetHead
+    else if (releasedId == 2 and s.results.get(1).targetHeld)
+      s.results.get(1).expectedTargetHead
+    else
+      0
 
   val acceptedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == AcceptedResult)
@@ -832,12 +853,24 @@ module acceptedResultIntegration {
       val result = state.results.get(id)
       result.retryRunCount == 0
         or and {
-          result.lastDirection == RetryDirection,
-          result.lastDirectionSession == result.integrationSession,
-          result.lastDirectionPosition > 0,
+          result.retryDirectionSession == result.integrationSession,
+          result.retryDirectionPosition > 0,
           result.retryRunCount == 1,
           result.integratorInvocationCount == 2,
         }
+    })
+
+  val retryDirectionIsBounded: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      and {
+        result.retryRunCount <= 1,
+        not(and {
+          result.retryRunCount == 1,
+          result.quarantineOccurrenceCount > 1,
+          result.quarantineDirection == RetryDirection,
+        }),
+      }
     })
 
   val retryUsesSameSessionAndCurrentHead: bool =
@@ -1251,7 +1284,9 @@ module acceptedResultIntegration {
         quarantineDirectionCount: 0,
         quarantineRedeliveryCount: 0,
         quarantineConflictCount: 0,
-        retryRunCount: 0,
+          retryRunCount: 0,
+          retryDirectionSession: 0,
+          retryDirectionPosition: 0,
         integratorRunOrdinal: 0,
         integratorRunSession: 0,
         lastRecoveryRunSession: 0,
@@ -1446,8 +1481,8 @@ module acceptedResultIntegration {
           integratorResponseAmbiguous: true,
         }),
         trackerFactsCurrent: false,
-        targetFactsCurrent: false,
-        targetHeadProof: 0,
+        targetFactsCurrent: anotherTargetIsHeld(state, id),
+        targetHeadProof: remainingHeldTargetHead(state, id),
         targetReacquisitionRequired: true,
       },
     }
@@ -1504,7 +1539,26 @@ module acceptedResultIntegration {
           integratorResultRecorded: true,
           candidateReported: false,
           integratorResponseAmbiguous: false,
+          // Run two replaces run one's rejected candidate as the session's
+          // current outer result. The earlier run remains durable Journal
+          // history, but none of its candidate projection may describe this
+          // conclusive NotPrepared result.
+          submittedCandidate: 0,
+          candidateJournalPosition: 0,
+          candidateGitReadIntentRecorded: false,
+          candidateGitReadCount: 0,
+          candidateGitResponseAmbiguous: false,
+          candidateGitObservation: NoCandidateGitObservation,
+          candidateQualificationProven: false,
+          observedFirstParent: 0,
+          observedSecondParent: 0,
+          resourceHeadCandidate: 0,
           promotionAuthorized: false,
+          // A Retry run is authorized by Q1 while it is in flight. Once run
+          // two concludes, Q1 cannot stand in for the new quarantine that
+          // must preserve the conclusive run-two result.
+          quarantineRecorded:
+            if (result.phase == RetryInFlight) false else result.quarantineRecorded,
         }),
       },
     }
@@ -1600,8 +1654,8 @@ module acceptedResultIntegration {
           candidateGitResponseAmbiguous: true,
         }),
         trackerFactsCurrent: false,
-        targetFactsCurrent: false,
-        targetHeadProof: 0,
+        targetFactsCurrent: anotherTargetIsHeld(state, id),
+        targetHeadProof: remainingHeldTargetHead(state, id),
         targetReacquisitionRequired: true,
       },
     }
@@ -1653,6 +1707,10 @@ module acceptedResultIntegration {
         observedSecondParent: secondParent,
         candidateQualificationProven: qualifies,
         promotionAuthorized: qualifies,
+        // A rejected Retry candidate needs its own durable quarantine. The
+        // first quarantine remains authorization evidence only while run two
+        // is unfinished.
+        quarantineRecorded: if (qualifies) result.quarantineRecorded else false,
       }),
       nextJournalPosition: s.nextJournalPosition + 1,
     }
@@ -1696,6 +1754,9 @@ module acceptedResultIntegration {
           quarantineDirection: NoQuarantineDirection,
           quarantineDirectionSession: 0,
           quarantineDirectionPosition: 0,
+          // Conflicts belong to one exact Q. A later conclusive run creates
+          // Q2 with its own empty direction and conflict history.
+          quarantineConflictCount: 0,
           quarantineRedeliveryCount: 0,
           retryNotApplicableCount: 0,
           retryFreshQuarantineCount: 0,
@@ -1723,6 +1784,7 @@ module acceptedResultIntegration {
     val result = state.results.get(id)
     all {
       canChooseQuarantineDirection(state, id, position),
+      result.retryRunCount == 0,
       state' = {
         ...state,
         results: state.results.put(id, {
@@ -1732,6 +1794,8 @@ module acceptedResultIntegration {
           quarantineDirectionSession: result.integrationSession,
           quarantineDirectionPosition: position,
           quarantineDirectionCount: result.quarantineDirectionCount + 1,
+          retryDirectionSession: result.integrationSession,
+          retryDirectionPosition: position,
           lastDirection: RetryDirection,
           lastDirectionSession: result.integrationSession,
           lastDirectionPosition: position,
@@ -1839,7 +1903,9 @@ module acceptedResultIntegration {
           ...result,
           phase: RetryInFlight,
           targetHeld: true,
-          quarantineRecorded: false,
+          // Q1 remains a durable authorization fact while the exact run-two
+          // boundary is in flight or is resumed after process loss.
+          quarantineRecorded: result.quarantineRecorded,
           retryRunCount: if (result.retryRunCount == 0) 1 else result.retryRunCount,
           // Retry is a second explicit outer Integrator run. A process-loss
           // resume leaves this count unchanged; only the winning Retry
@@ -2004,8 +2070,8 @@ module acceptedResultIntegration {
           targetHeld: false,
         }),
         trackerFactsCurrent: false,
-        targetFactsCurrent: false,
-        targetHeadProof: 0,
+        targetFactsCurrent: anotherTargetIsHeld(state, id),
+        targetHeadProof: remainingHeldTargetHead(state, id),
         targetReacquisitionRequired: true,
       },
     }
@@ -2233,8 +2299,8 @@ module acceptedResultIntegration {
           promotionResponseAmbiguous: true,
         }),
         trackerFactsCurrent: false,
-        targetFactsCurrent: false,
-        targetHeadProof: 0,
+        targetFactsCurrent: anotherTargetIsHeld(state, id),
+        targetHeadProof: remainingHeldTargetHead(state, id),
         targetReacquisitionRequired: true,
       },
     }

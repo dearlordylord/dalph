@@ -5,11 +5,13 @@ import {
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
-  integratorSessionFixedRecordKey
+  integratorSessionFixedRecordKey,
+  integratorSuccessorSessionFixedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { exactJournalRecordAtKey } from "../../../workflow-journal/exact-record.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegrationQuarantineBasis,
@@ -84,14 +86,6 @@ const observationMatches = (
   record.event.candidateText === candidateText &&
   record.event.observation.candidateText === candidateText
 
-const exactRecordAt = (
-  records: ReadonlyArray<JournalRecord>,
-  key: JournalRecord["key"]
-): JournalRecord | string | undefined => {
-  const matches = records.filter((record) => record.key === key)
-  return matches.length > 1 ? "Journal history contains duplicate records for one exact key" : matches[0]
-}
-
 const sameRunCandidateEvent = (record: JournalRecord, run: IntegratorRunCorrelation): boolean =>
   (record.event._tag === "IntegratorRunCandidateGitReadIntended" ||
     record.event._tag === "IntegratorRunCandidateGitObserved") &&
@@ -144,7 +138,10 @@ type EvidenceValidation<Value> =
   | { readonly _tag: "Valid"; readonly value: Value }
   | { readonly _tag: "Invalid"; readonly detail: string }
 type FixedSessionRecord = JournalRecord & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSessionFixed" }>
+  readonly event: Extract<
+    JournalRecord["event"],
+    { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }
+  >
 }
 
 const invalidEvidence = (detail: string): EvidenceValidation<never> => ({ _tag: "Invalid", detail })
@@ -154,29 +151,49 @@ const fixedSessionRecordMatches = (
   record: JournalRecord,
   run: IntegratorRunCorrelation
 ): record is FixedSessionRecord =>
-  record.event._tag === "IntegratorSessionFixed" &&
   record.runId === runIdFor(run) &&
-  integratorCorrelationsEqual(record.event.correlation, run.session) &&
+  ((record.event._tag === "IntegratorSessionFixed" &&
+    integratorCorrelationsEqual(record.event.correlation, run.session)) ||
+    (record.event._tag === "IntegratorSuccessorSessionFixed" &&
+      integratorCorrelationsEqual(record.event.successor, run.session))) &&
   record.position > run.session.targetLineageObservedAt
 
 const validateFixedSession = (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation
 ): EvidenceValidation<FixedSessionRecord> => {
-  const key = integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(run.session))
   const matching = records.filter(
     (record) =>
-      record.event._tag === "IntegratorSessionFixed" &&
       record.runId === runIdFor(run) &&
-      integratorCorrelationsEqual(record.event.correlation, run.session)
+      ((record.event._tag === "IntegratorSessionFixed" &&
+        integratorCorrelationsEqual(record.event.correlation, run.session)) ||
+        (record.event._tag === "IntegratorSuccessorSessionFixed" &&
+          integratorCorrelationsEqual(record.event.successor, run.session)))
   )
-  if (matching.some((record) => record.key !== key)) {
+  if (matching.length !== 1) {
+    return invalidEvidence("initial conclusive quarantine requires one exact fixed session predecessor")
+  }
+  const record = matching[0]
+  /* v8 ignore next -- @preserve a non-empty matching array always has index zero; this guard is defensive after exact-count validation. */
+  if (record === undefined)
+    return invalidEvidence("initial conclusive quarantine lacks the exact fixed session predecessor")
+  const key =
+    record.event._tag === "IntegratorSessionFixed"
+      ? integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(run.session))
+      : record.event._tag === "IntegratorSuccessorSessionFixed"
+        ? integratorSuccessorSessionFixedRecordKey(
+            record.event.predecessor,
+            record.event.quarantineAt,
+            record.event.directionAppliedAt
+          )
+        : /* v8 ignore next -- @preserve matching narrows the event to the two fixed-session tags handled above. */ undefined
+  if (key === undefined || record.key !== key) {
     return invalidEvidence("fixed Integrator session evidence appears under a foreign key")
   }
-  const record = exactRecordAt(records, key)
-  if (typeof record === "string") return invalidEvidence(record)
-  return record !== undefined && fixedSessionRecordMatches(record, run)
-    ? validEvidence(record)
+  const exact = exactJournalRecordAtKey(records, key)
+  if (exact._tag === "Duplicate") return invalidEvidence(exact.detail)
+  return exact._tag === "Found" && fixedSessionRecordMatches(exact.record, run)
+    ? validEvidence(exact.record)
     : invalidEvidence("initial conclusive quarantine lacks the exact fixed session predecessor")
 }
 
@@ -281,18 +298,18 @@ const resolveCandidateReadEvidence = (
   records: ReadonlyArray<JournalRecord>,
   result: CandidateRejectedInput
 ): EvidenceValidation<{ readonly observation: JournalRecord; readonly readIntent: JournalRecord }> => {
-  const readIntent = exactRecordAt(
+  const readIntent = exactJournalRecordAtKey(
     records,
     integratorRunCandidateGitReadIntendedRecordKey(result.run, result.candidateText)
   )
-  const observation = exactRecordAt(
+  const observation = exactJournalRecordAtKey(
     records,
     integratorRunCandidateGitObservedRecordKey(result.run, result.candidateText)
   )
-  if (typeof readIntent === "string") return invalidEvidence(readIntent)
-  if (typeof observation === "string") return invalidEvidence(observation)
-  return readIntent !== undefined && observation !== undefined
-    ? validEvidence({ observation, readIntent })
+  if (readIntent._tag === "Duplicate") return invalidEvidence(readIntent.detail)
+  if (observation._tag === "Duplicate") return invalidEvidence(observation.detail)
+  return readIntent._tag === "Found" && observation._tag === "Found"
+    ? validEvidence({ observation: observation.record, readIntent: readIntent.record })
     : invalidEvidence("candidate rejection lacks the exact invalid Git observation chronology")
 }
 
@@ -363,11 +380,11 @@ export const appendInitialConclusiveIntegrationQuarantine = Effect.fn(
     occurrenceClassification: "NonActionOccurrence",
     version: workflowJournalEventVersion
   })
-  const existingAtKey = exactRecordAt(records, key)
-  if (typeof existingAtKey === "string") return yield* reject(run, existingAtKey)
-  if (existingAtKey !== undefined) {
-    return sameExpectedQuarantine(existingAtKey, run, key, event)
-      ? existingAtKey
+  const existingAtKey = exactJournalRecordAtKey(records, key)
+  if (existingAtKey._tag === "Duplicate") return yield* reject(run, existingAtKey.detail)
+  if (existingAtKey._tag === "Found") {
+    return sameExpectedQuarantine(existingAtKey.record, run, key, event)
+      ? existingAtKey.record
       : yield* reject(run, "initial conclusive quarantine key contains a foreign event")
   }
   const duplicate = records.filter(

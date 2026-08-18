@@ -60,7 +60,12 @@ export class IntegrationQuarantineDirectionNotAvailable extends Schema.TaggedErr
   "IntegrationQuarantineDirectionNotAvailable",
   {
     fingerprint: ApplyIntegrationQuarantineDirectionRequest.fields.fingerprint,
-    reason: Schema.Literals(["MissingQuarantine", "SessionMismatch", "RetryLimitReached"]),
+    reason: Schema.Literals([
+      "MissingQuarantine",
+      "SessionMismatch",
+      "RetryLimitReached",
+      "SuccessorGenerationLimitReached"
+    ]),
     runId: RunId
   }
 ) {}
@@ -152,11 +157,15 @@ const runStartFor = (
       record.event._tag === "IntegratorRunStarted" &&
       record.position < before &&
       record.position > run.session.targetLineageObservedAt &&
-      record.runId === run.session.plannedAttempt.runId &&
-      record.key === integratorRunStartedRecordKey(run) &&
       integratorRunCorrelationsEqual(record.event.run, run)
   )
-  return starts.length === 1 ? starts[0] : undefined
+  const start = starts[0]
+  return start !== undefined &&
+    starts.length === 1 &&
+    start.runId === run.session.plannedAttempt.runId &&
+    start.key === integratorRunStartedRecordKey(run)
+    ? start
+    : undefined
 }
 
 const conclusiveResultIsFromRunOne = (
@@ -165,6 +174,7 @@ const conclusiveResultIsFromRunOne = (
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ConclusiveResult" }>
 ): boolean => {
   const record = records.find(({ position }) => position === basis.evidence.resultRecordedAt)
+  /* v8 ignore next -- @preserve quarantineRecordForFingerprint admits only evidence records before Q; an absent or post-Q result is rejected before this eligibility helper. */
   if (record === undefined || record.position >= quarantine.position) return false
 
   // Session-only results predate the run-bound vocabulary and can only denote
@@ -175,6 +185,7 @@ const conclusiveResultIsFromRunOne = (
       integratorCorrelationsEqual(record.event.result.correlation, quarantine.event.correlation)
     )
   }
+  /* v8 ignore next -- @preserve a ConclusiveResult quarantine basis can only name the two result event vocabularies handled above. */
   if (record.event._tag !== "IntegratorRunResultRecorded") return false
   const run = runOneFor(quarantine)
   return (
@@ -196,10 +207,11 @@ const providerFailureIsFromRunOne = (
     absence !== undefined &&
     absence.position < quarantine.position &&
     absence.runId === run.session.plannedAttempt.runId &&
-    absence.key === integrationProviderRunActivityAbsentRecordKey(run.session) &&
     absence.event._tag === "IntegrationProviderRunActivityAbsent" &&
     absence.event.detail === basis.detail &&
     integratorCorrelationsEqual(absence.event.correlation, run.session) &&
+    absence.key === integrationProviderRunActivityAbsentRecordKey(run) &&
+    integratorRunCorrelationsEqual(absence.event.run, run) &&
     runStartFor(records, run, absence.position) !== undefined
   )
 }
@@ -212,6 +224,16 @@ const retryIsEligible = (records: ReadonlyArray<JournalRecord>, quarantine: Quar
     ? conclusiveResultIsFromRunOne(records, quarantine, basis)
     : providerFailureIsFromRunOne(records, quarantine, basis)
 }
+
+/** Issue #68 permits one FullRerun successor generation; S2 cannot create S3. */
+const quarantineBelongsToSuccessor = (records: ReadonlyArray<JournalRecord>, quarantine: QuarantineRecord): boolean =>
+  records.some(
+    ({ event, position, runId }) =>
+      event._tag === "IntegratorSuccessorSessionFixed" &&
+      runId === quarantine.runId &&
+      position < quarantine.position &&
+      integratorCorrelationsEqual(event.successor, quarantine.event.correlation)
+  )
 
 /** Builds the narrow Journal-backed control for use both during and between Run activations. */
 export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQuarantineDirectionControl.make")(
@@ -263,6 +285,14 @@ export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQ
           runId,
           winningFingerprint: existingSubject.event.fingerprint,
           winningRequestId: existingSubject.event.requestId
+        })
+      }
+
+      if (quarantineBelongsToSuccessor(records, quarantine)) {
+        return yield* new IntegrationQuarantineDirectionNotAvailable({
+          fingerprint: request.fingerprint,
+          reason: "SuccessorGenerationLimitReached",
+          runId
         })
       }
 

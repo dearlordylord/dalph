@@ -231,14 +231,8 @@ interface AuthoredObservationCorrelation {
 /** Raw capture retained in exact local arrival order before Delivery projection is evaluated. */
 export type AuthoredObservationCapture = AuthoredObservationCorrelation &
   (
-    | {
-        readonly _tag: "AuthoredStoryOccurrenceCaptured"
-        readonly occurrence: AuthoredCassetteStoryItem
-      }
-    | {
-        readonly _tag: "DeliveryPublicationCaptured"
-        readonly publication: AuthoredDeliveryPublication
-      }
+    | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
+    | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
     | {
         readonly _tag: "DeliveryRuntimeOwnersCaptured"
         readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
@@ -263,14 +257,8 @@ interface AuthoredObservationMomentContext extends AuthoredObservationCorrelatio
 /** One exact playback moment. Only DeliveryPublicationMoment changes the source-stage values. */
 export type AuthoredObservationMoment = AuthoredObservationMomentContext &
   (
-    | {
-        readonly _tag: "AuthoredStoryOccurrenceMoment"
-        readonly occurrence: AuthoredCassetteStoryItem
-      }
-    | {
-        readonly _tag: "DeliveryPublicationMoment"
-        readonly deliveryFrame: AuthoredDeliveryFrame
-      }
+    | { readonly _tag: "AuthoredStoryOccurrenceMoment"; readonly occurrence: AuthoredCassetteStoryItem }
+    | { readonly _tag: "DeliveryPublicationMoment"; readonly deliveryFrame: AuthoredDeliveryFrame }
     | { readonly _tag: "DeliveryRuntimeOwnersMoment" }
   )
 
@@ -841,6 +829,7 @@ const proposalActionLabels = {
   ContinuePlannedAttemptExecutorWorkAfterCurrentFacts:
     "Authorize current tracker and Git facts, then tell the executor to continue the exact planned attempt",
   ContinueStartedIntegrationCandidate: "Ask the candidate agent to continue the exact started integration",
+  FixIntegratorSuccessorSession: "Fix the one FullRerun successor after the operator direction and fresh Git lineage",
   DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
   ObserveAttemptStoppageExecutor: "Check the executor for safe suspension or a terminal result after Stop",
   ObservePlannedAttemptContinuationClaim: "Check the tracker claim before continuing the planned attempt",
@@ -867,6 +856,8 @@ const proposalActionLabels = {
   ReconcileTaskWorktree: "Check or create the exact Git worktree",
   RecordChangedHeadRetryQuarantine: "Record that Retry observed a changed integration-target head",
   RecordInitialConclusiveIntegrationQuarantine: "Record the exact conclusive Integrator result as quarantined",
+  RecordProviderRunFailureIntegrationQuarantine: "Recover quarantine after exact provider-owned activity absence",
+  RecordRetryConclusiveIntegrationQuarantine: "Record the exact conclusive Retry run result as quarantined",
   RecordStoppedAttemptClaimNoRelease: "Record that the stopped attempt has no exact claim to release",
   RecordTaskAttemptPlan: "Record the exact planned task attempt in Dalph's journal",
   ReleaseExternallyCompletedTaskClaim: "Ask the tracker to release the externally completed task's claim",
@@ -1092,60 +1083,58 @@ export const evaluateAuthoredDeliveryPublication = Effect.fn("AuthoredCassette.e
 })
 
 /** Projects raw captures into one chronology while retaining the latest observed Delivery and runtime values. */
-export const evaluateAuthoredObservationChronology = Effect.fn(
-  "AuthoredCassette.evaluateObservationChronology"
-)((captures: ReadonlyArray<AuthoredObservationCapture>) =>
-  Effect.reduce(
-    captures,
-    (): ReadonlyArray<AuthoredObservationMoment> => [],
-    (moments, capture) =>
-      evaluateAuthoredObservationCapture(capture, moments.at(latestArrayElementIndex) ?? null).pipe(
-        Effect.map((moment) => [...moments, moment])
-      )
-  ))
+export const evaluateAuthoredObservationChronology = Effect.fn("AuthoredCassette.evaluateObservationChronology")(
+  (captures: ReadonlyArray<AuthoredObservationCapture>) =>
+    Effect.reduce(
+      captures,
+      (): ReadonlyArray<AuthoredObservationMoment> => [],
+      (moments, capture) =>
+        evaluateAuthoredObservationCapture(capture, moments.at(latestArrayElementIndex) ?? null).pipe(
+          Effect.map((moment) => [...moments, moment])
+        )
+    )
+)
 
 /** Evaluates one newly captured observation against the immediately preceding playback moment. */
 export const evaluateAuthoredObservationCapture: (
   capture: AuthoredObservationCapture,
   previous: AuthoredObservationMoment | null
-) => Effect.Effect<
-  AuthoredObservationMoment,
-  Effect.Error<ReturnType<typeof evaluateAuthoredDeliveryPublication>>
-> = Effect.fn("AuthoredCassette.evaluateObservationCapture")(function* (
-  capture: AuthoredObservationCapture,
-  previous: AuthoredObservationMoment | null
-) {
-  const correlation = {
-    activationOrdinal: capture.activationOrdinal,
-    captureOrder: capture.captureOrder,
-    storyPosition: capture.storyPosition
-  }
-  const deliveryFrame = previous?.deliveryFrame ?? null
-  const liveOwners = previous?.liveOwners ?? []
-  if (capture._tag === "DeliveryPublicationCaptured") {
+) => Effect.Effect<AuthoredObservationMoment, Effect.Error<ReturnType<typeof evaluateAuthoredDeliveryPublication>>> =
+  Effect.fn("AuthoredCassette.evaluateObservationCapture")(function* (
+    capture: AuthoredObservationCapture,
+    previous: AuthoredObservationMoment | null
+  ) {
+    const correlation = {
+      activationOrdinal: capture.activationOrdinal,
+      captureOrder: capture.captureOrder,
+      storyPosition: capture.storyPosition
+    }
+    const deliveryFrame = previous?.deliveryFrame ?? null
+    const liveOwners = previous?.liveOwners ?? []
+    if (capture._tag === "DeliveryPublicationCaptured") {
+      return {
+        _tag: "DeliveryPublicationMoment",
+        ...correlation,
+        deliveryFrame: yield* evaluateAuthoredDeliveryPublication(capture.publication),
+        liveOwners
+      } satisfies AuthoredObservationMoment
+    }
+    if (capture._tag === "DeliveryRuntimeOwnersCaptured") {
+      return {
+        _tag: "DeliveryRuntimeOwnersMoment",
+        ...correlation,
+        deliveryFrame,
+        liveOwners: capture.liveOwners
+      } satisfies AuthoredObservationMoment
+    }
     return {
-      _tag: "DeliveryPublicationMoment",
-      ...correlation,
-      deliveryFrame: yield* evaluateAuthoredDeliveryPublication(capture.publication),
-      liveOwners
-    } satisfies AuthoredObservationMoment
-  }
-  if (capture._tag === "DeliveryRuntimeOwnersCaptured") {
-    return {
-      _tag: "DeliveryRuntimeOwnersMoment",
+      _tag: "AuthoredStoryOccurrenceMoment",
       ...correlation,
       deliveryFrame,
-      liveOwners: capture.liveOwners
+      liveOwners,
+      occurrence: capture.occurrence
     } satisfies AuthoredObservationMoment
-  }
-  return {
-    _tag: "AuthoredStoryOccurrenceMoment",
-    ...correlation,
-    deliveryFrame,
-    liveOwners,
-    occurrence: capture.occurrence
-  } satisfies AuthoredObservationMoment
-})
+  })
 
 const minimumCorrectionExhaustionValidationCount = 2
 const latestArrayElementIndex = -1
@@ -1428,11 +1417,12 @@ const runAuthoredScenarioCassetteWith = (request: {
             captureOrder: AuthoredObservationCaptureOrder.make(nextOrder),
             storyPosition
           }
-          const captured: AuthoredObservationCapture = observation._tag === "AuthoredStoryOccurrenceCaptured"
-            ? { ...correlation, _tag: observation._tag, occurrence: observation.occurrence }
-            : observation._tag === "DeliveryPublicationCaptured"
-              ? { ...correlation, _tag: observation._tag, publication: observation.publication }
-              : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
+          const captured: AuthoredObservationCapture =
+            observation._tag === "AuthoredStoryOccurrenceCaptured"
+              ? { ...correlation, _tag: observation._tag, occurrence: observation.occurrence }
+              : observation._tag === "DeliveryPublicationCaptured"
+                ? { ...correlation, _tag: observation._tag, publication: observation.publication }
+                : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
           return [captured, { captures: [...captures, captured], nextOrder: nextOrder + 1 }]
         })
         yield* Effect.exit(Effect.sync(() => options.onObservationCapture?.(capture)))
@@ -1472,10 +1462,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             const storyPosition = yield* cursor.storyPosition
             const publication = { activationOrdinal, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
             yield* Ref.update(capturedDeliveryPublications, (captured) => [...captured, publication])
-            yield* appendObservation(
-              { _tag: "DeliveryPublicationCaptured", publication },
-              publication.storyPosition
-            )
+            yield* appendObservation({ _tag: "DeliveryPublicationCaptured", publication }, publication.storyPosition)
             yield* Queue.offer(deliveryPublicationSignals, publication)
             // A read-only diagnostic observer defect never changes production cassette execution.
             yield* Effect.exit(Effect.sync(() => options.onDeliveryPublication?.(publication)))
@@ -1696,7 +1683,9 @@ const runAuthoredScenarioCassetteWith = (request: {
                   (failure) =>
                     new TargetPromotionGitReadFailure({
                       candidateCommit: request.candidateCommit,
-                      detail: `${failure._tag}: ${"detail" in failure ? failure.detail : "interaction mismatch"} at story position ${failure.storyPosition}`,
+                      detail: `${failure._tag}: ${
+                        "detail" in failure ? failure.detail : "interaction mismatch"
+                      } at story position ${failure.storyPosition}`,
                       target: request.integrationTarget
                     })
                 )

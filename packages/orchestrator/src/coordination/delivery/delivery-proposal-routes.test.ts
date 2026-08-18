@@ -42,6 +42,8 @@ import { OperationId } from "../../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import {
+  integrationQuarantineDirectionAppliedRecordKey,
+  integrationStartedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
@@ -76,6 +78,7 @@ import {
   StartedIntegrationResponsibility,
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
+import { IntegrationStartedEvent } from "../../workflow/protocols/integration-admission/events.js"
 import {
   IntegrationCandidateAgent,
   CandidateContinuationLimit,
@@ -102,15 +105,29 @@ import { executeIntegrationAction } from "./integration-delivery-action-adapter.
 import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import {
   Integrator,
+  IntegratorCallFailure,
   IntegratorCandidateText,
   IntegratorGit,
   IntegratorGitReadFailure,
   IntegratorNotPreparedDetail,
+  IntegratorProviderActivityAbsent,
   IntegratorRunProtocolResult,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   IntegratorResult
 } from "../../workflow/protocols/integrator/protocol.js"
+import {
+  IntegrationQuarantineDirectionAppliedEvent,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineFailureDetail,
+  integrationQuarantineDirectionSubject
+} from "../../workflow/protocols/integration-quarantine/events.js"
 import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
-import { integratorInitialRunCorrelationFor } from "../../workflow/protocols/integrator/session.js"
+import {
+  integratorInitialRunCorrelationFor,
+  integratorSuccessorCorrelationFor
+} from "../../workflow/protocols/integrator/session.js"
 import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executeFreshTrackerGraphRead, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import { executePlannedAttemptTransition } from "./planned-attempt-delivery-action-adapter.js"
@@ -147,9 +164,11 @@ import { TargetPromotionGitReadObservation } from "../../workflow/protocols/targ
 import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotion/runtime.js"
 import {
   EvidenceStore,
+  EvidenceStoreFailure,
   type EvidenceStoreService
 } from "../../workflow/protocols/target-verification/evidence-store.js"
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
+import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 
 const runId = RunId.make("route-matrix-run")
 const taskId = TaskId.make("A")
@@ -594,6 +613,60 @@ describe("delivery proposal route matrix", () => {
         })
       },
       {
+        access: "NoIntegrationTargetResource",
+        owner: "DeliverySettlement",
+        position: null,
+        transition: RunnableFrontierTransition.RecordProviderRunFailureIntegrationQuarantine({
+          input: {
+            detail: IntegrationQuarantineFailureDetail.make("route matrix provider absence"),
+            run: integratorInitialRunCorrelationFor({
+              responsibility: started,
+              targetLineage: lineage,
+              targetLineageObservedAt: JournalPosition.make(91)
+            })
+          },
+          responsibility: started
+        })
+      },
+      {
+        access: "NoIntegrationTargetResource",
+        owner: "DeliverySettlement",
+        position: null,
+        transition: RunnableFrontierTransition.RecordRetryConclusiveIntegrationQuarantine({
+          responsibility: started,
+          result: IntegratorRunProtocolResult.cases.NotPrepared.make({
+            detail: IntegratorNotPreparedDetail.make("route matrix retry result"),
+            run: IntegratorRunCorrelation.make({
+              ordinal: IntegratorRunOrdinal.make(2),
+              session: integratorInitialRunCorrelationFor({
+                responsibility: started,
+                targetLineage: lineage,
+                targetLineageObservedAt: JournalPosition.make(91)
+              }).session
+            })
+          })
+        })
+      },
+      {
+        access: "UseHeld",
+        owner: "DeliverySettlement",
+        position: null,
+        transition: RunnableFrontierTransition.FixIntegratorSuccessorSession({
+          input: {
+            directionAppliedAt: JournalPosition.make(94),
+            predecessor: integratorInitialRunCorrelationFor({
+              responsibility: started,
+              targetLineage: lineage,
+              targetLineageObservedAt: JournalPosition.make(91)
+            }).session,
+            quarantineAt: JournalPosition.make(93),
+            targetLineage: lineage,
+            targetLineageObservedAt: JournalPosition.make(96)
+          },
+          responsibility: started
+        })
+      },
+      {
         access: "UseHeld",
         owner: "DeliverySettlement",
         position: null,
@@ -836,6 +909,18 @@ describe("delivery proposal route matrix", () => {
           key: JournalRecordKey.make("route-matrix-integrator-lineage:observed"),
           position: JournalPosition.make(19),
           runId
+        },
+        {
+          event: IntegrationStartedEvent.make({
+            acceptedResult: started.acceptedResult,
+            integrationTarget: started.integrationTarget,
+            plannedAttempt: started.plannedAttempt,
+            responsibilityBeganAt: started.queuedAt,
+            version: workflowJournalEventVersion
+          }),
+          key: integrationStartedRecordKey(started.plannedAttempt.attemptId),
+          position: started.startedAt,
+          runId
         }
       ])
       const integratorJournal = InRunJournal.of({
@@ -893,6 +978,85 @@ describe("delivery proposal route matrix", () => {
         reason: { _tag: "IntegratorGitReadFailure", candidateText }
       })
 
+      const providerFailureRecords = yield* Ref.make(yield* Ref.get(integratorRecords))
+      const providerFailureJournal = InRunJournal.of({
+        append: (requestedRunId, key, event) =>
+          Ref.modify(providerFailureRecords, (records) => {
+            const existing = records.find((record) => record.key === key)
+            if (existing !== undefined) return [Effect.succeed(existing), records] as const
+            const position = JournalPosition.make(Math.max(...records.map((record) => record.position)) + 1)
+            const appended: JournalRecord = { event, key, position, runId: requestedRunId }
+            return [Effect.succeed(appended), [...records, appended]] as const
+          }).pipe(Effect.flatten),
+        read: () => Ref.get(providerFailureRecords)
+      })
+      const ordinaryFailure = yield* executeIntegrationAction(integratorAction, runIntegrator, inertLease, target).pipe(
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Effect.fail(
+                new IntegratorCallFailure({
+                  correlation: request.correlation,
+                  detail: "controlled ambiguous provider failure"
+                })
+              )
+          })
+        ),
+        Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+        Effect.provideService(InRunJournal, providerFailureJournal),
+        Effect.flip
+      )
+      expect(ordinaryFailure).toMatchObject({ _tag: "IntegratorCallFailure" })
+      expect(
+        (yield* Ref.get(providerFailureRecords)).filter(
+          ({ event }) =>
+            event._tag === "IntegrationProviderRunActivityAbsent" || event._tag === "IntegrationQuarantined"
+        )
+      ).toHaveLength(0)
+
+      const providerAbsent = yield* executeIntegrationAction(integratorAction, runIntegrator, inertLease, target).pipe(
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Effect.fail(
+                new IntegratorProviderActivityAbsent({
+                  correlation: request.correlation,
+                  detail: "controlled provider confirms no owned activity"
+                })
+              )
+          })
+        ),
+        Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+        Effect.provideService(InRunJournal, providerFailureJournal)
+      )
+      expect(providerAbsent).toMatchObject({ _tag: "ActionCompleted", proposalId: integratorProposal.id })
+      expect((yield* Ref.get(providerFailureRecords)).map(({ event }) => event._tag).slice(-2)).toEqual([
+        "IntegrationProviderRunActivityAbsent",
+        "IntegrationQuarantined"
+      ])
+
+      const providerRecovery = RunnableFrontierTransition.RecordProviderRunFailureIntegrationQuarantine({
+        input: {
+          detail: IntegrationQuarantineFailureDetail.make("controlled provider confirms no owned activity"),
+          run: runIntegrator.run
+        },
+        responsibility: started
+      })
+      const providerRecoveryProposal = proposalsFor(providerRecovery).proposals[0]
+      if (providerRecoveryProposal === undefined || !isIdentityFreeProposal(providerRecoveryProposal)) {
+        return yield* Effect.die("missing provider-failure recovery proposal")
+      }
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: providerRecoveryProposal },
+          providerRecovery,
+          inertLease,
+          target
+        ).pipe(Effect.provideService(InRunJournal, providerFailureJournal))
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: providerRecoveryProposal.id })
+
       const completed = yield* executeIntegrationAction(integratorAction, runIntegrator, inertLease, target).pipe(
         Effect.provideService(
           Integrator,
@@ -940,6 +1104,334 @@ describe("delivery proposal route matrix", () => {
       expect(
         (yield* Ref.get(integratorRecords)).filter(({ event }) => event._tag === "IntegrationQuarantined")
       ).toHaveLength(1)
+
+      const initialQuarantine = (yield* Ref.get(integratorRecords)).find(
+        ({ event }) => event._tag === "IntegrationQuarantined"
+      )
+      if (initialQuarantine?.event._tag !== "IntegrationQuarantined") {
+        return yield* Effect.die("Retry delivery fixture requires Q1")
+      }
+      const retryFingerprint = IntegrationQuarantineDirectionFingerprint.make({
+        direction: "Retry",
+        quarantineAt: initialQuarantine.position,
+        sessionId: runIntegrator.run.session.sessionId
+      })
+      const retryDirection = yield* integratorJournal.append(
+        runId,
+        integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(retryFingerprint)),
+        IntegrationQuarantineDirectionAppliedEvent.make({
+          fingerprint: retryFingerprint,
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "route-matrix-retry", runId }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const retryLineageOperationId = OperationId.make("route-matrix-retry-lineage")
+      const retryLineageOperation = makeTargetLineageObservationOperation({
+        integrationTarget: started.integrationTarget,
+        operationId: retryLineageOperationId,
+        plannedAttempt: started.plannedAttempt,
+        predecessorOperationIds: []
+      })
+      yield* integratorJournal.append(
+        runId,
+        JournalRecordKey.make("route-matrix-retry-lineage:intent"),
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: retryLineageOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      const retryLineageRecord = yield* integratorJournal.append(
+        runId,
+        JournalRecordKey.make("route-matrix-retry-lineage:observed"),
+        TargetLineageObservedEvent.make({
+          observation: lineage,
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: retryLineageOperationId,
+          plannedAttempt: started.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      expect(retryDirection.position).toBeLessThan(retryLineageRecord.position)
+
+      const retryRun = IntegratorRunCorrelation.make({
+        ordinal: IntegratorRunOrdinal.make(2),
+        session: runIntegrator.run.session
+      })
+      const retryTransition = RunnableFrontierTransition.RunIntegrator({
+        lineage,
+        lineageObservedAt: retryLineageRecord.position,
+        responsibility: started,
+        run: retryRun
+      })
+      const retryProposal = proposalsFor(retryTransition).proposals[0]
+      if (retryProposal === undefined || !isIdentityFreeProposal(retryProposal)) {
+        return yield* Effect.die("missing Retry Integrator delivery proposal")
+      }
+      const deliveredSessions = yield* Ref.make<ReadonlyArray<string>>([])
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: retryProposal },
+          retryTransition,
+          inertLease,
+          target
+        ).pipe(
+          Effect.provideService(
+            Integrator,
+            Integrator.of({
+              prepare: (request) =>
+                Ref.update(deliveredSessions, (sessions) => [...sessions, request.correlation.sessionId]).pipe(
+                  Effect.as(
+                    IntegratorResult.cases.NotPrepared.make({
+                      correlation: request.correlation,
+                      detail: IntegratorNotPreparedDetail.make("controlled Retry route result")
+                    })
+                  )
+                )
+            })
+          ),
+          Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+          Effect.provideService(InRunJournal, integratorJournal)
+        )
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: retryProposal.id })
+      expect(
+        (yield* Ref.get(integratorRecords)).filter(
+          ({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === IntegratorRunOrdinal.make(2)
+        )
+      ).toHaveLength(1)
+
+      const retryRecovery = RunnableFrontierTransition.RecordRetryConclusiveIntegrationQuarantine({
+        responsibility: started,
+        result: IntegratorRunProtocolResult.cases.NotPrepared.make({
+          detail: IntegratorNotPreparedDetail.make("controlled Retry route result"),
+          run: retryRun
+        })
+      })
+      const retryRecoveryProposal = proposalsFor(retryRecovery).proposals[0]
+      if (retryRecoveryProposal === undefined || !isIdentityFreeProposal(retryRecoveryProposal)) {
+        return yield* Effect.die("missing retry-quarantine recovery proposal")
+      }
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: retryRecoveryProposal },
+          retryRecovery,
+          inertLease,
+          target
+        ).pipe(Effect.provideService(InRunJournal, integratorJournal))
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: retryRecoveryProposal.id })
+
+      const retryQuarantine = (yield* Ref.get(integratorRecords))
+        .filter(({ event }) => event._tag === "IntegrationQuarantined")
+        .at(-1)
+      if (retryQuarantine?.event._tag !== "IntegrationQuarantined") {
+        return yield* Effect.die("FullRerun delivery fixture requires Q2")
+      }
+      const fullRerunFingerprint = IntegrationQuarantineDirectionFingerprint.make({
+        direction: "FullRerun",
+        quarantineAt: retryQuarantine.position,
+        sessionId: runIntegrator.run.session.sessionId
+      })
+      const fullRerunDirection = yield* integratorJournal.append(
+        runId,
+        integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(fullRerunFingerprint)),
+        IntegrationQuarantineDirectionAppliedEvent.make({
+          fingerprint: fullRerunFingerprint,
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "route-matrix-full-rerun", runId }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const successorLineage = TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: plannedAttempt.baseSha,
+        targetHeadSha: GitCommitSha.make("5".repeat(40))
+      })
+      const successorLineageOperationId = OperationId.make("route-matrix-successor-lineage")
+      const successorLineageOperation = makeTargetLineageObservationOperation({
+        integrationTarget: started.integrationTarget,
+        operationId: successorLineageOperationId,
+        plannedAttempt: started.plannedAttempt,
+        predecessorOperationIds: []
+      })
+      yield* integratorJournal.append(
+        runId,
+        JournalRecordKey.make("route-matrix-successor-lineage:intent"),
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: successorLineageOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      const successorLineageRecord = yield* integratorJournal.append(
+        runId,
+        JournalRecordKey.make("route-matrix-successor-lineage:observed"),
+        TargetLineageObservedEvent.make({
+          observation: successorLineage,
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: successorLineageOperationId,
+          plannedAttempt: started.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const successorInput = {
+        directionAppliedAt: fullRerunDirection.position,
+        predecessor: runIntegrator.run.session,
+        quarantineAt: retryQuarantine.position,
+        targetLineage: successorLineage,
+        targetLineageObservedAt: successorLineageRecord.position
+      }
+      const fixSuccessor = RunnableFrontierTransition.FixIntegratorSuccessorSession({
+        input: successorInput,
+        responsibility: started
+      })
+      const fixSuccessorProposal = proposalsFor(fixSuccessor).proposals[0]
+      if (fixSuccessorProposal === undefined || !isIdentityFreeProposal(fixSuccessorProposal)) {
+        return yield* Effect.die("missing FullRerun successor delivery proposal")
+      }
+      yield* executeIntegrationAction(
+        { _tag: "IdentityFreeAction", proposal: fixSuccessorProposal },
+        fixSuccessor,
+        inertLease,
+        target
+      ).pipe(Effect.provideService(InRunJournal, integratorJournal))
+
+      const successor = integratorSuccessorCorrelationFor(successorInput)
+      const successorRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: successor })
+      const successorTransition = RunnableFrontierTransition.RunIntegrator({
+        lineage: successorLineage,
+        lineageObservedAt: successorLineageRecord.position,
+        responsibility: started,
+        run: successorRun
+      })
+      const successorProposal = proposalsFor(successorTransition).proposals[0]
+      if (successorProposal === undefined || !isIdentityFreeProposal(successorProposal)) {
+        return yield* Effect.die("missing S2 Integrator delivery proposal")
+      }
+      yield* executeIntegrationAction(
+        { _tag: "IdentityFreeAction", proposal: successorProposal },
+        successorTransition,
+        inertLease,
+        target
+      ).pipe(
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Ref.update(deliveredSessions, (sessions) => [...sessions, request.correlation.sessionId]).pipe(
+                Effect.as(
+                  IntegratorResult.cases.NotPrepared.make({
+                    correlation: request.correlation,
+                    detail: IntegratorNotPreparedDetail.make("controlled S2 route result")
+                  })
+                )
+              )
+          })
+        ),
+        Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+        Effect.provideService(InRunJournal, integratorJournal)
+      )
+      expect(yield* Ref.get(deliveredSessions)).toEqual([runIntegrator.run.session.sessionId, successor.sessionId])
+    })
+  )
+
+  effectIt.effect("defers missing or contradictory acceptance evidence and rejects incomplete promotion runtime", () =>
+    Effect.gen(function* () {
+      const queue = RunnableFrontierTransition.QueueAcceptedResultIntegrationResponsibility({
+        accepted: unqueued,
+        integrationTarget
+      })
+      const queueProposal = proposalsFor(queue).proposals[0]
+      if (queueProposal === undefined || !isIdentityFreeProposal(queueProposal)) {
+        return yield* Effect.die("missing acceptance-evidence proposal")
+      }
+      const queueAction = { _tag: "IdentityFreeAction" as const, proposal: queueProposal }
+      const acceptedRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        {
+          event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+            plannedAttempt: unqueued.plannedAttempt,
+            version: workflowJournalEventVersion
+          }),
+          key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(unqueued.plannedAttempt.attemptId),
+          position: JournalPosition.make(1),
+          runId
+        },
+        {
+          event: PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+            report: PlannedAttemptExecutorReport.cases.Terminal.make({
+              correlation: { attemptId: unqueued.plannedAttempt.attemptId, runId },
+              result: { _tag: "Accepted", acceptedResult: unqueued.acceptedResult }
+            }),
+            version: workflowJournalEventVersion
+          }),
+          key: plannedAttemptExecutorWorkReportedRecordKey(
+            unqueued.plannedAttempt.attemptId,
+            PlannedAttemptExecutorReportOrdinal.make(1)
+          ),
+          position: JournalPosition.make(2),
+          runId
+        }
+      ])
+      const acceptedJournal = appendableJournalFor(acceptedRecords)
+
+      expect(
+        yield* executeIntegrationAction(queueAction, queue, inertLease, target).pipe(
+          Effect.provideService(InRunJournal, acceptedJournal)
+        )
+      ).toMatchObject({ _tag: "ActionDeferred", reason: { _tag: "AcceptedResultEvidenceUnavailable" } })
+
+      const unavailableEvidence = EvidenceStore.of({
+        put: () => Effect.die("acceptance evidence tests never publish evidence"),
+        read: () =>
+          Effect.fail(
+            new EvidenceStoreFailure({ detail: "controlled evidence read failure", operation: "EvidenceStore.read" })
+          )
+      })
+      expect(
+        yield* executeIntegrationAction(queueAction, queue, inertLease, target).pipe(
+          Effect.provideService(EvidenceStore, unavailableEvidence),
+          Effect.provideService(InRunJournal, acceptedJournal)
+        )
+      ).toMatchObject({ _tag: "ActionDeferred", reason: { _tag: "AcceptedResultEvidenceUnavailable" } })
+
+      const conflictingEvidence = EvidenceStore.of({
+        put: () => Effect.die("acceptance evidence tests never publish evidence"),
+        read: () => Effect.succeed(new TextEncoder().encode("{}"))
+      })
+      expect(
+        yield* executeIntegrationAction(queueAction, queue, inertLease, target).pipe(
+          Effect.provideService(EvidenceStore, conflictingEvidence),
+          Effect.provideService(InRunJournal, acceptedJournal)
+        )
+      ).toMatchObject({ _tag: "ActionDeferred", reason: { _tag: "AcceptedResultEvidenceConflict" } })
+
+      const promotion = RunnableFrontierTransition.RunTargetPromotion({
+        candidate: integrationFinalityFixture.qualifiedCandidate,
+        responsibility: started
+      })
+      const promotionProposal = proposalsFor(promotion).proposals[0]
+      if (promotionProposal === undefined || !isIdentityFreeProposal(promotionProposal)) {
+        return yield* Effect.die("missing target-promotion proposal")
+      }
+      const promotionAction = { _tag: "IdentityFreeAction" as const, proposal: promotionProposal }
+      expect(
+        yield* executeIntegrationAction(promotionAction, promotion, inertLease, target).pipe(
+          Effect.provideService(InRunJournal, acceptedJournal),
+          Effect.flip
+        )
+      ).toBeInstanceOf(TargetPromotionRuntimeUnavailable)
+      expect(
+        yield* executeIntegrationAction(promotionAction, promotion, inertLease, target).pipe(
+          Effect.provideService(TargetPromotionRuntime, completionPromotionRuntime),
+          Effect.provideService(InRunJournal, acceptedJournal),
+          Effect.flip
+        )
+      ).toBeInstanceOf(TargetPromotionRuntimeUnavailable)
     })
   )
 
@@ -1331,6 +1823,84 @@ describe("delivery proposal route matrix", () => {
           _tag: "IntegrationFinality.CompletionTaskAuthorizationConflict",
           reason: "RequestIdentityContradiction"
         }
+      })
+    })
+  )
+
+  effectIt.effect("translates focused confirmation waits and precondition conflicts", () =>
+    Effect.gen(function* () {
+      const request = completionTaskRequestFor(integrationFinalityFixture.claim)
+      const transition = RunnableFrontierTransition.ObserveFocusedTaskCompletion({ request, responsibility: started })
+      const proposal = proposalsFor(transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing focused confirmation proposal")
+      }
+      const intent = CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion })
+      const journalRecord = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+        event,
+        key: JournalRecordKey.make(`focused-confirmation-adapter:${position}`),
+        position: JournalPosition.make(position),
+        runId: integrationFinalityFixture.runId
+      })
+      const acknowledgement = CompletionTaskAcknowledgedEvent.make({
+        acknowledgement: CompletionTaskAcknowledgement.make({
+          operationId: request.operationId,
+          taskId: request.taskId
+        }),
+        attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+        request,
+        version: workflowJournalEventVersion
+      })
+      const waitingRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        journalRecord(1, intent),
+        journalRecord(2, acknowledgement)
+      ])
+      const waitingBoundary = CompletionTaskBoundary.of({
+        completeTask: () => Effect.die("focused confirmation wait must not complete the task"),
+        readCompletionRequest: () => Effect.die("focused confirmation wait must not look up the request"),
+        readFocusedTaskCompletion: (taskId) =>
+          Effect.fail(new FocusedTaskCompletionReadFailure({ detail: "focused facts unavailable", taskId }))
+      })
+      expect(
+        yield* executeIntegrationAction({ _tag: "IdentityFreeAction", proposal }, transition, inertLease, target).pipe(
+          Effect.provideService(CompletionTaskBoundary, waitingBoundary),
+          Effect.provideService(InRunJournal, appendableJournalFor(waitingRecords))
+        )
+      ).toMatchObject({
+        _tag: "ActionDeferred",
+        reason: { _tag: "IntegrationFinality.CompletionTaskConfirmationWait" }
+      })
+
+      const focusedOperation = makeCompletionTaskFactsObservationOperation(
+        request,
+        target,
+        integrationFinalityFixture.focusedSuccessFactsEvent.observation.purpose
+      )
+      const conflictingFacts = makeFocusedTaskCompletionFactsObserved(focusedOperation, {
+        ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
+        currentClaim: integrationFinalityFixture.activeClaim,
+        lifecycle: "Open",
+        operationId: focusedOperation.operationId,
+        target
+      })
+      const conflictingRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        journalRecord(1, intent),
+        journalRecord(2, acknowledgement),
+        journalRecord(3, taskTrackerFactsObservedEvent(focusedOperation.operationId, conflictingFacts))
+      ])
+      const neverCalledBoundary = CompletionTaskBoundary.of({
+        completeTask: () => Effect.die("durable conflicting facts must stop before completion"),
+        readCompletionRequest: () => Effect.die("durable conflicting facts must stop before lookup"),
+        readFocusedTaskCompletion: () => Effect.die("durable conflicting facts must not be reread")
+      })
+      expect(
+        yield* executeIntegrationAction({ _tag: "IdentityFreeAction", proposal }, transition, inertLease, target).pipe(
+          Effect.provideService(CompletionTaskBoundary, neverCalledBoundary),
+          Effect.provideService(InRunJournal, appendableJournalFor(conflictingRecords))
+        )
+      ).toMatchObject({
+        _tag: "ActionDeferred",
+        reason: { _tag: "IntegrationFinality.CompletionTaskPreconditionConflict" }
       })
     })
   )

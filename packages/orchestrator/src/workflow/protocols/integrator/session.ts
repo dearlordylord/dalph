@@ -35,6 +35,17 @@ export const IntegratorPreparationInput = Schema.Struct({
 })
 export type IntegratorPreparationInput = typeof IntegratorPreparationInput.Type
 
+/** Inputs proving the fresh Git observation that may fix one FullRerun successor. */
+export const IntegratorSuccessorPreparationInput = Schema.Struct({
+  directionAppliedAt: JournalPosition,
+  predecessor: IntegratorCorrelation,
+  quarantineAt: JournalPosition,
+  targetLineage: TargetLineageObservation,
+  /** Position of the fresh durable TargetLineageObserved fact. */
+  targetLineageObservedAt: JournalPosition
+})
+export type IntegratorSuccessorPreparationInput = typeof IntegratorSuccessorPreparationInput.Type
+
 /** Explicit input for a requested outer run, including its required ordinal. */
 export const IntegratorRunPreparationInput = Schema.Struct({
   preparation: IntegratorPreparationInput,
@@ -69,6 +80,45 @@ export const integratorCorrelationFor = (input: IntegratorPreparationInput): Int
     queuedAt: input.responsibility.queuedAt,
     sessionId: IntegratorSessionId.make(`integrator-session:${material}`),
     startedAt: input.responsibility.startedAt,
+    targetLineageObservedAt: input.targetLineageObservedAt
+  })
+}
+
+const successorCorrelationKeyMaterial = (input: IntegratorSuccessorPreparationInput): string =>
+  [
+    "full-rerun-successor",
+    input.predecessor.sessionId,
+    input.predecessor.candidateResource,
+    input.predecessor.plannedAttempt.runId,
+    input.predecessor.plannedAttempt.attemptId,
+    input.predecessor.startedAt,
+    input.quarantineAt,
+    input.directionAppliedAt,
+    input.targetLineageObservedAt,
+    input.targetLineage.targetHeadSha,
+    input.predecessor.acceptedResult.commit,
+    input.predecessor.integrationTarget.repository,
+    input.predecessor.integrationTarget.ref
+  ].join(":")
+
+/**
+ * Derives the one deterministic S2/resource pair for an exact Q/D/fresh-L
+ * chain. The transport request nonce is deliberately absent so redelivery
+ * and restart reuse the same identities.
+ */
+export const integratorSuccessorCorrelationFor = (
+  input: IntegratorSuccessorPreparationInput
+): IntegratorCorrelation => {
+  const material = successorCorrelationKeyMaterial(input)
+  return IntegratorCorrelation.make({
+    acceptedResult: input.predecessor.acceptedResult,
+    candidateResource: IntegratorCandidateResourceLocator.make(`integrator-resource:${material}`),
+    expectedTargetHead: input.targetLineage.targetHeadSha,
+    integrationTarget: input.predecessor.integrationTarget,
+    plannedAttempt: input.predecessor.plannedAttempt,
+    queuedAt: input.predecessor.queuedAt,
+    sessionId: IntegratorSessionId.make(`integrator-session:${material}`),
+    startedAt: input.predecessor.startedAt,
     targetLineageObservedAt: input.targetLineageObservedAt
   })
 }

@@ -1,7 +1,14 @@
-import { AcceptedResult, GitCommitSha, IntegrationTarget, PlannedTaskAttempt } from "@dalph/contracts"
+import {
+  AcceptedResult,
+  GitCommitSha,
+  IntegrationTarget,
+  PlannedTaskAttempt,
+  plannedTaskAttemptEquivalence
+} from "@dalph/contracts"
 import { Schema } from "effect"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { acceptedResultEquivalence } from "../integration-admission/responsibility.js"
 
 /** Identifies the one opaque outer-integrator session fixed for a responsibility and target head. */
 export const IntegratorSessionId = Schema.NonEmptyString.pipe(Schema.brand("IntegratorSessionId"))
@@ -238,6 +245,44 @@ export const IntegratorSessionFixedEvent = Schema.TaggedStruct("IntegratorSessio
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
+/** One FullRerun may replace a quarantined predecessor with one fresh session. */
+export const firstFullRerunSuccessorGeneration = 2 // eslint-disable-line no-magic-numbers -- The accepted #68 lifecycle names exactly S2.
+export const IntegratorSuccessorGeneration = Schema.Literal(firstFullRerunSuccessorGeneration)
+
+/**
+ * Durable relation preserving a quarantined Integrator session while fixing
+ * its one fresh-head successor. The predecessor remains cleanup evidence; the
+ * successor is the only session eligible for the following ordinary run.
+ */
+export const IntegratorSuccessorSessionFixedEvent = Schema.TaggedStruct("IntegratorSuccessorSessionFixed", {
+  direction: Schema.Literal("FullRerun"),
+  directionAppliedAt: JournalPosition,
+  predecessor: IntegratorCorrelation,
+  quarantineAt: JournalPosition,
+  successor: IntegratorCorrelation,
+  successorGeneration: IntegratorSuccessorGeneration,
+  version: Schema.Literal(workflowJournalEventVersion)
+}).check(
+  Schema.makeFilter((event) => {
+    const sameResponsibility =
+      plannedTaskAttemptEquivalence(event.predecessor.plannedAttempt, event.successor.plannedAttempt) &&
+      acceptedResultEquivalence(event.predecessor.acceptedResult, event.successor.acceptedResult) &&
+      event.predecessor.integrationTarget.repository === event.successor.integrationTarget.repository &&
+      event.predecessor.integrationTarget.ref === event.successor.integrationTarget.ref &&
+      event.predecessor.queuedAt === event.successor.queuedAt &&
+      event.predecessor.startedAt === event.successor.startedAt
+    return event.predecessor.sessionId !== event.successor.sessionId &&
+      event.predecessor.candidateResource !== event.successor.candidateResource &&
+      sameResponsibility &&
+      event.predecessor.targetLineageObservedAt < event.quarantineAt &&
+      event.quarantineAt < event.directionAppliedAt &&
+      event.directionAppliedAt < event.successor.targetLineageObservedAt
+      ? undefined
+      : "FullRerun successor must preserve responsibility, use distinct identities, and follow Q < D < fresh L"
+  })
+)
+export type IntegratorSuccessorSessionFixedEvent = typeof IntegratorSuccessorSessionFixedEvent.Type
+
 /** Durable intent written before each opaque call for one exact run ordinal. */
 export const IntegratorRunStartedEvent = Schema.TaggedStruct("IntegratorRunStarted", {
   run: IntegratorRunCorrelation,
@@ -289,6 +334,7 @@ export const IntegratorRunCandidateGitObservedEvent = Schema.TaggedStruct("Integ
 
 export const IntegratorJournalEvent = Schema.Union([
   IntegratorSessionFixedEvent,
+  IntegratorSuccessorSessionFixedEvent,
   IntegratorRunStartedEvent,
   IntegratorResultRecordedEvent,
   IntegratorRunResultRecordedEvent,

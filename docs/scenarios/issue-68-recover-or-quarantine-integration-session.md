@@ -51,15 +51,19 @@ have ordered direct parents `[H, C]`.
 ### Chronology and visible result
 
 1. Dalph records the exact unsuccessful result or invalid-candidate
-   observation.
+   observation. If the provider reports no owned activity, Dalph records that
+   exact absence before it records the quarantine.
 2. Dalph records one quarantine occurrence for S and preserves C, the claim,
    queue position, S, its isolated resource and edits, provider evidence, and
    error evidence.
-3. Dalph releases the live worker and process-local position for T and stops
+3. If Dalph disappears after recording provider absence but before recording
+   the quarantine, restart reads that absence, records the same quarantine,
+   and does not call the provider again.
+4. Dalph releases the live worker and process-local position for T and stops
    session-specific polling.
-4. Because A is still first for T, later integration responsibility A2 for T
+5. Because A is still first for T, later integration responsibility A2 for T
    cannot pass it. Work that does not require T remains eligible.
-5. The operator can choose Retry or Full rerun for this quarantine occurrence.
+6. The operator can choose Retry or Full rerun for this quarantine occurrence.
 
 Dalph does not automatically start another outer Integrator run after a
 conclusive result. It must not discard the preserved work, mark A complete,
@@ -70,6 +74,8 @@ release A's claim, or turn the local failure into a Run-wide stop.
 - `quarantines one conclusively unsuccessful Integrator session and preserves its evidence`
 - `blocks later same-target integration while unrelated work continues`
 - `rejects a candidate whose Git object or ordered parents are invalid`
+- `records provider-owned absence before one idempotent provider-failure quarantine`
+- `recovers Q after absence was durably recorded before the process disappeared`
 
 ## The operator retries the same session
 
@@ -89,6 +95,10 @@ client submits Retry more than once with the same typed fingerprint
    automatically; the operator does not submit it again.
 4. Repeated identical requests return the already-selected result. A later
    conflicting Full rerun request returns a conflict and starts nothing.
+5. If the exact retry run ends without a usable candidate, the conclusive-run
+   scenario applies again: Dalph records a new quarantine occurrence Q2 and
+   does not start an unapproved third run. Q2 permits Full rerun only because
+   the one allowed Retry for S has already been used.
 
 If Git now reports a target head other than H, Dalph starts no Integrator run.
 It records a fresh quarantine occurrence explaining that Retry is no longer
@@ -104,6 +114,7 @@ against a target head different from S's fixed H.
 - `applies a recorded Retry after restart without another user request`
 - `rejects a conflicting direction after the first choice`
 - `starts no retry when the session target head has changed`
+- `records a fresh quarantine after the authorized Retry run ends conclusively`
 
 ## The operator requests a full rerun
 
@@ -132,3 +143,4 @@ successors, or special-case restart as a different delivery path.
 - `full rerun preserves queue position and starts one successor session at the fresh head`
 - `preserves predecessor resources for separately authorized cleanup`
 - `recovers a recorded full rerun without creating a second successor`
+- `delivers the already-recorded FullRerun successor after restart`

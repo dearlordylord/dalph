@@ -32,7 +32,12 @@ import {
   TargetPromotionAttemptOrdinal,
   TargetPromotionAttemptReason,
   TargetPromotionIntendedEvent,
+  TargetPromotionNonConvergenceEvent,
+  TargetPromotionNonConvergenceObservation,
+  TargetPromotionStaleEvent,
+  TargetPromotionStaleObservation,
   TargetPromotionTerminalBasis,
+  targetPromotionAttemptLimit,
   targetPromotionCorrelationFor,
   TargetPromotionObservedSuccessEvent,
   TargetPromotionSuccessObservation
@@ -119,6 +124,65 @@ it("rejects promotion intent with no earlier Integrator Git result", () => {
   )
 })
 
+it("rejects altered or non-prior Integrator Git qualification evidence", () => {
+  const changedCandidateText = IntegratorCandidateText.make("refs/candidates/foreign-promotion-history")
+  const foreignRun = { ...qualifiedCandidate.run, ordinal: IntegratorRunOrdinal.make(1) }
+  const samePositionCandidate = IntegratorRunQualifiedCandidate.make({
+    ...qualifiedCandidate,
+    qualifiedAt: JournalPosition.make(6)
+  })
+  const cases = [
+    ["foreign qualification position", qualifiedCandidate, qualification, JournalPosition.make(4)],
+    ["non-prior qualification", samePositionCandidate, qualification, JournalPosition.make(6)],
+    [
+      "foreign run",
+      qualifiedCandidate,
+      IntegratorRunCandidateGitObservedEvent.make({ ...qualification, run: foreignRun }),
+      qualifiedCandidate.qualifiedAt
+    ],
+    [
+      "foreign candidate text",
+      qualifiedCandidate,
+      IntegratorRunCandidateGitObservedEvent.make({
+        ...qualification,
+        candidateText: changedCandidateText,
+        observation: IntegratorGitObservation.cases.Commit.make({
+          candidateText: changedCandidateText,
+          commit: candidateCommit,
+          directParents: [expectedHead, acceptedCommit]
+        })
+      }),
+      qualifiedCandidate.qualifiedAt
+    ],
+    [
+      "non-commit observation",
+      qualifiedCandidate,
+      IntegratorRunCandidateGitObservedEvent.make({
+        ...qualification,
+        observation: IntegratorGitObservation.cases.Missing.make({ candidateText })
+      }),
+      qualifiedCandidate.qualifiedAt
+    ]
+  ] as const
+
+  for (const [label, candidate, observationEvent, observedAt] of cases) {
+    const intent = TargetPromotionIntendedEvent.make({
+      correlation: targetPromotionCorrelationFor(candidate),
+      version: workflowJournalEventVersion
+    })
+    const observations = new Map([
+      [
+        integratorRunCandidateRecordKeyPrefix(candidate.run, candidate.candidateText),
+        { event: observationEvent, position: observedAt }
+      ]
+    ])
+    expect(
+      invalidTargetPromotionHistory(promotionRecord(6, intent), makeTargetPromotionHistoryIndexes(), observations),
+      label
+    ).toContain("Integrator Git qualification")
+  }
+})
+
 it("requires numbered attempts and terminal proof to follow the same outer request", () => {
   const indexes = makeTargetPromotionHistoryIndexes()
   const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
@@ -142,4 +206,125 @@ it("requires numbered attempts and terminal proof to follow the same outer reque
   expect(invalidTargetPromotionHistory(promotionRecord(6, intent), indexes, integratorObservations)).toBeUndefined()
   expect(invalidTargetPromotionHistory(promotionRecord(7, attempt), indexes, integratorObservations)).toBeUndefined()
   expect(invalidTargetPromotionHistory(promotionRecord(8, success), indexes, integratorObservations)).toBeUndefined()
+})
+
+it("rejects a promotion attempt whose reason is not exact for its ordinal", () => {
+  const indexes = makeTargetPromotionHistoryIndexes()
+  const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+  const attempt = TargetPromotionAttemptIntendedEvent.make({
+    attemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
+    correlation,
+    reason: TargetPromotionAttemptReason.cases.ReconciledExpectedHead.make({
+      observedHeadSha: expectedHead,
+      previousAttemptOrdinal: TargetPromotionAttemptOrdinal.make(1)
+    }),
+    version: workflowJournalEventVersion
+  })
+  expect(invalidTargetPromotionHistory(promotionRecord(6, intent), indexes, integratorObservations)).toBeUndefined()
+  expect(invalidTargetPromotionHistory(promotionRecord(7, attempt), indexes, integratorObservations)).toContain(
+    "expected exact sequential ordinal"
+  )
+})
+
+it("rejects terminal observations that contradict M, H, or their causal basis", () => {
+  const invalidTerminals = [
+    TargetPromotionObservedSuccessEvent.make({
+      basis: TargetPromotionTerminalBasis.cases.BeforeFirstAttempt.make({}),
+      correlation,
+      observation: TargetPromotionSuccessObservation.cases.CompareAndSetApplied.make({
+        candidateAncestry: "Current",
+        targetHeadSha: candidateCommit
+      }),
+      version: workflowJournalEventVersion
+    }),
+    TargetPromotionObservedSuccessEvent.make({
+      basis: TargetPromotionTerminalBasis.cases.BeforeFirstAttempt.make({}),
+      correlation,
+      observation: TargetPromotionSuccessObservation.cases.ReconciledCandidateAncestor.make({
+        candidateAncestry: "Ancestor",
+        targetHeadSha: candidateCommit
+      }),
+      version: workflowJournalEventVersion
+    }),
+    TargetPromotionObservedSuccessEvent.make({
+      basis: TargetPromotionTerminalBasis.cases.BeforeFirstAttempt.make({}),
+      correlation,
+      observation: TargetPromotionSuccessObservation.cases.ReconciledCandidateAncestor.make({
+        candidateAncestry: "Ancestor",
+        targetHeadSha: expectedHead
+      }),
+      version: workflowJournalEventVersion
+    }),
+    TargetPromotionStaleEvent.make({
+      basis: TargetPromotionTerminalBasis.cases.BeforeFirstAttempt.make({}),
+      correlation,
+      observation: TargetPromotionStaleObservation.cases.CompareAndSetRejected.make({
+        observedHeadSha: candidateCommit
+      }),
+      version: workflowJournalEventVersion
+    }),
+    TargetPromotionNonConvergenceEvent.make({
+      attemptLimit: targetPromotionAttemptLimit,
+      attemptOrdinal: TargetPromotionAttemptOrdinal.make(targetPromotionAttemptLimit),
+      correlation,
+      lastObservation: TargetPromotionNonConvergenceObservation.cases.ExpectedHeadStillObserved.make({
+        observedHeadSha: candidateCommit
+      }),
+      version: workflowJournalEventVersion
+    })
+  ] as const
+
+  for (const terminal of invalidTerminals) {
+    const indexes = makeTargetPromotionHistoryIndexes()
+    const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+    expect(invalidTargetPromotionHistory(promotionRecord(6, intent), indexes, integratorObservations)).toBeUndefined()
+    expect(invalidTargetPromotionHistory(promotionRecord(7, terminal), indexes, integratorObservations)).toContain(
+      "no exact latest unresolved attempt"
+    )
+  }
+})
+
+it("accepts three exact attempts followed by bounded non-convergence", () => {
+  const indexes = makeTargetPromotionHistoryIndexes()
+  const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+  expect(invalidTargetPromotionHistory(promotionRecord(6, intent), indexes, integratorObservations)).toBeUndefined()
+
+  for (const ordinal of [1, 2, 3]) {
+    const attemptOrdinal = TargetPromotionAttemptOrdinal.make(ordinal)
+    const reason =
+      ordinal === 1
+        ? TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead })
+        : TargetPromotionAttemptReason.cases.ReconciledExpectedHead.make({
+            observedHeadSha: expectedHead,
+            previousAttemptOrdinal: TargetPromotionAttemptOrdinal.make(ordinal - 1)
+          })
+    const attempt = TargetPromotionAttemptIntendedEvent.make({
+      attemptOrdinal,
+      correlation,
+      reason,
+      version: workflowJournalEventVersion
+    })
+    expect(
+      invalidTargetPromotionHistory(promotionRecord(6 + ordinal, attempt), indexes, integratorObservations)
+    ).toBeUndefined()
+  }
+
+  const nonConvergence = TargetPromotionNonConvergenceEvent.make({
+    attemptLimit: targetPromotionAttemptLimit,
+    attemptOrdinal: TargetPromotionAttemptOrdinal.make(targetPromotionAttemptLimit),
+    correlation,
+    lastObservation: TargetPromotionNonConvergenceObservation.cases.ExpectedHeadStillObserved.make({
+      observedHeadSha: expectedHead
+    }),
+    version: workflowJournalEventVersion
+  })
+  expect(
+    invalidTargetPromotionHistory(promotionRecord(10, nonConvergence), indexes, integratorObservations)
+  ).toBeUndefined()
+})
+
+it("ignores workflow events outside the promotion chronology", () => {
+  expect(
+    invalidTargetPromotionHistory(promotionRecord(5, qualification), makeTargetPromotionHistoryIndexes(), new Map())
+  ).toBeUndefined()
 })

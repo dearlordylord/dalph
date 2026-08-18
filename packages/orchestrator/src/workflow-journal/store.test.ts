@@ -506,6 +506,36 @@ durableJournalStoreContract(
       )
     )
 
+    it.effect("classifies an unrecognized raw append failure as unavailable storage", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            yield* Effect.gen(function* () {
+              yield* JournalStore
+            }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            yield* withSqliteClient(filename, (sql) =>
+              Effect.asVoid(
+                sql`CREATE TRIGGER reject_journal_insert AFTER INSERT ON journal_records BEGIN SELECT RAISE(ABORT, 'opaque append failure'); END`
+              )
+            )
+
+            const failure = yield* Effect.flip(
+              Effect.gen(function* () {
+                const journal = yield* JournalStore
+                return yield* journal.append(
+                  RunId.make("opaque-append-failure-run"),
+                  JournalRecordKey.make("operation:opaque:append"),
+                  intent("opaque-append-failure", "task-opaque-append-failure")
+                )
+              }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            )
+
+            expect(failure).toMatchObject({ _tag: "JournalStorageUnavailable", operation: "JournalStore.append" })
+          })
+        )
+      )
+    )
+
     it.effect("types append and read failures from damaged journal storage", () =>
       Effect.scoped(
         withTemporaryDatabase((filename) =>

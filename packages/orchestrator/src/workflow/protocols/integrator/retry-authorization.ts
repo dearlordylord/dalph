@@ -7,10 +7,14 @@ import {
   integratorRunCandidateGitObservedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
-  integratorSessionFixedRecordKey
+  integratorSessionFixedRecordKey,
+  integrationQuarantineDirectionAppliedRecordKey,
+  integrationQuarantinedRecordKey,
+  integrationProviderRunActivityAbsentRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
+  integrationQuarantineDirectionSubject,
   type IntegrationQuarantineBasis,
   type IntegrationQuarantineDirectionAppliedEvent,
   type IntegrationQuarantinedEvent
@@ -268,6 +272,7 @@ const preparedCandidateEvidence = (
   if (result.event.result._tag !== "PreparedCandidate" || result.event.result.candidateText !== cause.candidateText) {
     return undefined
   }
+  /* v8 ignore next -- @preserve the InvalidCandidate quarantine schema requires its exact candidate observation position. */
   if (observationAt === undefined) return undefined
   const observation = exactCandidateObservation(
     records,
@@ -306,6 +311,8 @@ const providerAbsenceMatches = (
   quarantine.event.basis._tag === "ProviderRunFailure" &&
   isProviderAbsenceRecord(record) &&
   record.runId === runIdFor(run) &&
+  record.key === integrationProviderRunActivityAbsentRecordKey(run) &&
+  integratorRunCorrelationsEqual(record.event.run, run) &&
   record.position > start.position &&
   record.position < quarantine.position &&
   record.event.detail === quarantine.event.basis.detail &&
@@ -330,17 +337,35 @@ const exactDirectionAndQuarantine = (
   run: IntegratorRunCorrelation
 ): { readonly direction: DirectionRecord; readonly quarantine: QuarantineRecord } | string => {
   const runId = runIdFor(run)
+  const sessionDirections = records.filter(
+    (record): record is DirectionRecord =>
+      isDirectionRecord(record) && record.event.fingerprint.sessionId === run.session.sessionId
+  )
+  /* v8 ignore next -- @preserve retryPreflightIssue rejects every foreign or wrongly keyed session direction before this helper is reached. */
+  if (
+    sessionDirections.some(
+      (record) =>
+        record.key !==
+        integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint))
+    )
+  ) {
+    return "Retry history contains a foreign or wrongly keyed direction"
+  }
   const retryDirections = records.filter(
     (record): record is DirectionRecord =>
       isDirectionRecord(record) &&
       record.runId === runId &&
       record.event.requestId.runId === runId &&
       record.event.fingerprint.direction === "Retry" &&
-      record.event.fingerprint.sessionId === run.session.sessionId
+      record.event.fingerprint.sessionId === run.session.sessionId &&
+      record.key ===
+        integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint))
   )
   if (retryDirections.length !== 1) return "Retry requires one exact applied Retry direction for its session and Run"
   const direction = retryDirections[0]
+  /* v8 ignore next -- @preserve a length-one array always yields an element; this guard protects malformed runtime data. */
   if (direction === undefined) return "Retry requires one exact applied Retry direction for its session and Run"
+  /* v8 ignore next -- @preserve duplicate direction subjects have the same deterministic key and are rejected by retryPreflightIssue before this helper is reached. */
   if (!hasUniqueDirectionSubject(records, run, direction))
     return "Retry must be the unique winning quarantine direction"
   const quarantine = exactPriorQuarantine(records, run, direction)
@@ -358,7 +383,9 @@ const hasUniqueDirectionSubject = (
     (record) =>
       isDirectionRecord(record) &&
       record.event.fingerprint.sessionId === run.session.sessionId &&
-      record.event.fingerprint.quarantineAt === direction.event.fingerprint.quarantineAt
+      record.event.fingerprint.quarantineAt === direction.event.fingerprint.quarantineAt &&
+      record.key ===
+        integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint))
   ).length === 1
 
 const exactPriorQuarantine = (
@@ -369,6 +396,8 @@ const exactPriorQuarantine = (
   const quarantine = oneRecordAt(records, direction.event.fingerprint.quarantineAt)
   if (quarantine === undefined || !isQuarantineRecord(quarantine)) return undefined
   return quarantine.runId === runIdFor(run) &&
+    quarantine.key ===
+      integrationQuarantinedRecordKey(quarantine.event.correlation.sessionId, quarantine.event.basis) &&
     quarantine.position < direction.position &&
     quarantine.event.basis._tag !== "RetryTargetHeadChanged" &&
     integratorCorrelationsEqual(quarantine.event.correlation, run.session)
@@ -394,6 +423,7 @@ const freshLineage = (
     )
     if (sameOperationObservations.length === 1 && intents.length === 1) {
       const intent = intents[0]
+      /* v8 ignore next -- @preserve intents.length === 1 guarantees an element at index zero; this guard protects malformed runtime data. */
       if (intent !== undefined) return { intent, observation }
     }
   }
@@ -448,7 +478,18 @@ const exactSessionQuarantines = (records: ReadonlyArray<JournalRecord>, run: Int
     (record) =>
       !isQuarantineRecord(record) ||
       record.event.correlation.sessionId !== run.session.sessionId ||
-      (record.runId === runIdFor(run) && integratorCorrelationsEqual(record.event.correlation, run.session))
+      (record.runId === runIdFor(run) &&
+        integratorCorrelationsEqual(record.event.correlation, run.session) &&
+        record.key === integrationQuarantinedRecordKey(record.event.correlation.sessionId, record.event.basis))
+  )
+
+const exactSessionDirections = (records: ReadonlyArray<JournalRecord>, run: IntegratorRunCorrelation): boolean =>
+  records.every(
+    (record) =>
+      !isDirectionRecord(record) ||
+      record.event.fingerprint.sessionId !== run.session.sessionId ||
+      record.key ===
+        integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint))
   )
 
 /**
@@ -484,9 +525,10 @@ const retryPreflightIssue = (
   ) {
     return "Retry authorization was terminated by a changed-head quarantine"
   }
-  return exactSessionQuarantines(records, run)
+  if (!exactSessionQuarantines(records, run)) return "Retry history contains a foreign or wrongly keyed quarantine"
+  return exactSessionDirections(records, run)
     ? undefined
-    : "Retry history contains a foreign or wrongly keyed quarantine"
+    : "Retry history contains a foreign or wrongly keyed direction"
 }
 
 const authorizeRetryRelation = (

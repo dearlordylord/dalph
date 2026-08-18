@@ -8,6 +8,7 @@ import {
   IntegratorCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
+  IntegratorRunCorrelation,
   IntegratorSessionId
 } from "../integrator/events.js"
 
@@ -16,6 +17,8 @@ export const IntegrationQuarantineFailureDetail = Schema.NonEmptyString.pipe(
   Schema.brand("IntegrationQuarantineFailureDetail")
 )
 export type IntegrationQuarantineFailureDetail = typeof IntegrationQuarantineFailureDetail.Type
+
+const integratorCorrelationEquivalence = Schema.toEquivalence(IntegratorCorrelation)
 
 /** Conclusive outer-Integrator facts that stop automatic work for one session. */
 export const IntegrationQuarantineCause = Schema.TaggedUnion({
@@ -98,9 +101,10 @@ const quarantineBasisIsValid = (event: {
 }): string | undefined => {
   const { basis, correlation } = event
   return basis._tag === "ProviderRunFailure"
-    ? basis.ownedActivityProvenAbsentAt >= 1
+    ? /* v8 ignore next -- @preserve JournalPosition is branded to be at least one, so the defensive non-positive provider position cannot be constructed. */
+      basis.ownedActivityProvenAbsentAt >= 1
       ? undefined
-      : "provider-run quarantine requires a positive owned-activity absence position"
+      : /* v8 ignore next -- @preserve JournalPosition is branded to be at least one, so this defensive rejection is unreachable. */ "provider-run quarantine requires a positive owned-activity absence position"
     : basis._tag === "RetryTargetHeadChanged"
       ? retryTargetHeadBasisIsValid(basis, correlation)
       : conclusiveBasisIsValid({ basis, correlation })
@@ -119,8 +123,15 @@ export const IntegrationProviderRunActivityAbsentEvent = Schema.TaggedStruct("In
   correlation: IntegratorCorrelation,
   detail: IntegrationQuarantineFailureDetail,
   occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  run: IntegratorRunCorrelation,
   version: Schema.Literal(workflowJournalEventVersion)
-})
+}).check(
+  Schema.makeFilter((event) =>
+    integratorCorrelationEquivalence(event.correlation, event.run.session)
+      ? undefined
+      : "provider-run absence must name the same exact session in its run and correlation"
+  )
+)
 export type IntegrationProviderRunActivityAbsentEvent = typeof IntegrationProviderRunActivityAbsentEvent.Type
 
 /** The only operator directions accepted for one exact quarantine occurrence. */

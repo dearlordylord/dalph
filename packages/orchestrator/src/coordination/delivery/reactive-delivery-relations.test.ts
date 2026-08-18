@@ -86,9 +86,11 @@ import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
 import { makeDeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
+import { deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
 import {
   DeliveryControlPolicyMissing,
-  makeReactiveDeliveryRelationsLayer as makeProductionReactiveDeliveryRelationsLayer
+  makeReactiveDeliveryRelationsLayer as makeProductionReactiveDeliveryRelationsLayer,
+  reactiveDeliveryRelationsLayer
 } from "./reactive-delivery-relations.js"
 import { DeliveryRelationReconciliationError } from "./relations.js"
 import type { DeliveryRelationInputBundle } from "./relations.js"
@@ -274,6 +276,10 @@ const makeReactiveDeliveryRelationsLayer = (
     const integrationTargets = yield* makeIntegrationTargetResourceController()
     return yield* makeProductionReactiveDeliveryRelationsLayer(runId, target, journal, recovery, integrationTargets)
   })
+
+const testDeliveryRuntimeResourcesLayer = Layer.unwrap(
+  makeApplicationExitLifecycle().pipe(Effect.map((lifecycle) => deliveryRuntimeResourcesLayer(lifecycle.admission)))
+)
 
 it.effect("records the initial and later exact production bundles without changing their delivery source chain", () =>
   Effect.scoped(
@@ -610,6 +616,57 @@ it.effect("waits for the accepted journal position to reach delivery planning be
       expect(waiting.pollUnsafe()).toBeUndefined()
       yield* Deferred.succeed(projectionBlocked, undefined)
       yield* Fiber.join(waiting)
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("removes an interrupted accepted-fact waiter before the next publication", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const projectionBlocked = yield* Deferred.make<void>()
+      const refreshStarted = yield* Deferred.make<void>()
+      const projectionReads = yield* Ref.make(0)
+      const baseProjection = currentProjection(journal.state.get.pipe(Effect.orDie))
+      const recovery = {
+        ...baseProjection,
+        readDeliveryProjection: Ref.getAndUpdate(projectionReads, (count) => count + 1).pipe(
+          Effect.flatMap((read) =>
+            read === 0
+              ? baseProjection.readDeliveryProjection
+              : Deferred.succeed(refreshStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(projectionBlocked)),
+                  Effect.andThen(baseProjection.readDeliveryProjection)
+                )
+          )
+        )
+      }
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      const operation = makeTrackerGraphObservationOperation(OperationId.make("interrupted-publication-waiter"), target)
+      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+      yield* Deferred.await(refreshStarted)
+
+      const waiting = yield* publication.awaitCurrent.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* Fiber.interrupt(waiting)
+      yield* Deferred.succeed(projectionBlocked, undefined)
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("constructs the scoped reactive relations layer from shared runtime resources", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const layer = reactiveDeliveryRelationsLayer(
+        runId,
+        target,
+        journal,
+        currentProjection(journal.state.get.pipe(Effect.orDie))
+      ).pipe(Layer.provide(testDeliveryRuntimeResourcesLayer))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      expect((yield* relation.get).current.trackerGraph._tag).toBe("GraphNotEstablished")
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )

@@ -57,6 +57,8 @@ import {
   IntegratorGitObservation,
   IntegratorResult,
   IntegratorRunCorrelation,
+  IntegratorSuccessorGeneration,
+  JournalPosition,
   IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
@@ -166,6 +168,15 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   },
   /** Outer Integrator facts retain the exact correlation, including causal Journal positions. */
   IntegratorSessionFixed: { correlation: IntegratorCorrelation },
+  /** FullRerun preserves the quarantined predecessor while fixing one fresh-head successor. */
+  IntegratorSuccessorSessionFixed: {
+    direction: Schema.Literal("FullRerun"),
+    directionAppliedAt: JournalPosition,
+    predecessor: IntegratorCorrelation,
+    quarantineAt: JournalPosition,
+    successor: IntegratorCorrelation,
+    successorGeneration: IntegratorSuccessorGeneration
+  },
   IntegratorResultRecorded: { result: IntegratorResult },
   IntegratorCandidateGitReadIntended: { candidateText: IntegratorCandidateText, correlation: IntegratorCorrelation },
   IntegratorCandidateGitObserved: {
@@ -186,6 +197,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   IntegrationProviderRunActivityAbsent: {
     correlation: IntegratorCorrelation,
     detail: IntegrationQuarantineFailureDetail,
+    run: IntegratorRunCorrelation,
     ...nonActionOccurrence
   },
   IntegrationQuarantined: {

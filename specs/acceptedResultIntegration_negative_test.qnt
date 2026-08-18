@@ -121,6 +121,74 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
+  // Forbidden mutation: releasing one independent target must not erase the
+  // fresh head proof still owned by another held target responsibility.
+  action eraseIndependentHeldTargetProof: bool = {
+    val released = state.results.get(1)
+    val held = state.results.get(2)
+    all {
+      released.phase == IntegratorInFlight,
+      released.targetHeld,
+      held.phase == Started,
+      held.targetHeld,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...released,
+          phase: IntegratorResponseLost,
+          targetHeld: false,
+          integratorResponseAmbiguous: true,
+        }),
+        trackerFactsCurrent: false,
+        targetFactsCurrent: false,
+        targetHeadProof: 0,
+        targetReacquisitionRequired: true,
+      },
+    }
+  }
+
+  // Forbidden mutation: run two reports NotPrepared but leaves the rejected
+  // candidate projection from run one attached to the session's current
+  // result.
+  action reportRetryNotPreparedKeepingPriorCandidate: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == RetryInFlight,
+      result.targetHeld,
+      result.integratorRunOrdinal == 2,
+      result.submittedCandidate != 0,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: IntegratorNotPrepared,
+          integratorOutcome: NotPrepared,
+          integratorResultRecorded: true,
+          candidateReported: false,
+          integratorResponseAmbiguous: false,
+          promotionAuthorized: false,
+          quarantineRecorded: false,
+        }),
+      },
+    }
+  }
+
+  // Forbidden mutation: a conflict belongs to Q1 and cannot be carried into
+  // the fresh direction history of Q2.
+  action carryPriorConflictIntoFreshQuarantine: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == Quarantined,
+      result.quarantineOccurrenceCount == 2,
+      result.quarantineDirection == NoQuarantineDirection,
+      result.quarantineConflictCount == 0,
+      state' = {
+        ...state,
+        results: state.results.put(1, { ...result, quarantineConflictCount: 1 }),
+      },
+    }
+  }
+
   // Each of these four actions makes the same invalid promotion claim from a
   // different non-authoritative source. Git qualification must reject all of
   // them: an explicit report plus exact [H,C] parents is still required.
@@ -489,6 +557,63 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
+  // Forbidden recovery mutation: Q1 is the durable authorization for the
+  // already-started Retry run and cannot disappear when Dalph restarts.
+  action eraseRetryQuarantineOnRecovery: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == RetrySelected,
+      result.retryRunCount == 1,
+      result.integratorRunOrdinal == 2,
+      state' = {
+        ...state,
+        results: state.results.put(1, { ...result, quarantineRecorded: false }),
+      },
+    }
+  }
+
+  // Forbidden projection mutation: Q2's later FullRerun direction cannot
+  // erase the exact Retry direction that authorized the already-run ordinal 2.
+  action eraseRetryDirectionEvidenceAfterFullRerun: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == FullRerunSelected,
+      result.retryRunCount == 1,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          retryDirectionSession: 0,
+          retryDirectionPosition: 0,
+        }),
+      },
+    }
+  }
+
+  // Forbidden control mutation: Q2 cannot authorize a second Retry for S.
+  action chooseRetryAfterQ2: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == Quarantined,
+      result.retryRunCount == 1,
+      result.quarantineOccurrenceCount == 2,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: RetrySelected,
+          quarantineDirection: RetryDirection,
+          quarantineDirectionSession: result.integrationSession,
+          quarantineDirectionPosition: result.quarantinePosition,
+          quarantineDirectionCount: result.quarantineDirectionCount + 1,
+          lastDirection: RetryDirection,
+          lastDirectionSession: result.integrationSession,
+          lastDirectionPosition: result.quarantinePosition,
+        }),
+      },
+    }
+  }
+
   action allocateSecondSuccessor: bool = {
     val result = state.results.get(1)
     all {
@@ -533,6 +658,41 @@ module acceptedResultIntegrationNegativeTest {
         not(retryRequiresOneExplicitChoice),
         not(quarantineDirectionIsExactAndFirst),
       })
+  }
+
+  run fullRerunCannotErasePriorRetryAuthorizationTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetry(1, state.results.get(1).quarantinePosition))
+      .then(startRetry(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseFullRerun(1, state.results.get(1).quarantinePosition))
+      .then(eraseRetryDirectionEvidenceAfterFullRerun)
+      .expect(not(retryRequiresOneExplicitChoice))
+  }
+
+  run q2CannotAuthorizeASecondRetryTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetry(1, state.results.get(1).quarantinePosition))
+      .then(startRetry(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryAfterQ2)
+      .expect(not(retryDirectionIsBounded))
   }
 
   run conflictingDirectionCannotReplaceFirstChoiceTest = {
@@ -581,6 +741,22 @@ module acceptedResultIntegrationNegativeTest {
       .then(startFullRerun(1))
       .then(allocateSecondSuccessor)
       .expect(not(successorAllocationIsBounded))
+  }
+
+  run retryRecoveryCannotEraseAuthorizingQuarantineTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetry(1, state.results.get(1).quarantinePosition))
+      .then(startRetry(1))
+      .then(recoverCoordinator)
+      .then(eraseRetryQuarantineOnRecovery)
+      .expect(not(quarantinePhaseRequiresRecordedOccurrence))
   }
 
   run lateAcceptedAfterRestartCannotBeQueuedForIntegrationTest = {
@@ -643,6 +819,63 @@ module acceptedResultIntegrationNegativeTest {
       .then(observeTrackerFacts)
       .then(reacquireWithoutFreshTargetHead)
       .expect(not(mutableTargetWorkReacquisitionUsesFreshExpectedHead))
+  }
+
+
+  run independentResponseLossCannotEraseHeldTargetProofTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(acceptResult(2))
+      .then(assignResultTwoIndependentTarget)
+      .then(queueAcceptedResult(2))
+      .then(startIntegration(2))
+      .then(eraseIndependentHeldTargetProof)
+      .expect(not(mutableTargetWorkReacquisitionUsesFreshExpectedHead))
+  }
+
+
+  run retryNotPreparedCannotKeepRejectedRunOneCandidateTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeNonCommitCandidate(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryOne)
+      .then(startRetryOne)
+      .then(reportRetryNotPreparedKeepingPriorCandidate)
+      .expect(and {
+        not(conclusiveNotPreparedHasNoCandidate),
+        not(candidateGitIntentPrecedesObservation),
+      })
+  }
+
+
+  run freshQuarantineCannotCarryPriorDirectionConflictTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryOne)
+      .then(rejectConflictingFullRerun(1, state.results.get(1).quarantineDirectionPosition))
+      .then(startRetryOne)
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(carryPriorConflictIntoFreshQuarantine)
+      .expect(not(conflictingDirectionIsNoOp))
   }
 
   run unreportedCandidateCannotAuthorizePromotionTest = {

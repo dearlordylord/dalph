@@ -25,6 +25,7 @@ import { TargetLineageObservedEvent } from "../../registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
 import {
   integrationQuarantinedRecordKey,
+  integratorSuccessorSessionFixedRecordKey,
   integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
@@ -46,20 +47,32 @@ import {
   IntegratorCandidateText,
   IntegratorCandidateResourceLocator,
   IntegratorCorrelation,
+  IntegratorCandidateGitReadIntendedEvent,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   IntegratorResult,
   IntegratorRunCandidateGitObservedEvent,
   IntegratorRunCandidateGitReadIntendedEvent,
+  IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunProtocolResult,
+  IntegratorResultRecordedEvent,
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
-  IntegratorSessionId
+  IntegratorSessionFixedEvent,
+  IntegratorSessionId,
+  IntegratorSuccessorSessionFixedEvent,
+  firstFullRerunSuccessorGeneration
 } from "../integrator/events.js"
 import { integratorResponsibilityFactsFromCorrelation } from "../integrator/state.js"
 import { integratorRunCorrelationForSession } from "../integrator/session.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
+import {
+  IntegrationQuarantineBasis,
+  IntegrationQuarantineCause,
+  IntegrationQuarantineResultEvidence,
+  IntegrationQuarantinedEvent
+} from "./events.js"
 
 const runId = RunId.make("initial-conclusive-quarantine-run")
 const target = FixtureTarget.make("initial-conclusive-quarantine-target")
@@ -179,7 +192,7 @@ const appendExactHistory = Effect.fn("InitialConclusiveTest.appendExactHistory")
   return { journal, result, resultRecord, run, session, observationRecord }
 })
 
-it.effect("records one idempotent Q for exact modern run-1 NotPrepared evidence", () =>
+it.effect("quarantines one conclusively unsuccessful Integrator session and preserves its evidence", () =>
   Effect.gen(function* () {
     const history = yield* appendExactHistory("NotPrepared")
     const first = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
@@ -194,6 +207,11 @@ it.effect("records one idempotent Q for exact modern run-1 NotPrepared evidence"
     expect(deriveIntegrationQuarantineState(records, history.session.sessionId)._tag).toBe("Quarantined")
     const quarantine = records.find(({ event }) => event._tag === "IntegrationQuarantined")
     if (quarantine?.event._tag !== "IntegrationQuarantined") return
+    expect(quarantine.event.correlation).toEqual(history.session)
+    expect(quarantine.event.correlation.acceptedResult).toEqual(history.session.acceptedResult)
+    expect(quarantine.event.correlation.candidateResource).toBe(history.session.candidateResource)
+    expect(quarantine.event.correlation.queuedAt).toBe(history.session.queuedAt)
+    expect(quarantine.event.correlation.startedAt).toBe(history.session.startedAt)
     expect(quarantine.event.basis).toEqual(
       expect.objectContaining({
         _tag: "ConclusiveResult",
@@ -267,5 +285,586 @@ it.effect("fails closed for foreign evidence and an ambiguous append", () =>
     )
     expect(reconciled.event._tag).toBe("IntegrationQuarantined")
     expect(reconciled.key).toEqual(integrationQuarantinedRecordKey(history.session.sessionId, reconciled.event.basis))
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("fails closed when the exact fixed-session key is duplicated", () =>
+  Effect.gen(function* () {
+    const history = yield* appendExactHistory("NotPrepared")
+    const current = yield* history.journal.read(runId)
+    const fixedSessionKey = integratorSessionFixedRecordKey(
+      integratorResponsibilityFactsFromCorrelation(history.session)
+    )
+    const fixedSession = current.find((record) => record.key === fixedSessionKey)
+    if (fixedSession === undefined) return yield* Effect.die("fixture lacks its exact fixed-session record")
+    const duplicateRecords = [...current, { ...fixedSession, position: JournalPosition.make(current.length + 1) }]
+    const contradiction = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("duplicate fixed-session evidence must not append"),
+          read: () => Effect.succeed(duplicateRecords)
+        })
+      ),
+      Effect.flip
+    )
+    expect(contradiction._tag).toBe("IntegratorJournalContradiction")
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects legacy, foreign-key, and malformed modern run evidence", () =>
+  Effect.gen(function* () {
+    const history = yield* appendExactHistory("NotPrepared")
+    const current = yield* history.journal.read(runId)
+    const fixedSession = current.find((record) => record.event._tag === "IntegratorSessionFixed")
+    const runStart = current.find(
+      (record) =>
+        record.event._tag === "IntegratorRunStarted" && record.event.run.ordinal === IntegratorRunOrdinal.make(1)
+    )
+    const runResult = current.find(
+      (record) =>
+        record.event._tag === "IntegratorRunResultRecorded" && record.event.run.ordinal === IntegratorRunOrdinal.make(1)
+    )
+    if (fixedSession === undefined || runStart === undefined || runResult === undefined) {
+      return yield* Effect.die("fixture lacks its exact modern run evidence")
+    }
+    const rejectWith = (transform: (records: ReadonlyArray<JournalRecord>) => ReadonlyArray<JournalRecord>) =>
+      appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+        Effect.provideService(
+          InRunJournal,
+          InRunJournal.of({
+            append: () => Effect.die("malformed evidence must fail before append"),
+            read: () => Effect.succeed(transform(current))
+          })
+        ),
+        Effect.flip
+      )
+
+    const legacyResult: JournalRecord = {
+      event: IntegratorResultRecordedEvent.make({
+        result: IntegratorResult.cases.NotPrepared.make({ correlation: history.session, detail: notPreparedDetail }),
+        version: workflowJournalEventVersion
+      }),
+      key: JournalRecordKey.make("initial-conclusive:legacy-result"),
+      position: JournalPosition.make(current.length + 1),
+      runId
+    }
+    const legacyFailure = yield* rejectWith((records) => [...records, legacyResult])
+    expect(legacyFailure._tag).toBe("IntegratorJournalContradiction")
+
+    const foreignFixedKey = yield* rejectWith((records) =>
+      records.map((record) =>
+        record === fixedSession
+          ? { ...record, key: JournalRecordKey.make("initial-conclusive:foreign-fixed-key") }
+          : record
+      )
+    )
+    expect(foreignFixedKey._tag).toBe("IntegratorJournalContradiction")
+
+    const duplicateFixedWithForeignEvent = yield* rejectWith((records) => [
+      ...records,
+      {
+        ...fixedSession,
+        event: IntegratorSessionFixedEvent.make({
+          correlation: IntegratorCorrelation.make({
+            ...history.session,
+            sessionId: IntegratorSessionId.make("initial-conclusive-foreign-fixed-session")
+          }),
+          version: workflowJournalEventVersion
+        }),
+        position: JournalPosition.make(current.length + 1)
+      }
+    ])
+    expect(duplicateFixedWithForeignEvent._tag).toBe("IntegratorJournalContradiction")
+
+    const foreignStartKey = yield* rejectWith((records) =>
+      records.map((record) =>
+        record === runStart ? { ...record, key: JournalRecordKey.make("initial-conclusive:foreign-start-key") } : record
+      )
+    )
+    expect(foreignStartKey._tag).toBe("IntegratorJournalContradiction")
+
+    const foreignResultKey = yield* rejectWith((records) =>
+      records.map((record) =>
+        record === runResult
+          ? { ...record, key: JournalRecordKey.make("initial-conclusive:foreign-result-key") }
+          : record
+      )
+    )
+    expect(foreignResultKey._tag).toBe("IntegratorJournalContradiction")
+
+    const missingResult = yield* rejectWith((records) => records.filter((record) => record !== runResult))
+    expect(missingResult._tag).toBe("IntegratorJournalContradiction")
+
+    const wrongResultKind = yield* rejectWith((records) =>
+      records.map((record) =>
+        record === runResult && record.event._tag === "IntegratorRunResultRecorded"
+          ? {
+              ...record,
+              event: IntegratorRunResultRecordedEvent.make({
+                ...record.event,
+                result: IntegratorResult.cases.PreparedCandidate.make({ correlation: history.session, candidateText })
+              })
+            }
+          : record
+      )
+    )
+    expect(wrongResultKind._tag).toBe("IntegratorJournalContradiction")
+
+    const ordinalTwo = IntegratorRunProtocolResult.cases.NotPrepared.make({
+      detail: notPreparedDetail,
+      run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(2), session: history.session })
+    })
+    const ordinalFailure = yield* appendInitialConclusiveIntegrationQuarantine(ordinalTwo).pipe(
+      Effect.provideService(InRunJournal, history.journal),
+      Effect.flip
+    )
+    expect(ordinalFailure._tag).toBe("IntegratorJournalContradiction")
+
+    const legacyCandidate: JournalRecord = {
+      event: IntegratorCandidateGitReadIntendedEvent.make({
+        candidateText,
+        correlation: history.session,
+        version: workflowJournalEventVersion
+      }),
+      key: JournalRecordKey.make("initial-conclusive:legacy-candidate"),
+      position: JournalPosition.make(current.length + 1),
+      runId
+    }
+    const legacyCandidateFailure = yield* rejectWith((records) => [...records, legacyCandidate])
+    expect(legacyCandidateFailure._tag).toBe("IntegratorJournalContradiction")
+
+    const missingStart = yield* rejectWith((records) => records.filter((record) => record !== runStart))
+    expect(missingStart._tag).toBe("IntegratorJournalContradiction")
+
+    const fixedBeforeLineage = yield* rejectWith((records) =>
+      records.map((record) => (record === fixedSession ? { ...record, position: JournalPosition.make(1) } : record))
+    )
+    expect(fixedBeforeLineage._tag).toBe("IntegratorJournalContradiction")
+
+    const resultBeforeStart = yield* rejectWith((records) =>
+      records.map((record) => (record === runResult ? { ...record, position: runStart.position } : record))
+    )
+    expect(resultBeforeStart._tag).toBe("IntegratorJournalContradiction")
+
+    const startBeforeFixed = yield* rejectWith((records) =>
+      records.map((record) => (record === runStart ? { ...record, position: fixedSession.position } : record))
+    )
+    expect(startBeforeFixed._tag).toBe("IntegratorJournalContradiction")
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("fails closed when an exact candidate evidence key is duplicated", () =>
+  Effect.gen(function* () {
+    const history = yield* appendExactHistory("CandidateRejected")
+    const current = yield* history.journal.read(runId)
+    const readIntentKey = integratorRunCandidateGitReadIntendedRecordKey(history.run, candidateText)
+    const observationKey = integratorRunCandidateGitObservedRecordKey(history.run, candidateText)
+    const readIntent = current.find((record) => record.key === readIntentKey)
+    const observation = current.find((record) => record.key === observationKey)
+    if (readIntent === undefined || observation === undefined) {
+      return yield* Effect.die("fixture lacks its exact candidate read intent or observation")
+    }
+    const duplicateReadIntent = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("duplicate candidate evidence must not append"),
+          read: () =>
+            Effect.succeed([...current, { ...readIntent, position: JournalPosition.make(current.length + 1) }])
+        })
+      ),
+      Effect.flip
+    )
+    expect(duplicateReadIntent._tag).toBe("IntegratorJournalContradiction")
+
+    const duplicateObservation = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("duplicate candidate evidence must not append"),
+          read: () =>
+            Effect.succeed([...current, { ...observation, position: JournalPosition.make(current.length + 1) }])
+        })
+      ),
+      Effect.flip
+    )
+    expect(duplicateObservation._tag).toBe("IntegratorJournalContradiction")
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects a NotPrepared result with candidate evidence and candidate result/key contradictions", () =>
+  Effect.gen(function* () {
+    const notPreparedHistory = yield* appendExactHistory("NotPrepared")
+    const notPreparedRecords = yield* notPreparedHistory.journal.read(runId)
+    const notPreparedResult = notPreparedRecords.find((record) => record.event._tag === "IntegratorRunResultRecorded")
+    if (notPreparedResult === undefined) return yield* Effect.die("fixture lacks its run result")
+    const candidateEvidence: JournalRecord = {
+      event: IntegratorRunCandidateGitReadIntendedEvent.make({
+        candidateText,
+        run: notPreparedHistory.run,
+        version: workflowJournalEventVersion
+      }),
+      key: integratorRunCandidateGitReadIntendedRecordKey(notPreparedHistory.run, candidateText),
+      position: JournalPosition.make(notPreparedRecords.length + 1),
+      runId
+    }
+    const candidateFailure = yield* appendInitialConclusiveIntegrationQuarantine(notPreparedHistory.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("candidate evidence must fail before append"),
+          read: () => Effect.succeed([...notPreparedRecords, candidateEvidence])
+        })
+      ),
+      Effect.flip
+    )
+    expect(candidateFailure._tag).toBe("IntegratorJournalContradiction")
+
+    const wrongResultKind = yield* appendInitialConclusiveIntegrationQuarantine(notPreparedHistory.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("wrong result kind must fail before append"),
+          read: () =>
+            Effect.succeed(
+              notPreparedRecords.map((record) =>
+                record === notPreparedResult && record.event._tag === "IntegratorRunResultRecorded"
+                  ? {
+                      ...record,
+                      event: IntegratorRunResultRecordedEvent.make({
+                        ...record.event,
+                        result: IntegratorResult.cases.PreparedCandidate.make({
+                          correlation: notPreparedHistory.session,
+                          candidateText
+                        })
+                      })
+                    }
+                  : record
+              )
+            )
+        })
+      ),
+      Effect.flip
+    )
+    expect(wrongResultKind._tag).toBe("IntegratorJournalContradiction")
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects CandidateRejected results with foreign candidate names or keys", () =>
+  Effect.gen(function* () {
+    const history = yield* appendExactHistory("CandidateRejected")
+    const records = yield* history.journal.read(runId)
+    const readIntent = records.find((record) => record.event._tag === "IntegratorRunCandidateGitReadIntended")
+    if (readIntent === undefined) return yield* Effect.die("candidate fixture lacks its exact read intent")
+    const foreignCandidate = IntegratorCandidateText.make("refs/heads/initial-conclusive-foreign-candidate")
+    const foreignCandidateEvent: JournalRecord = {
+      event: IntegratorRunCandidateGitReadIntendedEvent.make({
+        candidateText: foreignCandidate,
+        run: history.run,
+        version: workflowJournalEventVersion
+      }),
+      key: JournalRecordKey.make("initial-conclusive:foreign-candidate"),
+      position: JournalPosition.make(records.length + 1),
+      runId
+    }
+    const foreignCandidateFailure = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("foreign candidate must fail before append"),
+          read: () => Effect.succeed([...records, foreignCandidateEvent])
+        })
+      ),
+      Effect.flip
+    )
+    expect(foreignCandidateFailure._tag).toBe("IntegratorJournalContradiction")
+
+    const foreignCandidateKey = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("foreign candidate key must fail before append"),
+          read: () =>
+            Effect.succeed(
+              records.map((record) =>
+                record === readIntent
+                  ? { ...record, key: JournalRecordKey.make("initial-conclusive:foreign-read-key") }
+                  : record
+              )
+            )
+        })
+      ),
+      Effect.flip
+    )
+    expect(foreignCandidateKey._tag).toBe("IntegratorJournalContradiction")
+
+    const candidateResult = records.find((record) => record.event._tag === "IntegratorRunResultRecorded")
+    const observation = records.find((record) => record.event._tag === "IntegratorRunCandidateGitObserved")
+    if (candidateResult === undefined || observation === undefined) {
+      return yield* Effect.die("candidate fixture lacks its exact result or observation")
+    }
+    const wrongResultKind = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("candidate result mismatch must fail before append"),
+          read: () =>
+            Effect.succeed(
+              records.map((record) =>
+                record === candidateResult && record.event._tag === "IntegratorRunResultRecorded"
+                  ? {
+                      ...record,
+                      event: IntegratorRunResultRecordedEvent.make({
+                        ...record.event,
+                        result: IntegratorResult.cases.NotPrepared.make({
+                          correlation: history.session,
+                          detail: notPreparedDetail
+                        })
+                      })
+                    }
+                  : record
+              )
+            )
+        })
+      ),
+      Effect.flip
+    )
+    expect(wrongResultKind._tag).toBe("IntegratorJournalContradiction")
+
+    const missingObservation = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("missing observation must fail before append"),
+          read: () => Effect.succeed(records.filter((record) => record !== observation))
+        })
+      ),
+      Effect.flip
+    )
+    expect(missingObservation._tag).toBe("IntegratorJournalContradiction")
+
+    const nonChronological = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("non-chronological candidate evidence must fail before append"),
+          read: () =>
+            Effect.succeed(
+              records.map((record) =>
+                record.event._tag === "IntegratorRunCandidateGitReadIntended"
+                  ? { ...record, position: observation.position }
+                  : record
+              )
+            )
+        })
+      ),
+      Effect.flip
+    )
+    expect(nonChronological._tag).toBe("IntegratorJournalContradiction")
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("accepts a modern run whose fixed predecessor is a FullRerun successor session", () =>
+  Effect.gen(function* () {
+    const history = yield* appendExactHistory("NotPrepared")
+    const current = yield* history.journal.read(runId)
+    const fixed = current.find((record) => record.event._tag === "IntegratorSessionFixed")
+    const start = current.find((record) => record.event._tag === "IntegratorRunStarted")
+    const result = current.find((record) => record.event._tag === "IntegratorRunResultRecorded")
+    if (fixed === undefined || start === undefined || result === undefined) {
+      return yield* Effect.die("fixture lacks direct modern evidence")
+    }
+    const predecessor = IntegratorCorrelation.make({
+      ...history.session,
+      candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:initial-predecessor"),
+      sessionId: IntegratorSessionId.make("initial-conclusive-predecessor"),
+      targetLineageObservedAt: JournalPosition.make(1)
+    })
+    const successor = IntegratorCorrelation.make({
+      ...history.session,
+      targetLineageObservedAt: JournalPosition.make(5)
+    })
+    const successorRun = integratorRunCorrelationForSession(successor, IntegratorRunOrdinal.make(1))
+    const successorFixedEvent = IntegratorSuccessorSessionFixedEvent.make({
+      direction: "FullRerun",
+      directionAppliedAt: JournalPosition.make(3),
+      predecessor,
+      quarantineAt: JournalPosition.make(2),
+      successor,
+      successorGeneration: firstFullRerunSuccessorGeneration,
+      version: workflowJournalEventVersion
+    })
+    const successorRecords = current.map((record) => {
+      if (record === fixed) {
+        return {
+          ...record,
+          event: successorFixedEvent,
+          key: integratorSuccessorSessionFixedRecordKey(predecessor, JournalPosition.make(2), JournalPosition.make(3)),
+          position: JournalPosition.make(6)
+        }
+      }
+      if (record === start) {
+        return {
+          ...record,
+          event: IntegratorRunStartedEvent.make({ run: successorRun, version: workflowJournalEventVersion }),
+          key: integratorRunStartedRecordKey(successorRun),
+          position: JournalPosition.make(7)
+        }
+      }
+      if (record === result && record.event._tag === "IntegratorRunResultRecorded") {
+        return {
+          ...record,
+          event: IntegratorRunResultRecordedEvent.make({
+            ...record.event,
+            result: IntegratorResult.cases.NotPrepared.make({ correlation: successor, detail: notPreparedDetail }),
+            run: successorRun
+          }),
+          key: integratorRunResultRecordedRecordKey(successorRun),
+          position: JournalPosition.make(8)
+        }
+      }
+      return record
+    })
+    const successorResult = IntegratorRunProtocolResult.cases.NotPrepared.make({
+      detail: notPreparedDetail,
+      run: successorRun
+    })
+    const quarantine = yield* appendInitialConclusiveIntegrationQuarantine(successorResult).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: (requestedRunId, key, event) => history.journal.append(requestedRunId, key, event),
+          read: () => Effect.succeed(successorRecords)
+        })
+      )
+    )
+    expect(quarantine.event._tag).toBe("IntegrationQuarantined")
+    expect(quarantine.event.correlation.sessionId).toBe(successor.sessionId)
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("rejects foreign Q keys/events and ambiguous append winners", () =>
+  Effect.gen(function* () {
+    const history = yield* appendExactHistory("NotPrepared")
+    const first = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(InRunJournal, history.journal)
+    )
+    const recordsWithQ = yield* history.journal.read(runId)
+    const foreignBasis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+      cause: IntegrationQuarantineCause.cases.NotPrepared.make({
+        detail: IntegratorNotPreparedDetail.make("a contradictory Q payload")
+      }),
+      evidence: IntegrationQuarantineResultEvidence.make({ resultRecordedAt: history.resultRecord.position })
+    })
+    const foreignEvent = IntegrationQuarantinedEvent.make({ ...first.event, basis: foreignBasis })
+    const foreignEventRecords = recordsWithQ.map((record) =>
+      record === first ? { ...record, event: foreignEvent } : record
+    )
+    const foreignEventFailure = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("foreign Q event must fail before append"),
+          read: () => Effect.succeed(foreignEventRecords)
+        })
+      ),
+      Effect.flip
+    )
+    expect(foreignEventFailure._tag).toBe("IntegratorJournalContradiction")
+
+    const foreignKeyFailure = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("foreign Q key must fail before append"),
+          read: () =>
+            Effect.succeed(
+              recordsWithQ.map((record) =>
+                record === first
+                  ? { ...record, key: JournalRecordKey.make("initial-conclusive:foreign-q-key") }
+                  : record
+              )
+            )
+        })
+      ),
+      Effect.flip
+    )
+    expect(foreignKeyFailure._tag).toBe("IntegratorJournalContradiction")
+
+    const recordsBeforeQ = recordsWithQ.filter((record) => record !== first)
+    const foreignWinnerKey = JournalRecordKey.make("initial-conclusive:ambiguous-foreign-q")
+    let appendAttempted = false
+    const ambiguousJournal = InRunJournal.of({
+      append: (requestedRunId: RunId, key: JournalRecordKey, _event: JournalRecord["event"]) => {
+        appendAttempted = true
+        return Effect.fail(
+          new JournalStoreContradiction({
+            existingPosition: JournalPosition.make(recordsWithQ.length),
+            key,
+            runId: requestedRunId
+          })
+        )
+      },
+      read: () =>
+        Effect.succeed(
+          appendAttempted
+            ? [
+                ...recordsBeforeQ,
+                {
+                  event: first.event,
+                  key: foreignWinnerKey,
+                  position: JournalPosition.make(recordsWithQ.length),
+                  runId
+                }
+              ]
+            : recordsBeforeQ
+        )
+    })
+    const ambiguousFailure = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(InRunJournal, ambiguousJournal),
+      Effect.flip
+    )
+    expect(ambiguousFailure._tag).toBe("IntegratorJournalContradiction")
+
+    const returnedForeign = InRunJournal.of({
+      append: (requestedRunId: RunId, _key: JournalRecordKey, event: JournalRecord["event"]) =>
+        Effect.succeed({
+          event,
+          key: JournalRecordKey.make("initial-conclusive:return-foreign-q"),
+          position: JournalPosition.make(recordsWithQ.length),
+          runId: requestedRunId
+        }),
+      read: () => Effect.succeed(recordsBeforeQ)
+    })
+    const returnedFailure = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(InRunJournal, returnedForeign),
+      Effect.flip
+    )
+    expect(returnedFailure._tag).toBe("IntegratorJournalContradiction")
+  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+)
+
+it.effect("fails closed when the exact quarantine key is duplicated", () =>
+  Effect.gen(function* () {
+    const history = yield* appendExactHistory("NotPrepared")
+    yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(InRunJournal, history.journal)
+    )
+    const current = yield* history.journal.read(runId)
+    const quarantine = current.find((record) => record.event._tag === "IntegrationQuarantined")
+    if (quarantine === undefined) return yield* Effect.die("fixture lacks its exact quarantine record")
+    const duplicateRecords = [...current, { ...quarantine, position: JournalPosition.make(current.length + 1) }]
+    const contradiction = yield* appendInitialConclusiveIntegrationQuarantine(history.result).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("duplicate quarantine must not append"),
+          read: () => Effect.succeed(duplicateRecords)
+        })
+      ),
+      Effect.flip
+    )
+    expect(contradiction._tag).toBe("IntegratorJournalContradiction")
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )

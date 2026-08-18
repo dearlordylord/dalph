@@ -12,6 +12,16 @@ export class IntegratorCallFailure extends Schema.TaggedError<IntegratorCallFail
   detail: Schema.String
 }) {}
 
+/**
+ * The provider boundary conclusively reports that this exact Integrator call
+ * has no provider-owned activity left. Unlike IntegratorCallFailure, this is
+ * a terminal provider observation and may be recorded before quarantine.
+ */
+export class IntegratorProviderActivityAbsent extends Schema.TaggedError<IntegratorProviderActivityAbsent>()(
+  "IntegratorProviderActivityAbsent",
+  { correlation: IntegratorCorrelation, detail: Schema.NonEmptyString }
+) {}
+
 /** Git could not provide object kind and ordered direct-parent facts for M. */
 export class IntegratorGitReadFailure extends Schema.TaggedError<IntegratorGitReadFailure>()(
   "IntegratorGitReadFailure",
@@ -48,6 +58,7 @@ export class IntegratorJournalContradiction extends Schema.TaggedError<Integrato
 
 export type IntegratorProtocolError =
   | IntegratorCallFailure
+  | IntegratorProviderActivityAbsent
   | IntegratorGitReadFailure
   | IntegratorJournalContradiction
   | JournalAppendError

@@ -23,7 +23,12 @@ import { makeTargetLineageObservationOperation } from "../../registry/operation.
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { integratorResultRecordedRecordKey } from "../../../workflow-journal/record-key.js"
+import {
+  integrationQuarantineDirectionAppliedRecordKey,
+  integrationProviderRunActivityAbsentRecordKey,
+  integrationQuarantinedRecordKey,
+  integratorResultRecordedRecordKey
+} from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import {
@@ -34,7 +39,8 @@ import {
   IntegrationQuarantineDirectionRequestId,
   IntegrationQuarantinedEvent,
   IntegrationProviderRunActivityAbsentEvent,
-  IntegrationQuarantineFailureDetail
+  IntegrationQuarantineFailureDetail,
+  integrationQuarantineDirectionSubject
 } from "../integration-quarantine/events.js"
 import { appendInitialConclusiveIntegrationQuarantine } from "../integration-quarantine/initial-conclusive.js"
 import {
@@ -44,6 +50,7 @@ import {
   IntegratorGitReadFailure,
   IntegratorJournalContradiction,
   IntegratorTargetHeadChanged,
+  IntegratorTargetLineageIncompatible,
   IntegratorTargetLineageObservationChanged,
   IntegratorPreparationInput,
   deriveIntegratorRunState,
@@ -60,16 +67,21 @@ import {
   readRecordedIntegratorSession
 } from "./session.js"
 import { deriveCurrentIntegratorState, integratorRunQualifiedCandidateFromState } from "./state.js"
-import { integratorRunTwoAuthorizationIssue } from "./retry-authorization.js"
+import {
+  evaluateIntegratorRetryAuthorization,
+  integratorRetryAuthorizationIssue,
+  integratorRunTwoAuthorizationIssue
+} from "./retry-authorization.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorGitObservation,
   IntegratorRunQualifiedCandidate,
+  IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorNotPreparedDetail,
   IntegratorResultRecordedEvent,
-  type IntegratorCorrelation,
+  IntegratorCorrelation,
   type IntegratorProtocolResult,
   type IntegratorRunProtocolResult,
   IntegratorResult
@@ -295,13 +307,15 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
     })
   } else {
     const detail = IntegrationQuarantineFailureDetail.make("provider reports no owned activity for run one")
+    const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
     const absence = yield* harness.journal.append(
       runId,
-      JournalRecordKey.make("integrator-retry:provider-absence"),
+      integrationProviderRunActivityAbsentRecordKey(run),
       IntegrationProviderRunActivityAbsentEvent.make({
         correlation: session,
         detail,
         occurrenceClassification: "NonActionOccurrence",
+        run,
         version: workflowJournalEventVersion
       })
     )
@@ -312,7 +326,7 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
   }
   const quarantine = yield* harness.journal.append(
     runId,
-    JournalRecordKey.make("integrator-retry:quarantine"),
+    integrationQuarantinedRecordKey(session.sessionId, basis),
     IntegrationQuarantinedEvent.make({
       basis,
       correlation: session,
@@ -322,7 +336,15 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
   )
   const direction = yield* harness.journal.append(
     runId,
-    JournalRecordKey.make("integrator-retry:direction"),
+    integrationQuarantineDirectionAppliedRecordKey(
+      integrationQuarantineDirectionSubject(
+        IntegrationQuarantineDirectionFingerprint.make({
+          direction: "Retry",
+          quarantineAt: quarantine.position,
+          sessionId: session.sessionId
+        })
+      )
+    ),
     IntegrationQuarantineDirectionAppliedEvent.make({
       fingerprint: IntegrationQuarantineDirectionFingerprint.make({
         direction: "Retry",
@@ -578,6 +600,28 @@ describe("outer Integrator protocol", () => {
     })
   )
 
+  it.effect("rejects a run occurrence recorded under a foreign Journal key", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      yield* Ref.update(harness.records, (records) =>
+        records.map((record) =>
+          record.event._tag === "IntegratorRunStarted"
+            ? { ...record, key: JournalRecordKey.make("integrator-run:foreign-start-key") }
+            : record
+        )
+      )
+
+      expect(deriveCurrentIntegratorState(yield* harness.readRecords, responsibility)).toMatchObject({
+        _tag: "Contradiction",
+        detail: expect.stringContaining("foreign key")
+      })
+    })
+  )
+
   it.effect("process loss before the outer result reuses the same unfinished session", () =>
     Effect.gen(function* () {
       let calls = 0
@@ -642,10 +686,37 @@ describe("outer Integrator protocol", () => {
           ? "missing run-two start"
           : integratorRunTwoAuthorizationIssue(records, runTwo, { beforePosition: runTwoStart.position })
       ).toBeUndefined()
+      expect(evaluateIntegratorRetryAuthorization(records, integratorInitialRunCorrelationFor(input))).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringContaining("applies only to run ordinal two")
+      })
+
+      const changedHarness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* changedHarness.runExact(input, IntegratorRunOrdinal.make(1))
+      const changedAuthorization = yield* appendRetryAuthorization(changedHarness, changedTargetHead)
+      const changedRunTwo = integratorRunCorrelationForSession(
+        changedAuthorization.session,
+        IntegratorRunOrdinal.make(2)
+      )
+      const changedRecords = yield* changedHarness.readRecords
+      expect(
+        integratorRunTwoAuthorizationIssue(changedRecords, changedRunTwo, {
+          beforePosition: JournalPosition.make(Number(changedAuthorization.observation.position) + 1)
+        })
+      ).toContain("unchanged target-lineage")
+      expect(
+        integratorRetryAuthorizationIssue(changedRecords, {
+          preparation: compatibleInput(targetHead, changedAuthorization.observation.position),
+          run: changedRunTwo
+        })
+      ).toContain("does not match its exact Journal observation")
     })
   )
 
-  it.effect("reuses the same authorized run two after process loss without another Retry direction", () =>
+  it.effect("applies a recorded Retry after restart without another user request", () =>
     Effect.gen(function* () {
       let calls = 0
       const harness = yield* makeHarness(
@@ -774,7 +845,13 @@ describe("outer Integrator protocol", () => {
 
   it.effect("rejects non-Retry, conflicting, stale-lineage, and wrong-quarantine evidence before run two", () =>
     Effect.forEach(
-      ["FullRerun", "ConflictingDirection", "LineageBeforeDirection", "WrongQuarantineEvidence"] as const,
+      [
+        "FullRerun",
+        "ConflictingDirection",
+        "LineageBeforeDirection",
+        "WrongQuarantineEvidence",
+        "WrongQuarantineKey"
+      ] as const,
       (invalidCase) =>
         Effect.gen(function* () {
           const harness = yield* makeHarness(
@@ -838,6 +915,9 @@ describe("outer Integrator protocol", () => {
                       })
                     }
                   }
+                }
+                if (invalidCase === "WrongQuarantineKey" && record.position === authorization.quarantine.position) {
+                  return { ...record, key: JournalRecordKey.make("integrator-retry:foreign-quarantine-key") }
                 }
                 return record
               })
@@ -1136,7 +1216,7 @@ describe("outer Integrator protocol", () => {
     })
   )
 
-  it.effect("Missing and NonCommit Git objects never qualify as candidates", () =>
+  it.effect("rejects a candidate whose Git object or ordered parents are invalid", () =>
     Effect.gen(function* () {
       const missing = yield* makeHarness(
         (request) => Effect.succeed(prepared(request)),
@@ -1146,12 +1226,18 @@ describe("outer Integrator protocol", () => {
         (request) => Effect.succeed(prepared(request)),
         successfulGitRead(IntegratorGitObservation.cases.NonCommit.make({ candidateText, objectType: "tree" }))
       )
+      const wrongParents = yield* makeHarness(
+        (request) => Effect.succeed(prepared(request)),
+        successfulGitRead(commitObservation([acceptedResultCommit, targetHead]))
+      )
 
       const missingResult = yield* missing.run(compatibleInput())
       const nonCommitResult = yield* nonCommit.run(compatibleInput())
+      const wrongParentsResult = yield* wrongParents.run(compatibleInput())
 
       expect(missingResult._tag).toBe("CandidateRejected")
       expect(nonCommitResult._tag).toBe("CandidateRejected")
+      expect(wrongParentsResult._tag).toBe("CandidateRejected")
     })
   )
 
@@ -1312,6 +1398,498 @@ describe("outer Integrator protocol", () => {
         const failure = yield* harness.run(input).pipe(Effect.flip)
         expect(failure, label).toMatchObject({ _tag: expectedTag })
       }
+    })
+  )
+
+  it.effect("rejects Retry requests without a fixed session, with incompatible lineage, or for a foreign session", () =>
+    Effect.gen(function* () {
+      const empty = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      const noSession = yield* empty.runExact(compatibleInput(), IntegratorRunOrdinal.make(2)).pipe(Effect.flip)
+      expect(noSession).toMatchObject({
+        _tag: "IntegratorJournalContradiction",
+        detail: expect.stringContaining("no exact earlier fixed session")
+      })
+
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      const authorization = yield* appendRetryAuthorization(harness)
+      const incompatibleRetry = yield* harness
+        .runExact(
+          IntegratorPreparationInput.make({
+            ...authorization.input,
+            targetLineage: TargetLineageObservation.make({
+              plannedBaseIsAncestorOfTargetHead: false,
+              plannedBaseSha: base,
+              targetHeadSha: targetHead
+            })
+          }),
+          IntegratorRunOrdinal.make(2),
+          authorization.session
+        )
+        .pipe(Effect.flip)
+      expect(incompatibleRetry).toBeInstanceOf(IntegratorTargetLineageIncompatible)
+
+      const foreignSession = IntegratorCorrelation.make({
+        ...authorization.session,
+        candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-request")
+      })
+      const foreignRequest = yield* harness
+        .runExact(compatibleInput(), IntegratorRunOrdinal.make(1), foreignSession)
+        .pipe(Effect.flip)
+      expect(foreignRequest).toMatchObject({
+        _tag: "IntegratorJournalContradiction",
+        detail: expect.stringContaining("foreign session")
+      })
+    })
+  )
+
+  it.effect("reuses a legacy session result and rejects a foreign legacy correlation", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      const sessionRecord = (yield* harness.readRecords).find(({ event }) => event._tag === "IntegratorSessionFixed")
+      const runResult = (yield* harness.readRecords).find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+      if (
+        sessionRecord?.event._tag !== "IntegratorSessionFixed" ||
+        runResult?.event._tag !== "IntegratorRunResultRecorded"
+      ) {
+        return yield* Effect.die("expected one fixed session and run result")
+      }
+      const legacyRecords = (yield* harness.readRecords)
+        .filter(({ event }) => event._tag !== "IntegratorRunStarted" && event._tag !== "IntegratorRunResultRecorded")
+        .concat({
+          ...runResult,
+          event: IntegratorResultRecordedEvent.make({
+            result: runResult.event.result,
+            version: workflowJournalEventVersion
+          }),
+          key: integratorResultRecordedRecordKey(sessionRecord.event.correlation)
+        })
+      yield* Ref.set(harness.records, legacyRecords)
+      const reused = yield* harness.runExact(
+        compatibleInput(),
+        IntegratorRunOrdinal.make(1),
+        sessionRecord.event.correlation
+      )
+      expect(reused._tag).toBe("NotPrepared")
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(1)
+
+      const foreignCorrelation = {
+        ...sessionRecord.event.correlation,
+        candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-legacy")
+      }
+      const legacyResultKey = integratorResultRecordedRecordKey(sessionRecord.event.correlation)
+      yield* Ref.update(harness.records, (records) =>
+        records.map((record) =>
+          record.key === legacyResultKey && record.event._tag === "IntegratorResultRecorded"
+            ? {
+                ...record,
+                event: IntegratorResultRecordedEvent.make({
+                  result: { ...record.event.result, correlation: foreignCorrelation },
+                  version: workflowJournalEventVersion
+                })
+              }
+            : record
+        )
+      )
+      const foreign = yield* harness
+        .runExact(compatibleInput(), IntegratorRunOrdinal.make(1), sessionRecord.event.correlation)
+        .pipe(Effect.flip)
+      expect(foreign).toMatchObject({
+        _tag: "IntegratorJournalContradiction",
+        detail: expect.stringContaining("foreign correlation")
+      })
+    })
+  )
+
+  it.effect("rejects Retry authorization after a foreign record, duplicate identity, or changed-head quarantine", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      const authorization = yield* appendRetryAuthorization(harness)
+      const runTwo = IntegratorRunCorrelation.make({
+        ordinal: IntegratorRunOrdinal.make(2),
+        session: authorization.session
+      })
+
+      const records = yield* harness.readRecords
+      const foreignRecord = records.map((record, index) =>
+        index === 0 ? { ...record, runId: RunId.make("foreign-retry-history") } : record
+      )
+      expect(evaluateIntegratorRetryAuthorization(foreignRecord, runTwo)).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringContaining("one exact Journal history")
+      })
+      expect(
+        evaluateIntegratorRetryAuthorization(
+          [...records, { ...authorization.direction, position: JournalPosition.make(999) }],
+          runTwo
+        )
+      ).toMatchObject({ _tag: "Rejected", detail: expect.stringContaining("one exact Journal history") })
+
+      const changedBasis = IntegrationQuarantineBasis.cases.RetryTargetHeadChanged.make({
+        direction: "Retry",
+        directionAppliedAt: authorization.direction.position,
+        observedTargetHead: changedTargetHead,
+        priorQuarantineAt: authorization.quarantine.position,
+        targetLineageObservedAt: authorization.observation.position
+      })
+      const changedQuarantine = {
+        event: IntegrationQuarantinedEvent.make({
+          basis: changedBasis,
+          correlation: authorization.session,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        }),
+        key: integrationQuarantinedRecordKey(authorization.session.sessionId, changedBasis),
+        position: JournalPosition.make(Number(authorization.observation.position) + 1),
+        runId
+      }
+      expect(evaluateIntegratorRetryAuthorization([...records, changedQuarantine], runTwo)).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringContaining("changed-head quarantine")
+      })
+
+      const secondOperationId = OperationId.make("operation-target-lineage-retry-second")
+      yield* harness.journal.append(
+        runId,
+        JournalRecordKey.make("integrator-retry:lineage-intent-second"),
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: makeTargetLineageObservationOperation({
+            integrationTarget: target,
+            operationId: secondOperationId,
+            plannedAttempt,
+            predecessorOperationIds: []
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* harness.journal.append(
+        runId,
+        JournalRecordKey.make("integrator-retry:lineage-observation-second"),
+        TargetLineageObservedEvent.make({
+          observation: TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: base,
+            targetHeadSha: targetHead
+          }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: secondOperationId,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      expect(evaluateIntegratorRetryAuthorization(yield* harness.readRecords, runTwo)).toMatchObject({
+        _tag: "Authorized"
+      })
+    })
+  )
+
+  it.effect("authorizes Retry from a prepared candidate with an exact invalid Git observation", () =>
+    Effect.gen(function* () {
+      const observation = IntegratorGitObservation.cases.NonCommit.make({ candidateText, objectType: "tree" })
+      const harness = yield* makeHarness((request) => Effect.succeed(prepared(request)), successfulGitRead(observation))
+      const result = yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      expect(result._tag).toBe("CandidateRejected")
+      const records = yield* harness.readRecords
+      const resultRecord = records.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+      const observationRecord = records.find(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
+      if (
+        resultRecord?.event._tag !== "IntegratorRunResultRecorded" ||
+        observationRecord?.event._tag !== "IntegratorRunCandidateGitObserved"
+      ) {
+        return yield* Effect.die("expected prepared result and candidate observation")
+      }
+
+      const authorization = yield* appendRetryAuthorization(harness)
+      const cause = IntegrationQuarantineCause.cases.InvalidCandidate.make({ candidateText, observation })
+      const basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+        cause,
+        evidence: { candidateObservationAt: observationRecord.position, resultRecordedAt: resultRecord.position }
+      })
+      const rewritten = (yield* harness.readRecords).map((record) =>
+        record.position === authorization.quarantine.position && record.event._tag === "IntegrationQuarantined"
+          ? {
+              ...record,
+              event: IntegrationQuarantinedEvent.make({ ...record.event, basis }),
+              key: integrationQuarantinedRecordKey(authorization.session.sessionId, basis)
+            }
+          : record
+      )
+      yield* Ref.set(harness.records, rewritten)
+
+      const runTwo = IntegratorRunCorrelation.make({
+        ordinal: IntegratorRunOrdinal.make(2),
+        session: authorization.session
+      })
+      const resultAfterRewrite = evaluateIntegratorRetryAuthorization(yield* harness.readRecords, runTwo)
+      expect(resultAfterRewrite).toMatchObject({
+        _tag: "Authorized",
+        authorization: { ordinalOneEvidence: { _tag: "ConclusiveResult", candidateObservation: observationRecord } }
+      })
+
+      const missingResultBasis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+        cause,
+        evidence: {
+          candidateObservationAt: observationRecord.position,
+          resultRecordedAt: JournalPosition.make(Number(resultRecord.position) + 999)
+        }
+      })
+      const missingResultRecords = rewritten.map((record) =>
+        record.position === authorization.quarantine.position && record.event._tag === "IntegrationQuarantined"
+          ? {
+              ...record,
+              event: IntegrationQuarantinedEvent.make({ ...record.event, basis: missingResultBasis }),
+              key: integrationQuarantinedRecordKey(authorization.session.sessionId, missingResultBasis)
+            }
+          : record
+      )
+      expect(evaluateIntegratorRetryAuthorization(missingResultRecords, runTwo)).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringContaining("modern ordinal-one terminal evidence")
+      })
+
+      const directionWithMissingQuarantine = rewritten.map((record) => {
+        if (
+          record.position !== authorization.direction.position ||
+          record.event._tag !== "IntegrationQuarantineDirectionApplied"
+        )
+          return record
+        const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+          ...record.event.fingerprint,
+          quarantineAt: JournalPosition.make(Number(authorization.quarantine.position) + 999)
+        })
+        return {
+          ...record,
+          event: IntegrationQuarantineDirectionAppliedEvent.make({ ...record.event, fingerprint }),
+          key: integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(fingerprint))
+        }
+      })
+      expect(evaluateIntegratorRetryAuthorization(directionWithMissingQuarantine, runTwo)).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringContaining("no exact earlier ordinal-one quarantine")
+      })
+
+      const foreignCandidateText = IntegratorCandidateText.make("M-foreign-retry-evidence")
+      const foreignObservation = IntegratorGitObservation.cases.NonCommit.make({
+        candidateText: foreignCandidateText,
+        objectType: "tree"
+      })
+      const foreignCause = IntegrationQuarantineCause.cases.InvalidCandidate.make({
+        candidateText: foreignCandidateText,
+        observation: foreignObservation
+      })
+      const foreignBasis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+        cause: foreignCause,
+        evidence: { candidateObservationAt: observationRecord.position, resultRecordedAt: resultRecord.position }
+      })
+      const foreignEvidenceRecords = rewritten.map((record) =>
+        record.position === authorization.quarantine.position && record.event._tag === "IntegrationQuarantined"
+          ? {
+              ...record,
+              event: IntegrationQuarantinedEvent.make({ ...record.event, basis: foreignBasis }),
+              key: integrationQuarantinedRecordKey(authorization.session.sessionId, foreignBasis)
+            }
+          : record
+      )
+      expect(evaluateIntegratorRetryAuthorization(foreignEvidenceRecords, runTwo)).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringContaining("modern ordinal-one terminal evidence")
+      })
+    })
+  )
+
+  it.effect("rejects Retry when each exact terminal, direction, or fresh-lineage relation is malformed", () =>
+    Effect.gen(function* () {
+      const notPreparedHarness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* notPreparedHarness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      const notPreparedAuthorization = yield* appendRetryAuthorization(notPreparedHarness)
+      const runTwo = IntegratorRunCorrelation.make({
+        ordinal: IntegratorRunOrdinal.make(2),
+        session: notPreparedAuthorization.session
+      })
+      const notPreparedRecords = yield* notPreparedHarness.readRecords
+      const notPreparedQuarantine = notPreparedRecords.find(({ event }) => event._tag === "IntegrationQuarantined")
+      if (notPreparedQuarantine?.event._tag !== "IntegrationQuarantined") {
+        return yield* Effect.die("expected NotPrepared quarantine")
+      }
+      const notPreparedQuarantineEvent = notPreparedQuarantine.event
+      const wrongDetail = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+        cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: IntegratorNotPreparedDetail.make("wrong") }),
+        evidence:
+          notPreparedQuarantine.event.basis._tag === "ConclusiveResult"
+            ? notPreparedQuarantine.event.basis.evidence
+            : { resultRecordedAt: JournalPosition.make(0) }
+      })
+      const wrongDetailRecords = notPreparedRecords.map((record) =>
+        record.position === notPreparedQuarantine.position
+          ? {
+              ...record,
+              event: IntegrationQuarantinedEvent.make({ ...notPreparedQuarantineEvent, basis: wrongDetail }),
+              key: integrationQuarantinedRecordKey(notPreparedAuthorization.session.sessionId, wrongDetail)
+            }
+          : record
+      )
+      expect(evaluateIntegratorRetryAuthorization(wrongDetailRecords, runTwo)).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringContaining("modern ordinal-one terminal evidence")
+      })
+
+      const providerHarness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* providerHarness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      const providerAuthorization = yield* appendRetryAuthorization(providerHarness, targetHead, "ProviderRunFailure")
+      const providerRecords = yield* providerHarness.readRecords
+      const providerQuarantine = providerRecords.find(({ event }) => event._tag === "IntegrationQuarantined")
+      if (providerQuarantine?.event._tag !== "IntegrationQuarantined") {
+        return yield* Effect.die("expected provider-failure quarantine")
+      }
+      if (providerQuarantine.event.basis._tag !== "ProviderRunFailure") {
+        return yield* Effect.die("expected provider-failure basis")
+      }
+      const providerQuarantineEvent = providerQuarantine.event
+      const wrongAbsence = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+        detail: providerQuarantine.event.basis.detail,
+        ownedActivityProvenAbsentAt: providerQuarantine.position
+      })
+      const wrongAbsenceRecords = providerRecords.map((record) =>
+        record.position === providerQuarantine.position
+          ? {
+              ...record,
+              event: IntegrationQuarantinedEvent.make({ ...providerQuarantineEvent, basis: wrongAbsence }),
+              key: integrationQuarantinedRecordKey(providerAuthorization.session.sessionId, wrongAbsence)
+            }
+          : record
+      )
+      expect(
+        evaluateIntegratorRetryAuthorization(wrongAbsenceRecords, {
+          ordinal: IntegratorRunOrdinal.make(2),
+          session: providerAuthorization.session
+        })
+      ).toMatchObject({ _tag: "Rejected", detail: expect.stringContaining("modern ordinal-one terminal evidence") })
+
+      const preparedHarness = yield* makeHarness(
+        (request) => Effect.succeed(prepared(request)),
+        successfulGitRead(IntegratorGitObservation.cases.NonCommit.make({ candidateText, objectType: "tree" }))
+      )
+      yield* preparedHarness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      const preparedAuthorization = yield* appendRetryAuthorization(preparedHarness)
+      const preparedRecords = yield* preparedHarness.readRecords
+      const preparedResultRecord = preparedRecords.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+      const preparedObservationRecord = preparedRecords.find(
+        ({ event }) => event._tag === "IntegratorRunCandidateGitObserved"
+      )
+      const preparedQuarantine = preparedRecords.find(({ event }) => event._tag === "IntegrationQuarantined")
+      if (
+        preparedResultRecord?.event._tag !== "IntegratorRunResultRecorded" ||
+        preparedObservationRecord?.event._tag !== "IntegratorRunCandidateGitObserved" ||
+        preparedQuarantine?.event._tag !== "IntegrationQuarantined"
+      ) {
+        return yield* Effect.die("expected prepared candidate Retry records")
+      }
+      const preparedObservationEvent = preparedObservationRecord.event
+      const preparedQuarantineEvent = preparedQuarantine.event
+      const invalidCandidate = IntegrationQuarantineCause.cases.InvalidCandidate.make({
+        candidateText,
+        observation: IntegratorGitObservation.cases.NonCommit.make({ candidateText, objectType: "tree" })
+      })
+      const invalidBasis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+        cause: invalidCandidate,
+        evidence: {
+          candidateObservationAt: preparedObservationRecord.position,
+          resultRecordedAt: preparedResultRecord.position
+        }
+      })
+      const preparedWithInvalidBasis = preparedRecords.map((record) =>
+        record.position === preparedQuarantine.position
+          ? {
+              ...record,
+              event: IntegrationQuarantinedEvent.make({ ...preparedQuarantineEvent, basis: invalidBasis }),
+              key: integrationQuarantinedRecordKey(preparedAuthorization.session.sessionId, invalidBasis)
+            }
+          : record
+      )
+      const foreignCandidateText = IntegratorCandidateText.make("M-foreign-retry-candidate")
+      const foreignCandidateRecord = preparedWithInvalidBasis.map((record) =>
+        record.position === preparedObservationRecord.position
+          ? { ...record, event: { ...preparedObservationEvent, candidateText: foreignCandidateText } }
+          : record
+      )
+      expect(
+        evaluateIntegratorRetryAuthorization(foreignCandidateRecord, {
+          ordinal: IntegratorRunOrdinal.make(2),
+          session: preparedAuthorization.session
+        })
+      ).toMatchObject({ _tag: "Rejected", detail: expect.stringContaining("modern ordinal-one terminal evidence") })
+
+      const mismatchedObservation = preparedWithInvalidBasis.map((record) =>
+        record.position === preparedObservationRecord.position
+          ? {
+              ...record,
+              event: {
+                ...preparedObservationEvent,
+                observation: IntegratorGitObservation.cases.NonCommit.make({ candidateText, objectType: "blob" })
+              }
+            }
+          : record
+      )
+      expect(
+        evaluateIntegratorRetryAuthorization(mismatchedObservation, {
+          ordinal: IntegratorRunOrdinal.make(2),
+          session: preparedAuthorization.session
+        })
+      ).toMatchObject({ _tag: "Rejected", detail: expect.stringContaining("modern ordinal-one terminal evidence") })
+
+      const delayedQuarantinePosition = JournalPosition.make(100)
+      const directionBeforeQuarantine = notPreparedRecords.map((record) => {
+        if (record.position === notPreparedAuthorization.quarantine.position) {
+          return { ...record, position: delayedQuarantinePosition }
+        }
+        if (record.position !== notPreparedAuthorization.direction.position) return record
+        if (record.event._tag !== "IntegrationQuarantineDirectionApplied") return record
+        const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+          ...record.event.fingerprint,
+          quarantineAt: delayedQuarantinePosition
+        })
+        return {
+          ...record,
+          event: IntegrationQuarantineDirectionAppliedEvent.make({ ...record.event, fingerprint }),
+          key: integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(fingerprint))
+        }
+      })
+      expect(evaluateIntegratorRetryAuthorization(directionBeforeQuarantine, runTwo)).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringContaining("no exact earlier ordinal-one quarantine")
+      })
+
+      const duplicateLineage = {
+        ...notPreparedAuthorization.observation,
+        key: JournalRecordKey.make("integrator-retry:duplicate-lineage-observation"),
+        position: JournalPosition.make(Number(notPreparedAuthorization.observation.position) + 1)
+      }
+      expect(evaluateIntegratorRetryAuthorization([...notPreparedRecords, duplicateLineage], runTwo)).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringContaining("fresh matching target-lineage")
+      })
     })
   )
 })

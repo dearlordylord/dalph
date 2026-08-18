@@ -24,19 +24,23 @@ import { runIntegrationCandidateConstruction as runIntegrationCandidateConstruct
 import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { InRunJournal, JournalStore } from "../../../workflow-journal/store.js"
+import { rememberValidatedJournalPrefixSuccessor } from "../../../workflow-journal/prefix-lineage.js"
 import {
   attemptPlanRecordKey,
   integrationCandidateAgentReportRecordKey,
+  integrationCandidateConstructionIntentRecordKey,
   integrationCandidateGitObservationRecordKey,
+  integrationCandidateSessionSupersededRecordKey,
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  taskWorkCapacityPolicyRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
+import { InitialControlPolicy, RunPolicyRevision } from "../../../control/policy.js"
 import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { makeApplicationExitLifecycle } from "../../../coordination/application-exit/lifecycle.js"
@@ -56,7 +60,8 @@ import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
-  TaskClaimAcquisitionIntendedEvent
+  TaskClaimAcquisitionIntendedEvent,
+  TaskWorkCapacityChangedEvent
 } from "../../registry/event.js"
 import { makeTaskAttemptPlanOperation, makeTaskClaimAcquisitionOperation } from "../../registry/operation.js"
 import { OperationId } from "../../identity.js"
@@ -75,13 +80,16 @@ import {
   CandidateContinuationLimit,
   IntegrationCandidateAgentReportedEvent,
   IntegrationCandidateAgentReportOrdinal,
+  IntegrationCandidateConstructionIntendedEvent,
   IntegrationCandidateGitObservedEvent,
-  IntegrationCandidateSessionSupersededEvent
+  IntegrationCandidateSessionSupersededEvent,
+  integrationCandidateConstructionEventCorrelation
 } from "./events.js"
 import {
   CandidateCorrectionLimit,
   continueIntegrationCandidateConstruction as continueIntegrationCandidateConstructionWithLimit,
   deriveIntegrationCandidateConstruction,
+  deriveConstructedIntegrationCandidateOccurrence,
   IntegrationCandidateAgent,
   IntegrationCandidateAgentReport,
   IntegrationCandidateId,
@@ -374,6 +382,24 @@ it.effect("builds one candidate with current target first and accepted result se
       candidateCommit: candidate,
       expectedTargetHead: head
     })
+    const constructedOccurrence = deriveConstructedIntegrationCandidateOccurrence(records, started)
+    expect(constructedOccurrence).toMatchObject({
+      candidateCommit: candidate,
+      constructedAt: expect.anything(),
+      correlation: expect.objectContaining({ expectedTargetHead: head }),
+      reviewManifest: evidenceReferenceFixture
+    })
+    expect(deriveConstructedIntegrationCandidateOccurrence(records.slice(0, -1), started)).toBeUndefined()
+    const report = records.find(({ event }) => event._tag === "IntegrationCandidateAgentReported")?.event
+    const intent = records.find(({ event }) => event._tag === "IntegrationCandidateConstructionIntended")?.event
+    if (
+      report?._tag !== "IntegrationCandidateAgentReported" ||
+      intent?._tag !== "IntegrationCandidateConstructionIntended"
+    ) {
+      return yield* Effect.die("candidate fixture lacks its report and intent")
+    }
+    expect(integrationCandidateConstructionEventCorrelation(report)).toEqual(report.expectedCorrelation)
+    expect(integrationCandidateConstructionEventCorrelation(intent)).toEqual(intent.correlation)
   }).pipe(
     Effect.provide(
       candidateBoundaryLayer([
@@ -390,6 +416,127 @@ it.effect("builds one candidate with current target first and accepted result se
             integrationTarget: target,
             runId
           },
+          reviewManifest: evidenceReferenceFixture
+        })
+      ])
+    ),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
+
+it.effect("reuses validated journal prefixes while deriving candidate state", () =>
+  Effect.gen(function* () {
+    yield* seedStartedResponsibility
+    const constructed = yield* continueIntegrationCandidateConstruction(
+      started,
+      lineage,
+      CandidateCorrectionLimit.make(2)
+    )
+    expect(constructed._tag).toBe("CandidateConstructed")
+
+    const journal = yield* JournalStore
+    const priorRecords = yield* journal.read(runId)
+    const prior = reduceWorkflowJournalHistory(runId, priorRecords)
+    if (prior._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die("expected valid candidate prefix")
+    const changed = yield* journal.append(
+      runId,
+      taskWorkCapacityPolicyRecordKey(RunPolicyRevision.make(2)),
+      TaskWorkCapacityChangedEvent.make({
+        capacity: defaultTaskWorkCapacity,
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        previousRevision: RunPolicyRevision.make(1),
+        revision: RunPolicyRevision.make(2),
+        version: workflowJournalEventVersion
+      })
+    )
+    const advancedRecords = yield* journal.read(runId)
+    const advanced = reduceWorkflowJournalHistory(runId, advancedRecords)
+    if (advanced._tag !== "ValidWorkflowJournalHistory") {
+      return yield* Effect.die(`expected valid advanced prefix: ${JSON.stringify(advanced.issues)}`)
+    }
+    rememberValidatedJournalPrefixSuccessor(prior, advanced, changed)
+
+    const alternate = StartedIntegrationResponsibility.make({ ...started, startedAt: JournalPosition.make(999) })
+    expect(deriveIntegrationCandidateConstruction(advancedRecords, alternate)).toBeUndefined()
+    expect(deriveIntegrationCandidateConstruction(advancedRecords, started)).toMatchObject({
+      _tag: "CandidateConstructed",
+      candidateCommit: candidate
+    })
+  }).pipe(
+    Effect.provide(
+      candidateBoundaryLayer([
+        IntegrationCandidateAgentReport.cases.Submitted.make({
+          candidateCommit: candidate,
+          correlation: placeholderCorrelation,
+          reviewManifest: evidenceReferenceFixture
+        })
+      ])
+    ),
+    Effect.provide(legacyMemoryJournalStoreLayer)
+  )
+)
+
+it.effect("reuses an already recorded successor session during stale-candidate reconciliation", () =>
+  Effect.gen(function* () {
+    yield* seedStartedResponsibility
+    const first = yield* continueIntegrationCandidateConstruction(started, lineage, CandidateCorrectionLimit.make(2))
+    expect(first._tag).toBe("CandidateConstructed")
+    const journal = yield* JournalStore
+    const records = yield* journal.read(runId)
+    const intent = records.find(({ event }) => event._tag === "IntegrationCandidateConstructionIntended")?.event
+    if (intent?._tag !== "IntegrationCandidateConstructionIntended")
+      return yield* Effect.die("missing candidate intent")
+    const successor = {
+      ...intent.correlation,
+      candidateId: IntegrationCandidateId.make("pre-recorded-successor"),
+      candidateResource: IntegrationCandidateResourceLocator.make("/candidate-resources/pre-recorded-successor"),
+      expectedTargetHead: advancedHead,
+      integrationSessionId: IntegrationSessionId.make("pre-recorded-successor-session")
+    }
+    yield* journal.append(
+      runId,
+      integrationCandidateSessionSupersededRecordKey(intent.correlation, successor),
+      IntegrationCandidateSessionSupersededEvent.make({
+        observedTargetHead: advancedHead,
+        priorCandidateCommit: candidate,
+        priorCorrelation: intent.correlation,
+        responsibilityBeganAt: started.queuedAt,
+        startedAt: started.startedAt,
+        successorCorrelation: successor,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      integrationCandidateConstructionIntentRecordKey(successor),
+      IntegrationCandidateConstructionIntendedEvent.make({
+        correlation: successor,
+        correctionLimit: CandidateCorrectionLimit.make(2),
+        continuationLimit,
+        plannedAttempt,
+        responsibilityBeganAt: started.queuedAt,
+        startedAt: JournalPosition.make(99),
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const reconciled = yield* continueIntegrationCandidateConstruction(
+      started,
+      TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: base,
+        targetHeadSha: advancedHead
+      }),
+      CandidateCorrectionLimit.make(2)
+    )
+    expect(reconciled).toMatchObject({ _tag: "CandidateConstructed", candidateCommit: candidate })
+  }).pipe(
+    Effect.provide(
+      candidateBoundaryLayer([
+        IntegrationCandidateAgentReport.cases.Submitted.make({
+          candidateCommit: candidate,
+          correlation: placeholderCorrelation,
           reviewManifest: evidenceReferenceFixture
         })
       ])
@@ -432,6 +579,7 @@ it.effect("supersedes a stale pre-promotion session before starting one successo
     expect(records.filter(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded")).toHaveLength(1)
     const supersession = records.find(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded")?.event
     if (supersession?._tag !== "IntegrationCandidateSessionSuperseded") return expect.fail("expected supersession")
+    expect(integrationCandidateConstructionEventCorrelation(supersession)).toEqual(supersession.successorCorrelation)
     expect(supersededSessionMatches(supersession, supersession.priorCorrelation, advancedHead)).toBe(true)
     expect(
       supersededSessionMatches(

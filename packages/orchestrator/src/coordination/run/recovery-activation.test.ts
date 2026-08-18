@@ -100,6 +100,7 @@ import {
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineDirectionSubject,
   IntegrationQuarantineResultEvidence,
   IntegrationQuarantinedEvent
 } from "../../workflow/protocols/integration-quarantine/events.js"
@@ -122,6 +123,8 @@ import {
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import {
+  integrationQuarantineDirectionAppliedRecordKey,
+  integrationQuarantinedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
@@ -541,7 +544,10 @@ const directionProjectionFixture = (direction: "Retry" | "FullRerun", graphAfter
     occurrenceClassification: "NonActionOccurrence",
     version: workflowJournalEventVersion
   })
-  const quarantineRecord = coverageRecord(17, quarantine)
+  const quarantineRecord = {
+    ...coverageRecord(17, quarantine),
+    key: integrationQuarantinedRecordKey(correlation.sessionId, quarantine.basis)
+  }
   const directionEvent = IntegrationQuarantineDirectionAppliedEvent.make({
     fingerprint: IntegrationQuarantineDirectionFingerprint.make({
       direction,
@@ -556,7 +562,15 @@ const directionProjectionFixture = (direction: "Retry" | "FullRerun", graphAfter
     }),
     version: workflowJournalEventVersion
   })
-  const directionRecord = coverageRecord(18, directionEvent)
+  const directionRecord = {
+    ...coverageRecord(18, directionEvent),
+    key: integrationQuarantineDirectionAppliedRecordKey(
+      IntegrationQuarantineDirectionSubject.make({
+        quarantineAt: quarantineRecord.position,
+        sessionId: correlation.sessionId
+      })
+    )
+  }
   const integrationRecords = [
     coverageRecord(
       Number(queuePosition),
@@ -852,6 +866,128 @@ effectIt.effect(
         )
       ).toBe(false)
     })
+)
+
+effectIt.effect("requests a fresh direction-bound lineage read for FullRerun before fixing a successor", () =>
+  Effect.gen(function* () {
+    const fixture = directionProjectionFixture("FullRerun")
+    const resources = yield* makeIntegrationTargetResourceController()
+    const recovery = yield* makeRunRecoveryProjection(
+      coverageRunId,
+      fixture.integrationTarget,
+      undefined,
+      undefined,
+      resources
+    ).pipe(
+      Effect.provideService(
+        InRunJournal,
+        currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
+      )
+    )
+    const first = yield* recovery.readDeliveryProjection
+    const acquire = first.frontier.transitions.find(({ _tag }) => _tag === "AcquireStartedIntegrationTarget")
+    if (acquire?._tag !== "AcquireStartedIntegrationTarget") {
+      return yield* Effect.die("FullRerun must reacquire its existing responsibility before the fresh Git read")
+    }
+    yield* resources.acquire(acquire.responsibility)
+    yield* resources.publishAcceptedOwnership(acquire.responsibility)
+
+    const heldRecovery = yield* makeRunRecoveryProjection(
+      coverageRunId,
+      fixture.integrationTarget,
+      undefined,
+      undefined,
+      resources
+    ).pipe(
+      Effect.provideService(
+        InRunJournal,
+        currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
+      )
+    )
+    const read = (yield* heldRecovery.readDeliveryProjection).frontier.transitions.find(
+      ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+    )
+    if (read?._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
+      return yield* Effect.die("FullRerun must request its direction-bound target-lineage observation")
+    }
+    expect(read.operation.predecessorOperationIds).toEqual([fixture.lineageOperation.operationId])
+    expect(read.operation.operationId).toContain(`d:${Number(fixture.directionRecord.position)}`)
+  })
+)
+
+effectIt.effect("fails closed when recovered quarantine-direction evidence is not exact", () =>
+  Effect.gen(function* () {
+    const fixture = directionProjectionFixture("Retry")
+    const records = fixture.reconstructed.workflowHistory.records
+    const session = records.find(({ event }) => event._tag === "IntegratorSessionFixed")
+    const runStart = records.find(({ event }) => event._tag === "IntegratorRunStarted")
+    const directionEvent = fixture.directionRecord.event
+    if (
+      session?.event._tag !== "IntegratorSessionFixed" ||
+      runStart?.event._tag !== "IntegratorRunStarted" ||
+      directionEvent._tag !== "IntegrationQuarantineDirectionApplied"
+    ) {
+      return yield* Effect.die("expected fixed session, initial run, and quarantine direction evidence")
+    }
+    const invalidHistories = [
+      ["missing quarantine", records.filter(({ event }) => event._tag !== "IntegrationQuarantined")],
+      ["duplicate session", [...records, { ...session, position: JournalPosition.make(24) }]],
+      [
+        "foreign session key",
+        records.map((record) => (record === session ? { ...record, key: fixture.directionRecord.key } : record))
+      ],
+      ["duplicate run", [...records, { ...runStart }]],
+      [
+        "foreign run key",
+        records.map((record) => (record === runStart ? { ...record, key: fixture.directionRecord.key } : record))
+      ],
+      [
+        "missing fixed lineage",
+        records.filter(
+          ({ event }) =>
+            event._tag !== "TargetLineageObserved" || event.operationId !== fixture.lineageOperation.operationId
+        )
+      ],
+      [
+        "foreign direction Journal Run",
+        records.map((record) =>
+          record !== fixture.directionRecord
+            ? record
+            : {
+                ...record,
+                event: IntegrationQuarantineDirectionAppliedEvent.make({
+                  ...directionEvent,
+                  requestId: IntegrationQuarantineDirectionRequestId.make({
+                    nonce: "direction-retry-foreign-run",
+                    runId: RunId.make("foreign-direction-run")
+                  })
+                })
+              }
+        )
+      ]
+    ] as const
+
+    for (const [label, invalidRecords] of invalidHistories) {
+      const resources = yield* makeIntegrationTargetResourceController()
+      const invalidState = { ...fixture.reconstructed, workflowHistory: { records: invalidRecords } }
+      const recovery = yield* makeRunRecoveryProjection(
+        coverageRunId,
+        fixture.integrationTarget,
+        undefined,
+        undefined,
+        resources
+      ).pipe(Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, invalidState)))
+      const projection = yield* recovery.readDeliveryProjection
+      expect(
+        projection.frontier.transitions.some(
+          (transition) =>
+            transition._tag === "ObservePlannedAttemptContinuationTargetLineage" &&
+            transition.operation.operationId.includes(`d:${Number(fixture.directionRecord.position)}`)
+        ),
+        label
+      ).toBe(false)
+    }
+  })
 )
 
 it("suspends a running grouping descendant and reopens it after current facts move it outside the parent", () => {

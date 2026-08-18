@@ -53,7 +53,13 @@ import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-bo
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
-import { executeIntegratorAction, recordInitialConclusiveIntegrationQuarantine } from "./integrator-delivery-action.js"
+import {
+  executeIntegratorAction,
+  fixIntegratorSuccessorSession,
+  recordInitialConclusiveIntegrationQuarantine,
+  recordProviderRunFailureIntegrationQuarantine,
+  recordRetryConclusiveIntegrationQuarantine
+} from "./integrator-delivery-action.js"
 import { recordChangedHeadRetryQuarantine } from "./integration-quarantine-disposition-action.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
@@ -89,8 +95,11 @@ type OuterIntegratorTransition = Extract<
   {
     readonly _tag:
       | "ContinueStartedIntegrationCandidate"
+      | "FixIntegratorSuccessorSession"
       | "RecordChangedHeadRetryQuarantine"
       | "RecordInitialConclusiveIntegrationQuarantine"
+      | "RecordProviderRunFailureIntegrationQuarantine"
+      | "RecordRetryConclusiveIntegrationQuarantine"
       | "RunIntegrator"
   }
 >
@@ -377,11 +386,20 @@ const executeOuterIntegratorAction = Effect.fn("DeliveryAction.executeOuterInteg
   transition: OuterIntegratorTransition,
   lease: DeliveryActionExecutionLease
 ) {
+  if (transition._tag === "FixIntegratorSuccessorSession") {
+    return yield* fixIntegratorSuccessorSession(action, transition)
+  }
   if (transition._tag === "RecordChangedHeadRetryQuarantine") {
     return yield* recordChangedHeadRetryQuarantine(action, transition, lease)
   }
   if (transition._tag === "RecordInitialConclusiveIntegrationQuarantine") {
     return yield* recordInitialConclusiveIntegrationQuarantine(action, transition, lease)
+  }
+  if (transition._tag === "RecordProviderRunFailureIntegrationQuarantine") {
+    return yield* recordProviderRunFailureIntegrationQuarantine(action, transition, lease)
+  }
+  if (transition._tag === "RecordRetryConclusiveIntegrationQuarantine") {
+    return yield* recordRetryConclusiveIntegrationQuarantine(action, transition, lease)
   }
   if (transition._tag === "RunIntegrator") return yield* executeIntegratorAction(action, transition, lease)
   return yield* continueIntegrationCandidate(action, transition, lease)

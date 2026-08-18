@@ -10,8 +10,8 @@ const successorByPrefix = new WeakMap<object, JournalPrefixSuccessor>()
 
 /** Records process-local lineage only after reconstruction accepted both exact prefixes. */
 export const rememberValidatedJournalPrefixSuccessor = (
-  prior: ValidWorkflowJournalHistory,
-  successor: ValidWorkflowJournalHistory,
+  prior: Pick<ValidWorkflowJournalHistory, "records" | "runId">,
+  successor: Pick<ValidWorkflowJournalHistory, "records" | "runId">,
   appended: JournalRecord
 ): void => {
   const priorLength = prior.records.length
