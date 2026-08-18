@@ -1,20 +1,20 @@
 import "./prototype.css"
 
 // THROWAWAY PROTOTYPE
-// Question: Which temporal treatment makes change between adjacent delivery
-// landmarks easiest to read without changing the accepted current-state grammar?
+// Question: Which capacity treatment makes vacancies, waiting, and the next
+// admissible task predictable without changing the accepted rectangle grammar?
 
 type TaskKey = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "X"
 type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" | "settlements" | "reflection"
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
-const viewKeys = ["original", "change-receipts", "before-after", "stability-age"] as const
+const viewKeys = ["original", "fixed-slots", "admission-forecast", "constraint-ledger"] as const
 type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
 
-interface Cell { readonly title: string; readonly value: string; readonly task?: TaskKey; readonly tone?: Tone }
+interface Cell { readonly title: string; readonly value: string; readonly position?: string; readonly task?: TaskKey; readonly tone?: Tone }
 interface Stage { readonly key: StageKey; readonly code: string }
 interface GraphState {
   readonly kind: "Complete"
@@ -255,10 +255,10 @@ const story: Scenario = {
 }
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
-  { key: "original", name: "Original · position + capacity", description: "The accepted position-and-capacity rectangles use the existing changed-row marker and Before/After strip." },
-  { key: "change-receipts", name: "Change receipts", description: "Each source stage receives an explicit landmark receipt for entries, exits, moves, and fact updates." },
-  { key: "before-after", name: "Before → now rectangles", description: "Each current rectangle carries its preceding fact beside its accepted current position and state." },
-  { key: "stability-age", name: "Stability age", description: "Each rectangle reports whether its source stage changed now or how many landmarks it has remained stable." }
+  { key: "original", name: "Original · position + capacity", description: "The accepted rectangles show each current entity, position or capacity relationship, and state." },
+  { key: "fixed-slots", name: "Fixed capacity slots", description: "The tickets row always renders both task-work positions, including explicit vacancies and the complete waiting remainder." },
+  { key: "admission-forecast", name: "Admission forecast", description: "Frontier, ticket, and responsibility rectangles state what currently permits or prevents admission." },
+  { key: "constraint-ledger", name: "Constraint ledger", description: "Relevant source stages receive a compact equation for held positions, vacancies, frontier size, and waiting tasks." }
 ]
 
 let frameIndex = 0
@@ -370,7 +370,7 @@ const stateFor = (cell: Cell, item: Frame): string => {
 }
 
 const positionFor = (stage: StageKey, cell: Cell, item: Frame): string => {
-  if (cell.task === undefined) return stage === "read" || stage === "graph" ? `${item.graph.taskCount} task complete view` : "stage aggregate"
+  if (cell.task === undefined) return cell.position ?? (stage === "read" || stage === "graph" ? `${item.graph.taskCount} task complete view` : "stage aggregate")
   const task = cell.task
   if (stage === "frontier") return `frontier ${item.frontier.indexOf(task) + 1}/${item.frontier.length}`
   if (stage === "tickets") {
@@ -386,60 +386,47 @@ const positionFor = (stage: StageKey, cell: Cell, item: Frame): string => {
   return "not position-bearing"
 }
 
-const cellForTask = (stage: StageKey, task: TaskKey, item: Frame): Cell => ({
-  title: `TASK ${task}`,
-  value: taskLabel[item.tasks[task]],
-  task
-})
-
-const temporalTasksForStage = (stage: StageKey, item: Frame): ReadonlyArray<TaskKey> => {
-  if (stage === "read" || stage === "reflection") return []
-  return tasksForStage(stage, item)
+const admissionForecast = (stage: StageKey, cell: Cell, item: Frame): string | undefined => {
+  if (cell.task === undefined || !(["frontier", "tickets", "responsibilities"] as ReadonlyArray<StageKey>).includes(stage)) return undefined
+  const task = cell.task
+  if (item.held.includes(task)) return "already holds a task-work position"
+  if (item.app === "down") return "waits for restart and fresh facts"
+  if (item.app === "restarting") return "recovery blocks new admission"
+  if (item.control.run === "paused") return "Run Pause blocks new admission"
+  if (item.control.tasks.includes(task)) return "Task Pause suppresses its ticket"
+  if (item.control.resumePending.includes(task)) return "task-scoped fresh read required"
+  if (item.bounded.includes(task)) return "inside the desired prefix; admission permitted"
+  if (item.frontier.includes(task)) return "waits beyond the capacity boundary"
+  return "not currently eligible for admission"
 }
 
-const taskFact = (stage: StageKey, task: TaskKey, item: Frame): string => {
-  const cell = cellForTask(stage, task, item)
-  return `${positionFor(stage, cell, item)} · ${stateFor(cell, item)}`
+const fixedSlotCells = (item: Frame): ReadonlyArray<Cell> => {
+  const slots = Array.from({ length: capacity }, (_, index): Cell => {
+    const task = item.bounded[index]
+    if (task === undefined) return { title: "VACANT", position: `position ${index + 1}/${capacity}`, value: "available for next desired task", tone: "fact" }
+    const held = item.held.includes(task)
+    return { title: `POSITION ${index + 1}/${capacity}`, value: `${task} · ${held ? "held" : "desired"}`, task, tone: held ? "running" : "desired" }
+  })
+  const outside = item.frontier.filter((task) => !item.bounded.includes(task))
+  return [
+    ...slots,
+    ...(outside.length === 0 ? [] : [{ title: `${outside.length} AFTER BOUND`, value: `${outside.join(" · ")} remain ordered in frontier`, tone: "waiting" as const }])
+  ]
 }
 
-const changeReceipt = (stage: StageKey, item: Frame): string => {
-  if (frameIndex === 0) return '<span class="change-receipt initial"><small>LANDMARK CHANGE</small><b>initial accepted fact</b></span>'
-  const before = previous()
-  const beforeTasks = temporalTasksForStage(stage, before)
-  const nowTasks = temporalTasksForStage(stage, item)
-  const entered = nowTasks.filter((task) => !beforeTasks.includes(task)).map((task) => `${task} entered`)
-  const left = beforeTasks.filter((task) => !nowTasks.includes(task)).map((task) => `${task} left`)
-  const changed = nowTasks.filter((task) => beforeTasks.includes(task) && taskFact(stage, task, before) !== taskFact(stage, task, item)).map((task) => `${task} changed`)
-  const facts = [...entered, ...left, ...changed]
-  if (facts.length === 0 && item.changed.includes(stage)) facts.push("stage fact updated")
-  if (facts.length === 0) facts.push("no stage change")
-  const visible = facts.slice(0, 3)
-  const remainder = facts.length - visible.length
-  return `<span class="change-receipt ${facts[0] === "no stage change" ? "stable" : "changed"}"><small>LANDMARK CHANGE</small><b>${visible.join(" · ")}</b>${remainder > 0 ? `<em>+${remainder} more change${remainder === 1 ? "" : "s"}</em>` : ""}</span>`
-}
-
-const previousFactFor = (stage: StageKey, cell: Cell): string => {
-  if (frameIndex === 0) return "initial accepted fact"
-  const before = previous()
-  if (cell.task !== undefined) {
-    const priorTaskCell = cellsFor(stage, before).find((candidate) => candidate.task === cell.task)
-    if (priorTaskCell === undefined) return "not in this stage"
-    return taskFact(stage, cell.task, before)
-  }
-  const priorCell = cellsFor(stage, before).find((candidate) => candidate.task === undefined && candidate.title === cell.title)
-  return priorCell?.value ?? "not present"
-}
-
-const stableLandmarks = (stage: StageKey): number => {
-  if (frameIndex === 0) return 0
-  let lastChange = 0
-  for (let index = frameIndex; index >= 0; index -= 1) {
-    if (story.frames[index]!.changed.includes(stage)) {
-      lastChange = index
-      break
-    }
-  }
-  return frameIndex - lastChange
+const constraintLedger = (stage: StageKey, item: Frame): string => {
+  if (stage !== "frontier" && stage !== "tickets" && stage !== "responsibilities") return ""
+  const open = capacity - item.held.length
+  const outside = item.frontier.filter((task) => !item.bounded.includes(task))
+  const equation = stage === "frontier"
+    ? `${item.frontier.length} frontier · ${outside.length} after bound`
+    : stage === "tickets"
+      ? `${capacity} capacity − ${item.held.length} held = ${open} open`
+      : `${item.held.length}/${capacity} held · ${open} vacant`
+  const detail = stage === "frontier"
+    ? `ordered: ${item.frontier.length === 0 ? "empty" : item.frontier.join(" → ")}`
+    : `held: ${item.held.length === 0 ? "none" : item.held.join(" + ")}`
+  return `<span class="constraint-ledger"><small>CAPACITY EQUATION</small><b>${equation}</b><em>${detail}</em></span>`
 }
 
 const rectangleContent = (stage: StageKey, cell: Cell, item: Frame): string => {
@@ -447,17 +434,17 @@ const rectangleContent = (stage: StageKey, cell: Cell, item: Frame): string => {
   const state = stateFor(cell, item)
   const position = positionFor(stage, cell, item)
   const base = `<small>${entity}</small><b>${position}</b><em>${state}</em>`
-  if (view() === "original" || view() === "change-receipts") return base
-  if (view() === "before-after") return `${base}<span class="temporal-pair"><i>BEFORE</i>${previousFactFor(stage, cell)}</span><span class="temporal-pair now"><i>NOW</i>${position} · ${state}</span>`
-  const age = stableLandmarks(stage)
-  return `${base}<span class="temporal-age ${age === 0 ? "changed" : "stable"}"><i>${frameIndex === 0 ? "INITIAL" : age === 0 ? "CHANGED" : "STABLE"}</i>${frameIndex === 0 ? "accepted fact" : age === 0 ? "this landmark" : `${age} landmark${age === 1 ? "" : "s"}`}</span>`
+  if (view() !== "admission-forecast") return base
+  const forecast = admissionForecast(stage, cell, item)
+  return forecast === undefined ? base : `${base}<span class="admission-forecast"><i>NEXT</i>${forecast}</span>`
 }
 
 const rectangles = (stage: StageKey, cells: ReadonlyArray<Cell>, item: Frame): string => {
-  const receipt = view() === "change-receipts" ? changeReceipt(stage, item) : ""
-  if (cells.length === 0) return `<span class="rectangles">${receipt}<span class="no-delta">empty</span></span>`
+  const displayCells = view() === "fixed-slots" && stage === "tickets" ? fixedSlotCells(item) : cells
+  const ledger = view() === "constraint-ledger" ? constraintLedger(stage, item) : ""
+  if (displayCells.length === 0) return `<span class="rectangles">${ledger}<span class="no-delta">empty</span></span>`
   const active = activeTasks(item)
-  return `<span class="rectangles">${receipt}${cells.map((cell) => {
+  return `<span class="rectangles">${ledger}${displayCells.map((cell) => {
     const related = selectionMode === "stage" ? stage === selectedStage : selectionMode === "task" && cell.task === selectedTask
     const selection = related ? "selection-related" : active.length > 0 ? "selection-muted" : ""
     return `<span class="data-rectangle tone-${cell.tone ?? "fact"} ${selection}" ${cell.task === undefined ? "" : `data-cell-task="${cell.task}"`}>${rectangleContent(stage, cell, item)}</span>`
@@ -508,7 +495,7 @@ const graphPanel = (item: Frame): string => `<section class="graph-panel instrum
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
 const switcher = (): string => {
   const index = views.findIndex(({ key }) => key === view())
-  return `<nav class="switcher" aria-label="Temporal treatment prototype"><button data-cycle="-1" aria-label="Previous temporal treatment">←</button><label><small>TEMPORAL TREATMENT ${index + 1} / ${views.length}</small><select data-view-select aria-label="Temporal treatment">${views.map(({ key, name }) => `<option value="${key}" ${key === view() ? "selected" : ""}>${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next temporal treatment">→</button></nav>`
+  return `<nav class="switcher" aria-label="Capacity treatment prototype"><button data-cycle="-1" aria-label="Previous capacity treatment">←</button><label><small>CAPACITY TREATMENT ${index + 1} / ${views.length}</small><select data-view-select aria-label="Capacity treatment">${views.map(({ key, name }) => `<option value="${key}" ${key === view() ? "selected" : ""}>${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next capacity treatment">→</button></nav>`
 }
 
 const selectView = (next: ViewKey): void => {

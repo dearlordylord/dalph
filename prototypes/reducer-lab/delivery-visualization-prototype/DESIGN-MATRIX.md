@@ -9,7 +9,7 @@ The prototype changes no Dalph runtime behavior.
 | Priority | Direction | Concrete user question | Why it comes here | Prototype decision | Success evidence |
 | ---: | --- | --- | --- | --- | --- |
 | 1 | Rectangle semantics | What must one rectangle say for its stage to be understood without explanatory prose? | Every later direction depends on a stable information grammar. | Accepted: Position + capacity becomes the new original. | A user can identify the entity, current fact, and relevant position without consulting the graph legend. |
-| 2 | Temporal behavior | What changed between adjacent accepted landmarks? | Static content must be correct before motion or transition marks explain its change. | Show entered, stayed, moved, admitted, paused, resumed, integrated, and settled changes without leaving ghost entities. | A user can narrate two adjacent frames and identify the changed rectangle. |
+| 2 | Temporal behavior | What changed between adjacent accepted landmarks? | Static content must be correct before motion or transition marks explain its change. | Rejected: step navigation already exposes the state change; added temporal labels duplicate it. | A user can narrate two adjacent frames and identify the changed rectangle. |
 | 3 | Frontier and capacity | Which tasks are ordered in the frontier, inside the desired prefix, holding positions, or waiting beyond capacity? | This is the central scheduling relationship and uses the rectangle grammar plus temporal changes. | Test explicit rank, capacity boundary, held-position occupancy, and task-by-task frontier consumption. | A user predicts which task can advance next and why another task waits. |
 | 4 | Epistemic state | Which facts are complete, fresh, stale, or awaiting a required read? | Crash, pause, and restart are misleading unless observation status is explicit. | Distinguish complete graph publication, observation age, frozen state, and fresh-read gates. Never show a partial graph. | A user distinguishes stale-but-complete facts from current tracker facts. |
 | 5 | Code–data–graph mapping | Which exact source stage, rectangles, graph nodes, and dependency edges describe the same fact? | Exact synchronization needs stable rectangle meaning and freshness. | Refine selection from incident-edge highlighting to the smallest correct dependency path. | Selecting any surface produces the same bounded set of related facts. |
@@ -44,11 +44,15 @@ The prototype changes no Dalph runtime behavior.
 
 Position + capacity is the new original. Every current task rectangle shows its entity, ordered position or capacity relationship, and current state.
 
-## Active experiment: Priority 2 — temporal behavior
+## Rejected direction: Priority 2 — temporal behavior
 
-The scenario, graph, rectangle grammar, selection behavior, and eventual full integration remain fixed. Four treatments test how the UI communicates change between adjacent accepted landmarks:
+Change receipts, Before → now rectangles, and Stability age duplicated differences that are already visible when the user moves between landmarks. No temporal overlay remains.
 
-1. Original — the accepted rectangles, changed-row marker, and Before/After strip.
-2. Change receipts — an extra rectangle summarizes entries, exits, moves, and stage updates. Exited tasks appear only as past-tense receipt text, never as current-state rectangles or graph nodes.
-3. Before → now rectangles — each current rectangle carries its preceding fact and its accepted current fact.
-4. Stability age — each rectangle shows whether its source stage changed at this landmark or how many landmarks it has remained stable.
+## Active experiment: Priority 3 — frontier and capacity
+
+The scenario, graph, accepted rectangle grammar, and eventual full integration remain fixed. Four treatments test facts that step navigation does not directly expose:
+
+1. Original — Position + capacity remains the baseline.
+2. Fixed capacity slots — the tickets row always shows both task-work positions, including empty positions, plus a complete remainder rectangle for tasks after the bound.
+3. Admission forecast — current task rectangles state whether admission is permitted or which current boundary blocks it.
+4. Constraint ledger — frontier, tickets, and responsibilities receive an equation for ordered tasks, held positions, vacancies, and tasks after the bound.
