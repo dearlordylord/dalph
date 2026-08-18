@@ -863,6 +863,7 @@ const proposalActionLabels = {
   ReleaseExternallyCompletedTaskClaim: "Ask the tracker to release the externally completed task's claim",
   ReleaseStartedIntegrationTarget: "Release the held integration-target position",
   ReleaseStoppedAttemptClaim: "Ask the tracker to release the stopped attempt's exact claim",
+  ObservePromotedCandidateAncestryAfterBlockerClear: "Recheck Git ancestry after a promoted task's blocker clears",
   ReplacePromotedTaskClaim: "Ask the tracker to replace the promoted task claim with its completion claim",
   RetryStoppedAttemptClaimRelease: "Retry the exact stopped-attempt claim release",
   RunIntegrator: "Ask the outer Integrator to prepare or resume the exact integration session",

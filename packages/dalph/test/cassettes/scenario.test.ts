@@ -31,13 +31,9 @@ import {
   ContradictoryWorktreeState,
   CompletionClaimReplacedEvent,
   CompletionClaimReplacementIntendedEvent,
-  CompletionTaskAuthorizationReadOrdinal,
   CompletionTaskClaim,
   CompletionTaskBoundary,
-  CompletionTaskFocusedReadPurpose,
-  CompletionTaskRequestOrdinal,
   completionClaimReplacementOperationIdFor,
-  completionTaskRequestFor,
   decodeFreshWorkflowRunIdForDiagnostics,
   deriveIntegrationFrontier,
   deriveIntegrationAdmission,
@@ -81,7 +77,7 @@ import {
   projectWorkflowOccurrences,
   projectTrackerSnapshot,
   reduceWorkflowJournalHistory,
-  readCompletionCandidateAncestry,
+  readPostPromotionBlockerCandidateAncestry,
   RunPolicyRevision,
   TrackerRevision,
   TrackerMutation,
@@ -93,6 +89,7 @@ import {
   TaskTrackerFactsObservedEvent,
   TaskTrackerFactsReadFailed,
   TargetPromotionGit,
+  TargetPromotionGitReadFailure,
   TargetPromotionGitReadObservation,
   taskTrackerReadIntent,
   taskRevisionFor,
@@ -2257,6 +2254,101 @@ it.effect(
     })
 )
 
+it.effect(
+  "preserves the Integrator session and releases target ownership when a blocker appears before promotion",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.prePromotionBlocker)
+      const blockerFrame = run.deliveryFrames.find(
+        (frame) => frame.graph._tag === "Established" && frame.graph.revision === "issue-138-pre-promotion-blocker"
+      )
+      const started =
+        run.history._tag === "ValidWorkflowJournalHistory"
+          ? deriveIntegrationAdmission(run.history.runState.workflowHistory.records).responsibilities.find(
+              (responsibility) => responsibility._tag === "StartedIntegrationResponsibility"
+            )
+          : undefined
+
+      expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
+      expect(started?._tag).toBe("StartedIntegrationResponsibility")
+      expect(blockerFrame?.heldPositions).toEqual([])
+      expect(blockerFrame?.integrationOrder.responsibilities).toContainEqual(
+        expect.objectContaining({ taskId: "A", queuedAt: started?.queuedAt })
+      )
+      expect(blockerFrame?.frontier).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ taskId: "A", standing: "Excluded" }),
+          expect.objectContaining({ taskId: "B", standing: "Eligible" }),
+          expect.objectContaining({ taskId: "C", standing: "Eligible" })
+        ])
+      )
+      expect(run.records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+      expect(run.records.filter(({ event }) => event._tag === "IntegratorRunResultRecorded")).toHaveLength(1)
+      expect(run.records.filter(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")).toHaveLength(1)
+      expect(run.records.filter(({ event }) => event._tag === "TaskClaimAcquired")).toHaveLength(1)
+      expect(run.records.filter(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toHaveLength(1)
+      expect(run.records.some(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toBe(false)
+      expect(run.records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(false)
+    })
+)
+
+it.effect("keeps an unfinished Integrator session dormant when a blocker appears after process loss", () =>
+  Effect.gen(function* () {
+    const [prepared, blocked] = yield* Effect.all([
+      runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateVerificationPassed),
+      runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.prePromotionBlocker)
+    ])
+    const runStartedAt = prepared.records.findIndex(({ event }) => event._tag === "IntegratorRunStarted")
+    if (runStartedAt < 0) return yield* Effect.die("missing unfinished Integrator run start")
+    const blockerOutcome = blocked.records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "CompleteTaskTrackerFacts" &&
+        event.observation.factFamilies.some(
+          ({ contentIdentity }) => contentIdentity === "issue-138-pre-promotion-blocker"
+        )
+    )
+    if (blockerOutcome?.event._tag !== "TaskTrackerFactsObserved") {
+      return yield* Effect.die("missing blocker observation")
+    }
+    const blockerOperationId = blockerOutcome.event.operationId
+    const blockerIntent = blocked.records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId === blockerOperationId
+    )
+    if (blockerIntent?.event._tag !== "TaskTrackerReadIntentRecorded") {
+      return yield* Effect.die("missing blocker read intent")
+    }
+    const unfinished = [blockerIntent.event, blockerOutcome.event].reduce<ReadonlyArray<JournalRecord>>(
+      (records, event) => [
+        ...records,
+        {
+          event,
+          key: describeJournalEvent(event).expectedKey,
+          position: JournalPosition.make(records.length + 1),
+          runId: prepared.runId
+        }
+      ],
+      prepared.records.slice(0, runStartedAt + 1)
+    )
+    const history = reduceWorkflowJournalHistory(prepared.runId, unfinished)
+    if (history._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(history)
+    const attempt = unfinished.find(({ event }) => event._tag === "IntegratorSessionFixed")?.event
+    if (attempt?._tag !== "IntegratorSessionFixed") return yield* Effect.die("missing fixed Integrator session")
+    const facts = {
+      currentTrackerTaskIds: new Set([TaskId.make("A"), TaskId.make("B"), TaskId.make("C")]),
+      heldResponsibilityPositions: new Set<JournalPosition>(),
+      integrationTarget: Option.none(),
+      taskClaimAuthorityByAttemptId: exactClaimAuthorities(attempt.correlation.plannedAttempt.attemptId)
+    }
+    expect(deriveIntegrationFrontier(history.runState, facts).transitions).toEqual([])
+    expect(unfinished.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+    expect(unfinished.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(1)
+    expect(unfinished.some(({ event }) => event._tag === "IntegratorRunResultRecorded")).toBe(false)
+    expect(unfinished.some(({ event }) => event._tag.startsWith("TargetPromotion"))).toBe(false)
+  })
+)
+
 it.effect("delegates changed H after a cleared blocker without reusing M or creating S2", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(
@@ -2349,6 +2441,19 @@ it.effect("delegates changed H after a cleared blocker without reusing M or crea
   })
 )
 
+it.effect("promotes the preserved candidate after a blocker clears at unchanged H", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(
+      maintainedAuthoredCassetteCatalog.prePromotionBlockerClearAtCurrentHead
+    )
+    expect(run.records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "IntegratorRunResultRecorded")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+    expect(run.records.some(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")).toBe(false)
+    expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
+  })
+)
+
 it.effect("restarts after a durable blocker read with the candidate and queue history intact", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.prePromotionBlockerRecovery)
@@ -2418,16 +2523,47 @@ it.effect("durably waits after an unreadable blocker restart read and resumes on
   })
 )
 
-it.effect("preserves promotion proof and waits before tracker completion on a new blocker", () =>
+it.effect("preserves promotion proof and releases target ownership before tracker completion on a new blocker", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(blockersAroundPromotionAuthoredCassette)
     const promotion = run.records.find(({ event }) => event._tag === "TargetPromotionObservedSuccess")
+    const blockerFrame = run.deliveryFrames.find(
+      (frame) => frame.graph._tag === "Established" && frame.graph.revision === "issue-138-post-promotion-blocker"
+    )
 
     expect(promotion?.event._tag).toBe("TargetPromotionObservedSuccess")
+    expect(blockerFrame?.heldPositions).toEqual([])
+    expect(blockerFrame?.frontier).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: "A", standing: "Excluded" }),
+        expect.objectContaining({ taskId: "B", standing: "Eligible" }),
+        expect.objectContaining({ taskId: "C", standing: "Eligible" })
+      ])
+    )
     expect(run.records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(false)
     expect(run.records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "IntegratorRunResultRecorded")).toHaveLength(1)
     expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
     expect(run.records.some(({ event }) => event._tag === "IntegratorSessionFixed")).toBe(true)
+  })
+)
+
+it.effect("reconstructs a post-promotion blocker without repeating Git promotion", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.postPromotionBlockerRecovery)
+    expect(run.activationOrdinals.length).toBeGreaterThan(1)
+    expect(run.records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+    expect(run.records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+    expect(run.records.some(({ event }) => event._tag === "CompletionClaimReplaced")).toBe(false)
+    const recovered = run.deliveryFrames.findLast(
+      ({ graph }) => graph._tag === "Established" && graph.revision === "issue-138-post-promotion-blocker"
+    )
+    expect(recovered?.heldPositions).toEqual([])
+    expect(recovered?.frontier).toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId: "A", standing: "Excluded" })])
+    )
+    expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
   })
 )
 
@@ -2799,7 +2935,7 @@ it.effect(
   600_000
 )
 
-it.effect("preserves promoted M across a post-promotion blocker and resumes its same finality proof after clear", () =>
+it.effect("proves promoted ancestry after the blocker clears and completes without reintegration", () =>
   Effect.gen(function* () {
     const promoted = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
     const promotion = promoted.records.findLast(({ event }) => event._tag === "TargetPromotionObservedSuccess")?.event
@@ -2905,13 +3041,19 @@ it.effect("preserves promoted M across a post-promotion blocker and resumes its 
     const clearRecords = appendGraph(blockedRecords, "post-promotion-clear", "CompletedSuccessfully")
     const clearHistory = reduceWorkflowJournalHistory(plannedAttempt.operation.plannedAttempt.runId, clearRecords)
     if (clearHistory._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(clearHistory)
-    expect(deriveIntegrationFrontier(clearHistory.runState, facts).transitions).toContainEqual(
+    const postBlockerClearTransitions = deriveIntegrationFrontier(clearHistory.runState, facts).transitions
+    expect(postBlockerClearTransitions).toContainEqual(
       expect.objectContaining({
-        _tag: "ReplacePromotedTaskClaim",
-        request: expect.objectContaining({
+        _tag: "ObservePromotedCandidateAncestryAfterBlockerClear",
+        authorization: expect.objectContaining({
+          blockerClearedAt: expect.any(Number),
+          blockerObservedAt: expect.any(Number),
           claim: expect.objectContaining({ promotionCorrelation: promotion.correlation })
         })
       })
+    )
+    expect(postBlockerClearTransitions).not.toContainEqual(
+      expect.objectContaining({ _tag: "ReplacePromotedTaskClaim" })
     )
     expect(clearRecords.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
     expect(clearRecords.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
@@ -2962,11 +3104,68 @@ it.effect("preserves promoted M across a post-promotion blocker and resumes its 
       completionClaimBlockedHistory.records.filter(({ event }) => event._tag === "CompletionClaimReplaced")
     ).toHaveLength(1)
 
-    const completionRequest = completionTaskRequestFor(claim)
-    const ancestryPurpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
-      attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
-      authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(1)
-    })
+    const ancestryTransition = postBlockerClearTransitions.find(
+      (transition) => transition._tag === "ObservePromotedCandidateAncestryAfterBlockerClear"
+    )
+    if (ancestryTransition?._tag !== "ObservePromotedCandidateAncestryAfterBlockerClear") {
+      return yield* Effect.die("missing post-promotion blocker-clear ancestry transition")
+    }
+    const readAncestryWith = (disposition: "Current" | "NotInAncestry" | "Unreadable") =>
+      Effect.gen(function* () {
+        const recordsRef = yield* Ref.make(clearRecords)
+        const journal = InRunJournal.of({
+          append: (runId, key, event) =>
+            Effect.gen(function* () {
+              const records = yield* Ref.get(recordsRef)
+              const existing = records.find((record) => record.runId === runId && record.key === key)
+              if (existing !== undefined) return existing
+              const record = { event, key, position: JournalPosition.make(records.length + 1), runId }
+              yield* Ref.set(recordsRef, [...records, record])
+              return record
+            }),
+          read: (runId) =>
+            Ref.get(recordsRef).pipe(Effect.map((records) => records.filter((record) => record.runId === runId)))
+        })
+        const observation = yield* readPostPromotionBlockerCandidateAncestry(ancestryTransition.authorization).pipe(
+          Effect.provideService(InRunJournal, journal),
+          Effect.provideService(
+            TargetPromotionGit,
+            TargetPromotionGit.of({
+              compareAndSet: () => Effect.die("post-promotion ancestry check must not mutate Git"),
+              read: (request) =>
+                disposition === "Unreadable"
+                  ? Effect.fail(
+                      new TargetPromotionGitReadFailure({
+                        candidateCommit: request.candidateCommit,
+                        detail: "Git ancestry unavailable",
+                        target: request.integrationTarget
+                      })
+                    )
+                  : Effect.succeed(
+                      disposition === "Current"
+                        ? TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
+                            currentHeadSha: request.candidateCommit
+                          })
+                        : TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+                            currentHeadSha: promotion.correlation.qualifiedCandidate.run.session.expectedTargetHead
+                          })
+                    )
+            })
+          )
+        )
+        return { observation, records: yield* Ref.get(recordsRef) }
+      })
+
+    for (const disposition of ["NotInAncestry", "Unreadable"] as const) {
+      const negative = yield* readAncestryWith(disposition)
+      const history = reduceWorkflowJournalHistory(plannedAttempt.operation.plannedAttempt.runId, negative.records)
+      if (history._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(history)
+      expect(negative.observation._tag).toBe(disposition === "Unreadable" ? "Unreadable" : "Observed")
+      expect(deriveIntegrationFrontier(history.runState, facts).transitions).not.toContainEqual(
+        expect.objectContaining({ _tag: "ReplacePromotedTaskClaim" })
+      )
+    }
+
     const ancestryRecordsRef = yield* Ref.make(clearRecords)
     const ancestryJournal = InRunJournal.of({
       append: (runId, key, event) =>
@@ -2981,7 +3180,7 @@ it.effect("preserves promoted M across a post-promotion blocker and resumes its 
       read: (runId) =>
         Ref.get(ancestryRecordsRef).pipe(Effect.map((records) => records.filter((record) => record.runId === runId)))
     })
-    const ancestry = yield* readCompletionCandidateAncestry(completionRequest, ancestryPurpose).pipe(
+    const ancestry = yield* readPostPromotionBlockerCandidateAncestry(ancestryTransition.authorization).pipe(
       Effect.provideService(InRunJournal, ancestryJournal),
       Effect.provideService(
         TargetPromotionGit,
@@ -2994,15 +3193,25 @@ it.effect("preserves promoted M across a post-promotion blocker and resumes its 
         })
       )
     )
-    expect(ancestry.observation._tag).toBe("CandidateCurrent")
+    expect(ancestry).toMatchObject({ _tag: "Observed", observation: { _tag: "CandidateCurrent" } })
     const clearAndAncestryRecords = yield* Ref.get(ancestryRecordsRef)
+    const clearAndAncestryHistory = reduceWorkflowJournalHistory(
+      plannedAttempt.operation.plannedAttempt.runId,
+      clearAndAncestryRecords
+    )
+    if (clearAndAncestryHistory._tag !== "ValidWorkflowJournalHistory") {
+      return yield* Effect.die(clearAndAncestryHistory)
+    }
+    expect(deriveIntegrationFrontier(clearAndAncestryHistory.runState, facts).transitions).toContainEqual(
+      expect.objectContaining({ _tag: "ReplacePromotedTaskClaim" })
+    )
     const resumed = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
       maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
       clearAndAncestryRecords
     )
     const resumedRecords = resumed.records.slice(clearAndAncestryRecords.length)
     const ancestryAt = clearAndAncestryRecords.findIndex(
-      ({ event }) => event._tag === "CompletionTaskCandidateAncestryObserved"
+      ({ event }) => event._tag === "PostPromotionBlockerCandidateAncestryObserved"
     )
     const completionAt = resumedRecords.findIndex(({ event }) => event._tag === "IntegrationFinalitySettled")
     expect(ancestryAt).toBeGreaterThanOrEqual(0)
@@ -6563,6 +6772,8 @@ it.effect(
         CompletionTaskRejected: true,
         CompletionTaskCandidateAncestryReadIntended: true,
         CompletionTaskCandidateAncestryObserved: true,
+        PostPromotionBlockerCandidateAncestryReadIntended: true,
+        PostPromotionBlockerCandidateAncestryObserved: true,
         CompletionTaskRequestLookupIntended: true,
         CompletionTaskRequestLookupObserved: true,
         PlannedAttemptExecutorWorkReported: true,
@@ -6915,6 +7126,7 @@ it.effect(
               !tag.startsWith("TargetPromotion") &&
               !tag.startsWith("CompletionTask") &&
               !tag.startsWith("CompletionClaim") &&
+              !tag.startsWith("PostPromotionBlocker") &&
               tag !== "IntegratorResultRecorded" &&
               tag !== "IntegratorCandidateGitReadIntended" &&
               tag !== "IntegratorCandidateGitObserved" &&

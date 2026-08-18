@@ -110,6 +110,7 @@ const transitionsWithoutIntegrationTarget = new Set<RunnableFrontierTransition["
   "RecordInitialConclusiveIntegrationQuarantine",
   "RecordProviderRunFailureIntegrationQuarantine",
   "RecordRetryConclusiveIntegrationQuarantine",
+  "ObservePromotedCandidateAncestryAfterBlockerClear",
   "ReplacePromotedTaskClaim",
   "CompletePromotedTask",
   "ObserveFocusedTaskCompletion",
@@ -156,6 +157,7 @@ const settlementTransitionTags = new Set<RunnableFrontierTransition["_tag"]>([
   "ContinueStartedIntegrationCandidate",
   "RunTargetVerification",
   "RunTargetPromotion",
+  "ObservePromotedCandidateAncestryAfterBlockerClear",
   "ReplacePromotedTaskClaim",
   "DeleteCompletedTaskCompletionClaim",
   "ReleaseStartedIntegrationTarget"

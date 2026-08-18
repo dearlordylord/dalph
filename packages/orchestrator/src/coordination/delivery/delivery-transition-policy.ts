@@ -36,6 +36,7 @@ export const deliveryTransitionPolicy = {
   RunIntegrator: policy("IdentityFree", "None"),
   RunTargetVerification: policy("IdentityFree", "None"),
   RunTargetPromotion: policy("IdentityFree", "None"),
+  ObservePromotedCandidateAncestryAfterBlockerClear: policy("IdentityFree", "None"),
   ReplacePromotedTaskClaim: policy("IdentityFree", "None"),
   CompletePromotedTask: policy("IdentityFree", "None"),
   ObserveFocusedTaskCompletion: policy("IdentityFree", "None"),

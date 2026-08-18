@@ -336,6 +336,7 @@ export * from "./workflow/protocols/integration-finality/completion-task-operati
 export * from "./workflow/protocols/integration-finality/protocol.js"
 export * from "./workflow/protocols/integration-finality/history.js"
 export * from "./workflow/protocols/integration-finality/state.js"
+export * from "./workflow/protocols/integration-finality/post-promotion-blocker-ancestry.js"
 export * from "./workflow/protocols/integration-quarantine/events.js"
 export * from "./workflow/protocols/integration-quarantine/request.js"
 export * from "./workflow/protocols/integration-quarantine/state.js"

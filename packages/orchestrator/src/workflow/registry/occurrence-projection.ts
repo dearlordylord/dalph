@@ -579,6 +579,8 @@ const nonProjectedJournalEventKinds = {
   CompletionTaskCandidateAncestryObserved: true,
   CompletionTaskRequestLookupIntended: true,
   CompletionTaskRequestLookupObserved: true,
+  PostPromotionBlockerCandidateAncestryReadIntended: true,
+  PostPromotionBlockerCandidateAncestryObserved: true,
   PlannedAttemptExecutorCommandIntended: true,
   PlannedAttemptExecutorCommandProjectionObserved: true,
   PlannedAttemptExecutorCommandResponseContradicted: true,

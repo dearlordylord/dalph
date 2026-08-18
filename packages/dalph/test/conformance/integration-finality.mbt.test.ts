@@ -109,6 +109,8 @@ const failTest = (message: string): never => Effect.runSync(Effect.die(message))
 type Phase =
   | "PromotedProof"
   | "BlockedAfterPromotion"
+  | "PostPromotionAncestryPending"
+  | "PostPromotionAncestryWait"
   | "CompletionClaimBlocked"
   | "ReplacementIntentPending"
   | "ReplacementIntentRecorded"
@@ -1486,6 +1488,10 @@ const integrationFinalityDriver = defineDriver(
     observePromotedCandidateAncestry: {},
     observePromotedCandidateAncestryUnreadable: {},
     observePromotedCandidateNotAncestor: {},
+    observePostPromotionCandidateCurrentAncestry: {},
+    observePostPromotionCandidateAncestorAncestry: {},
+    observePostPromotionCandidateNotAncestor: {},
+    observePostPromotionCandidateAncestryUnreadable: {},
     lookupCompletionRequestApplied: {},
     lookupCompletionRequestNotApplied: {},
     lookupCompletionRequestUnreadable: {},
@@ -1575,10 +1581,19 @@ const integrationFinalityDriver = defineDriver(
         Effect.sync(() =>
           updatePromoted((subject) => ({
             ...subject,
-            phase: subject.phase === "CompletionClaimBlocked" ? "CompletionClaimCurrent" : "PromotedProof",
+            phase:
+              subject.phase === "CompletionClaimBlocked" ? "CompletionClaimCurrent" : "PostPromotionAncestryPending",
             blockerPresent: false
           }))
         ),
+      observePostPromotionCandidateCurrentAncestry: () =>
+        Effect.sync(() => updatePromoted((subject) => ({ ...subject, phase: "PromotedProof" }))),
+      observePostPromotionCandidateAncestorAncestry: () =>
+        Effect.sync(() => updatePromoted((subject) => ({ ...subject, phase: "PromotedProof" }))),
+      observePostPromotionCandidateNotAncestor: () =>
+        Effect.sync(() => updatePromoted((subject) => ({ ...subject, phase: "PostPromotionAncestryWait" }))),
+      observePostPromotionCandidateAncestryUnreadable: () =>
+        Effect.sync(() => updatePromoted((subject) => ({ ...subject, phase: "PostPromotionAncestryWait" }))),
       deriveCompletionClaim: () =>
         Effect.sync(() =>
           updatePromoted((subject) => ({

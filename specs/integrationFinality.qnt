@@ -9,6 +9,8 @@ module integrationFinality {
   type Phase =
     | PromotedProof
     | BlockedAfterPromotion
+    | PostPromotionAncestryPending
+    | PostPromotionAncestryWait
     | CompletionClaimBlocked
     | ReplacementIntentPending
     | ReplacementIntentRecorded
@@ -43,6 +45,12 @@ module integrationFinality {
   type TrackerObservation = NoTrackerObservation | StaleSuccess | FreshSuccess
   type CompletionRequestOutcome = NoCompletionOutcome | Applied | NotApplied | UnreadableCompletionOutcome
   type CandidateAncestry = NoCandidateAncestry | CandidateAncestor | CandidateNotAncestor | UnreadableAncestry
+  type PostPromotionAncestry =
+    | NoPostPromotionAncestry
+    | PostPromotionCandidateCurrent
+    | PostPromotionCandidateAncestor
+    | PostPromotionCandidateNotAncestor
+    | UnreadablePostPromotionCandidateAncestry
   type CompleteGraphObservation = NoCompleteGraph | GraphBlocked | GraphReleased | UnreadableGraph
   type SuccessSource = NoSuccess | ExternalFocusedSuccess | PostRequestFocusedSuccess
   type CompletionConflict = NoCompletionConflict | ForeignTask | RevisionConflict | ReopenedTask
@@ -119,6 +127,7 @@ module integrationFinality {
     focusedFactsOpen: bool,
     focusedFactsNoBlocker: bool,
     completionAncestry: CandidateAncestry,
+    postPromotionAncestry: PostPromotionAncestry,
     completionEvidenceRecorded: bool,
     // Legacy evidence is a forbidden source-only value. It never authorizes
     // a completion claim or task request in the corrected contract.
@@ -143,6 +152,10 @@ module integrationFinality {
     reintegrationCount: int,
     lastMutation: MutationTarget,
     blockerPresent: bool,
+    // A cleared post-promotion blocker invalidates the prior Git observation.
+    // This flag identifies that pre-claim path without changing the later
+    // completion-claim-current authorization cycle.
+    postPromotionBlockerCleared: bool,
     reopenedAfterSuccess: bool,
   }
 
@@ -272,6 +285,12 @@ module integrationFinality {
   // protocol's two identity-binding boundaries.
   val promotedProofReached: bool = state.promoted.phase == PromotedProof
   val blockerWaitReached: bool = state.promoted.phase == BlockedAfterPromotion
+  val postPromotionAncestryPendingReached: bool = state.promoted.phase == PostPromotionAncestryPending
+  val postPromotionAncestryWaitReached: bool = state.promoted.phase == PostPromotionAncestryWait
+  val postPromotionAncestryReached: bool = or {
+    state.promoted.postPromotionAncestry == PostPromotionCandidateCurrent,
+    state.promoted.postPromotionAncestry == PostPromotionCandidateAncestor,
+  }
   val replacementIntentPendingReached: bool = state.promoted.phase == ReplacementIntentPending
   val replacementIntentReached: bool = state.promoted.phase == ReplacementIntentRecorded
   val replacementRequestedReached: bool = state.promoted.phase == ReplacementRequested
@@ -426,6 +445,25 @@ module integrationFinality {
       not(state.promoted.completionIntentRecorded),
       state.promoted.completionRequests == 0,
     }
+
+  // Clearing a blocker after promotion makes the prior Git result stale. The
+  // protocol enters a dedicated pending phase while waiting for the fresh
+  // positive ancestry read, but it may not derive the replacement claim (or
+  // reach replacement) without that read. A no-blocker path has no such
+  // obligation, and the later completion-claim-current authorization keeps its
+  // existing focused-facts/ancestry sequence.
+  val clearedPromotionRequiresFreshAncestry: bool = or {
+    not(
+      (
+        state.promoted.completionClaimDerived
+          or state.promoted.replacementIntentRecorded
+          or state.promoted.replacementRequests > 0
+      )
+        and state.promoted.postPromotionBlockerCleared
+    ),
+    state.promoted.postPromotionAncestry == PostPromotionCandidateCurrent,
+    state.promoted.postPromotionAncestry == PostPromotionCandidateAncestor,
+  }
 
   // A request is the ambiguity-crossing effect. Its exact intent must already
   // be in the durable model state.
@@ -658,6 +696,7 @@ module integrationFinality {
         focusedFactsOpen: false,
         focusedFactsNoBlocker: false,
         completionAncestry: NoCandidateAncestry,
+        postPromotionAncestry: NoPostPromotionAncestry,
         completionEvidenceRecorded: false,
         legacyEvidenceForged: false,
         completionRequestId: 0,
@@ -680,6 +719,7 @@ module integrationFinality {
         reintegrationCount: 0,
         lastMutation: NoMutation,
         blockerPresent: false,
+        postPromotionBlockerCleared: false,
         reopenedAfterSuccess: false,
       },
       unrelated: {
@@ -745,6 +785,7 @@ module integrationFinality {
         focusedFactsOpen: false,
         focusedFactsNoBlocker: false,
         completionAncestry: NoCandidateAncestry,
+        postPromotionAncestry: NoPostPromotionAncestry,
         completionEvidenceRecorded: false,
         legacyEvidenceForged: false,
         completionRequestId: 0,
@@ -767,6 +808,7 @@ module integrationFinality {
         reintegrationCount: 0,
         lastMutation: NoMutation,
         blockerPresent: false,
+        postPromotionBlockerCleared: false,
         reopenedAfterSuccess: false,
       },
       frontierEmpty: false,
@@ -797,8 +839,14 @@ module integrationFinality {
       ...state,
       promoted: {
         ...state.promoted,
-        phase: if (state.promoted.phase == CompletionClaimBlocked) CompletionClaimCurrent else PromotedProof,
+        phase:
+          if (state.promoted.phase == CompletionClaimBlocked)
+          CompletionClaimCurrent
+          else PostPromotionAncestryPending,
         blockerPresent: false,
+        postPromotionBlockerCleared:
+          if (state.promoted.phase == BlockedAfterPromotion) true
+          else state.promoted.postPromotionBlockerCleared,
       },
     },
   }
@@ -808,6 +856,11 @@ module integrationFinality {
     not(state.promoted.blockerPresent),
     state.promoted.claimState == OriginalClaim,
     promotionProofExact(state.promoted),
+    or {
+      not(state.promoted.postPromotionBlockerCleared),
+      state.promoted.postPromotionAncestry == PostPromotionCandidateCurrent,
+      state.promoted.postPromotionAncestry == PostPromotionCandidateAncestor,
+    },
     state' = {
       ...state,
       promoted: {
@@ -838,6 +891,11 @@ module integrationFinality {
     state.promoted.phase == ReplacementIntentPending,
     state.promoted.completionClaimDerived,
     completionClaimExact(state.promoted),
+    or {
+      not(state.promoted.postPromotionBlockerCleared),
+      state.promoted.postPromotionAncestry == PostPromotionCandidateCurrent,
+      state.promoted.postPromotionAncestry == PostPromotionCandidateAncestor,
+    },
     state' = {
       ...state,
       promoted: {
@@ -852,6 +910,11 @@ module integrationFinality {
     state.promoted.phase == ReplacementIntentRecorded,
     state.promoted.replacementIntentRecorded,
     state.promoted.claimState == OriginalClaim,
+    or {
+      not(state.promoted.postPromotionBlockerCleared),
+      state.promoted.postPromotionAncestry == PostPromotionCandidateCurrent,
+      state.promoted.postPromotionAncestry == PostPromotionCandidateAncestor,
+    },
     state.promoted.replacementRequests < REPLACEMENT_REQUEST_LIMIT,
     state' = {
       ...state,
@@ -1121,6 +1184,60 @@ module integrationFinality {
         ...state.promoted,
         phase: CompletionAncestryObserved,
         completionAncestry: CandidateAncestor,
+      },
+    },
+  }
+
+  // After a post-promotion blocker clears, this separate Git observation is
+  // journal-first and is the only path that may re-authorize claim derivation.
+  action observePostPromotionCandidateCurrentAncestry: bool = all {
+    state.promoted.phase == PostPromotionAncestryPending,
+    state.promoted.postPromotionBlockerCleared,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: PromotedProof,
+        postPromotionAncestry: PostPromotionCandidateCurrent,
+      },
+    },
+  }
+
+  action observePostPromotionCandidateAncestorAncestry: bool = all {
+    state.promoted.phase == PostPromotionAncestryPending,
+    state.promoted.postPromotionBlockerCleared,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: PromotedProof,
+        postPromotionAncestry: PostPromotionCandidateAncestor,
+      },
+    },
+  }
+
+  action observePostPromotionCandidateNotAncestor: bool = all {
+    state.promoted.phase == PostPromotionAncestryPending,
+    state.promoted.postPromotionBlockerCleared,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: PostPromotionAncestryWait,
+        postPromotionAncestry: PostPromotionCandidateNotAncestor,
+      },
+    },
+  }
+
+  action observePostPromotionCandidateAncestryUnreadable: bool = all {
+    state.promoted.phase == PostPromotionAncestryPending,
+    state.promoted.postPromotionBlockerCleared,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: PostPromotionAncestryWait,
+        postPromotionAncestry: UnreadablePostPromotionCandidateAncestry,
       },
     },
   }
@@ -1603,6 +1720,10 @@ module integrationFinality {
   action step: bool = any {
     observePostPromotionBlocker,
     observeFreshBlockerClear,
+    observePostPromotionCandidateCurrentAncestry,
+    observePostPromotionCandidateAncestorAncestry,
+    observePostPromotionCandidateNotAncestor,
+    observePostPromotionCandidateAncestryUnreadable,
     deriveCompletionClaim,
     recordCompletionClaimReplacementIntent,
     requestCompletionClaimReplacement,

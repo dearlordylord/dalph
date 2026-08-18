@@ -50,7 +50,8 @@ import type {
   CompletionTaskClaim,
   CompletionClaimDeletionRequest,
   CompletionClaimReplacementRequest,
-  CompletionTaskRequest
+  CompletionTaskRequest,
+  PostPromotionBlockerClearAuthorization
 } from "../../workflow/protocols/integration-finality/events.js"
 import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
 import type {
@@ -222,6 +223,11 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly request: CompletionClaimReplacementRequest
     readonly responsibility: StartedIntegrationResponsibility
   }
+  /** Reproves promoted-candidate ancestry after a tracker blocker clears. */
+  ObservePromotedCandidateAncestryAfterBlockerClear: {
+    readonly authorization: PostPromotionBlockerClearAuthorization
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   CompletePromotedTask: {
     readonly request: CompletionTaskRequest
     readonly responsibility: StartedIntegrationResponsibility
@@ -303,6 +309,7 @@ const transitionTrackerGraphRequirements = {
   RunTargetVerification: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",
   ReplacePromotedTaskClaim: "CurrentTrackerGraphRequired",
+  ObservePromotedCandidateAncestryAfterBlockerClear: "CurrentTrackerGraphRequired",
   CompletePromotedTask: "CurrentTrackerGraphRequired",
   ObserveFocusedTaskCompletion: "CurrentTrackerGraphRequired",
   DeleteCompletedTaskCompletionClaim: "CurrentTrackerGraphRequired",

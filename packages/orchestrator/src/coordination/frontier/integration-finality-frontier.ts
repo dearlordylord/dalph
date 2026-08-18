@@ -21,6 +21,11 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { IntegrationFrontierRuntimeFacts } from "./integration-frontier.js"
 import { completionTaskConfirmationDisposition } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 import {
+  postPromotionBlockerAncestryIsPositive,
+  postPromotionBlockerAncestryOutcomeFor,
+  postPromotionBlockerClearAuthorizationFor
+} from "../../workflow/protocols/integration-finality/post-promotion-blocker-ancestry.js"
+import {
   FrontierExplanation,
   type IntegrationFinalityTrackerSuccessWaitReason,
   RunnableFrontierTransition,
@@ -268,6 +273,22 @@ const finalityTransitionsForState = (
   return deletionTransitionsFor(state, records, claim, responsibility, replacementOperationId)
 }
 
+const postPromotionBlockerClearTransitionsFor = (
+  records: ReadonlyArray<JournalRecord>,
+  claim: CompletionTaskClaim,
+  responsibility: StartedIntegrationResponsibility
+): ReadonlyArray<RunnableFrontierTransitionType> | undefined => {
+  const authorization = postPromotionBlockerClearAuthorizationFor(records, claim)
+  if (authorization === undefined) return undefined
+  const outcome = postPromotionBlockerAncestryOutcomeFor(records, authorization)
+  if (outcome?.event._tag !== "PostPromotionBlockerCandidateAncestryObserved") {
+    return [
+      RunnableFrontierTransition.ObservePromotedCandidateAncestryAfterBlockerClear({ authorization, responsibility })
+    ]
+  }
+  return postPromotionBlockerAncestryIsPositive(outcome.event.observation) ? undefined : []
+}
+
 /** Derives only the task-scoped post-promotion claim action; it never acquires a Git target. */
 export const integrationFinalityTransitionsFor = (
   records: ReadonlyArray<JournalRecord>,
@@ -280,6 +301,10 @@ export const integrationFinalityTransitionsFor = (
   if (claim === undefined) return []
   const state = deriveIntegrationFinalityStateFor(records, claim)
   const replacementOperationId = completionClaimReplacementOperationIdFor(claim)
+  if (state === undefined || state._tag === "ReplacementPending") {
+    const blockerClearTransitions = postPromotionBlockerClearTransitionsFor(records, claim, responsibility)
+    if (blockerClearTransitions !== undefined) return blockerClearTransitions
+  }
   return finalityTransitionsForState(
     state,
     records,

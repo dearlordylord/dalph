@@ -27,6 +27,7 @@ import {
   isFocusedCompletionFactsObserved,
   type FocusedCompletionFactsObservedEvent
 } from "./completion-task-history-relations.js"
+import { invalidPostPromotionBlockerAncestryHistory } from "./post-promotion-blocker-ancestry.js"
 
 const completionTaskEventTagValues = [
   "CompletionTaskIntended",
@@ -421,6 +422,8 @@ export const invalidCompletionTaskHistory = (
   runId: RunId
 ): CompletionTaskHistoryIssue | undefined => {
   const event = record.event
+  const postPromotionIssue = invalidPostPromotionBlockerAncestryHistory(records, record, runId)
+  if (postPromotionIssue !== undefined) return postPromotionIssue
   if (!isCompletionTaskEvent(event)) return undefined
   const request =
     event._tag === "TaskTrackerReadIntentRecorded"

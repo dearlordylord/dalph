@@ -12,6 +12,7 @@ module integrationFinalityTest {
           and completionProofCarriesAcceptedEvidenceAndNoReturnedRefs
           and state.promoted.replacementIntentRecorded
           and state.promoted.replacementRequests == 0
+          and not(state.promoted.postPromotionBlockerCleared)
       )
   }
 
@@ -98,11 +99,35 @@ module integrationFinalityTest {
           and noReintegration
       )
       .then(observeFreshBlockerClear)
+      .then(observePostPromotionCandidateAncestorAncestry)
       .then(deriveCompletionClaim)
       .expect(
         state.promoted.phase == ReplacementIntentPending
           and exactProofAndBinding
+          and postPromotionAncestryReached
           and noReintegration
+      )
+  }
+
+  run postPromotionBlockerClearRequiresFreshCandidateAncestryBeforeReplacementTest = {
+    init
+      .then(observePostPromotionBlocker)
+      .then(observeFreshBlockerClear)
+      .expect(
+        state.promoted.postPromotionBlockerCleared
+          and state.promoted.postPromotionAncestry == NoPostPromotionAncestry
+          and not(state.promoted.completionClaimDerived)
+          and clearedPromotionRequiresFreshAncestry
+      )
+      .then(observePostPromotionCandidateCurrentAncestry)
+      .expect(postPromotionAncestryReached and clearedPromotionRequiresFreshAncestry)
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .expect(
+        state.promoted.phase == ReplacementIntentRecorded
+          and state.promoted.completionClaimDerived
+          and postPromotionAncestryReached
+          and clearedPromotionRequiresFreshAncestry
       )
   }
 
@@ -110,11 +135,39 @@ module integrationFinalityTest {
     init
       .then(observePostPromotionBlocker)
       .then(observeFreshBlockerClear)
+      .then(observePostPromotionCandidateAncestorAncestry)
       .then(deriveCompletionClaim)
       .expect(
         state.promoted.phase == ReplacementIntentPending
           and state.promoted.completionClaim.integratorSession == INTEGRATOR_SESSION_A
+          and postPromotionAncestryReached
           and state.reintegrationRequests == 0
+      )
+  }
+
+  run postPromotionCandidateNotAncestorWaitsWithoutReplacementTest = {
+    init
+      .then(observePostPromotionBlocker)
+      .then(observeFreshBlockerClear)
+      .then(observePostPromotionCandidateNotAncestor)
+      .expect(
+        state.promoted.phase == PostPromotionAncestryWait
+          and state.promoted.postPromotionAncestry == PostPromotionCandidateNotAncestor
+          and not(state.promoted.completionClaimDerived)
+          and state.promoted.replacementRequests == 0
+      )
+  }
+
+  run postPromotionCandidateAncestryUnreadableWaitsWithoutReplacementTest = {
+    init
+      .then(observePostPromotionBlocker)
+      .then(observeFreshBlockerClear)
+      .then(observePostPromotionCandidateAncestryUnreadable)
+      .expect(
+        state.promoted.phase == PostPromotionAncestryWait
+          and state.promoted.postPromotionAncestry == UnreadablePostPromotionCandidateAncestry
+          and not(state.promoted.completionClaimDerived)
+          and state.promoted.replacementRequests == 0
       )
   }
 

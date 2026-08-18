@@ -83,6 +83,8 @@ import {
   CompletionTaskAcknowledgement,
   CompletionTaskRequest,
   CompletionTaskRequestLookup,
+  PostPromotionBlockerClearAuthorization,
+  PostPromotionBlockerCandidateAncestryObservation,
   CompletionTaskRequestOrdinal,
   TargetPromotionGitReadObservation,
   PlannedAttemptContinuationWitness,
@@ -382,6 +384,17 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     operationId: OperationId,
     ...nonActionOccurrence,
     request: CompletionTaskRequest
+  },
+  PostPromotionBlockerCandidateAncestryReadIntended: {
+    authorization: PostPromotionBlockerClearAuthorization,
+    operationId: OperationId,
+    ...initiatedByCoordinator
+  },
+  PostPromotionBlockerCandidateAncestryObserved: {
+    authorization: PostPromotionBlockerClearAuthorization,
+    observation: PostPromotionBlockerCandidateAncestryObservation,
+    operationId: OperationId,
+    ...nonActionOccurrence
   },
   CompletionTaskRequestLookupIntended: {
     attemptOrdinal: CompletionTaskRequestOrdinal,

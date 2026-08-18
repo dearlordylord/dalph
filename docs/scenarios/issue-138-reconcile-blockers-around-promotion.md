@@ -2,8 +2,8 @@
 
 Issue: [Reconcile blockers before and after Git promotion](https://github.com/dearlordylord/dalph/issues/138)
 
-Status: accepted rewrite on 2026-08-14; not implemented. Issues #223 and #68
-block implementation.
+Status: accepted rewrite on 2026-08-14; implemented after issues #223 and #68
+established the corrected outer Integrator and quarantine boundaries.
 
 No person directly triggers these scenarios. The tracker owns prerequisite
 facts, Git owns candidate and promotion facts, and the outer Integrator owns
@@ -35,13 +35,13 @@ wait, or promote from stale tracker facts.
 
 ### Scenario-to-test mapping
 
-- `preserves the Integrator session and releases target ownership when a blocker appears before promotion`
-- `keeps prerequisite and unrelated work eligible during the blocker wait`
-- `reconstructs the wait without process-local target ownership`
+- `packages/dalph/test/cassettes/scenario.test.ts::preserves the Integrator session and releases target ownership when a blocker appears before promotion`
+- `packages/dalph/test/cassettes/scenario.test.ts::keeps an unfinished Integrator session dormant when a blocker appears after process loss`
+- `packages/dalph/test/cassettes/scenario.test.ts::restarts after a durable blocker read with the candidate and queue history intact`
 
 ## The blocker clears before promotion
 
-A later complete focused tracker observation proves B complete or proves the
+A later complete tracker observation proves B complete or proves the
 prerequisite edge absent. Dalph clears only this dependency constraint and
 freshly reads the target head and required ancestry before another integration
 action.
@@ -57,10 +57,10 @@ waits for later authority facts.
 
 ### Scenario-to-test mapping
 
-- `freshly reads tracker and Git authority after a pre-promotion blocker clears`
-- `clears only the proven dependency constraint`
-- `delegates stale fixed-head disposition without reusing the candidate`
-- `preserves the wait when tracker or Git authority is incomplete`
+- `packages/dalph/test/cassettes/scenario.test.ts::delegates changed H after a cleared blocker without reusing M or creating S2`
+- `packages/dalph/test/cassettes/scenario.test.ts::promotes the preserved candidate after a blocker clears at unchanged H`
+- `packages/dalph/test/cassettes/scenario.test.ts::durably waits after an unreadable blocker restart read and resumes only on later complete facts`
+- `packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts::fails visibly when the first reconciliation read is unavailable`
 
 ## A blocker appears after promotion
 
@@ -75,13 +75,12 @@ It does not repeat the Git mutation or restore a process-local target position.
 
 ### Scenario-to-test mapping
 
-- `preserves promotion proof and waits before tracker completion on a new blocker`
-- `never rolls Git back or invokes the Integrator after known promotion`
-- `keeps prerequisite and unrelated work eligible after promotion`
+- `packages/dalph/test/cassettes/scenario.test.ts::preserves promotion proof and releases target ownership before tracker completion on a new blocker`
+- `packages/dalph/test/cassettes/scenario.test.ts::reconstructs a post-promotion blocker without repeating Git promotion`
 
 ## The blocker clears after promotion
 
-A focused tracker read proves B complete or the edge absent. Dalph freshly asks
+A complete tracker observation proves B complete or the edge absent. Dalph freshly asks
 Git whether M remains an ancestor of the target. Only matching current tracker
 facts plus proven ancestry allow the existing tracker-completion protocol to
 continue. Unreadable or incompatible Git facts preserve A and authorize no
@@ -94,9 +93,10 @@ warning but does not manufacture a repair.
 
 ### Scenario-to-test mapping
 
-- `proves promoted ancestry after the blocker clears and completes without reintegration`
-- `waits without tracker completion when promoted ancestry is unreadable or incompatible`
-- `preserves accepted tracker completion across a concurrent prerequisite reopen`
+- `packages/dalph/test/cassettes/scenario.test.ts::proves promoted ancestry after the blocker clears and completes without reintegration`
+- `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::waits when Git cannot read current candidate ancestry`
+- `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::rejects current authorization when Git no longer contains the promoted candidate`
+- `packages/dalph/test/cassettes/scenario.test.ts::preserves accepted tracker completion when a prerequisite concurrently reopens`
 
 ## Forbidden-result invariant mapping
 

@@ -86,6 +86,22 @@ module integrationFinalityNegativeTest {
     },
   }
 
+  // A cleared post-promotion blocker must not let a weakened derivation skip
+  // the fresh positive candidate-ancestry observation.
+  action deriveAfterClearedBlockerWithoutFreshAncestry: bool = all {
+    state.promoted.phase == PostPromotionAncestryPending,
+    state.promoted.postPromotionBlockerCleared,
+    state.promoted.postPromotionAncestry == NoPostPromotionAncestry,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: ReplacementIntentPending,
+        completionClaimDerived: true,
+      },
+    },
+  }
+
   action requestBeforeDurableIntent: bool = all {
     state.promoted.phase == ReplacementIntentPending,
     state' = {
@@ -319,6 +335,14 @@ module integrationFinalityNegativeTest {
     init
       .then(deriveCompletionClaimWithWeakenedGuard)
       .expect(not(exactProofAndBinding) and not(completionClaimRequiresExactPromotionProof))
+  }
+
+  run derivationAfterClearedBlockerWithoutFreshAncestryIsDetectedTest = {
+    init
+      .then(observePostPromotionBlocker)
+      .then(observeFreshBlockerClear)
+      .then(deriveAfterClearedBlockerWithoutFreshAncestry)
+      .expect(not(clearedPromotionRequiresFreshAncestry))
   }
 
   run requestBeforeIntentIsDetectedTest = {

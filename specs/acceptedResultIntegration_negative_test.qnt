@@ -614,6 +614,32 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
+  // Forbidden control mutation: the changed-head non-action Q2 cannot be
+  // relabeled as a Retry direction. It may only receive FullRerun.
+  action chooseRetryAfterChangedHeadQ2: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == RetryNotApplicable,
+      result.retryRunCount == 0,
+      result.quarantineOccurrenceCount == 2,
+      result.quarantineCause == RetryHeadChangedQuarantine,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: RetrySelected,
+          quarantineDirection: RetryDirection,
+          quarantineDirectionSession: result.integrationSession,
+          quarantineDirectionPosition: result.quarantinePosition,
+          quarantineDirectionCount: result.quarantineDirectionCount + 1,
+          lastDirection: RetryDirection,
+          lastDirectionSession: result.integrationSession,
+          lastDirectionPosition: result.quarantinePosition,
+        }),
+      },
+    }
+  }
+
   action allocateSecondSuccessor: bool = {
     val result = state.results.get(1)
     all {
@@ -692,6 +718,22 @@ module acceptedResultIntegrationNegativeTest {
       .then(reportIntegratorNotPrepared(1))
       .then(recordQuarantine(1))
       .then(chooseRetryAfterQ2)
+      .expect(not(retryDirectionIsBounded))
+  }
+
+  run changedHeadQ2CannotAuthorizeRetryTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetry(1, state.results.get(1).quarantinePosition))
+      .then(observeChangedTargetHead(1))
+      .then(recordRetryNotApplicable(1))
+      .then(chooseRetryAfterChangedHeadQ2)
       .expect(not(retryDirectionIsBounded))
   }
 

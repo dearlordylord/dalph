@@ -137,7 +137,9 @@ const integrationFinalityJournalEventTags = {
   CompletionTaskCandidateAncestryReadIntended: true,
   CompletionTaskCandidateAncestryObserved: true,
   CompletionTaskRequestLookupIntended: true,
-  CompletionTaskRequestLookupObserved: true
+  CompletionTaskRequestLookupObserved: true,
+  PostPromotionBlockerCandidateAncestryReadIntended: true,
+  PostPromotionBlockerCandidateAncestryObserved: true
 } as const satisfies Record<IntegrationFinalityJournalEvent["_tag"], true>
 
 export const isFinalityOccurrence = (

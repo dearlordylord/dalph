@@ -46,6 +46,8 @@ import {
   CompletionTaskAttemptIntendedEvent,
   CompletionTaskCandidateAncestryObservedEvent,
   CompletionTaskCandidateAncestryReadIntendedEvent,
+  PostPromotionBlockerCandidateAncestryObservedEvent,
+  PostPromotionBlockerCandidateAncestryReadIntendedEvent,
   CompletionTaskIntendedEvent,
   CompletionTaskRequestLookupIntendedEvent,
   CompletionTaskRequestLookupObservedEvent,
@@ -449,6 +451,8 @@ const integrationFinalityTags = [
   "CompletionTaskRejected",
   "CompletionTaskCandidateAncestryReadIntended",
   "CompletionTaskCandidateAncestryObserved",
+  "PostPromotionBlockerCandidateAncestryReadIntended",
+  "PostPromotionBlockerCandidateAncestryObserved",
   "CompletionTaskRequestLookupIntended",
   "CompletionTaskRequestLookupObserved"
 ] as const satisfies ReadonlyArray<WorkflowJournalEvent["_tag"] & RecordedCassetteEntry["_tag"]>
@@ -576,6 +580,20 @@ const recordIntegrationFinalityEntry = (event: IntegrationFinalityEvent): Record
         occurrenceClassification: "NonActionOccurrence",
         operationId: value.operationId,
         request: value.request
+      }),
+      PostPromotionBlockerCandidateAncestryReadIntended: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        authorization: value.authorization,
+        initiatedBy: coordinator(),
+        occurrenceClassification: "InitiatedAction",
+        operationId: value.operationId
+      }),
+      PostPromotionBlockerCandidateAncestryObserved: (value): RecordedIntegrationFinalityEntry => ({
+        _tag: value._tag,
+        authorization: value.authorization,
+        observation: value.observation,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: value.operationId
       }),
       CompletionTaskRequestLookupIntended: (value): RecordedIntegrationFinalityEntry => ({
         _tag: value._tag,
@@ -1542,6 +1560,19 @@ const eventForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntr
         request: value.request,
         version: workflowJournalEventVersion
       }),
+    PostPromotionBlockerCandidateAncestryReadIntended: (value) =>
+      PostPromotionBlockerCandidateAncestryReadIntendedEvent.make({
+        authorization: value.authorization,
+        operationId: value.operationId,
+        version: workflowJournalEventVersion
+      }),
+    PostPromotionBlockerCandidateAncestryObserved: (value) =>
+      PostPromotionBlockerCandidateAncestryObservedEvent.make({
+        authorization: value.authorization,
+        observation: value.observation,
+        operationId: value.operationId,
+        version: workflowJournalEventVersion
+      }),
     CompletionTaskRequestLookupIntended: (value) =>
       CompletionTaskRequestLookupIntendedEvent.make({
         attemptOrdinal: value.attemptOrdinal,
@@ -1831,6 +1862,10 @@ const lyricForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntr
       `Dalph coordinator intended a current Git ancestry read before completion call ${value.attemptOrdinal} for task ${value.request.taskId}.`,
     CompletionTaskCandidateAncestryObserved: (value) =>
       `Git reported ${value.observation._tag} for promoted candidate ${value.request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit}.`,
+    PostPromotionBlockerCandidateAncestryReadIntended: (value) =>
+      `Dalph coordinator intended a fresh Git ancestry read after the blocker cleared for task ${value.authorization.claim.plannedAttempt.taskId}.`,
+    PostPromotionBlockerCandidateAncestryObserved: (value) =>
+      `Git reported ${value.observation._tag} after the blocker cleared for task ${value.authorization.claim.plannedAttempt.taskId}.`,
     CompletionTaskRequestLookupIntended: (value) =>
       `Dalph coordinator intended to look up exact completion request ${value.request.operationId} after call ${value.attemptOrdinal}.`,
     CompletionTaskRequestLookupObserved: (value) =>

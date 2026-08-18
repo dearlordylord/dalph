@@ -61,6 +61,7 @@ import {
   recordRetryConclusiveIntegrationQuarantine
 } from "./integrator-delivery-action.js"
 import { recordChangedHeadRetryQuarantine } from "./integration-quarantine-disposition-action.js"
+import { readPostPromotionBlockerCandidateAncestry } from "../../workflow/protocols/integration-finality/post-promotion-blocker-ancestry.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -84,6 +85,10 @@ type ContinueIntegrationCandidate = Extract<
 type RunTargetVerification = Extract<IntegrationTransition, { readonly _tag: "RunTargetVerification" }>
 type RunTargetPromotion = Extract<IntegrationTransition, { readonly _tag: "RunTargetPromotion" }>
 type ReplacePromotedTaskClaim = Extract<IntegrationTransition, { readonly _tag: "ReplacePromotedTaskClaim" }>
+type ObservePromotedCandidateAncestryAfterBlockerClear = Extract<
+  IntegrationTransition,
+  { readonly _tag: "ObservePromotedCandidateAncestryAfterBlockerClear" }
+>
 type DeleteCompletedTaskCompletionClaim = Extract<
   IntegrationTransition,
   { readonly _tag: "DeleteCompletedTaskCompletionClaim" }
@@ -143,6 +148,17 @@ const replacePromotedTaskClaim = Effect.fn("DeliveryAction.replacePromotedTaskCl
         Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimRejected"))
     })
   )
+})
+
+const observePromotedCandidateAncestryAfterBlockerClear = Effect.fn(
+  "DeliveryAction.observePromotedCandidateAncestryAfterBlockerClear"
+)(function* (action: IdentityFreeAction, transition: ObservePromotedCandidateAncestryAfterBlockerClear) {
+  const runtime = Context.getOption(yield* Effect.context<never>(), TargetPromotionRuntime)
+  if (Option.isNone(runtime)) return deliveryActionDeferred(action.proposal.id, "CompletionTaskUnavailable")
+  yield* readPostPromotionBlockerCandidateAncestry(transition.authorization).pipe(
+    Effect.provideService(TargetPromotionGit, runtime.value.git)
+  )
+  return deliveryActionCompleted(action.proposal.id)
 })
 
 const deleteCompletedTaskCompletionClaim = Effect.fn("DeliveryAction.deleteCompletedTaskCompletionClaim")(function* (
@@ -413,6 +429,9 @@ const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvanc
 ) {
   if (transition._tag === "RunTargetVerification") return yield* executeTargetVerification(action, transition, lease)
   if (transition._tag === "RunTargetPromotion") return yield* executeTargetPromotion(action, transition, lease)
+  if (transition._tag === "ObservePromotedCandidateAncestryAfterBlockerClear") {
+    return yield* observePromotedCandidateAncestryAfterBlockerClear(action, transition)
+  }
   if (transition._tag === "ReplacePromotedTaskClaim") return yield* replacePromotedTaskClaim(action, transition)
   if (transition._tag === "CompletePromotedTask") return yield* completePromotedTask(action, transition, target)
   if (transition._tag === "ObserveFocusedTaskCompletion") {

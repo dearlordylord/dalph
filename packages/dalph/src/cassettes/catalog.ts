@@ -3488,6 +3488,65 @@ export const prePromotionBlockerClearAndSupersessionAuthoredCassette: ScenarioCa
   })
 })
 
+/** The blocker clears at unchanged H, so the preserved qualified M may proceed to ordinary promotion. */
+export const prePromotionBlockerClearAtCurrentHeadAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...prePromotionBlockerClearAndSupersessionAuthoredCassette,
+  name: "clears a pre-promotion blocker and promotes preserved M at unchanged H",
+  startingFacts: {
+    ...prePromotionBlockerClearAndSupersessionAuthoredCassette.startingFacts,
+    targetLineageObservations: [
+      {
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: promotionExpectedHead,
+        targetHeadSha: promotionExpectedHead
+      },
+      {
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: promotionExpectedHead,
+        targetHeadSha: promotionExpectedHead
+      }
+    ]
+  },
+  story: prePromotionBlockerClearAndSupersessionAuthoredCassette.story.flatMap(
+    (item, index): ReadonlyArray<unknown> =>
+      item._tag === "ExpectedBehavior"
+        ? [
+            item.orchestration === null
+              ? item
+              : {
+                  ...item,
+                  orchestration: [
+                    ...item.orchestration,
+                    {
+                      _tag: "TargetPromotionSucceeded",
+                      basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+                      candidateCommit: promotionCandidateCommit,
+                      expectedTargetHead: promotionExpectedHead,
+                      observedTargetHead: promotionCandidateCommit,
+                      observation: "CompareAndSetApplied",
+                      taskId: "A"
+                    }
+                  ]
+                }
+          ]
+        : index ===
+            prePromotionBlockerClearAndSupersessionAuthoredCassette.story.findLastIndex(
+              (candidate) => candidate._tag === "DalphSelects" && candidate.operation._tag === "ReadTargetLineage"
+            )
+          ? [
+              item,
+              targetPromotionGitReadReturned("/dalph/cassettes/integration.git", promotionCandidateCommit, {
+                _tag: "CandidateNotInAncestry",
+                currentHeadSha: promotionExpectedHead
+              }),
+              { _tag: "TargetPromotionCompareAndSetReturned", result: { _tag: "Applied" } }
+            ]
+          : [item]
+  )
+})
+
 /** The complete blocker fact is durable before a crash; restart owns no target resource. */
 export const prePromotionBlockerRecoveryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
@@ -3584,6 +3643,25 @@ export const blockersAroundPromotionAuthoredCassette: ScenarioCassette = Schema.
           item
         ]
   })
+})
+
+/** Process loss after the blocker read reconstructs promotion while target ownership stays empty. */
+export const postPromotionBlockerRecoveryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...blockersAroundPromotionAuthoredCassette,
+  name: "a post-promotion blocker survives coordinator process loss",
+  story: blockersAroundPromotionAuthoredCassette.story.flatMap(
+    (item): ReadonlyArray<unknown> =>
+      item._tag === "TrackerGraphReadReturned" && item.graph.revision === issue138PostPromotionBlockerGraph.revision
+        ? [
+            item,
+            { _tag: "CoordinatorProcessDies" },
+            { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+            { _tag: "TrackerGraphReadReturned", graph: issue138PostPromotionBlockerGraph }
+          ]
+        : [item]
+  )
 })
 
 const deliveryFinalityStartingGraph = {
@@ -4965,10 +5043,12 @@ type MaintainedAuthoredCassetteName =
   | "candidateVerificationPassed"
   | "prePromotionBlocker"
   | "prePromotionBlockerClearAndSupersession"
+  | "prePromotionBlockerClearAtCurrentHead"
   | "prePromotionBlockerRecovery"
   | "prePromotionBlockerUnreadableReadRecovery"
   | "targetPromotionSuccess"
   | "blockersAroundPromotion"
+  | "postPromotionBlockerRecovery"
   | "targetPromotionAmbiguityExhaustion"
   | "targetPromotionStaleBeforeCompareAndSet"
   | "targetPromotionLostResponseDiscoversCurrentCandidate"
@@ -5034,10 +5114,12 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     candidateVerificationPassed: candidatePreparedAuthoredCassette,
     prePromotionBlocker: prePromotionBlockerAuthoredCassette,
     prePromotionBlockerClearAndSupersession: prePromotionBlockerClearAndSupersessionAuthoredCassette,
+    prePromotionBlockerClearAtCurrentHead: prePromotionBlockerClearAtCurrentHeadAuthoredCassette,
     prePromotionBlockerRecovery: prePromotionBlockerRecoveryAuthoredCassette,
     prePromotionBlockerUnreadableReadRecovery: prePromotionBlockerUnreadableReadRecoveryAuthoredCassette,
     targetPromotionSuccess: targetPromotionSuccessAuthoredCassette,
     blockersAroundPromotion: blockersAroundPromotionAuthoredCassette,
+    postPromotionBlockerRecovery: postPromotionBlockerRecoveryAuthoredCassette,
     targetPromotionAmbiguityExhaustion: targetPromotionAmbiguityExhaustionAuthoredCassette,
     targetPromotionStaleBeforeCompareAndSet: targetPromotionStaleBeforeCompareAndSetAuthoredCassette,
     targetPromotionLostResponseDiscoversCurrentCandidate:

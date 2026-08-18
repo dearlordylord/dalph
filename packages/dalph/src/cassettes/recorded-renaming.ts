@@ -69,6 +69,8 @@ import {
   type TargetVerificationCorrelation,
   type TargetPromotionCorrelation,
   type CompletionTaskClaim,
+  type PostPromotionBlockerClearAuthorization,
+  postPromotionBlockerAncestryOperationIdFor,
   type CompletionTaskRequest,
   type CompletionTaskRequestLookup,
   type CompletionClaimObservation,
@@ -508,6 +510,16 @@ const renameCompletionTaskClaim = (claim: CompletionTaskClaim, maps: IdentityRen
     }),
     plannedAttempt: renamePlannedAttempt(claim.plannedAttempt, maps),
     promotionCorrelation: renameTargetPromotionCorrelation(claim.promotionCorrelation, maps)
+  })
+
+const renamePostPromotionBlockerAuthorization = (
+  authorization: PostPromotionBlockerClearAuthorization,
+  maps: IdentityRenamingMaps
+): PostPromotionBlockerClearAuthorization =>
+  completeFields<PostPromotionBlockerClearAuthorization>({
+    blockerClearedAt: preserveCassetteValue(authorization.blockerClearedAt),
+    blockerObservedAt: preserveCassetteValue(authorization.blockerObservedAt),
+    claim: renameCompletionTaskClaim(authorization.claim, maps)
   })
 
 const renameCompletionTaskRequest = (
@@ -1168,6 +1180,26 @@ const renameRecordedCassetteEntry = (
           operationId: renamed(entry.operationId, maps.operationIds),
           request: renameCompletionTaskRequest(entry.request, maps)
         }),
+      PostPromotionBlockerCandidateAncestryReadIntended: (entry) => {
+        const authorization = renamePostPromotionBlockerAuthorization(entry.authorization, maps)
+        return completeFields<typeof entry>({
+          _tag: "PostPromotionBlockerCandidateAncestryReadIntended",
+          authorization,
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: postPromotionBlockerAncestryOperationIdFor(authorization)
+        })
+      },
+      PostPromotionBlockerCandidateAncestryObserved: (entry) => {
+        const authorization = renamePostPromotionBlockerAuthorization(entry.authorization, maps)
+        return completeFields<typeof entry>({
+          _tag: "PostPromotionBlockerCandidateAncestryObserved",
+          authorization,
+          observation: preserveCassetteValue(entry.observation),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          operationId: postPromotionBlockerAncestryOperationIdFor(authorization)
+        })
+      },
       CompletionTaskRequestLookupIntended: (entry) =>
         completeFields<typeof entry>({
           _tag: "CompletionTaskRequestLookupIntended",

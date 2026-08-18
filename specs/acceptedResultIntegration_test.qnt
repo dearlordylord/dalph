@@ -778,6 +778,31 @@ module acceptedResultIntegrationTest {
       })
   }
 
+  // A changed-head Retry occurrence is non-action Q2. It explains why the
+  // selected Retry cannot run, so the only available operator direction is a
+  // later Full rerun; a second Retry choice must remain blocked.
+  run changedHeadQuarantineCannotSelectRetryTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryOne)
+      .then(observeChangedTargetHead(1))
+      .then(recordRetryNotApplicable(1))
+      .expect(and {
+        state.results.get(1).phase == RetryNotApplicable,
+        state.results.get(1).quarantineCause == RetryHeadChangedQuarantine,
+        state.results.get(1).quarantineDirection == NoQuarantineDirection,
+        state.results.get(1).retryRunCount == 0,
+        retryDirectionIsBounded,
+      })
+      .then(chooseRetryOne.fail())
+  }
+
   // Full rerun records one winning direction, rereads a fresh H2 after
   // restart, preserves S/resource/queue position, and fixes one S2.
   run fullRerunPreservesPredecessorAndRestartsOneSuccessorTest = {

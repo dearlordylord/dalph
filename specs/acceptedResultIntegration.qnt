@@ -866,6 +866,10 @@ module acceptedResultIntegration {
       and {
         result.retryRunCount <= 1,
         not(and {
+          result.quarantineCause == RetryHeadChangedQuarantine,
+          result.quarantineDirection == RetryDirection,
+        }),
+        not(and {
           result.retryRunCount == 1,
           result.quarantineOccurrenceCount > 1,
           result.quarantineDirection == RetryDirection,
@@ -1785,6 +1789,7 @@ module acceptedResultIntegration {
     all {
       canChooseQuarantineDirection(state, id, position),
       result.retryRunCount == 0,
+      result.quarantineCause != RetryHeadChangedQuarantine,
       state' = {
         ...state,
         results: state.results.put(id, {

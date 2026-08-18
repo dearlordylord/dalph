@@ -494,6 +494,14 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       _tag: "GenericEventDescriptor",
       expectedKey: completionClaimDeletedRecordKey(event.operationId)
     }),
+    PostPromotionBlockerCandidateAncestryReadIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: intentRecordKey(event.operationId)
+    }),
+    PostPromotionBlockerCandidateAncestryObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: outcomeRecordKey(event.operationId)
+    }),
     IntegrationFinalitySettled: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integrationFinalitySettledRecordKey(event.claim.promotionCorrelation.requestId)

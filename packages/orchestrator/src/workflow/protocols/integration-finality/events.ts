@@ -18,6 +18,7 @@ import {
   CompletionTaskClaim
 } from "./completion-claim.js"
 import type { FocusedTaskCompletionFacts } from "./focused-task-completion-facts.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 
 export * from "./completion-claim.js"
 export * from "./focused-task-completion-facts.js"
@@ -132,6 +133,76 @@ export const CompletionTaskAuthorizationReadOrdinal = Schema.Int.check(Schema.is
   Schema.brand("CompletionTaskAuthorizationReadOrdinal")
 )
 export type CompletionTaskAuthorizationReadOrdinal = typeof CompletionTaskAuthorizationReadOrdinal.Type
+
+/**
+ * Exact tracker chronology that requires Git to reprove promoted-candidate
+ * ancestry before Dalph may replace the task's active claim.
+ */
+export const PostPromotionBlockerClearAuthorization = Schema.Struct({
+  blockerClearedAt: JournalPosition,
+  blockerObservedAt: JournalPosition,
+  claim: CompletionTaskClaim
+}).check(
+  Schema.makeFilter((authorization) =>
+    authorization.blockerObservedAt < authorization.blockerClearedAt
+      ? undefined
+      : "post-promotion blocker clearance must follow the blocker observation"
+  )
+)
+export type PostPromotionBlockerClearAuthorization = typeof PostPromotionBlockerClearAuthorization.Type
+
+/** Stable identity for one exact post-promotion blocker-clear ancestry read. */
+export const postPromotionBlockerAncestryOperationIdFor = (
+  authorization: PostPromotionBlockerClearAuthorization
+): OperationId =>
+  OperationId.make(
+    `post-promotion-blocker-ancestry:${authorization.claim.promotionCorrelation.requestId}:${authorization.blockerObservedAt}:${authorization.blockerClearedAt}`
+  )
+
+/** Git either returned a normalized ancestry fact or the read remained unavailable. */
+export const PostPromotionBlockerCandidateAncestryObservation = Schema.TaggedUnion({
+  Observed: { observation: TargetPromotionGitReadObservation },
+  Unreadable: { detail: Schema.String }
+})
+export type PostPromotionBlockerCandidateAncestryObservation =
+  typeof PostPromotionBlockerCandidateAncestryObservation.Type
+
+/** Durable intent before the Git read required by one exact blocker-clear chronology. */
+export const PostPromotionBlockerCandidateAncestryReadIntendedEvent = Schema.TaggedStruct(
+  "PostPromotionBlockerCandidateAncestryReadIntended",
+  {
+    authorization: PostPromotionBlockerClearAuthorization,
+    operationId: OperationId,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+).check(
+  Schema.makeFilter((event) =>
+    event.operationId === postPromotionBlockerAncestryOperationIdFor(event.authorization)
+      ? undefined
+      : "post-promotion blocker ancestry intent must use its exact deterministic identity"
+  )
+)
+export type PostPromotionBlockerCandidateAncestryReadIntendedEvent =
+  typeof PostPromotionBlockerCandidateAncestryReadIntendedEvent.Type
+
+/** Durable Git outcome for one exact post-promotion blocker-clear ancestry intent. */
+export const PostPromotionBlockerCandidateAncestryObservedEvent = Schema.TaggedStruct(
+  "PostPromotionBlockerCandidateAncestryObserved",
+  {
+    authorization: PostPromotionBlockerClearAuthorization,
+    observation: PostPromotionBlockerCandidateAncestryObservation,
+    operationId: OperationId,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+).check(
+  Schema.makeFilter((event) =>
+    event.operationId === postPromotionBlockerAncestryOperationIdFor(event.authorization)
+      ? undefined
+      : "post-promotion blocker ancestry outcome must use its exact deterministic identity"
+  )
+)
+export type PostPromotionBlockerCandidateAncestryObservedEvent =
+  typeof PostPromotionBlockerCandidateAncestryObservedEvent.Type
 
 /** Issue #61's fixed completion mutation bound. */
 export const completionTaskRequestLimit = 3 as const // eslint-disable-line no-magic-numbers
@@ -405,7 +476,9 @@ export const IntegrationFinalityJournalEvent = Schema.Union([
   CompletionTaskCandidateAncestryReadIntendedEvent,
   CompletionTaskCandidateAncestryObservedEvent,
   CompletionTaskRequestLookupIntendedEvent,
-  CompletionTaskRequestLookupObservedEvent
+  CompletionTaskRequestLookupObservedEvent,
+  PostPromotionBlockerCandidateAncestryReadIntendedEvent,
+  PostPromotionBlockerCandidateAncestryObservedEvent
 ])
 export type IntegrationFinalityJournalEvent = typeof IntegrationFinalityJournalEvent.Type
 

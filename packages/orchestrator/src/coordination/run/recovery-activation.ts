@@ -1401,6 +1401,7 @@ const transitionTagsAllowedToFinishHeldIntegration = new Set<RunnableFrontierTra
   "ContinueStartedIntegrationCandidate",
   "RunTargetVerification",
   "RunTargetPromotion",
+  "ObservePromotedCandidateAncestryAfterBlockerClear",
   "ReplacePromotedTaskClaim",
   "CompletePromotedTask",
   "ObserveFocusedTaskCompletion",
