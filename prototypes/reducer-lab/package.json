@@ -10,15 +10,21 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@noble/hashes": "2.3.0",
+    "@dagrejs/dagre": "3.0.0",
     "@effect/platform-browser": "4.0.0-beta.106",
+    "@noble/hashes": "2.3.0",
+    "@xyflow/react": "12.11.2",
     "cytoscape": "3.34.0",
     "cytoscape-dagre": "4.0.0",
     "effect": "4.0.0-beta.106",
-    "foldkit": "0.141.2"
+    "foldkit": "0.141.2",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
     "@types/cytoscape-dagre": "2.3.4",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
     "linkedom": "0.18.12",
     "playwright": "1.62.1",
     "typescript": "5.9.3",

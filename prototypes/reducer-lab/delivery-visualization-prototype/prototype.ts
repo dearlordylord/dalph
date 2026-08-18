@@ -1,10 +1,15 @@
 import "./prototype.css"
+import {
+  graphVariants,
+  mountComparisonGraph,
+  type GraphVariant
+} from "./graph-comparison.ts"
 
 // THROWAWAY PROTOTYPE
 // Accepted synchronized code, rectangle, and graph treatment for one complete
 // delivery scenario.
 
-type TaskKey = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "X"
+export type TaskKey = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "X"
 type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" | "settlements" | "reflection"
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
@@ -26,7 +31,7 @@ interface UserControlState {
   readonly tasks: ReadonlyArray<TaskKey>
   readonly resumePending: ReadonlyArray<TaskKey>
 }
-interface Frame {
+export interface Frame {
   readonly time: string
   readonly event: string
   readonly boundary: string
@@ -266,12 +271,19 @@ let selectionMode: SelectionMode = "none"
 let playing = false
 let reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches
 let timer: number | undefined
+const graphVariantFromUrl = (): GraphVariant => {
+  const candidate = new URLSearchParams(location.search).get("graph")
+  return graphVariants.some(({ key }) => key === candidate) ? candidate as GraphVariant : "original"
+}
+let graphVariant = graphVariantFromUrl()
+let graphCleanup: (() => void) | undefined
 const root = document.querySelector<HTMLElement>("#prototype-root")!
 
 const scenario = (): Scenario => originalStory
 const current = (): Frame => scenario().frames[frameIndex] ?? scenario().frames[0]!
 const previous = (): Frame => scenario().frames[Math.max(0, frameIndex - 1)]!
 const visibleTasks = (item: Frame): ReadonlyArray<TaskKey> => item.graph.taskCount === 10 ? allTasks : originalTasks
+const graphDefinition = () => graphVariants.find(({ key }) => key === graphVariant) ?? graphVariants[0]!
 
 const header = (): string => `<header class="topbar"><div><span class="kicker">THROWAWAY · DELIVERY VISUALIZATION PROTOTYPE</span><h1>${scenario().name}</h1><p>${scenario().question}</p></div><div class="top-controls"><button data-end class="end">View full integration</button><button data-play class="play">${playing ? "■ Stop" : "▶ Play scenario"}</button><label class="motion"><input data-motion type="checkbox" ${reducedMotion ? "checked" : ""}><span></span>Reduce motion</label></div></header>`
 
@@ -453,14 +465,67 @@ const chip = (task: TaskKey, item: Frame): string => {
   return `<button data-task="${task}" class="flow-chip state-${item.tasks[task]} ${selection}"><b>${task}</b><span>${state}</span></button>`
 }
 
-const graphPanel = (item: Frame): string => `<section class="graph-panel instrument"><div class="panel-head"><div><span class="panel-kind">COMPLETE GRAPH + DELIVERY OVERLAY</span><h2>${item.graph.revision} · ${item.graph.taskCount} tasks · ${item.settled.length}/${item.graph.taskCount} integrated</h2></div><span class="freshness ${item.graph.age === "fresh" ? "fresh" : "stale"}">${item.settled.length === item.graph.taskCount ? "FULL INTEGRATION" : `${item.graph.age} · observed ${item.graph.observedAt}`}</span></div><div class="graph-canvas ${item.app === "down" ? "frozen" : ""}"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.map((edge) => svgEdge(edge, item)).join("")}</svg>${visibleTasks(item).map((task) => node(task, item)).join("")}${item.app === "down" ? '<div class="crash-shutter"><b>APPLICATION DOWN</b><span>Complete graph remains visible but frozen</span></div>' : ""}</div><div class="flow-model"><div class="flow-group frontier-group"><small>ORDERED FRONTIER · CURRENT MEMBERSHIP</small><div>${item.frontier.length === 0 ? '<span class="empty">empty</span>' : item.frontier.map((task) => chip(task, item)).join("")}</div><p>${item.frontier.filter((task) => !item.bounded.includes(task)).length} task(s) wait beyond the desired prefix.</p></div><span class="capacity-arrow">→<small>capacity ${capacity}</small></span><div class="flow-group capacity-group"><small>DESIRED TICKETS / ACTUAL HELD POSITIONS</small><div>${item.bounded.length === 0 ? '<span class="empty">no desired tickets</span>' : item.bounded.map((task) => chip(task, item)).join("")}</div><p>Held: ${item.held.length === 0 ? "none" : item.held.join(" + ")}</p></div></div></section>`
+const originalGraph = (item: Frame): string => `<div class="graph-canvas original-graph ${item.app === "down" ? "frozen" : ""}"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.map((edge) => svgEdge(edge, item)).join("")}</svg>${visibleTasks(item).map((task) => node(task, item)).join("")}${item.app === "down" ? '<div class="crash-shutter"><b>APPLICATION DOWN</b><span>Complete graph remains visible but frozen</span></div>' : ""}</div>`
+
+const mountedGraph = (item: Frame): string => `<div class="graph-canvas mounted-graph graph-${graphVariant} ${item.app === "down" ? "frozen" : ""}"><div data-graph-host class="graph-host"></div>${item.app === "down" ? '<div class="crash-shutter"><b>APPLICATION DOWN</b><span>Complete graph remains visible but frozen</span></div>' : ""}</div>`
+
+const flowModel = (item: Frame): string => `<div class="flow-model"><div class="flow-group frontier-group"><small>ORDERED FRONTIER · CURRENT MEMBERSHIP</small><div>${item.frontier.length === 0 ? '<span class="empty">empty</span>' : item.frontier.map((task) => chip(task, item)).join("")}</div><p>${item.frontier.filter((task) => !item.bounded.includes(task)).length} task(s) wait beyond the desired prefix.</p></div><span class="capacity-arrow">→<small>capacity ${capacity}</small></span><div class="flow-group capacity-group"><small>DESIRED TICKETS / ACTUAL HELD POSITIONS</small><div>${item.bounded.length === 0 ? '<span class="empty">no desired tickets</span>' : item.bounded.map((task) => chip(task, item)).join("")}</div><p>Held: ${item.held.length === 0 ? "none" : item.held.join(" + ")}</p></div></div>`
+
+const graphPanel = (item: Frame): string => {
+  const definition = graphDefinition()
+  return `<section class="graph-panel instrument"><div class="panel-head"><div><span class="panel-kind">${definition.name.toUpperCase()} · ${definition.source.toUpperCase()}</span><h2>${item.graph.revision} · ${item.graph.taskCount} tasks · ${item.settled.length}/${item.graph.taskCount} integrated</h2></div><span class="freshness ${item.graph.age === "fresh" ? "fresh" : "stale"}">${item.settled.length === item.graph.taskCount ? "FULL INTEGRATION" : `${item.graph.age} · observed ${item.graph.observedAt}`}</span></div><div class="graph-observation"><b>COMPARE ${graphVariants.findIndex(({ key }) => key === graphVariant) + 1}/3</b><span>${definition.prompt}</span></div>${graphVariant === "original" ? originalGraph(item) : mountedGraph(item)}${flowModel(item)}</section>`
+}
+
+const graphSwitcher = (): string => {
+  const activeIndex = graphVariants.findIndex(({ key }) => key === graphVariant)
+  return `<nav class="graph-switcher" aria-label="Graph implementation comparison"><button data-graph-step="-1" aria-label="Previous graph">←</button>${graphVariants.map((variant, index) => `<button data-graph-variant="${variant.key}" class="${variant.key === graphVariant ? "active" : ""}"><kbd>${index + 1}</kbd><span><b>${variant.name}</b><small>${variant.source}</small></span>${index === 0 ? "<em>ORIGINAL</em>" : ""}</button>`).join("")}<button data-graph-step="1" aria-label="Next graph">→</button><i>${activeIndex + 1} / ${graphVariants.length}</i></nav>`
+}
 
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
+const selectTask = (task: TaskKey): void => {
+  selectionMode = selectionMode === "task" && selectedTask === task ? "none" : "task"
+  selectedTask = task
+  render()
+}
+
+const setGraphVariant = (variant: GraphVariant): void => {
+  graphVariant = variant
+  const url = new URL(location.href)
+  url.searchParams.set("graph", variant)
+  history.replaceState(null, "", url)
+  render()
+}
+
+const stepGraphVariant = (delta: number): void => {
+  const currentIndex = graphVariants.findIndex(({ key }) => key === graphVariant)
+  const nextIndex = (currentIndex + delta + graphVariants.length) % graphVariants.length
+  setGraphVariant(graphVariants[nextIndex]!.key)
+}
+
+const mountGraph = (item: Frame): void => {
+  if (graphVariant === "original") return
+  const host = document.querySelector<HTMLElement>("[data-graph-host]")
+  if (host === null) return
+  graphCleanup = mountComparisonGraph({
+    activeTasks: activeTasks(item),
+    edges,
+    frame: item,
+    host,
+    onTask: selectTask,
+    selectedTask: selectionMode === "task" ? selectedTask : null,
+    tasks: visibleTasks(item),
+    variant: graphVariant
+  })
+}
+
 const render = (): void => {
   const item = current()
+  graphCleanup?.()
+  graphCleanup = undefined
   root.className = `prototype app-${item.app} ${reducedMotion ? "reduce-motion" : ""}`
-  root.innerHTML = `${header()}${placement()}${timeline()}${transition(item)}<main><div class="layout">${codePanel(item)}${graphPanel(item)}</div>${evidence(item)}</main>`
+  root.innerHTML = `${header()}${placement()}${timeline()}${transition(item)}<main><div class="layout">${codePanel(item)}${graphPanel(item)}</div>${evidence(item)}</main>${graphSwitcher()}`
   bind()
+  mountGraph(item)
 }
 
 const bind = (): void => {
@@ -472,19 +537,16 @@ const bind = (): void => {
     render()
   }))
   document.querySelectorAll<HTMLElement>("[data-task]").forEach((element) => element.addEventListener("click", () => {
-    const task = element.dataset.task as TaskKey
-    selectionMode = selectionMode === "task" && selectedTask === task ? "none" : "task"
-    selectedTask = task
-    render()
+    selectTask(element.dataset.task as TaskKey)
   }))
   document.querySelectorAll<HTMLElement>("[data-cell-task]").forEach((element) => element.addEventListener("click", (event) => {
     event.stopPropagation()
     const task = element.dataset.cellTask as TaskKey
     selectedStage = element.closest<HTMLElement>("[data-stage]")?.dataset.stage as StageKey ?? selectedStage
-    selectionMode = selectionMode === "task" && selectedTask === task ? "none" : "task"
-    selectedTask = task
-    render()
+    selectTask(task)
   }))
+  document.querySelectorAll<HTMLElement>("[data-graph-variant]").forEach((element) => element.addEventListener("click", () => setGraphVariant(element.dataset.graphVariant as GraphVariant)))
+  document.querySelectorAll<HTMLElement>("[data-graph-step]").forEach((element) => element.addEventListener("click", () => stepGraphVariant(Number(element.dataset.graphStep))))
   document.querySelector<HTMLElement>("[data-end]")?.addEventListener("click", () => { frameIndex = scenario().frames.length - 1; render() })
   document.querySelector<HTMLElement>("[data-play]")?.addEventListener("click", () => { playing = !playing; if (timer !== undefined) clearInterval(timer); if (playing) timer = window.setInterval(() => { frameIndex = (frameIndex + 1) % scenario().frames.length; render() }, reducedMotion ? 2600 : 1900); render() })
   document.querySelector<HTMLInputElement>("[data-motion]")?.addEventListener("change", (event) => { reducedMotion = (event.currentTarget as HTMLInputElement).checked; render() })
@@ -498,6 +560,15 @@ addEventListener("keydown", (event) => {
       ? Math.max(0, frameIndex - 1)
       : Math.min(scenario().frames.length - 1, frameIndex + 1)
     render()
+    return
+  }
+  if (!event.metaKey && !event.altKey && !event.ctrlKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    event.preventDefault()
+    stepGraphVariant(event.key === "ArrowLeft" ? -1 : 1)
+    return
+  }
+  if (/^[1-3]$/.test(event.key)) {
+    setGraphVariant(graphVariants[Number(event.key) - 1]!.key)
     return
   }
   if (event.key === "[") { frameIndex = Math.max(0, frameIndex - 1); render() }
