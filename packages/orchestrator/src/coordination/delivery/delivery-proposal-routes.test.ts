@@ -109,6 +109,7 @@ import {
   IntegratorResult
 } from "../../workflow/protocols/integrator/protocol.js"
 import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
+import { integratorInitialRunCorrelationFor } from "../../workflow/protocols/integrator/session.js"
 import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executeFreshTrackerGraphRead, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import { executePlannedAttemptTransition } from "./planned-attempt-delivery-action-adapter.js"
@@ -757,10 +758,14 @@ describe("delivery proposal route matrix", () => {
       )
       expect(missingGit).toEqual(new IntegrationCandidateBoundaryUnavailable({ boundary: "Git" }))
 
+      const preparation = { lineage, lineageObservedAt: JournalPosition.make(19), responsibility: started }
       const runIntegrator = RunnableFrontierTransition.RunIntegrator({
-        lineage,
-        lineageObservedAt: JournalPosition.make(19),
-        responsibility: started
+        ...preparation,
+        run: integratorInitialRunCorrelationFor({
+          responsibility: preparation.responsibility,
+          targetLineage: preparation.lineage,
+          targetLineageObservedAt: preparation.lineageObservedAt
+        })
       })
       const integratorProposal = proposalsFor(runIntegrator).proposals[0]
       if (integratorProposal === undefined || !isIdentityFreeProposal(integratorProposal)) {

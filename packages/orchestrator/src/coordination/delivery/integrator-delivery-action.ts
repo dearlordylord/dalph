@@ -1,5 +1,9 @@
 import { Context, Effect, Option } from "effect"
-import { Integrator, IntegratorGit, prepareIntegrationCandidate } from "../../workflow/protocols/integrator/protocol.js"
+import {
+  Integrator,
+  IntegratorGit,
+  prepareIntegrationCandidateRun
+} from "../../workflow/protocols/integrator/protocol.js"
 import type { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { deliveryActionCompleted, deliveryActionDeferred } from "./delivery-action-adapter-common.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
@@ -22,10 +26,13 @@ export const executeIntegratorAction = Effect.fn("DeliveryAction.runIntegrator")
   return yield* lease.integrationTargets
     .withPermit(
       transition.responsibility,
-      prepareIntegrationCandidate({
-        responsibility: transition.responsibility,
-        targetLineage: transition.lineage,
-        targetLineageObservedAt: transition.lineageObservedAt
+      prepareIntegrationCandidateRun({
+        preparation: {
+          responsibility: transition.responsibility,
+          targetLineage: transition.lineage,
+          targetLineageObservedAt: transition.lineageObservedAt
+        },
+        run: transition.run
       }).pipe(Effect.provideService(Integrator, integrator.value), Effect.provideService(IntegratorGit, git.value))
     )
     .pipe(

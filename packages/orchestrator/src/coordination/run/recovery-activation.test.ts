@@ -34,6 +34,7 @@ import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
+  makeTargetLineageObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTrackerGraphObservationOperation
@@ -82,22 +83,50 @@ import {
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
+  IntegratorCorrelation,
+  IntegratorNotPreparedDetail,
+  IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
+  IntegratorResult,
+  IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent,
+  IntegratorSessionFixedEvent,
   IntegratorSessionId as OuterIntegratorSessionId
 } from "../../workflow/protocols/integrator/events.js"
+import {
+  IntegrationQuarantineBasis,
+  IntegrationQuarantineCause,
+  IntegrationQuarantineDirectionAppliedEvent,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineResultEvidence,
+  IntegrationQuarantinedEvent
+} from "../../workflow/protocols/integration-quarantine/events.js"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../../workflow/protocols/integration-admission/events.js"
+import { integratorResponsibilityFactsFromCorrelation } from "../../workflow/protocols/integrator/state.js"
+import { evaluateIntegratorRetryAuthorization } from "../../workflow/protocols/integrator/retry-authorization.js"
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import type { PlannedAttemptWorktreeObservation } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
+  TargetLineageObservedEvent,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent
 } from "../../workflow/registry/event.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
-import { outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  integratorRunResultRecordedRecordKey,
+  integratorRunStartedRecordKey,
+  integratorSessionFixedRecordKey,
+  outcomeRecordKey
+} from "../../workflow-journal/record-key.js"
 import {
   continuationDecisionFor,
   continuationFreshnessBaselineForAttempt,
@@ -110,6 +139,7 @@ import {
 import { authorizedClaimForAttempt } from "./recovery-authority.js"
 import { ReconstructedPauseState, type ReconstructedRunState } from "../reconstruction/state.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
+import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 
 const coverageRunId = RunId.make("recovery-activation-coverage-run")
 const coverageTarget = FixtureTarget.make("recovery-activation-coverage-target")
@@ -440,6 +470,389 @@ const currentProjectionJournal = (
   })
   return Object.assign(journal, { state: { get: Effect.succeed({ reconstructed }) } })
 }
+
+const directionProjectionFixture = (direction: "Retry" | "FullRerun", graphAfterDirection = true) => {
+  const acceptedResult = acceptedResultFixture(GitCommitSha.make("b".repeat(40)))
+  const integrationTarget = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make(`/repositories/recovery-activation-direction-${direction}.git`)
+  })
+  const queuePosition = JournalPosition.make(10)
+  const startedPosition = JournalPosition.make(11)
+  const lineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget,
+    operationId: OperationId.make(`direction-${direction.toLowerCase()}-fixed-lineage`),
+    plannedAttempt: coverageAttempt,
+    predecessorOperationIds: []
+  })
+  const lineageObservation = TargetLineageObservation.make({
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: coverageAttempt.baseSha,
+    targetHeadSha: coverageAttempt.baseSha
+  })
+  const lineageRecord = coverageRecord(
+    13,
+    TargetLineageObservedEvent.make({
+      observation: lineageObservation,
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: lineageOperation.operationId,
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const correlation = IntegratorCorrelation.make({
+    acceptedResult,
+    candidateResource: IntegratorCandidateResourceLocator.make(`direction-resource-${direction.toLowerCase()}`),
+    expectedTargetHead: coverageAttempt.baseSha,
+    integrationTarget,
+    plannedAttempt: coverageAttempt,
+    queuedAt: queuePosition,
+    sessionId: OuterIntegratorSessionId.make(`direction-session-${direction.toLowerCase()}`),
+    startedAt: startedPosition,
+    targetLineageObservedAt: lineageRecord.position
+  })
+  const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
+  const resultDetail = IntegratorNotPreparedDetail.make("the outer Integrator returned no candidate")
+  const sessionRecord = {
+    ...coverageRecord(14, IntegratorSessionFixedEvent.make({ correlation, version: workflowJournalEventVersion })),
+    key: integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(correlation))
+  }
+  const runStartedRecord = {
+    ...coverageRecord(15, IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })),
+    key: integratorRunStartedRecordKey(run)
+  }
+  const resultRecord = {
+    ...coverageRecord(
+      16,
+      IntegratorRunResultRecordedEvent.make({
+        result: IntegratorResult.cases.NotPrepared.make({ correlation, detail: resultDetail }),
+        run,
+        version: workflowJournalEventVersion
+      })
+    ),
+    key: integratorRunResultRecordedRecordKey(run)
+  }
+  const quarantine = IntegrationQuarantinedEvent.make({
+    basis: IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+      cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: resultDetail }),
+      evidence: IntegrationQuarantineResultEvidence.make({ resultRecordedAt: resultRecord.position })
+    }),
+    correlation,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const quarantineRecord = coverageRecord(17, quarantine)
+  const directionEvent = IntegrationQuarantineDirectionAppliedEvent.make({
+    fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+      direction,
+      quarantineAt: quarantineRecord.position,
+      sessionId: correlation.sessionId
+    }),
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    requestId: IntegrationQuarantineDirectionRequestId.make({
+      nonce: `direction-${direction.toLowerCase()}-request`,
+      runId: coverageRunId
+    }),
+    version: workflowJournalEventVersion
+  })
+  const directionRecord = coverageRecord(18, directionEvent)
+  const integrationRecords = [
+    coverageRecord(
+      Number(queuePosition),
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult,
+        integrationTarget,
+        plannedAttempt: coverageAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    coverageRecord(
+      Number(startedPosition),
+      IntegrationStartedEvent.make({
+        acceptedResult,
+        integrationTarget,
+        plannedAttempt: coverageAttempt,
+        responsibilityBeganAt: queuePosition,
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
+  const claimObservation = coverageRecord(graphAfterDirection ? 22 : 5, coverageClaimEvent)
+  const graphObservation = coverageRecord(graphAfterDirection ? 23 : 6, coverageGraphEvent)
+  const records = [
+    ...coveragePlanRecords(),
+    ...integrationRecords,
+    coverageRecord(
+      12,
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: lineageOperation,
+        version: workflowJournalEventVersion
+      })
+    ),
+    lineageRecord,
+    sessionRecord,
+    runStartedRecord,
+    resultRecord,
+    quarantineRecord,
+    directionRecord,
+    claimObservation,
+    graphObservation
+  ].toSorted((left, right) => left.position - right.position)
+  const reconstructed = coverageRunState(records)
+  return {
+    direction,
+    directionRecord,
+    integrationTarget,
+    lineageOperation,
+    reconstructed: { ...reconstructed, graphKnowledge: { taskTrackerFacts: [coverageGraphEvent.observation] } }
+  }
+}
+
+effectIt.effect(
+  "acquires the target before a fresh direction-bound lineage read and reuses the read after restart",
+  () =>
+    Effect.gen(function* () {
+      const direction = "Retry" as const
+      for (const graphAfterDirection of [true, false]) {
+        const fixture = directionProjectionFixture(direction, graphAfterDirection)
+        const resources = yield* makeIntegrationTargetResourceController()
+        const recovery = yield* makeRunRecoveryProjection(
+          coverageRunId,
+          fixture.integrationTarget,
+          undefined,
+          undefined,
+          resources
+        ).pipe(
+          Effect.provideService(
+            InRunJournal,
+            currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
+          )
+        )
+        const firstProjection = yield* recovery.readDeliveryProjection
+        const acquire = firstProjection.frontier.transitions.find(
+          ({ _tag }) => _tag === "AcquireStartedIntegrationTarget"
+        )
+        if (acquire?._tag !== "AcquireStartedIntegrationTarget") {
+          return yield* Effect.die(
+            `expected ${direction} to reacquire its integration target; got ${firstProjection.frontier.transitions.map(({ _tag }) => _tag).join(",")}; explanations ${firstProjection.frontier.explanations.map(({ _tag }) => _tag).join(",")}`
+          )
+        }
+        expect(
+          firstProjection.frontier.transitions.some(
+            ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+          )
+        ).toBe(false)
+        yield* resources.acquire(acquire.responsibility)
+        yield* resources.publishAcceptedOwnership(acquire.responsibility)
+
+        const heldRecovery = yield* makeRunRecoveryProjection(
+          coverageRunId,
+          fixture.integrationTarget,
+          undefined,
+          undefined,
+          resources
+        ).pipe(
+          Effect.provideService(
+            InRunJournal,
+            currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
+          )
+        )
+        const heldProjection = yield* heldRecovery.readDeliveryProjection
+        const firstRead = heldProjection.frontier.transitions.find(
+          ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+        )
+        if (firstRead?._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
+          const sessionRecord = fixture.reconstructed.workflowHistory.records.find(
+            ({ event }) => event._tag === "IntegratorSessionFixed"
+          )
+          const authorization =
+            sessionRecord?.event._tag === "IntegratorSessionFixed"
+              ? evaluateIntegratorRetryAuthorization(
+                  fixture.reconstructed.workflowHistory.records,
+                  IntegratorRunCorrelation.make({
+                    ordinal: IntegratorRunOrdinal.make(2),
+                    session: sessionRecord.event.correlation
+                  })
+                )
+              : undefined
+          return yield* Effect.die(
+            `expected ${direction} direction-bound target-lineage read; got ${heldProjection.frontier.transitions.map(({ _tag }) => _tag).join(",")}; authorization ${JSON.stringify(authorization)}`
+          )
+        }
+        expect(firstRead.operation.predecessorOperationIds).toEqual([fixture.lineageOperation.operationId])
+        expect(firstRead.operation.operationId).toContain(`d:${Number(fixture.directionRecord.position)}`)
+
+        const intent = GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: firstRead.operation,
+          version: workflowJournalEventVersion
+        })
+        const intentPosition = JournalPosition.make(Number(fixture.reconstructed.appliedThrough ?? 0) + 1)
+        const afterIntent = {
+          ...fixture.reconstructed,
+          appliedThrough: intentPosition,
+          workflowHistory: {
+            records: [...fixture.reconstructed.workflowHistory.records, coverageRecord(intentPosition, intent)]
+          }
+        }
+        const restarted = yield* makeRunRecoveryProjection(
+          coverageRunId,
+          fixture.integrationTarget,
+          undefined,
+          undefined,
+          resources
+        ).pipe(
+          Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterIntent))
+        )
+        const restartedProjection = yield* restarted.readDeliveryProjection
+        const restartedRead = restartedProjection.frontier.transitions.find(
+          ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+        )
+        expect(restartedRead).toEqual(firstRead)
+
+        const fixedSession = fixture.reconstructed.workflowHistory.records.find(
+          ({ event }) => event._tag === "IntegratorSessionFixed"
+        )
+        if (fixedSession?.event._tag !== "IntegratorSessionFixed") {
+          return yield* Effect.die("expected fixed Integrator session")
+        }
+        const observationPosition = JournalPosition.make(Number(intentPosition) + 1)
+        const observation = TargetLineageObservedEvent.make({
+          observation: {
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: acquire.responsibility.plannedAttempt.baseSha,
+            targetHeadSha: fixedSession.event.correlation.expectedTargetHead
+          },
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: firstRead.operation.operationId,
+          plannedAttempt: acquire.responsibility.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+        const afterObservation = {
+          ...afterIntent,
+          appliedThrough: observationPosition,
+          workflowHistory: {
+            records: [...afterIntent.workflowHistory.records, coverageRecord(observationPosition, observation)]
+          }
+        }
+        const restartedResources = yield* makeIntegrationTargetResourceController()
+        const afterObservationRecovery = yield* makeRunRecoveryProjection(
+          coverageRunId,
+          fixture.integrationTarget,
+          undefined,
+          undefined,
+          restartedResources
+        ).pipe(
+          Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterObservation))
+        )
+        const reacquire = (yield* afterObservationRecovery.readDeliveryProjection).frontier.transitions.find(
+          ({ _tag }) => _tag === "AcquireStartedIntegrationTarget"
+        )
+        if (reacquire?._tag !== "AcquireStartedIntegrationTarget") {
+          return yield* Effect.die("expected target reacquisition after the completed Retry lineage read")
+        }
+        yield* restartedResources.acquire(reacquire.responsibility)
+        yield* restartedResources.publishAcceptedOwnership(reacquire.responsibility)
+        const heldAfterObservationRecovery = yield* makeRunRecoveryProjection(
+          coverageRunId,
+          fixture.integrationTarget,
+          undefined,
+          undefined,
+          restartedResources
+        ).pipe(
+          Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterObservation))
+        )
+        const runTwo = (yield* heldAfterObservationRecovery.readDeliveryProjection).frontier.transitions.find(
+          ({ _tag }) => _tag === "RunIntegrator"
+        )
+        expect(runTwo?._tag === "RunIntegrator" ? runTwo.run.ordinal : undefined).toBe(2)
+
+        const laterClaimPosition = JournalPosition.make(Number(observationPosition) + 1)
+        const laterGraphPosition = JournalPosition.make(Number(observationPosition) + 2)
+        const laterGraphOperation = makeTrackerGraphObservationOperation(
+          OperationId.make(`direction-retry-graph-after-lineage:${graphAfterDirection}`),
+          coverageTarget,
+          [],
+          [coverageAttempt.taskId]
+        )
+        const laterClaimOperation = makeTaskClaimObservationOperation(
+          OperationId.make(`direction-retry-claim-after-lineage:${graphAfterDirection}`),
+          coverageTarget,
+          coverageAttempt.taskId,
+          [coverageGraphOperation.operationId]
+        )
+        const afterLaterGraph = {
+          ...afterObservation,
+          appliedThrough: laterGraphPosition,
+          workflowHistory: {
+            records: [
+              ...afterObservation.workflowHistory.records,
+              coverageRecord(
+                laterClaimPosition,
+                taskTrackerFactsObservedEvent(
+                  laterClaimOperation.operationId,
+                  makeFocusedTaskClaimFactsObserved(laterClaimOperation, coverageClaim)
+                )
+              ),
+              coverageRecord(
+                laterGraphPosition,
+                taskTrackerFactsObservedEvent(
+                  laterGraphOperation.operationId,
+                  makeCompleteTaskTrackerFactsObserved(laterGraphOperation, coverageGraph)
+                )
+              )
+            ]
+          }
+        }
+        const graphRefreshRecovery = yield* makeRunRecoveryProjection(
+          coverageRunId,
+          fixture.integrationTarget,
+          undefined,
+          undefined,
+          restartedResources
+        ).pipe(
+          Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterLaterGraph))
+        )
+        const refreshedRead = (yield* graphRefreshRecovery.readDeliveryProjection).frontier.transitions.find(
+          ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+        )
+        expect(refreshedRead?._tag === "ObservePlannedAttemptContinuationTargetLineage").toBe(true)
+        expect(
+          refreshedRead?._tag === "ObservePlannedAttemptContinuationTargetLineage"
+            ? refreshedRead.operation.operationId
+            : undefined
+        ).not.toBe(firstRead.operation.operationId)
+      }
+
+      const withoutDirection = directionProjectionFixture("Retry")
+      const recordsWithoutDirection = withoutDirection.reconstructed.workflowHistory.records.filter(
+        ({ position }) => position !== withoutDirection.directionRecord.position
+      )
+      const noDirectionState = {
+        ...withoutDirection.reconstructed,
+        workflowHistory: { records: recordsWithoutDirection }
+      }
+      const noDirectionResources = yield* makeIntegrationTargetResourceController()
+      const noDirectionRecovery = yield* makeRunRecoveryProjection(
+        coverageRunId,
+        withoutDirection.integrationTarget,
+        undefined,
+        undefined,
+        noDirectionResources
+      ).pipe(
+        Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, noDirectionState))
+      )
+      expect(
+        (yield* noDirectionRecovery.readDeliveryProjection).frontier.transitions.some(
+          ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+        )
+      ).toBe(false)
+    })
+)
 
 it("suspends a running grouping descendant and reopens it after current facts move it outside the parent", () => {
   const runId = RunId.make("grouping-descendant-suspension-run")

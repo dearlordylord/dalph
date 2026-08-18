@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Retry authorization and changed-head disposition remain one frontier algebra owner. */
 import { Option } from "effect"
 import { plannedAttemptExecutorCorrelation, type AttemptId, type TaskId } from "@dalph/contracts"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
@@ -19,8 +20,18 @@ import {
   integratorRunQualifiedCandidateFromState,
   type CurrentIntegratorState
 } from "../../workflow/protocols/integrator/state.js"
+import {
+  integratorInitialRunCorrelationFor,
+  integratorRunCorrelationForSession
+} from "../../workflow/protocols/integrator/session.js"
+import { integratorRetryRunOrdinal, type IntegratorRunCorrelation } from "../../workflow/protocols/integrator/events.js"
+import { integratorRunTwoAuthorizationIssue } from "../../workflow/protocols/integrator/retry-authorization.js"
+import {
+  deriveIntegrationQuarantineState,
+  type IntegrationQuarantineState
+} from "../../workflow/protocols/integration-quarantine/state.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
-import type { JournalPosition } from "../../workflow-journal/identity.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
 
 type ClaimSubject = { readonly plannedAttempt: { readonly attemptId: AttemptId; readonly taskId: TaskId } }
 type PromotionState = ReturnType<typeof deriveTargetPromotionStateFor>
@@ -62,6 +73,21 @@ interface DurableTargetLineage {
   readonly observedAt: JournalPosition
 }
 
+/** One retry decision derived from the durable quarantine and target-lineage chronology. */
+type RetryIntegratorProgress =
+  | { readonly _tag: "NotApplicable" }
+  | { readonly _tag: "Blocked" }
+  | { readonly _tag: "AwaitingLineage" }
+  | { readonly _tag: "Authorized"; readonly lineage: DurableTargetLineage; readonly run: IntegratorRunCorrelation }
+  | {
+      /** Fresh Git evidence proves Retry cannot use the session's fixed head. */
+      readonly _tag: "TargetHeadChanged"
+      readonly directionAppliedAt: JournalPosition
+      readonly lineage: DurableTargetLineage
+      readonly priorQuarantineAt: JournalPosition
+      readonly session: IntegratorRunCorrelation["session"]
+    }
+
 const targetLineageEqual = (left: TargetLineageObservation, right: TargetLineageObservation): boolean =>
   left.plannedBaseIsAncestorOfTargetHead === right.plannedBaseIsAncestorOfTargetHead &&
   left.plannedBaseSha === right.plannedBaseSha &&
@@ -70,13 +96,15 @@ const targetLineageEqual = (left: TargetLineageObservation, right: TargetLineage
 const durableTargetLineageFor = (
   runState: ReconstructedRunState,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
-  responsibility: StartedIntegrationResponsibility
+  responsibility: StartedIntegrationResponsibility,
+  afterPosition?: JournalPosition
 ): DurableTargetLineage | undefined => {
   const current = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
   if (current === undefined) return undefined
   const record = runState.workflowHistory.records.findLast(
-    ({ event }) =>
+    ({ event, position }) =>
       event._tag === "TargetLineageObserved" &&
+      (afterPosition === undefined || position > afterPosition) &&
       event.plannedAttempt.attemptId === responsibility.plannedAttempt.attemptId &&
       event.plannedAttempt.runId === responsibility.plannedAttempt.runId &&
       targetLineageEqual(event.observation, current)
@@ -84,6 +112,85 @@ const durableTargetLineageFor = (
   return record?.event._tag === "TargetLineageObserved"
     ? { observation: record.event.observation, observedAt: record.position }
     : undefined
+}
+
+const nextJournalPositionFor = (runState: ReconstructedRunState): JournalPosition =>
+  JournalPosition.make(
+    runState.workflowHistory.records.reduce((latest, record) => Math.max(latest, Number(record.position)), 0) + 1
+  )
+
+const runBoundIntegratorStateFor = (
+  state: CurrentIntegratorState
+): Extract<CurrentIntegratorState, { readonly run: IntegratorRunCorrelation }> | undefined =>
+  "run" in state ? state : undefined
+
+const retryQuarantineStateFor = (
+  runState: ReconstructedRunState,
+  integratorState: CurrentIntegratorState
+): IntegrationQuarantineState | undefined => {
+  const runBoundState = runBoundIntegratorStateFor(integratorState)
+  return runBoundState === undefined || runBoundState.run.ordinal !== 1
+    ? undefined
+    : deriveIntegrationQuarantineState(runState.workflowHistory.records, runBoundState.run.session.sessionId)
+}
+
+/**
+ * Derives the only frontier permission that may start Retry's ordinal-two
+ * run. A terminal or provider-absence quarantine blocks the old run until a
+ * winning Retry direction and a fresh unchanged target-lineage pair exist.
+ */
+// eslint-disable-next-line complexity -- One closed Q/D/L decision must retain its precedence and exact authority checks.
+const retryIntegratorProgressFor = (
+  runState: ReconstructedRunState,
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility,
+  integratorState: CurrentIntegratorState
+): RetryIntegratorProgress => {
+  const runBoundState = runBoundIntegratorStateFor(integratorState)
+  if (runBoundState === undefined || runBoundState.run.ordinal !== 1) {
+    return { _tag: "NotApplicable" }
+  }
+
+  const quarantine = retryQuarantineStateFor(runState, integratorState)
+  if (quarantine === undefined || quarantine._tag === "NoQuarantine") {
+    return { _tag: "NotApplicable" }
+  }
+  if (
+    quarantine._tag === "Contradiction" ||
+    quarantine._tag === "Quarantined" ||
+    quarantine.application.fingerprint.direction !== "Retry"
+  ) {
+    return { _tag: "Blocked" }
+  }
+  if (runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true) {
+    return { _tag: "AwaitingLineage" }
+  }
+
+  const lineage = durableTargetLineageFor(runState, runtimeFacts, responsibility, quarantine.applicationAt)
+  if (lineage === undefined) {
+    return { _tag: "AwaitingLineage" }
+  }
+  if (lineage.observation.targetHeadSha !== runBoundState.run.session.expectedTargetHead) {
+    return lineage.observation.plannedBaseSha === responsibility.plannedAttempt.baseSha
+      ? {
+          _tag: "TargetHeadChanged",
+          directionAppliedAt: quarantine.applicationAt,
+          lineage,
+          priorQuarantineAt: quarantine.quarantineAt,
+          session: runBoundState.run.session
+        }
+      : { _tag: "Blocked" }
+  }
+  if (targetLineageIsIncompatible(lineage.observation, responsibility)) {
+    return { _tag: "Blocked" }
+  }
+
+  const run = integratorRunCorrelationForSession(runBoundState.run.session, integratorRetryRunOrdinal)
+  const authorizationIssue = integratorRunTwoAuthorizationIssue(runState.workflowHistory.records, run, {
+    beforePosition: nextJournalPositionFor(runState),
+    requiredTargetLineageObservedAt: lineage.observedAt
+  })
+  return authorizationIssue === undefined ? { _tag: "Authorized", lineage, run } : { _tag: "Blocked" }
 }
 
 const fixedTargetLineageFor = (
@@ -196,6 +303,7 @@ const settledIntegrationMustReleaseTarget = (
   targetPromotionConfigurationIsMissing(integratorState, runtimeFacts) ||
   fixedLineageRequiresRelease(runtimeFacts, responsibility, integratorState)
 
+// eslint-disable-next-line complexity -- Started integration admission is one ordered authority gate over tracker, claim, quarantine, and target ownership.
 const transitionsBeforeStartedIntegrationAdmission = (
   runState: ReconstructedRunState,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
@@ -204,6 +312,7 @@ const transitionsBeforeStartedIntegrationAdmission = (
   held: boolean,
   integratorState: CurrentIntegratorState,
   promotion: PromotionState,
+  retryProgress: RetryIntegratorProgress,
   trackerFactsAreCurrentFor: (responsibility: { readonly plannedAttempt: { readonly taskId: TaskId } }) => boolean,
   claimIsExactFor: (responsibility: ClaimSubject) => boolean
 ): ReadonlyArray<RunnableFrontierTransitionType> | undefined => {
@@ -220,6 +329,15 @@ const transitionsBeforeStartedIntegrationAdmission = (
   }
   if (!trackerFactsAreCurrentFor(responsibility)) return releaseStartedIntegrationTargetFor(responsibility, held)
   if (!claimIsExactFor(responsibility)) return []
+  if (waiting) return releaseStartedIntegrationTargetFor(responsibility, held)
+  if (retryProgress._tag === "Blocked") return releaseStartedIntegrationTargetFor(responsibility, held)
+  if (
+    retryProgress._tag === "AwaitingLineage" ||
+    retryProgress._tag === "Authorized" ||
+    retryProgress._tag === "TargetHeadChanged"
+  ) {
+    return undefined
+  }
   if (settledIntegrationMustReleaseTarget(waiting, runtimeFacts, responsibility, integratorState, promotion)) {
     return releaseStartedIntegrationTargetFor(responsibility, held)
   }
@@ -244,6 +362,11 @@ const absentIntegratorProgressTransitionsFor = (
     RunnableFrontierTransition.RunIntegrator({
       lineage: lineage.observation,
       lineageObservedAt: lineage.observedAt,
+      run: integratorInitialRunCorrelationFor({
+        responsibility,
+        targetLineage: lineage.observation,
+        targetLineageObservedAt: lineage.observedAt
+      }),
       responsibility
     })
   ]
@@ -268,12 +391,38 @@ const startedIntegrationProgressTransitionFor = (
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
   integratorState: CurrentIntegratorState,
-  held: boolean
+  held: boolean,
+  retryProgress: RetryIntegratorProgress
 ): ReadonlyArray<RunnableFrontierTransitionType> => {
   // A fixed Integrator session or qualified candidate may outlive a released
   // process-local target position. The unfinished outer boundary reuses S's
   // durable H; only later promotion requires current target authority.
   if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+  if (retryProgress._tag === "AwaitingLineage") return []
+  if (retryProgress._tag === "TargetHeadChanged") {
+    return [
+      RunnableFrontierTransition.RecordChangedHeadRetryQuarantine({
+        request: {
+          directionAppliedAt: retryProgress.directionAppliedAt,
+          priorQuarantineAt: retryProgress.priorQuarantineAt,
+          session: retryProgress.session,
+          targetLineage: retryProgress.lineage.observation,
+          targetLineageObservedAt: retryProgress.lineage.observedAt
+        },
+        responsibility
+      })
+    ]
+  }
+  if (retryProgress._tag === "Authorized") {
+    return [
+      RunnableFrontierTransition.RunIntegrator({
+        lineage: retryProgress.lineage.observation,
+        lineageObservedAt: retryProgress.lineage.observedAt,
+        responsibility,
+        run: retryProgress.run
+      })
+    ]
+  }
   if (integratorState._tag === "GitQualifiedPrepared") {
     return qualifiedIntegratorProgressTransitionsFor(runtimeFacts, responsibility, integratorState)
   }
@@ -286,6 +435,7 @@ const startedIntegrationProgressTransitionFor = (
     RunnableFrontierTransition.RunIntegrator({
       lineage: lineage.observation,
       lineageObservedAt: lineage.observedAt,
+      run: integratorState.run,
       responsibility
     })
   ]
@@ -340,6 +490,7 @@ export const deriveStartedIntegrationFrontier = (
     const held = runtimeFacts.heldResponsibilityPositions.has(responsibility.queuedAt)
     const integratorState = integratorStateFor(responsibility)
     const promotion = promotionFor(integratorState)
+    const retryProgress = retryIntegratorProgressFor(runState, runtimeFacts, responsibility, integratorState)
     const earlyTransition = transitionsBeforeStartedIntegrationAdmission(
       runState,
       runtimeFacts,
@@ -348,12 +499,20 @@ export const deriveStartedIntegrationFrontier = (
       held,
       integratorState,
       promotion,
+      retryProgress,
       trackerFactsAreCurrentFor,
       claimIsExactFor
     )
     return (
       earlyTransition ??
-      startedIntegrationProgressTransitionFor(runState, runtimeFacts, responsibility, integratorState, held)
+      startedIntegrationProgressTransitionFor(
+        runState,
+        runtimeFacts,
+        responsibility,
+        integratorState,
+        held,
+        retryProgress
+      )
     )
   })
   return {

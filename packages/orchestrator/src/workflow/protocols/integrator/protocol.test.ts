@@ -679,7 +679,7 @@ describe("outer Integrator protocol", () => {
     })
   )
 
-  it.effect("accepts exact legacy initial-run result evidence as the migration authority for Retry", () =>
+  it.effect("rejects legacy session-only initial-run result evidence for Retry", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness(
         (request) => Effect.succeed(notPrepared(request)),
@@ -705,10 +705,12 @@ describe("outer Integrator protocol", () => {
       )
       expect(deriveCurrentIntegratorState(yield* harness.readRecords, responsibility)._tag).toBe("Contradiction")
 
-      const retried = yield* harness.runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
+      const retried = yield* harness
+        .runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
+        .pipe(Effect.flip)
 
-      expect(retried._tag).toBe("NotPrepared")
-      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(2)
+      expect(retried).toBeInstanceOf(IntegratorJournalContradiction)
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(1)
     })
   )
 

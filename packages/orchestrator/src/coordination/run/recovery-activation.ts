@@ -35,8 +35,19 @@ import {
   reconstructedTaskGraphFromEvents,
   reconstructedTaskWorkSpecificationFor
 } from "../reconstruction/graph-knowledge.js"
-import { deriveIntegrationAdmission } from "../../workflow/protocols/integration-admission/protocol.js"
+import {
+  deriveIntegrationAdmission,
+  type StartedIntegrationResponsibility
+} from "../../workflow/protocols/integration-admission/protocol.js"
 import { deriveIntegrationFrontier, integrationDeliveryWaitsOf } from "../frontier/integration-frontier.js"
+import { deriveIntegrationQuarantineState } from "../../workflow/protocols/integration-quarantine/state.js"
+import {
+  integratorCorrelationsEqual,
+  integratorResponsibilityFactsEqual,
+  integratorResponsibilityFactsFor,
+  integratorResponsibilityFactsFromCorrelation
+} from "../../workflow/protocols/integrator/state.js"
+import { integratorRunStartedRecordKey, integratorSessionFixedRecordKey } from "../../workflow-journal/record-key.js"
 import {
   type IntegrationTargetResourceSnapshot,
   type IntegrationTargetResourceController,
@@ -1541,6 +1552,130 @@ type WorktreeObservationRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptWorktreeObserved" }>
 }
 
+type IntegrationQuarantineDirectionFacts = {
+  readonly quarantineAt: JournalPosition
+  readonly directionAt: JournalPosition
+  readonly direction: Extract<JournalRecord["event"], { readonly _tag: "IntegrationQuarantineDirectionApplied" }>
+  readonly predecessorOperationId: OperationId
+}
+
+/**
+ * Finds one latest quarantine direction only when its fixed session, run,
+ * responsibility, and target-lineage read are all exact. The direction event
+ * is not itself a workflow operation, so the fresh read keeps the fixed
+ * session's real lineage operation as its durable causal predecessor.
+ */
+// eslint-disable-next-line complexity -- Exact S/run/Q/D reconstruction is intentionally one fail-closed causal relation.
+const integrationQuarantineDirectionFor = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: StartedIntegrationResponsibility
+): IntegrationQuarantineDirectionFacts | undefined => {
+  const matchingQuarantine = records.findLast(
+    (record) =>
+      record.event._tag === "IntegrationQuarantined" &&
+      record.runId === responsibility.plannedAttempt.runId &&
+      integratorResponsibilityFactsEqual(
+        integratorResponsibilityFactsFromCorrelation(record.event.correlation),
+        integratorResponsibilityFactsFor(responsibility)
+      )
+  )
+  if (matchingQuarantine?.event._tag !== "IntegrationQuarantined") return undefined
+  const quarantineCorrelation = matchingQuarantine.event.correlation
+
+  const fixedSessionRecords = records.filter(
+    (record) =>
+      record.event._tag === "IntegratorSessionFixed" &&
+      integratorResponsibilityFactsEqual(
+        integratorResponsibilityFactsFromCorrelation(record.event.correlation),
+        integratorResponsibilityFactsFromCorrelation(quarantineCorrelation)
+      )
+  )
+  if (fixedSessionRecords.length !== 1) return undefined
+  const fixedSession = fixedSessionRecords[0]
+  const fixedSessionEvent = fixedSession?.event
+  if (
+    fixedSession === undefined ||
+    fixedSessionEvent?._tag !== "IntegratorSessionFixed" ||
+    fixedSession.key !==
+      integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(quarantineCorrelation)) ||
+    fixedSession.runId !== responsibility.plannedAttempt.runId ||
+    !integratorCorrelationsEqual(fixedSessionEvent.correlation, quarantineCorrelation) ||
+    fixedSession.position <= quarantineCorrelation.targetLineageObservedAt ||
+    fixedSession.position >= matchingQuarantine.position
+  ) {
+    return undefined
+  }
+
+  const initialRunRecords = records.filter(
+    (record) =>
+      record.runId === responsibility.plannedAttempt.runId &&
+      record.event._tag === "IntegratorRunStarted" &&
+      record.event.run.ordinal === 1 &&
+      integratorCorrelationsEqual(record.event.run.session, quarantineCorrelation) &&
+      record.position > fixedSession.position &&
+      record.position < matchingQuarantine.position
+  )
+  if (initialRunRecords.length !== 1) return undefined
+  const initialRun = initialRunRecords[0]
+  const initialRunEvent = initialRun?.event
+  if (
+    initialRun === undefined ||
+    initialRunEvent?._tag !== "IntegratorRunStarted" ||
+    initialRun.key !== integratorRunStartedRecordKey(initialRunEvent.run) ||
+    initialRun.position <= fixedSession.position ||
+    initialRun.position >= matchingQuarantine.position
+  ) {
+    return undefined
+  }
+
+  const state = deriveIntegrationQuarantineState(records, quarantineCorrelation.sessionId)
+  if (state._tag !== "DirectionApplied" || state.quarantineAt !== matchingQuarantine.position) return undefined
+
+  const directionRecord = records.find(
+    (record) =>
+      record.position === state.applicationAt &&
+      record.runId === responsibility.plannedAttempt.runId &&
+      record.event._tag === "IntegrationQuarantineDirectionApplied"
+  )
+  if (
+    directionRecord?.event._tag !== "IntegrationQuarantineDirectionApplied" ||
+    directionRecord.event.requestId.runId !== responsibility.plannedAttempt.runId ||
+    directionRecord.event.fingerprint.sessionId !== quarantineCorrelation.sessionId ||
+    directionRecord.event.fingerprint.quarantineAt !== matchingQuarantine.position
+  ) {
+    return undefined
+  }
+
+  const fixedLineageRecord = records.find(
+    (record) =>
+      record.position === quarantineCorrelation.targetLineageObservedAt &&
+      record.event._tag === "TargetLineageObserved" &&
+      record.event.operationId.length > 0 &&
+      record.event.plannedAttempt.runId === responsibility.plannedAttempt.runId &&
+      plannedTaskAttemptEquivalence(record.event.plannedAttempt, responsibility.plannedAttempt) &&
+      record.event.observation.plannedBaseIsAncestorOfTargetHead &&
+      record.event.observation.plannedBaseSha === responsibility.plannedAttempt.baseSha &&
+      record.event.observation.targetHeadSha === quarantineCorrelation.expectedTargetHead
+  )
+  if (fixedLineageRecord?.event._tag !== "TargetLineageObserved") return undefined
+
+  return {
+    quarantineAt: matchingQuarantine.position,
+    directionAt: directionRecord.position,
+    direction: directionRecord.event,
+    predecessorOperationId: fixedLineageRecord.event.operationId
+  }
+}
+
+const integrationQuarantineDirectionTargetLineageOperationId = (
+  facts: IntegrationQuarantineDirectionFacts,
+  plannedAttempt: PlannedTaskAttempt,
+  graphObservedAt: JournalPosition
+): OperationId =>
+  OperationId.make(
+    `integration-quarantine-direction:${encodeURIComponent(facts.direction.requestId.nonce)}:${plannedAttempt.attemptId}:q:${facts.quarantineAt}:d:${facts.directionAt}:g:${graphObservedAt}:target-lineage`
+  )
+
 const currentCompleteGraphObservationAfter = (
   records: ReadonlyArray<JournalRecord>,
   baseline: Option.Option<JournalPosition>
@@ -2017,6 +2152,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       : []
   })
   const integrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
+  const integrationResponsibilities = deriveIntegrationAdmission(runState.workflowHistory.records).responsibilities
   const latestClaimObservationPositionFor = (taskId: TaskId) =>
     runState.workflowHistory.records.findLast(
       ({ event, position }) =>
@@ -2026,10 +2162,39 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
         event.observation.coverage.taskId === taskId
     )?.position
+  const directionLineageByAttemptId = new Map(
+    integrationResponsibilities.flatMap((responsibility) => {
+      if (responsibility._tag !== "StartedIntegrationResponsibility") return []
+      const direction = integrationQuarantineDirectionFor(runState.workflowHistory.records, responsibility)
+      return direction === undefined || direction.direction.fingerprint.direction !== "Retry"
+        ? []
+        : [
+            [
+              responsibility.plannedAttempt.attemptId,
+              {
+                directionAt: direction.directionAt,
+                operationId: integrationQuarantineDirectionTargetLineageOperationId(
+                  direction,
+                  responsibility.plannedAttempt,
+                  currentGraphObservationForTask(responsibility.plannedAttempt.taskId)?.position ??
+                    direction.directionAt
+                )
+              }
+            ] as const
+          ]
+    })
+  )
   const activationTargetLineage = runState.workflowHistory.records.flatMap(({ event, position }) => {
     if (event._tag !== "TargetLineageObserved") return []
     const taskBaseline = freshnessBaselineForTask(event.plannedAttempt.taskId)
-    return positionIsAfter(position, taskBaseline) ? [[event.plannedAttempt.attemptId, event.observation] as const] : []
+    const directionLineage = directionLineageByAttemptId.get(event.plannedAttempt.attemptId)
+    const isExactDirectionLineage =
+      directionLineage !== undefined &&
+      position > directionLineage.directionAt &&
+      event.operationId === directionLineage.operationId
+    return positionIsAfter(position, taskBaseline) || isExactDirectionLineage
+      ? [[event.plannedAttempt.attemptId, event.observation] as const]
+      : []
   })
   const targetLineageByAttemptId = new Map(activationTargetLineage)
   const targetLineageRefreshRequiredAttemptIds = new Set([
@@ -2053,6 +2218,19 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       return claim === undefined ? [] : [[plannedAttempt.attemptId, claim] as const]
     })
   )
+  const taskClaimAuthorityByAttemptId = new Map(
+    recordedTaskAttemptPlans(runState.workflowHistory.records).map(({ plannedAttempt }) => {
+      return [
+        plannedAttempt.attemptId,
+        currentTaskClaimAuthority(
+          runState.workflowHistory.records,
+          plannedAttempt.taskId,
+          authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim,
+          freshnessBaselineForTask(plannedAttempt.taskId)
+        )
+      ] as const
+    })
+  )
   const integration = deriveIntegrationFrontier(runState, {
     ...integrationResourceSnapshot,
     candidateCorrectionLimit,
@@ -2066,38 +2244,60 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     activeClaimByAttemptId,
     integrationFinalityConfigured,
     completionTaskConfigured,
-    taskClaimAuthorityByAttemptId: new Map(
-      recordedTaskAttemptPlans(runState.workflowHistory.records).map(({ plannedAttempt }) => {
-        return [
-          plannedAttempt.attemptId,
-          currentTaskClaimAuthority(
-            runState.workflowHistory.records,
-            plannedAttempt.taskId,
-            authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim,
-            freshnessBaselineForTask(plannedAttempt.taskId)
-          )
-        ] as const
-      })
-    )
+    taskClaimAuthorityByAttemptId
   })
   const integrationLineageTransitions = Option.match(integrationTarget, {
     onNone: () => [],
     onSome: (target) =>
       // eslint-disable-next-line complexity -- Candidate lineage starts only after the exact responsibility passes every current authority gate.
-      deriveIntegrationAdmission(runState.workflowHistory.records).responsibilities.flatMap((responsibility) => {
+      integrationResponsibilities.flatMap<RunnableFrontierTransition>((responsibility) => {
         if (responsibility._tag !== "StartedIntegrationResponsibility") return []
+        const appliedQuarantineDirection = integrationQuarantineDirectionFor(
+          runState.workflowHistory.records,
+          responsibility
+        )
+        const quarantineDirection =
+          appliedQuarantineDirection?.direction.fingerprint.direction === "Retry"
+            ? appliedQuarantineDirection
+            : undefined
         const claimObservedAt = latestClaimObservationPositionFor(responsibility.plannedAttempt.taskId)
         const taskGraphObservation = currentGraphObservationForTask(responsibility.plannedAttempt.taskId)
         const graphWasCheckedAfterClaim =
           claimObservedAt !== undefined &&
           taskGraphObservation !== undefined &&
           taskGraphObservation.position > claimObservedAt
-        return integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt) &&
+        const claimIsExact =
+          taskClaimAuthorityByAttemptId.get(responsibility.plannedAttempt.attemptId)?._tag === "Exact"
+        const targetIsHeld = integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt)
+        const directionLineageOperationId =
+          quarantineDirection === undefined
+            ? undefined
+            : integrationQuarantineDirectionTargetLineageOperationId(
+                quarantineDirection,
+                responsibility.plannedAttempt,
+                taskGraphObservation?.position ?? quarantineDirection.directionAt
+              )
+        const directionLineageWasObserved =
+          quarantineDirection !== undefined &&
+          directionLineageOperationId !== undefined &&
+          runState.workflowHistory.records.some(
+            ({ event, position }) =>
+              position > quarantineDirection.directionAt &&
+              event._tag === "TargetLineageObserved" &&
+              event.operationId === directionLineageOperationId &&
+              plannedTaskAttemptEquivalence(event.plannedAttempt, responsibility.plannedAttempt)
+          )
+        const targetLineageReadIsRequired =
+          quarantineDirection === undefined
+            ? !targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) ||
+              targetLineageRefreshRequiredAttemptIds.has(responsibility.plannedAttempt.attemptId)
+            : !directionLineageWasObserved
+        const lineageReadIsReady =
           !integrationResourceSnapshot.activeResponsibilityPositions.has(responsibility.queuedAt) &&
           graphWasCheckedAfterClaim &&
+          claimIsExact &&
           !pendingAttemptIds.has(responsibility.plannedAttempt.attemptId) &&
-          (!targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) ||
-            targetLineageRefreshRequiredAttemptIds.has(responsibility.plannedAttempt.attemptId)) &&
+          targetLineageReadIsRequired &&
           !integration.transitions.some(
             (transition) =>
               transition._tag === "RunIntegrator" && transition.responsibility.queuedAt === responsibility.queuedAt
@@ -2107,15 +2307,28 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               transition._tag === "ReleaseStartedIntegrationTarget" &&
               transition.responsibility.queuedAt === responsibility.queuedAt
           )
+        if (quarantineDirection !== undefined && !targetIsHeld && lineageReadIsReady) {
+          return integration.transitions.some(
+            (transition) =>
+              transition._tag === "AcquireStartedIntegrationTarget" &&
+              transition.responsibility.queuedAt === responsibility.queuedAt
+          )
+            ? []
+            : [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+        }
+        return targetIsHeld && lineageReadIsReady
           ? [
               RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
                 operation: makeTargetLineageObservationOperation({
                   integrationTarget: target,
                   operationId: OperationId.make(
-                    `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${responsibility.startedAt}:activation:${Option.getOrElse(requiredFreshnessBaseline, () => 0)}:target-lineage`
+                    directionLineageOperationId === undefined
+                      ? `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${responsibility.startedAt}:activation:${Option.getOrElse(requiredFreshnessBaseline, () => 0)}:target-lineage`
+                      : directionLineageOperationId
                   ),
                   plannedAttempt: responsibility.plannedAttempt,
-                  predecessorOperationIds: []
+                  predecessorOperationIds:
+                    quarantineDirection === undefined ? [] : [quarantineDirection.predecessorOperationId]
                 }),
                 plannedAttempt: responsibility.plannedAttempt
               })

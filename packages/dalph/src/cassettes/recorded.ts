@@ -1639,6 +1639,7 @@ const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
     ? `Dalph observed ${entry.evidence._tag} through tracker read ${entry.originatingActionOperationId}.`
     : `Dalph coordinator initiated ${entry.operation._tag} for the task tracker.`
 
+// eslint-disable-next-line complexity -- Every closed outer-Integrator occurrence receives one concrete actor-first lyric.
 const lyricForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): string => {
   if (entry._tag === "IntegratorSessionFixed") {
     return `Dalph coordinator fixed Integrator session ${entry.correlation.sessionId} for target head ${entry.correlation.expectedTargetHead}.`

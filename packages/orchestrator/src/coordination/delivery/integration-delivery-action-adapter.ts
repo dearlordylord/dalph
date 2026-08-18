@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The exhaustive integration transition-to-boundary routing stays in one auditable adapter. */
 import { Context, Effect, Option } from "effect"
 import {
   AcceptedResultEvidenceUnavailable,
@@ -53,6 +54,7 @@ import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { executeIntegratorAction } from "./integrator-delivery-action.js"
+import { recordChangedHeadRetryQuarantine } from "./integration-quarantine-disposition-action.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -82,6 +84,10 @@ type DeleteCompletedTaskCompletionClaim = Extract<
 >
 type CompletePromotedTask = Extract<IntegrationTransition, { readonly _tag: "CompletePromotedTask" }>
 type ObserveFocusedTaskCompletion = Extract<IntegrationTransition, { readonly _tag: "ObserveFocusedTaskCompletion" }>
+type OuterIntegratorTransition = Extract<
+  IntegrationTransition,
+  { readonly _tag: "ContinueStartedIntegrationCandidate" | "RecordChangedHeadRetryQuarantine" | "RunIntegrator" }
+>
 type CompletionConfirmationBasis = Extract<
   JournalRecord["event"],
   { readonly _tag: "CompletionTaskAcknowledged" | "CompletionTaskRequestLookupObserved" }
@@ -360,6 +366,18 @@ const continueIntegrationCandidate = Effect.fn("DeliveryAction.continueIntegrati
   return { _tag: "IntegrationCandidateAdvanced" as const, proposalId: action.proposal.id, resourceDisposition, state }
 })
 
+const executeOuterIntegratorAction = Effect.fn("DeliveryAction.executeOuterIntegrator")(function* (
+  action: IdentityFreeAction,
+  transition: OuterIntegratorTransition,
+  lease: DeliveryActionExecutionLease
+) {
+  if (transition._tag === "RecordChangedHeadRetryQuarantine") {
+    return yield* recordChangedHeadRetryQuarantine(action, transition, lease)
+  }
+  if (transition._tag === "RunIntegrator") return yield* executeIntegratorAction(action, transition, lease)
+  return yield* continueIntegrationCandidate(action, transition, lease)
+})
+
 const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvancedIntegration")(function* (
   action: IdentityFreeAction,
   transition: AdvancedIntegrationTransition,
@@ -376,8 +394,7 @@ const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvanc
   if (transition._tag === "DeleteCompletedTaskCompletionClaim") {
     return yield* deleteCompletedTaskCompletionClaim(action, transition, lease)
   }
-  if (transition._tag === "RunIntegrator") return yield* executeIntegratorAction(action, transition, lease)
-  return yield* continueIntegrationCandidate(action, transition, lease)
+  return yield* executeOuterIntegratorAction(action, transition, lease)
 })
 
 export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegration")(function* (

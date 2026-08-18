@@ -800,6 +800,7 @@ const proposalActionLabels = {
   ReconcileTaskClaim: "Check the tracker after an ambiguous task-claim request",
   ReconcileTaskClaimRelease: "Check the tracker after an ambiguous claim-release request",
   ReconcileTaskWorktree: "Check or create the exact Git worktree",
+  RecordChangedHeadRetryQuarantine: "Record that Retry observed a changed integration-target head",
   RecordStoppedAttemptClaimNoRelease: "Record that the stopped attempt has no exact claim to release",
   RecordTaskAttemptPlan: "Record the exact planned task attempt in Dalph's journal",
   ReleaseExternallyCompletedTaskClaim: "Ask the tracker to release the externally completed task's claim",

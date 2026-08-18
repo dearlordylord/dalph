@@ -180,7 +180,7 @@ const targetLineageIntentFor = (
   )
 
 // eslint-disable-next-line complexity -- One exact lineage pair must bind operation, target, attempt, observation, and Journal positions.
-export const matchingIntegratorTargetLineageIntentPosition = (
+const matchingIntegratorTargetLineageIntentPosition = (
   records: ReadonlyArray<JournalRecord>,
   input: IntegratorPreparationInput
 ): JournalPosition | undefined => {

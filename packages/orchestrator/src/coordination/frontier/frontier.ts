@@ -38,7 +38,10 @@ import type {
   TargetVerificationCandidate,
   TargetVerificationPlan
 } from "../../workflow/protocols/target-verification/events.js"
-import type { IntegratorRunQualifiedCandidate } from "../../workflow/protocols/integrator/events.js"
+import type {
+  IntegratorRunCorrelation,
+  IntegratorRunQualifiedCandidate
+} from "../../workflow/protocols/integrator/events.js"
 import type {
   CompletionTaskClaim,
   CompletionClaimDeletionRequest,
@@ -53,6 +56,7 @@ import type {
 import type { PlannedAttemptContinuationWitness } from "../../workflow/protocols/planned-attempt-continuation/events.js"
 import type { CompletionTaskConflictReason } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 import type { PlannedAttemptExecutorProjectionWaitReason } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import type { ChangedHeadRetryQuarantineInput } from "../../workflow/protocols/integration-quarantine/changed-head-retry.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
@@ -173,6 +177,13 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly lineage: TargetLineageObservation
     readonly lineageObservedAt: JournalPosition
     readonly responsibility: StartedIntegrationResponsibility
+    /** Exact outer occurrence authorized for this delivery, including Retry ordinal two. */
+    readonly run: IntegratorRunCorrelation
+  }
+  /** Records why an authorized Retry cannot reuse its fixed session head; this transition never calls Integrator. */
+  RecordChangedHeadRetryQuarantine: {
+    readonly request: ChangedHeadRetryQuarantineInput
+    readonly responsibility: StartedIntegrationResponsibility
   }
   RunTargetVerification: {
     readonly candidate: TargetVerificationCandidate
@@ -259,6 +270,7 @@ const transitionTrackerGraphRequirements = {
   ContinuePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
   ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
   ContinueStartedIntegrationCandidate: "CurrentTrackerGraphRequired",
+  RecordChangedHeadRetryQuarantine: "CurrentTrackerGraphRequired",
   RunIntegrator: "CurrentTrackerGraphRequired",
   RunTargetVerification: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",

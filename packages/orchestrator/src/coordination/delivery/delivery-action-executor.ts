@@ -39,8 +39,9 @@ import type {
 import type { runIntegrationCandidateConstruction } from "../run/integration-candidate-runtime.js"
 import type {
   IntegratorGitReadFailure,
-  prepareIntegrationCandidate
+  prepareIntegrationCandidateRun
 } from "../../workflow/protocols/integrator/protocol.js"
+import type { appendChangedHeadRetryQuarantine } from "../../workflow/protocols/integration-quarantine/changed-head-retry.js"
 import type { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-reacquisition/execute.js"
 import type {
   recoverTaskClaimOperation,
@@ -220,7 +221,8 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof recoverTaskClaimReleaseOperation>
   | EffectFunctionFailure<typeof recoverTaskWorktreeOperation>
   | EffectFunctionFailure<typeof runIntegrationCandidateConstruction>
-  | EffectFunctionFailure<typeof prepareIntegrationCandidate>
+  | EffectFunctionFailure<typeof prepareIntegrationCandidateRun>
+  | EffectFunctionFailure<typeof appendChangedHeadRetryQuarantine>
   | EffectFunctionFailure<typeof runTaskClaimReacquisition>
   | EffectFunctionFailure<typeof runTargetVerification>
   | EffectFunctionFailure<typeof runTargetPromotion>
