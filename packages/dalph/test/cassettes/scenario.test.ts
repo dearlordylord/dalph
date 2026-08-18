@@ -6841,6 +6841,9 @@ it.effect(
               !tag.startsWith("TargetPromotion") &&
               !tag.startsWith("CompletionTask") &&
               !tag.startsWith("CompletionClaim") &&
+              tag !== "IntegratorResultRecorded" &&
+              tag !== "IntegratorCandidateGitReadIntended" &&
+              tag !== "IntegratorCandidateGitObserved" &&
               tag !== "IntegrationFinalitySettled"
           )
         )

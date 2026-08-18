@@ -2299,7 +2299,7 @@ const targetPromotionGitReadReturned = (repository: string, candidateCommit: str
 
 const pipelineIntegrationPositions = {
   A: { queuedAt: 20, startedAt: 21, targetLineageObservedAt: 31 },
-  B: { queuedAt: 74, startedAt: 75, targetLineageObservedAt: 85 }
+  B: { queuedAt: 75, startedAt: 76, targetLineageObservedAt: 86 }
 } as const
 
 const pipelineIntegrationFinality = (
@@ -2996,7 +2996,7 @@ const pauseExecutorAndPromotionRequestD = {
       }
     },
     directParents: [promotionExpectedHead, pauseExecutorAndPromotionAcceptedResult.commit],
-    qualifiedAt: 31
+    qualifiedAt: 32
   },
   requestId: `target-promotion:integrator-session:${pauseExecutorAndPromotionSessionSuffix}:1:${promotionCandidateCommit}`
 } as const
@@ -3030,7 +3030,7 @@ const pauseExecutorAndPromotionRunD = {
 const pauseExecutorResponsibilityA = {
   _tag: "PlannedAttemptExecutorWork",
   attemptId: "attempt:A:0",
-  beganAt: 64,
+  beganAt: 65,
   coverage: { _tag: "ExactTaskPauseCoverage" },
   taskId: "A"
 } as const
@@ -3038,7 +3038,7 @@ const pauseExecutorResponsibilityA = {
 const pausePromotionResponsibilityD = {
   _tag: "StartedIntegration",
   attemptId: "attempt:D:0",
-  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 71, pausedTaskId: "A" },
+  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 72, pausedTaskId: "A" },
   queuedAt: 22,
   startedAt: 23,
   taskId: "D"
@@ -4332,10 +4332,10 @@ const defaultDiamondIntegrationPositions = {
 
 const fiveTaskDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 101, startedAt: 108, targetLineageObservedAt: 123 },
-  C: { queuedAt: 105, startedAt: 148, targetLineageObservedAt: 150 },
-  D: { queuedAt: 220, startedAt: 221, targetLineageObservedAt: 231 },
-  E: { queuedAt: 109, startedAt: 175, targetLineageObservedAt: 177 },
+  B: { queuedAt: 102, startedAt: 109, targetLineageObservedAt: 124 },
+  C: { queuedAt: 106, startedAt: 150, targetLineageObservedAt: 152 },
+  D: { queuedAt: 224, startedAt: 225, targetLineageObservedAt: 235 },
+  E: { queuedAt: 110, startedAt: 178, targetLineageObservedAt: 180 },
   F: defaultDiamondIntegrationPositions,
   G: defaultDiamondIntegrationPositions,
   H: defaultDiamondIntegrationPositions,
@@ -4345,15 +4345,15 @@ const fiveTaskDiamondIntegrationPositions = {
 
 const doubleDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 122, startedAt: 124, targetLineageObservedAt: 109 },
-  C: { queuedAt: 123, startedAt: 149, targetLineageObservedAt: 118 },
-  D: { queuedAt: 208, startedAt: 210, targetLineageObservedAt: 220 },
-  E: { queuedAt: 306, startedAt: 308, targetLineageObservedAt: 320 },
-  F: { queuedAt: 307, startedAt: 345, targetLineageObservedAt: 347 },
-  G: { queuedAt: 490, startedAt: 491, targetLineageObservedAt: 501 },
-  H: { queuedAt: 406, startedAt: 408, targetLineageObservedAt: 420 },
-  I: { queuedAt: 407, startedAt: 445, targetLineageObservedAt: 447 },
-  X: { queuedAt: 209, startedAt: 245, targetLineageObservedAt: 247 }
+  B: { queuedAt: 123, startedAt: 125, targetLineageObservedAt: 110 },
+  C: { queuedAt: 124, startedAt: 151, targetLineageObservedAt: 119 },
+  D: { queuedAt: 211, startedAt: 213, targetLineageObservedAt: 223 },
+  E: { queuedAt: 311, startedAt: 313, targetLineageObservedAt: 325 },
+  F: { queuedAt: 312, startedAt: 351, targetLineageObservedAt: 353 },
+  G: { queuedAt: 499, startedAt: 500, targetLineageObservedAt: 510 },
+  H: { queuedAt: 413, startedAt: 415, targetLineageObservedAt: 427 },
+  I: { queuedAt: 414, startedAt: 453, targetLineageObservedAt: 455 },
+  X: { queuedAt: 212, startedAt: 249, targetLineageObservedAt: 251 }
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
 const integrationPositionsForDiamondTask = (
