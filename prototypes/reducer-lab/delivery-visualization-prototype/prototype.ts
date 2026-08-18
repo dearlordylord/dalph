@@ -9,11 +9,6 @@ type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" |
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
-const viewKeys = [
-  "original", "data-wide", "floating-panels", "transparent-panels",
-  "value-first", "centered-values", "quiet-labels"
-] as const
-type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
 
@@ -257,15 +252,7 @@ const story: Scenario = {
   ]
 }
 
-const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
-  { key: "original", name: "State top rules · leading", description: "The retained original identifies each live-data rectangle with a strong state-colored top rule." },
-  { key: "data-wide", name: "Wide data field", description: "More row width is assigned to live rectangles while source remains readable." },
-  { key: "floating-panels", name: "Floating state panels", description: "Top-rule rectangles gain depth while their state colors stay unchanged." },
-  { key: "transparent-panels", name: "Transparent state panels", description: "Rectangle fills disappear so state top rules and values carry the hierarchy." },
-  { key: "value-first", name: "Value before label", description: "Dynamic values move above their descriptive labels inside every rectangle." },
-  { key: "centered-values", name: "Centered values", description: "Rectangle contents use centered alignment to test faster shape scanning." },
-  { key: "quiet-labels", name: "Quiet rectangle labels", description: "Labels recede so dynamic values and state top rules dominate each rectangle." }
-]
+const originalDescription = "State-colored top rules identify each live-data rectangle while source and data remain in one shared row."
 
 let frameIndex = 0
 let selectedStage: StageKey = "frontier"
@@ -276,10 +263,6 @@ let reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches
 let timer: number | undefined
 const root = document.querySelector<HTMLElement>("#prototype-root")!
 
-const view = (): ViewKey => {
-  const value = new URLSearchParams(location.search).get("view")
-  return views.some(({ key }) => key === value) ? value as ViewKey : "original"
-}
 const current = (): Frame => story.frames[frameIndex] ?? story.frames[0]!
 const previous = (): Frame => story.frames[Math.max(0, frameIndex - 1)]!
 const visibleTasks = (item: Frame): ReadonlyArray<TaskKey> => item.graph.taskCount === 10 ? allTasks : originalTasks
@@ -387,7 +370,7 @@ const codeMarkup = (code: string): string => {
   }).join("")
 }
 
-const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${story.frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i></span><code>${codeMarkup(stage.code)}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>${views.find(({ key }) => key === view())!.description}</span></div></section>`
+const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${story.frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i></span><code>${codeMarkup(stage.code)}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>${originalDescription}</span></div></section>`
 
 const nodePositions: Record<TaskKey, readonly [number, number]> = {
   A: [5, 43], B: [21, 17], C: [21, 69], D: [39, 43], E: [55, 17], F: [55, 69], H: [71, 17], I: [71, 69], X: [39, 84], G: [88, 43]
@@ -419,29 +402,11 @@ const chip = (task: TaskKey, item: Frame): string => {
 const graphPanel = (item: Frame): string => `<section class="graph-panel instrument"><div class="panel-head"><div><span class="panel-kind">COMPLETE GRAPH + DELIVERY OVERLAY</span><h2>${item.graph.revision} · ${item.graph.taskCount} tasks · ${item.settled.length}/${item.graph.taskCount} integrated</h2></div><span class="freshness ${item.graph.age === "fresh" ? "fresh" : "stale"}">${item.settled.length === item.graph.taskCount ? "FULL INTEGRATION" : `${item.graph.age} · observed ${item.graph.observedAt}`}</span></div><div class="graph-canvas ${item.app === "down" ? "frozen" : ""}"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.map((edge) => svgEdge(edge, item)).join("")}</svg>${visibleTasks(item).map((task) => node(task, item)).join("")}${item.app === "down" ? '<div class="crash-shutter"><b>APPLICATION DOWN</b><span>Complete graph remains visible but frozen</span></div>' : ""}</div><div class="flow-model"><div class="flow-group frontier-group"><small>ORDERED FRONTIER · CURRENT MEMBERSHIP</small><div>${item.frontier.length === 0 ? '<span class="empty">empty</span>' : item.frontier.map((task) => chip(task, item)).join("")}</div><p>${item.frontier.filter((task) => !item.bounded.includes(task)).length} task(s) wait beyond the desired prefix.</p></div><span class="capacity-arrow">→<small>capacity ${capacity}</small></span><div class="flow-group capacity-group"><small>DESIRED TICKETS / ACTUAL HELD POSITIONS</small><div>${item.bounded.length === 0 ? '<span class="empty">no desired tickets</span>' : item.bounded.map((task) => chip(task, item)).join("")}</div><p>Held: ${item.held.length === 0 ? "none" : item.held.join(" + ")}</p></div></div></section>`
 
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
-const switcher = (): string => {
-  const index = views.findIndex(({ key }) => key === view())
-  return `<nav class="switcher"><button data-cycle="-1">←</button><label><small>CODE / DATA STYLING ${index + 1} / ${views.length}</small><select data-view-select aria-label="Prototype styling">${views.map((item) => `<option value="${item.key}" ${item.key === view() ? "selected" : ""}>${item.name}</option>`).join("")}</select></label><button data-cycle="1">→</button></nav>`
-}
-
 const render = (): void => {
   const item = current()
-  root.className = `prototype view-${view()} app-${item.app} ${reducedMotion ? "reduce-motion" : ""}`
-  root.innerHTML = `${header()}${placement()}${timeline()}${transition(item)}<main><div class="layout">${codePanel(item)}${graphPanel(item)}</div>${evidence(item)}</main>${switcher()}`
+  root.className = `prototype view-original app-${item.app} ${reducedMotion ? "reduce-motion" : ""}`
+  root.innerHTML = `${header()}${placement()}${timeline()}${transition(item)}<main><div class="layout">${codePanel(item)}${graphPanel(item)}</div>${evidence(item)}</main>`
   bind()
-}
-
-const selectView = (next: ViewKey): void => {
-  const url = new URL(location.href)
-  url.searchParams.delete("scenario")
-  url.searchParams.delete("variant")
-  url.searchParams.set("view", next)
-  history.replaceState({}, "", url)
-  render()
-}
-const cycle = (direction: number): void => {
-  const index = views.findIndex(({ key }) => key === view())
-  selectView(views[(index + direction + views.length) % views.length]!.key)
 }
 
 const bind = (): void => {
@@ -454,8 +419,6 @@ const bind = (): void => {
   }))
   document.querySelectorAll<HTMLElement>("[data-task]").forEach((element) => element.addEventListener("click", () => { selectedTask = element.dataset.task as TaskKey; selectionMode = "task"; render() }))
   document.querySelectorAll<HTMLElement>("[data-cell-task]").forEach((element) => element.addEventListener("click", (event) => { event.stopPropagation(); selectedStage = element.closest<HTMLElement>("[data-stage]")?.dataset.stage as StageKey ?? selectedStage; selectedTask = element.dataset.cellTask as TaskKey; selectionMode = "task"; render() }))
-  document.querySelectorAll<HTMLElement>("[data-cycle]").forEach((element) => element.addEventListener("click", () => cycle(Number(element.dataset.cycle))))
-  document.querySelector<HTMLSelectElement>("[data-view-select]")?.addEventListener("change", (event) => selectView((event.currentTarget as HTMLSelectElement).value as ViewKey))
   document.querySelector<HTMLElement>("[data-end]")?.addEventListener("click", () => { frameIndex = story.frames.length - 1; render() })
   document.querySelector<HTMLElement>("[data-play]")?.addEventListener("click", () => { playing = !playing; if (timer !== undefined) clearInterval(timer); if (playing) timer = window.setInterval(() => { frameIndex = (frameIndex + 1) % story.frames.length; render() }, reducedMotion ? 2600 : 1900); render() })
   document.querySelector<HTMLInputElement>("[data-motion]")?.addEventListener("change", (event) => { reducedMotion = (event.currentTarget as HTMLInputElement).checked; render() })
@@ -463,8 +426,6 @@ const bind = (): void => {
 
 addEventListener("keydown", (event) => {
   if ((event.target as HTMLElement | null)?.matches("input,textarea,[contenteditable]")) return
-  if (event.key === "ArrowLeft") cycle(-1)
-  if (event.key === "ArrowRight") cycle(1)
   if (event.key === "[") { frameIndex = Math.max(0, frameIndex - 1); render() }
   if (event.key === "]") { frameIndex = Math.min(story.frames.length - 1, frameIndex + 1); render() }
 })
