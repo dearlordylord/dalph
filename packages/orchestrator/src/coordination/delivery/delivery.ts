@@ -13,6 +13,8 @@ import { frontierOf } from "./ticket-delivery-projection.js"
  * Shows, at one abstraction level, how current tracker facts become delivery
  * consequences.
  *
+ * Architecture catalogue: [Protected Compositions](../../../../../docs/ARCHITECTURE.md#protected-compositions).
+ *
  * Every arrow below is a pure projection, so none of them is a model-based
  * testing target; what covers each one is recorded per surface in
  * `research/verification-bakeoff/INVARIANTS.md`, under "Coverage per production
