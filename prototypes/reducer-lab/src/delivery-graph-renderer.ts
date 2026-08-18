@@ -25,10 +25,10 @@ interface CytoscapeTaskData {
   readonly missing: "false" | "true"
 }
 
-type DeliveryGraphPalette = "original" | "trace-fill" | "trace-soft" | "trace-outline"
+type DeliveryGraphPalette = "original" | "trace-fill"
 
 const deliveryGraphPalette = (value: string | undefined): DeliveryGraphPalette =>
-  value === "trace-fill" || value === "trace-soft" || value === "trace-outline" ? value : "original"
+  value === "trace-fill" ? value : "original"
 
 const placeholderTask = (id: string): RenderedTask => ({
   id,
@@ -293,62 +293,6 @@ const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
   {
     selector: "node.palette-trace-fill.tone-paused",
     style: { "background-color": "#f5ecfa", "border-color": "#80639b" }
-  },
-  {
-    selector: "node.palette-trace-soft.tone-blocked",
-    style: { "background-color": "#eef0ed", "border-color": "#8b948f", opacity: 0.5 }
-  },
-  {
-    selector: "node.palette-trace-soft.tone-waiting",
-    style: { "background-color": "#f3dfbc", "border-color": "#987028", "border-style": "dashed" }
-  },
-  {
-    selector: "node.palette-trace-soft.tone-desired",
-    style: { "background-color": "#cfe7f4", "border-color": "#367fa7" }
-  },
-  {
-    selector: "node.palette-trace-soft.tone-running",
-    style: { "background-color": "#cce9dc", "border-color": "#278364" }
-  },
-  {
-    selector: "node.palette-trace-soft.tone-integrating",
-    style: { "background-color": "#d2e5f0", "border-color": "#3d7897" }
-  },
-  {
-    selector: "node.palette-trace-soft.tone-settled",
-    style: { "background-color": "#c5e4d5", "border-color": "#2f8669" }
-  },
-  {
-    selector: "node.palette-trace-soft.tone-paused",
-    style: { "background-color": "#eadcf2", "border-color": "#76518f" }
-  },
-  {
-    selector: "node.palette-trace-outline.tone-blocked",
-    style: { "background-color": "#ffffff", "border-color": "#8d9691", "border-style": "dashed", opacity: 0.45 }
-  },
-  {
-    selector: "node.palette-trace-outline.tone-waiting",
-    style: { "background-color": "#fffaf1", "border-color": "#a37a32", "border-style": "dashed" }
-  },
-  {
-    selector: "node.palette-trace-outline.tone-desired",
-    style: { "background-color": "#ffffff", "border-color": "#4b91b8" }
-  },
-  {
-    selector: "node.palette-trace-outline.tone-running",
-    style: { "background-color": "#ffffff", "border-color": "#3a9978" }
-  },
-  {
-    selector: "node.palette-trace-outline.tone-integrating",
-    style: { "background-color": "#ffffff", "border-color": "#477f9f" }
-  },
-  {
-    selector: "node.palette-trace-outline.tone-settled",
-    style: { "background-color": "#f7fbf9", "border-color": "#3a9978" }
-  },
-  {
-    selector: "node.palette-trace-outline.tone-paused",
-    style: { "background-color": "#ffffff", "border-color": "#80639b", "border-style": "dashed" }
   },
   {
     selector: "edge",

@@ -5,7 +5,7 @@
 body{margin:0;min-width:340px}
 button,input{font:inherit}
 button{color:inherit}
-.prototype{--code-bg:#16211c;--code-fg:#d9e3de;--code-muted:#71837a;--code-divider:#3d5047;--cell-bg:#1e2c26;--cell-border:#455a50;--cell-label:#81978d;--cell-fg:#d4e1da;--syntax-keyword:#e795c4;--syntax-call:#70c8e5;--success:#3a9978;--warning:#a37a32;--info:#4b91b8;--integration:#477f9f;--rule:#8e6ca8;--selection:#52a8dc;--blocked:#665d57;min-height:100vh;padding:22px clamp(14px,2.8vw,44px) 118px;background:radial-gradient(circle at 8% -10%,#fffdf4 0,transparent 34%),#e9e8e0}
+.prototype{--code-bg:#16211c;--code-fg:#d9e3de;--code-muted:#71837a;--code-divider:#3d5047;--cell-bg:#1e2c26;--cell-border:#455a50;--cell-label:#81978d;--cell-fg:#d4e1da;--syntax-keyword:#e795c4;--syntax-call:#70c8e5;--success:#3a9978;--warning:#a37a32;--info:#4b91b8;--integration:#477f9f;--rule:#8e6ca8;--selection:#52a8dc;--blocked:#665d57;min-height:100vh;padding:22px clamp(14px,2.8vw,44px) 28px;background:radial-gradient(circle at 8% -10%,#fffdf4 0,transparent 34%),#e9e8e0}
 .topbar,.placement,.timeline,.transition-strip,main{max-width:1560px;margin-left:auto;margin-right:auto}
 
 .topbar{display:flex;justify-content:space-between;align-items:end;gap:24px;margin-bottom:11px}
@@ -168,18 +168,6 @@ button{color:inherit}
 .evidence>div:last-child{border-right:0;background:#fff4f1}
 .evidence b{display:block;font-size:8px;margin-top:3px}
 
-.graph-switcher{position:fixed;z-index:20;left:50%;bottom:16px;transform:translateX(-50%);display:flex;align-items:stretch;gap:4px;border:1px solid #40534a;border-radius:12px;background:#17251f;padding:5px;box-shadow:0 10px 30px #17251f52;color:#e9f1ed}
-.graph-switcher>button{border:1px solid transparent;border-radius:8px;background:transparent;color:inherit;padding:7px 9px;cursor:pointer;display:flex;align-items:center;gap:7px;text-align:left}
-.graph-switcher>button:first-child,.graph-switcher>button:nth-last-child(2){display:grid;place-items:center;min-width:34px;font-size:15px}
-.graph-switcher>button:hover{background:#263c32}
-.graph-switcher>button.active{border-color:#66b99a;background:#e7f4ee;color:#183d30}
-.graph-switcher kbd{width:18px;height:18px;border:1px solid currentColor;border-radius:4px;display:grid;place-items:center;font:7px DM Mono,monospace;opacity:.65}
-.graph-switcher span,.graph-switcher b,.graph-switcher small{display:block}
-.graph-switcher b{font-size:7px;white-space:nowrap}
-.graph-switcher small{font-size:5px;opacity:.72;white-space:nowrap;margin-top:2px}
-.graph-switcher em{border:1px solid #4b816c;border-radius:99px;padding:2px 4px;font-size:5px;font-style:normal;font-weight:800;letter-spacing:.06em}
-.graph-switcher>i{align-self:center;color:#8fa198;font:6px DM Mono,monospace;padding:0 4px;white-space:nowrap}
-
 .reduce-motion *{animation-duration:.001ms!important;animation-iteration-count:1!important}
 @media(prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;animation-iteration-count:1!important}}
 
@@ -203,6 +191,4 @@ button{color:inherit}
   .flow-model{grid-template-columns:1fr}
   .capacity-arrow{transform:rotate(90deg)}
   .evidence>div{border-right:0;border-bottom:1px solid #deded6}
-  .graph-switcher{width:calc(100% - 16px);overflow-x:auto;justify-content:flex-start}
-  .graph-switcher>button{flex:0 0 auto}
 }

@@ -9,41 +9,11 @@ import {
 } from "../src/delivery-graph-element.ts"
 import type { Frame, TaskKey } from "./prototype.ts"
 
-export type GraphVariant = "original" | "trace-fill" | "trace-soft" | "trace-outline"
-
-export interface GraphVariantDefinition {
-  readonly key: GraphVariant
-  readonly name: string
-  readonly source: string
-  readonly prompt: string
-}
-
-export const graphVariants: ReadonlyArray<GraphVariantDefinition> = [
-  {
-    key: "original",
-    name: "Original",
-    source: "Promoted lab palette",
-    prompt: "Reference: the accepted Cytoscape graph with its existing neutral, gold, blue, and purple encodings."
-  },
-  {
-    key: "trace-fill",
-    name: "Trace fills",
-    source: "Older trace node colors",
-    prompt: "Compare direct state-colored fills while position, frontier, and ticket encodings remain present."
-  },
-  {
-    key: "trace-soft",
-    name: "Stronger fills",
-    source: "Trace colors · higher separation",
-    prompt: "Compare stronger state separation when several task states share the same graph view."
-  },
-  {
-    key: "trace-outline",
-    name: "Trace outlines",
-    source: "Neutral fills · state borders",
-    prompt: "Compare a quieter canvas where state moves to borders and most node surfaces stay neutral."
-  }
-]
+export const graphDefinition = {
+  name: "Original",
+  source: "Cytoscape + trace state fills",
+  note: "Node fills show task state. Position, frontier, and ticket encodings remain present."
+} as const
 
 const taskState = (task: TaskKey, frame: Frame): string => {
   if (frame.control.tasks.includes(task)) return "paused by user"
@@ -69,7 +39,6 @@ export interface MountGraphInput {
   readonly onTask: (task: TaskKey) => void
   readonly selectedTask: TaskKey | null
   readonly tasks: ReadonlyArray<TaskKey>
-  readonly variant: GraphVariant
 }
 
 export const mountComparisonGraph = (input: MountGraphInput): (() => void) => {
@@ -78,7 +47,7 @@ export const mountComparisonGraph = (input: MountGraphInput): (() => void) => {
     edges: input.edges
       .filter(([from, to]) => input.tasks.includes(from) && input.tasks.includes(to))
       .map(([from, to]) => ({ from, kind: "Prerequisite", to })),
-    fingerprint: `${input.frame.graph.revision}:${input.tasks.join("")}:${input.variant}`,
+    fingerprint: `${input.frame.graph.revision}:${input.tasks.join("")}:trace-fill`,
     key: input.frame.graph.revision,
     status: `${input.frame.graph.age} · observed ${input.frame.graph.observedAt}`,
     tasks: input.tasks.map((task) => {
@@ -105,7 +74,7 @@ export const mountComparisonGraph = (input: MountGraphInput): (() => void) => {
     })
   }
   const element = document.createElement(deliveryGraphTag) as DeliveryGraphElement
-  element.dataset.palette = input.variant
+  element.dataset.palette = "trace-fill"
   element.projection = projection
   element.selectedTaskId = input.selectedTask
   element.highlightedTaskIds = input.activeTasks
