@@ -116,22 +116,28 @@ button{color:inherit}
 .stage-graph,.stage-settlements{min-height:224px}
 .stage-graph .rectangles,.stage-settlements .rectangles{flex-wrap:wrap;align-content:center;overflow:visible}
 .stage-graph .data-rectangle,.stage-settlements .data-rectangle{flex:1 1 84px;max-width:128px}
-.view-original .code-columns{display:none}
-.view-separated .code-columns b:last-child{align-self:stretch;display:flex;align-items:center;background:#101a16;border-left:5px solid #2a4036;padding-left:13px}
-.view-separated .code-line:not(.brace) .rectangles{align-self:stretch;align-items:center;background:#101a16;border-left:5px solid #2a4036;padding-left:13px}
-.view-separated .stage-graph .rectangles,.view-separated .stage-settlements .rectangles{align-content:center}
-.view-stacked .code-columns{display:none}
-.view-stacked .code-line:not(.brace){grid-template-columns:38px minmax(0,1fr);grid-template-rows:auto auto;align-items:start;gap:8px 0;padding:12px 12px 12px 0}
-.view-stacked .code-line:not(.brace) .gutter{grid-column:1;grid-row:1/3}
-.view-stacked .code-line:not(.brace)>code{grid-column:2;grid-row:1;padding:3px 8px}
-.view-stacked .rectangles{grid-column:2;grid-row:2;flex-wrap:wrap;border-left:0;border-top:1px solid #3d5047;padding:9px 8px 0}
-.view-stacked .stage-graph,.view-stacked .stage-settlements{min-height:0}
-.view-data-first .code-columns{grid-template-columns:38px minmax(390px,1.26fr) minmax(270px,.74fr)}
-.view-data-first .code-columns b:first-of-type{grid-column:3;grid-row:1}
-.view-data-first .code-columns b:last-child{grid-column:2;grid-row:1;border-left:0;border-right:1px solid #3d5047}
-.view-data-first .code-line:not(.brace){grid-template-columns:38px minmax(390px,1.26fr) minmax(270px,.74fr)}
-.view-data-first .code-line:not(.brace)>code{grid-column:3;grid-row:1;padding-left:12px}
-.view-data-first .rectangles{grid-column:2;grid-row:1;border-left:0;border-right:1px solid #3d5047;padding-left:9px;padding-right:12px}
+.view-original .code-columns,.view-color-fields .code-columns,.view-code-highlight .code-columns,.view-light-source .code-columns{display:none}
+
+/* Controlled experiment: geometry stays fixed; only the visual boundary changes. */
+.view-color-fields .code-line:not(.brace)>code{align-self:stretch;display:flex;align-items:center;padding:0 12px;background:#182a35;color:#d5e4ed;box-shadow:inset -1px 0 #456275}
+.view-color-fields .code-line:not(.brace) .rectangles{align-self:stretch;align-items:center;padding-left:13px;border-left:0;background:#101c17}
+.view-color-fields .stage-graph .rectangles,.view-color-fields .stage-settlements .rectangles{align-content:center}
+.view-color-fields .code-line.changed>code{background:linear-gradient(90deg,#204253,#182a35)}
+
+.view-code-highlight .code-line:not(.brace)>code{align-self:stretch;display:flex;align-items:center;margin:9px 8px;padding:0 9px;border-radius:5px;background:#1c2923;color:#91a49a;box-shadow:inset 0 0 0 1px #33463d}
+.view-code-highlight .syntax-keyword{color:#e795c4;font-weight:500}
+.view-code-highlight .syntax-call{color:#70c8e5;font-weight:500}
+.view-code-highlight .code-line.changed>code{background:#1e332b;box-shadow:inset 3px 0 #3eb38c,inset 0 0 0 1px #3b574b}
+
+.view-light-source .code-window{background:#17211d}
+.view-light-source .code-line:not(.brace)>code{align-self:stretch;display:flex;align-items:center;padding:0 12px;background:#f2f0e8;color:#26372f;box-shadow:inset -1px 0 #aeb8b1}
+.view-light-source .code-line:not(.brace) .gutter{align-self:stretch;background:#dde1da;color:#52655b}
+.view-light-source .code-line:not(.brace) .rectangles{align-self:stretch;align-items:center;padding-left:13px;border-left:0;background:#17211d}
+.view-light-source .stage-graph .rectangles,.view-light-source .stage-settlements .rectangles{align-content:center}
+.view-light-source .code-line.brace{background:#f2f0e8;color:#526159}
+.view-light-source .code-line.changed>code{background:linear-gradient(90deg,#dcefe6,#f2f0e8)}
+.view-light-source .syntax-keyword{color:#8b2f68;font-weight:500}
+.view-light-source .syntax-call{color:#126c87;font-weight:500}
 .code-key{display:flex;gap:17px;padding:8px 12px;color:#747d77;font-size:7px;font-weight:700}
 .code-key span{display:flex;align-items:center;gap:5px}
 .code-key i{display:inline-block;width:12px;height:7px}

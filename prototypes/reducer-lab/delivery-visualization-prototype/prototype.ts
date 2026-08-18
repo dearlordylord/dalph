@@ -9,7 +9,7 @@ type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" |
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
-type ViewKey = "original" | "separated" | "stacked" | "data-first"
+type ViewKey = "original" | "color-fields" | "code-highlight" | "light-source"
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
 
@@ -254,10 +254,10 @@ const story: Scenario = {
 }
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
-  { key: "original", name: "Original shared row", description: "The original treatment keeps source and rectangles in one dark row with a quiet divider." },
-  { key: "separated", name: "Separated data sidecar", description: "A visible rail treats rectangles as a live data surface beside production source." },
-  { key: "stacked", name: "Data below source", description: "Each source expression owns a full-width data band directly below it." },
-  { key: "data-first", name: "Data before source", description: "Live state leads each row; the production expression follows as its explanation." }
+  { key: "original", name: "Original shared row · leading", description: "The leading treatment keeps source and rectangles in one dark row with a quiet divider." },
+  { key: "color-fields", name: "Two dark color fields", description: "Blue-black source and green-black live data separate responsibility without changing the row." },
+  { key: "code-highlight", name: "Code ink hierarchy", description: "Token color and a quiet source wash make production code distinct from state rectangles." },
+  { key: "light-source", name: "Light source field", description: "A light production-source field meets the existing dark live-data field at one hard boundary." }
 ]
 
 let frameIndex = 0
@@ -370,7 +370,17 @@ const rectangles = (stage: StageKey, cells: ReadonlyArray<Cell>, item: Frame): s
   }).join("")}</span>`
 }
 
-const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${story.frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i><small>${stage.line}</small></span><code>${stage.code}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>${views.find(({ key }) => key === view())!.description}</span></div></section>`
+const codeMarkup = (code: string): string => {
+  const terms = /(const|return|yield\*|TrackerGraphRelation|mapCurrentSignal|frontierOf|boundedParallelTickets|executorResponsibilities|deliverySettlements|reflectDeliverySettlements)/g
+  return code.split(terms).map((term) => {
+    if (term === "const" || term === "return" || term === "yield*") return `<span class="syntax-keyword">${term}</span>`
+    if (terms.test(term)) return `<span class="syntax-call">${term}</span>`
+    terms.lastIndex = 0
+    return term
+  }).join("")
+}
+
+const codePanel = (item: Frame): string => `<section class="code-panel instrument"><div class="panel-head"><div><span class="panel-kind">PRODUCTION SHAPE · FRONTIER MEMBERSHIP</span><h2>delivery.ts</h2></div><span>moment ${frameIndex + 1} / ${story.frames.length}</span></div><div class="code-window"><div class="code-columns"><span></span><b>PRODUCTION SOURCE</b><b>LIVE DATA</b></div><div class="code-line brace"><span></span><code>export const delivery = Effect.gen(function* () {</code></div>${stages.map((stage) => `<button data-stage="${stage.key}" class="code-line stage-${stage.key} ${item.changed.includes(stage.key) ? "changed" : "stable"} ${stageSelectionClass(stage.key, item)}"><span class="gutter"><i></i><small>${stage.line}</small></span><code>${codeMarkup(stage.code)}</code>${rectangles(stage.key, cellsFor(stage.key, item), item)}</button>`).join("")}<div class="code-line brace"><span></span><code>})</code></div></div><div class="code-key"><span><i class="changed-mark"></i>changed at this landmark</span><span><i class="selected-mark"></i>selection links source · data · graph</span><span>${views.find(({ key }) => key === view())!.description}</span></div></section>`
 
 const nodePositions: Record<TaskKey, readonly [number, number]> = {
   A: [5, 43], B: [21, 17], C: [21, 69], D: [39, 43], E: [55, 17], F: [55, 69], H: [71, 17], I: [71, 69], X: [39, 84], G: [88, 43]
