@@ -34,24 +34,29 @@ import {
   IntegratorTargetHeadChanged,
   IntegratorTargetLineageObservationChanged,
   IntegratorPreparationInput,
-  deriveIntegratorState,
-  integratorQualifiedCandidateFromState,
+  deriveIntegratorRunState,
   prepareIntegrationCandidate,
+  prepareIntegrationCandidateRun,
   type IntegratorRequest
 } from "./protocol.js"
 import {
   appendIntegratorSessionIfNeeded,
   hasMatchingIntegratorTargetLineageObservation,
   integratorCorrelationFor,
+  integratorInitialRunCorrelationFor,
+  integratorRunCorrelationFor,
   readRecordedIntegratorSession
 } from "./session.js"
+import { integratorRunQualifiedCandidateFromState } from "./state.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorGitObservation,
-  IntegratorQualifiedCandidate,
+  IntegratorRunQualifiedCandidate,
+  IntegratorRunOrdinal,
   IntegratorNotPreparedDetail,
   type IntegratorProtocolResult,
+  type IntegratorRunProtocolResult,
   IntegratorResult
 } from "./events.js"
 
@@ -117,6 +122,9 @@ const incompatibleInput = (): IntegratorPreparationInput =>
     targetLineageObservedAt
   })
 
+const initialRunState = (records: ReadonlyArray<JournalRecord>, input: IntegratorPreparationInput) =>
+  deriveIntegratorRunState(records, responsibility, integratorInitialRunCorrelationFor(input))
+
 const prepared = (request: IntegratorRequest): IntegratorResult =>
   IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: request.correlation })
 
@@ -148,6 +156,10 @@ interface Harness {
   readonly records: Ref.Ref<ReadonlyArray<JournalRecord>>
   readonly journal: InRunJournal["Service"]
   readonly run: (input: IntegratorPreparationInput) => Effect.Effect<IntegratorProtocolResult, unknown>
+  readonly runExact: (
+    input: IntegratorPreparationInput,
+    ordinal: IntegratorRunOrdinal
+  ) => Effect.Effect<IntegratorRunProtocolResult, unknown>
   readonly readRecords: Effect.Effect<ReadonlyArray<JournalRecord>>
 }
 
@@ -229,8 +241,14 @@ const makeHarness = (
         Effect.provideService(IntegratorGit, git),
         Effect.provideService(InRunJournal, journal)
       )
+    const runExact = (input: IntegratorPreparationInput, ordinal: IntegratorRunOrdinal) =>
+      prepareIntegrationCandidateRun({ preparation: input, run: integratorRunCorrelationFor(input, ordinal) }).pipe(
+        Effect.provideService(Integrator, integrator),
+        Effect.provideService(IntegratorGit, git),
+        Effect.provideService(InRunJournal, journal)
+      )
 
-    return { integratorCalls, gitCalls, gitCandidates, journal, records, readRecords: Ref.get(records), run }
+    return { integratorCalls, gitCalls, gitCandidates, journal, records, readRecords: Ref.get(records), run, runExact }
   })
 
 describe("outer Integrator protocol", () => {
@@ -331,7 +349,7 @@ describe("outer Integrator protocol", () => {
         (request) => Effect.succeed(prepared(request)),
         successfulGitRead(commitObservation([targetHead, acceptedResultCommit])),
         (event) =>
-          event._tag === "IntegratorResultRecorded"
+          event._tag === "IntegratorRunResultRecorded"
             ? {
                 ...event,
                 result: IntegratorResult.cases.NotPrepared.make({
@@ -355,7 +373,7 @@ describe("outer Integrator protocol", () => {
         (request) => Effect.succeed(prepared(request)),
         successfulGitRead(commitObservation([targetHead, acceptedResultCommit])),
         (event) =>
-          event._tag === "IntegratorCandidateGitObserved"
+          event._tag === "IntegratorRunCandidateGitObserved"
             ? {
                 ...event,
                 observation: IntegratorGitObservation.cases.Missing.make({ candidateText: event.candidateText })
@@ -381,7 +399,7 @@ describe("outer Integrator protocol", () => {
       const calls = yield* Ref.get(harness.integratorCalls)
       const gitCalls = yield* Ref.get(harness.gitCalls)
       const records = yield* harness.readRecords
-      const state = deriveIntegratorState(records, responsibility)
+      const state = initialRunState(records, compatibleInput())
 
       expect(result._tag).toBe("PreparedCandidate")
       expect(replay._tag).toBe("PreparedCandidate")
@@ -391,15 +409,15 @@ describe("outer Integrator protocol", () => {
       expect(gitCalls).toBe(1)
       expect(state._tag).toBe("GitQualifiedPrepared")
       if (state._tag !== "GitQualifiedPrepared") return yield* Effect.die("expected Git-qualified state")
-      const qualified = integratorQualifiedCandidateFromState(state)
-      const gitObservation = records.findLast(({ event }) => event._tag === "IntegratorCandidateGitObserved")
+      const qualified = integratorRunQualifiedCandidateFromState(state)
+      const gitObservation = records.findLast(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
       expect(qualified.candidateCommit).toBe(canonicalCandidateCommit)
       expect(qualified.directParents).toEqual([targetHead, acceptedResultCommit])
       expect(qualified.qualifiedAt).toBe(gitObservation?.position)
       expect(
-        Schema.is(IntegratorQualifiedCandidate)({ ...qualified, directParents: [acceptedResultCommit, targetHead] })
+        Schema.is(IntegratorRunQualifiedCandidate)({ ...qualified, directParents: [acceptedResultCommit, targetHead] })
       ).toBe(false)
-      expect(Schema.is(IntegratorQualifiedCandidate)({ ...qualified, qualifiedAt: targetLineageObservedAt })).toBe(
+      expect(Schema.is(IntegratorRunQualifiedCandidate)({ ...qualified, qualifiedAt: targetLineageObservedAt })).toBe(
         false
       )
       expect(calls[0]?.correlation.acceptedResult).toEqual(responsibility.acceptedResult)
@@ -421,9 +439,10 @@ describe("outer Integrator protocol", () => {
       expect(records.filter(({ event }) => event._tag.startsWith("Integrator")).map(({ event }) => event._tag)).toEqual(
         [
           "IntegratorSessionFixed",
-          "IntegratorResultRecorded",
-          "IntegratorCandidateGitReadIntended",
-          "IntegratorCandidateGitObserved"
+          "IntegratorRunStarted",
+          "IntegratorRunResultRecorded",
+          "IntegratorRunCandidateGitReadIntended",
+          "IntegratorRunCandidateGitObserved"
         ]
       )
       const sessionRecord = records.find(({ event }) => event._tag === "IntegratorSessionFixed")
@@ -453,12 +472,53 @@ describe("outer Integrator protocol", () => {
       const records = yield* harness.readRecords
 
       expect(first._tag).toBe("Failure")
-      expect(deriveIntegratorState(recordsAfterFailure, responsibility)._tag).toBe("SessionUnfinished")
+      expect(initialRunState(recordsAfterFailure, compatibleInput())._tag).toBe("RunUnfinished")
       expect(second._tag).toBe("PreparedCandidate")
       expect(requests).toHaveLength(2)
       expect(requests[0]?.correlation.sessionId).toBe(requests[1]?.correlation.sessionId)
       expect(requests[0]?.correlation.candidateResource).toBe(requests[1]?.correlation.candidateResource)
       expect(records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+    })
+  )
+
+  it.effect("rejects run ordinal two until exact Journal-authorized Retry evidence is supplied", () =>
+    Effect.gen(function* () {
+      const input = compatibleInput()
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+
+      const initial = yield* harness.runExact(input, IntegratorRunOrdinal.make(1))
+      const retryFailure = yield* harness.runExact(input, IntegratorRunOrdinal.make(2)).pipe(Effect.flip)
+      const records = yield* harness.readRecords
+      const runTwo = integratorRunCorrelationFor(input, IntegratorRunOrdinal.make(2))
+
+      expect(initial._tag).toBe("NotPrepared")
+      expect(retryFailure).toBeInstanceOf(IntegratorJournalContradiction)
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(1)
+      expect(deriveIntegratorRunState(records, responsibility, runTwo)._tag).toBe("Absent")
+      expect(records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+      expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(1)
+      expect(records.filter(({ event }) => event._tag === "IntegratorRunResultRecorded")).toHaveLength(1)
+    })
+  )
+
+  it.effect("rejects successor ordinals before crossing the Integrator boundary", () =>
+    Effect.gen(function* () {
+      const input = compatibleInput()
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+
+      const failure = yield* harness.runExact(input, IntegratorRunOrdinal.make(3)).pipe(Effect.flip)
+      const records = yield* harness.readRecords
+
+      expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(0)
+      expect(records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(0)
+      expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(0)
     })
   )
 
@@ -480,9 +540,9 @@ describe("outer Integrator protocol", () => {
       expect(second._tag === "NotPrepared" ? second.detail : undefined).toBe(notPreparedDetail)
       expect(calls).toHaveLength(1)
       expect(gitCalls).toBe(0)
-      expect(deriveIntegratorState(records, responsibility)._tag).toBe("NotPrepared")
+      expect(initialRunState(records, compatibleInput())._tag).toBe("NotPrepared")
       expect(records.filter(({ event }) => event._tag.startsWith("Integrator")).map(({ event }) => event._tag)).toEqual(
-        ["IntegratorSessionFixed", "IntegratorResultRecorded"]
+        ["IntegratorSessionFixed", "IntegratorRunStarted", "IntegratorRunResultRecorded"]
       )
     })
   )
@@ -511,7 +571,7 @@ describe("outer Integrator protocol", () => {
       const records = yield* harness.readRecords
 
       expect(result._tag).toBe("CandidateRejected")
-      expect(deriveIntegratorState(records, responsibility)._tag).toBe("CandidateRejected")
+      expect(initialRunState(records, compatibleInput())._tag).toBe("CandidateRejected")
       expect(result._tag === "CandidateRejected" ? result.candidateText : undefined).toBe(candidateText)
       expect(result._tag === "CandidateRejected" ? "candidateCommit" in result : false).toBe(false)
     })
@@ -532,7 +592,7 @@ describe("outer Integrator protocol", () => {
       expect(calls).toHaveLength(0)
       expect(gitCalls).toBe(0)
       expect(records.filter(({ event }) => event._tag.startsWith("Integrator"))).toHaveLength(0)
-      expect(deriveIntegratorState(records, responsibility)._tag).toBe("Absent")
+      expect(initialRunState(records, incompatibleInput())._tag).toBe("Absent")
     })
   )
 
@@ -577,7 +637,7 @@ describe("outer Integrator protocol", () => {
       expect(failure).toBeInstanceOf(IntegratorTargetHeadChanged)
       expect(calls).toHaveLength(1)
       expect(records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
-      expect(records.filter(({ event }) => event._tag === "IntegratorResultRecorded")).toHaveLength(1)
+      expect(records.filter(({ event }) => event._tag === "IntegratorRunResultRecorded")).toHaveLength(1)
     })
   )
 
@@ -625,15 +685,20 @@ describe("outer Integrator protocol", () => {
       const records = yield* harness.readRecords
 
       expect(firstFailure).toBeInstanceOf(IntegratorGitReadFailure)
-      expect(deriveIntegratorState(recordsAfterFailure, responsibility)._tag).toBe("PreparedAwaitingGit")
+      expect(initialRunState(recordsAfterFailure, compatibleInput())._tag).toBe("PreparedAwaitingGit")
       expect(
         recordsAfterFailure.filter(({ event }) => event._tag.startsWith("Integrator")).map(({ event }) => event._tag)
-      ).toEqual(["IntegratorSessionFixed", "IntegratorResultRecorded", "IntegratorCandidateGitReadIntended"])
+      ).toEqual([
+        "IntegratorSessionFixed",
+        "IntegratorRunStarted",
+        "IntegratorRunResultRecorded",
+        "IntegratorRunCandidateGitReadIntended"
+      ])
       expect(second._tag).toBe("PreparedCandidate")
       expect(calls).toHaveLength(1)
       expect(gitCalls).toBe(2)
-      expect(records.filter(({ event }) => event._tag === "IntegratorCandidateGitReadIntended")).toHaveLength(1)
-      expect(records.filter(({ event }) => event._tag === "IntegratorCandidateGitObserved")).toHaveLength(1)
+      expect(records.filter(({ event }) => event._tag === "IntegratorRunCandidateGitReadIntended")).toHaveLength(1)
+      expect(records.filter(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")).toHaveLength(1)
     })
   )
 
@@ -702,16 +767,16 @@ describe("outer Integrator protocol", () => {
       yield* harness.run(compatibleInput())
       const pristine = yield* harness.readRecords
       const session = pristine.find(({ event }) => event._tag === "IntegratorSessionFixed")
-      const result = pristine.find(({ event }) => event._tag === "IntegratorResultRecorded")
-      const intent = pristine.find(({ event }) => event._tag === "IntegratorCandidateGitReadIntended")
-      const observed = pristine.find(({ event }) => event._tag === "IntegratorCandidateGitObserved")
+      const result = pristine.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+      const intent = pristine.find(({ event }) => event._tag === "IntegratorRunCandidateGitReadIntended")
+      const observed = pristine.find(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
       const lineageIntent = pristine.find(({ event }) => event._tag === "GitReadIntentRecorded")
       const lineage = pristine.find(({ event }) => event._tag === "TargetLineageObserved")
       if (
         session?.event._tag !== "IntegratorSessionFixed" ||
-        result?.event._tag !== "IntegratorResultRecorded" ||
-        intent?.event._tag !== "IntegratorCandidateGitReadIntended" ||
-        observed?.event._tag !== "IntegratorCandidateGitObserved" ||
+        result?.event._tag !== "IntegratorRunResultRecorded" ||
+        intent?.event._tag !== "IntegratorRunCandidateGitReadIntended" ||
+        observed?.event._tag !== "IntegratorRunCandidateGitObserved" ||
         lineageIntent?.event._tag !== "GitReadIntentRecorded" ||
         lineage?.event._tag !== "TargetLineageObserved"
       ) {
@@ -781,7 +846,7 @@ describe("outer Integrator protocol", () => {
         ["non-intent at intent key", replaceEvent(pristine, intent.key, lineage.event)]
       ]
       for (const [label, records] of stateCorruptions) {
-        expect(deriveIntegratorState(records, responsibility), label).toMatchObject({ _tag: "Contradiction" })
+        expect(initialRunState(records, compatibleInput()), label).toMatchObject({ _tag: "Contradiction" })
       }
 
       const protocolCorruptions: ReadonlyArray<
@@ -799,7 +864,10 @@ describe("outer Integrator protocol", () => {
         ["non-observation at observation key", replaceEvent(pristine, observed.key, lineage.event), compatibleInput()],
         [
           "observation for another correlation",
-          replaceEvent(pristine, observed.key, { ...observed.event, correlation: foreignCorrelation }),
+          replaceEvent(pristine, observed.key, {
+            ...observed.event,
+            run: { ...observed.event.run, session: foreignCorrelation }
+          }),
           compatibleInput()
         ],
         [

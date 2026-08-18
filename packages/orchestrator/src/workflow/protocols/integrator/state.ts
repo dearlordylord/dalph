@@ -9,8 +9,20 @@ import {
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../registry/event.js"
-import { integratorCandidateHasExactParents, IntegratorResponsibilityFacts, IntegratorState } from "./events.js"
-import type { IntegratorCandidateText, IntegratorCorrelation, IntegratorResult } from "./events.js"
+import {
+  integratorCandidateHasExactParents,
+  IntegratorResponsibilityFacts,
+  IntegratorRunQualifiedCandidate,
+  IntegratorState
+} from "./events.js"
+import type {
+  IntegratorCandidateText,
+  IntegratorCorrelation,
+  IntegratorResult,
+  IntegratorRunCorrelation,
+  IntegratorRunState
+} from "./events.js"
+import { deriveIntegratorRunStateFromHistory } from "./run-state.js"
 
 const responsibilityFactsEquivalence = Schema.toEquivalence(IntegratorResponsibilityFacts)
 const plannedAttemptEquivalence = Schema.toEquivalence(PlannedTaskAttempt)
@@ -221,3 +233,29 @@ export const deriveIntegratorState = (
   if (foreignRelatedSession) return contradictionState("multiple target heads were recorded for one responsibility")
   return stateAfterSession(records, related, correlation)
 }
+
+/** Reconstructs run-bound state while keeping the public state module surface stable. */
+export const deriveIntegratorRunState = (
+  records: ReadonlyArray<JournalRecord>,
+  responsibility: StartedIntegrationResponsibility,
+  run: IntegratorRunCorrelation
+): IntegratorRunState =>
+  deriveIntegratorRunStateFromHistory(records, responsibility, run, {
+    deriveLegacyState: deriveIntegratorState,
+    findEventAtKey: integratorFindEventAtKey,
+    responsibilityFactsFromCorrelation: integratorResponsibilityFactsFromCorrelation,
+    responsibilityFactsEqual: integratorResponsibilityFactsEqual,
+    correlationsEqual: integratorCorrelationsEqual
+  })
+
+/** Materializes exact-run promotion evidence from reconstructed run state. */
+export const integratorRunQualifiedCandidateFromState = (
+  state: Extract<IntegratorRunState, { readonly _tag: "GitQualifiedPrepared" }>
+) =>
+  IntegratorRunQualifiedCandidate.make({
+    candidateCommit: state.candidateCommit,
+    candidateText: state.candidateText,
+    directParents: state.observation.directParents,
+    qualifiedAt: state.qualifiedAt,
+    run: state.run
+  })

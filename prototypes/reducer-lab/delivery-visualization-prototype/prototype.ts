@@ -9,7 +9,13 @@ type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" |
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
-type ViewKey = "original" | "syntax-original" | "change-spotlight" | "selection-spotlight"
+const viewKeys = [
+  "original", "midnight", "deep-ocean", "forest", "aubergine", "cobalt",
+  "graphite-lime", "espresso", "plum", "ink-gold", "arctic", "aurora",
+  "sunset", "ocean-gradient", "moss-gradient", "ultraviolet", "ember",
+  "diagonal-slate", "monochrome", "paper-dusk", "phosphor"
+] as const
+type ViewKey = typeof viewKeys[number]
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
 
@@ -254,10 +260,27 @@ const story: Scenario = {
 }
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
-  { key: "original", name: "Original shared row · leading", description: "The leading treatment keeps source and rectangles in one dark row with a quiet divider." },
-  { key: "syntax-original", name: "Syntax-highlighted original", description: "The original treatment changes only production-code token color." },
-  { key: "change-spotlight", name: "Changed-code spotlight", description: "The code expression that changed at this landmark receives a local green spotlight." },
-  { key: "selection-spotlight", name: "Selection-code spotlight", description: "Selection adds a local blue source highlight while rectangles and graph nodes synchronize." }
+  { key: "original", name: "Syntax original · leading", description: "The retained shared row uses syntax color on the original dark neutral surface." },
+  { key: "midnight", name: "Midnight cyan", description: "Near-black navy with cold cyan code and restrained blue state surfaces." },
+  { key: "deep-ocean", name: "Deep ocean", description: "Layered marine blue with aqua syntax and submerged teal rectangles." },
+  { key: "forest", name: "Forest amber", description: "Deep forest surfaces pair warm amber syntax with moss state panels." },
+  { key: "aubergine", name: "Aubergine mint", description: "Purple-black depth uses mint calls and rose keywords." },
+  { key: "cobalt", name: "Cobalt coral", description: "Saturated cobalt supports coral keywords and pale blue calls." },
+  { key: "graphite-lime", name: "Graphite lime", description: "Neutral graphite puts sharp lime and ice accents around live data." },
+  { key: "espresso", name: "Espresso peach", description: "Warm brown-black surfaces use peach syntax and muted copper state panels." },
+  { key: "plum", name: "Plum sky", description: "Dark plum carries sky-blue calls and orchid keywords." },
+  { key: "ink-gold", name: "Ink gold", description: "Blue-black ink uses gold hierarchy with cool secondary syntax." },
+  { key: "arctic", name: "Arctic night", description: "Cold slate surfaces use icy foregrounds and glacier-blue accents." },
+  { key: "aurora", name: "Aurora gradient", description: "A green-to-violet field shifts behind stable shared-row data." },
+  { key: "sunset", name: "Sunset gradient", description: "Indigo moves through plum toward a restrained ember edge." },
+  { key: "ocean-gradient", name: "Ocean-depth gradient", description: "Deep navy descends through teal without changing state geometry." },
+  { key: "moss-gradient", name: "Moss gradient", description: "Charcoal transitions into forest and lichen surfaces." },
+  { key: "ultraviolet", name: "Ultraviolet gradient", description: "Violet and blue light cross a dark high-contrast field." },
+  { key: "ember", name: "Ember gradient", description: "Charcoal carries a low red-orange glow behind the code and data." },
+  { key: "diagonal-slate", name: "Diagonal slate", description: "A quiet diagonal graphite gradient adds direction without a hard division." },
+  { key: "monochrome", name: "Monochrome", description: "Grayscale contrast tests whether hue is necessary outside state meaning." },
+  { key: "paper-dusk", name: "Paper dusk", description: "A light warm surface tests dark syntax with softly tinted state rectangles." },
+  { key: "phosphor", name: "Phosphor terminal", description: "Black-green terminal surfaces use phosphor syntax and emerald state panels." }
 ]
 
 let frameIndex = 0
@@ -412,7 +435,10 @@ const chip = (task: TaskKey, item: Frame): string => {
 const graphPanel = (item: Frame): string => `<section class="graph-panel instrument"><div class="panel-head"><div><span class="panel-kind">COMPLETE GRAPH + DELIVERY OVERLAY</span><h2>${item.graph.revision} · ${item.graph.taskCount} tasks · ${item.settled.length}/${item.graph.taskCount} integrated</h2></div><span class="freshness ${item.graph.age === "fresh" ? "fresh" : "stale"}">${item.settled.length === item.graph.taskCount ? "FULL INTEGRATION" : `${item.graph.age} · observed ${item.graph.observedAt}`}</span></div><div class="graph-canvas ${item.app === "down" ? "frozen" : ""}"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.map((edge) => svgEdge(edge, item)).join("")}</svg>${visibleTasks(item).map((task) => node(task, item)).join("")}${item.app === "down" ? '<div class="crash-shutter"><b>APPLICATION DOWN</b><span>Complete graph remains visible but frozen</span></div>' : ""}</div><div class="flow-model"><div class="flow-group frontier-group"><small>ORDERED FRONTIER · CURRENT MEMBERSHIP</small><div>${item.frontier.length === 0 ? '<span class="empty">empty</span>' : item.frontier.map((task) => chip(task, item)).join("")}</div><p>${item.frontier.filter((task) => !item.bounded.includes(task)).length} task(s) wait beyond the desired prefix.</p></div><span class="capacity-arrow">→<small>capacity ${capacity}</small></span><div class="flow-group capacity-group"><small>DESIRED TICKETS / ACTUAL HELD POSITIONS</small><div>${item.bounded.length === 0 ? '<span class="empty">no desired tickets</span>' : item.bounded.map((task) => chip(task, item)).join("")}</div><p>Held: ${item.held.length === 0 ? "none" : item.held.join(" + ")}</p></div></div></section>`
 
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
-const switcher = (): string => { const index = views.findIndex(({ key }) => key === view()); return `<nav class="switcher"><button data-cycle="-1">←</button><div><small>CODE / DATA TREATMENT ${index + 1} / ${views.length}</small><b>${views[index]!.name}</b></div><button data-cycle="1">→</button></nav>` }
+const switcher = (): string => {
+  const index = views.findIndex(({ key }) => key === view())
+  return `<nav class="switcher"><button data-cycle="-1">←</button><label><small>CODE / DATA PALETTE ${index + 1} / ${views.length}</small><select data-view-select aria-label="Prototype palette">${views.map((item) => `<option value="${item.key}" ${item.key === view() ? "selected" : ""}>${item.name}</option>`).join("")}</select></label><button data-cycle="1">→</button></nav>`
+}
 
 const render = (): void => {
   const item = current()
@@ -421,15 +447,17 @@ const render = (): void => {
   bind()
 }
 
-const cycle = (direction: number): void => {
-  const index = views.findIndex(({ key }) => key === view())
-  const next = views[(index + direction + views.length) % views.length]!
+const selectView = (next: ViewKey): void => {
   const url = new URL(location.href)
   url.searchParams.delete("scenario")
   url.searchParams.delete("variant")
-  url.searchParams.set("view", next.key)
+  url.searchParams.set("view", next)
   history.replaceState({}, "", url)
   render()
+}
+const cycle = (direction: number): void => {
+  const index = views.findIndex(({ key }) => key === view())
+  selectView(views[(index + direction + views.length) % views.length]!.key)
 }
 
 const bind = (): void => {
@@ -443,6 +471,7 @@ const bind = (): void => {
   document.querySelectorAll<HTMLElement>("[data-task]").forEach((element) => element.addEventListener("click", () => { selectedTask = element.dataset.task as TaskKey; selectionMode = "task"; render() }))
   document.querySelectorAll<HTMLElement>("[data-cell-task]").forEach((element) => element.addEventListener("click", (event) => { event.stopPropagation(); selectedStage = element.closest<HTMLElement>("[data-stage]")?.dataset.stage as StageKey ?? selectedStage; selectedTask = element.dataset.cellTask as TaskKey; selectionMode = "task"; render() }))
   document.querySelectorAll<HTMLElement>("[data-cycle]").forEach((element) => element.addEventListener("click", () => cycle(Number(element.dataset.cycle))))
+  document.querySelector<HTMLSelectElement>("[data-view-select]")?.addEventListener("change", (event) => selectView((event.currentTarget as HTMLSelectElement).value as ViewKey))
   document.querySelector<HTMLElement>("[data-end]")?.addEventListener("click", () => { frameIndex = story.frames.length - 1; render() })
   document.querySelector<HTMLElement>("[data-play]")?.addEventListener("click", () => { playing = !playing; if (timer !== undefined) clearInterval(timer); if (playing) timer = window.setInterval(() => { frameIndex = (frameIndex + 1) % story.frames.length; render() }, reducedMotion ? 2600 : 1900); render() })
   document.querySelector<HTMLInputElement>("[data-motion]")?.addEventListener("change", (event) => { reducedMotion = (event.currentTarget as HTMLInputElement).checked; render() })

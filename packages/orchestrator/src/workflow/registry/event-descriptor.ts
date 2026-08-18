@@ -24,6 +24,10 @@ import {
   integrationStartedRecordKey,
   integratorCandidateGitObservedRecordKey,
   integratorCandidateGitReadIntendedRecordKey,
+  integratorRunCandidateGitObservedRecordKey,
+  integratorRunCandidateGitReadIntendedRecordKey,
+  integratorRunResultRecordedRecordKey,
+  integratorRunStartedRecordKey,
   integratorResultRecordedRecordKey,
   integratorSessionFixedRecordKey,
   integrationCandidateAgentReportRecordKey,
@@ -357,17 +361,33 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       _tag: "GenericEventDescriptor",
       expectedKey: integratorSessionFixedRecordKey(event.correlation)
     }),
+    IntegratorRunStarted: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorRunStartedRecordKey(event.run)
+    }),
     IntegratorResultRecorded: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integratorResultRecordedRecordKey(event.result.correlation)
+    }),
+    IntegratorRunResultRecorded: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorRunResultRecordedRecordKey(event.run)
     }),
     IntegratorCandidateGitReadIntended: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integratorCandidateGitReadIntendedRecordKey(event.correlation, event.candidateText)
     }),
+    IntegratorRunCandidateGitReadIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorRunCandidateGitReadIntendedRecordKey(event.run, event.candidateText)
+    }),
     IntegratorCandidateGitObserved: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integratorCandidateGitObservedRecordKey(event.correlation, event.candidateText)
+    }),
+    IntegratorRunCandidateGitObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorRunCandidateGitObservedRecordKey(event.run, event.candidateText)
     }),
     IntegrationCandidateConstructionIntended: (event) => ({
       _tag: "GenericEventDescriptor",

@@ -3,7 +3,7 @@ import { Effect, Option, Schema } from "effect"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { OperationId } from "../../identity.js"
-import { integratorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
+import { integratorRunStartedRecordKey, integratorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
 import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
@@ -11,8 +11,12 @@ import { IntegratorJournalContradiction } from "./errors.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCorrelation,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorRunStartedEvent,
   IntegratorSessionFixedEvent,
-  IntegratorSessionId
+  IntegratorSessionId,
+  integratorRunCorrelationsEqual
 } from "./events.js"
 import {
   integratorCorrelationsEqual,
@@ -30,6 +34,13 @@ export const IntegratorPreparationInput = Schema.Struct({
   targetLineageObservedAt: JournalPosition
 })
 export type IntegratorPreparationInput = typeof IntegratorPreparationInput.Type
+
+/** Explicit input for a requested outer run, including its required ordinal. */
+export const IntegratorRunPreparationInput = Schema.Struct({
+  preparation: IntegratorPreparationInput,
+  run: IntegratorRunCorrelation
+})
+export type IntegratorRunPreparationInput = typeof IntegratorRunPreparationInput.Type
 
 const runIdFor = (responsibility: StartedIntegrationResponsibility) => responsibility.plannedAttempt.runId
 const runIdForCorrelation = (correlation: IntegratorCorrelation) => correlation.plannedAttempt.runId
@@ -62,6 +73,16 @@ export const integratorCorrelationFor = (input: IntegratorPreparationInput): Int
   })
 }
 
+/** Constructs the explicit run identity without allowing an unvalidated ordinal. */
+export const integratorRunCorrelationFor = (
+  input: IntegratorPreparationInput,
+  ordinal: IntegratorRunOrdinal
+): IntegratorRunCorrelation => IntegratorRunCorrelation.make({ ordinal, session: integratorCorrelationFor(input) })
+
+/** The first opaque call for a fixed session always has run ordinal one. */
+export const integratorInitialRunCorrelationFor = (input: IntegratorPreparationInput): IntegratorRunCorrelation =>
+  integratorRunCorrelationFor(input, IntegratorRunOrdinal.make(1))
+
 const sessionRecordMatches = (record: JournalRecord, correlation: IntegratorCorrelation): boolean =>
   record.event._tag === "IntegratorSessionFixed" &&
   integratorCorrelationsEqual(record.event.correlation, correlation) &&
@@ -93,6 +114,59 @@ export const appendIntegratorSessionIfNeeded = Effect.fn("IntegratorProtocol.app
   }
   return appended
 })
+
+const runStartRecordMatches = (record: JournalRecord, run: IntegratorRunCorrelation): boolean =>
+  record.event._tag === "IntegratorRunStarted" &&
+  integratorRunCorrelationsEqual(record.event.run, run) &&
+  record.position > run.session.targetLineageObservedAt
+
+/**
+ * Appends the run-start intent before an opaque Integrator call and reuses it
+ * after process loss. The durable key makes the same (session, ordinal) win
+ * concurrent registration attempts.
+ */
+export const appendIntegratorRunStartedIfNeeded = Effect.fn("IntegratorProtocol.appendRunStartedIfNeeded")(function* (
+  journal: InRunJournal["Service"],
+  run: IntegratorRunCorrelation,
+  records: ReadonlyArray<JournalRecord>
+) {
+  const key = integratorRunStartedRecordKey(run)
+  const existing = integratorFindEventAtKey(records, key)
+  if (existing !== undefined) {
+    if (!runStartRecordMatches(existing, run)) {
+      return yield* new IntegratorJournalContradiction({
+        detail: "run-start key contains a foreign event or precedes the fixed lineage",
+        runId: runIdForCorrelation(run.session)
+      })
+    }
+    return existing
+  }
+  const event = IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
+  const appended = yield* journal.append(runIdForCorrelation(run.session), key, event)
+  if (!runStartRecordMatches(appended, run)) {
+    return yield* new IntegratorJournalContradiction({
+      detail: "run-start append lost to a foreign event or does not follow the fixed lineage",
+      runId: runIdForCorrelation(run.session)
+    })
+  }
+  return appended
+})
+
+export const readRecordedIntegratorRunStarted = (
+  records: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation
+): Effect.Effect<Option.Option<JournalRecord>, IntegratorJournalContradiction> => {
+  const existing = integratorFindEventAtKey(records, integratorRunStartedRecordKey(run))
+  if (existing === undefined) return Effect.succeed(Option.none())
+  return runStartRecordMatches(existing, run) && existing.event._tag === "IntegratorRunStarted"
+    ? Effect.succeed(Option.some(existing))
+    : Effect.fail(
+        new IntegratorJournalContradiction({
+          detail: "run-start key contains a foreign event or precedes the fixed lineage",
+          runId: runIdForCorrelation(run.session)
+        })
+      )
+}
 
 export const integratorLineageIsCompatible = (input: IntegratorPreparationInput): boolean =>
   input.targetLineage.plannedBaseIsAncestorOfTargetHead &&

@@ -21,8 +21,8 @@ export type IntegratorCandidateText = typeof IntegratorCandidateText.Type
 export const IntegratorNotPreparedDetail = Schema.NonEmptyString.pipe(Schema.brand("IntegratorNotPreparedDetail"))
 export type IntegratorNotPreparedDetail = typeof IntegratorNotPreparedDetail.Type
 
-/** Exact facts that identify one outer-integrator call and its durable replay identity. */
-export const IntegratorCorrelation = Schema.Struct({
+/** Exact facts that identify one outer-integrator session and its durable replay identity. */
+export const IntegratorSessionCorrelation = Schema.Struct({
   acceptedResult: AcceptedResult,
   candidateResource: IntegratorCandidateResourceLocator,
   expectedTargetHead: GitCommitSha,
@@ -34,7 +34,33 @@ export const IntegratorCorrelation = Schema.Struct({
   /** Position of the durable TargetLineageObserved fact that supplied H. */
   targetLineageObservedAt: JournalPosition
 })
-export type IntegratorCorrelation = typeof IntegratorCorrelation.Type
+export type IntegratorSessionCorrelation = typeof IntegratorSessionCorrelation.Type
+
+/**
+ * Compatibility name for the session-only correlation used by the original
+ * initial-run journal vocabulary. New retry/recovery records use the explicit
+ * IntegratorRunCorrelation below; a session correlation remains valid only
+ * where the journal event's domain is the fixed session itself.
+ */
+export const IntegratorCorrelation = IntegratorSessionCorrelation
+export type IntegratorCorrelation = IntegratorSessionCorrelation
+
+/** One-based ordinal identifying one opaque outer-Integrator run within a session. */
+export const IntegratorRunOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.brand("IntegratorRunOrdinal"))
+export type IntegratorRunOrdinal = typeof IntegratorRunOrdinal.Type
+
+/** Exact identity of one outer-Integrator run, including its owning session. */
+export const IntegratorRunCorrelation = Schema.Struct({
+  ordinal: IntegratorRunOrdinal,
+  session: IntegratorSessionCorrelation
+})
+export type IntegratorRunCorrelation = typeof IntegratorRunCorrelation.Type
+
+const integratorSessionCorrelationEquivalence = Schema.toEquivalence(IntegratorSessionCorrelation)
+const integratorRunCorrelationEquivalence = Schema.toEquivalence(IntegratorRunCorrelation)
+
+export const integratorSessionCorrelationsEqual = integratorSessionCorrelationEquivalence
+export const integratorRunCorrelationsEqual = integratorRunCorrelationEquivalence
 
 /** Responsibility facts flattened into the correlation without importing admission protocol code. */
 export const IntegratorResponsibilityFacts = Schema.Struct({
@@ -85,6 +111,23 @@ export const IntegratorProtocolResult = Schema.TaggedUnion({
 })
 export type IntegratorProtocolResult = typeof IntegratorProtocolResult.Type
 
+/** Protocol result whose candidate, rejection, or conclusive detail is bound to one exact run. */
+export const IntegratorRunProtocolResult = Schema.TaggedUnion({
+  CandidateRejected: {
+    candidateText: IntegratorCandidateText,
+    observation: IntegratorGitObservation,
+    run: IntegratorRunCorrelation
+  },
+  NotPrepared: { detail: IntegratorNotPreparedDetail, run: IntegratorRunCorrelation },
+  PreparedCandidate: {
+    candidateCommit: GitCommitSha,
+    candidateText: IntegratorCandidateText,
+    observation: Schema.Struct({ directParents: Schema.Tuple([GitCommitSha, GitCommitSha]) }),
+    run: IntegratorRunCorrelation
+  }
+})
+export type IntegratorRunProtocolResult = typeof IntegratorRunProtocolResult.Type
+
 /**
  * The exact candidate explicitly reported by one outer Integrator session and
  * subsequently qualified by Git as the ordered merge commit [H, C].
@@ -105,6 +148,28 @@ export const IntegratorQualifiedCandidate = Schema.Struct({
   )
 )
 export type IntegratorQualifiedCandidate = typeof IntegratorQualifiedCandidate.Type
+
+/**
+ * Promotion evidence qualified for one exact outer-Integrator run. The legacy
+ * IntegratorQualifiedCandidate remains valid for the original session-only
+ * vocabulary; this value is required once a session has multiple runs.
+ */
+export const IntegratorRunQualifiedCandidate = Schema.Struct({
+  candidateCommit: GitCommitSha,
+  candidateText: IntegratorCandidateText,
+  directParents: Schema.Tuple([GitCommitSha, GitCommitSha]),
+  qualifiedAt: JournalPosition,
+  run: IntegratorRunCorrelation
+}).check(
+  Schema.makeFilter((candidate) =>
+    candidate.directParents[0] === candidate.run.session.expectedTargetHead &&
+    candidate.directParents[1] === candidate.run.session.acceptedResult.commit &&
+    candidate.qualifiedAt > candidate.run.session.targetLineageObservedAt
+      ? undefined
+      : "qualified Integrator candidate must bind the durable Git observation to exact ordered parents [H, C] and run"
+  )
+)
+export type IntegratorRunQualifiedCandidate = typeof IntegratorRunQualifiedCandidate.Type
 
 /** Closed reconstruction states for one responsibility's local Integrator history. */
 export const IntegratorState = Schema.TaggedUnion({
@@ -128,6 +193,28 @@ export const IntegratorState = Schema.TaggedUnion({
 })
 export type IntegratorState = typeof IntegratorState.Type
 
+/** Closed reconstruction states for one explicitly identified Integrator run. */
+export const IntegratorRunState = Schema.TaggedUnion({
+  Absent: { run: IntegratorRunCorrelation },
+  CandidateRejected: {
+    candidateText: IntegratorCandidateText,
+    observation: IntegratorGitObservation,
+    run: IntegratorRunCorrelation
+  },
+  Contradiction: { detail: Schema.String },
+  GitQualifiedPrepared: {
+    candidateCommit: GitCommitSha,
+    candidateText: IntegratorCandidateText,
+    observation: Schema.Struct({ directParents: Schema.Tuple([GitCommitSha, GitCommitSha]) }),
+    qualifiedAt: JournalPosition,
+    run: IntegratorRunCorrelation
+  },
+  NotPrepared: { detail: IntegratorNotPreparedDetail, run: IntegratorRunCorrelation },
+  PreparedAwaitingGit: { candidateText: IntegratorCandidateText, run: IntegratorRunCorrelation },
+  RunUnfinished: { run: IntegratorRunCorrelation }
+})
+export type IntegratorRunState = typeof IntegratorRunState.Type
+
 /**
  * Materializes the promotion-eligible value proved by reconstructed Integrator
  * history. Its Journal position lets promotion validation prove that the Git
@@ -150,9 +237,22 @@ export const IntegratorSessionFixedEvent = Schema.TaggedStruct("IntegratorSessio
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
+/** Durable intent written before each opaque call for one exact run ordinal. */
+export const IntegratorRunStartedEvent = Schema.TaggedStruct("IntegratorRunStarted", {
+  run: IntegratorRunCorrelation,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
 /** Durable outer result; replay must reuse this fact and never call the Integrator again. */
 export const IntegratorResultRecordedEvent = Schema.TaggedStruct("IntegratorResultRecorded", {
   result: IntegratorResult,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
+/** Durable outer result bound to the exact run that crossed the provider boundary. */
+export const IntegratorRunResultRecordedEvent = Schema.TaggedStruct("IntegratorRunResultRecorded", {
+  result: IntegratorResult,
+  run: IntegratorRunCorrelation,
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
@@ -160,6 +260,13 @@ export const IntegratorResultRecordedEvent = Schema.TaggedStruct("IntegratorResu
 export const IntegratorCandidateGitReadIntendedEvent = Schema.TaggedStruct("IntegratorCandidateGitReadIntended", {
   candidateText: IntegratorCandidateText,
   correlation: IntegratorCorrelation,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
+/** Durable intent proving Git was about to read a candidate for one exact run. */
+export const IntegratorRunCandidateGitReadIntendedEvent = Schema.TaggedStruct("IntegratorRunCandidateGitReadIntended", {
+  candidateText: IntegratorCandidateText,
+  run: IntegratorRunCorrelation,
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
@@ -171,11 +278,23 @@ export const IntegratorCandidateGitObservedEvent = Schema.TaggedStruct("Integrat
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
+/** Durable Git observation bound to the exact run and explicitly reported candidate. */
+export const IntegratorRunCandidateGitObservedEvent = Schema.TaggedStruct("IntegratorRunCandidateGitObserved", {
+  candidateText: IntegratorCandidateText,
+  observation: IntegratorGitObservation,
+  run: IntegratorRunCorrelation,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
 export const IntegratorJournalEvent = Schema.Union([
   IntegratorSessionFixedEvent,
+  IntegratorRunStartedEvent,
   IntegratorResultRecordedEvent,
+  IntegratorRunResultRecordedEvent,
   IntegratorCandidateGitReadIntendedEvent,
-  IntegratorCandidateGitObservedEvent
+  IntegratorRunCandidateGitReadIntendedEvent,
+  IntegratorCandidateGitObservedEvent,
+  IntegratorRunCandidateGitObservedEvent
 ])
 export type IntegratorJournalEvent = typeof IntegratorJournalEvent.Type
 

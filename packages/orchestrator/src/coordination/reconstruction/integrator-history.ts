@@ -9,9 +9,10 @@ import { acceptedResultEquivalence } from "../../workflow/protocols/integration-
 import type { IntegratorCorrelation } from "../../workflow/protocols/integrator/events.js"
 import { integratorCorrelationsEqual } from "../../workflow/protocols/integrator/state.js"
 import { setMapValue } from "./integration-history-run-binding.js"
+import { type IntegratorRunHistoryIndexes, validateIntegratorRunHistoryEvent } from "./integrator-run-history.js"
 
 /** Causal indexes owned by the generic outer Integrator history. */
-export interface IntegratorHistoryIndexes {
+export interface IntegratorHistoryIndexes extends IntegratorRunHistoryIndexes {
   readonly integrationStarted: Map<
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>
@@ -251,11 +252,14 @@ const invalidIntegratorCandidateGitObservation = (
       : undefined
 }
 
-/** Validates and indexes only the events owned by the outer Integrator protocol. */
-export const validateIntegratorHistoryEvent = (
+type IntegratorHistoryValidationResult =
+  | { readonly handled: true; readonly issue: string | undefined }
+  | { readonly handled: false }
+
+const validateNonRunIntegratorHistoryEvent = (
   record: JournalRecord,
   indexes: IntegratorHistoryIndexes
-): { readonly handled: true; readonly issue: string | undefined } | { readonly handled: false } => {
+): IntegratorHistoryValidationResult => {
   const event = record.event
   if (event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage") {
     setMapValue(indexes.targetLineageReadIntents, event.operation.operationId, {
@@ -281,4 +285,13 @@ export const validateIntegratorHistoryEvent = (
     return { handled: true, issue: invalidIntegratorCandidateGitObservation(record, event, indexes) }
   }
   return { handled: false }
+}
+
+/** Validates and indexes only the events owned by the outer Integrator protocol. */
+export const validateIntegratorHistoryEvent = (
+  record: JournalRecord,
+  indexes: IntegratorHistoryIndexes
+): IntegratorHistoryValidationResult => {
+  const runHistory = validateIntegratorRunHistoryEvent(record, indexes)
+  return runHistory.handled ? runHistory : validateNonRunIntegratorHistoryEvent(record, indexes)
 }

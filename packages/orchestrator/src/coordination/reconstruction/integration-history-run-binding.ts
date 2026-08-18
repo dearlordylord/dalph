@@ -100,18 +100,34 @@ const invalidCandidateRunBinding = (event: WorkflowJournalEvent, runId: RunId): 
         candidate.correlation.plannedAttempt.runId === runId
           ? undefined
           : `Integrator session binds run ${candidate.correlation.plannedAttempt.runId}`,
+      IntegratorRunStarted: (candidate) =>
+        candidate.run.session.plannedAttempt.runId === runId
+          ? undefined
+          : `Integrator run start binds run ${candidate.run.session.plannedAttempt.runId}`,
       IntegratorResultRecorded: (candidate) =>
         candidate.result.correlation.plannedAttempt.runId === runId
           ? undefined
           : `Integrator result binds run ${candidate.result.correlation.plannedAttempt.runId}`,
+      IntegratorRunResultRecorded: (candidate) =>
+        candidate.run.session.plannedAttempt.runId === runId
+          ? undefined
+          : `Integrator run result binds run ${candidate.run.session.plannedAttempt.runId}`,
       IntegratorCandidateGitReadIntended: (candidate) =>
         candidate.correlation.plannedAttempt.runId === runId
           ? undefined
           : `Integrator candidate Git-read intent binds run ${candidate.correlation.plannedAttempt.runId}`,
+      IntegratorRunCandidateGitReadIntended: (candidate) =>
+        candidate.run.session.plannedAttempt.runId === runId
+          ? undefined
+          : `Integrator run candidate Git-read intent binds run ${candidate.run.session.plannedAttempt.runId}`,
       IntegratorCandidateGitObserved: (candidate) =>
         candidate.correlation.plannedAttempt.runId === runId
           ? undefined
-          : `Integrator candidate Git observation binds run ${candidate.correlation.plannedAttempt.runId}`
+          : `Integrator candidate Git observation binds run ${candidate.correlation.plannedAttempt.runId}`,
+      IntegratorRunCandidateGitObserved: (candidate) =>
+        candidate.run.session.plannedAttempt.runId === runId
+          ? undefined
+          : `Integrator run candidate Git observation binds run ${candidate.run.session.plannedAttempt.runId}`
     }),
     Match.orElse(() => undefined)
   )

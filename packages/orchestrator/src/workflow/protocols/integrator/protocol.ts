@@ -1,16 +1,13 @@
-import { Context, Effect, Option, Schema } from "effect"
-import type { IntegrationTarget, RunId } from "@dalph/contracts"
+import { Context, Effect, Option } from "effect"
+import type { IntegrationTarget } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
-  integratorCandidateGitObservedRecordKey,
-  integratorCandidateGitReadIntendedRecordKey,
-  integratorResultRecordedRecordKey
+  integratorRunCandidateGitObservedRecordKey,
+  integratorRunResultRecordedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
-  IntegratorCandidateGitObservedEvent,
-  IntegratorCandidateGitReadIntendedEvent,
   IntegratorCandidateText,
   IntegratorCorrelation,
   IntegratorGitObservation,
@@ -19,7 +16,11 @@ import {
   IntegratorRequest,
   IntegratorResult,
   IntegratorNotPreparedDetail,
-  IntegratorResultRecordedEvent,
+  IntegratorRunCandidateGitObservedEvent,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorRunProtocolResult,
+  IntegratorRunResultRecordedEvent,
   IntegratorCandidateResourceLocator,
   IntegratorSessionId,
   IntegratorState,
@@ -35,17 +36,31 @@ import {
   IntegratorTargetLineageIncompatible,
   IntegratorTargetLineageObservationChanged
 } from "./errors.js"
-import { deriveIntegratorState, integratorCorrelationsEqual, integratorFindEventAtKey } from "./state.js"
+import { deriveIntegratorRunState, deriveIntegratorState, integratorCorrelationsEqual } from "./state.js"
 import {
   appendIntegratorSessionIfNeeded,
   hasMatchingIntegratorTargetLineageObservation,
   IntegratorPreparationInput,
   integratorCorrelationFor,
+  integratorInitialRunCorrelationFor,
   integratorLineageIsCompatible,
+  integratorRunCorrelationFor,
   readRecordedIntegratorSession
 } from "./session.js"
+import type { IntegratorRunPreparationInput } from "./session.js"
+import {
+  appendRunGitReadIntentIfNeeded,
+  readLegacyInitialResultForRun,
+  readRecordedRunResult,
+  readRunCandidateObservation,
+  reconcileRunResult,
+  runIdForCorrelation,
+  runObservationFromAppendedRecord,
+  runResultFromAppendedRecord,
+  validateLegacyInitialResult
+} from "./journal-record-reconciliation.js"
 
-export { deriveIntegratorState }
+export { deriveIntegratorRunState, deriveIntegratorState }
 export {
   IntegratorCallFailure,
   IntegratorGitReadFailure,
@@ -56,8 +71,16 @@ export {
 }
 export type { IntegratorProtocolError } from "./errors.js"
 
-export { IntegratorPreparationInput, integratorCorrelationFor }
-export type { IntegratorPreparationInput as IntegratorPreparationInputType } from "./session.js"
+export {
+  IntegratorPreparationInput,
+  integratorCorrelationFor,
+  integratorInitialRunCorrelationFor,
+  integratorRunCorrelationFor
+}
+export type {
+  IntegratorPreparationInput as IntegratorPreparationInputType,
+  IntegratorRunPreparationInput as IntegratorRunPreparationInputType
+} from "./session.js"
 
 export {
   IntegratorCandidateResourceLocator,
@@ -66,9 +89,12 @@ export {
   IntegratorGitObservation,
   IntegratorJournalEvent,
   IntegratorProtocolResult,
+  IntegratorRunProtocolResult,
   IntegratorRequest,
   IntegratorResult,
   IntegratorNotPreparedDetail,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   IntegratorState,
   IntegratorQualifiedCandidate,
   integratorQualifiedCandidateFromState,
@@ -103,202 +129,46 @@ export interface IntegratorGitService {
 
 export class IntegratorGit extends Context.Service<IntegratorGit, IntegratorGitService>()("@dalph/IntegratorGit") {}
 
-const runIdForCorrelation = (correlation: IntegratorCorrelation): RunId => correlation.plannedAttempt.runId
-const integratorResultEquivalence = Schema.toEquivalence(IntegratorResult)
-const integratorGitObservationEquivalence = Schema.toEquivalence(IntegratorGitObservation)
-
-const resultFromAppendedRecord = (
-  record: JournalRecord,
-  correlation: IntegratorCorrelation,
-  expectedResult: IntegratorResult
-): Effect.Effect<IntegratorResult, IntegratorJournalContradiction> => {
-  if (
-    record.event._tag !== "IntegratorResultRecorded" ||
-    !integratorCorrelationsEqual(record.event.result.correlation, correlation) ||
-    !integratorResultEquivalence(record.event.result, expectedResult)
-  ) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "result append lost to a different durable result",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  return Effect.succeed(record.event.result)
-}
-
-const observationFromAppendedRecord = (
-  record: JournalRecord,
-  correlation: IntegratorCorrelation,
-  candidateText: IntegratorCandidateText,
-  expectedObservation: IntegratorGitObservation
-): Effect.Effect<IntegratorGitObservation, IntegratorJournalContradiction> => {
-  if (
-    record.event._tag !== "IntegratorCandidateGitObserved" ||
-    record.event.candidateText !== candidateText ||
-    !integratorCorrelationsEqual(record.event.correlation, correlation) ||
-    !integratorGitObservationEquivalence(record.event.observation, expectedObservation)
-  ) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "Git observation append lost to different durable facts",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  return Effect.succeed(record.event.observation)
-}
-
-const readRecordedResult = (
-  records: ReadonlyArray<JournalRecord>,
-  correlation: IntegratorCorrelation
-): Effect.Effect<Option.Option<IntegratorResult>, IntegratorJournalContradiction> => {
-  const existing = integratorFindEventAtKey(records, integratorResultRecordedRecordKey(correlation))
-  if (existing === undefined) return Effect.succeed(Option.none())
-  if (existing.event._tag !== "IntegratorResultRecorded") {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "result key contains a foreign event",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  if (!integratorCorrelationsEqual(existing.event.result.correlation, correlation)) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "recorded result belongs to a foreign correlation",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  return Effect.succeed(Option.some(existing.event.result))
-}
-
-const readRecordedGitObservation = (
-  records: ReadonlyArray<JournalRecord>,
-  correlation: IntegratorCorrelation,
-  candidateText: IntegratorCandidateText
-): Effect.Effect<Option.Option<IntegratorGitObservation>, IntegratorJournalContradiction> => {
-  const key = integratorCandidateGitObservedRecordKey(correlation, candidateText)
-  const existing = integratorFindEventAtKey(records, key)
-  if (existing === undefined) return Effect.succeed(Option.none())
-  if (existing.event._tag !== "IntegratorCandidateGitObserved") {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "Git observation key contains a foreign event",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  if (
-    !integratorCorrelationsEqual(existing.event.correlation, correlation) ||
-    existing.event.candidateText !== candidateText
-  ) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "recorded Git observation belongs to a foreign candidate",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  if (existing.event.observation.candidateText !== candidateText) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "Git observation text differs from the reported candidate",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  return Effect.succeed(Option.some(existing.event.observation))
-}
-
-const appendGitReadIntentIfNeeded = Effect.fn("IntegratorProtocol.appendGitReadIntentIfNeeded")(function* (
-  journal: InRunJournal["Service"],
-  correlation: IntegratorCorrelation,
-  candidateText: IntegratorCandidateText,
-  records: ReadonlyArray<JournalRecord>
-) {
-  const key = integratorCandidateGitReadIntendedRecordKey(correlation, candidateText)
-  const existing = integratorFindEventAtKey(records, key)
-  if (existing !== undefined) {
-    if (
-      existing.event._tag !== "IntegratorCandidateGitReadIntended" ||
-      existing.event.candidateText !== candidateText ||
-      !integratorCorrelationsEqual(existing.event.correlation, correlation)
-    ) {
-      return yield* new IntegratorJournalContradiction({
-        detail: "Git-read key contains a foreign event",
-        runId: runIdForCorrelation(correlation)
-      })
-    }
-    return existing
-  }
-  const appended = yield* journal.append(
-    runIdForCorrelation(correlation),
-    key,
-    IntegratorCandidateGitReadIntendedEvent.make({ candidateText, correlation, version: workflowJournalEventVersion })
-  )
-  if (
-    appended.event._tag !== "IntegratorCandidateGitReadIntended" ||
-    appended.event.candidateText !== candidateText ||
-    !integratorCorrelationsEqual(appended.event.correlation, correlation)
-  ) {
-    return yield* new IntegratorJournalContradiction({
-      detail: "Git-read append lost to a foreign event",
-      runId: runIdForCorrelation(correlation)
-    })
-  }
-  return appended
-})
-
-const readGitReadIntent = (
-  records: ReadonlyArray<JournalRecord>,
-  correlation: IntegratorCorrelation,
-  candidateText: IntegratorCandidateText
-): Effect.Effect<boolean, IntegratorJournalContradiction> => {
-  const existing = integratorFindEventAtKey(
-    records,
-    integratorCandidateGitReadIntendedRecordKey(correlation, candidateText)
-  )
-  if (existing === undefined) return Effect.succeed(false)
-  if (
-    existing.event._tag !== "IntegratorCandidateGitReadIntended" ||
-    existing.event.candidateText !== candidateText ||
-    !integratorCorrelationsEqual(existing.event.correlation, correlation)
-  ) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "Git-read key contains a foreign event",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  return Effect.succeed(true)
-}
-
-const qualifyCandidate = (
+const qualifyRunCandidate = (
   result: Extract<IntegratorResult, { readonly _tag: "PreparedCandidate" }>,
+  run: IntegratorRunCorrelation,
   observation: IntegratorGitObservation
-): IntegratorProtocolResult => {
+): IntegratorRunProtocolResult => {
   if (
-    integratorCandidateHasExactParents(
-      observation,
-      result.correlation.expectedTargetHead,
-      result.correlation.acceptedResult.commit
-    )
+    integratorCandidateHasExactParents(observation, run.session.expectedTargetHead, run.session.acceptedResult.commit)
   ) {
-    return IntegratorProtocolResult.cases.PreparedCandidate.make({
+    return IntegratorRunProtocolResult.cases.PreparedCandidate.make({
       candidateCommit: observation.commit,
       candidateText: result.candidateText,
-      correlation: result.correlation,
-      observation: { directParents: [observation.directParents[0], observation.directParents[1]] }
+      observation: { directParents: [observation.directParents[0], observation.directParents[1]] },
+      run
     })
   }
-  return IntegratorProtocolResult.cases.CandidateRejected.make({
+  return IntegratorRunProtocolResult.cases.CandidateRejected.make({
     candidateText: result.candidateText,
-    correlation: result.correlation,
-    observation
+    observation,
+    run
   })
+}
+
+const legacyProtocolResultFromRun = (result: IntegratorRunProtocolResult): IntegratorProtocolResult => {
+  switch (result._tag) {
+    case "CandidateRejected":
+      return IntegratorProtocolResult.cases.CandidateRejected.make({
+        candidateText: result.candidateText,
+        correlation: result.run.session,
+        observation: result.observation
+      })
+    case "NotPrepared":
+      return IntegratorProtocolResult.cases.NotPrepared.make({ correlation: result.run.session, detail: result.detail })
+    case "PreparedCandidate":
+      return IntegratorProtocolResult.cases.PreparedCandidate.make({
+        candidateCommit: result.candidateCommit,
+        candidateText: result.candidateText,
+        correlation: result.run.session,
+        observation: result.observation
+      })
+  }
 }
 
 const correlationForPreparation = Effect.fn("IntegratorProtocol.correlationForPreparation")(function* (
@@ -355,87 +225,113 @@ const correlationForPreparation = Effect.fn("IntegratorProtocol.correlationForPr
   return correlation
 })
 
-/**
- * Fixes the opaque session before calling the generic Integrator, reuses durable
- * outer results after restart, and qualifies an explicit M only from Git's
- * exact ordered direct-parent proof [H, C].
- */
-export const prepareIntegrationCandidate = Effect.fn("IntegratorProtocol.prepareIntegrationCandidate")(function* (
-  input: IntegratorPreparationInput
-) {
-  const journal = yield* InRunJournal
-  const runId = input.responsibility.plannedAttempt.runId
-  const records = yield* journal.read(runId)
-  const correlation = yield* correlationForPreparation(journal, input, records)
-
-  const request = IntegratorRequest.make({ correlation })
-  // Reconcile after the intent append: another process may have durably recorded
-  // the outer result between the first read and this protocol invocation.
-  const recordsAfterSession = yield* journal.read(runId)
-  const resultFromJournal = yield* readRecordedResult(recordsAfterSession, correlation)
-  let result: IntegratorResult
-  if (Option.isNone(resultFromJournal)) {
-    const integrator = yield* Integrator
-    const freshResult = yield* integrator.prepare(request)
-    if (!integratorCorrelationsEqual(freshResult.correlation, correlation)) {
-      return yield* new IntegratorJournalContradiction({ detail: "Integrator returned a foreign correlation", runId })
-    }
-    const appended = yield* journal.append(
-      runId,
-      integratorResultRecordedRecordKey(correlation),
-      IntegratorResultRecordedEvent.make({ result: freshResult, version: workflowJournalEventVersion })
-    )
-    result = yield* resultFromAppendedRecord(appended, correlation, freshResult)
-  } else {
-    result = resultFromJournal.value
-  }
-  return yield* qualifyOrNotPrepared(journal, correlation, result)
-})
-
-const qualifyOrNotPrepared = Effect.fn("IntegratorProtocol.qualifyOrNotPrepared")(function* (
+const qualifyOrNotPreparedForRun = Effect.fn("IntegratorProtocol.qualifyOrNotPreparedForRun")(function* (
   journal: InRunJournal["Service"],
-  correlation: IntegratorCorrelation,
+  run: IntegratorRunCorrelation,
   result: IntegratorResult
 ) {
+  if (!integratorCorrelationsEqual(result.correlation, run.session)) {
+    return yield* new IntegratorJournalContradiction({
+      detail: "Integrator result is not bound to the requested run session",
+      runId: runIdForCorrelation(run.session)
+    })
+  }
   if (result._tag === "NotPrepared") {
-    return IntegratorProtocolResult.cases.NotPrepared.make({ correlation, detail: result.detail })
+    return IntegratorRunProtocolResult.cases.NotPrepared.make({ detail: result.detail, run })
   }
 
-  const currentRecords = yield* journal.read(runIdForCorrelation(correlation))
-  const recordedObservation = yield* readRecordedGitObservation(currentRecords, correlation, result.candidateText)
-  const readIntent = yield* readGitReadIntent(currentRecords, correlation, result.candidateText)
+  const currentRecords = yield* journal.read(runIdForCorrelation(run.session))
+  const recordedObservation = yield* readRunCandidateObservation(currentRecords, run, result.candidateText)
   let observation: IntegratorGitObservation
   if (Option.isSome(recordedObservation)) {
-    if (!readIntent) {
-      return yield* new IntegratorJournalContradiction({
-        detail: "Git observation exists without its durable read intent",
-        runId: runIdForCorrelation(correlation)
-      })
-    }
     observation = recordedObservation.value
   } else {
-    // The read intent is durable before Git can produce an ambiguous outcome.
-    yield* appendGitReadIntentIfNeeded(journal, correlation, result.candidateText, currentRecords)
-    observation = yield* (yield* IntegratorGit).readCandidate(correlation.integrationTarget, result.candidateText)
+    // The run-bound read intent is durable before Git can produce an ambiguous outcome.
+    yield* appendRunGitReadIntentIfNeeded(journal, run, result.candidateText, currentRecords)
+    observation = yield* (yield* IntegratorGit).readCandidate(run.session.integrationTarget, result.candidateText)
   }
   if (observation.candidateText !== result.candidateText) {
     return yield* new IntegratorJournalContradiction({
       detail: "Git returned facts for a different candidate text",
-      runId: runIdForCorrelation(correlation)
+      runId: runIdForCorrelation(run.session)
     })
   }
   if (Option.isNone(recordedObservation)) {
     const appended = yield* journal.append(
-      runIdForCorrelation(correlation),
-      integratorCandidateGitObservedRecordKey(correlation, result.candidateText),
-      IntegratorCandidateGitObservedEvent.make({
+      runIdForCorrelation(run.session),
+      integratorRunCandidateGitObservedRecordKey(run, result.candidateText),
+      IntegratorRunCandidateGitObservedEvent.make({
         candidateText: result.candidateText,
-        correlation,
         observation,
+        run,
         version: workflowJournalEventVersion
       })
     )
-    observation = yield* observationFromAppendedRecord(appended, correlation, result.candidateText, observation)
+    observation = yield* runObservationFromAppendedRecord(appended, run, result.candidateText, observation)
   }
-  return qualifyCandidate(result, observation)
+  return qualifyRunCandidate(result, run, observation)
+})
+
+/**
+ * Runs one exact outer Integrator ordinal. New calls always write
+ * IntegratorRunStarted before the opaque provider call and persist all result
+ * and candidate Git facts with the same `(session, ordinal)` identity.
+ */
+export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prepareIntegrationCandidateRun")(function* (
+  requestInput: IntegratorRunPreparationInput
+) {
+  const journal = yield* InRunJournal
+  const input = requestInput.preparation
+  const runId = input.responsibility.plannedAttempt.runId
+  if (requestInput.run.ordinal !== 1) {
+    return yield* new IntegratorJournalContradiction({
+      detail: "successor Integrator run requires exact Journal-authorized Retry evidence",
+      runId
+    })
+  }
+  const records = yield* journal.read(runId)
+  const session = yield* correlationForPreparation(journal, input, records)
+  if (!integratorCorrelationsEqual(session, requestInput.run.session)) {
+    return yield* new IntegratorJournalContradiction({
+      detail: "requested Integrator run belongs to a foreign session",
+      runId
+    })
+  }
+  const run = requestInput.run
+  const recordsAfterSession = yield* journal.read(runId)
+  const recordedRunResult = yield* readRecordedRunResult(recordsAfterSession, run)
+  const recordedLegacyResult = yield* readLegacyInitialResultForRun(recordsAfterSession, run)
+
+  if (Option.isNone(recordedRunResult) && Option.isSome(recordedLegacyResult)) {
+    const legacyResult = yield* validateLegacyInitialResult(recordsAfterSession, run, recordedLegacyResult.value)
+    return yield* qualifyOrNotPreparedForRun(journal, run, legacyResult)
+  }
+
+  const reconciledRunResult = yield* reconcileRunResult(journal, run, recordsAfterSession, recordedRunResult)
+  let result: IntegratorResult
+  if (Option.isSome(reconciledRunResult)) {
+    result = reconciledRunResult.value
+  } else {
+    const integrator = yield* Integrator
+    const freshResult = yield* integrator.prepare(IntegratorRequest.make({ correlation: run.session }))
+    if (!integratorCorrelationsEqual(freshResult.correlation, run.session)) {
+      return yield* new IntegratorJournalContradiction({ detail: "Integrator returned a foreign correlation", runId })
+    }
+    const appended = yield* journal.append(
+      runId,
+      integratorRunResultRecordedRecordKey(run),
+      IntegratorRunResultRecordedEvent.make({ result: freshResult, run, version: workflowJournalEventVersion })
+    )
+    result = yield* runResultFromAppendedRecord(appended, run, freshResult)
+  }
+  return yield* qualifyOrNotPreparedForRun(journal, run, result)
+})
+
+/** Compatibility wrapper for the initial run's session-level public result. */
+export const prepareIntegrationCandidate = Effect.fn("IntegratorProtocol.prepareIntegrationCandidate")(function* (
+  input: IntegratorPreparationInput
+) {
+  const run = integratorInitialRunCorrelationFor(input)
+  const result = yield* prepareIntegrationCandidateRun({ preparation: input, run })
+  return legacyProtocolResultFromRun(result)
 })

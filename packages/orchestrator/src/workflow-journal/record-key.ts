@@ -19,6 +19,7 @@ import type {
 import type {
   IntegratorCandidateText,
   IntegratorCorrelation,
+  IntegratorRunCorrelation,
   IntegratorResponsibilityFacts,
   IntegratorSessionId
 } from "../workflow/protocols/integrator/events.js"
@@ -132,6 +133,38 @@ const integratorRecordKeyPrefix = (responsibility: IntegratorResponsibilityFacts
 
 const integratorCorrelationRecordKeyPrefix = (correlation: IntegratorCorrelation): string =>
   `${integratorRecordKeyPrefix(correlation)}:session:${correlation.sessionId}`
+
+/** Stable key prefix for one exact outer-Integrator run within its session. */
+export const integratorRunRecordKeyPrefix = (run: IntegratorRunCorrelation): string =>
+  `${integratorCorrelationRecordKeyPrefix(run.session)}:run:${run.ordinal}`
+
+/** Stable key for the intent written before one exact opaque Integrator run. */
+export const integratorRunStartedRecordKey = (run: IntegratorRunCorrelation): JournalRecordKey =>
+  JournalRecordKey.make(`${integratorRunRecordKeyPrefix(run)}:started`)
+
+/** Stable key for one exact run's durable outer result. */
+export const integratorRunResultRecordedRecordKey = (run: IntegratorRunCorrelation): JournalRecordKey =>
+  JournalRecordKey.make(`${integratorRunRecordKeyPrefix(run)}:result`)
+
+/** Stable key prefix for one exact run's explicitly reported candidate. */
+export const integratorRunCandidateRecordKeyPrefix = (
+  run: IntegratorRunCorrelation,
+  candidateText: IntegratorCandidateText
+): string => `${integratorRunRecordKeyPrefix(run)}:candidate:${JSON.stringify(candidateText)}`
+
+/** Intent before Git reads a candidate reported by one exact Integrator run. */
+export const integratorRunCandidateGitReadIntendedRecordKey = (
+  run: IntegratorRunCorrelation,
+  candidateText: IntegratorCandidateText
+): JournalRecordKey =>
+  JournalRecordKey.make(`${integratorRunCandidateRecordKeyPrefix(run, candidateText)}:git-read-intent`)
+
+/** Durable Git object-and-parent observation for one exact Integrator run. */
+export const integratorRunCandidateGitObservedRecordKey = (
+  run: IntegratorRunCorrelation,
+  candidateText: IntegratorCandidateText
+): JournalRecordKey =>
+  JournalRecordKey.make(`${integratorRunCandidateRecordKeyPrefix(run, candidateText)}:git-observation`)
 
 /** One fixed outer-Integrator session for an exact started responsibility, independent of a later observed H. */
 export const integratorSessionFixedRecordKey = (responsibility: IntegratorResponsibilityFacts): JournalRecordKey =>
