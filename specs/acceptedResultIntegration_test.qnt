@@ -149,9 +149,17 @@ module acceptedResultIntegrationTest {
         state.results.get(1).integratorOutcome == NotPrepared,
         state.results.get(1).integratorResultRecorded,
         state.results.get(1).submittedCandidate == 0,
-        not(state.results.get(1).targetHeld),
+        state.results.get(1).targetHeld,
         not(state.results.get(1).promotionAuthorized),
         conclusiveNotPreparedHasNoCandidate,
+      })
+      .then(recordQuarantine(1))
+      .expect(and {
+        state.results.get(1).phase == Quarantined,
+        state.results.get(1).quarantineRecorded,
+        state.results.get(1).quarantineCause == NotPreparedQuarantine,
+        not(state.results.get(1).targetHeld),
+        quarantineReleaseRequiresDurableOccurrence,
       })
   }
 
@@ -174,9 +182,15 @@ module acceptedResultIntegrationTest {
         state.results.get(1).integrationSession == 1,
         state.results.get(1).integratorInvocationCount == 1,
         state.results.get(1).integratorResumeCount == 1,
+        state.results.get(1).integratorRunOrdinal == 1,
+        state.results.get(1).integratorRunSession == 1,
+        state.results.get(1).lastRecoveryRunSession == 1,
+        state.results.get(1).lastRecoveryRunOrdinal == 1,
         state.results.get(1).targetHeld,
         integratorResourceIsExactlyBound,
         integratorRecoveryReusesSameSession,
+        integratorRunCorrelationIsExact,
+        recoveryResumesSameRunOrdinal,
         noAutomaticIntegratorSuccessor,
       })
   }
@@ -264,8 +278,9 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeMissingCandidate(1))
+      .then(recordQuarantine(1))
       .expect(and {
-        state.results.get(1).phase == CandidateRejected,
+        state.results.get(1).phase == Quarantined,
         state.results.get(1).candidateGitObservation == CandidateMissing,
         not(state.results.get(1).candidateQualificationProven),
         not(state.results.get(1).promotionAuthorized),
@@ -284,8 +299,9 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeNonCommitCandidate(1))
+      .then(recordQuarantine(1))
       .expect(and {
-        state.results.get(1).phase == CandidateRejected,
+        state.results.get(1).phase == Quarantined,
         state.results.get(1).candidateGitObservation == CandidateNonCommit,
         not(state.results.get(1).promotionAuthorized),
         invalidCandidateNeverAuthorizesPromotion,
@@ -303,8 +319,9 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeWrongParentCandidate(1))
+      .then(recordQuarantine(1))
       .expect(and {
-        state.results.get(1).phase == CandidateRejected,
+        state.results.get(1).phase == Quarantined,
         state.results.get(1).candidateGitObservation == CandidateWrongParents,
         state.results.get(1).observedFirstParent != state.results.get(1).expectedTargetHead,
         state.results.get(1).observedSecondParent != state.results.get(1).acceptedResultCommit,
@@ -508,6 +525,158 @@ module acceptedResultIntegrationTest {
         not(state.results.get(1).targetHeld),
         promotionExhaustionPreservesCandidate,
         promotionTerminalReleasesTarget,
+      })
+  }
+
+  // A conclusive outer result records its quarantine before releasing the
+  // target. The same target remains FIFO-blocked while target 2 progresses.
+  run conclusiveFailureQuarantinesBeforeReleaseAndKeepsUnrelatedWorkRunnableTest = {
+    init
+      .then(acceptResult(1))
+      .then(acceptResult(2))
+      .then(assignResultTwoIndependentTarget)
+      .then(queueAcceptedResult(1))
+      .then(queueAcceptedResult(2))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .expect(and {
+        state.results.get(1).phase == IntegratorNotPrepared,
+        state.results.get(1).targetHeld,
+        not(state.results.get(1).quarantineRecorded),
+        conclusiveResultCannotReleaseBeforeQuarantine,
+      })
+      .then(recordQuarantine(1))
+      .expect(and {
+        state.results.get(1).phase == Quarantined,
+        state.results.get(1).quarantineRecorded,
+        not(state.results.get(1).targetHeld),
+        logicalIntegrationResponsibilityBlocksLaterQueue,
+        quarantinePreservesSameTargetResponsibility,
+      })
+      .then(startIntegration(2))
+      .expect(and {
+        state.results.get(1).phase == Quarantined,
+        state.results.get(2).phase == Started,
+        state.results.get(1).queuePosition < state.results.get(2).queuePosition,
+      })
+  }
+
+  // The first Retry direction is durable and exact redelivery does not start
+  // the new outer run twice; the explicit start reuses S and its original H.
+  run retryRedeliveryStartsOneRunInTheSameSessionTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryOne)
+      .expect(and {
+        state.results.get(1).phase == RetrySelected,
+        state.results.get(1).quarantineDirection == RetryDirection,
+        state.results.get(1).quarantineDirectionCount == 1,
+      })
+      .then(redeliverRetryOne)
+      .expect(and {
+        state.results.get(1).phase == RetrySelected,
+        state.results.get(1).quarantineDirectionCount == 1,
+        state.results.get(1).quarantineRedeliveryCount == 1,
+        quarantineDirectionIsExactAndFirst,
+      })
+      .then(rejectConflictingFullRerun(1, state.results.get(1).quarantineDirectionPosition))
+      .expect(and {
+        state.results.get(1).phase == RetrySelected,
+        state.results.get(1).quarantineDirection == RetryDirection,
+        state.results.get(1).quarantineConflictCount == 1,
+        state.results.get(1).retryRunCount == 0,
+        state.results.get(1).successorRunCount == 0,
+        conflictingDirectionIsNoOp,
+      })
+      .then(startRetryOne)
+      .expect(and {
+        state.results.get(1).phase == RetryInFlight,
+        state.results.get(1).retryRunCount == 1,
+        state.results.get(1).integratorInvocationCount == 2,
+        state.results.get(1).integrationSession == 1,
+        retryUsesSameSessionAndCurrentHead,
+        retryRequiresOneExplicitChoice,
+        retryAdvancesSameSessionToOrdinalTwo,
+        noAutomaticIntegratorSuccessor,
+      })
+  }
+
+  // Retry at a changed H is not a stale-session call. It records a new
+  // quarantine occurrence and leaves the operator a Full-rerun choice.
+  run retryAtChangedHeadCreatesFreshQuarantineWithoutIntegratorCallTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryOne)
+      .then(observeChangedTargetHead(1))
+      .then(recordRetryNotApplicable(1))
+      .expect(and {
+        state.results.get(1).phase == RetryNotApplicable,
+        state.results.get(1).quarantineOccurrenceCount == 2,
+        state.results.get(1).retryNotApplicableCount == 1,
+        state.results.get(1).retryFreshQuarantineCount == 1,
+        state.results.get(1).retryRunCount == 0,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationSession == 1,
+        changedHeadRetryCreatesFreshQuarantine,
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  // Full rerun records one winning direction, rereads a fresh H2 after
+  // restart, preserves S/resource/queue position, and fixes one S2.
+  run fullRerunPreservesPredecessorAndRestartsOneSuccessorTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(observeChangedTargetHead(1))
+      .then(chooseFullRerunOne)
+      .expect(and {
+        state.results.get(1).phase == FullRerunSelected,
+        state.results.get(1).quarantineDirection == FullRerunDirection,
+        state.results.get(1).quarantineDirectionCount == 1,
+      })
+      .then(redeliverFullRerunOne)
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(observeSuccessorTargetHead(1))
+      .then(startFullRerun(1))
+      .expect(and {
+        state.results.get(1).phase == SuccessorSessionFixed,
+        state.results.get(1).successorSession == 1001,
+        state.results.get(1).successorResource == 1101,
+        state.results.get(1).successorTargetHead == 111,
+        state.results.get(1).successorRunOrdinal == 1,
+        state.results.get(1).predecessorPreserved,
+        state.results.get(1).queuePosition == 1,
+        fullRerunPreservesPredecessorAndQueuePosition,
+        successorAllocationIsBounded,
+        successorStartsAtFreshOrdinalOne,
+      })
+      .then(startSuccessorIntegrator(1))
+      .expect(and {
+        state.results.get(1).phase == SuccessorInFlight,
+        state.results.get(1).successorIntegratorInvocationCount == 1,
+        fullRerunPreservesPredecessorAndQueuePosition,
+        successorStartsAtFreshOrdinalOne,
       })
   }
 

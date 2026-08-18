@@ -72,7 +72,7 @@ module acceptedResultIntegrationNegativeTest {
   action startLaterQueueAfterRejectedCandidate: bool = {
     val result = state.results.get(2)
     all {
-      state.results.get(1).phase == CandidateRejected,
+      state.results.get(1).phase == Quarantined,
       result.phase == Queued,
       state' = {
         ...state,
@@ -416,6 +416,173 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
+  // Forbidden release shortcut: the live target is released before the
+  // conclusive result has a durable quarantine occurrence.
+  action releaseBeforeQuarantine: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == IntegratorNotPrepared,
+      result.targetHeld,
+      not(result.quarantineRecorded),
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: Quarantined,
+          targetHeld: false,
+        }),
+      },
+    }
+  }
+
+  // A quarantine has no automatic retry path; a Retry direction must be the
+  // durable first choice before a new outer run can begin.
+  action retryWithoutChoice: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == Quarantined,
+      result.quarantineDirection == NoQuarantineDirection,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: RetryInFlight,
+          targetHeld: true,
+          retryRunCount: 1,
+        }),
+      },
+    }
+  }
+
+  action conflictingDirectionWins: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == RetrySelected,
+      result.quarantineDirection == RetryDirection,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          quarantineDirection: FullRerunDirection,
+        }),
+      },
+    }
+  }
+
+  // A stale fixed H cannot be used to launch the Retry-selected outer run.
+  action retryAgainstChangedHead: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == RetrySelected,
+      result.quarantineDirection == RetryDirection,
+      state.targetFactsCurrent,
+      state.targetHeadProof != result.expectedTargetHead,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: RetryInFlight,
+          targetHeld: true,
+          retryRunCount: 1,
+        }),
+      },
+    }
+  }
+
+  action allocateSecondSuccessor: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == SuccessorSessionFixed,
+      result.successorFixed,
+      result.successorRunCount == 1,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          successorSession: result.successorSession + 1,
+          successorResource: result.successorResource + 1,
+          successorRunCount: 2,
+        }),
+      },
+    }
+  }
+
+  run releaseBeforeQuarantineViolatesDurableBoundaryTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(releaseBeforeQuarantine)
+      .expect(not(quarantinePhaseRequiresRecordedOccurrence))
+  }
+
+  run retryWithoutChoiceViolatesNoAutomaticRetryTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(retryWithoutChoice)
+      .expect(and {
+        not(retryRequiresOneExplicitChoice),
+        not(quarantineDirectionIsExactAndFirst),
+      })
+  }
+
+  run conflictingDirectionCannotReplaceFirstChoiceTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetry(1, state.results.get(1).quarantinePosition))
+      .then(conflictingDirectionWins)
+      .expect(not(quarantineDirectionIsExactAndFirst))
+  }
+
+  run retryCannotUseChangedHeadTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetry(1, state.results.get(1).quarantinePosition))
+      .then(observeChangedTargetHead(1))
+      .then(retryAgainstChangedHead)
+      .expect(not(retryUsesSameSessionAndCurrentHead))
+  }
+
+  run successorCannotBeAllocatedTwiceTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorNotPrepared(1))
+      .then(recordQuarantine(1))
+      .then(observeChangedTargetHead(1))
+      .then(chooseFullRerun(1, state.results.get(1).quarantinePosition))
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(observeSuccessorTargetHead(1))
+      .then(startFullRerun(1))
+      .then(allocateSecondSuccessor)
+      .expect(not(successorAllocationIsBounded))
+  }
+
   run lateAcceptedAfterRestartCannotBeQueuedForIntegrationTest = {
     init
       .then(observeAppliedRestartBeforeAccepted(1))
@@ -456,6 +623,7 @@ module acceptedResultIntegrationNegativeTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeMissingCandidate(1))
+      .then(recordQuarantine(1))
       .then(startLaterQueueAfterRejectedCandidate)
       .expect(not(logicalIntegrationResponsibilityBlocksLaterQueue))
   }

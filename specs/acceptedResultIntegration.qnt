@@ -16,6 +16,14 @@ module acceptedResultIntegration {
     | IntegratorResponseLost
     | IntegratorNotPrepared
     | IntegratorResultRecorded
+    | Quarantined
+    | RetrySelected
+    | RetryInFlight
+    | RetryNotApplicable
+    | FullRerunSelected
+    | SuccessorSessionFixed
+    | SuccessorInFlight
+    | SuccessorResponseLost
     | CandidateGitReadIntent
     | CandidateGitReadPending
     | CandidateReady
@@ -39,6 +47,22 @@ module acceptedResultIntegration {
     | NoIntegratorOutcome
     | NotPrepared
     | PreparedCandidate
+
+  // Operator direction is durable per exact quarantine occurrence. A missing
+  // direction is not a retry policy; it is the quiescent quarantine state.
+  type QuarantineDirection =
+    | NoQuarantineDirection
+    | RetryDirection
+    | FullRerunDirection
+
+  // A quarantine retains why the outer result stopped. A changed fixed head
+  // creates a fresh occurrence rather than mutating the old result in place.
+  type QuarantineCause =
+    | NoQuarantineCause
+    | NotPreparedQuarantine
+    | CandidateRejectedQuarantine
+    | RetryHeadChangedQuarantine
+    | SuccessorNotPreparedQuarantine
 
   // Git qualifies only the explicitly reported candidate object. Missing,
   // non-commit, and wrong-parent observations are distinct from success.
@@ -133,6 +157,42 @@ module acceptedResultIntegration {
     promotionCompareAndSetRequested: bool,
     promotionForceRequested: bool,
     promotionEquivalentContentAccepted: bool,
+    // Issue #68: the conclusive outer result is quarantined before its live
+    // target ownership is released. The position is the Journal position of
+    // this exact quarantine occurrence.
+    quarantineRecorded: bool,
+    quarantineOccurrenceCount: int,
+    quarantinePosition: int,
+    quarantineCause: QuarantineCause,
+    quarantineDirection: QuarantineDirection,
+    quarantineDirectionSession: int,
+    quarantineDirectionPosition: int,
+    quarantineDirectionCount: int,
+    quarantineRedeliveryCount: int,
+    quarantineConflictCount: int,
+    retryRunCount: int,
+    // The run ordinal belongs to one exact Integrator session. The initial
+    // run is ordinal 1; an explicit Retry advances the same session to 2.
+    integratorRunOrdinal: int,
+    integratorRunSession: int,
+    lastRecoveryRunSession: int,
+    lastRecoveryRunOrdinal: int,
+    retryNotApplicableCount: int,
+    retryFreshQuarantineCount: int,
+    // Full rerun preserves S and its resource while allocating exactly one
+    // successor session/resource at a newly qualified target head.
+    predecessorPreserved: bool,
+    successorSession: int,
+    successorResource: int,
+    successorTargetHead: int,
+    successorFixed: bool,
+    successorRunCount: int,
+    successorRunOrdinal: int,
+    successorHeadFreshlyObserved: bool,
+    successorIntegratorInvocationCount: int,
+    lastDirection: QuarantineDirection,
+    lastDirectionSession: int,
+    lastDirectionPosition: int,
   }
 
   type State = {
@@ -183,6 +243,10 @@ module acceptedResultIntegration {
       IntegratorInFlight,
       IntegratorResponseLost,
       IntegratorResultRecorded,
+      RetryInFlight,
+      SuccessorSessionFixed,
+      SuccessorInFlight,
+      SuccessorResponseLost,
       CandidateGitReadIntent,
       CandidateGitReadPending,
     ).contains(phase)
@@ -249,7 +313,11 @@ module acceptedResultIntegration {
       s.targetFactsCurrent,
       result.lineageCompatible,
       // A known changed H cannot create a fresh S for the queued result.
-      s.targetHeadProof == 0 or s.targetHeadProof == result.plannedTargetHead,
+      // The finite model carries one explicit target-head proof for target 1;
+      // unrelated target 2 remains independently admissible.
+      result.integrationTarget != 1
+        or s.targetHeadProof == 0
+        or s.targetHeadProof == result.plannedTargetHead,
       not(RESULT_IDS.exists(other =>
         other != id
           and sameIntegrationTarget(s.results.get(other), result)
@@ -267,6 +335,18 @@ module acceptedResultIntegration {
           and s.results.get(other).phase == Queued
           and s.results.get(other).queuePosition < result.queuePosition
       )),
+      // The finite model carries one current target-head proof. Do not let a
+      // concurrent independent start overwrite the proof while a selected
+      // Retry or Full-rerun successor is actively using it.
+      not(RESULT_IDS.exists(other =>
+        other != id
+          and Set(
+            RetryInFlight,
+            SuccessorSessionFixed,
+            SuccessorInFlight,
+            SuccessorResponseLost,
+          ).contains(s.results.get(other).phase)
+      )),
     }
   }
 
@@ -280,6 +360,12 @@ module acceptedResultIntegration {
       CandidateGitReadIntent,
       CandidateGitReadPending,
       CandidateReady,
+      RetrySelected,
+      RetryInFlight,
+      FullRerunSelected,
+      SuccessorSessionFixed,
+      SuccessorInFlight,
+      SuccessorResponseLost,
       PromotionPremise,
     ).contains(phase)
 
@@ -314,6 +400,22 @@ module acceptedResultIntegration {
     RESULT_IDS.exists(id => state.results.get(id).phase == IntegratorNotPrepared)
   val integratorResultRecordedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == IntegratorResultRecorded)
+  val quarantineReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == Quarantined)
+  val retrySelectedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == RetrySelected)
+  val retryInFlightReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == RetryInFlight)
+  val retryNotApplicableReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == RetryNotApplicable)
+  val fullRerunSelectedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == FullRerunSelected)
+  val successorSessionFixedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == SuccessorSessionFixed)
+  val successorInFlightReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == SuccessorInFlight)
+  val successorResponseLostReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == SuccessorResponseLost)
   val candidateGitReadIntentReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == CandidateGitReadIntent)
   val candidateGitReadPendingReached: bool =
@@ -349,6 +451,8 @@ module acceptedResultIntegration {
       Set(
         IntegratorNotPrepared,
         CandidateRejected,
+        Quarantined,
+        RetryNotApplicable,
         PromotionPremise,
         PromotionIntent,
         PromotionAttemptIntended,
@@ -429,6 +533,12 @@ module acceptedResultIntegration {
           IntegratorInFlight,
           IntegratorResponseLost,
           IntegratorResultRecorded,
+          IntegratorNotPrepared,
+          CandidateRejected,
+          RetryInFlight,
+          SuccessorSessionFixed,
+          SuccessorInFlight,
+          SuccessorResponseLost,
           CandidateGitReadIntent,
           CandidateGitReadPending,
           CandidateReady,
@@ -508,7 +618,7 @@ module acceptedResultIntegration {
       val result = state.results.get(id)
       and {
         result.integratorInvocationCount >= 0,
-        result.integratorInvocationCount <= 1,
+        result.integratorInvocationCount <= 2,
         result.integratorResumeCount >= 0,
         result.integratorResumeCount <= RECONCILIATION_LIMIT,
         result.integratorInvocationCount > 0 implies and {
@@ -521,9 +631,19 @@ module acceptedResultIntegration {
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
       result.integratorResultRecorded implies and {
-        result.integratorInvocationCount == 1,
+        result.integratorInvocationCount > 0,
         result.integratorOutcome != NoIntegratorOutcome,
-        result.phase == IntegratorNotPrepared
+        Set(
+          IntegratorNotPrepared,
+          Quarantined,
+          RetrySelected,
+          RetryInFlight,
+          RetryNotApplicable,
+          FullRerunSelected,
+          SuccessorSessionFixed,
+          SuccessorInFlight,
+          SuccessorResponseLost,
+        ).contains(result.phase)
           or candidateResultPhase(result.phase)
           or candidateQualificationPhase(result.phase),
       }
@@ -535,7 +655,7 @@ module acceptedResultIntegration {
       result.integratorResumeCount > 0 implies and {
         result.sessionFixed,
         result.integrationSession == id,
-        result.integratorInvocationCount <= 1,
+        result.integratorInvocationCount <= 2,
       }
     })
 
@@ -564,7 +684,7 @@ module acceptedResultIntegration {
         result.candidateGitObservation == NoCandidateGitObservation,
         not(result.candidateQualificationProven),
         not(result.promotionAuthorized),
-        not(result.targetHeld),
+        result.targetHeld,
       }
     })
 
@@ -615,6 +735,237 @@ module acceptedResultIntegration {
       }
     })
 
+  // A conclusive result or invalid candidate is still live until the separate
+  // quarantine occurrence records its preserved evidence and releases the
+  // process-local target permit.
+  val quarantineReleaseRequiresDurableOccurrence: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(Set(Quarantined, RetryNotApplicable).contains(result.phase)) or and {
+        result.quarantineRecorded,
+        result.quarantineOccurrenceCount > 0,
+        result.quarantinePosition > 0,
+        result.quarantineCause != NoQuarantineCause,
+        result.integratorResultRecorded,
+        result.acceptedEvidencePreserved,
+        result.integrationResponsibilityRecorded,
+        result.integrationResponsibilityCount == 1,
+        result.integrationSession == id,
+        result.candidateResource == id + 100,
+        not(result.targetHeld),
+      }
+    })
+
+  val quarantinePhaseRequiresRecordedOccurrence: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(
+        Set(
+          Quarantined,
+          RetrySelected,
+          RetryInFlight,
+          RetryNotApplicable,
+          FullRerunSelected,
+          SuccessorSessionFixed,
+          SuccessorInFlight,
+          SuccessorResponseLost,
+        ).contains(result.phase)
+      ) or and {
+        result.quarantineRecorded,
+        result.quarantineOccurrenceCount > 0,
+        result.quarantinePosition > 0,
+      }
+    })
+
+  val conclusiveResultCannotReleaseBeforeQuarantine: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(Set(IntegratorNotPrepared, CandidateRejected).contains(result.phase))
+        or and {
+          not(result.quarantineRecorded),
+          result.targetHeld,
+        }
+    })
+
+  val quarantinePreservesSameTargetResponsibility: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.quarantineRecorded) or and {
+        result.acceptedEvidencePreserved,
+        result.integrationResponsibilityRecorded,
+        result.integrationResponsibilityCount == 1,
+        result.queuePosition > 0,
+        result.integrationTarget == 1 or result.integrationTarget == 2,
+        result.integrationSession == id,
+        result.candidateResource == id + 100,
+      }
+    })
+
+  val quarantineDirectionIsExactAndFirst: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      and {
+        result.quarantineOccurrenceCount >= 0,
+        result.quarantineDirectionCount >= 0,
+        result.quarantineDirectionCount <= result.quarantineOccurrenceCount,
+        result.quarantineDirection == NoQuarantineDirection
+          or and {
+            result.quarantineDirectionSession == result.integrationSession,
+            result.quarantineDirectionPosition == result.quarantinePosition,
+            result.quarantineDirectionCount > 0,
+            result.lastDirection == result.quarantineDirection,
+            result.lastDirectionSession == result.integrationSession,
+            result.lastDirectionPosition == result.quarantinePosition,
+          },
+        result.phase == RetrySelected or result.phase == RetryInFlight
+          implies result.quarantineDirection == RetryDirection,
+        result.phase == FullRerunSelected
+          or result.phase == SuccessorSessionFixed
+          or result.phase == SuccessorInFlight
+          or result.phase == SuccessorResponseLost
+          implies result.quarantineDirection == FullRerunDirection,
+      }
+    })
+
+  val retryRequiresOneExplicitChoice: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.retryRunCount == 0
+        or and {
+          result.lastDirection == RetryDirection,
+          result.lastDirectionSession == result.integrationSession,
+          result.lastDirectionPosition > 0,
+          result.retryRunCount == 1,
+          result.integratorInvocationCount == 2,
+        }
+    })
+
+  val retryUsesSameSessionAndCurrentHead: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.phase != RetryInFlight or and {
+        result.retryRunCount == 1,
+        result.integrationSession == id,
+        result.successorSession == 0,
+        result.targetHeld,
+        state.targetFactsCurrent,
+        state.targetHeadProof == result.expectedTargetHead,
+      }
+    })
+
+  val integratorRunCorrelationIsExact: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      and {
+        result.integratorRunOrdinal >= 0,
+        result.integratorRunOrdinal <= 2,
+        result.integratorRunOrdinal == 0 implies result.integratorRunSession == 0,
+        result.integratorRunOrdinal > 0 implies result.integratorRunSession == result.integrationSession,
+        result.lastRecoveryRunSession == 0 or and {
+          result.lastRecoveryRunOrdinal > 0,
+          result.lastRecoveryRunSession == result.integratorRunSession
+            or result.lastRecoveryRunSession == result.successorSession,
+        },
+      }
+    })
+
+  val retryAdvancesSameSessionToOrdinalTwo: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.retryRunCount == 0 or and {
+        result.retryRunCount == 1,
+        result.integratorRunOrdinal == 2,
+        result.integratorRunSession == result.integrationSession,
+        result.integrationSession == id,
+      }
+    })
+
+  val recoveryResumesSameRunOrdinal: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.lastRecoveryRunSession == 0 or if (result.lastRecoveryRunSession == result.successorSession) {
+        result.lastRecoveryRunOrdinal == result.successorRunOrdinal
+      } else {
+        result.lastRecoveryRunSession == result.integratorRunSession
+          and result.lastRecoveryRunOrdinal == result.integratorRunOrdinal
+      }
+    })
+
+  val successorStartsAtFreshOrdinalOne: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.successorFixed) or and {
+        result.successorRunOrdinal == 1,
+        result.successorRunCount == 1,
+        result.successorHeadFreshlyObserved,
+      }
+    })
+
+  val changedHeadRetryCreatesFreshQuarantine: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.phase != RetryNotApplicable or and {
+        result.retryNotApplicableCount > 0,
+        result.retryRunCount == 0,
+        result.retryFreshQuarantineCount > 0,
+        result.quarantineOccurrenceCount > 1,
+        result.quarantineCause == RetryHeadChangedQuarantine,
+        result.quarantineDirection == NoQuarantineDirection,
+        not(result.targetHeld),
+        result.integratorInvocationCount == 1,
+      }
+    })
+
+  val fullRerunPreservesPredecessorAndQueuePosition: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.successorFixed) or and {
+        result.predecessorPreserved,
+        result.successorSession != 0,
+        result.successorSession != result.integrationSession,
+        result.successorResource != result.candidateResource,
+        result.successorTargetHead != 0,
+        result.successorRunCount == 1,
+        result.successorIntegratorInvocationCount <= 1,
+        result.queuePosition > 0,
+        result.lastDirection == FullRerunDirection,
+      }
+    })
+
+  val successorAllocationIsBounded: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      and {
+        result.successorRunCount >= 0,
+        result.successorRunCount <= 1,
+        result.successorIntegratorInvocationCount >= 0,
+        result.successorIntegratorInvocationCount <= result.successorRunCount,
+        result.successorSession == 0 or result.successorRunCount == 1,
+      }
+    })
+
+  val quarantineRedeliveryIsIdempotent: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      and {
+        result.quarantineRedeliveryCount >= 0,
+        result.quarantineRedeliveryCount > 0 implies result.quarantineDirectionCount > 0,
+        result.retryRunCount <= result.quarantineDirectionCount,
+        result.successorRunCount <= result.quarantineDirectionCount,
+      }
+    })
+
+  val conflictingDirectionIsNoOp: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.quarantineConflictCount == 0 or and {
+        result.quarantineDirection != NoQuarantineDirection,
+        result.quarantineDirectionCount > 0,
+        result.retryRunCount <= result.quarantineDirectionCount,
+        result.successorRunCount <= result.quarantineDirectionCount,
+      }
+    })
+
   val noForbiddenEvidenceAuthorizesPromotion: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
@@ -651,7 +1002,7 @@ module acceptedResultIntegration {
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
       and {
-        result.integratorInvocationCount <= 1,
+        result.integratorInvocationCount <= 2,
         result.integrationSession == 0 or result.integrationSession == id,
       }
     })
@@ -890,6 +1241,35 @@ module acceptedResultIntegration {
         promotionCompareAndSetRequested: false,
         promotionForceRequested: false,
         promotionEquivalentContentAccepted: false,
+        quarantineRecorded: false,
+        quarantineOccurrenceCount: 0,
+        quarantinePosition: 0,
+        quarantineCause: NoQuarantineCause,
+        quarantineDirection: NoQuarantineDirection,
+        quarantineDirectionSession: 0,
+        quarantineDirectionPosition: 0,
+        quarantineDirectionCount: 0,
+        quarantineRedeliveryCount: 0,
+        quarantineConflictCount: 0,
+        retryRunCount: 0,
+        integratorRunOrdinal: 0,
+        integratorRunSession: 0,
+        lastRecoveryRunSession: 0,
+        lastRecoveryRunOrdinal: 0,
+        retryNotApplicableCount: 0,
+        retryFreshQuarantineCount: 0,
+        predecessorPreserved: false,
+        successorSession: 0,
+        successorResource: 0,
+        successorTargetHead: 0,
+        successorFixed: false,
+        successorRunCount: 0,
+        successorRunOrdinal: 0,
+        successorHeadFreshlyObserved: false,
+        successorIntegratorInvocationCount: 0,
+        lastDirection: NoQuarantineDirection,
+        lastDirectionSession: 0,
+        lastDirectionPosition: 0,
       }),
       nextJournalPosition: 1,
       recovered: false,
@@ -1040,6 +1420,8 @@ module acceptedResultIntegration {
           ...result,
           phase: IntegratorInFlight,
           integratorInvocationCount: 1,
+          integratorRunOrdinal: 1,
+          integratorRunSession: result.integrationSession,
           integratorResponseAmbiguous: false,
         }),
       },
@@ -1114,7 +1496,10 @@ module acceptedResultIntegration {
         results: state.results.put(id, {
           ...result,
           phase: IntegratorNotPrepared,
-          targetHeld: false,
+          // The conclusive result is observed while the live target permit is
+          // still held. recordQuarantine is the next durable occurrence and
+          // releases that permit only after preservation is established.
+          targetHeld: true,
           integratorOutcome: NotPrepared,
           integratorResultRecorded: true,
           candidateReported: false,
@@ -1259,7 +1644,9 @@ module acceptedResultIntegration {
       results: s.results.put(id, {
         ...result,
         phase: if (qualifies) CandidateReady else CandidateRejected,
-        targetHeld: false,
+        // A rejected candidate remains live until its quarantine occurrence
+        // is recorded. A qualified candidate can release normally.
+        targetHeld: if (qualifies) false else true,
         candidateGitObservation: observation,
         candidateJournalPosition: s.nextJournalPosition,
         observedFirstParent: firstParent,
@@ -1268,6 +1655,356 @@ module acceptedResultIntegration {
         promotionAuthorized: qualifies,
       }),
       nextJournalPosition: s.nextJournalPosition + 1,
+    }
+  }
+
+  pure def canRecordQuarantine(s: State, id: int): bool = {
+    val result = s.results.get(id)
+    and {
+      RESULT_IDS.contains(id),
+      Set(IntegratorNotPrepared, CandidateRejected).contains(result.phase),
+      result.targetHeld,
+      result.sessionFixed,
+      result.integratorResultRecorded,
+      result.quarantineOccurrenceCount == 0,
+      result.integrationResponsibilityRecorded,
+      result.integrationResponsibilityCount == 1,
+      result.acceptedEvidencePreserved,
+      result.integrationSession == id,
+      result.candidateResource == id + 100,
+    }
+  }
+
+  // This is the durable disposition boundary for a conclusive outer result.
+  // It is deliberately separate from the result observation so the model
+  // cannot release a live target before the quarantine occurrence exists.
+  action recordQuarantine(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      canRecordQuarantine(state, id),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: Quarantined,
+          targetHeld: false,
+          quarantineRecorded: true,
+          quarantineOccurrenceCount: 1,
+          quarantinePosition: state.nextJournalPosition,
+          quarantineCause:
+            if (result.phase == IntegratorNotPrepared) NotPreparedQuarantine else CandidateRejectedQuarantine,
+          quarantineDirection: NoQuarantineDirection,
+          quarantineDirectionSession: 0,
+          quarantineDirectionPosition: 0,
+          quarantineRedeliveryCount: 0,
+          retryNotApplicableCount: 0,
+          retryFreshQuarantineCount: 0,
+        }),
+        nextJournalPosition: state.nextJournalPosition + 1,
+      },
+    }
+  }
+
+  pure def canChooseQuarantineDirection(s: State, id: int, position: int): bool = {
+    val result = s.results.get(id)
+    and {
+      RESULT_IDS.contains(id),
+      Set(Quarantined, RetryNotApplicable).contains(result.phase),
+      result.quarantineRecorded,
+      result.quarantineDirection == NoQuarantineDirection,
+      result.integrationSession == id,
+      result.quarantinePosition == position,
+      position > 0,
+      not(result.targetHeld),
+    }
+  }
+
+  action chooseRetry(id: int, position: int): bool = {
+    val result = state.results.get(id)
+    all {
+      canChooseQuarantineDirection(state, id, position),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: RetrySelected,
+          quarantineDirection: RetryDirection,
+          quarantineDirectionSession: result.integrationSession,
+          quarantineDirectionPosition: position,
+          quarantineDirectionCount: result.quarantineDirectionCount + 1,
+          lastDirection: RetryDirection,
+          lastDirectionSession: result.integrationSession,
+          lastDirectionPosition: position,
+        }),
+      },
+    }
+  }
+
+  action chooseFullRerun(id: int, position: int): bool = {
+    val result = state.results.get(id)
+    all {
+      canChooseQuarantineDirection(state, id, position),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: FullRerunSelected,
+          quarantineDirection: FullRerunDirection,
+          quarantineDirectionSession: result.integrationSession,
+          quarantineDirectionPosition: position,
+          quarantineDirectionCount: result.quarantineDirectionCount + 1,
+          lastDirection: FullRerunDirection,
+          lastDirectionSession: result.integrationSession,
+          lastDirectionPosition: position,
+        }),
+      },
+    }
+  }
+
+  action redeliverRetry(id: int, position: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == RetrySelected,
+      result.quarantineDirection == RetryDirection,
+      result.quarantineDirectionSession == result.integrationSession,
+      result.quarantineDirectionPosition == position,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          quarantineRedeliveryCount: result.quarantineRedeliveryCount + 1,
+        }),
+      },
+    }
+  }
+
+  action redeliverFullRerun(id: int, position: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == FullRerunSelected,
+      result.quarantineDirection == FullRerunDirection,
+      result.quarantineDirectionSession == result.integrationSession,
+      result.quarantineDirectionPosition == position,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          quarantineRedeliveryCount: result.quarantineRedeliveryCount + 1,
+        }),
+      },
+    }
+  }
+
+  // A competing direction is acknowledged as a conflict but cannot replace
+  // the first Journaled choice or allocate any run.
+  action rejectConflictingFullRerun(id: int, position: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == RetrySelected,
+      result.quarantineDirection == RetryDirection,
+      result.quarantineDirectionSession == result.integrationSession,
+      result.quarantineDirectionPosition == position,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          quarantineConflictCount: result.quarantineConflictCount + 1,
+        }),
+      },
+    }
+  }
+
+  action startRetry(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == RetrySelected,
+      result.quarantineDirection == RetryDirection,
+      result.quarantineDirectionSession == result.integrationSession,
+      result.quarantineDirectionPosition == result.quarantinePosition,
+      result.targetHeld == false,
+      result.retryRunCount <= 1,
+      result.successorSession == 0,
+      result.sessionFixed,
+      result.expectedTargetHead != 0,
+      result.integratorRunOrdinal == 1 or result.integratorRunOrdinal == 2,
+      state.targetFactsCurrent,
+      state.targetHeadProof == result.expectedTargetHead,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: RetryInFlight,
+          targetHeld: true,
+          retryRunCount: if (result.retryRunCount == 0) 1 else result.retryRunCount,
+          // Retry is a second explicit outer Integrator run. A process-loss
+          // resume leaves this count unchanged; only the winning Retry
+          // direction advances it.
+          integratorInvocationCount:
+            if (result.retryRunCount == 0) result.integratorInvocationCount + 1
+            else result.integratorInvocationCount,
+          lastRecoveryRunSession:
+            if (result.retryRunCount == 0) 0 else result.lastRecoveryRunSession,
+          lastRecoveryRunOrdinal:
+            if (result.retryRunCount == 0) 0 else result.lastRecoveryRunOrdinal,
+          integratorRunOrdinal:
+            if (result.retryRunCount == 0) result.integratorRunOrdinal + 1 else result.integratorRunOrdinal,
+          integratorRunSession: result.integrationSession,
+        }),
+        // Starting the selected Retry atomically reacquires the same resource
+        // after the fresh exact-head read. No selected-but-idle state owns it.
+        targetReacquisitionRequired: false,
+      },
+    }
+  }
+
+  pure def recordFreshQuarantine(
+    s: State,
+    id: int,
+    phase: Phase,
+    cause: QuarantineCause
+  ): State = {
+    val result = s.results.get(id)
+    {
+      ...s,
+      results: s.results.put(id, {
+        ...result,
+        phase: phase,
+        targetHeld: false,
+        quarantineRecorded: true,
+        quarantineOccurrenceCount: result.quarantineOccurrenceCount + 1,
+        quarantinePosition: s.nextJournalPosition,
+        quarantineCause: cause,
+        quarantineDirection: NoQuarantineDirection,
+        quarantineDirectionSession: 0,
+        quarantineDirectionPosition: 0,
+        // Conflict attempts belong to the exact quarantine occurrence; a
+        // fresh occurrence starts with its own empty direction history.
+        quarantineConflictCount: 0,
+        retryFreshQuarantineCount:
+          if (cause == RetryHeadChangedQuarantine) result.retryFreshQuarantineCount + 1
+          else result.retryFreshQuarantineCount,
+        retryNotApplicableCount:
+          if (cause == RetryHeadChangedQuarantine) result.retryNotApplicableCount + 1
+          else result.retryNotApplicableCount,
+      }),
+      nextJournalPosition: s.nextJournalPosition + 1,
+    }
+  }
+
+  // Retry never creates another session. A changed H is a fresh quarantine,
+  // not permission to call the Integrator against stale session facts.
+  action recordRetryNotApplicable(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == RetrySelected,
+      result.quarantineDirection == RetryDirection,
+      result.targetHeld == false,
+      result.retryRunCount == 0,
+      state.targetFactsCurrent,
+      state.targetHeadProof != result.expectedTargetHead,
+      state' = recordFreshQuarantine(state, id, RetryNotApplicable, RetryHeadChangedQuarantine),
+    }
+  }
+
+  // A Full rerun first reads a fresh compatible head, then fixes one successor
+  // while retaining the predecessor session/resource and queue position.
+  action observeSuccessorTargetHead(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == FullRerunSelected,
+      result.quarantineDirection == FullRerunDirection,
+      state.trackerFactsCurrent,
+      state.targetFactsCurrent == false,
+      state.targetReacquisitionRequired,
+      state' = {
+        ...state,
+        results: state.results.put(id, { ...result, successorHeadFreshlyObserved: true }),
+        targetFactsCurrent: true,
+        targetHeadProof: result.expectedTargetHead + 100,
+        targetReacquisitionRequired: false,
+      },
+    }
+  }
+
+  action startFullRerun(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == FullRerunSelected,
+      result.quarantineDirection == FullRerunDirection,
+      result.targetHeld == false,
+      result.successorSession == 0,
+      result.successorRunCount == 0,
+      result.predecessorPreserved == false,
+      state.targetFactsCurrent,
+      state.targetHeadProof != 0,
+      result.successorHeadFreshlyObserved,
+      not(state.targetReacquisitionRequired),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: SuccessorSessionFixed,
+          targetHeld: true,
+          predecessorPreserved: true,
+          successorSession: id + 1000,
+          successorResource: id + 1100,
+          successorTargetHead: state.targetHeadProof,
+          successorFixed: true,
+          successorRunCount: 1,
+          successorRunOrdinal: 1,
+          lastRecoveryRunSession: 0,
+          lastRecoveryRunOrdinal: 0,
+        }),
+      },
+    }
+  }
+
+  action startSuccessorIntegrator(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == SuccessorSessionFixed,
+      result.targetHeld,
+      result.successorFixed,
+      result.successorSession != 0,
+      result.successorIntegratorInvocationCount == 0,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: SuccessorInFlight,
+          successorIntegratorInvocationCount: 1,
+        }),
+      },
+    }
+  }
+
+  action loseSuccessorResponse(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == SuccessorInFlight,
+      result.targetHeld,
+      result.successorIntegratorInvocationCount == 1,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: SuccessorResponseLost,
+          targetHeld: false,
+        }),
+        trackerFactsCurrent: false,
+        targetFactsCurrent: false,
+        targetHeadProof: 0,
+        targetReacquisitionRequired: true,
+      },
     }
   }
 
@@ -1727,6 +2464,10 @@ module acceptedResultIntegration {
           phase:
             if (result.phase == IntegratorInFlight)
               IntegratorResponseLost
+            else if (result.phase == RetryInFlight)
+              RetrySelected
+            else if (result.phase == SuccessorInFlight)
+              SuccessorResponseLost
             else if (
               Set(PromotionInFlight, PromotionAttemptIntended, PromotionReconciliation, PromotionRetryReady)
                 .contains(result.phase)
@@ -1750,7 +2491,28 @@ module acceptedResultIntegration {
             if (promotionProtocolPhase(result.phase) and not(promotionTerminalPhase(result.phase)))
               0
             else result.promotionObservedTargetHead,
-          targetHeld: false,
+          // A conclusive NotPrepared or invalid-candidate observation has
+          // not crossed the durable quarantine boundary yet. Preserve its
+          // live responsibility through recovery so the next durable action
+          // can quarantine before releasing target ownership. Unfinished
+          // work and already-quarantined work may release their process-local
+          // permit during restart.
+          targetHeld:
+            if (Set(IntegratorNotPrepared, CandidateRejected).contains(result.phase))
+              result.targetHeld
+            else false,
+          lastRecoveryRunSession:
+            if (result.integratorResponseAmbiguous or result.phase == IntegratorInFlight or result.phase == RetryInFlight)
+              result.integratorRunSession
+            else if (result.phase == SuccessorInFlight)
+              result.successorSession
+            else result.lastRecoveryRunSession,
+          lastRecoveryRunOrdinal:
+            if (result.integratorResponseAmbiguous or result.phase == IntegratorInFlight or result.phase == RetryInFlight)
+              result.integratorRunOrdinal
+            else if (result.phase == SuccessorInFlight)
+              result.successorRunOrdinal
+            else result.lastRecoveryRunOrdinal,
         }
       }),
       recovered: true,
@@ -1795,6 +2557,7 @@ module acceptedResultIntegration {
       s.trackerFactsCurrent,
       s.targetReacquisitionRequired,
       targetReacquisitionPhase(result.phase),
+      not(Set(RetrySelected, FullRerunSelected).contains(result.phase)),
       not(result.targetHeld),
       result.expectedTargetHead != 0,
       fixedIntegratorSessionPhase(result.phase)
@@ -1849,6 +2612,7 @@ module acceptedResultIntegration {
   action reacquireIntegrationTargetOne: bool = reacquireIntegrationTarget(1)
   action resumeIntegratorOne: bool = resumeIntegrator(1)
   action reportIntegratorNotPreparedOne: bool = reportIntegratorNotPrepared(1)
+  action recordQuarantineOne: bool = recordQuarantine(1)
   action reportIntegratorCandidateOne31: bool = reportIntegratorCandidate(1, 31)
   action reportIntegratorCandidateOne32: bool = reportIntegratorCandidate(1, 32)
   action recordCandidateGitReadIntentOne: bool = recordCandidateGitReadIntent(1)
@@ -1859,6 +2623,18 @@ module acceptedResultIntegration {
   action observeMissingCandidateOne: bool = observeMissingCandidate(1)
   action observeNonCommitCandidateOne: bool = observeNonCommitCandidate(1)
   action observeWrongParentCandidateOne: bool = observeWrongParentCandidate(1)
+  action chooseRetryOne: bool = chooseRetry(1, state.results.get(1).quarantinePosition)
+  action chooseFullRerunOne: bool = chooseFullRerun(1, state.results.get(1).quarantinePosition)
+  action redeliverRetryOne: bool = redeliverRetry(1, state.results.get(1).quarantineDirectionPosition)
+  action redeliverFullRerunOne: bool = redeliverFullRerun(1, state.results.get(1).quarantineDirectionPosition)
+  action rejectConflictingFullRerunOne: bool =
+    rejectConflictingFullRerun(1, state.results.get(1).quarantineDirectionPosition)
+  action startRetryOne: bool = startRetry(1)
+  action recordRetryNotApplicableOne: bool = recordRetryNotApplicable(1)
+  action observeSuccessorTargetHeadOne: bool = observeSuccessorTargetHead(1)
+  action startFullRerunOne: bool = startFullRerun(1)
+  action startSuccessorIntegratorOne: bool = startSuccessorIntegrator(1)
+  action loseSuccessorResponseOne: bool = loseSuccessorResponse(1)
   action offerPromotionPremiseOne: bool = offerPromotionPremise(1)
   action recordPromotionIntentOne: bool = recordPromotionIntent(1)
   action recordPromotionAttemptIntentOne: bool = recordPromotionAttemptIntent(1)
@@ -1900,6 +2676,7 @@ module acceptedResultIntegration {
     reacquireIntegrationTargetOne,
     resumeIntegratorOne,
     reportIntegratorNotPreparedOne,
+    recordQuarantineOne,
     reportIntegratorCandidateOne31,
     reportIntegratorCandidateOne32,
     recordCandidateGitReadIntentOne,
@@ -1910,6 +2687,17 @@ module acceptedResultIntegration {
     observeMissingCandidateOne,
     observeNonCommitCandidateOne,
     observeWrongParentCandidateOne,
+    chooseRetryOne,
+    chooseFullRerunOne,
+    redeliverRetryOne,
+    redeliverFullRerunOne,
+    rejectConflictingFullRerunOne,
+    startRetryOne,
+    recordRetryNotApplicableOne,
+    observeSuccessorTargetHeadOne,
+    startFullRerunOne,
+    startSuccessorIntegratorOne,
+    loseSuccessorResponseOne,
     offerPromotionPremiseOne,
     recordPromotionIntentOne,
     recordPromotionAttemptIntentOne,

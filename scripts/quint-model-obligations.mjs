@@ -271,7 +271,23 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "promotionTerminalReleasesTarget",
     "promotionFreshObservationIsExactExpectedHead",
     "promotionNoForceOrEquivalentShortcut",
-    "promotionRetryOrdinalsHaveFreshHeadReads"
+    "promotionRetryOrdinalsHaveFreshHeadReads",
+    "quarantineReleaseRequiresDurableOccurrence",
+    "quarantinePhaseRequiresRecordedOccurrence",
+    "conclusiveResultCannotReleaseBeforeQuarantine",
+    "quarantinePreservesSameTargetResponsibility",
+    "quarantineDirectionIsExactAndFirst",
+    "retryRequiresOneExplicitChoice",
+    "integratorRunCorrelationIsExact",
+    "retryAdvancesSameSessionToOrdinalTwo",
+    "recoveryResumesSameRunOrdinal",
+    "successorStartsAtFreshOrdinalOne",
+    "retryUsesSameSessionAndCurrentHead",
+    "changedHeadRetryCreatesFreshQuarantine",
+    "fullRerunPreservesPredecessorAndQueuePosition",
+    "successorAllocationIsBounded",
+    "quarantineRedeliveryIsIdempotent",
+    "conflictingDirectionIsNoOp"
   ]),
   witnesses: Object.freeze([
     "acceptedReached",
@@ -304,6 +320,14 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "promotionSucceededReached",
     "promotionStaleReached",
     "promotionExhaustedReached",
-    "releasedLogicalBlockerReached"
+    "releasedLogicalBlockerReached",
+    "quarantineReached",
+    "retrySelectedReached",
+    "retryInFlightReached",
+    "retryNotApplicableReached",
+    "fullRerunSelectedReached",
+    "successorSessionFixedReached",
+    "successorInFlightReached",
+    "successorResponseLostReached"
   ])
 })
