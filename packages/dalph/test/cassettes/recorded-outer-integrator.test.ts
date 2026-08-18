@@ -3,6 +3,7 @@ import { Effect, Schema } from "effect"
 import { expect, it } from "vitest"
 import {
   CassetteIdentityRenaming,
+  RecordedCassette,
   foldRecordedCassette,
   invertCassetteIdentityRenaming,
   maintainedAuthoredCassetteCatalog,
@@ -130,6 +131,69 @@ it("records conclusive Integrator and Git rejection outcomes without a focused c
           )
         ).toBe(true)
       }
+    }).pipe(Effect.provide(NodeCrypto.layer))
+  )
+})
+
+it("preserves every Integrator, promotion, and finality projection under identity laws", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const emptyRenaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
+        attemptIds: [],
+        claimTokens: [],
+        integrationCandidateIds: [],
+        integrationCandidateResourceLocators: [],
+        integrationSessionIds: [],
+        operationIds: [],
+        runIds: [],
+        taskBranchRefs: [],
+        worktreeLocators: []
+      })
+      const cases = [
+        { cassette: maintainedAuthoredCassetteCatalog.candidateVerificationPassed, roundTrip: true },
+        { cassette: maintainedAuthoredCassetteCatalog.candidateVerificationFailure, roundTrip: true },
+        { cassette: maintainedAuthoredCassetteCatalog.candidateCorrectionExhaustion, roundTrip: true },
+        { cassette: maintainedAuthoredCassetteCatalog.targetPromotionSuccess, roundTrip: false },
+        { cassette: maintainedAuthoredCassetteCatalog.targetPromotionStaleBeforeCompareAndSet, roundTrip: false },
+        { cassette: maintainedAuthoredCassetteCatalog.targetPromotionAmbiguityExhaustion, roundTrip: false }
+      ]
+
+      let preparedRecorded: ReturnType<typeof RecordedCassette.make> | undefined
+      for (const { cassette, roundTrip } of cases) {
+        const run = yield* runAuthoredScenarioCassette(cassette)
+        const recorded = yield* projectRecordedCassette(run.records)
+        const renamed = yield* renameRecordedCassette(recorded, emptyRenaming)
+
+        if (cassette === maintainedAuthoredCassetteCatalog.candidateVerificationPassed) preparedRecorded = recorded
+
+        expect(renamed).toEqual(recorded)
+        if (roundTrip) {
+          expect(
+            verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+              ({ operationalStateEquivalent, pureSelectionEquivalent, workflowHistoryEquivalent }) =>
+                operationalStateEquivalent && pureSelectionEquivalent && workflowHistoryEquivalent
+            )
+          ).toBe(true)
+        }
+        expect(renderRecordedCassetteLyrics(recorded).length).toBeGreaterThan(0)
+      }
+
+      if (preparedRecorded === undefined) return yield* Effect.die("prepared Integrator projection was not recorded")
+      const nonCommit = RecordedCassette.make({
+        ...preparedRecorded,
+        entries: preparedRecorded.entries.map((entry) =>
+          entry._tag === "IntegratorCandidateGitObserved"
+            ? {
+                ...entry,
+                observation: { _tag: "NonCommit" as const, candidateText: entry.candidateText, objectType: "tree" }
+              }
+            : entry
+        )
+      })
+      const renamedNonCommit = yield* renameRecordedCassette(nonCommit, emptyRenaming)
+      expect(renamedNonCommit).toEqual(nonCommit)
+      expect(renderRecordedCassetteLyrics(nonCommit)).toContain("NonCommit")
+
     }).pipe(Effect.provide(NodeCrypto.layer))
   )
 })

@@ -181,3 +181,68 @@ it("projects every task-bearing delivery route and correlation shape into author
 
   expect(projected.every((result) => result._tag === "PauseWaiting")).toBe(true)
 })
+
+it("projects settled live delivery owners without losing their exact authored state", () => {
+  const taskId = "A"
+  const proposal = {
+    route: { _tag: "FreshWorkflowRoute", step: { _tag: "ReadTaskClaim" } },
+    admission: {
+      integrationTarget: { _tag: "NoIntegrationTargetResource" },
+      plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" },
+      taskWorkPosition: { _tag: "NoTaskWorkPosition" }
+    },
+    order: { _tag: "FreshWorkflowOrder", frontierOrdinal: 0, step: "controlled", taskId }
+  }
+  const secondProposal = {
+    ...proposal,
+    route: { _tag: "RecoveredNewActionRoute", action: { _tag: "ReadTaskClaim", plannedAttempt: null, taskId } }
+  }
+  const responsibility = {
+    _tag: "PauseDeliveryActionResponsibility",
+    coverage: { _tag: "RunPauseCoverage" },
+    proposal,
+    taskId
+  }
+  const settledOwners = [
+    { _tag: "SettledBeforeMaterialization", proposal },
+    {
+      _tag: "SettledMaterializedDeliveryAction",
+      intent: "IntentRecorded",
+      operationId: "run:projection:settled",
+      proposal: secondProposal
+    }
+  ]
+
+  const projected = pauseObservationResultOf(
+    {
+      _tag: "PauseWaiting",
+      atBoundary: [],
+      preventing: settledOwners.map((owner, index) => ({
+        _tag: "PauseResponsibilityPreventingBoundary",
+        blockers: [{ _tag: "LiveDeliveryAction", owner }],
+        responsibility: index === 0 ? responsibility : { ...responsibility, proposal: secondProposal }
+      })),
+      subject: { _tag: "Run" }
+    } as never,
+    RunId.make("run:projection")
+  )
+
+  expect(projected).toMatchObject({
+    _tag: "PauseWaiting",
+    preventing: [
+      { blockers: [{ _tag: "LiveDeliveryAction", owner: { _tag: "SettledBeforeMaterialization" } }] },
+      {
+        blockers: [
+          {
+            _tag: "LiveDeliveryAction",
+            owner: {
+              _tag: "SettledMaterializedDeliveryAction",
+              intent: "IntentRecorded",
+              operationId: "$authored-run:settled"
+            }
+          }
+        ]
+      }
+    ]
+  })
+})

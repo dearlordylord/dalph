@@ -253,6 +253,58 @@ it("correlates concurrent executor reports when the later request arrives first"
   )
 })
 
+it("registers exact executor ownership after a sibling selection is already waiting", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const report = maintainedStoryItems.find((item) => item._tag === "PlannedAttemptExecutorWorkReported")
+      const selection = maintainedStoryItems.find(
+        (item) => item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
+      )
+      if (report?._tag !== "PlannedAttemptExecutorWorkReported" || selection?._tag !== "DalphSelects") {
+        return yield* Effect.die("missing executor outcome and later worktree selection")
+      }
+      const cursor = yield* makeStoryCursor([report, selection])
+      const waitingSelection = yield* cursor.consumeDalphSelectionFor(selection.operation).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+
+      yield* cursor.beginExecutorReportRequest(report.request, report.report.attemptId)
+      yield* Effect.yieldNow
+      expect(waitingSelection.pollUnsafe()).toBeUndefined()
+
+      expect(yield* cursor.consumeExecutorReportFor(report.request, report.report.attemptId)).toEqual(report)
+      expect(yield* Fiber.join(waitingSelection)).toEqual(selection)
+      yield* cursor.endExecutorReportRequest(report.request, report.report.attemptId)
+    })
+  )
+})
+
+it("retains a pre-registered executor owner after the registration window closes", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const reports = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story.filter(
+        (item) => item._tag === "PlannedAttemptExecutorWorkReported"
+      )
+      const first = reports[0]
+      const second = reports.find((item) => first !== undefined && item.report.attemptId !== first.report.attemptId)
+      if (first === undefined || second === undefined) {
+        return yield* Effect.die("missing independently correlated executor reports")
+      }
+      const cursor = yield* makeStoryCursor([first, second])
+      yield* cursor.beginExecutorReportRequest(first.request, first.report.attemptId)
+      const waitingLaterReport = yield* cursor
+        .consumeExecutorReportFor(second.request, second.report.attemptId)
+        .pipe(Effect.forkChild)
+
+      for (let turn = 0; turn < 16; turn += 1) yield* Effect.yieldNow
+      expect(waitingLaterReport.pollUnsafe()).toBeUndefined()
+
+      expect(yield* cursor.consumeExecutorReportFor(first.request, first.report.attemptId)).toEqual(first)
+      expect(yield* Fiber.join(waitingLaterReport)).toEqual(second)
+      yield* cursor.endExecutorReportRequest(first.request, first.report.attemptId)
+    })
+  )
+})
+
 it("fails closed when an exact selection has no permitted immediate predecessor owner", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -322,6 +374,9 @@ it("lets an exact operation selection wait for an actively owned sibling executo
             const operation = yield* cursor.consumeDalphSelectionFor(selection.operation).pipe(Effect.forkChild)
             yield* Effect.yieldNow
 
+            // Let the cursor's bounded registration window close while the exact
+            // executor request remains registered but has not advanced the story.
+            for (let turn = 0; turn < 16; turn += 1) yield* Effect.yieldNow
             expect(operation.pollUnsafe()).toBeUndefined()
             expect(yield* cursor.consumeExecutorReportFor(report.request, report.report.attemptId)).toEqual(report)
             expect(yield* Fiber.join(operation)).toEqual(selection)

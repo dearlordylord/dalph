@@ -155,6 +155,23 @@ it.effect("fails closed for an unrelated selection before the outer Integrator G
   })
 )
 
+it.effect("fails closed when an Integrator recovery read has no exact owner", () =>
+  Effect.gen(function* () {
+    const recoverySelection = AuthoredCassetteStoryItem.cases.DalphSelects.make({
+      operation: { _tag: "ReadTaskClaim", taskId }
+    })
+    const observation = AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned.make({
+      candidateText,
+      observation: gitObservation
+    })
+    const cursor = yield* makeStoryCursor([recoverySelection, observation])
+    const exit = yield* cursor.consumeIntegratorGitObservation(candidateText).pipe(Effect.exit)
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("AuthoredCassetteInteractionMismatch")
+  })
+)
+
 it.effect("rejects a foreign request correlation and a Git observation for another candidate", () =>
   Effect.gen(function* () {
     const foreignCorrelation = IntegratorCorrelation.make({ ...correlation, expectedTargetHead: sha("c") })
