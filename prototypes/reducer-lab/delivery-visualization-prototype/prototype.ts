@@ -545,7 +545,7 @@ const graphPanel = (item: Frame): string => `<section class="graph-panel instrum
 const evidence = (item: Frame): string => `<section class="evidence instrument"><div><small>DURABLE AT THIS LANDMARK</small><b>${item.durable}</b></div><div><small>EXPECTED VISIBLE RESULT</small><b>${item.expected}</b></div><div><small>FORBIDDEN RESULT</small><b>${item.forbidden}</b></div></section>`
 const switcher = (): string => {
   const index = views.findIndex(({ key }) => key === view())
-  return `<nav class="switcher" aria-label="Crash arrangement prototype"><button data-cycle="-1" aria-label="Previous crash arrangement">←</button><label><small>CRASH ARRANGEMENT ${index + 1} / ${views.length} · KEYS 1–${views.length}</small><select data-view-select aria-label="Crash arrangement">${views.map(({ key, name }, optionIndex) => `<option value="${key}" ${key === view() ? "selected" : ""}>${optionIndex + 1} · ${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next crash arrangement">→</button></nav>`
+  return `<nav class="switcher" aria-label="Crash arrangement prototype"><button data-cycle="-1" aria-label="Previous crash arrangement">←</button><label><small>CRASH ARRANGEMENT ${index + 1} / ${views.length} · KEYS 1–${views.length} · ⌘←/→ STEPS</small><select data-view-select aria-label="Crash arrangement">${views.map(({ key, name }, optionIndex) => `<option value="${key}" ${key === view() ? "selected" : ""}>${optionIndex + 1} · ${name}</option>`).join("")}</select></label><button data-cycle="1" aria-label="Next crash arrangement">→</button></nav>`
 }
 
 const selectView = (next: ViewKey): void => {
@@ -601,6 +601,14 @@ const bind = (): void => {
 
 addEventListener("keydown", (event) => {
   if ((event.target as HTMLElement | null)?.matches("input,textarea,select,[contenteditable]")) return
+  if (event.metaKey && !event.altKey && !event.ctrlKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    event.preventDefault()
+    frameIndex = event.key === "ArrowLeft"
+      ? Math.max(0, frameIndex - 1)
+      : Math.min(scenario().frames.length - 1, frameIndex + 1)
+    render()
+    return
+  }
   if (!event.altKey && !event.ctrlKey && !event.metaKey && /^[1-9]$/.test(event.key)) {
     const selectedView = views[Number(event.key) - 1]
     if (selectedView !== undefined) selectView(selectedView.key)
