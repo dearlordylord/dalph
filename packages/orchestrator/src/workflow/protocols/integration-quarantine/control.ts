@@ -8,11 +8,17 @@ import {
   InRunJournal,
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
-import { integrationQuarantineDirectionAppliedRecordKey } from "../../../workflow-journal/record-key.js"
+import {
+  integrationProviderRunActivityAbsentRecordKey,
+  integrationQuarantineDirectionAppliedRecordKey,
+  integratorRunStartedRecordKey
+} from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   ApplyIntegrationQuarantineDirectionRequest,
+  type IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionAppliedEvent,
+  type IntegrationQuarantinedEvent,
   IntegrationQuarantineDirectionRequestId,
   integrationQuarantineDirectionRunId,
   integrationQuarantineDirectionSubject,
@@ -22,6 +28,8 @@ import {
 } from "./events.js"
 import { ReadIntegrationQuarantineDirectionRequest } from "./request.js"
 import { quarantineRecordForFingerprint } from "./state.js"
+import { IntegratorRunCorrelation, IntegratorRunOrdinal, integratorRunCorrelationsEqual } from "../integrator/events.js"
+import { integratorCorrelationsEqual } from "../integrator/state.js"
 
 /** A transport identity was redelivered with different exact direction content. */
 export class IntegrationQuarantineDirectionRequestIdentityContradiction extends Schema.TaggedError<IntegrationQuarantineDirectionRequestIdentityContradiction>()(
@@ -52,7 +60,7 @@ export class IntegrationQuarantineDirectionNotAvailable extends Schema.TaggedErr
   "IntegrationQuarantineDirectionNotAvailable",
   {
     fingerprint: ApplyIntegrationQuarantineDirectionRequest.fields.fingerprint,
-    reason: Schema.Literals(["MissingQuarantine", "SessionMismatch"]),
+    reason: Schema.Literals(["MissingQuarantine", "SessionMismatch", "RetryLimitReached"]),
     runId: RunId
   }
 ) {}
@@ -129,6 +137,82 @@ const appliedRecordsForSubject = (
   )
 }
 
+type QuarantineRecord = JournalRecord & { readonly event: IntegrationQuarantinedEvent }
+
+const runOneFor = (quarantine: QuarantineRecord): IntegratorRunCorrelation =>
+  IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: quarantine.event.correlation })
+
+const runStartFor = (
+  records: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  before: JournalPosition
+): JournalRecord | undefined => {
+  const starts = records.filter(
+    (record) =>
+      record.event._tag === "IntegratorRunStarted" &&
+      record.position < before &&
+      record.position > run.session.targetLineageObservedAt &&
+      record.runId === run.session.plannedAttempt.runId &&
+      record.key === integratorRunStartedRecordKey(run) &&
+      integratorRunCorrelationsEqual(record.event.run, run)
+  )
+  return starts.length === 1 ? starts[0] : undefined
+}
+
+const conclusiveResultIsFromRunOne = (
+  records: ReadonlyArray<JournalRecord>,
+  quarantine: QuarantineRecord,
+  basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ConclusiveResult" }>
+): boolean => {
+  const record = records.find(({ position }) => position === basis.evidence.resultRecordedAt)
+  if (record === undefined || record.position >= quarantine.position) return false
+
+  // Session-only results predate the run-bound vocabulary and can only denote
+  // the original session result. Run-bound results must explicitly name run 1.
+  if (record.event._tag === "IntegratorResultRecorded") {
+    return (
+      record.runId === quarantine.runId &&
+      integratorCorrelationsEqual(record.event.result.correlation, quarantine.event.correlation)
+    )
+  }
+  if (record.event._tag !== "IntegratorRunResultRecorded") return false
+  const run = runOneFor(quarantine)
+  return (
+    record.runId === run.session.plannedAttempt.runId &&
+    integratorRunCorrelationsEqual(record.event.run, run) &&
+    integratorCorrelationsEqual(record.event.result.correlation, quarantine.event.correlation) &&
+    runStartFor(records, run, record.position) !== undefined
+  )
+}
+
+const providerFailureIsFromRunOne = (
+  records: ReadonlyArray<JournalRecord>,
+  quarantine: QuarantineRecord,
+  basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ProviderRunFailure" }>
+): boolean => {
+  const run = runOneFor(quarantine)
+  const absence = records.find(({ position }) => position === basis.ownedActivityProvenAbsentAt)
+  return (
+    absence !== undefined &&
+    absence.position < quarantine.position &&
+    absence.runId === run.session.plannedAttempt.runId &&
+    absence.key === integrationProviderRunActivityAbsentRecordKey(run.session) &&
+    absence.event._tag === "IntegrationProviderRunActivityAbsent" &&
+    absence.event.detail === basis.detail &&
+    integratorCorrelationsEqual(absence.event.correlation, run.session) &&
+    runStartFor(records, run, absence.position) !== undefined
+  )
+}
+
+/** Retry is allowed only from the first quarantine's exact run-one evidence. */
+const retryIsEligible = (records: ReadonlyArray<JournalRecord>, quarantine: QuarantineRecord): boolean => {
+  const { basis } = quarantine.event
+  if (basis._tag === "RetryTargetHeadChanged") return false
+  return basis._tag === "ConclusiveResult"
+    ? conclusiveResultIsFromRunOne(records, quarantine, basis)
+    : providerFailureIsFromRunOne(records, quarantine, basis)
+}
+
 /** Builds the narrow Journal-backed control for use both during and between Run activations. */
 export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQuarantineDirectionControl.make")(
   function* (journal: InRunJournal["Service"]) {
@@ -179,6 +263,14 @@ export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQ
           runId,
           winningFingerprint: existingSubject.event.fingerprint,
           winningRequestId: existingSubject.event.requestId
+        })
+      }
+
+      if (request.fingerprint.direction === "Retry" && !retryIsEligible(records, quarantine)) {
+        return yield* new IntegrationQuarantineDirectionNotAvailable({
+          fingerprint: request.fingerprint,
+          reason: "RetryLimitReached",
+          runId
         })
       }
 

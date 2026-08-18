@@ -48,6 +48,7 @@ import {
 import {
   IntegrationQuarantineDirectionAlreadyApplied,
   IntegrationQuarantineDirectionControl,
+  IntegrationQuarantineDirectionNotAvailable,
   IntegrationQuarantineDirectionRequestIdentityContradiction,
   IntegrationQuarantineDirectionRequestRunMismatch,
   integrationQuarantineDirectionControlLayer
@@ -376,15 +377,26 @@ it.effect(
         occurrenceClassification: "NonActionOccurrence",
         version: workflowJournalEventVersion
       })
-      yield* journal.append(
+      const successorRecord = yield* journal.append(
         runId,
         integrationQuarantinedRecordKey(successor.correlation.sessionId, successor.basis),
         successor
       )
 
+      const retryAfterChangedHead = yield* control
+        .apply(requestFor(fingerprintFor(successor, successorRecord.position, "Retry"), "changed-chain-retry-again"))
+        .pipe(Effect.flip)
+      expect(retryAfterChangedHead).toBeInstanceOf(IntegrationQuarantineDirectionNotAvailable)
+      expect(retryAfterChangedHead).toMatchObject({ reason: "RetryLimitReached" })
+
+      const fullRerunAfterChangedHead = yield* control.apply(
+        requestFor(fingerprintFor(successor, successorRecord.position, "FullRerun"), "changed-chain-full-rerun")
+      )
+      expect(fullRerunAfterChangedHead._tag).toBe("DirectionApplied")
+
       const state = deriveIntegrationQuarantineState(yield* journal.read(runId), prior.correlation.sessionId)
-      expect(state._tag).toBe("Quarantined")
-      if (state._tag !== "Quarantined") return
+      expect(state._tag).toBe("DirectionApplied")
+      if (state._tag !== "DirectionApplied") return
       expect(state.quarantine.basis).toEqual(successor.basis)
     }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
 )
