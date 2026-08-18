@@ -9,7 +9,7 @@ type StageKey = "read" | "graph" | "frontier" | "tickets" | "responsibilities" |
 type TaskState = "blocked" | "waiting" | "desired" | "running" | "integrating" | "settled"
 type AppState = "up" | "down" | "restarting"
 type FrameKind = "publication" | "runtime" | "crash" | "external" | "recovery" | "control"
-type ViewKey = "original" | "color-fields" | "code-highlight" | "light-source"
+type ViewKey = "original" | "syntax-original" | "change-spotlight" | "selection-spotlight"
 type Tone = TaskState | "fresh" | "stale" | "fact" | "rule" | "output"
 type SelectionMode = "none" | "stage" | "task"
 
@@ -255,9 +255,9 @@ const story: Scenario = {
 
 const views: ReadonlyArray<{ readonly key: ViewKey; readonly name: string; readonly description: string }> = [
   { key: "original", name: "Original shared row · leading", description: "The leading treatment keeps source and rectangles in one dark row with a quiet divider." },
-  { key: "color-fields", name: "Two dark color fields", description: "Blue-black source and green-black live data separate responsibility without changing the row." },
-  { key: "code-highlight", name: "Code ink hierarchy", description: "Token color and a quiet source wash make production code distinct from state rectangles." },
-  { key: "light-source", name: "Light source field", description: "A light production-source field meets the existing dark live-data field at one hard boundary." }
+  { key: "syntax-original", name: "Syntax-highlighted original", description: "The original treatment changes only production-code token color." },
+  { key: "change-spotlight", name: "Changed-code spotlight", description: "The code expression that changed at this landmark receives a local green spotlight." },
+  { key: "selection-spotlight", name: "Selection-code spotlight", description: "Selection adds a local blue source highlight while rectangles and graph nodes synchronize." }
 ]
 
 let frameIndex = 0

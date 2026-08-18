@@ -116,28 +116,16 @@ button{color:inherit}
 .stage-graph,.stage-settlements{min-height:224px}
 .stage-graph .rectangles,.stage-settlements .rectangles{flex-wrap:wrap;align-content:center;overflow:visible}
 .stage-graph .data-rectangle,.stage-settlements .data-rectangle{flex:1 1 84px;max-width:128px}
-.view-original .code-columns,.view-color-fields .code-columns,.view-code-highlight .code-columns,.view-light-source .code-columns{display:none}
+.view-original .code-columns,.view-syntax-original .code-columns,.view-change-spotlight .code-columns,.view-selection-spotlight .code-columns{display:none}
 
-/* Controlled experiment: geometry stays fixed; only the visual boundary changes. */
-.view-color-fields .code-line:not(.brace)>code{align-self:stretch;display:flex;align-items:center;padding:0 12px;background:#182a35;color:#d5e4ed;box-shadow:inset -1px 0 #456275}
-.view-color-fields .code-line:not(.brace) .rectangles{align-self:stretch;align-items:center;padding-left:13px;border-left:0;background:#101c17}
-.view-color-fields .stage-graph .rectangles,.view-color-fields .stage-settlements .rectangles{align-content:center}
-.view-color-fields .code-line.changed>code{background:linear-gradient(90deg,#204253,#182a35)}
+/* Controlled experiments: the original row geometry and background stay fixed. */
+.view-syntax-original .syntax-keyword{color:#e795c4;font-weight:500}
+.view-syntax-original .syntax-call{color:#70c8e5;font-weight:500}
 
-.view-code-highlight .code-line:not(.brace)>code{align-self:stretch;display:flex;align-items:center;margin:9px 8px;padding:0 9px;border-radius:5px;background:#1c2923;color:#91a49a;box-shadow:inset 0 0 0 1px #33463d}
-.view-code-highlight .syntax-keyword{color:#e795c4;font-weight:500}
-.view-code-highlight .syntax-call{color:#70c8e5;font-weight:500}
-.view-code-highlight .code-line.changed>code{background:#1e332b;box-shadow:inset 3px 0 #3eb38c,inset 0 0 0 1px #3b574b}
+.view-change-spotlight .code-line.stable>code{color:#8da097}
+.view-change-spotlight .code-line.changed>code{align-self:stretch;display:flex;align-items:center;margin:8px 8px;padding:0 9px;border-radius:5px;background:#1e392f;color:#e0ede7;box-shadow:inset 3px 0 #3eb38c,inset 0 0 0 1px #3c604f}
 
-.view-light-source .code-window{background:#17211d}
-.view-light-source .code-line:not(.brace)>code{align-self:stretch;display:flex;align-items:center;padding:0 12px;background:#f2f0e8;color:#26372f;box-shadow:inset -1px 0 #aeb8b1}
-.view-light-source .code-line:not(.brace) .gutter{align-self:stretch;background:#dde1da;color:#52655b}
-.view-light-source .code-line:not(.brace) .rectangles{align-self:stretch;align-items:center;padding-left:13px;border-left:0;background:#17211d}
-.view-light-source .stage-graph .rectangles,.view-light-source .stage-settlements .rectangles{align-content:center}
-.view-light-source .code-line.brace{background:#f2f0e8;color:#526159}
-.view-light-source .code-line.changed>code{background:linear-gradient(90deg,#dcefe6,#f2f0e8)}
-.view-light-source .syntax-keyword{color:#8b2f68;font-weight:500}
-.view-light-source .syntax-call{color:#126c87;font-weight:500}
+.view-selection-spotlight .code-line.selection-related>code{align-self:stretch;display:flex;align-items:center;margin:8px 8px;padding:0 9px;border-radius:5px;background:#1c3544;color:#e0edf5;box-shadow:inset 3px 0 #52a8dc,inset 0 0 0 1px #3f6276}
 .code-key{display:flex;gap:17px;padding:8px 12px;color:#747d77;font-size:7px;font-weight:700}
 .code-key span{display:flex;align-items:center;gap:5px}
 .code-key i{display:inline-block;width:12px;height:7px}
