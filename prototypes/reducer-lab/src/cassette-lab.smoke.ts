@@ -6,6 +6,7 @@ import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../../../p
 import { maintainedTargetPromotionProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/target-promotion-protocol-cassette-domain.ts"
 import { maintainedApplicationExitProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/application-exit-protocol-cassette-domain.ts"
 import { maintainedCodexPlannedAttemptExecutorCassetteCatalog } from "../../../packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette-domain.ts"
+import { deliveryProposalOrderTaskId } from "@dalph/orchestrator"
 import { parseHTML } from "linkedom"
 import {
   cassetteSettledEvent,
@@ -15,6 +16,7 @@ import {
 } from "./cassette-lab-browser.ts"
 import {
   browserDigest,
+  type CassetteLabResult,
   type CassetteRunObserver,
   maintainedCassetteKeys,
   maintainedCassetteRows,
@@ -29,6 +31,18 @@ import {
   resultStatusText,
   runAllSummaryText
 } from "./cassette-lab-view.ts"
+import { deliverySourceExplanationAt } from "./delivery-source-explanation.ts"
+import { dominantTaskTone } from "./cassette-lab-workbench.ts"
+
+type CompletedCassette = Extract<CassetteLabResult, { readonly _tag: "Completed" }>
+
+const deliveryMomentIndex = (result: CompletedCassette, deliveryFrameIndex: number): number => {
+  const frame = result.deliveryFrames?.[deliveryFrameIndex]
+  if (frame === undefined || result.observationMoments === null) return -1
+  return result.observationMoments.findIndex((moment) =>
+    moment._tag === "DeliveryPublicationMoment" && moment.deliveryFrame === frame
+  )
+}
 
 const assert = (condition: boolean, message: string): void => {
   if (!condition) throw new Error(message)
@@ -47,6 +61,77 @@ const expectedCatalogSize = Object.keys(maintainedAuthoredCassetteCatalog).lengt
 
 let everyResult = await runEveryMaintainedCassette()
 let mismatchedResult: Awaited<ReturnType<typeof runAuthoredCassetteInput>> | undefined
+
+await scenario("does not mark delivery source outputs changed for runtime-only or story-only moments", () => {
+  const result = everyResult.find(({ catalogKey }) =>
+    catalogKey === "authored:acceptedResultRestartsIntoIntegration"
+  )
+  if (result?._tag !== "Completed" || result.observationMoments === null) {
+    throw new Error("authored observation moments are unavailable")
+  }
+  const index = result.observationMoments.findIndex((moment, candidateIndex) =>
+    candidateIndex > 0
+    && moment._tag !== "DeliveryPublicationMoment"
+    && moment.deliveryFrame !== null
+  )
+  const explanation = deliverySourceExplanationAt(result.observationMoments, index)
+  assert(
+    explanation._tag === "DeliverySourceAvailable"
+    && !explanation.publicationObservedAtMoment
+    && explanation.rows.every(({ changed }) => !changed)
+    && explanation.status === "No Delivery publication changed the source explanation at this moment.",
+    "A story-only or runtime-only moment must carry Delivery values without changed-source highlighting"
+  )
+})
+
+await scenario("marks only source outputs changed by adjacent Delivery publications", () => {
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:productionShapedFiveTaskDiamond")
+  if (result?._tag !== "Completed" || result.observationMoments === null) {
+    throw new Error("authored observation moments are unavailable")
+  }
+  const firstPublicationIndex = result.observationMoments.findIndex(({ _tag }) => _tag === "DeliveryPublicationMoment")
+  const firstExplanation = deliverySourceExplanationAt(result.observationMoments, firstPublicationIndex)
+  assert(
+    firstExplanation._tag === "DeliverySourceAvailable"
+    && firstExplanation.rows.every(({ changed }) => !changed)
+    && firstExplanation.status.includes("no preceding Delivery publication"),
+    "The first Delivery publication has no adjacent predecessor and must not claim changed rows"
+  )
+  assert(
+    result.observationMoments.some((moment, index) => {
+      if (moment._tag !== "DeliveryPublicationMoment") return false
+      if (!result.observationMoments?.slice(0, index).some(({ _tag }) => _tag === "DeliveryPublicationMoment")) {
+        return false
+      }
+      const explanation = deliverySourceExplanationAt(result.observationMoments ?? [], index)
+      return explanation._tag === "DeliverySourceAvailable" && explanation.rows.some(({ changed }) => changed)
+    }),
+    "Adjacent Delivery publications must compare their typed stage outputs"
+  )
+})
+
+await scenario("keeps an integration owner live while a newer graph publication changes source stages", () => {
+  const match = everyResult.flatMap((result) => {
+    if (result._tag !== "Completed" || result.observationMoments === null) return []
+    return result.observationMoments.flatMap((moment, index) => {
+      if (moment._tag !== "DeliveryPublicationMoment") return []
+      const hasLiveIntegration = moment.liveOwners.some((owner) =>
+        !owner._tag.startsWith("Settled")
+        && owner.proposal.admission.integrationTarget._tag === "IntegrationTargetResourceRequired"
+      )
+      const explanation = deliverySourceExplanationAt(result.observationMoments ?? [], index)
+      return hasLiveIntegration
+        && explanation._tag === "DeliverySourceAvailable"
+        && explanation.rows.some(({ changed }) => changed)
+        ? [{ moment, result }]
+        : []
+    })
+  })[0]
+  assert(
+    match !== undefined,
+    "A maintained chronology must retain a coherent Delivery change while its observed integration owner remains live"
+  )
+})
 
 await scenario("hashes verification evidence without requiring browser crypto.subtle", () => {
   const digest = browserDigest("SHA-256", new TextEncoder().encode("abc"))
@@ -82,8 +167,14 @@ await scenario("runs every maintained cassette through production to its declare
         result.deliveryFrames !== null && result.deliveryFrames.length > 0,
         `${result.catalogKey} must retain production delivery publications`
       )
+      assert(
+        result.observationMoments !== null
+        && result.observationMoments.length > (result.deliveryFrames?.length ?? 0),
+        `${result.catalogKey} must retain story, Delivery, and runtime observations in one chronology`
+      )
     } else {
       assert(result.deliveryFrames === null, `${result.catalogKey} must not fabricate graph-level delivery frames`)
+      assert(result.observationMoments === null, `${result.catalogKey} must not fabricate a Delivery runtime chronology`)
     }
   }
 })
@@ -494,8 +585,8 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
     "The primary graph must precede the explanatory delivery manual"
   )
   assert(
-    workbench.querySelector(".delivery-playback-shortcuts")?.textContent === "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
-    "Visible playback help must distinguish adjacent frames, delivery landmarks, and live following"
+    workbench.querySelector(".delivery-playback-shortcuts")?.textContent === "Moment = one captured story, Delivery, or runtime observation · Jump = graph, responsibility, integration, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
+    "Visible playback help must distinguish adjacent moments, delivery landmarks, and live following"
   )
   const status = workbench.querySelector(".delivery-timeline-controls output")
   const next = workbench.querySelector<HTMLButtonElement>("button[data-role='next-frame']")
@@ -521,9 +612,15 @@ await scenario("shows production delivery frames before the authored cassette se
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
-  if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null || result.deliveryFrames.length < 3) {
+  if (
+    row === undefined
+    || result?._tag !== "Completed"
+    || result.observationMoments === null
+  ) {
     throw new Error("The live delivery fixture is incomplete")
   }
+  const publicationMoments = result.observationMoments.filter((moment) => moment._tag === "DeliveryPublicationMoment")
+  if (publicationMoments.length < 3) throw new Error("The live delivery fixture has too few publications")
   let finish: (() => void) | undefined
   let observer: CassetteRunObserver | undefined
   mountCassetteLab({
@@ -542,14 +639,14 @@ await scenario("shows production delivery frames before the authored cassette se
   const permanentWorkbench = document.querySelector("[data-role='delivery-workbench']")
   const chronology = document.querySelector<HTMLDetailsElement>("[data-role='declared-chronology']")
   chronology?.setAttribute("open", "")
-  observer?.onDeliveryFrame(result.deliveryFrames[0]!)
+  observer?.onObservationMoment?.(publicationMoments[0]!)
   const workbench = document.querySelector<HTMLElement>("[data-role='delivery-workbench']")
   const timeline = workbench?.querySelector(".delivery-timeline-controls")
   const frameHost = workbench?.querySelector("[data-role='delivery-frame']")
   assert(document.querySelector("article")?.dataset.state === "Running", "A real delivery frame must be visible while the cassette is still running")
   assert(document.querySelector("article") === article && workbench === permanentWorkbench, "Starting production and receiving its first frame must not remount the selected cassette or permanent workbench")
   assert(workbench?.querySelectorAll(".delivery-timeline-controls option").length === 1, "The first live publication must create one frame before terminal settlement")
-  observer?.onDeliveryFrame(result.deliveryFrames[1]!)
+  observer?.onObservationMoment?.(publicationMoments[1]!)
   const status = workbench?.querySelector(".delivery-timeline-controls output")
   assert(status?.textContent?.startsWith("2 / 2") === true, "Follow live must advance to the newest running frame")
   const previous = workbench?.querySelector<HTMLButtonElement>("button[data-role='previous-frame']")
@@ -557,7 +654,7 @@ await scenario("shows production delivery frames before the authored cassette se
   const inspectedFrame = workbench?.querySelector("[data-role='delivery-frame']")
   const exactEvidence = inspectedFrame?.querySelector<HTMLDetailsElement>("details[data-role='all-task-facts']")
   exactEvidence?.setAttribute("open", "")
-  observer?.onDeliveryFrame(result.deliveryFrames[2]!)
+  observer?.onObservationMoment?.(publicationMoments[2]!)
   assert(status?.textContent?.startsWith("1 / 3") === true, "A rewound playhead must not move when another production frame arrives")
   assert(workbench?.querySelector(".delivery-timeline-controls") === timeline, "Appending a live frame must keep the same timeline controls mounted")
   assert(workbench?.querySelector("[data-role='delivery-frame']") === frameHost && inspectedFrame === frameHost, "Appending a live frame while paused must keep the inspected frame DOM mounted")
@@ -570,7 +667,7 @@ await scenario("shows production delivery frames before the authored cassette se
   const follow = workbench?.querySelector<HTMLButtonElement>("[data-role='follow-live']")
   follow?.click()
   const terminalStatus = workbench?.querySelector(".delivery-timeline-controls output")
-  assert(terminalStatus?.textContent?.startsWith(`${result.deliveryFrames.length} / ${result.deliveryFrames.length}`) === true, "Follow live must move to the retained newest terminal frame")
+  assert(terminalStatus?.textContent?.startsWith(`${result.observationMoments.length} / ${result.observationMoments.length}`) === true, "Follow live must move to the retained newest terminal moment")
   assert(document.querySelector("[data-role='journal-evidence']")?.hasAttribute("open") === false, "Terminal journal evidence must remain collapsed")
 })
 
@@ -603,10 +700,11 @@ await scenario("shows the production-observed graph frontier bounded tickets and
     frame.graph._tag === "Established"
     && frame.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0")
   )
+  const establishedMomentIndex = deliveryMomentIndex(result, establishedIndex)
   const timeline = workbench?.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null || establishedIndex < 0) throw new Error("The production delivery timeline is missing")
   for (const option of timeline.options) {
-    if (option.value === String(establishedIndex)) option.setAttribute("selected", "")
+    if (option.value === String(establishedMomentIndex)) option.setAttribute("selected", "")
     else option.removeAttribute("selected")
   }
   timeline.dispatchEvent(new Event("change"))
@@ -675,7 +773,7 @@ await scenario("shows represented and off-graph responsibilities without inventi
         && frame.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C"
       )
   if (restartIndex < 0) throw new Error("The restart frame with reconstructed B/C positions is missing")
-  selectFrame(restartIndex)
+  selectFrame(deliveryMomentIndex(result, restartIndex))
   const capacity = document.querySelector("[data-role='delivery-capacity-positions']")
   const rail = document.querySelector("[data-role='delivery-off-graph-responsibilities']")
   assert(capacity?.textContent?.includes("2 held of capacity 2") === true, "The capacity strip must show both reconstructed positions")
@@ -694,7 +792,7 @@ await scenario("shows represented and off-graph responsibilities without inventi
     && frame.heldPositions.map(({ taskId }) => taskId).join(",") === "C"
   )
   if (staggeredIndex < 0) throw new Error("The staggered C-only frame is missing")
-  selectFrame(staggeredIndex)
+  selectFrame(deliveryMomentIndex(result, staggeredIndex))
   const representedCapacity = document.querySelector("[data-role='delivery-capacity-positions']")
   assert(representedCapacity?.textContent?.includes("1 held of capacity 2") === true, "One released position must be visible before C finishes")
   assert(representedCapacity?.textContent?.includes("1 unheld position") === true, "Released capacity must remain anonymous and visible")
@@ -733,7 +831,15 @@ await scenario("shows an absent responsibility in the mismatch rail without inve
     ),
     graph: { ...establishedGraph, tasks: [] }
   }
-  const absentResult = { ...result, deliveryFrames: [absentFrame] }
+  const sourceMoment = result.observationMoments?.find((moment) =>
+    moment._tag === "DeliveryPublicationMoment" && moment.deliveryFrame === heldFrame
+  )
+  if (sourceMoment === undefined) throw new Error("The exact responsibility moment is missing")
+  const absentResult = {
+    ...result,
+    deliveryFrames: [absentFrame],
+    observationMoments: [{ ...sourceMoment, deliveryFrame: absentFrame }]
+  }
   mountCassetteLab({
     revision: "acceptance-revision",
     root,
@@ -753,12 +859,172 @@ await scenario("shows an absent responsibility in the mismatch rail without inve
   assert(rail?.textContent?.includes(`Run ${result.runId}`) === true, "The absent responsibility must retain its exact Run")
 })
 
-await scenario("does not fabricate a graph workbench for direct protocol cassettes", () => {
+await scenario("does not fabricate delivery visualization for direct protocol cassettes", () => {
   const { document, root } = installDom()
   const protocolRows = maintainedCassetteRows.filter(({ category }) => category !== "Authored")
   mountCassetteLab({ revision: "acceptance-revision", root, rows: protocolRows, runCassette: cannedRunner })
   assert(document.querySelector("[data-role='delivery-workbench']") === null, "Direct protocol runners must not display invented graph-level delivery state")
   assert(document.querySelector(".group-facts")?.textContent?.includes("does not publish the graph-level delivery relation") === true, "The direct protocol group must explain why no graph workbench applies")
+})
+
+await scenario("updates an observed runtime task tone without fabricating a delivery publication", async () => {
+  const match = everyResult.flatMap((result) => {
+    if (result._tag !== "Completed" || result.observationMoments === null) return []
+    const index = result.observationMoments.findIndex((moment) =>
+      moment._tag === "DeliveryRuntimeOwnersMoment"
+      && moment.deliveryFrame?.graph._tag === "Established"
+      && moment.liveOwners.some((owner) =>
+        owner._tag === "MaterializedDeliveryAction"
+        && owner.proposal.admission.integrationTarget._tag === "IntegrationTargetResourceRequired"
+      )
+    )
+    return index < 0 ? [] : [{ index, result }]
+  })[0]
+  if (match === undefined) throw new Error("The maintained runtime-owner fixture is missing")
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === match.result.catalogKey)
+  if (row === undefined) throw new Error("The maintained runtime-owner row is missing")
+  const { document, root, settled } = installDom()
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const timeline = document.querySelector<HTMLSelectElement>(".delivery-timeline-controls select")
+  if (timeline === null) throw new Error("The observed-moment selector is missing")
+  chooseOption(timeline, String(match.index))
+  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+    highlightedTaskIds: ReadonlyArray<string>
+    selectedTaskId: string | null
+    projection?: {
+      readonly tasks: ReadonlyArray<{
+        readonly display?: { readonly tone?: string }
+        readonly id: string
+      }>
+    }
+  }) | null
+  const integratingTask = graph?.projection?.tasks.find(({ display }) => display?.tone === "integrating")
+  assert(integratingTask !== undefined, "A live integration owner must dominate its task's trace-fill tone")
+  assert(
+    document.querySelector(".delivery-moment-evidence")?.textContent?.includes("exact proposal / operation correlation") === true
+    && document.querySelector(".delivery-moment-evidence")?.textContent?.includes("operationId") === true,
+    "A runtime moment must expose the exact proposal and operation correlation behind its live-owner tone"
+  )
+  assert(
+    document.querySelector(".delivery-source-status")?.textContent
+      === "No Delivery publication changed the source explanation at this moment.",
+    "A runtime-only moment must not fabricate a Delivery source change"
+  )
+  assert(
+    document.querySelectorAll(".delivery-source-stage-rows .source-output-changed").length === 0,
+    "A runtime-only moment must retain every source row without changed-output highlighting"
+  )
+  const stageButton = [...document.querySelectorAll<HTMLButtonElement>("[data-source-stage] > button")]
+    .find((button) => button.parentElement?.dataset.taskIds?.split(",").includes(integratingTask?.id ?? ""))
+  stageButton?.click()
+  assert(
+    graph?.highlightedTaskIds.includes(integratingTask?.id ?? "") === true,
+    "Selecting a source stage must highlight its graph task and incident edges"
+  )
+  assert(
+    graph?.shadowRoot?.querySelector("li[data-edge-from].selection-related") !== null,
+    "Selecting source data must visibly mark a relationship incident to its graph tasks"
+  )
+  const sourceTask = document.querySelector<HTMLButtonElement>("[data-source-stage] .delivery-source-task-buttons button")
+  sourceTask?.click()
+  assert(
+    graph?.selectedTaskId === sourceTask?.textContent,
+    "Selecting a task from typed source data must synchronize the graph selection"
+  )
+  graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: integratingTask?.id } }))
+  assert(
+    document.querySelector("[data-source-stage].source-selection-related") !== null,
+    "Selecting a graph task must highlight every source row containing that task"
+  )
+})
+
+await scenario("uses an explicit Pause or failed fresh-read occurrence as the constraint tone", () => {
+  const match = everyResult.flatMap((result) => {
+    if (result._tag !== "Completed" || result.observationMoments === null) return []
+    return result.observationMoments.flatMap((moment) => {
+      if (moment._tag !== "AuthoredStoryOccurrenceMoment" || moment.deliveryFrame?.graph._tag !== "Established") return []
+      const occurrence = moment.occurrence
+      const graphTaskIds = moment.deliveryFrame.graph.tasks.map(({ id }) => id)
+      const constraintTaskIds = occurrence._tag === "TrackerGraphReadFailed"
+        ? graphTaskIds
+        : occurrence._tag === "OperatorControlDirectionFailed"
+          ? [occurrence.subject.taskId]
+          : ((occurrence._tag === "OperatorAppliesControlDirection"
+          || occurrence._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+          || occurrence._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight")
+          && occurrence.direction === "Pause")
+            ? occurrence.subject._tag === "Task" ? [occurrence.subject.taskId] : graphTaskIds
+            : []
+      const taskId = constraintTaskIds.find((candidate) =>
+        !moment.deliveryFrame?.settlements.some((settlement) => settlement.taskId === candidate)
+        && !moment.liveOwners.some((owner) => deliveryProposalOrderTaskId(owner.proposal.order) === candidate)
+        && !moment.deliveryFrame?.heldPositions.some((held) => held.taskId === candidate)
+        && !moment.deliveryFrame?.tickets.some((ticket) =>
+          ticket.taskId === candidate && ticket.placement.kind === "Selected"
+        )
+        && !moment.deliveryFrame?.frontier.some((standing) =>
+          standing.taskId === candidate && standing.standing === "Eligible"
+        )
+      )
+      return taskId === undefined ? [] : [{ frame: moment.deliveryFrame, taskId }]
+    })
+  })[0]
+  if (match === undefined) throw new Error("The maintained Pause/fresh-read constraint fixture is missing")
+  assert(
+    dominantTaskTone(match.frame, match.taskId, [], [match.taskId]) === "paused",
+    "A typed Pause or failed fresh-read occurrence must produce the explicit constraint tone"
+  )
+})
+
+await scenario("keeps the graph primary and synchronizes story source data tasks and incident edges", async () => {
+  const match = everyResult.flatMap((result) => {
+    if (result._tag !== "Completed" || result.observationMoments === null) return []
+    const index = result.observationMoments.findIndex((moment) => {
+      if (moment._tag !== "AuthoredStoryOccurrenceMoment" || moment.deliveryFrame?.graph._tag !== "Established") return false
+      const story = JSON.stringify(moment.occurrence)
+      const graph = moment.deliveryFrame.graph
+      const firstMentioned = graph.tasks.find(({ id }) => story.includes(`\"${id}\"`))?.id
+      return firstMentioned !== undefined && graph.tasks.some(({ id, parentTaskId, prerequisiteIds }) =>
+        id === firstMentioned && (parentTaskId !== null || prerequisiteIds.length > 0)
+        || parentTaskId === firstMentioned
+        || prerequisiteIds.includes(firstMentioned)
+      )
+    })
+    return index < 0 ? [] : [{ index, result }]
+  })[0]
+  if (match === undefined) throw new Error("The maintained story/source selection fixture is missing")
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === match.result.catalogKey)
+  if (row === undefined) throw new Error("The maintained story/source selection row is missing")
+  const { document, root, settled } = installDom()
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const timeline = document.querySelector<HTMLSelectElement>(".delivery-timeline-controls select")
+  if (timeline === null) throw new Error("The observed-moment selector is missing")
+  chooseOption(timeline, String(match.index))
+  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+    selectedTaskId: string | null
+  }) | null
+  const storyTask = document.querySelector<HTMLButtonElement>(
+    ".delivery-moment-evidence .delivery-source-task-buttons button"
+  )
+  storyTask?.click()
+  assert(graph?.selectedTaskId === storyTask?.textContent, "A typed story task must select the same graph task")
+  assert(
+    graph?.shadowRoot?.querySelector("li[data-edge-from].selection-related") !== null,
+    "A story task selection must visibly highlight an incident graph relationship"
+  )
+  const sourceTask = document.querySelector<HTMLButtonElement>("[data-source-stage] .delivery-source-task-buttons button")
+  sourceTask?.click()
+  assert(graph?.selectedTaskId === sourceTask?.textContent, "A source data task must select the same graph task")
+  assert(
+    document.querySelector("[data-source-stage].source-selection-related") !== null,
+    "The selected graph task must keep containing source rows synchronized"
+  )
 })
 
 await scenario("shows graph observation provenance quiescence and planned actions", async () => {
@@ -778,7 +1044,7 @@ await scenario("shows graph observation provenance quiescence and planned action
   await done
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The pause delivery timeline is missing")
-  chooseOption(timeline, String(passiveIndex))
+  chooseOption(timeline, String(deliveryMomentIndex(result, passiveIndex)))
   const facts = document.querySelector("[data-role='delivery-frame']")?.textContent ?? ""
   const passiveFrame = result.deliveryFrames[passiveIndex]
   if (passiveFrame?.graph._tag !== "Established") throw new Error("The selected pause graph is not established")
@@ -817,7 +1083,7 @@ await scenario("explains restart continuity at the first later activation bounda
   await done
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The recovery delivery timeline is missing")
-  chooseOption(timeline, String(recoveredIndex))
+  chooseOption(timeline, String(deliveryMomentIndex(result, recoveredIndex)))
   const boundary = document.querySelector(".delivery-restart-boundary")?.textContent ?? ""
   assert(
     boundary.includes("Coordinator restarted: Initial activation 1 → Later activation 2"),
@@ -862,18 +1128,18 @@ await scenario("shows integration order separately from task-work capacity", asy
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The integration delivery timeline is missing")
 
-  chooseOption(timeline, String(awaitingIndex))
+  chooseOption(timeline, String(deliveryMomentIndex(result, awaitingIndex)))
   const order = document.querySelector("[data-role='delivery-integration-order']")
   assert(order?.textContent?.includes("0 ordered · 1 awaiting responsibility") === true, "An accepted result must remain outside integration order until its responsibility is durable")
   assert(order?.textContent?.includes("Accepted results not ordered yet") === true, "The waiting result must not receive an invented position")
   assert(order?.textContent?.includes("accepted commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") === true, "The waiting result must retain its exact commit")
 
-  chooseOption(timeline, String(queuedIndex))
+  chooseOption(timeline, String(deliveryMomentIndex(result, queuedIndex)))
   assert(order?.textContent?.includes("#1 · Task A · queued before integration cutoff") === true, "The durable responsibility must expose its target-relative position")
   assert(order?.textContent?.includes("/dalph/cassettes/integration.git · refs/heads/master") === true, "Integration order must be scoped to the exact repository/ref target")
   assert(order?.textContent?.includes(`Run ${result.runId} · attempt attempt:A:0`) === true, "Integration order must retain its exact Run and attempt")
 
-  chooseOption(timeline, String(startedIndex))
+  chooseOption(timeline, String(deliveryMomentIndex(result, startedIndex)))
   assert(order?.textContent?.includes("started past integration cutoff at journal") === true, "The durable cutoff must replace the queued state")
   assert(order?.textContent?.includes("not a persisted queue row or proof that this process holds") === true, "Integration order must not claim process-local ownership")
   assert(
@@ -902,7 +1168,7 @@ await scenario("separates every coordinator activation in a multi-restart delive
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The multi-restart delivery timeline is missing")
   for (const [boundaryOrdinal, frameIndex] of boundaryIndexes.entries()) {
-    chooseOption(timeline, String(frameIndex))
+    chooseOption(timeline, String(deliveryMomentIndex(result, frameIndex)))
     const marker = document.querySelector(".delivery-restart-boundary")?.textContent ?? ""
     assert(
       marker.includes(`activation ${boundaryOrdinal + 1} → Later activation ${boundaryOrdinal + 2}`),
@@ -933,7 +1199,7 @@ await scenario("keeps graph-not-established frames dimensionally stable and trut
   await done
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The recovery delivery timeline is missing")
-  chooseOption(timeline, String(emptyIndex))
+  chooseOption(timeline, String(deliveryMomentIndex(result, emptyIndex)))
   const emptyGraph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
     projection?: { readonly tasks: ReadonlyArray<unknown> }
   }) | null
@@ -954,7 +1220,7 @@ await scenario("keeps graph-not-established frames dimensionally stable and trut
       === true,
     "The graph must visibly explain its pointer gestures"
   )
-  chooseOption(timeline, String(establishedIndex))
+  chooseOption(timeline, String(deliveryMomentIndex(result, establishedIndex)))
   const establishedGraph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
     projection?: { readonly tasks: ReadonlyArray<unknown> }
   }) | null
@@ -984,7 +1250,9 @@ await scenario("names concrete planned transitions and their admission requireme
     await done
     const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
     if (timeline === null) throw new Error("The planned-action timeline is missing")
-    chooseOption(timeline, String(match.frameIndex))
+    const matchedResult = everyResult.find(({ catalogKey }) => catalogKey === match.key)
+    if (matchedResult?._tag !== "Completed") throw new Error(`The proposal result ${match.key} is missing`)
+    chooseOption(timeline, String(deliveryMomentIndex(matchedResult, match.frameIndex)))
     const item = [...document.querySelectorAll("[data-role='delivery-action-planning'] li")].find((candidate) =>
       candidate.querySelector("pre")?.textContent?.includes(marker)
     )
@@ -1176,7 +1444,7 @@ await scenario("composes simultaneous graph ticket held and delivery encodings",
   await done
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The dependency delivery timeline is missing")
-  chooseOption(timeline, String(combinedIndex))
+  chooseOption(timeline, String(deliveryMomentIndex(result, combinedIndex)))
   const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
     projection?: { readonly tasks: ReadonlyArray<{ readonly display?: { readonly classes?: ReadonlyArray<string> } }> }
   }) | null
@@ -1226,7 +1494,7 @@ await scenario("shows grouping relationships exact obligations and settlement st
   const select = workbench?.querySelector("select") as HTMLSelectElement | null
   if (select === null || groupingIndex < 0) throw new Error("Grouping timeline controls are missing")
   for (const option of select.options) {
-    if (option.value === String(groupingIndex)) option.setAttribute("selected", "")
+    if (option.value === String(deliveryMomentIndex(result, groupingIndex))) option.setAttribute("selected", "")
     else option.removeAttribute("selected")
   }
   select.dispatchEvent(new Event("change"))

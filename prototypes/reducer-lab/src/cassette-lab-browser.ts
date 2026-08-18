@@ -426,7 +426,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       )
     }
     if (row.surface._tag === "DirectProtocolSurface") {
-      ownership.append(" · This direct protocol runner does not publish the graph-level delivery relation, so no graph, frontier, or held-position workbench is shown.")
+      ownership.append(" · This direct protocol runner does not publish the graph-level delivery relation, so no Delivery graph, source-stage explanation, or runtime-owner chronology is shown.")
     }
 
     const chronology = document.createElement("details")
@@ -536,7 +536,8 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       playbackByKey.set(key, playback)
       states.set(key, {
         _tag: "Running",
-        deliveryFrames: row?.surface._tag === "AuthoredDeliverySurface" ? [] : null
+        deliveryFrames: row?.surface._tag === "AuthoredDeliverySurface" ? [] : null,
+        observationMoments: row?.surface._tag === "AuthoredDeliverySurface" ? [] : null
       })
     }
     refreshSelector()
@@ -550,14 +551,28 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
         if (catalogKey === undefined) return
         try {
           const observer: CassetteRunObserver = {
-            onDeliveryFrame: (frame) => {
+            onObservationMoment: (moment) => {
               const state = states.get(catalogKey)
-              if (state?._tag !== "Running" || state.deliveryFrames === null) return
-              const nextState = { _tag: "Running", deliveryFrames: [...state.deliveryFrames, frame] } as const
+              if (
+                state?._tag !== "Running"
+                || state.deliveryFrames === null
+                || state.observationMoments === null
+              ) return
+              const nextState = {
+                _tag: "Running",
+                deliveryFrames: moment._tag === "DeliveryPublicationMoment"
+                  ? [...state.deliveryFrames, moment.deliveryFrame]
+                  : state.deliveryFrames,
+                observationMoments: [...state.observationMoments, moment]
+              } as const
               states.set(catalogKey, nextState)
               if (selectedSurface?.catalogKey === catalogKey) selectedSurface.updateDeliveryFrame(nextState)
               root.dispatchEvent(new CustomEvent(deliveryFrameEvent, {
-                detail: { catalogKey, frameCount: nextState.deliveryFrames.length }
+                detail: {
+                  catalogKey,
+                  frameCount: nextState.deliveryFrames.length,
+                  momentCount: nextState.observationMoments.length
+                }
               }))
             }
           }

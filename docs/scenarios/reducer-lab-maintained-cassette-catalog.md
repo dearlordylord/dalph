@@ -284,29 +284,32 @@ observed it. Its **Run selected cassette** or **Rerun selected cassette** action
 and current cassette status live inside that workbench beside the playback
 controls, because they act on the visualization the maintainer is inspecting.
 Direct protocol cassettes retain the same action in their selected surface
-because they intentionally have no delivery workbench. As production publishes frames, the same mounted section gains
-one timeline control strip and one current-frame surface. The maintainer does
+because they intentionally have no delivery workbench. As the authored runner
+consumes story occurrences and production publishes Delivery or runtime-owner
+observations, the same mounted section gains one timeline control strip and one
+current-moment surface. The maintainer does
 not open, close, or rediscover the primary visualization.
 
 The compact statement **Desired tickets are not held capacity** remains visible
 beside the primary playback experience. Playback controls and the graph precede
 the longer provenance, production-layer chain, and graph legend, which are
 collapsed under **How to read this delivery graph** until the maintainer asks
-for them. The visible playback help says that **Frame** moves to an adjacent
-production publication, **Jump** moves to a frontier wave, held-position change, restart, or end,
-and **Live** follows the newest publication. A timeline with no established
+for them. The visible playback help says that **Moment** moves to an adjacent
+captured story, Delivery, or runtime observation, **Jump** moves to a useful
+graph, responsibility, integration, restart, or terminal landmark, and
+**Live** follows the newest moment. A timeline with no established
 settlement says only **Established settlements in this timeline: 0** beside the
 graph; the cross-catalog explanation of direct integration-finality behavior is
 secondary reading-guide material rather than the primary result.
 
-While **Follow live** is active, new frames update that current-frame surface.
-The frame controls and the top of the graph remain at stable document
+While **Follow live** is active, new moments update that current-moment surface.
+The moment controls and the top of the graph remain at stable document
 positions; variable change summaries and task facts appear after the graph so
 their changing height cannot push the graph away from the maintainer. Choosing
-**Previous frame**, **Next frame**, or an exact frame stops auto-follow and
-keeps the chosen frame until the maintainer explicitly resumes **Follow live**.
+**Previous moment**, **Next moment**, or an exact moment stops auto-follow and
+keeps the chosen moment until the maintainer explicitly resumes **Follow live**.
 With focus in the workbench, the keyboard's Left and Right Arrow keys move one
-exact frame backward or forward, while `[` and `]` move to the previous or next
+exact moment backward or forward, while `[` and `]` move to the previous or next
 delivery landmark. The visible shortcut hint names this behavior.
 When a button reaches the first or last frame and becomes unavailable, focus
 moves to the persistent delivery-playback control group instead of falling out
@@ -322,8 +325,8 @@ Rerunning the selected cassette replaces the old timeline handler, so one key
 press still moves exactly once rather than replaying handlers from prior runs.
 Repeated bracket input reuses the already-derived landmark index and remains
 responsive at either end of the timeline; it does not repeatedly rescan every
-production frame or enqueue redundant graph renders.
-The exact selector retains every production publication. **Previous delivery
+captured moment or enqueue redundant graph renders.
+The exact selector retains every captured observation. **Previous delivery
 landmark** and **Next delivery landmark** skip repeated publications to the
 stable eligible-frontier waves, full-capacity overlaps, one-holder releases,
 coordinator restarts, and terminal publication. The staggered cassette reaches
@@ -420,6 +423,89 @@ production frame replaced another.
   for a second keyboard activation. A repeated-bracket stress check remains bounded
   and leaves the page responsive, and disabled navigation buttons expose a
   not-allowed rather than wait cursor.
+
+## A maintainer correlates story, Delivery, and live runtime observations
+
+### Starting situation and trigger
+
+A maintainer selects a maintained authored cassette and chooses **Run selected
+cassette**. The controlled runner has a fresh in-memory tracker, Git boundary,
+executor, Journal, and delivery runtime. The graph is the primary workbench;
+the source explanation is a permanently visible secondary section. Nothing
+from an earlier browser run is retained, and no live provider is contacted.
+
+### Ordered observations and visible result
+
+Whenever the controlled runner consumes one typed story occurrence, the Lab
+records its coordinator activation, new story position, and next local capture
+order. Whenever production publishes coherent Delivery consequences, the Lab
+records the same correlation and evaluates the literal graph → frontier →
+bounded tickets → ticket deliveries → settlements → tracker reflection
+composition. Whenever the runtime admits, materializes, records intent for, or
+settles an action owner, the Lab passively records the sanitized owner snapshot
+at the next capture order. Display timestamps never order these events.
+
+**Previous moment** and **Next moment** move by one exact captured observation.
+**Jump** moves among useful graph, responsibility, integration-owner, restart,
+and terminal landmarks. **Live** follows the newest observation; rewinding
+keeps the chosen moment stable while newer moments arrive.
+
+A Delivery-publication moment compares each current source-stage output only
+with the preceding Delivery publication and highlights only changed rows. A
+story-only or runtime-only moment retains the last Delivery values, highlights
+no source row, and says that no Delivery publication changed the explanation.
+Acquiring the tracker-graph relation is shown once as composition setup, not as
+a tracker read repeated by each row, and no row is described as a current
+instruction pointer.
+
+The graph derives one dominant presentation-only fill tone in this order:
+established settlement, observed live integration owner, held task-work
+position, selected desired ticket, eligible work waiting beyond the bound,
+explicit Pause or fresh-read constraint, then graph exclusion. Frontier
+borders, desired-ticket halos, held-position double borders, selection
+outlines, labels, and settlement facts remain independent overlays. Selecting
+a source stage or typed data item highlights its graph tasks and incident
+edges; selecting a graph task highlights every source row that contains it.
+Unrelated nodes and edges dim without disappearing.
+
+### Process loss, rerun, and direct protocols
+
+If the browser or Lab process stops, this local chronology and all live-owner
+observations disappear. Rerun installs one fresh handler set and replaces the
+old chronology; it does not recover, append, or deduplicate against the prior
+browser run. No workflow recovery or retry is implied because the Lab changed
+no outside authority.
+
+Application Exit, Codex executor, target-promotion, and integration-finality
+protocol cassettes intentionally never traverse graph-level Delivery. Their
+existing protocol result and declared chronology remain visible, while the Lab
+explicitly provides no Delivery graph, source-stage rows, publications, or
+runtime-owner chronology.
+
+The Lab must not color a proposal or story sentence as live integration, color
+executor Terminal as settlement, fabricate a Delivery publication for a story
+or runtime transition, persist presentation state as workflow truth, or retain
+the removed throwaway visualization as a second runnable surface.
+
+### Acceptance-test mapping
+
+- `captures delivery publications and live runtime owners in one authored
+  observation order` proves typed occurrence, Delivery, and runtime-owner
+  capture with activation, story position, and monotonic local order.
+- `keeps an integration owner live while a newer graph publication changes
+  source stages` proves that a later coherent graph/source value does not erase
+  an older still-live runtime owner.
+- `does not mark delivery source outputs changed for runtime-only or story-only
+  moments` and `marks only source outputs changed by adjacent Delivery
+  publications` prove the source comparison rule.
+- `updates an observed runtime task tone without fabricating a delivery
+  publication` proves graph tone authority and synchronized source/graph task
+  selection.
+- `does not fabricate delivery visualization for direct protocol cassettes` proves
+  the intentional absence of graph, source, and runtime chronology.
+- The focused Reducer Lab typecheck, smoke run, browser smoke, and build prove
+  that the maintained entry surface remains the only runnable visualization
+  after prototype cleanup.
 
 ## A maintainer watches an authored cassette move through delivery
 

@@ -6,7 +6,6 @@ import {
   AuthoredRunActivationOrdinal,
   type AuthoredRunActivationOrdinal as AuthoredRunActivationOrdinalType
 } from "../../../packages/dalph/src/cassettes/authored-domain.ts"
-import type { TaskWorkCapacity } from "../../../packages/orchestrator/src/coordination/admission/capacity.ts"
 
 /**
  * Stable renderer contract for every playback control. A new FoldKit, React,
@@ -15,13 +14,13 @@ import type { TaskWorkCapacity } from "../../../packages/orchestrator/src/coordi
  */
 export const deliveryPlaybackViewContract = {
   groupLabel: "Delivery playback controls",
-  help: "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
-  nextFrame: { accessibleName: "Next frame", label: "Frame →", shortcut: "ArrowRight" },
+  help: "Moment = one captured story, Delivery, or runtime observation · Jump = graph, responsibility, integration, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
+  nextFrame: { accessibleName: "Next moment", label: "Moment →", shortcut: "ArrowRight" },
   nextLandmark: { accessibleName: "Next delivery landmark", label: "Jump →", shortcut: "]" },
-  previousFrame: { accessibleName: "Previous frame", label: "← Frame", shortcut: "ArrowLeft" },
+  previousFrame: { accessibleName: "Previous moment", label: "← Moment", shortcut: "ArrowLeft" },
   previousLandmark: { accessibleName: "Previous delivery landmark", label: "← Jump", shortcut: "[" },
   followLive: { accessibleName: "Follow live", activeLabel: "Live: on", label: "Live" },
-  frameSelectorLabel: "Delivery frame",
+  frameSelectorLabel: "Observed moment",
   statusLabel: "Delivery playback position"
 } as const
 
@@ -37,6 +36,9 @@ export const DeliveryLandmark = Schema.Union([
   ts("CoordinatorRestart", { activationOrdinal: AuthoredRunActivationOrdinal }),
   ts("EligibleFrontierWave", { taskIds: Schema.NonEmptyArray(TaskId) }),
   ts("HeldPositionsChanged", { taskIds: Schema.Array(TaskId) }),
+  ts("ResponsibilitiesChanged", { taskIds: Schema.Array(TaskId) }),
+  ts("IntegrationOwnerChanged", { taskIds: Schema.Array(TaskId) }),
+  ts("StoryLandmark", { label: Schema.NonEmptyString }),
   ts("TerminalPublication")
 ])
 export type DeliveryLandmark = typeof DeliveryLandmark.Type
@@ -44,10 +46,14 @@ export type DeliveryLandmark = typeof DeliveryLandmark.Type
 /** Framework-neutral facts needed to derive playback stops from production frames. */
 export interface DeliveryPlaybackFrameInput {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
-  readonly capacity: TaskWorkCapacity
+  readonly capacity: number
   readonly eligibleTaskIds: ReadonlyArray<TaskIdType>
   readonly heldTaskIds: ReadonlyArray<TaskIdType>
+  readonly integrationOwnerTaskIds?: ReadonlyArray<TaskIdType>
+  readonly responsibilityIdentity?: string
+  readonly responsibilityTaskIds?: ReadonlyArray<TaskIdType>
   readonly label: string
+  readonly storyLandmark?: string | null
 }
 
 /** Display-ready identity and semantic landmarks for one delivery publication. */
@@ -100,6 +106,18 @@ export const deliveryPlaybackFramesFrom = (
       && input.heldTaskIds.length < previous.heldTaskIds.length
     if (heldChanged && (fullCapacityReached || oneHolderRemainsAfterRelease)) {
       landmarks.push({ _tag: "HeldPositionsChanged", taskIds: input.heldTaskIds.toSorted() })
+    }
+    if (previous !== undefined && previous.responsibilityIdentity !== input.responsibilityIdentity) {
+      landmarks.push({ _tag: "ResponsibilitiesChanged", taskIds: input.responsibilityTaskIds?.toSorted() ?? [] })
+    }
+    const integrationOwnersChanged = previous !== undefined
+      && JSON.stringify(previous.integrationOwnerTaskIds?.toSorted() ?? [])
+        !== JSON.stringify(input.integrationOwnerTaskIds?.toSorted() ?? [])
+    if (integrationOwnersChanged) {
+      landmarks.push({ _tag: "IntegrationOwnerChanged", taskIds: input.integrationOwnerTaskIds?.toSorted() ?? [] })
+    }
+    if (input.storyLandmark !== undefined && input.storyLandmark !== null) {
+      landmarks.push({ _tag: "StoryLandmark", label: input.storyLandmark })
     }
     if (!running && index === inputs.length - 1) landmarks.push({ _tag: "TerminalPublication" })
     return DeliveryPlaybackFrame.make({ label: input.label, landmarks })
@@ -238,7 +256,12 @@ const landmarkLabel = (landmarks: ReadonlyArray<DeliveryLandmark>): string | nul
           taskIds.length === 0
             ? "all task-work positions released"
             : `held task-work positions ${taskIds.join("+")}`,
+        IntegrationOwnerChanged: ({ taskIds }) =>
+          taskIds.length === 0 ? "integration owner transition" : `integration owner ${taskIds.join("+")}`,
         InitialPublication: () => "initial publication",
+        ResponsibilitiesChanged: ({ taskIds }) =>
+          taskIds.length === 0 ? "responsibilities cleared" : `responsibilities ${taskIds.join("+")}`,
+        StoryLandmark: ({ label }) => label,
         TerminalPublication: () => "settled terminal publication"
       })
     )).join("; ")

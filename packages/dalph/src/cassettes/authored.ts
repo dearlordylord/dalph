@@ -20,7 +20,16 @@ export { AuthoredCassetteInteractionMismatch, AuthoredIntegratorGitObservationFa
 export { AuthoredCassetteBehaviorMismatch } from "./authored-outcomes.js"
 export { renderAuthoredCassetteLyrics } from "./authored-presentation.js"
 export {
+  AuthoredObservationCaptureOrder,
+  evaluateAuthoredDeliveryPublication,
+  evaluateAuthoredObservationCapture,
+  evaluateAuthoredObservationChronology,
   runAuthoredScenarioCassette,
+  type AuthoredDeliveryFrame,
+  type AuthoredDeliveryPublication,
+  type AuthoredObservationCapture,
+  type AuthoredObservationMoment,
   type AuthoredScenarioCassetteRun,
+  type AuthoredScenarioCassetteRunOptions,
   type AuthoredScenarioCassetteRunFailure
 } from "./authored-runner.js"

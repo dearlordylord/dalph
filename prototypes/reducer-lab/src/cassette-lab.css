@@ -382,6 +382,61 @@ dd {
   padding: 0.55rem 0.75rem;
 }
 
+.delivery-moment-evidence,
+.delivery-source-explanation {
+  border: 1px solid #c8c0b3;
+  margin: 0.8rem 0;
+  padding: 0.75rem;
+}
+
+.delivery-source-explanation {
+  background: #f7f3e9;
+  font-size: 0.88rem;
+}
+
+.delivery-source-explanation h5,
+.delivery-moment-evidence h5 {
+  margin: 0 0 0.45rem;
+}
+
+.delivery-source-stage-rows {
+  display: grid;
+  gap: 0.45rem;
+  list-style: none;
+  padding: 0;
+}
+
+.delivery-source-stage-rows > li {
+  background: #fff;
+  border-left: 0.22rem solid #9ca59f;
+  padding: 0.45rem 0.6rem;
+}
+
+.delivery-source-stage-rows > li.source-output-changed {
+  background: #fff2b8;
+  border-left-color: #9b7410;
+}
+
+.delivery-source-stage-rows > li.source-selection-related {
+  outline: 2px solid #196b75;
+  outline-offset: 0.12rem;
+}
+
+.delivery-source-stage-rows > li > button {
+  display: block;
+  font-family: ui-monospace, monospace;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+  text-align: left;
+}
+
+.delivery-source-task-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.4rem 0;
+}
+
 .selected-task-row {
   background: #dce8dc;
   outline: 2px solid #295b46;

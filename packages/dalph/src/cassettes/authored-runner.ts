@@ -48,11 +48,13 @@ import {
   type CompletionTaskRequest,
   type BoundedTicketRank,
   DeliveryRelationPublicationObserver,
+  DeliveryRuntimeObservationObserver,
   evaluateDeliveryRelationInputBundle,
   evaluateDeliveryRuntimeInputBundle,
   type DeliveryConsequences,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
+  type DeliveryRuntimeLiveOwnerSnapshot,
   deliveryProposalOrderTaskId,
   type JournaledTrackerGraphObservation,
   freshWorkflowRunId,
@@ -141,6 +143,7 @@ import {
   AuthoredCassetteInteractionMismatch,
   AuthoredCoordinatorProcessDies,
   makeStoryCursor,
+  type AuthoredStoryOccurrenceObserved,
   type StoryCursor
 } from "./authored-cursor.js"
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
@@ -153,6 +156,8 @@ export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
   readonly cassette: ScenarioCassette
   readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame>
+  readonly observationCaptures: ReadonlyArray<AuthoredObservationCapture>
+  readonly observationMoments: ReadonlyArray<AuthoredObservationMoment>
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
   readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
@@ -210,6 +215,64 @@ const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
   Schema.brand("AuthoredStoryPosition")
 )
 type AuthoredStoryPosition = typeof AuthoredStoryPosition.Type
+
+/** One-based order assigned when the Lab passively receives an observation during a cassette run. */
+export const AuthoredObservationCaptureOrder = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand("AuthoredObservationCaptureOrder")
+)
+export type AuthoredObservationCaptureOrder = typeof AuthoredObservationCaptureOrder.Type
+
+interface AuthoredObservationCorrelation {
+  readonly activationOrdinal: AuthoredRunActivationOrdinalType
+  readonly captureOrder: AuthoredObservationCaptureOrder
+  readonly storyPosition: AuthoredStoryPosition
+}
+
+/** Raw capture retained in exact local arrival order before Delivery projection is evaluated. */
+export type AuthoredObservationCapture = AuthoredObservationCorrelation &
+  (
+    | {
+        readonly _tag: "AuthoredStoryOccurrenceCaptured"
+        readonly occurrence: AuthoredCassetteStoryItem
+      }
+    | {
+        readonly _tag: "DeliveryPublicationCaptured"
+        readonly publication: AuthoredDeliveryPublication
+      }
+    | {
+        readonly _tag: "DeliveryRuntimeOwnersCaptured"
+        readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
+      }
+  )
+
+type AuthoredObservationCaptureInput =
+  | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
+  | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
+  | {
+      readonly _tag: "DeliveryRuntimeOwnersCaptured"
+      readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
+    }
+
+interface AuthoredObservationMomentContext extends AuthoredObservationCorrelation {
+  /** Last coherent Delivery value at this moment; null until the first Delivery publication. */
+  readonly deliveryFrame: AuthoredDeliveryFrame | null
+  /** Current process-local owner view carried forward from the latest runtime publication. */
+  readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
+}
+
+/** One exact playback moment. Only DeliveryPublicationMoment changes the source-stage values. */
+export type AuthoredObservationMoment = AuthoredObservationMomentContext &
+  (
+    | {
+        readonly _tag: "AuthoredStoryOccurrenceMoment"
+        readonly occurrence: AuthoredCassetteStoryItem
+      }
+    | {
+        readonly _tag: "DeliveryPublicationMoment"
+        readonly deliveryFrame: AuthoredDeliveryFrame
+      }
+    | { readonly _tag: "DeliveryRuntimeOwnersMoment" }
+  )
 
 export interface AuthoredDeliveryFrame {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
@@ -295,6 +358,8 @@ export interface AuthoredDeliveryPublication {
 export interface AuthoredScenarioCassetteRunOptions {
   /** Synchronous read-only notification; callers must move expensive projection outside the runtime turn. */
   readonly onDeliveryPublication?: (publication: AuthoredDeliveryPublication) => void
+  /** Synchronous raw notification in the same deterministic order retained by the completed run. */
+  readonly onObservationCapture?: (capture: AuthoredObservationCapture) => void
 }
 
 type AuthoredPauseObservationResult = (typeof AuthoredCassetteStoryItem.cases.PauseProgressObserved.Type)["result"]
@@ -1026,7 +1091,64 @@ export const evaluateAuthoredDeliveryPublication = Effect.fn("AuthoredCassette.e
   return authoredDeliveryFrameOf(publication, consequences, runtime)
 })
 
+/** Projects raw captures into one chronology while retaining the latest observed Delivery and runtime values. */
+export const evaluateAuthoredObservationChronology = Effect.fn(
+  "AuthoredCassette.evaluateObservationChronology"
+)((captures: ReadonlyArray<AuthoredObservationCapture>) =>
+  Effect.reduce(
+    captures,
+    (): ReadonlyArray<AuthoredObservationMoment> => [],
+    (moments, capture) =>
+      evaluateAuthoredObservationCapture(capture, moments.at(latestArrayElementIndex) ?? null).pipe(
+        Effect.map((moment) => [...moments, moment])
+      )
+  ))
+
+/** Evaluates one newly captured observation against the immediately preceding playback moment. */
+export const evaluateAuthoredObservationCapture: (
+  capture: AuthoredObservationCapture,
+  previous: AuthoredObservationMoment | null
+) => Effect.Effect<
+  AuthoredObservationMoment,
+  Effect.Error<ReturnType<typeof evaluateAuthoredDeliveryPublication>>
+> = Effect.fn("AuthoredCassette.evaluateObservationCapture")(function* (
+  capture: AuthoredObservationCapture,
+  previous: AuthoredObservationMoment | null
+) {
+  const correlation = {
+    activationOrdinal: capture.activationOrdinal,
+    captureOrder: capture.captureOrder,
+    storyPosition: capture.storyPosition
+  }
+  const deliveryFrame = previous?.deliveryFrame ?? null
+  const liveOwners = previous?.liveOwners ?? []
+  if (capture._tag === "DeliveryPublicationCaptured") {
+    return {
+      _tag: "DeliveryPublicationMoment",
+      ...correlation,
+      deliveryFrame: yield* evaluateAuthoredDeliveryPublication(capture.publication),
+      liveOwners
+    } satisfies AuthoredObservationMoment
+  }
+  if (capture._tag === "DeliveryRuntimeOwnersCaptured") {
+    return {
+      _tag: "DeliveryRuntimeOwnersMoment",
+      ...correlation,
+      deliveryFrame,
+      liveOwners: capture.liveOwners
+    } satisfies AuthoredObservationMoment
+  }
+  return {
+    _tag: "AuthoredStoryOccurrenceMoment",
+    ...correlation,
+    deliveryFrame,
+    liveOwners,
+    occurrence: capture.occurrence
+  } satisfies AuthoredObservationMoment
+})
+
 const minimumCorrectionExhaustionValidationCount = 2
+const latestArrayElementIndex = -1
 const authoredCandidateContinuationLimit = 2
 const gitCommitHexLength = 40
 const authoredSettlementYieldTurns = 10
@@ -1288,12 +1410,44 @@ const runAuthoredScenarioCassetteWith = (request: {
       yield* Effect.forEach(cassette.story, (item) => assertExactlyOneAuthoredCassetteStoryItemOwner(item._tag), {
         discard: true
       })
-      const cursor = yield* makeStoryCursor(cassette.story)
       const activeDeliveryActivation = yield* Ref.make<AuthoredRunActivationOrdinalType>(
         AuthoredRunActivationOrdinal.make(1)
       )
+      const observationCaptureState = yield* Ref.make<{
+        readonly captures: ReadonlyArray<AuthoredObservationCapture>
+        readonly nextOrder: number
+      }>({ captures: [], nextOrder: 1 })
+      const appendObservation = Effect.fn("AuthoredCassette.appendObservation")(function* (
+        observation: AuthoredObservationCaptureInput,
+        storyPosition: AuthoredStoryPosition
+      ) {
+        const activationOrdinal = yield* Ref.get(activeDeliveryActivation)
+        const capture = yield* Ref.modify(observationCaptureState, ({ captures, nextOrder }) => {
+          const correlation = {
+            activationOrdinal,
+            captureOrder: AuthoredObservationCaptureOrder.make(nextOrder),
+            storyPosition
+          }
+          const captured: AuthoredObservationCapture = observation._tag === "AuthoredStoryOccurrenceCaptured"
+            ? { ...correlation, _tag: observation._tag, occurrence: observation.occurrence }
+            : observation._tag === "DeliveryPublicationCaptured"
+              ? { ...correlation, _tag: observation._tag, publication: observation.publication }
+              : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
+          return [captured, { captures: [...captures, captured], nextOrder: nextOrder + 1 }]
+        })
+        yield* Effect.exit(Effect.sync(() => options.onObservationCapture?.(capture)))
+        return capture
+      })
+      const cursor = yield* makeStoryCursor(cassette.story, {
+        onOccurrence: ({ item, storyPosition }: AuthoredStoryOccurrenceObserved) =>
+          appendObservation(
+            { _tag: "AuthoredStoryOccurrenceCaptured", occurrence: item },
+            AuthoredStoryPosition.make(storyPosition)
+          ).pipe(Effect.asVoid)
+      })
       const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
+      const lastRuntimeOwners = yield* Ref.make<string | null>(null)
       const plannedSuspensionExecutorBoundaryGate = yield* Ref.make<
         Option.Option<{
           readonly attemptId: AttemptId
@@ -1318,9 +1472,27 @@ const runAuthoredScenarioCassetteWith = (request: {
             const storyPosition = yield* cursor.storyPosition
             const publication = { activationOrdinal, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
             yield* Ref.update(capturedDeliveryPublications, (captured) => [...captured, publication])
+            yield* appendObservation(
+              { _tag: "DeliveryPublicationCaptured", publication },
+              publication.storyPosition
+            )
             yield* Queue.offer(deliveryPublicationSignals, publication)
             // A read-only diagnostic observer defect never changes production cassette execution.
             yield* Effect.exit(Effect.sync(() => options.onDeliveryPublication?.(publication)))
+          })
+      })
+      const runtimeObservationObserver = DeliveryRuntimeObservationObserver.of({
+        observe: ({ liveOwners }) =>
+          Effect.gen(function* () {
+            const identity = JSON.stringify(liveOwners)
+            const previous = yield* Ref.get(lastRuntimeOwners)
+            if (previous === identity) return
+            yield* Ref.set(lastRuntimeOwners, identity)
+            if (previous === null && liveOwners.length === 0) return
+            yield* appendObservation(
+              { _tag: "DeliveryRuntimeOwnersCaptured", liveOwners },
+              AuthoredStoryPosition.make(yield* cursor.storyPosition)
+            )
           })
       })
       const candidateOutcomeRecorded = yield* Deferred.make<void>()
@@ -2800,7 +2972,8 @@ const runAuthoredScenarioCassetteWith = (request: {
       const execution = yield* Effect.scoped(
         coordinatorExecution.pipe(
           Effect.provide(application),
-          Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver)
+          Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),
+          Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)
         )
       )
       const { activationOrdinals, coordinatorExitAtAssertions, records } = execution
@@ -2814,15 +2987,18 @@ const runAuthoredScenarioCassetteWith = (request: {
         return yield* Effect.failCause(behaviorExit.cause)
       }
       const observedBehavior = behaviorExit.value
-      const deliveryFrames = yield* Effect.forEach(
-        yield* Ref.get(capturedDeliveryPublications),
-        evaluateAuthoredDeliveryPublication
+      const observationCaptures = (yield* Ref.get(observationCaptureState)).captures
+      const observationMoments = yield* evaluateAuthoredObservationChronology(observationCaptures)
+      const deliveryFrames = observationMoments.flatMap((moment) =>
+        moment._tag === "DeliveryPublicationMoment" ? [moment.deliveryFrame] : []
       )
       return {
         activationOrdinals,
         cassette,
         deliveryFrames,
         history: reduceWorkflowJournalHistory(runId, records),
+        observationCaptures,
+        observationMoments,
         observedBehavior,
         records,
         runId

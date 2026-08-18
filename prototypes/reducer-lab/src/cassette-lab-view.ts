@@ -1,4 +1,7 @@
-import type { AuthoredDeliveryFrame } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
+import type {
+  AuthoredDeliveryFrame,
+  AuthoredObservationMoment
+} from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import type { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import { Match } from "effect"
 import type { CassetteLabResult, MaintainedCassetteKey } from "./cassette-lab.ts"
@@ -6,7 +9,11 @@ import type { ContinuationAuthorizationProjection } from "./continuation-authori
 
 export type CassetteState =
   | { readonly _tag: "NotRun" }
-  | { readonly _tag: "Running"; readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null }
+  | {
+      readonly _tag: "Running"
+      readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null
+      readonly observationMoments: ReadonlyArray<AuthoredObservationMoment> | null
+    }
   | { readonly _tag: "Settled"; readonly result: CassetteLabResult }
   | { readonly _tag: "LabDefect"; readonly catalogKey: MaintainedCassetteKey; readonly detail: string }
 
@@ -50,10 +57,12 @@ export const cassetteStateStatusText = (state: CassetteState): string => {
     Match.tagsExhaustive({
       LabDefect: () => "Lab defect · the browser runner rejected unexpectedly",
       NotRun: () => "not run",
-      Running: ({ deliveryFrames }) =>
-        deliveryFrames === null || deliveryFrames.length === 0
-          ? "running production code with controlled boundaries… waiting for its first delivery publication"
-          : `running production code with controlled boundaries · ${deliveryFrames.length} delivery frames captured`,
+      Running: ({ deliveryFrames, observationMoments }) =>
+        observationMoments === null
+          ? "running a direct protocol with controlled boundaries · Delivery is not traversed"
+          : observationMoments.length === 0
+            ? "running production code with controlled boundaries… waiting for its first observed moment"
+            : `running production code with controlled boundaries · ${observationMoments.length} moments captured · ${deliveryFrames?.length ?? 0} Delivery publications`,
       Settled: ({ result }) => resultStatusText(result)
     })
   )

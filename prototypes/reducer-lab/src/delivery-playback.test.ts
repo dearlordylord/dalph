@@ -67,15 +67,34 @@ const following = makeDeliveryPlaybackModel(frames, false)
   )
 }
 
+{
+  const taskA = TaskId.make("A")
+  const transitions = deliveryPlaybackFramesFrom([
+    { ...frame(1, ["A"], "before responsibility"), integrationOwnerTaskIds: [], responsibilityIdentity: "[]", responsibilityTaskIds: [] },
+    { ...frame(1, ["A"], "responsibility queued"), integrationOwnerTaskIds: [], responsibilityIdentity: "queued:A", responsibilityTaskIds: [taskA] },
+    { ...frame(1, ["A"], "integration admitted"), integrationOwnerTaskIds: [taskA], responsibilityIdentity: "started:A", responsibilityTaskIds: [taskA] },
+    { ...frame(1, ["A"], "integration settled"), integrationOwnerTaskIds: [], responsibilityIdentity: "[]", responsibilityTaskIds: [] }
+  ], true)
+  assert.deepEqual(
+    transitions.map(({ landmarks }) => landmarks.map(({ _tag }) => _tag)),
+    [
+      ["InitialPublication"],
+      ["ResponsibilitiesChanged"],
+      ["ResponsibilitiesChanged", "IntegrationOwnerChanged"],
+      ["ResponsibilitiesChanged", "IntegrationOwnerChanged"]
+    ]
+  )
+}
+
 assert.deepEqual(deliveryPlaybackViewContract, {
   groupLabel: "Delivery playback controls",
-  help: "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/].",
-  nextFrame: { accessibleName: "Next frame", label: "Frame →", shortcut: "ArrowRight" },
+  help: "Moment = one captured story, Delivery, or runtime observation · Jump = graph, responsibility, integration, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
+  nextFrame: { accessibleName: "Next moment", label: "Moment →", shortcut: "ArrowRight" },
   nextLandmark: { accessibleName: "Next delivery landmark", label: "Jump →", shortcut: "]" },
-  previousFrame: { accessibleName: "Previous frame", label: "← Frame", shortcut: "ArrowLeft" },
+  previousFrame: { accessibleName: "Previous moment", label: "← Moment", shortcut: "ArrowLeft" },
   previousLandmark: { accessibleName: "Previous delivery landmark", label: "← Jump", shortcut: "[" },
   followLive: { accessibleName: "Follow live", activeLabel: "Live: on", label: "Live" },
-  frameSelectorLabel: "Delivery frame",
+  frameSelectorLabel: "Observed moment",
   statusLabel: "Delivery playback position"
 })
 assert.equal(deliveryPlaybackShortcutMessage("ArrowLeft")?._tag, "PreviousFrameRequested")

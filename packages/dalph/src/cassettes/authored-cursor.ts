@@ -438,9 +438,20 @@ export interface StoryCursor {
   readonly storyItems: Stream.Stream<StoryItem | undefined>
 }
 
-export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect<StoryCursor> = Effect.fn(
-  "AuthoredCassette.makeStoryCursor"
-)(function* (story: ReadonlyArray<StoryItem>): Effect.fn.Return<StoryCursor> {
+export interface AuthoredStoryOccurrenceObserved {
+  readonly item: StoryItem
+  /** Count of typed story occurrences consumed through this exact occurrence. */
+  readonly storyPosition: number
+}
+
+interface StoryCursorOptions {
+  readonly onOccurrence?: (occurrence: AuthoredStoryOccurrenceObserved) => Effect.Effect<void>
+}
+
+export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(function* (
+  story: ReadonlyArray<StoryItem>,
+  options: StoryCursorOptions = {}
+): Effect.fn.Return<StoryCursor> {
   const position = yield* SubscriptionRef.make(0)
   const controlDirectionBeforeAdmission = yield* SubscriptionRef.make<Option.Option<Deferred.Deferred<void>>>(
     Option.none()
@@ -525,6 +536,9 @@ export const makeStoryCursor: (story: ReadonlyArray<StoryItem>) => Effect.Effect
           ? [{ _tag: "Claimed" as const, index, item }, index + 1]
           : [{ _tag: "Mismatch" as const, index, item }, index]
       })
+      if (claimed._tag === "Claimed") {
+        yield* (options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void)
+      }
       yield* announceTerminalAssertions
       const advanced = bypassControlBoundary ? false : yield* awaitBarrierAdvance(claimed)
       return advanced ? yield* claimNext(predicate) : claimed

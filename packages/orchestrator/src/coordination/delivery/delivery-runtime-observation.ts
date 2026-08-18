@@ -198,6 +198,16 @@ export interface DeliveryRuntimeReadyObservation extends DeliveryRuntimeReadyFie
   readonly _tag: "Ready"
 }
 
+interface DeliveryRuntimeObservationObserverService {
+  readonly observe: (observation: DeliveryRuntimeReadyObservation) => Effect.Effect<void>
+}
+
+/** Optional passive observer of each process-local runtime publication; production is inert by default. */
+export const DeliveryRuntimeObservationObserver = Context.Reference<DeliveryRuntimeObservationObserverService>(
+  "@dalph/DeliveryRuntimeObservationObserver",
+  { defaultValue: () => ({ observe: () => Effect.void }) }
+)
+
 export type DeliveryRuntimeObservationState = Data.TaggedEnum<{
   Closed: { readonly final: DeliveryRuntimeReadyObservation | null }
   NotReady: Record<never, never>
@@ -230,6 +240,7 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
     const state = yield* SubscriptionRef.make<DeliveryRuntimeObservationState>(
       DeliveryRuntimeObservationState.NotReady()
     )
+    const observer = yield* DeliveryRuntimeObservationObserver
 
     return {
       close: SubscriptionRef.update(state, (current) =>
@@ -242,11 +253,13 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
         })
       ),
       publish: (evaluation, liveOwners) =>
-        SubscriptionRef.update(state, (current) =>
-          current._tag === "Closed"
-            ? current
-            : DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners: [...liveOwners] })
-        ),
+        Effect.gen(function* () {
+          const observation = DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners: [...liveOwners] })
+          const published = yield* SubscriptionRef.modify(state, (current) =>
+            current._tag === "Closed" ? [false, current] : [true, observation]
+          )
+          if (published) yield* observer.observe(observation)
+        }),
       signal: currentSignalFromCurrentFirstStream(
         SubscriptionRef.changes(state).pipe(Stream.takeUntil(({ _tag }) => _tag === "Closed"))
       )

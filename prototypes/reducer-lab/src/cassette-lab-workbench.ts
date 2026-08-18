@@ -1,7 +1,11 @@
-import type { AuthoredDeliveryFrame } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
+import type {
+  AuthoredDeliveryFrame,
+  AuthoredObservationMoment
+} from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import type { AttemptId } from "../../../packages/contracts/src/planned-attempt.ts"
-import { TaskId } from "../../../packages/contracts/src/task-identity.ts"
+import { TaskId, type TaskId as TaskIdType } from "../../../packages/contracts/src/task-identity.ts"
 import type { RunId } from "../../../packages/contracts/src/workflow-identity.ts"
+import { deliveryProposalOrderTaskId } from "@dalph/orchestrator"
 import { Match } from "effect"
 import {
   deliveryGraphEncoding,
@@ -10,6 +14,10 @@ import {
   type DeliveryGraphElement,
   type DeliveryGraphProjection
 } from "./delivery-graph-element.ts"
+import {
+  deliverySourceExplanationAt,
+  type DeliverySourceStageId
+} from "./delivery-source-explanation.ts"
 import type { maintainedCassetteRows } from "./cassette-lab.ts"
 import type { CassetteState } from "./cassette-lab-view.ts"
 import {
@@ -81,10 +89,76 @@ const declaredProjection = (row: AuthoredRow): DeliveryGraphProjection => ({
 const activationLabel = (ordinal: number): string =>
   ordinal === 1 ? "Initial activation 1" : `Later activation ${ordinal}`
 
-const frameLabel = (frame: AuthoredDeliveryFrame, index: number): string => {
-  const graph = frame.graph._tag === "Established" ? `observed graph ${frame.graph.revision}` : "graph not established"
-  const accepted = frame.acceptedAt === null ? "no accepted facts" : `facts through journal ${frame.acceptedAt}`
-  return `${index + 1}. ${activationLabel(frame.activationOrdinal)} · ${frame.storyPosition} declared interactions consumed · ${graph} · ${accepted}`
+const momentLabel = (moment: AuthoredObservationMoment, index: number): string => {
+  const kind = moment._tag === "DeliveryPublicationMoment"
+    ? "Delivery publication"
+    : moment._tag === "DeliveryRuntimeOwnersMoment"
+      ? "runtime owners"
+      : `story · ${moment.occurrence._tag}`
+  return `${index + 1}. ${activationLabel(moment.activationOrdinal)} · capture ${moment.captureOrder} · ${kind} · story position ${moment.storyPosition}`
+}
+
+/** Reads only task-identity-bearing fields from the typed authored occurrence. */
+const taskIdsDeclaredByOccurrence = (occurrence: AuthoredObservationMoment & {
+  readonly _tag: "AuthoredStoryOccurrenceMoment"
+}): ReadonlyArray<string> => {
+  const visit = (value: unknown, field: string | undefined): ReadonlyArray<string> => {
+    if (typeof value === "string") return field === "taskId" || field === "pausedTaskId" ? [value] : []
+    if (Array.isArray(value)) {
+      return field?.endsWith("TaskIds") === true
+        ? value.filter((item): item is string => typeof item === "string")
+        : value.flatMap((item) => visit(item, field))
+    }
+    if (typeof value !== "object" || value === null) return []
+    return Object.entries(value).flatMap(([key, nested]) => visit(nested, key))
+  }
+  return [...new Set(visit(occurrence.occurrence, undefined))]
+}
+
+/** Explicit task or run scope affected by a typed Pause request or failed fresh graph read. */
+const constraintTaskIdsAtMoment = (
+  moment: AuthoredObservationMoment,
+  graphTaskIds: ReadonlyArray<TaskIdType>
+): ReadonlyArray<TaskIdType> => {
+  if (moment._tag !== "AuthoredStoryOccurrenceMoment") return []
+  const occurrence = moment.occurrence
+  if (occurrence._tag === "TrackerGraphReadFailed") return graphTaskIds
+  if (occurrence._tag === "OperatorControlDirectionFailed") return [occurrence.subject.taskId]
+  if (
+    occurrence._tag === "OperatorAppliesControlDirection"
+    || occurrence._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+    || occurrence._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
+  ) {
+    if (occurrence.direction !== "Pause") return []
+    return occurrence.subject._tag === "Task" ? [occurrence.subject.taskId] : graphTaskIds
+  }
+  return []
+}
+
+const liveIntegrationTaskIds = (moment: AuthoredObservationMoment): ReadonlyArray<TaskIdType> =>
+  [...new Set(moment.liveOwners.flatMap((owner) => {
+    if (owner._tag.startsWith("Settled")) return []
+    if (owner.proposal.admission.integrationTarget._tag !== "IntegrationTargetResourceRequired") return []
+    const taskId = deliveryProposalOrderTaskId(owner.proposal.order)
+    return taskId === null ? [] : [taskId]
+  }))].toSorted()
+
+/** Dominant fill tone precedence: settlement, live integration, held work, desired, waiting, explicit constraint, exclusion. */
+export const dominantTaskTone = (
+  frame: AuthoredDeliveryFrame,
+  taskId: string,
+  integrationTaskIds: ReadonlyArray<string>,
+  constraintTaskIds: ReadonlyArray<string>
+) => {
+  if (frame.settlements.some((settlement) => settlement.taskId === taskId)) return "settled" as const
+  if (integrationTaskIds.includes(taskId)) return "integrating" as const
+  if (frame.heldPositions.some((held) => held.taskId === taskId)) return "running" as const
+  const ticket = frame.tickets.find((candidate) => candidate.taskId === taskId)
+  if (ticket?.placement.kind === "Selected") return "desired" as const
+  const frontier = frame.frontier.find((candidate) => candidate.taskId === taskId)
+  if (frontier?.standing === "Eligible") return "waiting" as const
+  if (constraintTaskIds.includes(taskId)) return "paused" as const
+  return "blocked" as const
 }
 
 const deliverySummary = (delivery: AuthoredDeliveryFrame["deliveries"][number] | undefined): string =>
@@ -119,7 +193,13 @@ const taskFacts = (frame: AuthoredDeliveryFrame, taskId: string) => {
   }
 }
 
-const frameProjection = (row: AuthoredRow, frame: AuthoredDeliveryFrame, index: number): DeliveryGraphProjection => {
+const frameProjection = (
+  row: AuthoredRow,
+  frame: AuthoredDeliveryFrame,
+  index: number,
+  integrationTaskIds: ReadonlyArray<string> = [],
+  constraintTaskIds: ReadonlyArray<string> = []
+): DeliveryGraphProjection => {
   const tasks = frame.graph._tag === "Established" ? frame.graph.tasks : []
   return {
     edges: graphEdges(tasks),
@@ -143,7 +223,8 @@ const frameProjection = (row: AuthoredRow, frame: AuthoredDeliveryFrame, index: 
             `Desired ticket: ${facts.ticket}`,
             `Held: ${facts.held === "none" ? "no" : "yes"}`,
             `Obligations: ${facts.delivery?.obligations.map(({ summary }) => summary).join(", ") || "none"}`
-          ]
+          ],
+          tone: dominantTaskTone(frame, id, integrationTaskIds, constraintTaskIds)
         },
         id,
         lifecycle
@@ -648,7 +729,7 @@ export const makeDeliveryWorkbenchPlaybackRuntime = (): DeliveryWorkbenchPlaybac
 
 interface DeliveryTimelineController {
   readonly destroy: () => void
-  readonly update: (frames: ReadonlyArray<AuthoredDeliveryFrame>, running: boolean) => void
+  readonly update: (moments: ReadonlyArray<AuthoredObservationMoment>, running: boolean) => void
 }
 
 export interface DeliveryWorkbenchController {
@@ -743,7 +824,7 @@ const restartContinuity = (
 const renderTimeline = (
   parent: HTMLElement,
   row: AuthoredRow,
-  initialFrames: ReadonlyArray<AuthoredDeliveryFrame>,
+  initialMoments: ReadonlyArray<AuthoredObservationMoment>,
   playback: DeliveryWorkbenchPlaybackRuntime,
   initiallyRunning: boolean
 ): DeliveryTimelineController => {
@@ -753,13 +834,13 @@ const renderTimeline = (
   appendText(
     readingGuide,
     "p",
-    "Each frame was captured from the production reactive delivery publication during the cassette run, then projected through the literal production delivery composition. Desired bounded tickets and actual held task-work positions remain separate.",
+    "Each moment is a typed authored occurrence, coherent production Delivery publication, or process-local runtime-owner change. Delivery moments are projected through the literal production composition; story-only and runtime-only moments retain the latest values without fabricating a publication. Desired bounded tickets and actual held task-work positions remain separate.",
     "delivery-provenance"
   )
   appendText(
     readingGuide,
     "p",
-    "Production layer chain: observed graph → exhaustive frontier → bounded desired tickets → ticket deliveries → settlements → descriptive tracker reflection → downstream action planning. Reflection does not prove a tracker mutation, and a proposal does not prove an action ran.",
+    "Production layer chain: acquire the tracker-graph relation as composition setup → observed graph → exhaustive frontier → bounded desired tickets → ticket deliveries → settlements → descriptive tracker reflection. No row is a current instruction pointer. Downstream action planning remains descriptive: reflection does not prove a tracker mutation, and a proposal does not prove an action ran.",
     "delivery-layer-chain"
   )
   const settlementCoverage = document.createElement("p")
@@ -772,6 +853,7 @@ const renderTimeline = (
     deliveryGraphEncoding.heldPosition.legend,
     deliveryGraphEncoding.retainedStanding.legend,
     deliveryGraphEncoding.selectedTask.legend,
+    "Dominant fill tone: settlement → observed live integration owner → held task work → selected desired work → eligible waiting work → explicit control/fresh-read constraint → graph exclusion",
     ...deliveryGraphInterpretationNotes
   ]) appendText(legend, "li", value)
   readingGuide.append(legend)
@@ -827,6 +909,11 @@ const renderTimeline = (
   graph.tabIndex = 0
   graph.setAttribute("aria-label", "Interactive delivery graph; drag to pan, scroll to zoom")
   const change = appendText(frameHost, "p", "", "delivery-frame-change")
+  const momentEvidence = document.createElement("section")
+  momentEvidence.className = "delivery-moment-evidence"
+  const sourceExplanation = document.createElement("section")
+  sourceExplanation.className = "delivery-source-explanation"
+  sourceExplanation.dataset.role = "delivery-source-explanation"
   const capacityPositions = document.createElement("section")
   capacityPositions.className = "delivery-capacity-positions"
   const integrationOrder = document.createElement("section")
@@ -848,17 +935,129 @@ const renderTimeline = (
     graphViewControls,
     capacityPositions,
     graph,
+    momentEvidence,
+    sourceExplanation,
     integrationOrder,
     offGraphResponsibilities,
     settlementCoverage
   )
   settlementCoverage.after(readingGuide)
   frameHost.append(factsHost, taskFactsDisclosure)
-  let frames = initialFrames
+  let moments = initialMoments
   let running = initiallyRunning
   let renderedFrame: AuthoredDeliveryFrame | undefined
+  let selectedSourceStageId: DeliverySourceStageId | undefined
+
+  const renderMomentEvidence = (moment: AuthoredObservationMoment): void => {
+    momentEvidence.replaceChildren()
+    appendText(momentEvidence, "h5", "Current observed moment")
+    appendText(
+      momentEvidence,
+      "p",
+      `Capture ${moment.captureOrder} · ${activationLabel(moment.activationOrdinal)} · story position ${moment.storyPosition}`
+    )
+    if (moment._tag === "AuthoredStoryOccurrenceMoment") {
+      appendText(momentEvidence, "p", `Typed authored occurrence consumed: ${moment.occurrence._tag}`)
+      const graphTaskIds = moment.deliveryFrame?.graph._tag === "Established"
+        ? moment.deliveryFrame.graph.tasks.map(({ id }) => id)
+        : []
+      const mentioned = new Set(taskIdsDeclaredByOccurrence(moment))
+      const storyTaskIds = graphTaskIds.filter((taskId) => mentioned.has(taskId))
+      if (storyTaskIds.length > 0) {
+        const tasks = document.createElement("div")
+        tasks.className = "delivery-source-task-buttons"
+        appendText(tasks, "span", "Story-relevant graph tasks:")
+        for (const taskId of storyTaskIds) {
+          const task = appendText(tasks, "button", taskId)
+          task.type = "button"
+          task.addEventListener("click", () => {
+            selectedSourceStageId = undefined
+            dispatchPlayback(TaskSelectedRequested({ taskId }))
+            applyTaskSelection()
+          })
+        }
+        momentEvidence.append(tasks)
+      }
+      const details = document.createElement("details")
+      appendText(details, "summary", "Declared occurrence data")
+      appendText(details, "pre", JSON.stringify(moment.occurrence, null, 2))
+      momentEvidence.append(details)
+    } else if (moment._tag === "DeliveryPublicationMoment") {
+      appendText(momentEvidence, "p", "Observed one coherent production Delivery publication.")
+    } else {
+      appendText(
+        momentEvidence,
+        "p",
+        `Observed process-local runtime owners: ${moment.liveOwners.length === 0 ? "none" : moment.liveOwners.map(({ _tag }) => _tag).join(", ")}.`
+      )
+      for (const owner of moment.liveOwners) {
+        const taskId = deliveryProposalOrderTaskId(owner.proposal.order)
+        const intent = owner._tag === "MaterializedDeliveryAction" || owner._tag === "SettledMaterializedDeliveryAction"
+          ? ` · intent ${owner.intent}`
+          : ""
+        appendText(
+          momentEvidence,
+          "p",
+          `${owner._tag} · task ${taskId ?? "graph-wide"}${intent} · exact proposal / operation correlation:`
+        )
+        appendText(momentEvidence, "pre", JSON.stringify(owner, null, 2))
+      }
+    }
+  }
+
+  const renderSourceExplanation = (moment: AuthoredObservationMoment, index: number): void => {
+    sourceExplanation.replaceChildren()
+    appendText(sourceExplanation, "h5", "Production Delivery source explanation")
+    const explanation = deliverySourceExplanationAt(moments, index)
+    appendText(sourceExplanation, "p", explanation.status, "delivery-source-status")
+    if (explanation._tag === "DeliverySourceUnavailable") return
+    appendText(
+      sourceExplanation,
+      "p",
+      `${explanation.relationSetup} This is composition setup, not a tracker read repeated for every publication. No row is a current instruction pointer.`,
+      "delivery-source-setup"
+    )
+    const rows = document.createElement("ol")
+    rows.className = "delivery-source-stage-rows"
+    for (const rowValue of explanation.rows) {
+      const item = document.createElement("li")
+      item.dataset.sourceStage = rowValue.id
+      item.dataset.taskIds = rowValue.taskIds.join(",")
+      item.classList.toggle("source-output-changed", rowValue.changed)
+      const selectStage = appendText(item, "button", rowValue.label)
+      selectStage.type = "button"
+      selectStage.setAttribute("aria-pressed", String(selectedSourceStageId === rowValue.id))
+      selectStage.addEventListener("click", () => {
+        selectedSourceStageId = rowValue.id
+        graph.highlightedTaskIds = rowValue.taskIds
+        applyTaskSelection()
+      })
+      appendText(item, "span", rowValue.changed ? "changed in this Delivery publication" : "unchanged at this moment")
+      const data = document.createElement("details")
+      appendText(data, "summary", `${rowValue.taskIds.length} related graph tasks · current typed output`)
+      const taskButtons = document.createElement("div")
+      taskButtons.className = "delivery-source-task-buttons"
+      for (const taskId of rowValue.taskIds) {
+        const task = appendText(taskButtons, "button", taskId)
+        task.type = "button"
+        task.addEventListener("click", () => {
+          selectedSourceStageId = undefined
+          dispatchPlayback(TaskSelectedRequested({ taskId: TaskId.make(taskId) }))
+          applyTaskSelection()
+        })
+      }
+      data.append(taskButtons)
+      appendText(data, "pre", rowValue.value)
+      item.append(data)
+      rows.append(item)
+    }
+    sourceExplanation.append(rows)
+  }
 
   const refreshSettlementCoverage = (): void => {
+    const frames = moments.flatMap((moment) =>
+      moment._tag === "DeliveryPublicationMoment" ? [moment.deliveryFrame] : []
+    )
     const distinctSettlementCount = new Set(
       frames.flatMap(({ settlements }) =>
         settlements.map(({ attemptId, taskId }) => JSON.stringify([taskId, attemptId]))
@@ -877,17 +1076,34 @@ const renderTimeline = (
 
   const playbackFrames = (): ReturnType<typeof deliveryPlaybackFramesFrom> =>
     deliveryPlaybackFramesFrom(
-      frames.map((frame, index) => ({
-        activationOrdinal: frame.activationOrdinal,
-        capacity: frame.capacity,
-        eligibleTaskIds: frame.graph._tag === "Established"
-          ? frame.graph.tasks
-            .filter(({ id }) => taskFacts(frame, id).frontierFact?.standing === "Eligible")
-            .map(({ id }) => id)
-          : [],
-        heldTaskIds: frame.heldPositions.map(({ taskId }) => taskId),
-        label: frameLabel(frame, index)
-      })),
+      moments.map((moment, index) => {
+        const frame = moment.deliveryFrame
+        return {
+          activationOrdinal: moment.activationOrdinal,
+          capacity: frame?.capacity ?? 0,
+          eligibleTaskIds: frame?.graph._tag === "Established"
+            ? frame.graph.tasks
+              .filter(({ id }) => taskFacts(frame, id).frontierFact?.standing === "Eligible")
+              .map(({ id }) => id)
+            : [],
+          heldTaskIds: frame?.heldPositions.map(({ taskId }) => taskId) ?? [],
+          integrationOwnerTaskIds: liveIntegrationTaskIds(moment),
+          label: momentLabel(moment, index),
+          responsibilityIdentity: frame === null
+            ? "unavailable"
+            : JSON.stringify({ deliveries: frame.deliveries, integrationOrder: frame.integrationOrder }),
+          responsibilityTaskIds: frame === null
+            ? []
+            : [...new Set([
+                ...frame.integrationOrder.awaitingResponsibility.map(({ taskId }) => taskId),
+                ...frame.integrationOrder.responsibilities.map(({ taskId }) => taskId),
+                ...frame.deliveries.map(({ taskId }) => taskId)
+              ])],
+          storyLandmark: moment._tag === "AuthoredStoryOccurrenceMoment"
+            ? row.storyItemLandmarks[moment.storyPosition - 1] ?? null
+            : null
+        }
+      }),
       running
     )
 
@@ -906,24 +1122,62 @@ const renderTimeline = (
   const applyTaskSelection = (): void => {
     const selectedTaskId = projectDeliveryPlayback(playback.current()).selectedTaskId
     graph.selectedTaskId = selectedTaskId
+    if (selectedSourceStageId === undefined) graph.highlightedTaskIds = selectedTaskId === null ? [] : [selectedTaskId]
     for (const taskRow of taskFactsHost.querySelectorAll<HTMLTableRowElement>("tr[data-task-id]")) {
       const selected = taskRow.dataset.taskId === selectedTaskId
       taskRow.classList.toggle("selected-task-row", selected)
       if (selected) taskRow.setAttribute("aria-current", "true")
       else taskRow.removeAttribute("aria-current")
     }
+    for (const sourceRow of sourceExplanation.querySelectorAll<HTMLElement>("[data-source-stage]")) {
+      const taskIds = (sourceRow.dataset.taskIds ?? "").split(",").filter((taskId) => taskId.length > 0)
+      sourceRow.classList.toggle(
+        "source-selection-related",
+        sourceRow.dataset.sourceStage === selectedSourceStageId
+          || (selectedTaskId !== null && taskIds.includes(selectedTaskId))
+      )
+      sourceRow.querySelector("button")?.setAttribute(
+        "aria-pressed",
+        String(sourceRow.dataset.sourceStage === selectedSourceStageId)
+      )
+    }
   }
 
   const show = (index: number): void => {
-    const frame = frames[index]
-    if (frame === undefined) return
-    graph.projection = frameProjection(row, frame, index)
+    const moment = moments[index]
+    if (moment === undefined) return
+    renderMomentEvidence(moment)
+    renderSourceExplanation(moment, index)
+    const frame = moment.deliveryFrame
+    if (frame === null) {
+      graph.projection = declaredProjection(row)
+      graph.dataset.palette = "trace-fill"
+      change.textContent = "No Delivery publication has been observed at this moment."
+      factsHost.replaceChildren()
+      appendText(factsHost, "p", "Delivery source stages are unavailable until production publishes coherent Delivery consequences.")
+      selectedTask.textContent = "The graph is controlled cassette input, not a production-observed Delivery graph."
+      taskFactsHost.replaceChildren()
+      renderedFrame = undefined
+      return
+    }
+    graph.dataset.palette = "trace-fill"
+    const graphTaskIds = frame.graph._tag === "Established" ? frame.graph.tasks.map(({ id }) => id) : []
+    graph.projection = frameProjection(
+      row,
+      frame,
+      index,
+      liveIntegrationTaskIds(moment),
+      constraintTaskIdsAtMoment(moment, graphTaskIds)
+    )
     renderTaskWorkCapacity(capacityPositions, frame)
     renderIntegrationOrder(integrationOrder, frame)
     renderOffGraphResponsibilities(offGraphResponsibilities, frame)
     resetGraphView.disabled = frame.graph._tag !== "Established"
-    change.textContent = frameChangeSummary(frames[index - 1], frame, row)
-    const restartSummary = restartContinuity(frames[index - 1], frame)
+    const previousFrame = moments.slice(0, index).findLast((candidate) => candidate.deliveryFrame !== frame)?.deliveryFrame ?? undefined
+    change.textContent = moment._tag === "DeliveryPublicationMoment"
+      ? frameChangeSummary(previousFrame ?? undefined, frame, row)
+      : "No Delivery publication changed the source explanation at this moment."
+    const restartSummary = restartContinuity(previousFrame ?? undefined, frame)
     restart.hidden = restartSummary === undefined
     restart.textContent = restartSummary ?? ""
     factsHost.replaceChildren()
@@ -966,7 +1220,7 @@ const renderTimeline = (
     const selectedIndex = projection.currentFrameIndex
     if (selectedIndex !== null) {
       setNativeSelectedFrame(selectedIndex)
-      if (frames[selectedIndex] !== renderedFrame) show(selectedIndex)
+      show(selectedIndex)
     }
     // Necessary imperative island: browsers drop focus when a focused button
     // becomes disabled. The pure update emits this command only at that edge.
@@ -1010,32 +1264,33 @@ const renderTimeline = (
   }
   keyboardSurface.addEventListener("keydown", handleKeyboard)
   graph.addEventListener("task-selected", (event) => {
+    selectedSourceStageId = undefined
     const taskId = TaskId.make((event as CustomEvent<{ readonly taskId: string }>).detail.taskId)
     dispatchPlayback(TaskSelectedRequested({ taskId }))
     const selectedFrameIndex = projectDeliveryPlayback(playback.current()).currentFrameIndex
-    const frame = selectedFrameIndex === null ? undefined : frames[selectedFrameIndex]
-    if (frame === undefined) return
+    const frame = selectedFrameIndex === null ? undefined : moments[selectedFrameIndex]?.deliveryFrame
+    if (frame === undefined || frame === null) return
     selectedTask.textContent = selectedTaskSummary(frame, taskId)
     applyTaskSelection()
   })
   resetGraphView.addEventListener("click", () => graph.resetView())
   parent.append(controls, shortcuts, frameHost)
-  const update = (nextFrames: ReadonlyArray<AuthoredDeliveryFrame>, nextRunning: boolean): void => {
-    frames = nextFrames
+  const update = (nextMoments: ReadonlyArray<AuthoredObservationMoment>, nextRunning: boolean): void => {
+    moments = nextMoments
     running = nextRunning
     refreshSettlementCoverage()
     dispatchPlayback(FramesUpdated({ frames: playbackFrames(), running }))
   }
-  update(initialFrames, initiallyRunning)
+  update(initialMoments, initiallyRunning)
   return {
     destroy: () => keyboardSurface.removeEventListener("keydown", handleKeyboard),
     update
   }
 }
 
-const deliveryFramesFrom = (state: CassetteState): ReadonlyArray<AuthoredDeliveryFrame> | null => {
-  if (state._tag === "Running") return state.deliveryFrames
-  return state._tag === "Settled" && state.result._tag === "Completed" ? state.result.deliveryFrames : null
+const observationMomentsFrom = (state: CassetteState): ReadonlyArray<AuthoredObservationMoment> | null => {
+  if (state._tag === "Running") return state.observationMoments
+  return state._tag === "Settled" && state.result._tag === "Completed" ? state.result.observationMoments : null
 }
 
 export const renderCassetteDeliveryWorkbench = (
@@ -1069,9 +1324,9 @@ export const renderCassetteDeliveryWorkbench = (
   content.className = "delivery-workbench-content"
   section.append(content)
   const renderContents = (): void => {
-    const frames = deliveryFramesFrom(currentState)
-    if (timeline !== undefined && frames !== null && frames.length > 0) {
-      timeline.update(frames, currentState._tag === "Running")
+    const moments = observationMomentsFrom(currentState)
+    if (timeline !== undefined && moments !== null && moments.length > 0) {
+      timeline.update(moments, currentState._tag === "Running")
       return
     }
     timeline?.destroy()
@@ -1079,8 +1334,8 @@ export const renderCassetteDeliveryWorkbench = (
     timeline = undefined
     const heading = appendText(content, "h4", "Production delivery timeline")
     heading.tabIndex = -1
-    if (frames !== null && frames.length > 0) {
-      timeline = renderTimeline(content, authoredRow, frames, playback, currentState._tag === "Running")
+    if (moments !== null && moments.length > 0) {
+      timeline = renderTimeline(content, authoredRow, moments, playback, currentState._tag === "Running")
     } else {
       renderNotObserved(content, authoredRow, currentState)
     }

@@ -5,8 +5,9 @@ import { sha1 } from "@noble/hashes/legacy.js"
 import { sha256, sha384, sha512 } from "@noble/hashes/sha2.js"
 import {
   type AuthoredDeliveryFrame,
-  type AuthoredDeliveryPublication,
-  evaluateAuthoredDeliveryPublication,
+  type AuthoredObservationCapture,
+  type AuthoredObservationMoment,
+  evaluateAuthoredObservationCapture,
   runAuthoredScenarioCassette
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import { maintainedAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/catalog.ts"
@@ -106,6 +107,7 @@ const cassetteCategoryMetadata = {
 interface CassetteExecution {
   readonly activationOrdinals: ReadonlyArray<number>
   readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null
+  readonly observationMoments: ReadonlyArray<AuthoredObservationMoment> | null
   readonly evidence: unknown
   readonly journalRecords: ReadonlyArray<unknown>
   readonly runId: string | null
@@ -125,7 +127,8 @@ interface MaintainedCassetteDescriptor {
 
 /** Read-only progress from one selected cassette; it never feeds state back into production. */
 export interface CassetteRunObserver {
-  readonly onDeliveryFrame: (frame: AuthoredDeliveryFrame) => void
+  readonly onDeliveryFrame?: (frame: AuthoredDeliveryFrame) => void
+  readonly onObservationMoment?: (moment: AuthoredObservationMoment) => void
 }
 
 interface DeclaredTaskGraph {
@@ -160,6 +163,7 @@ export type CassetteLabResult =
       readonly category: CassetteCategory
       readonly consumedItemCount: number
       readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null
+      readonly observationMoments: ReadonlyArray<AuthoredObservationMoment> | null
       readonly executionEvidence: unknown
       readonly journalRecordCount: number
       readonly journalRecords: ReadonlyArray<unknown>
@@ -207,24 +211,28 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
   category: "Authored",
   execute: async (observer) => {
     let projectionQueue: Promise<void> = Promise.resolve()
-    const onDeliveryPublication = observer === undefined
+    let previousMoment: AuthoredObservationMoment | null = null
+    const onObservationCapture = observer === undefined
       ? undefined
-      : (publication: AuthoredDeliveryPublication) => {
+      : (capture: AuthoredObservationCapture) => {
           projectionQueue = projectionQueue.then(async () => {
-            const frame = await Effect.runPromise(evaluateAuthoredDeliveryPublication(publication))
-            observer.onDeliveryFrame(frame)
+            const moment = await Effect.runPromise(evaluateAuthoredObservationCapture(capture, previousMoment))
+            previousMoment = moment
+            observer.onObservationMoment?.(moment)
+            if (moment._tag === "DeliveryPublicationMoment") observer.onDeliveryFrame?.(moment.deliveryFrame)
           })
         }
     const exit = await Effect.runPromiseExit(
       runAuthoredScenarioCassette(
         cassette,
-        onDeliveryPublication === undefined ? {} : { onDeliveryPublication }
+        onObservationCapture === undefined ? {} : { onObservationCapture }
       ).pipe(Effect.provide(cassetteRuntimeLayer))
     )
     await projectionQueue
     return Exit.map(exit, (run) => ({
       activationOrdinals: run.activationOrdinals,
       deliveryFrames: run.deliveryFrames,
+      observationMoments: run.observationMoments,
       evidence: run,
       journalRecords: run.records,
       runId: run.runId
@@ -263,6 +271,7 @@ const targetPromotionDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
     return Exit.map(exit, (run) => ({
       activationOrdinals: [],
       deliveryFrames: null,
+      observationMoments: null,
       evidence: run,
       journalRecords: run.records,
       runId: null
@@ -288,6 +297,7 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
     return Exit.map(exit, (run) => ({
       activationOrdinals: [],
       deliveryFrames: null,
+      observationMoments: null,
       evidence: run,
       journalRecords: run.records,
       runId: null
@@ -313,6 +323,7 @@ const applicationExitDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
     return Exit.map(exit, (run) => ({
       activationOrdinals: [],
       deliveryFrames: null,
+      observationMoments: null,
       evidence: run,
       journalRecords: [],
       runId: null
@@ -338,6 +349,7 @@ const codexExecutorDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Ob
     return Exit.map(exit, (run) => ({
       activationOrdinals: [],
       deliveryFrames: null,
+      observationMoments: null,
       evidence: run,
       journalRecords: [],
       runId: null
@@ -465,6 +477,7 @@ const completedResult = (
   category: descriptor.category,
     consumedItemCount: descriptor.story.length,
     deliveryFrames: execution.deliveryFrames,
+    observationMoments: execution.observationMoments,
   executionEvidence: execution.evidence,
   journalRecordCount: execution.journalRecords.length,
   journalRecords: execution.journalRecords,
@@ -506,6 +519,7 @@ export const runAuthoredCassetteInput = async (
     : completedResult(inputDescriptor, {
         activationOrdinals: exit.value.activationOrdinals,
         deliveryFrames: exit.value.deliveryFrames,
+        observationMoments: exit.value.observationMoments,
         evidence: exit.value,
         journalRecords: exit.value.records,
         runId: exit.value.runId

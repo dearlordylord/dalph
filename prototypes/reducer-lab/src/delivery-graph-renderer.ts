@@ -505,6 +505,8 @@ class DalphDeliveryGraphElement extends HTMLElement {
     const edgeList = document.createElement("ul")
     for (const edge of projection.edges) {
       const item = document.createElement("li")
+      item.dataset.edgeFrom = edge.from
+      item.dataset.edgeTo = edge.to
       item.textContent = edgeDescription(edge)
       edgeList.append(item)
     }
@@ -525,13 +527,22 @@ class DalphDeliveryGraphElement extends HTMLElement {
     for (const button of this.#summary.querySelectorAll<HTMLButtonElement>("button[data-task-id]")) {
       button.setAttribute("aria-current", String(button.dataset.taskId === this.#selectedTaskId))
     }
-  }
-
-  #applyGraphSelection(): void {
-    if (this.#core === null) return
     const highlighted = new Set(this.#highlightedTaskIds.length > 0
       ? this.#highlightedTaskIds
       : this.#selectedTaskId === null ? [] : [this.#selectedTaskId])
+    for (const edge of this.#summary.querySelectorAll<HTMLLIElement>("li[data-edge-from]")) {
+      const related = highlighted.has(edge.dataset.edgeFrom ?? "") || highlighted.has(edge.dataset.edgeTo ?? "")
+      edge.classList.toggle("selection-related", highlighted.size > 0 && related)
+      edge.classList.toggle("selection-muted", highlighted.size > 0 && !related)
+    }
+  }
+
+  #applyGraphSelection(): void {
+    const highlighted = new Set(this.#highlightedTaskIds.length > 0
+      ? this.#highlightedTaskIds
+      : this.#selectedTaskId === null ? [] : [this.#selectedTaskId])
+    this.#updateSummarySelection()
+    if (this.#core === null) return
     for (const node of this.#core.nodes()) {
       node.toggleClass("selection-related", highlighted.size > 0 && highlighted.has(node.id()))
       node.toggleClass("selection-muted", highlighted.size > 0 && !highlighted.has(node.id()))

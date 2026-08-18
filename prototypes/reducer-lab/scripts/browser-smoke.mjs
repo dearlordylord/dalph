@@ -137,7 +137,7 @@ try {
   )
   assert.equal(
     await workbench.locator(".delivery-playback-shortcuts").textContent(),
-    "Frame = adjacent production publication · Jump = frontier wave, held-position change, restart, or end · Live = follow newest · Keys: ←/→ and [/]."
+    "Moment = one captured story, Delivery, or runtime observation · Jump = graph, responsibility, integration, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/]."
   )
   const primaryBeforeGuide = await workbench.evaluate((element) => {
     const controls = element.querySelector(".delivery-timeline-controls")
@@ -148,7 +148,7 @@ try {
       && Boolean(graph.compareDocumentPosition(guide) & Node.DOCUMENT_POSITION_FOLLOWING)
   })
   assert.equal(primaryBeforeGuide, true)
-  const frameSelector = workbench.getByLabel("Delivery frame")
+  const frameSelector = workbench.getByLabel("Observed moment")
   await frameSelector.selectOption("0")
   assert.equal(
     await workbench.locator(".delivery-settlement-coverage").textContent(),
@@ -164,7 +164,7 @@ try {
   assert.equal(await frameSelector.inputValue(), "0")
   await workbench.getByRole("button", { name: "Follow live" }).click()
   assert.equal(await frameSelector.inputValue(), String(frameCount - 1))
-  await workbench.getByRole("button", { name: "Previous frame" }).click()
+  await workbench.getByRole("button", { name: "Previous moment" }).click()
   assert.equal(await frameSelector.inputValue(), String(frameCount - 2))
   const graphRendered = await page.locator("dalph-delivery-graph").evaluate((element) => {
     const shadow = element.shadowRoot
@@ -219,7 +219,7 @@ try {
   await page.keyboard.press("ArrowRight")
   assert.equal(await frameSelector.inputValue(), "1")
   const playbackControls = workbench.getByRole("group", { name: "Delivery playback controls" })
-  const nextFrameButton = workbench.getByRole("button", { name: "Next frame" })
+  const nextFrameButton = workbench.getByRole("button", { name: "Next moment" })
   await frameSelector.selectOption("1")
   await nextFrameButton.click()
   assert.equal(await frameSelector.inputValue(), "2")
@@ -234,13 +234,13 @@ try {
   await page.keyboard.press("ArrowLeft")
   assert.equal(await frameSelector.inputValue(), String(frameCount - 2))
   await frameSelector.selectOption("1")
-  await workbench.getByRole("button", { name: "Previous frame" }).click()
+  await workbench.getByRole("button", { name: "Previous moment" }).click()
   assert.equal(await frameSelector.inputValue(), "0")
   assert.equal(await playbackControls.evaluate((element) => document.activeElement === element), true)
   await page.keyboard.press("ArrowRight")
   assert.equal(await frameSelector.inputValue(), "1")
   await frameSelector.selectOption("3")
-  await workbench.getByRole("button", { name: "Previous frame" }).focus()
+  await workbench.getByRole("button", { name: "Previous moment" }).focus()
   await page.keyboard.press("ArrowLeft")
   await page.keyboard.press("ArrowLeft")
   await page.keyboard.press("ArrowLeft")
@@ -267,10 +267,54 @@ try {
   const afterSelection = await graphLocator.screenshot()
   assert.equal(beforeSelection.equals(afterSelection), false)
   assert.equal(await page.locator('tr[data-task-id="A"]').getAttribute("aria-current"), "true")
-  await workbench.getByRole("button", { name: "Previous frame" }).click()
+  await workbench.getByRole("button", { name: "Previous moment" }).click()
   assert.equal(await graphLocator.locator("#summary").getAttribute("open"), "")
   assert.equal(await graphLocator.locator('button[data-task-id="A"]').getAttribute("aria-current"), "true")
   console.log("✓ keeps selected-task feedback separate from delivery encodings")
+
+  const synchronizedSelection = await page.evaluate(() => {
+    const timeline = document.querySelector('[data-role="delivery-workbench"] select')
+    const graph = document.querySelector("dalph-delivery-graph")
+    if (!(timeline instanceof HTMLSelectElement) || graph === null) return null
+    for (const option of timeline.options) {
+      timeline.value = option.value
+      timeline.dispatchEvent(new Event("change"))
+      const storyTask = document.querySelector(".delivery-moment-evidence .delivery-source-task-buttons button")
+      if (!(storyTask instanceof HTMLButtonElement)) continue
+      const taskId = storyTask.textContent ?? ""
+      const incident = graph.projection?.edges.some(({ from, to }) => from === taskId || to === taskId) === true
+      if (!incident) continue
+      storyTask.click()
+      const storySelected = graph.selectedTaskId === taskId
+      const incidentEdgeSelected = graph.shadowRoot?.querySelector("li[data-edge-from].selection-related") !== null
+      const sourceStage = [...document.querySelectorAll("[data-source-stage]")].find((row) =>
+        row.getAttribute("data-task-ids")?.split(",").includes(taskId)
+      )
+      const stageButton = sourceStage?.querySelector(":scope > button")
+      if (!(stageButton instanceof HTMLButtonElement)) continue
+      stageButton.click()
+      const stageHighlightsTask = graph.highlightedTaskIds?.includes(taskId) === true
+      const dataTask = sourceStage.querySelector(".delivery-source-task-buttons button")
+      if (!(dataTask instanceof HTMLButtonElement)) continue
+      dataTask.click()
+      return {
+        dataSelected: graph.selectedTaskId === dataTask.textContent,
+        incidentEdgeSelected,
+        sourceRowsSelected: document.querySelector("[data-source-stage].source-selection-related") !== null,
+        stageHighlightsTask,
+        storySelected
+      }
+    }
+    return null
+  })
+  assert.deepEqual(synchronizedSelection, {
+    dataSelected: true,
+    incidentEdgeSelected: true,
+    sourceRowsSelected: true,
+    stageHighlightsTask: true,
+    storySelected: true
+  })
+  console.log("✓ keeps the graph primary and synchronizes story source data tasks and incident edges")
 
   const desktopTaskTruth = await page.locator('[data-role="delivery-task-state"]').evaluate((table) => {
     const tableRect = table.getBoundingClientRect()
@@ -348,7 +392,7 @@ try {
   })
   await workbench.getByRole("button", { name: /Run selected cassette:/u }).click()
   await page.evaluate(() => globalThis.__singleRerunSettled)
-  const rerunFrameSelector = workbench.getByLabel("Delivery frame")
+  const rerunFrameSelector = workbench.getByLabel("Observed moment")
   await rerunFrameSelector.selectOption("0")
   await workbench.getByRole("button", { name: /Run selected cassette:/u }).focus()
   await page.keyboard.press("ArrowRight")
@@ -369,7 +413,7 @@ try {
   await page.evaluate(() => new Promise(requestAnimationFrame))
   assert.equal(await rerunFrameSelector.inputValue(), "0")
   assert.ok(repeatedBracketDuration < 1_000, `repeated landmark input took ${repeatedBracketDuration}ms`)
-  const disabledCursor = await workbench.getByRole("button", { name: "Previous frame" }).evaluate((button) =>
+  const disabledCursor = await workbench.getByRole("button", { name: "Previous moment" }).evaluate((button) =>
     getComputedStyle(button).cursor
   )
   assert.equal(disabledCursor, "not-allowed")
@@ -384,7 +428,7 @@ try {
     acceptedIntegrationCassette,
     { timeout: terminalTimeoutMs }
   )
-  const integrationFrameSelector = page.getByLabel("Delivery frame")
+  const integrationFrameSelector = page.getByLabel("Observed moment")
   const integrationOrderFrames = await page.evaluate(() => {
     const select = document.querySelector('[data-role="delivery-workbench"] select')
     if (!(select instanceof HTMLSelectElement)) return []
@@ -452,7 +496,7 @@ try {
     Math.abs(graphTop - stableTrace[0].graphTop) <= 2 && Math.abs(scrollY - stableTrace[0].scrollY) <= 2
   ))
   const linkedWorkbench = page.locator('[data-role="delivery-workbench"]')
-  const linkedFrameSelector = linkedWorkbench.getByLabel("Delivery frame")
+  const linkedFrameSelector = linkedWorkbench.getByLabel("Observed moment")
   const linkedFrameTruth = await page.evaluate(() => {
     const select = document.querySelector('[data-role="delivery-workbench"] select')
     const graph = document.querySelector("dalph-delivery-graph")

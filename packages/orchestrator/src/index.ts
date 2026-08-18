@@ -598,6 +598,11 @@ export {
   evaluateDeliveryRuntimeInputBundle
 } from "./coordination/delivery/delivery-publication-observer.js"
 export {
+  DeliveryRuntimeObservationObserver,
+  type DeliveryRuntimeLiveOwnerSnapshot,
+  type DeliveryRuntimeReadyObservation
+} from "./coordination/delivery/delivery-runtime-observation.js"
+export {
   DeliveryControlPolicyMissing,
   makeReactiveDeliveryRelationsLayer
 } from "./coordination/delivery/reactive-delivery-relations.js"
